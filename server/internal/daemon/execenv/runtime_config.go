@@ -886,6 +886,10 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
+	if ctx.ManagedRole == "group_manager" {
+		b.WriteString("### Managed Group Manager Role\n\n")
+		b.WriteString("The server structurally assigned this agent the `group_manager` role for the current group. Treat adaptive patrol wakes as judgment work for this exact channel and re-check current state before acting. Speak only when coordination is genuinely useful. Prefer private coordination for one recipient and minimize group noise; use the related group or thread only when shared visibility or multiple participants are necessary. Issue creation, assignment, and status system events plus their directed wakes already own work delivery: never duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands. On every managed patrol wake, and after meaningful group context changes the follow-up horizon, replan the existing patrol with `multica reminder snooze --id <id> --delay-seconds <900..86400>`; never create a second patrol. The server's 24-hour fallback only preserves the chain after a failed run and does not choose the normal cadence. Never infer this role from the agent's display name.\n\n")
+	}
 	// Directed reply requirement — only rendered for directed runs (DM,
 	// @mention, direct question, priority >= 2). Ambient runs never see
 	// this block, so they won't be pressured to reply to every message.

@@ -453,6 +453,7 @@ type ChatAttachmentMeta struct {
 type TaskAgentData struct {
 	ID            string                    `json:"id"`
 	Name          string                    `json:"name"`
+	ManagedRole   string                    `json:"managed_role,omitempty"`
 	Instructions  string                    `json:"instructions"`
 	Skills        []service.AgentSkillData  `json:"skills,omitempty"`
 	Memories      []service.AgentMemoryData `json:"memories,omitempty"`
@@ -1359,11 +1360,18 @@ func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent d
 // isGroupManagerAgent reports whether the agent is a per-group Beckham. Reads
 // the managed_role column directly (it is not on the sqlc Agent model).
 func (h *Handler) isGroupManagerAgent(ctx context.Context, agentID pgtype.UUID) bool {
+	return h.agentManagedRole(ctx, agentID) == managedRoleGroupManager
+}
+
+func (h *Handler) agentManagedRole(ctx context.Context, agentID pgtype.UUID) string {
 	var managedRole pgtype.Text
 	if err := h.DB.QueryRow(ctx, `SELECT managed_role FROM agent WHERE id = $1`, agentID).Scan(&managedRole); err != nil {
-		return false
+		return ""
 	}
-	return managedRole.Valid && managedRole.String == managedRoleGroupManager
+	if !managedRole.Valid {
+		return ""
+	}
+	return managedRole.String
 }
 
 func agentUpdateAffectsEvolutionMatching(req UpdateAgentRequest) bool {

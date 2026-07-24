@@ -34,39 +34,19 @@ func WendyHandoffDispatchJob(h *handler.Handler, pool *pgxpool.Pool) JobSpec {
 			if pool == nil || h == nil {
 				return HandlerResult{Result: map[string]any{"skipped": true, "reason": "unavailable"}}, nil
 			}
-			dispatched, err := h.DispatchDueWendyHandoffs(ctx, wendyHandoffDispatchLimit)
-			if err != nil {
-				return HandlerResult{}, err
-			}
 			ambient, ambientErr := h.DispatchDueWendyAmbientReviews(ctx, wendyHandoffDispatchLimit)
 			if ambientErr != nil {
 				return HandlerResult{
-					RowsAffected: int64(dispatched),
+					RowsAffected: int64(ambient),
 					Result: map[string]any{
-						"dispatched": dispatched,
-						"ambient":    ambient,
+						"ambient": ambient,
 					},
 				}, ambientErr
 			}
-			// Idle nudge: never let a team go fully idle while its goal is
-			// unfinished — trigger Beckham to look and get someone working.
-			idle, idleErr := h.DispatchIdleNudges(ctx, wendyHandoffDispatchLimit)
-			if idleErr != nil {
-				return HandlerResult{
-					RowsAffected: int64(dispatched + ambient),
-					Result: map[string]any{
-						"dispatched":  dispatched,
-						"ambient":     ambient,
-						"idle_nudged": idle,
-					},
-				}, idleErr
-			}
 			return HandlerResult{
-				RowsAffected: int64(dispatched + ambient + idle),
+				RowsAffected: int64(ambient),
 				Result: map[string]any{
-					"dispatched":  dispatched,
-					"ambient":     ambient,
-					"idle_nudged": idle,
+					"ambient": ambient,
 				},
 			}, nil
 		},

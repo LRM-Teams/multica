@@ -2719,10 +2719,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if statusChanged || assigneeChanged {
 		h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 	}
-	if assigneeChanged {
-		h.detectWendyStartWorkForIssue(r.Context(), issue)
-	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -3224,10 +3220,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if statusChanged || assigneeChanged {
 			h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 		}
-		if assigneeChanged {
-			h.detectWendyStartWorkForIssue(r.Context(), issue)
-		}
-
 		updated++
 	}
 

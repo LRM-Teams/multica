@@ -188,6 +188,7 @@ type ArealProxy struct {
 type AgentData struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
+	ManagedRole   string            `json:"managed_role,omitempty"`
 	Instructions  string            `json:"instructions"`
 	Skills        []SkillData       `json:"skills"`
 	Memories      []MemoryData      `json:"memories,omitempty"`

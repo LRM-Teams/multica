@@ -10,11 +10,11 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// syncWendyWorkGraphAfterIssueCreate syncs a newly created issue and, when
-// possible, asks Wendy to visibly kick off the assignee.
+// syncWendyWorkGraphAfterIssueCreate records the issue in the dependency graph.
+// Issue assignment and source-thread system events own delivery to assignees;
+// the workgraph must not create a second coordination wake.
 func (h *Handler) syncWendyWorkGraphAfterIssueCreate(ctx context.Context, issue db.Issue) {
 	h.syncWendyWorkGraphAfterIssueUpdate(ctx, issue)
-	h.detectWendyStartWorkForIssue(ctx, issue)
 }
 
 // syncWendyWorkGraphAfterIssueUpdate updates the graph after an issue mutation
@@ -39,79 +39,6 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 		if err := h.WorkGraph.SyncDependenciesForIssue(ctx, issue.WorkspaceID, connected.ID); err != nil {
 			slog.Warn("sync Wendy issue dependencies failed", "issue_id", connected.ID.String(), "error", err)
 		}
-	}
-	for _, connected := range issues {
-		node, err := h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
-			WorkspaceID:   issue.WorkspaceID,
-			LinkedIssueID: connected.ID,
-		})
-		if err != nil {
-			slog.Warn("load Wendy work node failed", "issue_id", connected.ID.String(), "error", err)
-			continue
-		}
-		h.ensureWendyWorkNodeChannel(ctx, connected, node)
-		node, err = h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
-			WorkspaceID:   issue.WorkspaceID,
-			LinkedIssueID: connected.ID,
-		})
-		if err != nil {
-			slog.Warn("reload Wendy work node failed", "issue_id", connected.ID.String(), "error", err)
-			continue
-		}
-		if err := h.WorkGraph.DetectUnlockForNode(ctx, node.ID); err != nil {
-			slog.Warn("detect Wendy unlock failed", "issue_id", connected.ID.String(), "error", err)
-		}
-		if err := h.WorkGraph.DetectBlockRouteForNode(ctx, node.ID); err != nil {
-			slog.Warn("detect Wendy block route failed", "issue_id", connected.ID.String(), "error", err)
-		}
-	}
-	if err := h.WorkGraph.DetectStalledNodes(ctx, issue.WorkspaceID); err != nil {
-		slog.Warn("detect stalled Wendy work nodes failed", "workspace_id", issue.WorkspaceID.String(), "error", err)
-	}
-}
-
-func (h *Handler) detectWendyStartWorkForIssue(ctx context.Context, issue db.Issue) {
-	if h.WorkGraph == nil {
-		return
-	}
-	node, err := h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
-		WorkspaceID:   issue.WorkspaceID,
-		LinkedIssueID: issue.ID,
-	})
-	if err != nil {
-		slog.Warn("load Wendy work node for start work failed", "issue_id", issue.ID.String(), "error", err)
-		return
-	}
-	h.ensureWendyWorkNodeChannel(ctx, issue, node)
-	node, err = h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
-		WorkspaceID:   issue.WorkspaceID,
-		LinkedIssueID: issue.ID,
-	})
-	if err != nil {
-		slog.Warn("reload Wendy work node for start work failed", "issue_id", issue.ID.String(), "error", err)
-		return
-	}
-	if err := h.WorkGraph.DetectStartWorkForNode(ctx, node.ID); err != nil {
-		slog.Warn("detect Wendy start work failed", "issue_id", issue.ID.String(), "error", err)
-	}
-}
-
-func (h *Handler) ensureWendyWorkNodeChannel(ctx context.Context, issue db.Issue, node db.WorkNode) {
-	if h.WorkGraph == nil || node.PrimaryChannelID.Valid {
-		return
-	}
-	if node.OwnerType != "agent" && node.OwnerType != "member" {
-		return
-	}
-	if !node.OwnerID.Valid {
-		return
-	}
-	channelID, err := h.WorkGraph.ResolveSharedGroupChannel(ctx, issue.WorkspaceID, node.OwnerType, node.OwnerID)
-	if err != nil || !channelID.Valid {
-		return
-	}
-	if err := h.WorkGraph.SetPrimaryChannel(ctx, node.ID, channelID); err != nil {
-		slog.Warn("set Wendy work node primary channel failed", "issue_id", issue.ID.String(), "error", err)
 	}
 }
 

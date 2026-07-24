@@ -1,22 +1,18 @@
 "use client";
 
 import { useMemo } from "react";
-import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock, Link2, Repeat } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Clock, Cog, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
   agentRemindersKeys,
   agentRemindersUpcomingOptions,
-  agentRemindersHistoryOptions,
 } from "@multica/core/agents/queries";
 import {
   adaptUpcomingRow,
-  adaptFiredRow,
   type UpcomingReminderRow,
-  type FiredReminderRow,
   type ReminderCadence,
-  type ReminderDefinitionStatus,
 } from "@multica/core/agents/reminder-view-model";
 import { useT } from "../../../i18n";
 import { AppLink } from "../../../navigation/app-link";
@@ -34,12 +30,11 @@ interface RemindersTabProps {
  * inline form anywhere in this file. A human who wants a change asks the
  * Agent; only the owning Agent may act, via its own CLI.
  *
- * Two sections in one scroll pane: Upcoming (scheduled definitions, ordered
- * by next fire) then History (fired occurrences, cursor-paginated
- * newest-first). These are genuinely different data — a History row
- * describes one past OCCURRENCE, not the parent definition's current state;
- * a still-recurring reminder's past fire must not read as "this reminder is
- * done."
+ * One flat list of active reminder definitions ordered by next fire. There is
+ * no Upcoming/History partition: once a one-shot fires it disappears and the
+ * agent's resulting action is the user-visible record. Adaptive group patrols
+ * stay in place and add one "last patrol" line because they replan the same
+ * definition instead of creating a stream of visible history rows.
  *
  * LRM-505 field/IA alignment (not neo-brutal skin): title; clock + relative
  * + absolute time; recurring cadence chip (one-shot: no chip); readable
@@ -56,16 +51,6 @@ export function RemindersTab({ agent }: RemindersTabProps) {
     isError: upcomingIsError,
     error: upcomingError,
   } = useQuery(agentRemindersUpcomingOptions(agent.id));
-  const {
-    data: historyData,
-    isLoading: historyLoading,
-    isError: historyIsError,
-    error: historyError,
-    hasNextPage,
-    isFetchingNextPage,
-    fetchNextPage,
-  } = useInfiniteQuery(agentRemindersHistoryOptions(agent.id));
-
   const upcomingRows = useMemo<UpcomingReminderRow[]>(
     () =>
       (upcomingData?.definitions ?? [])
@@ -73,21 +58,8 @@ export function RemindersTab({ agent }: RemindersTabProps) {
         .filter((row): row is UpcomingReminderRow => row !== null),
     [upcomingData],
   );
-  const historyRows = useMemo<FiredReminderRow[]>(
-    () =>
-      (historyData?.pages ?? []).reduce<FiredReminderRow[]>((rows, page) => {
-        for (const raw of page.occurrences) {
-          const row = adaptFiredRow(raw);
-          if (row) rows.push(row);
-        }
-        return rows;
-      }, []),
-    [historyData],
-  );
 
-  const inaccessible =
-    (upcomingError instanceof ApiError && upcomingError.status === 403) ||
-    (historyError instanceof ApiError && historyError.status === 403);
+  const inaccessible = upcomingError instanceof ApiError && upcomingError.status === 403;
 
   if (inaccessible) {
     return (
@@ -101,90 +73,27 @@ export function RemindersTab({ agent }: RemindersTabProps) {
     void queryClient.invalidateQueries({ queryKey: agentRemindersKeys.all(agent.id) });
   };
 
-  // Empty state is decided at THIS aggregate level, not independently per
-  // section — a genuinely empty Agent (no reminders anywhere, ever) reads
-  // as one honest "No reminders yet", not two stacked "No upcoming.../No
-  // fired..." messages that redundantly say the same thing twice. Only
-  // once one section has real content does the other's specific empty
-  // copy become meaningful (it's now telling you something the other
-  // section's content doesn't already imply).
-  const upcomingSettled = !upcomingLoading && !upcomingIsError;
-  const historySettled = !historyLoading && !historyIsError;
-  const bothGenuinelyEmpty =
-    upcomingSettled && historySettled && upcomingRows.length === 0 && historyRows.length === 0;
-
-  if (bothGenuinelyEmpty) {
+  if (!upcomingLoading && !upcomingIsError && upcomingRows.length === 0) {
     return (
       <div className="p-4 text-xs text-muted-foreground">{t(($) => $.reminders.empty_all)}</div>
     );
   }
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <section aria-label={t(($) => $.reminders.upcoming_heading)}>
-        <SectionHeading label={t(($) => $.reminders.upcoming_heading)} />
-        {upcomingLoading ? (
-          <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
-            {t(($) => $.reminders.loading)}
-          </p>
-        ) : upcomingIsError ? (
-          <ErrorState onRetry={retry} label={t(($) => $.reminders.error_title)} retryLabel={t(($) => $.reminders.retry)} />
-        ) : upcomingRows.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
-            {t(($) => $.reminders.empty_upcoming)}
-          </p>
-        ) : (
-          <ul className="divide-y">
-            {upcomingRows.map((row) => (
-              <UpcomingRowView key={row.id} row={row} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section aria-label={t(($) => $.reminders.history_heading)}>
-        <SectionHeading label={t(($) => $.reminders.history_heading)} />
-        {historyLoading ? (
-          <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
-            {t(($) => $.reminders.loading)}
-          </p>
-        ) : historyIsError ? (
-          <ErrorState onRetry={retry} label={t(($) => $.reminders.error_title)} retryLabel={t(($) => $.reminders.retry)} />
-        ) : historyRows.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
-            {t(($) => $.reminders.empty_history)}
-          </p>
-        ) : (
-          <>
-            <ul className="divide-y">
-              {historyRows.map((row) => (
-                <FiredRowView key={`${row.id}:${row.firedAt}`} row={row} />
-              ))}
-            </ul>
-            {hasNextPage && (
-              <div className="px-3 py-3 md:px-4">
-                <button
-                  type="button"
-                  onClick={() => void fetchNextPage()}
-                  disabled={isFetchingNextPage}
-                  aria-busy={isFetchingNextPage}
-                  className="text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
-                >
-                  {isFetchingNextPage ? t(($) => $.reminders.loading) : t(($) => $.reminders.load_more)}
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function SectionHeading({ label }: { label: string }) {
-  return (
-    <div className="border-b bg-muted/30 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground md:px-4">
-      {label}
+    <div className="flex min-w-0 flex-col" aria-label={t(($) => $.tabs.reminders)}>
+      {upcomingLoading ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
+          {t(($) => $.reminders.loading)}
+        </p>
+      ) : upcomingIsError ? (
+        <ErrorState onRetry={retry} label={t(($) => $.reminders.error_title)} retryLabel={t(($) => $.reminders.retry)} />
+      ) : (
+        <ul className="divide-y">
+          {upcomingRows.map((row) => (
+            <UpcomingRowView key={row.id} row={row} />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -313,10 +222,11 @@ function formatRelativeInstant(iso: string, nowMs = Date.now()): string {
   return relativeTimeFormatter.format(diffDay, "day");
 }
 
-function TimeRow({ iso }: { iso: string }) {
+function TimeRow({ iso, label }: { iso: string; label?: string }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
       <Clock className="size-3.5 shrink-0" aria-hidden />
+      {label ? <span>{label}</span> : null}
       <span className="font-medium text-foreground">{formatRelativeInstant(iso)}</span>
       <span aria-hidden>·</span>
       <span>{formatAbsoluteInstant(iso)}</span>
@@ -324,7 +234,7 @@ function TimeRow({ iso }: { iso: string }) {
   );
 }
 
-type DisplayStatus = "scheduled" | "firing" | "overdue" | "cancelled" | "fired";
+type DisplayStatus = "scheduled" | "firing" | "overdue";
 
 function resolveUpcomingStatus(row: UpcomingReminderRow, nowMs = Date.now()): DisplayStatus {
   if (row.status === "firing") return "firing";
@@ -340,11 +250,7 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
       ? t(($) => $.reminders.status_scheduled)
       : status === "firing"
         ? t(($) => $.reminders.status_firing)
-        : status === "overdue"
-          ? t(($) => $.reminders.status_overdue)
-          : status === "cancelled"
-            ? t(($) => $.reminders.status_cancelled)
-            : t(($) => $.reminders.status_fired);
+        : t(($) => $.reminders.status_overdue);
   return (
     <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
       {label}
@@ -352,48 +258,49 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
   );
 }
 
-function historyStatus(definitionStatus: ReminderDefinitionStatus): DisplayStatus | null {
-  if (definitionStatus === "cancelled") return "cancelled";
-  if (definitionStatus === "fired") return "fired";
-  // Recurring definitions stay `scheduled` after a fire — don't stamp every
-  // History row as "scheduled" (noise). Terminal states only.
-  return null;
-}
-
-function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
-  const displayStatus = resolveUpcomingStatus(row);
+function ManagedSourceBadge() {
+  const { t } = useT("agents");
+  const label = t(($) => $.reminders.source_group_manager_auto);
   return (
-    <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
-          {row.title}
-        </p>
-        <StatusBadge status={displayStatus} />
-      </div>
-      <TimeRow iso={row.nextFireAt} />
-      <div className="flex flex-wrap items-center gap-1.5">
-        <RecurrenceChip cadence={row.cadence} />
-        <AnchorLink anchor={row.anchor} />
-      </div>
-    </li>
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+      title={t(($) => $.reminders.source_group_manager_auto_tooltip)}
+      aria-label={t(($) => $.reminders.source_group_manager_auto_aria)}
+    >
+      <Cog className="size-3" aria-hidden />
+      {label}
+    </span>
   );
 }
 
-function FiredRowView({ row }: { row: FiredReminderRow }) {
-  const status = historyStatus(row.definitionStatus);
+function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
+  const { t } = useT("agents");
+  const displayStatus = resolveUpcomingStatus(row);
+  const managedPatrol =
+    row.origin.kind === "group_manager_auto" && row.origin.managedKind === "patrol";
   return (
     <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
-          {row.title}
-        </p>
-        {status ? <StatusBadge status={status} /> : null}
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
+            {row.title}
+          </p>
+          {row.origin.kind === "group_manager_auto" ? <ManagedSourceBadge /> : null}
+        </div>
+        <StatusBadge status={displayStatus} />
       </div>
-      <TimeRow iso={row.firedAt} />
+      <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
+      {managedPatrol ? (
+        row.lastFireAt ? (
+          <TimeRow iso={row.lastFireAt} label={t(($) => $.reminders.last_patrol_label)} />
+        ) : (
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Clock className="size-3.5 shrink-0" aria-hidden />
+            <span>{t(($) => $.reminders.not_patrolled_yet)}</span>
+          </div>
+        )
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
-        {/* This describes the DEFINITION's own cadence, distinct from "this row
-            fired" — a recurring definition that's still `scheduled` must not
-            read as if this past occurrence terminated it. */}
         <RecurrenceChip cadence={row.cadence} />
         <AnchorLink anchor={row.anchor} />
       </div>

@@ -31,6 +31,10 @@ export type ReminderAnchor =
   | { available: true; kind: "channel" | "thread"; label: string; href: string }
   | { available: false };
 
+export type ReminderOrigin =
+  | { kind: "agent" }
+  | { kind: "group_manager_auto"; managedKind: "patrol" };
+
 /** Upcoming only ever queries `status=scheduled`, so a definition row must be
  * mid-lifecycle (not yet fired, not cancelled) to belong there. */
 const KNOWN_UPCOMING_DEFINITION_STATUSES = new Set(["scheduled", "firing"]);
@@ -43,10 +47,12 @@ export interface ReminderRow {
   title: string;
   cadence: ReminderCadence;
   anchor: ReminderAnchor;
+  origin: ReminderOrigin;
 }
 
 export interface UpcomingReminderRow extends ReminderRow {
   nextFireAt: string;
+  lastFireAt?: string;
   /** Definition lifecycle for Upcoming (`scheduled` | `firing`). */
   status: Extract<ReminderDefinitionStatus, "scheduled" | "firing">;
 }
@@ -85,6 +91,8 @@ export interface RawReminderDefinition {
   cadence?: string;
   schedule_timezone?: string;
   snooze_count: number;
+  origin_kind: string;
+  managed_kind?: string;
   anchor: RawReminderAnchor;
 }
 
@@ -171,6 +179,14 @@ function isKnownDefinitionStatus(status: string): status is ReminderDefinitionSt
   return KNOWN_DEFINITION_STATUSES.has(status as ReminderDefinitionStatus);
 }
 
+function adaptOrigin(originKind: string, managedKind: string | undefined): ReminderOrigin | null {
+  if (originKind === "agent" && !managedKind) return { kind: "agent" };
+  if (originKind === "group_manager_auto" && managedKind === "patrol") {
+    return { kind: "group_manager_auto", managedKind };
+  }
+  return null;
+}
+
 // `schedule_kind` arrives from the network as a plain `string` (the runtime
 // schema deliberately doesn't `z.enum()` it — see RawReminderPageSchema) so
 // an unrecognized third value still parses instead of rejecting the whole
@@ -206,12 +222,16 @@ export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRo
   if (!KNOWN_UPCOMING_DEFINITION_STATUSES.has(raw.status)) return null;
   const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
   if (!cadence) return null;
+  const origin = adaptOrigin(raw.origin_kind, raw.managed_kind);
+  if (!origin) return null;
   return {
     id: raw.id,
     title: raw.title,
     cadence,
     anchor: adaptAnchor(raw.anchor),
+    origin,
     nextFireAt: raw.next_fire_at,
+    lastFireAt: raw.last_fire_at,
     status: raw.status as Extract<ReminderDefinitionStatus, "scheduled" | "firing">,
   };
 }
@@ -235,6 +255,7 @@ export function adaptFiredRow(raw: RawReminderOccurrence): FiredReminderRow | nu
     title: raw.title,
     cadence,
     anchor: adaptAnchor(raw.anchor),
+    origin: { kind: "agent" },
     firedAt: raw.fired_at,
     definitionStatus: raw.definition_status,
   };

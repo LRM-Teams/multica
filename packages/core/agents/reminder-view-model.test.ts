@@ -16,6 +16,7 @@ function makeDefinition(overrides: Partial<RawReminderDefinition> = {}): RawRemi
     cadence: "daily@09:00",
     schedule_timezone: "America/Los_Angeles",
     snooze_count: 0,
+    origin_kind: "agent",
     anchor: { available: false },
     ...overrides,
   };
@@ -52,9 +53,35 @@ describe("adaptUpcomingRow", () => {
         timezone: "America/Los_Angeles",
       },
       anchor: { available: false },
+      origin: { kind: "agent" },
       nextFireAt: "2026-07-24T09:00:00Z",
+      lastFireAt: undefined,
       status: "scheduled",
     });
+  });
+
+  it("preserves managed origin and the adaptive patrol's last-fire state", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        schedule_kind: "one_shot",
+        cadence: undefined,
+        schedule_timezone: undefined,
+        origin_kind: "group_manager_auto",
+        managed_kind: "patrol",
+        last_fire_at: "2026-07-24T08:00:00Z",
+      }),
+    );
+    expect(row?.origin).toEqual({ kind: "group_manager_auto", managedKind: "patrol" });
+    expect(row?.lastFireAt).toBe("2026-07-24T08:00:00Z");
+  });
+
+  it("drops an unknown or malformed origin rather than hiding its source", () => {
+    expect(adaptUpcomingRow(makeDefinition({ origin_kind: "future_origin" }))).toBeNull();
+    expect(
+      adaptUpcomingRow(
+        makeDefinition({ origin_kind: "group_manager_auto", managed_kind: undefined }),
+      ),
+    ).toBeNull();
   });
 
   it("degrades bare #workspace:shortId anchor labels to unavailable", () => {
@@ -194,6 +221,7 @@ describe("adaptFiredRow", () => {
         timezone: "America/Los_Angeles",
       },
       anchor: { available: false },
+      origin: { kind: "agent" },
       firedAt: "2026-07-23T09:00:05Z",
       definitionStatus: "scheduled",
     });

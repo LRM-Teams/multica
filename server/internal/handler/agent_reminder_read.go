@@ -32,6 +32,8 @@ type humanReminderDefinition struct {
 	Cadence          *string             `json:"cadence,omitempty"`
 	ScheduleTimezone *string             `json:"schedule_timezone,omitempty"`
 	SnoozeCount      int32               `json:"snooze_count"`
+	OriginKind       string              `json:"origin_kind"`
+	ManagedKind      *string             `json:"managed_kind,omitempty"`
 	Anchor           humanReminderAnchor `json:"anchor"`
 }
 
@@ -119,6 +121,7 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				ScheduleKind: reminderScheduleKind(reminder.Cadence), NextFireAt: timestampToString(reminder.FireAt),
 				LastFireAt: timestampToPtr(reminder.FiredAt), Cadence: nullableTextPtr(reminder.Cadence),
 				ScheduleTimezone: reminderTimezonePtr(reminder.Cadence, reminder.ScheduleTimezone), SnoozeCount: reminder.SnoozeCount,
+				OriginKind: reminder.OriginKind, ManagedKind: nullableTextPtr(reminder.ManagedKind),
 				Anchor: h.safeHumanReminderAnchor(r, request.userID, reminder),
 			})
 		}
@@ -145,6 +148,10 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 			JOIN agent_reminder reminder ON reminder.id = occurrence.reminder_id
 			WHERE occurrence.workspace_id = $1 AND occurrence.agent_id = $2
 			  AND occurrence.status = 'fired'
+			  AND NOT (
+			    reminder.origin_kind = 'group_manager_auto'
+			    AND reminder.managed_kind = 'patrol'
+			  )
 			  AND ($3::timestamptz IS NULL OR (occurrence.fired_at, occurrence.id) < ($3, $4))
 			ORDER BY occurrence.fired_at DESC, occurrence.id DESC
 			LIMIT $5`, request.agent.WorkspaceID, request.agent.ID, cursorAt, nullableUUID(cursorID), limit+1)
@@ -165,7 +172,8 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				&reminder.FireAt, &reminder.Status, &reminder.FiredTaskID, &reminder.SnoozeCount,
 				&reminder.CreatedAt, &reminder.UpdatedAt, &reminder.FiredAt, &reminder.Cadence,
 				&reminder.ScheduleTimezone, &reminder.CadenceNextAt, &reminder.CurrentOccurrenceID,
-				&reminder.TerminalReason, &reminder.Version); err != nil {
+				&reminder.TerminalReason, &reminder.Version, &reminder.OriginKind,
+				&reminder.ManagedKind, &reminder.OriginKey); err != nil {
 				rows.Close()
 				writeError(w, http.StatusInternalServerError, "failed to load reminder history")
 				return
@@ -194,6 +202,36 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (h *Handler) canUserManageGroupChannel(ctx context.Context, workspaceID, channelID, userID pgtype.UUID) bool {
+	return canUserManageGroupChannelWithQuery(ctx, h.DB, workspaceID, channelID, userID)
+}
+
+func canUserManageGroupChannelWithQuery(ctx context.Context, q reminderQueryRower, workspaceID, channelID, userID pgtype.UUID) bool {
+	if !workspaceID.Valid || !channelID.Valid || !userID.Valid {
+		return false
+	}
+	var allowed bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM channel ch
+		  WHERE ch.id = $2
+		    AND ch.workspace_id = $1
+		    AND ch.kind = 'group'
+		    AND (
+		      ch.created_by = $3
+		      OR EXISTS (
+		        SELECT 1
+		        FROM member m
+		        WHERE m.workspace_id = $1
+		          AND m.user_id = $3
+		          AND m.role IN ('owner', 'admin')
+		      )
+		    )
+		)`, workspaceID, channelID, userID).Scan(&allowed)
+	return err == nil && allowed
+}
+
 func reminderSelectColumnsWithAlias(alias string) string {
 	parts := strings.Split(reminderSelectColumns(), ",")
 	for i, part := range parts {
@@ -217,7 +255,7 @@ func agentReminderRealtime(agentID string) AgentActivityRealtimeContract {
 
 func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, reminder agentReminder) humanReminderAnchor {
 	unavailable := humanReminderAnchor{Available: false}
-	if !reminder.AnchorChannelID.Valid || !reminder.AnchorMessageID.Valid {
+	if !reminder.AnchorChannelID.Valid {
 		return unavailable
 	}
 	var channelName, channelKind, workspaceSlug string
@@ -235,24 +273,29 @@ func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, remind
 		WHERE channel.id = $1 AND channel.workspace_id = $2`, reminder.AnchorChannelID, reminder.WorkspaceID, parseUUID(userID)).Scan(&channelName, &channelKind, &workspaceSlug, &archivedAt, &member); err != nil || archivedAt.Valid || !member {
 		return unavailable
 	}
-	anchor, err := loadReminderAnchorSnapshot(r.Context(), h.DB, reminder)
-	if err != nil || !anchor.Available {
-		return unavailable
-	}
 	kind := "channel"
 	display := h.reminderAnchorDisplayName(r.Context(), reminder.WorkspaceID, reminder.AnchorChannelID, channelKind, channelName, parseUUID(userID))
-	if reminder.AnchorThreadRootMessageID.Valid {
+	if reminder.AnchorMessageID.Valid {
+		anchor, err := loadReminderAnchorSnapshot(r.Context(), h.DB, reminder)
+		if err != nil || !anchor.Available {
+			return unavailable
+		}
+	}
+	if reminder.AnchorMessageID.Valid && reminder.AnchorThreadRootMessageID.Valid {
 		kind = "thread"
 		display = "Thread in " + display
 	}
-	messageID := reminder.AnchorMessageID
-	query := "message=" + url.QueryEscape(uuidToString(messageID))
-	if reminder.AnchorThreadRootMessageID.Valid {
-		query = "thread=" + url.QueryEscape(uuidToString(reminder.AnchorThreadRootMessageID)) +
-			"&message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
+	href := fmt.Sprintf("/%s/channels/%s", url.PathEscape(workspaceSlug),
+		url.PathEscape(uuidToString(reminder.AnchorChannelID)))
+	if reminder.AnchorMessageID.Valid {
+		href += "?message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
 	}
-	href := fmt.Sprintf("/%s/channels/%s?%s", url.PathEscape(workspaceSlug),
-		url.PathEscape(uuidToString(reminder.AnchorChannelID)), query)
+	if reminder.AnchorMessageID.Valid && reminder.AnchorThreadRootMessageID.Valid {
+		query := "thread=" + url.QueryEscape(uuidToString(reminder.AnchorThreadRootMessageID)) +
+			"&message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
+		href = fmt.Sprintf("/%s/channels/%s?%s", url.PathEscape(workspaceSlug),
+			url.PathEscape(uuidToString(reminder.AnchorChannelID)), query)
+	}
 	return humanReminderAnchor{
 		Available: true, Kind: &kind, Display: &display, DisplayName: &display, Href: &href,
 	}

@@ -80,6 +80,20 @@ func TestIssueThreadBackflowWritesTargetedEventsWithoutWakingOtherAgents(t *test
 	if unrelatedSessions != 0 {
 		t.Fatalf("unrelated agent received %d issue-event wake(s), want 0", unrelatedSessions)
 	}
+	var managedReminders int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_reminder
+		WHERE workspace_id = $1
+		  AND anchor_channel_id = $2
+		  AND agent_id IN ($3, $4)
+		  AND origin_kind = 'group_manager_auto'`,
+		testWorkspaceID, channelID, creatorID, assigneeID).Scan(&managedReminders); err != nil {
+		t.Fatalf("count managed reminders created by issue delivery: %v", err)
+	}
+	if managedReminders != 0 {
+		t.Fatalf("issue delivery created %d managed reminder(s), want 0", managedReminders)
+	}
 }
 
 func TestIssueThreadBackflowLeavesNonMembersUntargeted(t *testing.T) {

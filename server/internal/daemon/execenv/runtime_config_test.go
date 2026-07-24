@@ -1956,13 +1956,17 @@ func TestBuildMetaSkillContentUsesStructuralManagedRole(t *testing.T) {
 	})
 	if !strings.Contains(withRole, "### Managed Group Manager Role") ||
 		!strings.Contains(withRole, "server structurally assigned") ||
-		!strings.Contains(withRole, "Speak only when coordination is genuinely useful") ||
+		!strings.Contains(withRole, "Speak only when issue coordination is genuinely useful") ||
 		!strings.Contains(withRole, "Prefer private coordination for one recipient") ||
+		!strings.Contains(withRole, "Group chat quietness or chatter is not progress") ||
 		!strings.Contains(withRole, "system events plus their directed wakes already own work delivery") ||
 		!strings.Contains(withRole, "never duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands") ||
-		!strings.Contains(withRole, "within the bounds supplied by that patrol wake") ||
-		!strings.Contains(withRole, "never create a second patrol") ||
-		!strings.Contains(withRole, "failure fallback") {
+		!strings.Contains(withRole, "multica reminder snooze --id <reminder-id> --delay-seconds <900|1800|2700|3600>") ||
+		!strings.Contains(withRole, "never create, cancel, or mutate another patrol reminder") ||
+		!strings.Contains(withRole, "resets real issue progress to 15 minutes") ||
+		!strings.Contains(withRole, "makes no-active groups dormant") ||
+		!strings.Contains(withRole, "caps blocked work at 15 minutes") ||
+		!strings.Contains(withRole, "do not repeatedly disturb a blocked executor") {
 		t.Fatalf("managed group manager brief missing structural role contract: %q", withRole)
 	}
 	withoutRole := buildMetaSkillContent("codex", TaskContextForEnv{

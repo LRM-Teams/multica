@@ -178,7 +178,7 @@ func TestGroupManagerRemindersMigration221DownRestoresEmptyLegacyTable(t *testin
 	}
 }
 
-func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *testing.T) {
+func TestGroupManagerPatrolIntervalsMigration222UsesIssueProgressAndDormancy(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -190,31 +190,19 @@ func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *test
 		t.Fatalf("apply migration 221 up: %v", err)
 	}
 
-	var fallbackReminderID string
+	var dormantReminderID string
 	if err := conn.QueryRow(ctx, `
 		UPDATE agent_reminder
 		SET fire_at = now() + interval '24 hours'
 		WHERE origin_kind = 'group_manager_auto'
 		RETURNING id
-	`).Scan(&fallbackReminderID); err != nil {
-		t.Fatalf("prepare fallback schedule: %v", err)
-	}
-	if _, err := conn.Exec(ctx, `
-		INSERT INTO agent_reminder_lifecycle_event (
-		  reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
-		  next_fire_at, title_snapshot, resulting_state, reason_code
-		)
-		SELECT
-		  id, workspace_id, agent_id, 'fired', 'system', agent_id,
-		  fire_at, title, 'scheduled', 'patrol_failure_fallback_rearmed'
-		FROM agent_reminder
-		WHERE id = $1
-	`, fallbackReminderID); err != nil {
-		t.Fatalf("seed fallback lifecycle: %v", err)
+	`).Scan(&dormantReminderID); err != nil {
+		t.Fatalf("prepare dormant schedule: %v", err)
 	}
 
 	const adaptiveReminderID = "91000000-0000-4000-8000-000000000222"
 	const ordinaryReminderID = "92000000-0000-4000-8000-000000000222"
+	const activeIssueID = "71000000-0000-4000-8000-000000000222"
 	if _, err := conn.Exec(ctx, `
 		INSERT INTO agent (
 		  id, workspace_id, runtime_id, managed_role
@@ -232,6 +220,28 @@ func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *test
 		  'group',
 		  '20000000-0000-4000-8000-000000000219',
 		  '31000000-0000-4000-8000-000000000222'
+		);
+		INSERT INTO channel_message (
+		  id, channel_id, workspace_id
+		) VALUES (
+		  '81000000-0000-4000-8000-000000000222',
+		  '51000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219'
+		);
+		INSERT INTO issue (
+		  id, workspace_id, status
+		) VALUES (
+		  '71000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219',
+		  'in_progress'
+		);
+		INSERT INTO issue_source_message (
+		  issue_id, message_id, channel_id, workspace_id
+		) VALUES (
+		  '71000000-0000-4000-8000-000000000222',
+		  '81000000-0000-4000-8000-000000000222',
+		  '51000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219'
 		);
 		INSERT INTO agent_reminder (
 		  id, workspace_id, agent_id, initiator_user_id, title,
@@ -284,14 +294,20 @@ func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *test
 		t.Fatalf("reapply migration 222 up: %v", err)
 	}
 
-	var fallbackSeconds, adaptiveSeconds, ordinarySeconds int64
+	var dormantStatus, adaptiveStatus, ordinaryStatus string
+	var adaptiveSeconds, ordinarySeconds int64
+	var adaptiveStep int16
 	if err := conn.QueryRow(ctx, `
 		SELECT
-		  extract(epoch FROM ((SELECT fire_at FROM agent_reminder WHERE id = $1) - now()))::bigint,
+		  (SELECT status FROM agent_reminder WHERE id = $1),
+		  (SELECT status FROM agent_reminder WHERE id = $2),
+		  (SELECT managed_backoff_step FROM agent_reminder WHERE id = $2),
 		  extract(epoch FROM ((SELECT fire_at FROM agent_reminder WHERE id = $2) - now()))::bigint,
+		  (SELECT status FROM agent_reminder WHERE id = $3),
 		  extract(epoch FROM ((SELECT fire_at FROM agent_reminder WHERE id = $3) - now()))::bigint
-	`, fallbackReminderID, adaptiveReminderID, ordinaryReminderID).Scan(
-		&fallbackSeconds, &adaptiveSeconds, &ordinarySeconds,
+	`, dormantReminderID, adaptiveReminderID, ordinaryReminderID).Scan(
+		&dormantStatus, &adaptiveStatus, &adaptiveStep, &adaptiveSeconds,
+		&ordinaryStatus, &ordinarySeconds,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -302,25 +318,130 @@ func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *test
 			t.Fatalf("%s delay=%ds, want near %s", name, got, want)
 		}
 	}
-	assertDelayNear("fallback", fallbackSeconds, 12*time.Hour)
-	assertDelayNear("adaptive", adaptiveSeconds, 8*time.Hour)
+	if dormantStatus != "fired" {
+		t.Fatalf("no-active-issue patrol status=%s, want fired/dormant", dormantStatus)
+	}
+	if adaptiveStatus != "scheduled" || adaptiveStep != 0 {
+		t.Fatalf("active-issue patrol status/step=%s/%d, want scheduled/0", adaptiveStatus, adaptiveStep)
+	}
+	assertDelayNear("adaptive", adaptiveSeconds, 15*time.Minute)
+	if ordinaryStatus != "scheduled" {
+		t.Fatalf("ordinary reminder status=%s, want scheduled", ordinaryStatus)
+	}
 	assertDelayNear("ordinary", ordinarySeconds, 24*time.Hour)
 
-	var fallbackEvents, adaptiveEvents, ordinaryEvents int
+	var dormantEvents, adaptiveEvents, ordinaryEvents int
 	if err := conn.QueryRow(ctx, `
 		SELECT
-		  count(*) FILTER (WHERE reminder_id = $1 AND reason_code = 'patrol_failure_fallback_cap_migrated'),
-		  count(*) FILTER (WHERE reminder_id = $2 AND reason_code = 'patrol_adaptive_cap_migrated'),
+		  count(*) FILTER (WHERE reminder_id = $1 AND reason_code = 'patrol_no_active_issue_dormant'),
+		  count(*) FILTER (WHERE reminder_id = $2 AND reason_code = 'patrol_issue_progress_policy_migrated'),
 		  count(*) FILTER (WHERE reminder_id = $3)
 		FROM agent_reminder_lifecycle_event
-	`, fallbackReminderID, adaptiveReminderID, ordinaryReminderID).Scan(
-		&fallbackEvents, &adaptiveEvents, &ordinaryEvents,
+	`, dormantReminderID, adaptiveReminderID, ordinaryReminderID).Scan(
+		&dormantEvents, &adaptiveEvents, &ordinaryEvents,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if fallbackEvents != 1 || adaptiveEvents != 1 || ordinaryEvents != 0 {
-		t.Fatalf("migration lifecycle fallback/adaptive/ordinary=%d/%d/%d, want 1/1/0",
-			fallbackEvents, adaptiveEvents, ordinaryEvents)
+	if dormantEvents != 1 || adaptiveEvents != 1 || ordinaryEvents != 0 {
+		t.Fatalf("migration lifecycle dormant/adaptive/ordinary=%d/%d/%d, want 1/1/0",
+			dormantEvents, adaptiveEvents, ordinaryEvents)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		UPDATE agent_reminder
+		SET fire_at = now() + interval '1 hour',
+		    fired_at = '2026-07-24T08:00:00Z',
+		    managed_backoff_step = 3
+		WHERE id = $1
+	`, adaptiveReminderID); err != nil {
+		t.Fatalf("prepare progressed patrol: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO comment (issue_id, content) VALUES ($1, 'real issue progress')
+	`, activeIssueID); err != nil {
+		t.Fatalf("trigger issue-comment progress reset: %v", err)
+	}
+	var resetSeconds int64
+	var lastFireAt time.Time
+	if err := conn.QueryRow(ctx, `
+		SELECT managed_backoff_step,
+		       extract(epoch FROM (fire_at - now()))::bigint,
+		       fired_at
+		FROM agent_reminder WHERE id = $1
+	`, adaptiveReminderID).Scan(&adaptiveStep, &resetSeconds, &lastFireAt); err != nil {
+		t.Fatal(err)
+	}
+	if adaptiveStep != 0 {
+		t.Fatalf("comment progress backoff step=%d, want 0", adaptiveStep)
+	}
+	if want := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.UTC); !lastFireAt.Equal(want) {
+		t.Fatalf("comment progress last fire=%s, want preserved %s", lastFireAt, want)
+	}
+	assertDelayNear("comment progress reset", resetSeconds, 15*time.Minute)
+
+	const oldProjectID = "61000000-0000-4000-8000-000000000222"
+	const newProjectID = "62000000-0000-4000-8000-000000000222"
+	if _, err := conn.Exec(ctx, `
+		UPDATE channel SET project_id = $2 WHERE id = $1
+	`, "51000000-0000-4000-8000-000000000222", oldProjectID); err != nil {
+		t.Fatalf("bind managed group to old project scope: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE issue SET project_id = $2 WHERE id = $1
+	`, activeIssueID, oldProjectID); err != nil {
+		t.Fatalf("bind active issue to old project scope: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		DELETE FROM issue_source_message WHERE issue_id = $1
+	`, activeIssueID); err != nil {
+		t.Fatalf("remove source scope before project move: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE issue SET project_id = $2 WHERE id = $1
+	`, activeIssueID, newProjectID); err != nil {
+		t.Fatalf("move active issue away from managed project scope: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `
+		SELECT status FROM agent_reminder WHERE id = $1
+	`, adaptiveReminderID).Scan(&adaptiveStatus); err != nil {
+		t.Fatal(err)
+	}
+	if adaptiveStatus != "fired" {
+		t.Fatalf("patrol after issue project move status=%s, want fired/dormant", adaptiveStatus)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO issue_source_message (
+		  issue_id, message_id, channel_id, workspace_id
+		) VALUES ($1, $2, $3, $4)
+	`, activeIssueID,
+		"81000000-0000-4000-8000-000000000222",
+		"51000000-0000-4000-8000-000000000222",
+		"10000000-0000-4000-8000-000000000219",
+	); err != nil {
+		t.Fatalf("restore source scope after project move: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `
+		SELECT status FROM agent_reminder WHERE id = $1
+	`, adaptiveReminderID).Scan(&adaptiveStatus); err != nil {
+		t.Fatal(err)
+	}
+	if adaptiveStatus != "scheduled" {
+		t.Fatalf("patrol after restored source scope status=%s, want scheduled", adaptiveStatus)
+	}
+
+	if _, err := conn.Exec(ctx, `
+		UPDATE issue SET status = 'done' WHERE id = $1
+	`, activeIssueID); err != nil {
+		t.Fatalf("terminalize active issue: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `
+		SELECT status FROM agent_reminder WHERE id = $1
+	`, adaptiveReminderID).Scan(&adaptiveStatus); err != nil {
+		t.Fatal(err)
+	}
+	if adaptiveStatus != "fired" {
+		t.Fatalf("patrol after final active issue status=%s, want fired/dormant", adaptiveStatus)
 	}
 }
 
@@ -440,7 +561,14 @@ func readManagedReminderMigrationSQL(t *testing.T, name string) string {
 const pre221ManagedReminderSchemaSQL = `
 CREATE TABLE workspace (id UUID PRIMARY KEY);
 CREATE TABLE "user" (id UUID PRIMARY KEY);
-CREATE TABLE issue (id UUID PRIMARY KEY);
+CREATE TABLE issue (
+  id UUID PRIMARY KEY,
+  workspace_id UUID NOT NULL,
+  project_id UUID,
+  status TEXT NOT NULL DEFAULT 'todo',
+  assignee_type TEXT,
+  assignee_id UUID
+);
 CREATE TABLE agent_runtime (
   id UUID PRIMARY KEY,
   workspace_id UUID NOT NULL,
@@ -458,6 +586,7 @@ CREATE TABLE channel (
   workspace_id UUID NOT NULL,
   kind TEXT NOT NULL,
   created_by UUID NOT NULL,
+  project_id UUID,
   group_manager_agent_id UUID,
   archived_at TIMESTAMPTZ
 );
@@ -479,6 +608,16 @@ CREATE TABLE issue_source_message (
   message_id UUID NOT NULL,
   channel_id UUID NOT NULL,
   workspace_id UUID NOT NULL
+);
+CREATE TABLE comment (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  issue_id UUID NOT NULL,
+  content TEXT NOT NULL
+);
+CREATE TABLE agent_task_queue (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  issue_id UUID,
+  status TEXT NOT NULL
 );
 CREATE TABLE agent_reminder (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

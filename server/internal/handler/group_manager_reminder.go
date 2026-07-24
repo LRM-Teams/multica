@@ -60,17 +60,27 @@ func (h *Handler) ensureGroupManagerPatrolIfNeverCreated(ctx context.Context, wo
 		FROM channel_message
 		WHERE workspace_id = $1 AND channel_id = $2 AND deleted_at IS NULL
 		ORDER BY created_at ASC, id ASC LIMIT 1`, workspaceID, channelID).Scan(&anchorMessageID)
+	patrolState, err := loadManagedPatrolIssueState(ctx, tx, workspaceID, channelID)
+	if err != nil {
+		return err
+	}
 	next := time.Now().UTC().Add(managedPatrolMinDelay)
+	status := "fired"
+	reason := "group_manager_patrol_bootstrapped_dormant"
+	if patrolState.Active > 0 {
+		status = "scheduled"
+		reason = "group_manager_patrol_bootstrapped"
+	}
 	created, err := scanAgentReminder(tx.QueryRow(ctx, `
 		INSERT INTO agent_reminder (
 		  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
-		  anchor_message_id, fire_at, origin_kind, managed_kind, origin_key
+		  anchor_message_id, fire_at, status, origin_kind, managed_kind, origin_key
 		) VALUES (
-		  $1, $2, $3, '群巡检', $4, $5, $6,
-		  'group_manager_auto', 'patrol', $7
+		  $1, $2, $3, '群巡检', $4, $5, $6, $7,
+		  'group_manager_auto', 'patrol', $8
 		)
 		RETURNING `+reminderSelectColumns(), workspaceID, managerID, initiatorID,
-		channelID, nullableUUID(anchorMessageID), next, "patrol:"+uuidToString(channelID)))
+		channelID, nullableUUID(anchorMessageID), next, status, "patrol:"+uuidToString(channelID)))
 	if err != nil {
 		return err
 	}
@@ -80,16 +90,20 @@ func (h *Handler) ensureGroupManagerPatrolIfNeverCreated(ctx context.Context, wo
 		  next_fire_at, title_snapshot, cadence_snapshot, resulting_state,
 		  reason_code
 		) VALUES (
-		  $1, $2, $3, 'scheduled', 'system', $3, $4, $5, $6, 'scheduled',
-		  'group_manager_patrol_bootstrapped'
+		  $1, $2, $3, 'scheduled', 'system', $3, $4, $5, $6, $7,
+		  $8
 		)`, created.ID, created.WorkspaceID, created.AgentID, created.FireAt,
-		created.Title, created.Cadence); err != nil {
+		created.Title, created.Cadence, created.Status, reason); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	h.publishAgentReminderChanged(ctx, created.WorkspaceID, created.AgentID)
-	h.projectReminderUpsert(ctx, created)
+	if created.Status == "scheduled" {
+		h.projectReminderUpsert(ctx, created)
+	} else {
+		h.projectReminderCancel(ctx, created)
+	}
 	return nil
 }

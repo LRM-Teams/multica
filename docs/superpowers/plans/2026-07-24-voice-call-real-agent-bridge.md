@@ -41,9 +41,9 @@ memory, tools, permissions, and channel history.
   changes the running containers.
 - [x] PR 2 (#1168): authenticate and validate the OpenAI-compatible RTC
   endpoint.
-- [x] PR 3 (#1169): persist an idempotent DM speech turn and dispatch the selected
-  agent.
-- [x] PR 4: wait for the exact durable completion and stream it as SSE.
+- [x] PR 3 (#1169): persist an idempotent DM speech turn and dispatch the
+  selected agent.
+- [x] PR 4 (#1171): wait for the exact durable completion and stream it as SSE.
 - [ ] PR 5: configure deployment secrets and verify a production call.
 
 ## Failure semantics

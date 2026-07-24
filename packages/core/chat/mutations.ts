@@ -147,6 +147,47 @@ export function useSetChatSessionProject() {
 }
 
 /**
+ * Soft-archives or restores a chat session. Optimistically patches `status`
+ * in the cached list; rolls back on error. Archived sessions remain in the
+ * `status=all` list for revisit but refuse new sends until restored.
+ */
+export function useSetChatSessionStatus() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+
+  return useMutation({
+    mutationFn: (data: { sessionId: string; status: "active" | "archived" }) => {
+      logger.info("setChatSessionStatus.start", {
+        sessionId: data.sessionId,
+        status: data.status,
+      });
+      return api.updateChatSession(data.sessionId, { status: data.status });
+    },
+    onMutate: async ({ sessionId, status }) => {
+      await qc.cancelQueries({ queryKey: chatKeys.sessions(wsId) });
+
+      const prevSessions = qc.getQueryData<ChatSession[]>(chatKeys.sessions(wsId));
+
+      const patch = (old?: ChatSession[]) =>
+        old?.map((s) => (s.id === sessionId ? { ...s, status } : s));
+      qc.setQueryData<ChatSession[]>(chatKeys.sessions(wsId), patch);
+
+      return { prevSessions };
+    },
+    onError: (err, vars, ctx) => {
+      logger.error("setChatSessionStatus.error.rollback", {
+        sessionId: vars.sessionId,
+        err,
+      });
+      if (ctx?.prevSessions) qc.setQueryData(chatKeys.sessions(wsId), ctx.prevSessions);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+    },
+  });
+}
+
+/**
  * Hard-deletes a chat session. Optimistically removes the row from the
  * sessions list so the dropdown updates instantly; rolls back on error.
  * The matching `chat:session_deleted` WS event keeps other tabs/devices

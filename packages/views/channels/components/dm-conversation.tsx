@@ -84,6 +84,7 @@ import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
 import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
+import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -1356,6 +1357,9 @@ function DmChannelConversation({
           </>
         }
       />
+      {dm.peer.type === "agent" ? (
+        <DmAgentBubble agentId={dm.peer.id} agentName={dm.peer.name} />
+      ) : null}
     </main>
   );
 

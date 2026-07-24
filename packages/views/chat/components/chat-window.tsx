@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { Minus, Maximize2, Minimize2, ChevronDown, Plus, Check, Trash2, Pencil, Loader2, Square } from "lucide-react";
+import { Minus, Maximize2, Minimize2, ChevronDown, Plus, Check, Trash2, Pencil, Loader2, Square, Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
@@ -43,9 +43,24 @@ import {
   useCreateChatSession,
   useDeleteChatSession,
   useMarkChatSessionRead,
+  useSetChatSessionStatus,
   useUpdateChatSession,
 } from "@multica/core/chat/mutations";
 import { useChatStore } from "@multica/core/chat";
+
+export interface ChatWindowProps {
+  /**
+   * When set, lock the window to this agent (DM bubble mode): hide the
+   * contact list, filter sessions to this agent, and use agent-scoped
+   * open/session state so it never collides with the global desktop FAB.
+   */
+  lockedAgentId?: string;
+  /**
+   * Force layout. Default: floating desktop window; on mobile with a
+   * lockedAgentId, fullscreen sheet is used automatically.
+   */
+  layout?: "floating" | "fullscreen";
+}
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
@@ -178,21 +193,65 @@ function replaceOptimisticChatMessageId(
   );
 }
 
-export function ChatWindow() {
+export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowProps = {}) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
-  const isOpen = useChatStore((s) => s.isOpen);
-  const activeSessionId = useChatStore((s) => s.activeSessionId);
-  const selectedAgentId = useChatStore((s) => s.selectedAgentId);
-  const setOpen = useChatStore((s) => s.setOpen);
-  const setActiveSession = useChatStore((s) => s.setActiveSession);
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
+  const isDmBubble = Boolean(lockedAgentId);
+  const effectiveLayout: "floating" | "fullscreen" = layout;
+
+  const globalIsOpen = useChatStore((s) => s.isOpen);
+  const globalActiveSessionId = useChatStore((s) => s.activeSessionId);
+  const globalSelectedAgentId = useChatStore((s) => s.selectedAgentId);
+  const dmBubbleOpenAgentId = useChatStore((s) => s.dmBubbleOpenAgentId);
+  const dmBubbleActiveSessionByAgent = useChatStore((s) => s.dmBubbleActiveSessionByAgent);
+  const setGlobalOpen = useChatStore((s) => s.setOpen);
+  const setGlobalActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
+  const setDmBubbleOpenAgentId = useChatStore((s) => s.setDmBubbleOpenAgentId);
+  const setDmBubbleActiveSession = useChatStore((s) => s.setDmBubbleActiveSession);
+
+  const isOpen = isDmBubble
+    ? dmBubbleOpenAgentId === lockedAgentId
+    : globalIsOpen;
+  const activeSessionId = isDmBubble
+    ? (dmBubbleActiveSessionByAgent[lockedAgentId!] ?? null)
+    : globalActiveSessionId;
+  const selectedAgentId = isDmBubble ? lockedAgentId! : globalSelectedAgentId;
+  const setOpen = useCallback(
+    (open: boolean) => {
+      if (isDmBubble && lockedAgentId) {
+        setDmBubbleOpenAgentId(open ? lockedAgentId : null);
+        return;
+      }
+      setGlobalOpen(open);
+    },
+    [isDmBubble, lockedAgentId, setDmBubbleOpenAgentId, setGlobalOpen],
+  );
+  const setActiveSession = useCallback(
+    (id: string | null) => {
+      if (isDmBubble && lockedAgentId) {
+        setDmBubbleActiveSession(lockedAgentId, id);
+        return;
+      }
+      setGlobalActiveSession(id);
+    },
+    [isDmBubble, lockedAgentId, setDmBubbleActiveSession, setGlobalActiveSession],
+  );
+
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
-  const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(chatSessionsOptions(wsId));
+  const { data: allSessions = [], isSuccess: sessionsLoaded } = useQuery(chatSessionsOptions(wsId));
+  const sessions = useMemo(
+    () =>
+      lockedAgentId
+        ? allSessions.filter((s) => s.agent_id === lockedAgentId)
+        : allSessions,
+    [allSessions, lockedAgentId],
+  );
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,
@@ -254,18 +313,24 @@ export function ChatWindow() {
     (a) => !a.archived_at && canAssignAgent(a, user?.id, memberRole),
   );
 
-  // Resolve selected agent: stored preference → first available
-  const activeAgent =
-    availableAgents.find((a) => a.id === selectedAgentId) ??
-    availableAgents[0] ??
-    null;
+  // Resolve selected agent:
+  // - DM bubble: locked to peer only (never fall back to another agent)
+  // - global: stored preference → first available
+  const activeAgent = lockedAgentId
+    ? (agents.find((a) => a.id === lockedAgentId) ?? null)
+    : (availableAgents.find((a) => a.id === selectedAgentId) ??
+      availableAgents[0] ??
+      null);
 
   // Three-state availability — "loading" stays neutral (no banner, no
   // disable) so the input doesn't flash a fake "no agent" state in the
   // few hundred ms before the agent list query resolves. Only `"none"`
   // (server confirmed: zero usable agents) drives the disabled UI.
+  // DM bubble is pinned to one agent: treat missing peer as no-agent.
   const agentAvailability = useWorkspaceAgentAvailability();
-  const noAgent = agentAvailability === "none";
+  const noAgent = isDmBubble
+    ? !activeAgent && agentAvailability !== "loading"
+    : agentAvailability === "none";
 
   // Presence drives both the avatar status dot (via ActorAvatar) and the
   // TaskStatusPill availability copy. `useAgentPresenceDetail` returns
@@ -592,6 +657,8 @@ export function ChatWindow() {
 
   const handleSelectAgent = useCallback(
     (agent: Agent) => {
+      // DM bubble is pinned to one agent — never switch.
+      if (lockedAgentId) return;
       // No-op when clicking the already-active agent — don't clobber the
       // current session just because the user closed the menu this way.
       // Compare against activeAgent (what the UI shows), not selectedAgentId
@@ -606,7 +673,7 @@ export function ChatWindow() {
       // Reset session when switching agent
       setActiveSession(null);
     },
-    [activeAgent, selectedAgentId, activeSessionId, setSelectedAgentId, setActiveSession],
+    [lockedAgentId, activeAgent, selectedAgentId, activeSessionId, setSelectedAgentId, setActiveSession],
   );
 
   const handleNewChat = useCallback(() => {
@@ -620,8 +687,8 @@ export function ChatWindow() {
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
       // Sessions are bound 1:1 to an agent — picking a session from a
-      // different agent implicitly switches the agent too.
-      if (activeAgent && session.agent_id !== activeAgent.id) {
+      // different agent implicitly switches the agent too (global mode only).
+      if (!lockedAgentId && activeAgent && session.agent_id !== activeAgent.id) {
         uiLogger.info("selectSession (cross-agent)", {
           from: activeAgent.id,
           toAgent: session.agent_id,
@@ -631,7 +698,7 @@ export function ChatWindow() {
       }
       setActiveSession(session.id);
     },
-    [activeAgent, setSelectedAgentId, setActiveSession],
+    [lockedAgentId, activeAgent, setSelectedAgentId, setActiveSession],
   );
 
   // Contact-list pick (left IM pane): switch agent AND open that agent's
@@ -662,26 +729,41 @@ export function ChatWindow() {
   // a real message, or a pending task whose timeline will stream in.
   const hasMessages = messages.length > 0 || !!pendingTaskId;
 
-  const isVisible = isOpen && (isExpanded || boundsReady);
+  const isVisible = isOpen && (effectiveLayout === "fullscreen" || isExpanded || boundsReady);
 
-  const containerClass = "absolute bottom-2 right-2 z-50 flex flex-row rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
-  const containerStyle: React.CSSProperties = {
-    transformOrigin: "bottom right",
-    pointerEvents: isOpen ? "auto" : "none",
-  };
+  const isFullscreen = effectiveLayout === "fullscreen";
+  const containerClass = isFullscreen
+    ? "absolute inset-0 z-50 flex flex-row bg-background overflow-hidden"
+    : "absolute bottom-2 right-2 z-50 flex flex-row rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
+  const containerStyle: React.CSSProperties = isFullscreen
+    ? {
+        pointerEvents: isOpen ? "auto" : "none",
+      }
+    : {
+        transformOrigin: "bottom right",
+        pointerEvents: isOpen ? "auto" : "none",
+      };
 
   return (
     <motion.div
       ref={windowRef}
       className={containerClass}
       style={containerStyle}
-      initial={{ opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }}
-      animate={{
-        opacity: isVisible ? 1 : 0,
-        scale: isVisible ? 1 : 0.95,
-        width: renderWidth,
-        height: renderHeight,
-      }}
+      initial={
+        isFullscreen
+          ? { opacity: 0 }
+          : { opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }
+      }
+      animate={
+        isFullscreen
+          ? { opacity: isVisible ? 1 : 0 }
+          : {
+              opacity: isVisible ? 1 : 0,
+              scale: isVisible ? 1 : 0.95,
+              width: renderWidth,
+              height: renderHeight,
+            }
+      }
       transition={{
         width: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
         height: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
@@ -689,19 +771,38 @@ export function ChatWindow() {
         scale: { type: "spring", duration: 0.2, bounce: 0 },
       }}
     >
-      <ChatResizeHandles onDragStart={startDrag} />
-      {/* Left IM pane: agent contacts (1:1 DM threads). */}
-      <ChatContactList
-        sessions={sessions}
-        agents={agents}
-        activeAgentId={activeAgent?.id ?? null}
-        onSelect={handleSelectContact}
-      />
+      {!isFullscreen && <ChatResizeHandles onDragStart={startDrag} />}
+      {/* Left IM pane: agent contacts — hidden in DM bubble (locked agent). */}
+      {!isDmBubble && (
+        <ChatContactList
+          sessions={sessions}
+          agents={agents}
+          activeAgentId={activeAgent?.id ?? null}
+          onSelect={handleSelectContact}
+        />
+      )}
       {/* Right pane: the selected agent's thread. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header — ⊕ new + session dropdown | window tools */}
       <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
         <div className="flex items-center gap-1 min-w-0">
+          {isFullscreen && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="rounded-full text-muted-foreground"
+                    onClick={handleMinimize}
+                  />
+                }
+              >
+                <ArrowLeft />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.window.minimize_tooltip)}</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -724,48 +825,54 @@ export function ChatWindow() {
             agents={agents}
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
+            hideAgentAvatar={isDmBubble}
+            onClearActiveSession={() => setActiveSession(null)}
           />
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="text-muted-foreground"
-                  onClick={toggleExpand}
-                />
-              }
-            >
-              {isExpanded || isAtMax ? <Minimize2 /> : <Maximize2 />}
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {isExpanded || isAtMax ? t(($) => $.window.restore_tooltip) : t(($) => $.window.expand_tooltip)}
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="text-muted-foreground"
-                  onClick={handleMinimize}
-                />
-              }
-            >
-              <Minus />
-            </TooltipTrigger>
-            <TooltipContent side="top">{t(($) => $.window.minimize_tooltip)}</TooltipContent>
-          </Tooltip>
+          {!isFullscreen && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground"
+                    onClick={toggleExpand}
+                  />
+                }
+              >
+                {isExpanded || isAtMax ? <Minimize2 /> : <Maximize2 />}
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {isExpanded || isAtMax ? t(($) => $.window.restore_tooltip) : t(($) => $.window.expand_tooltip)}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {!isFullscreen && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground"
+                    onClick={handleMinimize}
+                  />
+                }
+              >
+                <Minus />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.window.minimize_tooltip)}</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
 
       {/* Messages / skeleton / empty state */}
       {showSkeleton ? (
         <ChatMessageSkeleton />
-      ) : hasMessages ? (
+        ) : hasMessages ? (
         <ChatMessageList
           key={activeSessionId}
           sessionId={activeSessionId ?? ""}
@@ -781,7 +888,10 @@ export function ChatWindow() {
         <EmptyState
           hasSessions={sessions.length > 0}
           agentName={activeAgent?.name}
-          onPickPrompt={(text) => handleSend(text)}
+          onPickPrompt={(text) => {
+            if (isSessionArchived || noAgent) return;
+            void handleSend(text);
+          }}
         />
       )}
 
@@ -809,16 +919,19 @@ export function ChatWindow() {
         disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={activeAgent?.name}
+        agentId={activeAgent?.id ?? null}
         wsId={wsId}
         sessionId={activeSessionId}
         currentProjectId={currentSession?.project_id ?? null}
         leftAdornment={
-          <AgentDropdown
-            agents={availableAgents}
-            activeAgent={activeAgent}
-            userId={user?.id}
-            onSelect={handleSelectAgent}
-          />
+          isDmBubble ? undefined : (
+            <AgentDropdown
+              agents={availableAgents}
+              activeAgent={activeAgent}
+              userId={user?.id}
+              onSelect={handleSelectAgent}
+            />
+          )
         }
       />
       </div>
@@ -970,22 +1083,26 @@ function AgentPickerItem({
 }
 
 /**
- * Session dropdown: a flat "Chat history" list of all non-archived
- * sessions. Selecting a session from a different agent implicitly
- * switches the agent too
- * (sessions are bound 1:1 to an agent). "New chat" lives in the header's
- * ⊕ button, not inside this dropdown.
+ * Session dropdown: Active + Archived groups. Selecting a session from a
+ * different agent implicitly switches the agent too (global mode only).
+ * "New chat" lives in the header's ⊕ button, not inside this dropdown.
  */
 function SessionDropdown({
   sessions,
   agents,
   activeSessionId,
   onSelectSession,
+  hideAgentAvatar = false,
+  onClearActiveSession,
 }: {
   sessions: ChatSession[];
   agents: Agent[];
   activeSessionId: string | null;
   onSelectSession: (session: ChatSession) => void;
+  /** DM bubble already shows the peer — skip per-row agent avatars. */
+  hideAgentAvatar?: boolean;
+  /** Clear the active session (scoped correctly for global vs bubble). */
+  onClearActiveSession?: () => void;
 }) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
@@ -994,10 +1111,12 @@ function SessionDropdown({
   const title = activeSession?.title?.trim() || t(($) => $.window.untitled);
   const triggerAgent = activeSession ? agentById.get(activeSession.agent_id) ?? null : null;
 
-  // The old soft-archive feature was removed. Pre-existing rows with
-  // status='archived' are legacy dead data and are excluded from history.
-  const historySessions = useMemo(
+  const activeSessions = useMemo(
     () => sessions.filter((s) => s.status !== "archived"),
+    [sessions],
+  );
+  const archivedSessions = useMemo(
+    () => sessions.filter((s) => s.status === "archived"),
     [sessions],
   );
 
@@ -1014,7 +1133,9 @@ function SessionDropdown({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const deleteSession = useDeleteChatSession();
   const updateSession = useUpdateChatSession();
-  const setActiveSession = useChatStore((s) => s.setActiveSession);
+  const setSessionStatus = useSetChatSessionStatus();
+  const setActiveSessionGlobal = useChatStore((s) => s.setActiveSession);
+  const clearActive = onClearActiveSession ?? (() => setActiveSessionGlobal(null));
   const queryClient = useQueryClient();
   const formatTimeAgo = useFormatTimeAgo();
 
@@ -1093,11 +1214,25 @@ function SessionDropdown({
     // keep rendering the now-deleted session until chat:session_deleted
     // arrives over WS (~50–200ms gap).
     if (isDeletingCurrent) {
-      setActiveSession(null);
+      clearActive();
     }
     deleteSession.mutate(sessionId, {
       onSettled: () => setConfirmingDeleteId(null),
     });
+  };
+
+  const handleArchiveToggle = (session: ChatSession) => {
+    const nextStatus = session.status === "archived" ? "active" : "archived";
+    setSessionStatus.mutate(
+      { sessionId: session.id, status: nextStatus },
+      {
+        onSuccess: () => {
+          if (nextStatus === "archived" && activeSessionId === session.id) {
+            // Keep viewing as read-only; user can unarchive to continue.
+          }
+        },
+      },
+    );
   };
 
   const handleSubmitRename = (sessionId: string, raw: string) => {
@@ -1200,7 +1335,7 @@ function SessionDropdown({
         )}
       >
         {isCurrent && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-brand" />}
-        {agent ? (
+        {!hideAgentAvatar && agent ? (
           <ActorAvatar
             actorType="agent"
             actorId={agent.id}
@@ -1208,9 +1343,9 @@ function SessionDropdown({
             enableHoverCard
             showStatusDot
           />
-        ) : (
+        ) : !hideAgentAvatar ? (
           <span className="size-6 shrink-0" />
-        )}
+        ) : null}
         <div className="min-w-0 flex-1">
           {isRenaming ? (
             <SessionRenameInput
@@ -1376,6 +1511,35 @@ function SessionDropdown({
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
+                        handleArchiveToggle(session);
+                      }}
+                      className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none"
+                      aria-label={
+                        session.status === "archived"
+                          ? t(($) => $.session_history.row_unarchive_aria)
+                          : t(($) => $.session_history.row_archive_aria)
+                      }
+                      title={
+                        session.status === "archived"
+                          ? t(($) => $.session_history.row_unarchive_aria)
+                          : t(($) => $.session_history.row_archive_aria)
+                      }
+                    >
+                      {session.status === "archived" ? (
+                        <ArchiveRestore className="size-3.5" />
+                      ) : (
+                        <Archive className="size-3.5" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
                         setConfirmingDeleteId(session.id);
                       }}
                       className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:outline-none"
@@ -1399,7 +1563,7 @@ function SessionDropdown({
       <Popover open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
         <div className="flex min-w-0 items-center gap-1">
           <PopoverTrigger className="flex max-w-96 min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-accent data-[popup-open]:bg-accent data-open:bg-accent">
-            {triggerAgent && (
+            {!hideAgentAvatar && triggerAgent && (
               <ActorAvatar
                 actorType="agent"
                 actorId={triggerAgent.id}
@@ -1442,17 +1606,29 @@ function SessionDropdown({
           className="max-h-96 w-auto min-w-[max(16rem,var(--anchor-width,16rem))] max-w-96 gap-0 overflow-y-auto p-1"
           onClick={(e) => e.stopPropagation()}
         >
-          {historySessions.length === 0 ? (
+          {activeSessions.length === 0 && archivedSessions.length === 0 ? (
             <div className="px-2 py-1.5 text-xs text-muted-foreground">
               {t(($) => $.window.no_previous)}
             </div>
           ) : (
-            <div role="group" aria-label={t(($) => $.window.history_group)}>
-              <div className="px-1.5 py-1 text-xs font-medium text-muted-foreground">
-                {t(($) => $.window.history_group)}
-              </div>
-              {historySessions.map(renderRow)}
-            </div>
+            <>
+              {activeSessions.length > 0 && (
+                <section aria-label={t(($) => $.window.history_group_active)}>
+                  <div className="px-1.5 py-1 text-xs font-medium text-muted-foreground">
+                    {t(($) => $.window.history_group_active)}
+                  </div>
+                  {activeSessions.map(renderRow)}
+                </section>
+              )}
+              {archivedSessions.length > 0 && (
+                <section aria-label={t(($) => $.window.history_group_archived)}>
+                  <div className="px-1.5 py-1 text-xs font-medium text-muted-foreground">
+                    {t(($) => $.window.history_group_archived)}
+                  </div>
+                  {archivedSessions.map(renderRow)}
+                </section>
+              )}
+            </>
           )}
         </PopoverContent>
       </Popover>

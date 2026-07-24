@@ -46,6 +46,8 @@
     },
     "row_delete_aria": "删除对话",
     "row_rename_aria": "重命名对话",
+    "row_archive_aria": "归档对话",
+    "row_unarchive_aria": "取消归档",
     "row_stop_aria": "停止当前运行",
     "stop_action": "停止",
     "row_subtitle": {
@@ -85,7 +87,12 @@
     "others": "其他",
     "no_agents": "暂无智能体",
     "history_group": "历史对话",
+    "history_group_active": "进行中",
+    "history_group_archived": "已归档",
     "agent_filter_placeholder": "搜索智能体..."
+  },
+  "dm_bubble": {
+    "fab_default": "与 {{name}} 专注对话"
   },
   "empty_state": {
     "first_time_title": "和你的智能体对话",

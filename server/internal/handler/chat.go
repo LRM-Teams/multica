@@ -292,6 +292,9 @@ func (h *Handler) GetChatSession(w http.ResponseWriter, r *http.Request) {
 
 type UpdateChatSessionRequest struct {
 	Title *string `json:"title"`
+	// Status soft-archives ("archived") or restores ("active") a session.
+	// Archived sessions are read-only for SendChatMessage until restored.
+	Status *string `json:"status"`
 	// ProjectID binds (or clears) the chat's "current project". json.RawMessage
 	// so we can tell absent (nil — leave unchanged) from null/"" (clear) from a
 	// uuid (set). chat_session.project_id is a raw column the generated structs
@@ -300,8 +303,8 @@ type UpdateChatSessionRequest struct {
 }
 
 // UpdateChatSession updates user-editable fields on a chat session: `title`
-// (inline rename) and `project_id` (the composer "current project" that scopes
-// the agent's working directory). `status` is legacy + read-only;
+// (inline rename), `status` (soft-archive / restore), and `project_id`
+// (the composer "current project" that scopes the agent's working directory).
 // agent/creator/workspace are immutable; the resume pointers
 // (session_id / work_dir / runtime_id) are daemon-owned.
 func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +320,7 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Title == nil && req.ProjectID == nil {
+	if req.Title == nil && req.ProjectID == nil && req.Status == nil {
 		writeError(w, http.StatusBadRequest, "no updatable fields")
 		return
 	}
@@ -342,6 +345,23 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		updated, err = h.Queries.UpdateChatSessionTitle(r.Context(), db.UpdateChatSessionTitleParams{
 			ID:    session.ID,
 			Title: title,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update chat session")
+			return
+		}
+	}
+
+	if req.Status != nil {
+		status := strings.TrimSpace(*req.Status)
+		if status != "active" && status != "archived" {
+			writeError(w, http.StatusBadRequest, "status must be active or archived")
+			return
+		}
+		var err error
+		updated, err = h.Queries.UpdateChatSessionStatus(r.Context(), db.UpdateChatSessionStatusParams{
+			ID:     session.ID,
+			Status: status,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update chat session")

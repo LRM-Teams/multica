@@ -42,6 +42,8 @@ interface ChatInputProps {
   noAgent?: boolean;
   /** Name of the currently selected agent, used in the placeholder. */
   agentName?: string;
+  /** Agent id for draft scoping on brand-new (not-yet-created) chats. */
+  agentId?: string | null;
   /** Rendered at the bottom-left of the input bar — typically the agent picker. */
   leftAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
@@ -67,6 +69,7 @@ export function ChatInput({
   disabled,
   noAgent,
   agentName,
+  agentId,
   leftAdornment,
   contextItems,
   wsId,
@@ -75,8 +78,12 @@ export function ChatInput({
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
-  const activeSessionId = useChatStore((s) => s.activeSessionId);
-  const selectedAgentId = useChatStore((s) => s.selectedAgentId);
+  // ChatWindow always passes sessionId/agentId. Prefer those for draft
+  // scoping so DM-bubble mode never bleeds into the global desktop chat store.
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- prop→local alias for draft/storage key only; not an event-handler-in-effect pattern
+  const activeSessionId = sessionId ?? null;
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- same prop→local alias as above for per-agent new-chat draft slot
+  const selectedAgentId = agentId ?? null;
   // Two keys with deliberately different concerns:
   //
   // `draftKey` — zustand storage key. Scopes the in-progress draft per

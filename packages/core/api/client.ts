@@ -2523,7 +2523,7 @@ export class ApiClient {
 
   async updateChatSession(
     id: string,
-    data: { title?: string; project_id?: string | null },
+    data: { title?: string; project_id?: string | null; status?: "active" | "archived" },
   ): Promise<ChatSession> {
     return this.fetch(`/api/chat/sessions/${id}`, {
       method: "PATCH",

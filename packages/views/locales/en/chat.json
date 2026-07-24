@@ -49,6 +49,8 @@
     },
     "row_delete_aria": "Delete chat session",
     "row_rename_aria": "Rename chat session",
+    "row_archive_aria": "Archive chat session",
+    "row_unarchive_aria": "Unarchive chat session",
     "row_stop_aria": "Stop current run",
     "stop_action": "Stop",
     "row_subtitle": {
@@ -88,7 +90,12 @@
     "others": "Others",
     "no_agents": "No agents",
     "history_group": "Chat history",
+    "history_group_active": "Active",
+    "history_group_archived": "Archived",
     "agent_filter_placeholder": "Search agents..."
+  },
+  "dm_bubble": {
+    "fab_default": "Focus chat with {{name}}"
   },
   "empty_state": {
     "first_time_title": "Chat with your agents",

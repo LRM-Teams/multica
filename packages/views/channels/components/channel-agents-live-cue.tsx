@@ -250,55 +250,32 @@ export function ChannelPresenceCluster({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const firstSeenRef = useRef<Map<string, number> | null>(null);
   if (firstSeenRef.current === null) {
     firstSeenRef.current = new Map();
   }
   const [now, setNow] = useState(() => Date.now());
 
-  const presentKeys = useMemo(
-    () => new Set(tasks.map((task) => taskRowKey(task))),
-    [tasks],
-  );
-  const activeDismissed = useMemo(() => {
-    const next = new Set<string>();
-    for (const key of dismissedKeys) {
-      if (presentKeys.has(key)) next.add(key);
+  // Working chrome = live Activity work only (Frank 2026-07-24): never fold
+  // terminal `no_reply` / `failed` into the header Working list — those stay
+  // on Activity / composer surfaces.
+  const { stoppable, listTasks, runningCount, workingAgentIds } = useMemo(() => {
+    const stop: ChannelActiveTask[] = [];
+    const workingIds = new Set<string>();
+    let running = 0;
+    for (const task of tasks) {
+      if (isTerminalChannelActiveTask(task)) continue;
+      stop.push(task);
+      workingIds.add(task.agent_id);
+      if (task.status === "running") running += 1;
     }
-    return next;
-  }, [dismissedKeys, presentKeys]);
-
-  const { stoppable, terminal, listTasks, runningCount, workingAgentIds } =
-    useMemo(() => {
-      const stop: ChannelActiveTask[] = [];
-      const term: ChannelActiveTask[] = [];
-      const workingIds = new Set<string>();
-      let running = 0;
-      for (const task of tasks) {
-        const key = taskRowKey(task);
-        if (activeDismissed.has(key)) continue;
-        if (isTerminalChannelActiveTask(task)) {
-          const outcome = task.outcome?.trim();
-          if (outcome === "failed" || outcome === "no_reply") {
-            term.push(task);
-          }
-          continue;
-        }
-        stop.push(task);
-        workingIds.add(task.agent_id);
-        if (task.status === "running") running += 1;
-      }
-      return {
-        stoppable: stop,
-        terminal: term,
-        listTasks: [...stop, ...term],
-        runningCount: running,
-        workingAgentIds: workingIds,
-      };
-    }, [tasks, activeDismissed]);
+    return {
+      stoppable: stop,
+      listTasks: stop,
+      runningCount: running,
+      workingAgentIds: workingIds,
+    };
+  }, [tasks]);
 
   useEffect(() => {
     const seen = firstSeenRef.current!;
@@ -349,23 +326,11 @@ export function ChannelPresenceCluster({
   const workingLabel =
     isLive && workingCount > 0
       ? t(($) => $.header.presence_working, { working: workingCount })
-      : isLive && terminal.length > 0
-        ? t(($) => $.header.presence_attention)
-        : null;
+      : null;
 
   const ariaLabel = workingLabel
     ? `${countsIdle} · ${workingLabel}`
     : countsIdle;
-
-  const dismissTerminal = (task: ChannelActiveTask) => {
-    const key = taskRowKey(task);
-    setDismissedKeys((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  };
 
   const listBody = (
     <div className="flex flex-col gap-2" data-testid="channel-agents-working-list">
@@ -382,7 +347,9 @@ export function ChannelPresenceCluster({
             canStop={canStop}
             stoppingTaskId={stoppingTaskId}
             onStopTask={onStopTask}
-            onDismiss={dismissTerminal}
+            onDismiss={() => {
+              /* live rows use Stop; terminal outcomes are not listed (Activity SoT) */
+            }}
           />
         ))}
       </div>
@@ -414,7 +381,10 @@ export function ChannelPresenceCluster({
 
   const overlap = Math.round(FACE_SIZE * 0.28);
   const faceStack = (
-    <span className="relative inline-flex items-center" data-testid="channel-presence-faces">
+    <span
+      className="relative isolate inline-flex items-center"
+      data-testid="channel-presence-faces"
+    >
       {stackedMembers.map((m, i) => {
         const isWorkingFace =
           isLive &&
@@ -425,10 +395,14 @@ export function ChannelPresenceCluster({
             key={`${m.member_type}:${m.member_id}`}
             style={{
               marginLeft: i === 0 ? 0 : -overlap,
+              zIndex: i + 1,
               animationDelay: isWorkingFace ? `${i * 60}ms` : undefined,
             }}
             className={cn(
-              "relative inline-flex rounded-full ring-2 ring-background",
+              // Separator ring only when idle — working faces use the brand
+              // breathing ring alone so overlaps don't double-stroke.
+              "relative inline-flex rounded-full",
+              !isWorkingFace && "ring-2 ring-background",
               isWorkingFace &&
                 "animate-[presence-face-enter_0.42s_cubic-bezier(0.2,0.8,0.2,1)_both]",
             )}
@@ -438,13 +412,15 @@ export function ChannelPresenceCluster({
               actorId={m.member_id}
               size={FACE_SIZE}
               avatarUrlHint={m.avatar_url}
-              showStatusDot
+              // Dense facepile: status-dot punch-outs collide with neighbor rings
+              // (Frank 2026-07-24 shot). Working is signaled by brand ring only.
+              showStatusDot={false}
               profileLink={false}
             />
             {isWorkingFace ? (
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-[-3px] rounded-full border-[1.5px] border-brand motion-reduce:animate-none animate-[presence-ring-pulse_1.6s_ease-in-out_infinite]"
+                className="pointer-events-none absolute inset-[-2px] rounded-full border-[1.5px] border-brand motion-reduce:animate-none animate-[presence-ring-pulse_1.6s_ease-in-out_infinite]"
               />
             ) : null}
           </span>
@@ -455,13 +431,7 @@ export function ChannelPresenceCluster({
 
   const countText = (
     <span
-      className={cn(
-        "inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground",
-        isLive &&
-          runningCount === 0 &&
-          terminal.length > 0 &&
-          "text-destructive",
-      )}
+      className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground"
       data-testid="channel-presence-counts"
     >
       <span>{countsIdle}</span>
@@ -471,12 +441,7 @@ export function ChannelPresenceCluster({
           <span
             className={cn(
               runningCount > 0 && "animate-chat-text-shimmer font-semibold",
-              runningCount === 0 &&
-                terminal.length > 0 &&
-                "font-semibold text-destructive",
-              runningCount === 0 &&
-                terminal.length === 0 &&
-                "font-semibold text-foreground",
+              runningCount === 0 && "font-semibold text-foreground",
             )}
             data-testid="channel-presence-working"
           >
@@ -611,51 +576,27 @@ function DmAgentsLiveCue({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const firstSeenRef = useRef<Map<string, number> | null>(null);
   if (firstSeenRef.current === null) {
     firstSeenRef.current = new Map();
   }
   const [now, setNow] = useState(() => Date.now());
 
-  const presentKeys = useMemo(
-    () => new Set(tasks.map((task) => taskRowKey(task))),
-    [tasks],
-  );
-  const activeDismissed = useMemo(() => {
-    const next = new Set<string>();
-    for (const key of dismissedKeys) {
-      if (presentKeys.has(key)) next.add(key);
-    }
-    return next;
-  }, [dismissedKeys, presentKeys]);
-
-  const { stoppable, terminal, listTasks, runningCount } = useMemo(() => {
+  const { stoppable, listTasks, runningCount } = useMemo(() => {
     const stop: ChannelActiveTask[] = [];
-    const term: ChannelActiveTask[] = [];
     let running = 0;
     for (const task of tasks) {
-      const key = taskRowKey(task);
-      if (activeDismissed.has(key)) continue;
-      if (isTerminalChannelActiveTask(task)) {
-        const outcome = task.outcome?.trim();
-        if (outcome === "failed" || outcome === "no_reply") {
-          term.push(task);
-        }
-        continue;
-      }
+      // Match Presence Cluster: terminal no_reply/failed stay on Activity, not Working.
+      if (isTerminalChannelActiveTask(task)) continue;
       stop.push(task);
       if (task.status === "running") running += 1;
     }
     return {
       stoppable: stop,
-      terminal: term,
-      listTasks: [...stop, ...term],
+      listTasks: stop,
       runningCount: running,
     };
-  }, [tasks, activeDismissed]);
+  }, [tasks]);
 
   useEffect(() => {
     const seen = firstSeenRef.current!;
@@ -680,34 +621,16 @@ function DmAgentsLiveCue({
   if (listTasks.length === 0) return null;
 
   const hasStoppable = stoppable.length > 0;
-  const agentsLabel =
-    stoppable.length > 0
-      ? t(($) => $.header.dm_live, { working: stoppable.length })
-      : t(($) => $.header.dm_attention);
+  const agentsLabel = t(($) => $.header.dm_live, { working: stoppable.length });
 
   const cueTextClass = cn(
     "truncate",
     runningCount > 0 && "animate-chat-text-shimmer font-semibold",
-    runningCount === 0 &&
-      terminal.length > 0 &&
-      "font-semibold text-destructive",
-    runningCount === 0 &&
-      terminal.length === 0 &&
-      "font-semibold text-foreground",
+    runningCount === 0 && "font-semibold text-foreground",
   );
 
   const cueButtonClass =
     "inline-flex min-h-8 min-w-0 items-center rounded-sm px-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
-  const dismissTerminal = (task: ChannelActiveTask) => {
-    const key = taskRowKey(task);
-    setDismissedKeys((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  };
 
   const listBody = (
     <div className="flex flex-col gap-2" data-testid="channel-agents-working-list">
@@ -724,7 +647,9 @@ function DmAgentsLiveCue({
             canStop={canStop}
             stoppingTaskId={stoppingTaskId}
             onStopTask={onStopTask}
-            onDismiss={dismissTerminal}
+            onDismiss={() => {
+              /* live rows use Stop; terminal outcomes are not listed */
+            }}
           />
         ))}
       </div>

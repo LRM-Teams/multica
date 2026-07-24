@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowLeft, Box, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, Box, Check, Copy, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { sandboxDetailOptions } from "@multica/core/sandboxes/queries";
 import { useUpdateSandboxMutation } from "@multica/core/sandboxes/mutations";
@@ -19,10 +19,52 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
 import { SandboxRuntimeForm } from "./sandbox-runtime-form";
+
+function SandboxIdField({ id }: { id: string }) {
+  const { t } = useT("layout");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  const handleCopy = () => {
+    void copyText(id).then((ok) => {
+      if (ok) setCopied(true);
+    });
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="sandbox-detail-id">{t(($) => $.sandboxes_page.id_label)}</Label>
+      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+        <code id="sandbox-detail-id" className="min-w-0 flex-1 break-all font-mono text-sm">
+          {id}
+        </code>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="shrink-0"
+          onClick={handleCopy}
+          aria-label={t(($) => $.sandboxes_page.copy_id_action)}
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          {copied
+            ? t(($) => $.sandboxes_page.copied_action)
+            : t(($) => $.sandboxes_page.copy_id_action)}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function SandboxDetailEditor({
   instance,
@@ -89,6 +131,8 @@ function SandboxDetailEditor({
             <CardTitle className="text-base">{t(($) => $.sandboxes_page.detail_settings_title)}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
+            <SandboxIdField id={instance.id} />
+
             <div className="space-y-2">
               <Label htmlFor="sandbox-detail-name">{t(($) => $.sandboxes_page.name_label)}</Label>
               <Input

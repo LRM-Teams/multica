@@ -60,6 +60,9 @@ memory, tools, permissions, and channel history.
 - [x] `go test ./internal/integrations/volcenginertc`
 - [x] `go test ./internal/service/voicecall`
 - [x] Voice-call wiring tests in `./cmd/server`
+- [x] Self-host deployment contract now checks the CustomLLM URL and API key;
+  the obsolete Ark endpoint assertion was removed.
+- [x] `bash scripts/selfhost-config.test.sh`
 - [ ] Full `./cmd/server` currently fails in the pre-existing
   `TestAgentsThroughRouter`: the local integration database returns 500 while
   loading an agent detail. The focused voice-call tests pass, and the failing

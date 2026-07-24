@@ -59,7 +59,10 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	if e == nil {
 		return lifecycleStepError("validate", errors.New("executor is not configured"))
 	}
-	if e.turns != nil && e.turns.hasActiveTurn(request.AgentID, request.RuntimeID) {
+	if err := e.validateDependencies(request); err != nil {
+		return lifecycleStepError("validate", err)
+	}
+	if e.turns.hasActiveTurn(request.AgentID, request.RuntimeID) {
 		return lifecycleStepError("drain", ErrCanonicalAgentRuntimeBusy)
 	}
 
@@ -84,6 +87,29 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	}
 }
 
+func (e *agentLifecycleExecutor) validateDependencies(request agentLifecycleExecutionRequest) error {
+	if e.turns == nil {
+		return errors.New("canonical turn coordinator is not configured")
+	}
+	if e.runtimes == nil {
+		return errors.New("canonical runtime pool is not configured")
+	}
+	switch request.ActionKind {
+	case agentLifecycleActionResetSessionRestart, agentLifecycleActionFullResetRestart:
+		if e.sessionReset == nil {
+			return errors.New("session reset client is not configured")
+		}
+	}
+	if request.ActionKind == agentLifecycleActionFullResetRestart {
+		if _, err := execenv.ResolveAgentWorkspaceLayout(
+			e.workspacesRoot, request.WorkspaceID, request.AgentID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *agentLifecycleExecutor) resetSession(ctx context.Context, request agentLifecycleExecutionRequest) error {
 	if e.sessionReset == nil {
 		return lifecycleStepError("reset_session", errors.New("session reset client is not configured"))
@@ -98,7 +124,7 @@ func (e *agentLifecycleExecutor) resetSession(ctx context.Context, request agent
 
 func (e *agentLifecycleExecutor) invalidateRuntime(request agentLifecycleExecutionRequest) error {
 	if e.runtimes == nil {
-		return nil
+		return lifecycleStepError("restart_runtime", errors.New("canonical runtime pool is not configured"))
 	}
 	if err := e.runtimes.invalidateSession(request.AgentID, request.RuntimeID); err != nil {
 		return lifecycleStepError("restart_runtime", err)

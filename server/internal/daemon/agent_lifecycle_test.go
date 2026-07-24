@@ -132,7 +132,12 @@ func TestAgentLifecycleExecutorFailsClosedOnActiveTurn(t *testing.T) {
 
 func TestAgentLifecycleExecutorReportsPartialFailureStep(t *testing.T) {
 	resetter := &lifecycleResetRecorder{err: errors.New("reset unavailable")}
-	executor := &agentLifecycleExecutor{sessionReset: resetter}
+	executor := &agentLifecycleExecutor{
+		workspacesRoot: t.TempDir(),
+		turns:          newAgentRuntimeTurnCoordinator(Config{}, nil),
+		runtimes:       newCanonicalAgentRuntimePool(),
+		sessionReset:   resetter,
+	}
 	err := executor.Execute(context.Background(), agentLifecycleExecutionRequest{
 		OperationID: uuid.NewString(),
 		WorkspaceID: uuid.NewString(),
@@ -144,6 +149,71 @@ func TestAgentLifecycleExecutorReportsPartialFailureStep(t *testing.T) {
 	if !errors.As(err, &stepErr) || stepErr.Step != "reset_session" {
 		t.Fatalf("partial failure error=%v", err)
 	}
+}
+
+func TestAgentLifecycleExecutorRequiresSafetyDependenciesBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := uuid.NewString()
+	agentID := uuid.NewString()
+	runtimeID := uuid.NewString()
+	layout, err := execenv.ProvisionAgentWorkspace(root, workspaceID, agentID, nil)
+	if err != nil {
+		t.Fatalf("provision workspace: %v", err)
+	}
+	sentinelPath := filepath.Join(layout.WorkDir, "sentinel.txt")
+	if err := os.WriteFile(sentinelPath, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	resetter := &lifecycleResetRecorder{}
+	base := agentLifecycleExecutionRequest{
+		OperationID: uuid.NewString(),
+		WorkspaceID: workspaceID,
+		AgentID:     agentID,
+		RuntimeID:   runtimeID,
+	}
+
+	t.Run("missing turn coordinator", func(t *testing.T) {
+		request := base
+		request.ActionKind = agentLifecycleActionFullResetRestart
+		executor := &agentLifecycleExecutor{
+			workspacesRoot: root,
+			runtimes:       newCanonicalAgentRuntimePool(),
+			sessionReset:   resetter,
+		}
+		assertLifecycleValidationFailure(t, executor.Execute(context.Background(), request))
+		if len(resetter.calls) != 0 {
+			t.Fatal("missing coordinator reached session reset")
+		}
+		if _, err := os.Stat(sentinelPath); err != nil {
+			t.Fatalf("missing coordinator changed workspace: %v", err)
+		}
+	})
+
+	t.Run("missing runtime pool", func(t *testing.T) {
+		request := base
+		request.ActionKind = agentLifecycleActionRestart
+		executor := &agentLifecycleExecutor{
+			turns: newAgentRuntimeTurnCoordinator(Config{}, nil),
+		}
+		assertLifecycleValidationFailure(t, executor.Execute(context.Background(), request))
+	})
+
+	t.Run("missing workspace root", func(t *testing.T) {
+		request := base
+		request.ActionKind = agentLifecycleActionFullResetRestart
+		executor := &agentLifecycleExecutor{
+			turns:        newAgentRuntimeTurnCoordinator(Config{}, nil),
+			runtimes:     newCanonicalAgentRuntimePool(),
+			sessionReset: resetter,
+		}
+		assertLifecycleValidationFailure(t, executor.Execute(context.Background(), request))
+		if len(resetter.calls) != 0 {
+			t.Fatal("missing workspace root reached session reset")
+		}
+		if _, err := os.Stat(sentinelPath); err != nil {
+			t.Fatalf("missing workspace root changed workspace: %v", err)
+		}
+	})
 }
 
 func TestAgentLifecycleExecutorRejectsBadBinding(t *testing.T) {
@@ -158,5 +228,13 @@ func TestAgentLifecycleExecutorRejectsBadBinding(t *testing.T) {
 	var stepErr *agentLifecycleExecutionError
 	if !errors.As(err, &stepErr) || stepErr.Step != "validate" {
 		t.Fatalf("bad binding error=%v", err)
+	}
+}
+
+func assertLifecycleValidationFailure(t *testing.T, err error) {
+	t.Helper()
+	var stepErr *agentLifecycleExecutionError
+	if !errors.As(err, &stepErr) || stepErr.Step != "validate" {
+		t.Fatalf("validation error=%v", err)
 	}
 }

@@ -139,13 +139,13 @@ type Handler struct {
 	LivenessStore         LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
-	MemberPresenceStore   MemberPresenceStore
-	HeartbeatScheduler    HeartbeatScheduler
-	Storage               storage.Storage
-	CFSigner              *auth.CloudFrontSigner
-	Analytics             analytics.Client
-	WendyComposer         WendyComposer
-	WorkGraph             *workgraph.Store
+	MemberPresenceStore MemberPresenceStore
+	HeartbeatScheduler  HeartbeatScheduler
+	Storage             storage.Storage
+	CFSigner            *auth.CloudFrontSigner
+	Analytics           analytics.Client
+	WendyComposer       WendyComposer
+	WorkGraph           *workgraph.Store
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
@@ -194,6 +194,12 @@ type Handler struct {
 	// or empty unless the RTC integration is configured.
 	VoiceCallCallbackProcessor VoiceCallCallbackProcessor
 	VoiceCallCallbackSignature string
+	// VoiceCallLLMProcessor is the server-side bridge from Volcengine's
+	// CustomLLM request to the durable Multica agent runtime. The API key is a
+	// dedicated provider-to-server bearer credential, not an RTC AppKey or a
+	// Multica user token.
+	VoiceCallLLMProcessor VoiceCallLLMProcessor
+	VoiceCallLLMAPIKey    string
 	// LarkHub owns the per-installation supervisor goroutines that
 	// hold the §4.4 WS lease and run the EventConnector. Nil only
 	// when the master at-rest key (MULTICA_LARK_SECRET_KEY) is unset.

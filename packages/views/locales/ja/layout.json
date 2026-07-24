@@ -64,6 +64,8 @@
     "no_node_matches_hint": "別の検索語を試してください。",
     "no_bound_node_title": "接続されたノードがありません",
     "name_label": "サンドボックス名",
+    "id_label": "サンドボックス ID",
+    "copy_id_action": "ID をコピー",
     "create_template_label": "テンプレート",
     "create_template_placeholder": "テンプレートを選択",
     "create_template_default_option": "デフォルト（{{id}}）",

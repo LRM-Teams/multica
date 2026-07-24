@@ -64,6 +64,8 @@
     "no_node_matches_hint": "试试其他搜索词。",
     "no_bound_node_title": "还没有连接节点",
     "name_label": "沙箱名称",
+    "id_label": "沙箱 ID",
+    "copy_id_action": "复制 ID",
     "node_label": "运行节点",
     "create_template_label": "模板",
     "create_template_placeholder": "选择模板",

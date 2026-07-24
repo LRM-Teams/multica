@@ -64,6 +64,8 @@
     "no_node_matches_hint": "Try a different search term.",
     "no_bound_node_title": "No connected nodes",
     "name_label": "Sandbox name",
+    "id_label": "Sandbox ID",
+    "copy_id_action": "Copy ID",
     "node_label": "Node",
     "create_template_label": "Template",
     "create_template_placeholder": "Select a template",

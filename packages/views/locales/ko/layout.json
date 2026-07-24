@@ -64,6 +64,8 @@
     "no_node_matches_hint": "다른 검색어를 시도해 보세요.",
     "no_bound_node_title": "연결된 노드 없음",
     "name_label": "샌드박스 이름",
+    "id_label": "샌드박스 ID",
+    "copy_id_action": "ID 복사",
     "create_template_label": "템플릿",
     "create_template_placeholder": "템플릿 선택",
     "create_template_default_option": "기본값 ({{id}})",

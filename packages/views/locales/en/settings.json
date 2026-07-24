@@ -404,17 +404,28 @@
     "remove_action": "Remove from workspace",
     "cannot_demote_last_owner_title": "Promote another member to owner first — a workspace must keep at least one owner.",
     "cannot_demote_last_owner": "Cannot demote the last owner",
+    "roles_entry": "Roles",
+    "roles_dialog": {
+      "title": "Roles",
+      "subtitle": "Controls what members can do in this workspace. Unrelated to Agent identity.",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel"
+    },
     "roles": {
       "owner": {
         "label": "Owner",
-        "description": "Full access, manage all settings"
+        "pill": "Workspace owner",
+        "description": "Full access; manage all settings. Keep at least one owner."
       },
       "admin": {
         "label": "Admin",
+        "pill": "Admin",
         "description": "Manage members and settings"
       },
       "member": {
         "label": "Member",
+        "pill": "Member",
         "description": "Create and work on issues"
       }
     }

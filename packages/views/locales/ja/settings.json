@@ -404,17 +404,28 @@
     "remove_action": "ワークスペースから削除",
     "cannot_demote_last_owner_title": "先に別のメンバーを owner に昇格させてください。ワークスペースには少なくとも 1 人の owner が必要です。",
     "cannot_demote_last_owner": "最後の owner は降格できません",
+    "roles_entry": "ロール",
+    "roles_dialog": {
+      "title": "ロール",
+      "subtitle": "ワークスペース内でメンバーができることを決めます。Agent の身分とは無関係です。",
+      "save": "保存",
+      "saving": "保存中…",
+      "cancel": "キャンセル"
+    },
     "roles": {
       "owner": {
-        "label": "オーナー",
-        "description": "フルアクセス、すべての設定を管理"
+        "label": "Owner",
+        "pill": "ワークスペース所有者",
+        "description": "フルアクセス。すべての設定を管理。少なくとも 1 人必要。"
       },
       "admin": {
-        "label": "管理者",
+        "label": "Admin",
+        "pill": "管理者",
         "description": "メンバーと設定を管理"
       },
       "member": {
-        "label": "メンバー",
+        "label": "Member",
+        "pill": "メンバー",
         "description": "イシューの作成と作業"
       }
     }

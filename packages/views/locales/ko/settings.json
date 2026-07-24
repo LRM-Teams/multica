@@ -329,17 +329,28 @@
     "remove_action": "워크스페이스에서 제거",
     "cannot_demote_last_owner_title": "먼저 다른 멤버를 소유자로 승격하세요. 워크스페이스에는 최소 한 명의 소유자가 필요합니다.",
     "cannot_demote_last_owner": "마지막 소유자는 강등할 수 없습니다",
+    "roles_entry": "역할",
+    "roles_dialog": {
+      "title": "역할",
+      "subtitle": "멤버가 워크스페이스에서 할 수 있는 일을 정합니다. Agent 신분과는 무관합니다.",
+      "save": "저장",
+      "saving": "저장 중…",
+      "cancel": "취소"
+    },
     "roles": {
       "owner": {
-        "label": "소유자",
-        "description": "전체 접근 권한, 모든 설정 관리"
+        "label": "Owner",
+        "pill": "워크스페이스 소유자",
+        "description": "전체 접근 권한, 모든 설정 관리. 최소 한 명 유지."
       },
       "admin": {
-        "label": "관리자",
+        "label": "Admin",
+        "pill": "관리자",
         "description": "멤버와 설정 관리"
       },
       "member": {
-        "label": "멤버",
+        "label": "Member",
+        "pill": "멤버",
         "description": "이슈 생성 및 작업"
       }
     }

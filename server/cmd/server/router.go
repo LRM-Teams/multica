@@ -541,6 +541,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// server-configured signature in the JSON body; the handler validates it
 	// before decoding the binary conversation event.
 	r.Post(voiceCallCallbackPath, h.HandleVoiceCallCallback)
+	// Volcengine RTC CustomLLM endpoint (no Multica user auth). A dedicated
+	// bearer credential authenticates the provider before any transcript is
+	// decoded.
+	r.Post(voiceCallLLMPath, h.HandleVoiceCallLLM)
 
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {

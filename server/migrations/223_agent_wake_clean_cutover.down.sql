@@ -10,6 +10,7 @@ DROP TRIGGER IF EXISTS trg_journal_workspace_radar_task ON agent_inbox_event;
 DROP INDEX IF EXISTS idx_agent_inbox_event_agent_created;
 DROP INDEX IF EXISTS idx_agent_inbox_event_issue_created;
 DROP INDEX IF EXISTS idx_agent_inbox_event_runtime_ready;
+DROP INDEX IF EXISTS idx_chat_message_task_user_created;
 
 CREATE TABLE agent_task_queue (
   id UUID PRIMARY KEY,

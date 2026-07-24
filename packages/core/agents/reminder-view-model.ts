@@ -10,7 +10,8 @@
  * read-page shape is locked independent of #870's fire/migration-correctness
  * blockers, per Parker):
  *   GET /api/agents/{agentId}/reminders?status=scheduled|fired|all&cursor=&limit=
- * `status=scheduled` -> only `definitions` populated (Upcoming section).
+ * `status=scheduled` -> only `definitions` populated (active definitions plus
+ * a visible dormant managed patrol).
  * `status=fired` -> only `occurrences` populated, cursor-paginated newest-first (History section).
  */
 
@@ -35,8 +36,8 @@ export type ReminderOrigin =
   | { kind: "agent" }
   | { kind: "group_manager_auto"; managedKind: "patrol" };
 
-/** Upcoming only ever queries `status=scheduled`, so a definition row must be
- * mid-lifecycle (not yet fired, not cancelled) to belong there. */
+/** Ordinary Upcoming rows must be mid-lifecycle. The adapter separately admits
+ * the one server-owned dormant patrol shape. */
 const KNOWN_UPCOMING_DEFINITION_STATUSES = new Set(["scheduled", "firing"]);
 
 /** The reminder DEFINITION's own lifecycle state — independent of any one occurrence row. `"firing"` is a real transient state (mid-fire-transaction) the FE must accept as-is, never coerced to `"fired"`. */
@@ -56,6 +57,14 @@ export interface UpcomingReminderRow extends ReminderRow {
   /** Definition lifecycle for Upcoming (`scheduled` | `firing`). */
   status: Extract<ReminderDefinitionStatus, "scheduled" | "firing">;
 }
+
+export interface DormantPatrolReminderRow extends ReminderRow {
+  lastFireAt?: string;
+  status: "fired";
+  origin: Extract<ReminderOrigin, { kind: "group_manager_auto" }>;
+}
+
+export type ReminderDefinitionRow = UpcomingReminderRow | DormantPatrolReminderRow;
 
 export interface FiredReminderRow extends ReminderRow {
   firedAt: string;
@@ -80,13 +89,13 @@ export interface RawReminderAnchor {
   href?: string;
 }
 
-/** `humanReminderDefinition` — one row in the Upcoming section. `status`/`schedule_kind` stay plain `string` (not narrowed) — see the `adapt*` functions for why. */
+/** `humanReminderDefinition` — one row in the visible definition list. `status`/`schedule_kind` stay plain `string` (not narrowed) — see the `adapt*` functions for why. */
 export interface RawReminderDefinition {
   id: string;
   title: string;
   status: string;
   schedule_kind: string;
-  next_fire_at: string;
+  next_fire_at?: string;
   last_fire_at?: string;
   cadence?: string;
   schedule_timezone?: string;
@@ -211,19 +220,35 @@ function adaptCadence(scheduleKind: string, cadence: string | undefined, schedul
 }
 
 /**
- * Adapts one Upcoming-section definition row. Returns `null` for a
- * malformed row (missing required field, an unrecognized `schedule_kind`,
- * or a `status` outside the mid-lifecycle set this section's `GET
- * ?status=scheduled` query actually promises) rather than rendering a
- * broken or contract-violating one.
+ * Adapts one visible definition row. Besides ordinary scheduled/firing rows,
+ * the server-owned dormant patrol is the only fired definition admitted:
+ * group_manager_auto/patrol, no next fire, and an optional preserved last
+ * fire. Everything else returns `null` rather than rendering a broken or
+ * contract-violating row.
  */
-export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRow | null {
-  if (!raw.next_fire_at) return null;
-  if (!KNOWN_UPCOMING_DEFINITION_STATUSES.has(raw.status)) return null;
+export function adaptUpcomingRow(raw: RawReminderDefinition): ReminderDefinitionRow | null {
   const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
   if (!cadence) return null;
   const origin = adaptOrigin(raw.origin_kind, raw.managed_kind);
   if (!origin) return null;
+  if (
+    raw.status === "fired" &&
+    !raw.next_fire_at &&
+    origin.kind === "group_manager_auto" &&
+    origin.managedKind === "patrol"
+  ) {
+    return {
+      id: raw.id,
+      title: raw.title,
+      cadence,
+      anchor: adaptAnchor(raw.anchor),
+      origin,
+      lastFireAt: raw.last_fire_at,
+      status: "fired",
+    };
+  }
+  if (!raw.next_fire_at) return null;
+  if (!KNOWN_UPCOMING_DEFINITION_STATUSES.has(raw.status)) return null;
   return {
     id: raw.id,
     title: raw.title,

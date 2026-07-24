@@ -75,6 +75,43 @@ describe("adaptUpcomingRow", () => {
     expect(row?.lastFireAt).toBe("2026-07-24T08:00:00Z");
   });
 
+  it("keeps a dormant managed patrol visible without inventing a next fire", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        status: "fired",
+        schedule_kind: "one_shot",
+        next_fire_at: undefined,
+        cadence: undefined,
+        schedule_timezone: undefined,
+        origin_kind: "group_manager_auto",
+        managed_kind: "patrol",
+        last_fire_at: "2026-07-24T08:00:00Z",
+      }),
+    );
+
+    expect(row).toEqual({
+      id: "r-1",
+      title: "Ping standup",
+      cadence: { kind: "one_shot" },
+      anchor: { available: false },
+      origin: { kind: "group_manager_auto", managedKind: "patrol" },
+      lastFireAt: "2026-07-24T08:00:00Z",
+      status: "fired",
+    });
+  });
+
+  it("does not admit an ordinary fired definition into the visible definition list", () => {
+    expect(
+      adaptUpcomingRow(
+        makeDefinition({
+          status: "fired",
+          next_fire_at: undefined,
+          origin_kind: "agent",
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("drops an unknown or malformed origin rather than hiding its source", () => {
     expect(adaptUpcomingRow(makeDefinition({ origin_kind: "future_origin" }))).toBeNull();
     expect(

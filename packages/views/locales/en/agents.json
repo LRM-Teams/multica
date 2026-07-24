@@ -636,6 +636,7 @@
     "status_scheduled": "Scheduled",
     "status_firing": "Firing",
     "status_overdue": "Overdue",
+    "status_dormant": "Dormant",
     "status_cancelled": "Cancelled",
     "status_fired": "Fired"
   },

@@ -172,6 +172,28 @@ describe("RemindersTab", () => {
     expect(await screen.findByText("Not patrolled yet")).toBeInTheDocument();
   });
 
+  it("keeps a dormant patrol visible without a false next-fire countdown", async () => {
+    mockGetAgentReminders.mockResolvedValue(
+      page([
+        definition({
+          title: "群巡检",
+          status: "fired",
+          next_fire_at: undefined,
+          origin_kind: "group_manager_auto",
+          managed_kind: "patrol",
+          last_fire_at: "2026-07-23T08:00:00Z",
+        }),
+      ]),
+    );
+
+    renderTab();
+
+    expect(await screen.findByText("群巡检")).toBeInTheDocument();
+    expect(screen.getByText("Dormant")).toBeInTheDocument();
+    expect(screen.getByText("Last patrol")).toBeInTheDocument();
+    expect(screen.queryByText("Next")).toBeNull();
+  });
+
   it("shows one cadence and timezone chip for a recurring calendar reminder", async () => {
     mockGetAgentReminders.mockResolvedValue(
       page([

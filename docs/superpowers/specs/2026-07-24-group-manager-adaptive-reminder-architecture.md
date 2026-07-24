@@ -193,15 +193,16 @@ Patrol rows show:
 
 - source badge `Automatic · Group management`;
 - active: the real next fire time;
-- dormant: no `next_fire_at` and the copy `休眠中，有 issue 动静即查`;
+- dormant: no `next_fire_at` and a localized `Dormant` status badge;
 - last fire time when available in both states;
 - the managed group anchor.
 
 The server returns dormant `group_manager_auto/patrol` definitions from the
 definitions projection with `status='fired'`, preserves `last_fire_at`, and
-omits `next_fire_at`. The frontend schema and adapter must accept this shape
-before migration 222/server deployment; otherwise the new honest dormant
-projection would be rejected by an older client.
+omits `next_fire_at`. The same delivery includes the frontend Zod schema,
+row-level adapter, localized badge, and list rendering for that exact shape, so
+the dormant projection is accepted without a false countdown before migration
+222/server deployment.
 
 The list has no handoff row, handoff badge, workgraph reason, or next-work
 projection.
@@ -253,6 +254,8 @@ The release gate requires:
    choices above 900;
 8. cancellation, re-enable, permissions, History exclusion, and one-active-row
    uniqueness pass against PostgreSQL;
-9. frontend list and action tests expose patrol plus user reminders only;
+9. frontend Zod fallback, row adapter, and list tests preserve a dormant patrol
+   with no `next_fire_at`, render its last patrol plus localized Dormant badge,
+   and expose patrol plus user reminders only;
 10. exact-head CI, migration deploy, served API/UI, and daemon capability gates
    pass before live closure.

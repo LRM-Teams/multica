@@ -2163,7 +2163,10 @@ const RawReminderDefinitionSchema = z.object({
   title: z.string(),
   status: z.string(),
   schedule_kind: z.string(),
-  next_fire_at: z.string(),
+  // Managed patrol definitions stay visible while dormant. The backend
+  // projects those rows as status=fired with no next fire instead of
+  // inventing a countdown for inactive work.
+  next_fire_at: z.string().optional(),
   last_fire_at: z.string().optional(),
   cadence: z.string().optional(),
   schedule_timezone: z.string().optional(),

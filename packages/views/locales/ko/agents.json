@@ -636,6 +636,7 @@
     "status_scheduled": "예약됨",
     "status_firing": "실행 중",
     "status_overdue": "기한 초과",
+    "status_dormant": "휴면",
     "status_cancelled": "취소됨",
     "status_fired": "발생됨"
   },

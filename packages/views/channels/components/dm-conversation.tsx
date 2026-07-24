@@ -20,7 +20,6 @@ import {
   useDeleteChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
-  activeChannelTasksOptions,
 } from "@multica/core/channels";
 import { dmKeys, type DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
@@ -79,7 +78,6 @@ import { ThreadFollowButton } from "./thread-follow-button";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
-import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 
 /**
@@ -92,9 +90,9 @@ import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
  * ConversationAgentActivityLine (preparing / Thinking / Stop). Status
  * perception redesign is a separate issue.
  *
- * LRM-589: agent DM header keeps the live cue (Thinking / working) only —
- * Stop lives in AgentProfileActions (profile card), not beside the cue.
- * 1:1 has no Stop all.
+ * LRM-594 (Working 荐 A): agent DM header has no Working/Thinking chrome —
+ * work state lives in Activity; Stop lives in AgentProfileActions (LRM-589).
+ * 1:1 has no Stop all. Aligns with LRM-584 K=1/DM (no Working chrome).
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -274,21 +272,8 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-581 / LRM-589 — agent DM: live cue beside peer name (status only).
-  // Stop is in AgentProfileActions, not outer header chrome. Human peers keep
-  // the static "Human" meta.
-  const channelIdForTasks = isAgentPeer ? (filesChannelId ?? dm.id) : "";
-  const { data: activeTasks = [] } = useQuery(
-    activeChannelTasksOptions(channelIdForTasks),
-  );
-  const agentLiveStatus = isAgentPeer ? (
-    <ChannelAgentsLiveCue
-      variant="dm"
-      agentCount={1}
-      tasks={activeTasks}
-      canStop={false}
-    />
-  ) : undefined;
+  // LRM-594: agent DM header — name + presence dot only (no Working/Thinking).
+  // Work state → Activity; Stop → AgentProfileActions. Human peers keep "Human" meta.
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -326,14 +311,6 @@ function DmHeader({
       </ActorProfileTrigger>
     );
 
-  // Mobile: put Working under the name (meta line) — long agent names +
-  // back/avatar/actions leave too little room for same-row "处理中".
-  // Desktop: keep Slack-style cue beside the name (status slot).
-  const headerStatus = isMobile ? undefined : agentLiveStatus;
-  const headerMeta = isMobile
-    ? (agentLiveStatus ?? meta)
-    : meta;
-
   return (
     <ConversationHeader
       isMobile={isMobile}
@@ -356,9 +333,7 @@ function DmHeader({
       title={wrapPeerTrigger(
         <span className="block truncate">{dm.peer.name}</span>,
       )}
-      meta={headerMeta}
-      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
-      status={headerStatus}
+      meta={meta}
       badges={mutedBadge}
       actions={
         <>

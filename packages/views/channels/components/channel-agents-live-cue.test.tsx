@@ -4,7 +4,6 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import {
-  ChannelAgentsLiveCue,
   ChannelPresenceCluster,
 } from "./channel-agents-live-cue";
 
@@ -151,22 +150,6 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(chip).toHaveAttribute("data-presence-working", "false");
     expect(screen.queryByTestId("channel-presence-working")).toBeNull();
     expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
-  });
-
-  it("dm variant with canStop=false keeps status and hides outer Stop (LRM-589)", () => {
-    render(
-      <ChannelAgentsLiveCue
-        variant="dm"
-        agentCount={1}
-        tasks={[task({ status: "running" })]}
-        canStop={false}
-      />,
-    );
-    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "Working",
-    );
-    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
-    expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
   });
 
   it("K≥2 working shows shimmer and no outer Stop; Stop all only in card", () => {

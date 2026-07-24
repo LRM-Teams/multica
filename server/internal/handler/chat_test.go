@@ -254,6 +254,138 @@ func TestUpdateChatSession_RejectsBlank(t *testing.T) {
 	}
 }
 
+// TestUpdateChatSession_ArchivesAndRestores soft-archives a session then
+// restores it. Archived sessions stay listable (status=all) but refuse sends.
+func TestUpdateChatSession_ArchivesAndRestores(t *testing.T) {
+	agentID := createHandlerTestAgent(t, "ChatArchiveAgent", []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	archiveReq := newRequest("PATCH", "/api/chat/sessions/"+sessionID, map[string]any{
+		"status": "archived",
+	})
+	archiveReq = withURLParam(archiveReq, "sessionId", sessionID)
+	archiveReq = withChatTestWorkspaceCtx(t, archiveReq)
+	w := httptest.NewRecorder()
+	testHandler.UpdateChatSession(w, archiveReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("archive: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var archived ChatSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &archived); err != nil {
+		t.Fatalf("decode archive: %v", err)
+	}
+	if archived.Status != "archived" {
+		t.Fatalf("archive status: want archived, got %q", archived.Status)
+	}
+
+	sendReq := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "should fail",
+	})
+	sendReq = withURLParam(sendReq, "sessionId", sessionID)
+	sendReq = withChatTestWorkspaceCtx(t, sendReq)
+	w = httptest.NewRecorder()
+	testHandler.SendChatMessage(w, sendReq)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("send on archived: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	restoreReq := newRequest("PATCH", "/api/chat/sessions/"+sessionID, map[string]any{
+		"status": "active",
+	})
+	restoreReq = withURLParam(restoreReq, "sessionId", sessionID)
+	restoreReq = withChatTestWorkspaceCtx(t, restoreReq)
+	w = httptest.NewRecorder()
+	testHandler.UpdateChatSession(w, restoreReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("restore: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var restored ChatSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &restored); err != nil {
+		t.Fatalf("decode restore: %v", err)
+	}
+	if restored.Status != "active" {
+		t.Fatalf("restore status: want active, got %q", restored.Status)
+	}
+}
+
+// TestUpdateChatSession_RejectsInvalidStatus refuses unknown status values.
+func TestUpdateChatSession_RejectsInvalidStatus(t *testing.T) {
+	agentID := createHandlerTestAgent(t, "ChatBadStatusAgent", []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	req := newRequest("PATCH", "/api/chat/sessions/"+sessionID, map[string]any{
+		"status": "deleted",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.UpdateChatSession(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestCreateChatSession_NotChannelBound confirms a plain CreateChatSession
+// (DM bubble path) never inserts channel_agent_session — so group wake
+// builders that only read channel_message + channel_agent_session cannot
+// see bubble transcript.
+func TestCreateChatSession_NotChannelBound(t *testing.T) {
+	agentID := createHandlerTestAgent(t, "ChatBubbleIsolateAgent", []byte("[]"))
+
+	req := newRequest("POST", "/api/chat/sessions", map[string]any{
+		"agent_id": agentID,
+		"title":    "Focus bubble",
+	})
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.CreateChatSession(w, req)
+	if w.Code != http.StatusCreated && w.Code != http.StatusOK {
+		t.Fatalf("CreateChatSession: expected 200/201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created ChatSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("expected session id")
+	}
+
+	var bound int
+	if err := testPool.QueryRow(
+		context.Background(),
+		`SELECT count(*) FROM channel_agent_session WHERE chat_session_id = $1`,
+		created.ID,
+	).Scan(&bound); err != nil {
+		t.Fatalf("query channel_agent_session: %v", err)
+	}
+	if bound != 0 {
+		t.Fatalf("plain chat_session must not be channel-bound; got %d bindings", bound)
+	}
+
+	listReq := newRequest("GET", "/api/chat/sessions?status=all", nil)
+	listReq = withChatTestWorkspaceCtx(t, listReq)
+	w = httptest.NewRecorder()
+	testHandler.ListChatSessions(w, listReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListChatSessions: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listed []ChatSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	found := false
+	for _, s := range listed {
+		if s.ID == created.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("bubble session %s missing from ListChatSessions", created.ID)
+	}
+}
+
+
 // TestSendChatMessage_InvalidAttachmentIDs rejects malformed UUIDs in
 // attachment_ids with 400 before any side effects (no message row created).
 func TestSendChatMessage_InvalidAttachmentIDs(t *testing.T) {

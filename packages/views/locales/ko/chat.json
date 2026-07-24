@@ -49,6 +49,8 @@
     },
     "row_delete_aria": "채팅 세션 삭제",
     "row_rename_aria": "채팅 세션 이름 변경",
+    "row_archive_aria": "채팅 세션 보관",
+    "row_unarchive_aria": "보관 해제",
     "row_stop_aria": "현재 실행 중지",
     "stop_action": "중지",
     "row_subtitle": {
@@ -88,7 +90,12 @@
     "others": "기타",
     "no_agents": "에이전트 없음",
     "history_group": "채팅 기록",
+    "history_group_active": "진행 중",
+    "history_group_archived": "보관됨",
     "agent_filter_placeholder": "에이전트 검색..."
+  },
+  "dm_bubble": {
+    "fab_default": "{{name}}와 집중 채팅"
   },
   "empty_state": {
     "first_time_title": "에이전트와 채팅하기",

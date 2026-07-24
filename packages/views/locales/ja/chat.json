@@ -46,6 +46,8 @@
     },
     "row_delete_aria": "チャットセッションを削除",
     "row_rename_aria": "チャットセッションの名前を変更",
+    "row_archive_aria": "チャットセッションをアーカイブ",
+    "row_unarchive_aria": "アーカイブを解除",
     "delete_dialog": {
       "title": "チャットセッションを削除",
       "description_with_title": "\"{{title}}\" とそのメッセージが完全に削除されます。この操作は取り消せません。",
@@ -85,7 +87,12 @@
     "others": "その他",
     "no_agents": "エージェントなし",
     "history_group": "チャット履歴",
+    "history_group_active": "アクティブ",
+    "history_group_archived": "アーカイブ済み",
     "agent_filter_placeholder": "エージェントを検索..."
+  },
+  "dm_bubble": {
+    "fab_default": "{{name}} と集中チャット"
   },
   "empty_state": {
     "first_time_title": "エージェントとチャット",

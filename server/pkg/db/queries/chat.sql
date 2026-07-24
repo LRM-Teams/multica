@@ -33,6 +33,12 @@ UPDATE chat_session SET title = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateChatSessionStatus :one
+-- Soft-archive / restore. Only 'active' and 'archived' are valid.
+UPDATE chat_session SET status = $2, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: UpdateChatSessionSession :exec
 -- Updates the resume pointer for a chat session. Empty/NULL inputs are
 -- ignored via COALESCE so a task that completes without a session_id (e.g.

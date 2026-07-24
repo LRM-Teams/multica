@@ -22,6 +22,10 @@ const CHAT_EXPANDED_KEY = "multica:chat:expanded";
  * every subsequent reload.
  */
 const OPEN_KEY = "multica:chat:isOpen";
+/** Which agent DM-bubble is open (null = all closed). Persisted per workspace. */
+const DM_BUBBLE_OPEN_AGENT_KEY = "multica:chat:dmBubbleOpenAgentId";
+/** Active session id per agent for DM bubbles: { [agentId]: sessionId }. */
+const DM_BUBBLE_SESSIONS_KEY = "multica:chat:dmBubbleSessions";
 
 function readDrafts(storage: StorageAdapter, key: string): Record<string, string> {
   const raw = storage.getItem(key);
@@ -38,6 +42,34 @@ function writeDrafts(storage: StorageAdapter, key: string, drafts: Record<string
   // Prune empty entries so the blob doesn't grow unbounded.
   const pruned: Record<string, string> = {};
   for (const [k, v] of Object.entries(drafts)) {
+    if (v) pruned[k] = v;
+  }
+  if (Object.keys(pruned).length === 0) {
+    storage.removeItem(key);
+  } else {
+    storage.setItem(key, JSON.stringify(pruned));
+  }
+}
+
+function readStringMap(storage: StorageAdapter, key: string): Record<string, string> {
+  const raw = storage.getItem(key);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string" && v) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeStringMap(storage: StorageAdapter, key: string, map: Record<string, string>) {
+  const pruned: Record<string, string> = {};
+  for (const [k, v] of Object.entries(map)) {
     if (v) pruned[k] = v;
   }
   if (Object.keys(pruned).length === 0) {
@@ -73,6 +105,14 @@ export interface ChatState {
   isOpen: boolean;
   activeSessionId: string | null;
   selectedAgentId: string | null;
+  /**
+   * Agent id whose DM-page bubble is open. Null = no DM bubble open.
+   * Independent from the global desktop ChatFab `isOpen` so web DM bubbles
+   * never collide with desktop's floating chat.
+   */
+  dmBubbleOpenAgentId: string | null;
+  /** Active bubble session per agent id (null omitted from the map). */
+  dmBubbleActiveSessionByAgent: Record<string, string>;
   /** Drafts per session: sessionId (or DRAFT_NEW_SESSION) → markdown text. */
   inputDrafts: Record<string, string>;
   /** Raw user-chosen size — no clamp applied. UI layer clamps at render time. */
@@ -83,6 +123,9 @@ export interface ChatState {
   toggle: () => void;
   setActiveSession: (id: string | null) => void;
   setSelectedAgentId: (id: string) => void;
+  setDmBubbleOpenAgentId: (agentId: string | null) => void;
+  toggleDmBubble: (agentId: string) => void;
+  setDmBubbleActiveSession: (agentId: string, sessionId: string | null) => void;
   /** sessionId accepts a real session UUID or DRAFT_NEW_SESSION. */
   setInputDraft: (sessionId: string, draft: string) => void;
   clearInputDraft: (sessionId: string) => void;
@@ -113,6 +156,8 @@ export function createChatStore(options: ChatStoreOptions) {
     isOpen: initialIsOpen,
     activeSessionId: storage.getItem(wsKey(SESSION_STORAGE_KEY)),
     selectedAgentId: storage.getItem(wsKey(AGENT_STORAGE_KEY)),
+    dmBubbleOpenAgentId: storage.getItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY)),
+    dmBubbleActiveSessionByAgent: readStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY)),
     inputDrafts: readDrafts(storage, wsKey(DRAFTS_KEY)),
     chatWidth: Number(storage.getItem(CHAT_WIDTH_KEY)) || CHAT_DEFAULT_W,
     chatHeight: Number(storage.getItem(CHAT_HEIGHT_KEY)) || CHAT_DEFAULT_H,
@@ -141,6 +186,41 @@ export function createChatStore(options: ChatStoreOptions) {
       logger.info("setSelectedAgentId", { from: get().selectedAgentId, to: id });
       storage.setItem(wsKey(AGENT_STORAGE_KEY), id);
       set({ selectedAgentId: id });
+    },
+    setDmBubbleOpenAgentId: (agentId) => {
+      logger.info("setDmBubbleOpenAgentId", {
+        from: get().dmBubbleOpenAgentId,
+        to: agentId,
+      });
+      if (agentId) {
+        storage.setItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY), agentId);
+      } else {
+        storage.removeItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY));
+      }
+      set({ dmBubbleOpenAgentId: agentId });
+    },
+    toggleDmBubble: (agentId) => {
+      const current = get().dmBubbleOpenAgentId;
+      const next = current === agentId ? null : agentId;
+      logger.debug("toggleDmBubble", { agentId, to: next });
+      if (next) {
+        storage.setItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY), next);
+      } else {
+        storage.removeItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY));
+      }
+      set({ dmBubbleOpenAgentId: next });
+    },
+    setDmBubbleActiveSession: (agentId, sessionId) => {
+      const prev = get().dmBubbleActiveSessionByAgent[agentId] ?? null;
+      logger.info("setDmBubbleActiveSession", { agentId, from: prev, to: sessionId });
+      const next = { ...get().dmBubbleActiveSessionByAgent };
+      if (sessionId) {
+        next[agentId] = sessionId;
+      } else {
+        delete next[agentId];
+      }
+      writeStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY), next);
+      set({ dmBubbleActiveSessionByAgent: next });
     },
     setInputDraft: (sessionId, draft) => {
       // Debug level — onUpdate fires on every keystroke.
@@ -184,17 +264,22 @@ export function createChatStore(options: ChatStoreOptions) {
     const nextSession = storage.getItem(wsKey(SESSION_STORAGE_KEY));
     const nextAgent = storage.getItem(wsKey(AGENT_STORAGE_KEY));
     const nextDrafts = readDrafts(storage, wsKey(DRAFTS_KEY));
+    const nextBubbleAgent = storage.getItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY));
+    const nextBubbleSessions = readStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY));
     logger.info("workspace rehydration", {
       prevSession: store.getState().activeSessionId,
       nextSession,
       prevAgent: store.getState().selectedAgentId,
       nextAgent,
       draftCount: Object.keys(nextDrafts).length,
+      nextBubbleAgent,
     });
     store.setState({
       activeSessionId: nextSession,
       selectedAgentId: nextAgent,
       inputDrafts: nextDrafts,
+      dmBubbleOpenAgentId: nextBubbleAgent,
+      dmBubbleActiveSessionByAgent: nextBubbleSessions,
     });
   });
 

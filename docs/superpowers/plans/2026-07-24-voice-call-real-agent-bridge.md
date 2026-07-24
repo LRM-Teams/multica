@@ -37,8 +37,8 @@ memory, tools, permissions, and channel history.
 
 - [x] PR 1: configure RTC `CustomLLM`, per-call identity, and deployment
   settings.
-- [x] PR 1b: reject partial RTC secret configuration before deployment changes
-  the running containers.
+- [x] PR 1b (#1172): reject partial RTC secret configuration before deployment
+  changes the running containers.
 - [ ] PR 2: authenticate and validate the OpenAI-compatible RTC endpoint.
 - [ ] PR 3: persist an idempotent DM speech turn and dispatch the selected
   agent.

@@ -16,10 +16,11 @@ const (
 type StartConfigurationInput struct {
 	TargetUserID      string
 	AgentUserID       string
+	VoiceCallID       string
 	WelcomeMessage    string
 	SystemMessages    []string
-	ArkEndpointID     string
-	ArkModelName      string
+	CustomLLMURL      string
+	CustomLLMAPIKey   string
 	TTSVoiceID        string
 	CallbackURL       string
 	CallbackSignature string
@@ -51,12 +52,14 @@ type startVADConfig struct {
 
 type startLLMConfig struct {
 	Mode           string   `json:"Mode"`
-	EndpointID     string   `json:"EndPointId,omitempty"`
-	ModelName      string   `json:"ModelName,omitempty"`
+	URL            string   `json:"Url"`
+	APIKey         string   `json:"APIKey"`
+	ModelName      string   `json:"ModelName"`
 	SystemMessages []string `json:"SystemMessages"`
 	HistoryLength  int      `json:"HistoryLength"`
-	ThinkingType   string   `json:"ThinkingType"`
 	Prefill        bool     `json:"Prefill"`
+	EnableRoundID  bool     `json:"EnableRoundId"`
+	Custom         string   `json:"Custom"`
 }
 
 type startTTSConfig struct {
@@ -120,10 +123,17 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 		return StartConfiguration{}, errors.New("volcengine RTC Agent UserId must differ from TargetUserId")
 	}
 
-	endpointID := strings.TrimSpace(input.ArkEndpointID)
-	modelName := strings.TrimSpace(input.ArkModelName)
-	if (endpointID == "") == (modelName == "") {
-		return StartConfiguration{}, errors.New("volcengine RTC requires exactly one Ark endpoint ID or model name")
+	voiceCallID := strings.TrimSpace(input.VoiceCallID)
+	if voiceCallID == "" {
+		return StartConfiguration{}, errors.New("volcengine RTC voice call ID is required")
+	}
+	customLLMURL := strings.TrimSpace(input.CustomLLMURL)
+	if err := validatePublicHTTPSURL(customLLMURL); err != nil {
+		return StartConfiguration{}, fmt.Errorf("volcengine RTC CustomLLM URL: %w", err)
+	}
+	customLLMAPIKey := strings.TrimSpace(input.CustomLLMAPIKey)
+	if customLLMAPIKey == "" {
+		return StartConfiguration{}, errors.New("volcengine RTC CustomLLM API key is required")
 	}
 	if len(input.SystemMessages) == 0 {
 		return StartConfiguration{}, errors.New("volcengine RTC SystemMessages requires at least one message")
@@ -140,8 +150,8 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 		return StartConfiguration{}, errors.New("volcengine RTC TTS voice is required")
 	}
 	callbackURL := strings.TrimSpace(input.CallbackURL)
-	if err := validateCallbackURL(callbackURL); err != nil {
-		return StartConfiguration{}, err
+	if err := validatePublicHTTPSURL(callbackURL); err != nil {
+		return StartConfiguration{}, fmt.Errorf("volcengine RTC callback URL: %w", err)
 	}
 	callbackSignature := strings.TrimSpace(input.CallbackSignature)
 	if callbackSignature == "" {
@@ -153,6 +163,12 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 	})
 	if err != nil {
 		return StartConfiguration{}, fmt.Errorf("encode volcengine RTC TTS parameters: %w", err)
+	}
+	customLLMData, err := json.Marshal(map[string]string{
+		"voice_call_id": voiceCallID,
+	})
+	if err != nil {
+		return StartConfiguration{}, fmt.Errorf("encode volcengine RTC CustomLLM data: %w", err)
 	}
 
 	config, err := json.Marshal(startConversationConfig{
@@ -171,13 +187,15 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 			},
 		},
 		LLMConfig: startLLMConfig{
-			Mode:           "ArkV3",
-			EndpointID:     endpointID,
-			ModelName:      modelName,
+			Mode:           "CustomLLM",
+			URL:            customLLMURL,
+			APIKey:         customLLMAPIKey,
+			ModelName:      "multica-beckham",
 			SystemMessages: systemMessages,
 			HistoryLength:  10,
-			ThinkingType:   "disabled",
 			Prefill:        false,
+			EnableRoundID:  true,
+			Custom:         string(customLLMData),
 		},
 		TTSConfig: startTTSConfig{
 			AutoActive: true,
@@ -220,14 +238,14 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 	}, nil
 }
 
-func validateCallbackURL(value string) error {
-	callbackURL, err := url.Parse(value)
+func validatePublicHTTPSURL(value string) error {
+	publicURL, err := url.Parse(value)
 	if err != nil ||
-		callbackURL.Scheme != "https" ||
-		callbackURL.Host == "" ||
-		callbackURL.User != nil ||
-		callbackURL.Fragment != "" {
-		return errors.New("volcengine RTC callback URL must be a public HTTPS URL without credentials or a fragment")
+		publicURL.Scheme != "https" ||
+		publicURL.Host == "" ||
+		publicURL.User != nil ||
+		publicURL.Fragment != "" {
+		return errors.New("must be a public HTTPS URL without credentials or a fragment")
 	}
 	return nil
 }

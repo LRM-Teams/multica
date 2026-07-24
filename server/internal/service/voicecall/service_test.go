@@ -45,6 +45,7 @@ func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
 		t.Fatalf("media = %+v", result.Media)
 	}
 	wantProviderInput := ProviderStartInput{
+		CallID:         "call-1",
 		RoomID:         "voice-call-nonce-1",
 		TaskID:         "voice-task-nonce-1",
 		TargetUserID:   "voice-member-nonce-1",

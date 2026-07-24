@@ -444,7 +444,20 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "lifecycle unavailable")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("sandbox lifecycle unavailable")
 	}
-	rtJSON, err := json.Marshal(service.EnvDispatchTrainingRuntimePolicy(cfg.BridgeStubURL, res.ProxyKey))
+	// The sandbox pi routes its LLM calls to the address reachable *from inside
+	// the sandbox VM* (AREAL_PROXY_URL / cfg.ProxyURL). This is deliberately
+	// distinct from cfg.BridgeStubURL (AREAL_BRIDGE_STUB_URL), which is the
+	// backend->stub address used by the arealrl control-plane client above:
+	// BridgeStubURL may be a Docker-compose DNS name (e.g. db-bridge-stub-multica)
+	// that resolves on the backend's compose network but NOT inside the sandbox
+	// VM, so using it as the pi base_url makes every LLM call hang on DNS/connect
+	// and the training DAG times out. Fall back to BridgeStubURL only when
+	// ProxyURL is unset (single-host deploys where the two addresses coincide).
+	sandboxProxyURL := cfg.ProxyURL
+	if sandboxProxyURL == "" {
+		sandboxProxyURL = cfg.BridgeStubURL
+	}
+	rtJSON, err := json.Marshal(service.EnvDispatchTrainingRuntimePolicy(sandboxProxyURL, res.ProxyKey))
 	if err != nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "encode training runtime failed")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("encode training runtime: %w", err)

@@ -59,13 +59,15 @@ func ResolveEnvDispatchTrainingSession(ctx context.Context, starter EnvDispatchS
 }
 
 // EnvDispatchTrainingRuntimePolicy builds the server-owned runtime policy for a
-// training derived agent's sandbox: model "areal-default", base_url the
-// configured AReaL bridge URL (AREAL_BRIDGE_STUB_URL / BridgeStubURL from
-// training config), api_key the session proxy key. No caller-supplied external
-// credential is used. AC-4 / [需澄清]#3.
-func EnvDispatchTrainingRuntimePolicy(bridgeURL, sessionKey string) ExternalModelRuntime {
+// training derived agent's sandbox: model "areal-default", base_url the given
+// proxyURL, api_key the session proxy key. The caller passes the address the
+// sandbox pi can reach from *inside* the sandbox VM (AREAL_PROXY_URL /
+// cfg.ProxyURL) — NOT AREAL_BRIDGE_STUB_URL, which is the backend->stub address
+// and may be a compose DNS name that does not resolve inside the sandbox. No
+// caller-supplied external credential is used. AC-4 / [需澄清]#3.
+func EnvDispatchTrainingRuntimePolicy(proxyURL, sessionKey string) ExternalModelRuntime {
 	return ExternalModelRuntime{
-		BaseURL: bridgeURL,
+		BaseURL: proxyURL,
 		APIKey:  sessionKey,
 		Model:   arealProxyModel,
 	}

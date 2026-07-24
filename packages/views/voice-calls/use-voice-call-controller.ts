@@ -1,0 +1,530 @@
+import {
+  useCreateVoiceCall,
+  useStopVoiceCall,
+  voiceCallOptions,
+} from "@multica/core/voice-calls";
+import type {
+  CreateVoiceCallRequest,
+  VoiceCall,
+  VoiceCallMedia,
+} from "@multica/core/types";
+import { useQuery } from "@tanstack/react-query";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  createVolcengineVoiceMediaSession,
+  VoiceCallMediaError,
+  type VoiceCallMediaEvents,
+  type VoiceCallMediaState,
+} from "./volcengine-media-session";
+
+export type VoiceCallControllerPhase =
+  | "idle"
+  | "creating"
+  | "joining"
+  | "connected"
+  | "muted"
+  | "reconnecting"
+  | "ending"
+  | "ended"
+  | "failed";
+
+export type VoiceCallControllerErrorSource =
+  | "create"
+  | "media"
+  | "stop"
+  | "server";
+
+export interface VoiceCallControllerError {
+  source: VoiceCallControllerErrorSource;
+  code: string;
+  message: string;
+}
+
+export interface VoiceCallMediaSession {
+  connect(media: VoiceCallMedia, deviceId?: string): Promise<void>;
+  setMuted(muted: boolean): Promise<void>;
+  resumeRemoteAudio(remoteUserId: string): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
+export type VoiceCallMediaSessionFactory = (
+  events: VoiceCallMediaEvents,
+) => VoiceCallMediaSession;
+
+export interface UseVoiceCallControllerOptions {
+  mediaSessionFactory?: VoiceCallMediaSessionFactory;
+}
+
+export interface VoiceCallController {
+  call: VoiceCall | null;
+  callId: string;
+  phase: VoiceCallControllerPhase;
+  error: VoiceCallControllerError | null;
+  autoplayBlockedUserId: string | null;
+  start(
+    input: CreateVoiceCallRequest,
+    microphoneDeviceId?: string,
+  ): Promise<string>;
+  hangUp(): Promise<void>;
+  setMuted(muted: boolean): Promise<void>;
+  resumeRemoteAudio(): Promise<void>;
+}
+
+const TERMINAL_STATUSES = new Set(["ended", "failed"]);
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : fallback;
+}
+
+function controllerError(
+  source: VoiceCallControllerErrorSource,
+  code: string,
+  error: unknown,
+  fallback: string,
+): VoiceCallControllerError {
+  return {
+    source,
+    code: error instanceof VoiceCallMediaError ? error.code : code,
+    message: errorMessage(error, fallback),
+  };
+}
+
+function phaseFromMediaState(
+  state: VoiceCallMediaState,
+): VoiceCallControllerPhase | null {
+  switch (state) {
+    case "joining":
+      return "joining";
+    case "connected":
+      return "connected";
+    case "muted":
+      return "muted";
+    case "reconnecting":
+      return "reconnecting";
+    case "failed":
+      return "failed";
+    case "idle":
+    case "closed":
+      return null;
+  }
+}
+
+function phaseFromServer(
+  status: string | undefined,
+  localPhase: VoiceCallControllerPhase,
+): VoiceCallControllerPhase {
+  if (localPhase === "failed" && status !== "failed") {
+    return "failed";
+  }
+  switch (status) {
+    case "ending":
+      return "ending";
+    case "ended":
+      return "ended";
+    case "failed":
+      return "failed";
+    default:
+      return localPhase;
+  }
+}
+
+export function useVoiceCallController(
+  workspaceId: string,
+  options: UseVoiceCallControllerOptions = {},
+): VoiceCallController {
+  const mediaSessionFactory =
+    options.mediaSessionFactory ?? createVolcengineVoiceMediaSession;
+  const createCallMutation = useCreateVoiceCall(workspaceId);
+  const stopCallMutation = useStopVoiceCall(workspaceId);
+  const [callId, setCallId] = useState("");
+  const [localPhase, setLocalPhase] =
+    useState<VoiceCallControllerPhase>("idle");
+  const [localError, setLocalError] =
+    useState<VoiceCallControllerError | null>(null);
+  const [autoplayBlockedUserId, setAutoplayBlockedUserId] =
+    useState<string | null>(null);
+  const callQuery = useQuery(voiceCallOptions(workspaceId, callId));
+
+  const mountedRef = useRef(true);
+  const activeCallIdRef = useRef("");
+  const mediaSessionRef = useRef<VoiceCallMediaSession | null>(null);
+  const startPromiseRef = useRef<Promise<string> | null>(null);
+  const cancelRequestedRef = useRef(false);
+  const endingRef = useRef(false);
+  const mediaFailureRef = useRef<unknown>(null);
+  const stoppedCallIdsRef = useRef(new Set<string>());
+  const stopInFlightRef = useRef<{
+    callId: string;
+    promise: Promise<void>;
+  } | null>(null);
+
+  const requestServerStop = useCallback((targetCallId: string) => {
+    if (stoppedCallIdsRef.current.has(targetCallId)) {
+      return Promise.resolve();
+    }
+    if (stopInFlightRef.current?.callId === targetCallId) {
+      return stopInFlightRef.current.promise;
+    }
+
+    const promise = stopCallMutation.mutateAsync(targetCallId)
+      .then(() => {
+        stoppedCallIdsRef.current.add(targetCallId);
+      })
+      .finally(() => {
+        if (stopInFlightRef.current?.callId === targetCallId) {
+          stopInFlightRef.current = null;
+        }
+      });
+    stopInFlightRef.current = { callId: targetCallId, promise };
+    return promise;
+  }, [stopCallMutation]);
+  const requestServerStopRef = useRef(requestServerStop);
+  requestServerStopRef.current = requestServerStop;
+
+  const setMediaFailure = useCallback((error: unknown) => {
+    if (endingRef.current || cancelRequestedRef.current) return;
+    mediaFailureRef.current = error;
+    if (mountedRef.current) {
+      setLocalError(controllerError(
+        "media",
+        "media_failed",
+        error,
+        "Voice call media failed",
+      ));
+      setLocalPhase("failed");
+    }
+    const targetCallId = activeCallIdRef.current;
+    if (targetCallId && !startPromiseRef.current) {
+      void requestServerStopRef.current(targetCallId).catch(
+        (stopError: unknown) => {
+          if (mountedRef.current) {
+            setLocalError(controllerError(
+              "stop",
+              "stop_failed",
+              stopError,
+              "Voice call media failed and the server call could not be stopped",
+            ));
+          }
+        },
+      );
+    }
+  }, []);
+
+  const start = useCallback((
+    input: CreateVoiceCallRequest,
+    microphoneDeviceId?: string,
+  ): Promise<string> => {
+    if (startPromiseRef.current || activeCallIdRef.current) {
+      return Promise.reject(
+        new VoiceCallMediaError(
+          "already_started",
+          "A voice call is already in progress",
+        ),
+      );
+    }
+
+    cancelRequestedRef.current = false;
+    endingRef.current = false;
+    mediaFailureRef.current = null;
+    setCallId("");
+    setAutoplayBlockedUserId(null);
+    setLocalError(null);
+    setLocalPhase("creating");
+
+    const operation = (async () => {
+      let createdCallId = "";
+      let cleanupAttempted = false;
+      try {
+        const created = await createCallMutation.mutateAsync(input);
+        createdCallId = created.call.id;
+        activeCallIdRef.current = createdCallId;
+        if (mountedRef.current) {
+          setCallId(createdCallId);
+        }
+
+        if (cancelRequestedRef.current) {
+          cleanupAttempted = true;
+          await requestServerStopRef.current(createdCallId).catch(
+            (stopError: unknown) => {
+              if (mountedRef.current) {
+                setLocalError(controllerError(
+                  "stop",
+                  "stop_failed",
+                  stopError,
+                  "Cancelled voice call could not be stopped on the server",
+                ));
+              }
+              throw stopError;
+            },
+          );
+          activeCallIdRef.current = "";
+          if (mountedRef.current) setLocalPhase("ended");
+          throw new VoiceCallMediaError(
+            "cancelled",
+            "Voice call startup was cancelled",
+          );
+        }
+
+        const events: VoiceCallMediaEvents = {
+          onStateChange: (state) => {
+            const nextPhase = phaseFromMediaState(state);
+            if (nextPhase && mountedRef.current) {
+              setLocalPhase(nextPhase);
+            }
+          },
+          onAutoplayBlocked: (remoteUserId) => {
+            if (mountedRef.current) {
+              setAutoplayBlockedUserId(remoteUserId);
+            }
+          },
+          onError: setMediaFailure,
+        };
+        const session = mediaSessionFactory(events);
+        mediaSessionRef.current = session;
+        await session.connect(created.media, microphoneDeviceId);
+        if (mediaFailureRef.current) {
+          throw mediaFailureRef.current;
+        }
+
+        if (cancelRequestedRef.current) {
+          await session.disconnect().catch(() => undefined);
+          cleanupAttempted = true;
+          await requestServerStopRef.current(createdCallId).catch(
+            (stopError: unknown) => {
+              if (mountedRef.current) {
+                setLocalError(controllerError(
+                  "stop",
+                  "stop_failed",
+                  stopError,
+                  "Cancelled voice call could not be stopped on the server",
+                ));
+              }
+              throw stopError;
+            },
+          );
+          activeCallIdRef.current = "";
+          if (mountedRef.current) setLocalPhase("ended");
+          throw new VoiceCallMediaError(
+            "cancelled",
+            "Voice call startup was cancelled",
+          );
+        }
+        return createdCallId;
+      } catch (error) {
+        const cancelled =
+          error instanceof VoiceCallMediaError && error.code === "cancelled";
+        if (createdCallId && !cancelled && !cleanupAttempted) {
+          await mediaSessionRef.current?.disconnect().catch(() => undefined);
+          mediaSessionRef.current = null;
+          let stopFailed = false;
+          await requestServerStopRef.current(createdCallId).catch(
+            (stopError: unknown) => {
+              stopFailed = true;
+              if (mountedRef.current) {
+                setLocalError(controllerError(
+                  "stop",
+                  "stop_failed",
+                  stopError,
+                  "Voice call media failed and the server call could not be stopped",
+                ));
+              }
+            },
+          );
+          if (!stopFailed) {
+            activeCallIdRef.current = "";
+          }
+        }
+        if (!cancelled && mountedRef.current) {
+          const source = createdCallId ? "media" : "create";
+          setLocalError((current) => current ?? controllerError(
+            source,
+            source === "create" ? "create_failed" : "media_failed",
+            error,
+            source === "create"
+              ? "Failed to create voice call"
+              : "Failed to start voice call media",
+          ));
+          setLocalPhase("failed");
+        }
+        throw error;
+      }
+    })();
+
+    startPromiseRef.current = operation;
+    void operation.then(
+      () => {
+        if (startPromiseRef.current === operation) {
+          startPromiseRef.current = null;
+        }
+      },
+      () => {
+        if (startPromiseRef.current === operation) {
+          startPromiseRef.current = null;
+        }
+      },
+    );
+    return operation;
+  }, [createCallMutation, mediaSessionFactory, setMediaFailure]);
+
+  const hangUp = useCallback(async (): Promise<void> => {
+    cancelRequestedRef.current = true;
+    endingRef.current = true;
+    if (mountedRef.current) setLocalPhase("ending");
+
+    const targetCallId = activeCallIdRef.current;
+    if (!targetCallId) {
+      try {
+        await startPromiseRef.current;
+      } catch (error) {
+        if (activeCallIdRef.current) {
+          endingRef.current = false;
+          throw error;
+        }
+      }
+      if (mountedRef.current && !activeCallIdRef.current) {
+        setLocalPhase("ended");
+      }
+      endingRef.current = false;
+      return;
+    }
+
+    const [mediaResult, stopResult] = await Promise.allSettled([
+      mediaSessionRef.current?.disconnect() ?? Promise.resolve(),
+      requestServerStopRef.current(targetCallId),
+    ]);
+    if (stopResult.status === "rejected") {
+      endingRef.current = false;
+      if (mountedRef.current) {
+        setLocalError(controllerError(
+          "stop",
+          "stop_failed",
+          stopResult.reason,
+          "Failed to stop voice call",
+        ));
+        setLocalPhase("failed");
+      }
+      throw stopResult.reason;
+    }
+
+    activeCallIdRef.current = "";
+    mediaSessionRef.current = null;
+    endingRef.current = false;
+    if (mountedRef.current) {
+      if (mediaResult.status === "rejected") {
+        setLocalError(controllerError(
+          "media",
+          "cleanup_failed",
+          mediaResult.reason,
+          "Voice call media cleanup was incomplete",
+        ));
+      }
+      setLocalPhase("ended");
+    }
+  }, []);
+
+  const setMuted = useCallback(async (muted: boolean): Promise<void> => {
+    const session = mediaSessionRef.current;
+    if (!session) {
+      throw new VoiceCallMediaError(
+        muted ? "mute_failed" : "unmute_failed",
+        "Voice call media is not connected",
+      );
+    }
+    try {
+      await session.setMuted(muted);
+    } catch (error) {
+      if (mountedRef.current) {
+        setLocalError(controllerError(
+          "media",
+          muted ? "mute_failed" : "unmute_failed",
+          error,
+          muted
+            ? "Failed to mute microphone"
+            : "Failed to resume microphone",
+        ));
+      }
+      throw error;
+    }
+  }, []);
+
+  const resumeRemoteAudio = useCallback(async (): Promise<void> => {
+    const remoteUserId = autoplayBlockedUserId;
+    const session = mediaSessionRef.current;
+    if (!session || !remoteUserId) {
+      throw new VoiceCallMediaError(
+        "playback_failed",
+        "Remote voice playback is not blocked",
+      );
+    }
+    try {
+      await session.resumeRemoteAudio(remoteUserId);
+      if (mountedRef.current) setAutoplayBlockedUserId(null);
+    } catch (error) {
+      if (mountedRef.current) {
+        setLocalError(controllerError(
+          "media",
+          "playback_failed",
+          error,
+          "Failed to resume remote voice playback",
+        ));
+      }
+      throw error;
+    }
+  }, [autoplayBlockedUserId]);
+
+  const serverCall = callQuery.data?.call ?? null;
+  const serverStatus = serverCall?.status;
+
+  useEffect(() => {
+    if (!callId || !TERMINAL_STATUSES.has(serverStatus ?? "")) return;
+    if (activeCallIdRef.current === callId) {
+      activeCallIdRef.current = "";
+    }
+    const session = mediaSessionRef.current;
+    mediaSessionRef.current = null;
+    void session?.disconnect().catch(() => undefined);
+  }, [callId, serverStatus]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cancelRequestedRef.current = true;
+      endingRef.current = true;
+      const targetCallId = activeCallIdRef.current;
+      activeCallIdRef.current = "";
+      void mediaSessionRef.current?.disconnect().catch(() => undefined);
+      mediaSessionRef.current = null;
+      if (targetCallId) {
+        void requestServerStopRef.current(targetCallId).catch(() => undefined);
+      }
+    };
+  }, []);
+
+  const serverFailure = serverStatus === "failed" && serverCall
+    ? {
+      source: "server" as const,
+      code: serverCall.error_code || "server_failed",
+      message: "Voice call ended because the server reported a failure",
+    }
+    : null;
+
+  return {
+    call: serverCall,
+    callId,
+    phase: phaseFromServer(serverStatus, localPhase),
+    error: localError ?? serverFailure,
+    autoplayBlockedUserId,
+    start,
+    hangUp,
+    setMuted,
+    resumeRemoteAudio,
+  };
+}

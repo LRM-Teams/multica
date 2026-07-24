@@ -179,6 +179,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		APIKey:    os.Getenv("DOUBAO_SPEECH_API_KEY"),
 		SpeakerID: os.Getenv("DOUBAO_TTS_SPEAKER_ID"),
 	})
+	if err := configureVoiceCallService(h, queries, os.Getenv); err != nil {
+		slog.Error("voice call integration disabled", "error", err)
+	} else if h.VoiceCallService != nil {
+		slog.Info("voice call integration enabled", "provider", "volcengine")
+	}
 	h.SandboxHub = sandboxHub
 	handler.ConfigureEphemeralSandboxManager(h)
 	h.StartChannelBridge()
@@ -532,6 +537,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// only forward the bytes + the Stripe-Signature header; see
 	// HandleCloudBillingStripeWebhook for the rationale).
 	r.Post("/api/webhooks/stripe", h.HandleCloudBillingStripeWebhook)
+	// Volcengine RTC callback (no Multica auth). The provider echoes the
+	// server-configured signature in the JSON body; the handler validates it
+	// before decoding the binary conversation event.
+	r.Post(voiceCallCallbackPath, h.HandleVoiceCallCallback)
 
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
@@ -653,6 +662,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
 					r.Get("/memory-curation/team-knowledge", h.ListTeamKnowledgeItems)
 					r.Get("/memory-curation/team-knowledge/{itemId}", h.GetTeamKnowledgeItem)
+					r.Route("/voice-calls", func(r chi.Router) {
+						r.Use(handler.RequireHumanActor)
+						r.Post("/", h.CreateVoiceCall)
+						r.Get("/{callId}", h.GetVoiceCall)
+						r.Post("/{callId}/stop", h.StopVoiceCall)
+					})
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the

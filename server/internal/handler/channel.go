@@ -5468,6 +5468,11 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 }
 
 func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channelID string, limit int) []ChannelMessageResponse {
+	messages, _ := h.recentChannelMessagesWithError(ctx, workspaceID, channelID, limit)
+	return messages
+}
+
+func (h *Handler) recentChannelMessagesWithError(ctx context.Context, workspaceID, channelID string, limit int) ([]ChannelMessageResponse, error) {
 	rows, err := h.DB.Query(ctx, `
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM (
@@ -5476,23 +5481,27 @@ func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channe
 			WHERE channel_id = $1
 			  AND workspace_id = $2
 			  AND thread_root_message_id IS NULL
+			  AND deleted_at IS NULL
 			ORDER BY seq DESC
 			LIMIT $3
 		) recent
 		ORDER BY seq ASC`, parseUUID(channelID), parseUUID(workspaceID), limit)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []ChannelMessageResponse
 	for rows.Next() {
 		msg, err := scanChannelMessage(rows)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		out = append(out, msg)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID, channelID, rootMessageID string, limit int) []ChannelMessageResponse {
@@ -5503,7 +5512,10 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 		WITH replies AS (
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM channel_message
-			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3
+			WHERE channel_id = $1
+			  AND workspace_id = $2
+			  AND thread_root_message_id = $3
+			  AND deleted_at IS NULL
 			ORDER BY seq DESC
 			LIMIT $4
 		)
@@ -5511,7 +5523,11 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 		FROM (
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM channel_message
-			WHERE id = $3 AND channel_id = $1 AND workspace_id = $2 AND author_type <> 'system'
+			WHERE id = $3
+			  AND channel_id = $1
+			  AND workspace_id = $2
+			  AND author_type <> 'system'
+			  AND deleted_at IS NULL
 			UNION ALL
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM replies

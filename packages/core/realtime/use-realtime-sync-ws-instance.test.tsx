@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
+import { voiceCallKeys } from "../voice-calls/queries";
 import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage } from "../types";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
@@ -104,10 +105,10 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (15 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
-    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 24
+    // (16 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
+    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 25
     // calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(24);
+    expect(invalidateSpy).toHaveBeenCalledTimes(25);
 
     // Assert the KEY, not just the count (Ronan): the reconnect resync must
     // invalidate the channel Tasks board prefix (#562) so tasks changed while
@@ -156,6 +157,7 @@ describe("useRealtimeSync — ws instance change", () => {
     ).toBe(true);
     expect(calls).toContainEqual(["labels", "ws-1"]);
     expect(calls).toContainEqual(["workspaces", "ws-1", "invitations"]);
+    expect(calls).toContainEqual(voiceCallKeys.all("ws-1"));
   });
 
   it("invalidates per-issue caches (no wsId in key) on ws instance change", () => {

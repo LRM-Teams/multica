@@ -710,7 +710,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       COALESCE(uc.cnt, 0) AS real_unread,
 		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
 		       COALESCE(hm.has_mention, false),
-		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint,
+		       NULLIF(COALESCE(vcm.last_read_seq, cr.last_read_seq, 0), 0)::bigint,
 		       cs.runtime_token_stats
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
@@ -776,7 +776,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		var lastParts, runtimeStatsRaw []byte
 		var unread int
 		var hasMention bool
-		var lastReadSeq int64
+		var lastReadSeq *int64
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
 			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq, &runtimeStatsRaw); err != nil {
 			continue
@@ -797,7 +797,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			MutedAt:        timestampToPtr(mutedAt),
 			Muted:          mutedAt.Valid,
 			HasMention:     hasMention,
-			LastReadSeq:    &lastReadSeq,
+			LastReadSeq:    lastReadSeq,
 			UpdatedAt:      timestampToString(updatedAt),
 		}
 		if item.ManuallyUnread && item.Unread == 0 {

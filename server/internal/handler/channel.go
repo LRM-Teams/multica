@@ -337,7 +337,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(uc.cnt, 0),
 		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
 		       COALESCE(vcm.mention_unread_count, 0),
-		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint
+		       NULLIF(COALESCE(vcm.last_read_seq, cr.last_read_seq, 0), 0)::bigint
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN conversation conv ON conv.channel_id = ch.id
@@ -382,7 +382,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var realUnread, unread int
 		var mentionUnreadCount int
 		var kind string
-		var lastReadSeq int64
+		var lastReadSeq *int64
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &projectID, &createdBy, &createdAt, &updatedAt, &kind, &systemKey,
 			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &mentionUnreadCount, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
@@ -394,7 +394,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
 			Kind: kind, SystemKey: textToPtr(systemKey), UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, MentionUnreadCount: mentionUnreadCount, LastReadSeq: &lastReadSeq, Members: []ChannelMemberBrief{},
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, MentionUnreadCount: mentionUnreadCount, LastReadSeq: lastReadSeq, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
@@ -483,7 +483,7 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 	// it back for FE race-free divider positioning (Frank's requirement).
 	var previousLastReadSeq *int64
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT COALESCE(cr.last_read_seq, vcm.last_read_seq, 0)::bigint
+		SELECT NULLIF(COALESCE(cr.last_read_seq, vcm.last_read_seq, 0), 0)::bigint
 		FROM conversation conv
 		LEFT JOIN channel_read cr ON cr.channel_id = conv.channel_id AND cr.user_id = $2
 		LEFT JOIN conversation_member vcm

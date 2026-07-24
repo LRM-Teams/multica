@@ -583,6 +583,68 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resolvedSessionID := uuidToString(session.ID)
+
+	// L4 greeting fast path: standalone chat_session + pure hi/你好 → reply
+	// with a builtin sticker immediately. Skip agent enqueue so greetings
+	// never spiral into CLI diagnostics.
+	if len(attachmentIDs) == 0 &&
+		isPureStandaloneChatGreeting(content) &&
+		h.channelIDForChatSession(r.Context(), session.ID) == "" {
+		stickerContent, stickerParts, normErr := messageparts.Normalize("", []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "hi",
+			PackID:    messageparts.BuiltinStickerPackID,
+		}})
+		if normErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to build greeting sticker: "+normErr.Error())
+			return
+		}
+		assistant, aerr := h.Queries.CreateChatMessage(r.Context(), db.CreateChatMessageParams{
+			ChatSessionID: session.ID,
+			Role:          "assistant",
+			Content:       stickerContent,
+			Parts:         messageparts.MustJSON(stickerParts),
+			ElapsedMs:     pgtype.Int8{Int64: 0, Valid: true},
+		})
+		if aerr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create greeting reply")
+			return
+		}
+		if err := h.Queries.SetUnreadSinceIfNull(r.Context(), session.ID); err != nil {
+			slog.Warn("failed to set unread_since on greeting fast path", "session_id", sessionID, "error", err)
+		}
+		if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
+			slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
+		}
+		h.clearDMPeerHiddenForChatSession(r.Context(), workspaceID, userID, session.AgentID)
+
+		h.publishChatToCreator(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatMessagePayload{
+			ChatSessionID: resolvedSessionID,
+			MessageID:     uuidToString(msg.ID),
+			Role:          "user",
+			Content:       content,
+			Parts:         parts,
+			CreatedAt:     timestampToString(msg.CreatedAt),
+		})
+		h.publishChatToCreator(protocol.EventChatDone, workspaceID, "system", "", resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatDonePayload{
+			ChatSessionID: resolvedSessionID,
+			Type:          protocol.ChatOutputKindMessage,
+			MessageID:     uuidToString(assistant.ID),
+			Content:       assistant.Content,
+			Parts:         stickerParts,
+			CreatedAt:     timestampToString(assistant.CreatedAt),
+			ElapsedMs:     0,
+		})
+
+		writeJSON(w, http.StatusCreated, SendChatMessageResponse{
+			MessageID: uuidToString(msg.ID),
+			TaskID:    "",
+			CreatedAt: timestampToString(msg.CreatedAt),
+		})
+		return
+	}
+
 	// Enqueue a chat task after the message exists. For web chat the sender is
 	// the authenticated request user (sessions are creator-only), so they are
 	// the task initiator — surfaced to the agent under `## Task Initiator`.
@@ -624,7 +686,6 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	))
 
 	// Broadcast the user message.
-	resolvedSessionID := uuidToString(session.ID)
 	h.publishChatToCreator(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatMessagePayload{
 		ChatSessionID: resolvedSessionID,
 		MessageID:     uuidToString(msg.ID),

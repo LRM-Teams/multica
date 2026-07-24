@@ -311,10 +311,13 @@ func buildChatPrompt(task Task, agentRoot string) string {
 	b.WriteString("You are running as a chat assistant for a Multica workspace.\n")
 	b.WriteString("A user is chatting with you directly. Respond to their message.\n\n")
 	if task.ChannelID == "" {
-		b.WriteString("Standalone chat delivery contract:\n")
+		b.WriteString("Standalone chat delivery contract (READ FIRST — overrides agent habits and skills that mention channel/DM transport):\n")
+		b.WriteString("- This task is a Multica `chat_session` (bubble / FAB chat), NOT a channel or outer-DM transport task.\n")
 		b.WriteString("- Your final assistant output is delivered to this chat session automatically.\n")
-		b.WriteString("- Do not use `multica message send` or search for a DM/channel target to reply to this current chat session.\n")
-		b.WriteString("- For a sticker-only reply, return exactly one JSON object as the final output, with no surrounding commentary. Example greeting sticker: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`.\n\n")
+		b.WriteString("- Do NOT run `multica message send`, `multica message react`, or search for a DM/channel `--target` to reply to THIS turn.\n")
+		b.WriteString("- Pure greetings (hi / hello / hey / 你好 / 在吗 / 嗨): reply with a sticker JSON only. Zero tools. Zero troubleshooting. Example: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`.\n")
+		b.WriteString("- If you mistakenly call `multica message send` and get `agent task is not a channel task` (403): STOP. Do not run help/env/rg/daemon diagnostics. Immediately reply via final output instead.\n")
+		b.WriteString("- For a short text reply without a sticker, return plain text (or `{\"action\":\"message_send\",\"parts\":[{\"type\":\"text\",\"text\":\"...\"}]}`) as the final output — never dump protocol JSON as user-visible prose after a tool spiral.\n\n")
 	}
 	writeAgentRootSection(&b, agentRoot)
 	b.WriteString("Context assembly rules:\n")

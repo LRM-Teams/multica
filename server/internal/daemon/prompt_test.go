@@ -465,7 +465,9 @@ func TestBuildChatPromptStandaloneDeliveryContract(t *testing.T) {
 
 	for _, want := range []string{
 		"final assistant output is delivered to this chat session automatically",
-		"Do not use `multica message send` or search for a DM/channel target",
+		"Do NOT run `multica message send`",
+		"agent task is not a channel task",
+		"Zero tools. Zero troubleshooting",
 		stickerEnvelope,
 	} {
 		if !strings.Contains(out, want) {

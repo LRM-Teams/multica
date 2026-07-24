@@ -31,26 +31,28 @@ export function ConversationHeader({
   badges?: ReactNode;
   /**
    * Optional live status (e.g. agent presence). Renders on the same row as
-   * the name, tight after title/badges — Slack/IM style, matching the profile
-   * hover card. Never under the name, never pushed to the far-right action
-   * cluster.
+   * the name, tight after title/badges — Slack/IM style. Always `shrink-0`
+   * so a long title truncates instead of painting over it. Narrow DM headers
+   * may instead pass the cue via `meta` (under the name).
    */
   status?: ReactNode;
   actions?: ReactNode;
   layout?: "default" | "slots3";
 }) {
   const titleBlock = (
-    <div className="min-w-0 flex-1">
-      {/* Name + badges share the semibold cluster; status sits outside so
-          it keeps its own weight/color and can shrink on narrow widths. */}
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold leading-5">
+    <div className="min-w-0 flex-1 overflow-hidden">
+      {/* Name + badges share the semibold cluster; status is shrink-0 beside
+          (or under via `meta` on narrow DM headers) so a long peer name can
+          never paint over "处理中" / Working. overflow-hidden is required for
+          truncate to kick in through compound title wrappers (button > span). */}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-sm font-semibold leading-5">
           {/* Plain-string titles (thread) keep truncate here; compound
               titles (channel name + ▾) own their own truncate so the
               chevron is never clipped. */}
           <div
             className={cn(
-              "min-w-0 flex-1",
+              "min-w-0 flex-1 overflow-hidden",
               typeof title === "string" && "truncate",
             )}
           >
@@ -58,7 +60,11 @@ export function ConversationHeader({
           </div>
           {badges}
         </div>
-        {status}
+        {status ? (
+          <div className="shrink-0" data-testid="conversation-header-status">
+            {status}
+          </div>
+        ) : null}
       </div>
       {meta && (
         // div (not p): Thread meta may include a clickable「在 #频道 查看」control

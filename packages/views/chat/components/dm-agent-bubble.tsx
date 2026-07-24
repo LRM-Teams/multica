@@ -35,6 +35,9 @@ export function DmAgentBubble({
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
+  // Mobile opens as a true viewport sheet (ChatWindow portals fixed+dvh).
+  // Desktop keeps the corner floating window.
+  const layout = isMobile ? "fullscreen" : "floating";
   const openAgentId = useChatStore((s) => s.dmBubbleOpenAgentId);
   const toggleDmBubble = useChatStore((s) => s.toggleDmBubble);
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
@@ -67,7 +70,7 @@ export function DmAgentBubble({
     <>
       <ChatWindow
         lockedAgentId={agentId}
-        layout={isMobile ? "fullscreen" : "floating"}
+        layout={layout}
       />
       {!isOpen && (
         <Tooltip>

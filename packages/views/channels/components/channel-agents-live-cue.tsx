@@ -621,16 +621,18 @@ function DmAgentsLiveCue({
   if (listTasks.length === 0) return null;
 
   const hasStoppable = stoppable.length > 0;
-  const agentsLabel = t(($) => $.header.dm_live, { working: stoppable.length });
+  // 1:1 DM — show the status word only (no "1 working" count clutter).
+  const agentsLabel = t(($) => $.header.dm_live);
 
   const cueTextClass = cn(
     "truncate",
-    runningCount > 0 && "animate-chat-text-shimmer font-semibold",
-    runningCount === 0 && "font-semibold text-foreground",
+    runningCount > 0 && "animate-chat-text-shimmer font-medium",
+    runningCount === 0 && "font-medium text-muted-foreground",
   );
 
+  // Compact pill so the cue reads as status chrome, not a second name string.
   const cueButtonClass =
-    "inline-flex min-h-8 min-w-0 items-center rounded-sm px-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    "inline-flex min-h-8 shrink-0 items-center rounded-md bg-muted/60 px-1.5 py-0.5 text-left text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
   const listBody = (
     <div className="flex flex-col gap-2" data-testid="channel-agents-working-list">
@@ -698,7 +700,7 @@ function DmAgentsLiveCue({
   return (
     <span
       className={cn(
-        "inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-1",
+        "inline-flex shrink-0 items-center gap-x-1.5 gap-y-1",
         className,
       )}
       data-testid="channel-roster-summary"

@@ -51,7 +51,23 @@ describe("ConversationHeader — title column flex (LRM-279)", () => {
     expect(titleColumn).toHaveClass("flex-1", "min-w-0");
 
     const titleWrapper = screen.getByRole("button", { name: "# long-channel-name" }).parentElement;
-    expect(titleWrapper).toHaveClass("flex-1", "min-w-0");
+    expect(titleWrapper).toHaveClass("flex-1", "min-w-0", "overflow-hidden");
+  });
+
+  it("keeps status shrink-0 so a long title cannot paint over Working", () => {
+    render(
+      <ConversationHeader
+        isMobile
+        leading={<span data-testid="leading">←</span>}
+        title={<span>Multica Dev 全栈工程师</span>}
+        status={<span data-testid="live-cue">Working</span>}
+        actions={<button type="button">Search</button>}
+      />,
+    );
+
+    const statusSlot = screen.getByTestId("conversation-header-status");
+    expect(statusSlot).toHaveClass("shrink-0");
+    expect(statusSlot).toContainElement(screen.getByTestId("live-cue"));
   });
 });
 

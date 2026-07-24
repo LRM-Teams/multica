@@ -37,7 +37,7 @@ vi.mock("../../i18n", () => ({
         presence_counts: `{{members}} · {{agents}}`,
         presence_working: `{{working}} working`,
         presence_attention: `Needs attention`,
-        dm_live: `{{working}} working`,
+        dm_live: `Working`,
         dm_attention: `Needs attention`,
         working_list_title: `Working · {{count}}`,
         working_verb_with_duration: `{{verb}} · {{duration}}`,
@@ -163,7 +163,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
       />,
     );
     expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "1 working",
+      "Working",
     );
     expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
     expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();

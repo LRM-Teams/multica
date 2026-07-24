@@ -5,7 +5,6 @@ import { ArrowLeft, ChevronDown, ChevronUp, FileText, Maximize2, MessageSquare, 
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
-  activeChannelTasksOptions,
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
@@ -35,7 +34,7 @@ import type {
   OpenAgentPanelFn,
 } from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
+import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Tooltip,
@@ -57,7 +56,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
@@ -299,8 +297,8 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-248: agent peers use avatar badge only; activity verbs live on
-  // ConversationAgentActivityLine above the composer.
+  // LRM-248: agent peers use avatar badge only. Composer no longer hosts
+  // preparing / Thinking / Stop (Frank + UI 2026-07-24 — rethink status later).
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -423,7 +421,6 @@ function DmChannelConversation({
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const appliedDeepLinkMessageRef = useRef<string | null>(null);
   const appliedThreadDeepLinkRef = useRef<string | null>(null);
-  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
   // #349 agent side panel — same slot as the thread panel (mutually
   // exclusive), matching channels-page.tsx's inline-panel pattern per
   // Frank's direction (replace the slot, don't route away).
@@ -532,8 +529,6 @@ function DmChannelConversation({
     },
     [threadPage?.messages, threadRoot],
   );
-  const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(channelId));
-
   const handleThreadFollowChange = useCallback((followed: boolean) => {
     if (!threadSurfaceRoot) return;
     setThreadFollowed.mutate(
@@ -814,26 +809,6 @@ function DmChannelConversation({
   const handleThreadEditorUpdate = (value: string) => {
     dispatch({ type: "setThreadDraftEmpty", empty: !value.trim() });
   };
-
-  const handleStopTask = useCallback(async (task: ChannelActiveTask) => {
-    // LRM-425 / LRM-238 — channel/DM wakes cancel via inbox event id only.
-    const inboxEventId = task.inbox_event_id?.trim();
-    if (!inboxEventId) {
-      toast.error(t(($) => $.agent_status.stop_failed));
-      return;
-    }
-    setStoppingTaskId(task.task_id);
-    try {
-      await api.cancelChannelInboxEvent(channelId, inboxEventId);
-      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    } catch {
-      toast.error(t(($) => $.agent_status.stop_failed));
-    } finally {
-      setStoppingTaskId((current) => (current === task.task_id ? null : current));
-    }
-  }, [channelId, qc, t, wsId]);
 
   const handlePickFiles = (files: FileList | null) => {
     if (!files?.length) return;
@@ -1129,11 +1104,6 @@ function DmChannelConversation({
           onDeleteMessage={handleDeleteMessage}
           onRetrySend={handleRetrySend}
         />
-        <ConversationActivityStrip
-          tasks={activeTasks}
-          stoppingTaskId={stoppingTaskId}
-          onStopTask={handleStopTask}
-        />
         <Composer
           surface="thread"
           sendLabel={t(($) => $.composer.send)}
@@ -1319,20 +1289,10 @@ function DmChannelConversation({
         onDeleteMessage={handleDeleteMessage}
         onRetrySend={handleRetrySend}
       />
-      <ConversationActivityStrip
-        typingActors={activeTypingActors}
-        tasks={activeTasks}
-        stoppingTaskId={stoppingTaskId}
-        onStopTask={handleStopTask}
-      />
-      {/* Current conversation agent's live Activity verb (Reading / Writing /
-          Running command… / Thinking) as one quiet line — reuses the Activity
-          latest-row projection and hides itself when the agent is idle. Only a
-          DM whose peer is an agent has a well-defined single conversation
-          agent; human DMs and multi-agent channels render nothing. */}
-      {dm.peer.type === "agent" ? (
-        <ConversationAgentActivityLine agentId={dm.peer.id} />
-      ) : null}
+      {/* Align LRM-447 group composer: typing only above input. Preparing /
+          Thinking / Stop strip removed (Frank + UI 2026-07-24); status
+          perception redesign later. */}
+      <ConversationActivityStrip typingActors={activeTypingActors} />
       <Composer
         surface="dm_channel"
         sendLabel={t(($) => $.composer.send)}

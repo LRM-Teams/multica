@@ -397,4 +397,28 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
       expect(apiMock.unfollowChannelThread).toHaveBeenCalledWith("dm-chan-1", "m-1");
     });
   });
+
+  it("agent DM composer has no preparing / Thinking / Stop strip (Frank 2026-07-24)", async () => {
+    const agentDm: DMItem = {
+      ...dm,
+      peer: { type: "agent", id: "agent-1", name: "Aria" },
+    };
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+        <QueryClientProvider client={qc}>
+          <DmConversation dm={agentDm} onBack={() => {}} />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+    await screen.findByTestId("message-bubble");
+    expect(screen.queryByTestId("conversation-agent-activity-line")).toBeNull();
+    expect(screen.queryByText(/is preparing a reply/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /stop/i })).toBeNull();
+  });
 });

@@ -290,14 +290,15 @@ func (h *Handler) ListAgentActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	visibility, err := h.batchAgentActivityVisibility(r.Context(), reqCtx, rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve agent activity visibility")
+		return
+	}
 	items := make([]AgentActivityItem, 0, limit)
 	var next *AgentActivityCursor
 	for _, row := range rows {
-		item, visible, err := h.agentActivityRowToItem(r.Context(), reqCtx, row)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to resolve agent activity visibility")
-			return
-		}
+		item, visible := agentActivityRowToItemWithVisibility(row, visibility[uuidToString(row.ID)])
 		if !visible {
 			continue
 		}
@@ -1109,6 +1110,251 @@ func (h *Handler) queryAgentActivitySteps(ctx context.Context, taskID pgtype.UUI
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+type agentActivityVisibilityResult struct {
+	TargetRef     AgentActivityTargetRef
+	Visible       bool
+	DetailAllowed bool
+}
+
+func (h *Handler) batchAgentActivityVisibility(ctx context.Context, reqCtx agentActivityRequestContext, rows []agentActivityRawRow) (map[string]agentActivityVisibilityResult, error) {
+	out := make(map[string]agentActivityVisibilityResult, len(rows))
+	if len(rows) == 0 {
+		return out, nil
+	}
+	workspaceID := parseUUID(reqCtx.workspaceID)
+	userUUID, err := util.ParseUUID(reqCtx.userID)
+	if err != nil {
+		return nil, err
+	}
+	detailAllowed := roleAllowed(reqCtx.member.Role, "owner", "admin") || uuidToString(reqCtx.agent.OwnerID) == reqCtx.userID
+	issueIDs := map[string]pgtype.UUID{}
+	chatIDs := map[string]pgtype.UUID{}
+	threadRootIDs := map[string]pgtype.UUID{}
+	channelIDs := map[string]pgtype.UUID{}
+	for _, row := range rows {
+		if row.Kind == "run" {
+			if row.IssueID.Valid {
+				issueIDs[uuidToString(row.IssueID)] = row.IssueID
+			}
+			if row.ChatSessionID.Valid {
+				chatIDs[uuidToString(row.ChatSessionID)] = row.ChatSessionID
+			}
+			continue
+		}
+		kind := textOrDefault(row.TargetKind, "none")
+		switch kind {
+		case "issue", "dm":
+			if row.TargetID.Valid {
+				if kind == "issue" {
+					issueIDs[uuidToString(row.TargetID)] = row.TargetID
+				} else {
+					chatIDs[uuidToString(row.TargetID)] = row.TargetID
+				}
+			}
+		case "channel":
+			if row.TargetID.Valid {
+				channelIDs[uuidToString(row.TargetID)] = row.TargetID
+			}
+		case "thread":
+			if row.TargetID.Valid {
+				threadRootIDs[uuidToString(row.TargetID)] = row.TargetID
+			}
+		}
+	}
+	issueVisible := map[string]bool{}
+	if len(issueIDs) > 0 {
+		ids := uuidMapValues(issueIDs)
+		qrows, err := h.DB.Query(ctx, `SELECT id FROM issue WHERE workspace_id = $1 AND id = ANY($2::uuid[])`, workspaceID, ids)
+		if err != nil {
+			return nil, err
+		}
+		for qrows.Next() {
+			var id pgtype.UUID
+			if err := qrows.Scan(&id); err != nil {
+				qrows.Close()
+				return nil, err
+			}
+			issueVisible[uuidToString(id)] = true
+		}
+		if err := qrows.Err(); err != nil {
+			qrows.Close()
+			return nil, err
+		}
+		qrows.Close()
+	}
+	type chatInfo struct {
+		ChannelID    pgtype.UUID
+		ThreadRootID pgtype.UUID
+		CreatorID    pgtype.UUID
+	}
+	chatInfos := map[string]chatInfo{}
+	if len(chatIDs) > 0 {
+		ids := uuidMapValues(chatIDs)
+		qrows, err := h.DB.Query(ctx, `
+			SELECT cs.id, cs.creator_id, cas.channel_id,
+			       (SELECT cm.channel_thread_root_message_id
+			        FROM chat_message cm
+			        WHERE cm.chat_session_id = cs.id AND cm.channel_thread_root_message_id IS NOT NULL
+			        ORDER BY cm.created_at DESC, cm.id DESC
+			        LIMIT 1) AS thread_root_id
+			FROM chat_session cs
+			LEFT JOIN channel_agent_session cas ON cas.chat_session_id = cs.id
+			WHERE cs.workspace_id = $1 AND cs.id = ANY($2::uuid[])`, workspaceID, ids)
+		if err != nil {
+			return nil, err
+		}
+		for qrows.Next() {
+			var id pgtype.UUID
+			var info chatInfo
+			if err := qrows.Scan(&id, &info.CreatorID, &info.ChannelID, &info.ThreadRootID); err != nil {
+				qrows.Close()
+				return nil, err
+			}
+			chatInfos[uuidToString(id)] = info
+			if info.ChannelID.Valid {
+				channelIDs[uuidToString(info.ChannelID)] = info.ChannelID
+			}
+		}
+		if err := qrows.Err(); err != nil {
+			qrows.Close()
+			return nil, err
+		}
+		qrows.Close()
+	}
+	threadChannels := map[string]pgtype.UUID{}
+	if len(threadRootIDs) > 0 {
+		ids := uuidMapValues(threadRootIDs)
+		qrows, err := h.DB.Query(ctx, `SELECT id, channel_id FROM channel_message WHERE workspace_id = $1 AND id = ANY($2::uuid[])`, workspaceID, ids)
+		if err != nil {
+			return nil, err
+		}
+		for qrows.Next() {
+			var rootID, channelID pgtype.UUID
+			if err := qrows.Scan(&rootID, &channelID); err != nil {
+				qrows.Close()
+				return nil, err
+			}
+			threadChannels[uuidToString(rootID)] = channelID
+			channelIDs[uuidToString(channelID)] = channelID
+		}
+		if err := qrows.Err(); err != nil {
+			qrows.Close()
+			return nil, err
+		}
+		qrows.Close()
+	}
+	memberChannels := map[string]bool{}
+	if len(channelIDs) > 0 {
+		ids := uuidMapValues(channelIDs)
+		qrows, err := h.DB.Query(ctx, `
+			SELECT channel_id FROM channel_member
+			WHERE workspace_id = $1 AND channel_id = ANY($2::uuid[]) AND member_type = 'user' AND member_id = $3`, workspaceID, ids, userUUID)
+		if err != nil {
+			return nil, err
+		}
+		for qrows.Next() {
+			var id pgtype.UUID
+			if err := qrows.Scan(&id); err != nil {
+				qrows.Close()
+				return nil, err
+			}
+			memberChannels[uuidToString(id)] = true
+		}
+		if err := qrows.Err(); err != nil {
+			qrows.Close()
+			return nil, err
+		}
+		qrows.Close()
+	}
+	for _, row := range rows {
+		res := agentActivityVisibilityResult{TargetRef: AgentActivityTargetRef{Kind: "none"}, Visible: true, DetailAllowed: detailAllowed}
+		if row.Kind == "run" {
+			if row.IssueID.Valid {
+				res.TargetRef = AgentActivityTargetRef{Kind: "issue", ID: stringPtr(uuidToString(row.IssueID))}
+				res.Visible = issueVisible[uuidToString(row.IssueID)]
+			} else if row.ChatSessionID.Valid {
+				info, ok := chatInfos[uuidToString(row.ChatSessionID)]
+				if !ok {
+					res.Visible = false
+				} else if info.ChannelID.Valid {
+					channelID := uuidToString(info.ChannelID)
+					if info.ThreadRootID.Valid {
+						root := uuidToString(info.ThreadRootID)
+						res.TargetRef = AgentActivityTargetRef{Kind: "thread", ID: &root, Slug: &channelID}
+					} else {
+						res.TargetRef = AgentActivityTargetRef{Kind: "channel", ID: &channelID}
+					}
+					res.Visible = memberChannels[channelID]
+				} else {
+					res.TargetRef = AgentActivityTargetRef{Kind: "dm", ID: stringPtr(uuidToString(row.ChatSessionID))}
+					res.Visible = info.CreatorID == userUUID
+				}
+			}
+		} else {
+			kind := textOrDefault(row.TargetKind, "none")
+			res.TargetRef = AgentActivityTargetRef{Kind: kind, ID: uuidToPtr(row.TargetID), Slug: textToPtr(row.TargetSlug)}
+			switch kind {
+			case "none", "agent":
+				res.Visible = true
+			case "issue":
+				res.Visible = row.TargetID.Valid && issueVisible[uuidToString(row.TargetID)]
+			case "dm":
+				info, ok := chatInfos[uuidToString(row.TargetID)]
+				res.Visible = ok && info.CreatorID == userUUID
+			case "channel":
+				res.Visible = row.TargetID.Valid && memberChannels[uuidToString(row.TargetID)]
+			case "thread":
+				channelID := threadChannels[uuidToString(row.TargetID)]
+				if channelID.Valid {
+					res.Visible = memberChannels[uuidToString(channelID)]
+					if res.TargetRef.Slug == nil {
+						res.TargetRef.Slug = stringPtr(uuidToString(channelID))
+					}
+				} else {
+					res.Visible = false
+				}
+			default:
+				res.TargetRef = AgentActivityTargetRef{Kind: "none"}
+				res.Visible = false
+			}
+		}
+		out[uuidToString(row.ID)] = res
+	}
+	return out, nil
+}
+
+func uuidMapValues(m map[string]pgtype.UUID) []pgtype.UUID {
+	out := make([]pgtype.UUID, 0, len(m))
+	for _, id := range m {
+		out = append(out, id)
+	}
+	return out
+}
+
+func agentActivityRowToItemWithVisibility(row agentActivityRawRow, vis agentActivityVisibilityResult) (AgentActivityItem, bool) {
+	if !vis.Visible {
+		return AgentActivityItem{}, false
+	}
+	visibleLevel := agentActivityVisibleSummary
+	if vis.DetailAllowed {
+		visibleLevel = agentActivityVisibleDetail
+	}
+	item := AgentActivityItem{
+		ID: uuidToString(row.ID), Kind: row.Kind, AgentID: uuidToString(row.AgentID), RuntimeID: uuidToPtr(row.RuntimeID),
+		CreatedAt: timestampToString(row.CreatedAt), TargetRef: vis.TargetRef, VisibleLevel: visibleLevel,
+	}
+	if row.Kind == "run" {
+		item.Run = agentActivityRunSummary(row)
+		if vis.DetailAllowed {
+			realtime := agentActivityRealtime(uuidToString(row.ID))
+			item.Realtime = &realtime
+		}
+	} else {
+		item.Event = agentActivityEventSummary(row)
+	}
+	return item, true
 }
 
 func (h *Handler) agentActivityRowToItem(ctx context.Context, reqCtx agentActivityRequestContext, row agentActivityRawRow) (AgentActivityItem, bool, error) {

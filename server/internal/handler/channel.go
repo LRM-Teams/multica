@@ -340,14 +340,10 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		) uc ON true
 		LEFT JOIN LATERAL (
 			SELECT EXISTS (
-				SELECT 1 FROM channel_message m
-				WHERE m.channel_id = ch.id
-				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
-				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
-				  AND m.deleted_at IS NULL
-				  AND (m.content ILIKE '%@' || (
-				    SELECT name FROM "user" WHERE id = $2
-				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
+				SELECT 1 FROM channel_message_user_mention mum
+				WHERE mum.channel_id = ch.id
+				  AND mum.user_id = $2
+				  AND mum.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
 			) AS has_mention
 		) hm ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
@@ -2053,6 +2049,14 @@ func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update channel message")
 		return
 	}
+	if err := deleteChannelMessageUserMentions(r.Context(), h.DB, messageID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update channel message")
+		return
+	}
+	if err := insertChannelMessageUserMentions(r.Context(), h.DB, channelID, parseUUID(workspaceID), msg, "user", parseUUID(userID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update channel message")
+		return
+	}
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	writeJSON(w, http.StatusOK, msg)
@@ -2107,6 +2111,11 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		DELETE FROM channel_message_reaction
 		WHERE channel_message_id = $1 AND workspace_id = $2`,
 		messageID, parseUUID(workspaceID)); err != nil {
+		_ = tx.Rollback(r.Context())
+		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
+		return
+	}
+	if err := deleteChannelMessageUserMentions(r.Context(), tx, messageID); err != nil {
 		_ = tx.Rollback(r.Context())
 		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
 		return
@@ -4725,7 +4734,34 @@ func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, cha
 			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17)
 			RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
 		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth, mainTimelineVisible)
-	return scanChannelMessage(row)
+	msg, err := scanChannelMessage(row)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	if err := insertChannelMessageUserMentions(ctx, exec, channelID, workspaceID, msg, authorType, authorID); err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	return msg, nil
+}
+
+func insertChannelMessageUserMentions(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, msg ChannelMessageResponse, authorType string, authorID pgtype.UUID) error {
+	_, err := exec.Exec(ctx, `
+		INSERT INTO channel_message_user_mention (channel_id, message_id, seq, user_id, created_at)
+		SELECT $1::uuid, $2::uuid, $3::bigint, u.id, $4::timestamptz
+		FROM channel_member cm
+		JOIN "user" u ON u.id = cm.member_id
+		WHERE cm.channel_id = $1
+		  AND cm.workspace_id = $5
+		  AND cm.member_type = 'user'
+		  AND NOT ($6::text = 'user' AND $7::uuid IS NOT NULL AND u.id = $7::uuid)
+		  AND ($8::text ILIKE '%@' || u.name || '%' OR $9::jsonb::text ILIKE '%mention://' || u.id::text || '%')
+		ON CONFLICT DO NOTHING`, channelID, msg.ID, msg.Seq, msg.CreatedAt, workspaceID, authorType, nullableUUID(authorID), msg.Content, messageparts.MustJSON(msg.Parts))
+	return err
+}
+
+func deleteChannelMessageUserMentions(ctx context.Context, exec dbExecutor, messageID pgtype.UUID) error {
+	_, err := exec.Exec(ctx, `DELETE FROM channel_message_user_mention WHERE message_id = $1`, messageID)
+	return err
 }
 
 func (h *Handler) sendChannelMessageToFeishu(ctx context.Context, ch ChannelResponse, authorName, content string) {

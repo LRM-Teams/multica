@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -52,16 +54,67 @@ func (h *Handler) ListAgentRadarRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list radar runs")
 		return
 	}
+	actionsByRun, err := h.listAgentRadarActionsByRuns(r.Context(), runs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list radar actions")
+		return
+	}
 	out := make([]AgentRadarRunResponse, 0, len(runs))
 	for _, run := range runs {
-		actions, err := h.Queries.ListAgentRadarActionsByRun(r.Context(), run.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list radar actions")
-			return
-		}
-		out = append(out, agentRadarRunToResponse(run, actions))
+		out = append(out, agentRadarRunToResponse(run, actionsByRun[uuidToString(run.ID)]))
 	}
 	writeJSON(w, http.StatusOK, ListAgentRadarRunsResponse{Runs: out})
+}
+
+func (h *Handler) listAgentRadarActionsByRuns(ctx context.Context, runs []db.AgentRadarRun) (map[string][]db.AgentRadarAction, error) {
+	out := make(map[string][]db.AgentRadarAction, len(runs))
+	if len(runs) == 0 {
+		return out, nil
+	}
+	runIDs := make([]pgtype.UUID, 0, len(runs))
+	for _, run := range runs {
+		runIDs = append(runIDs, run.ID)
+		out[uuidToString(run.ID)] = nil
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, radar_run_id, workspace_id, agent_id, action_type, status, risk_level,
+		       confidence, dedupe_key, target_kind, target_id, reason, evidence, payload,
+		       result, error, created_at, updated_at
+		FROM agent_radar_action
+		WHERE radar_run_id = ANY($1::uuid[])
+		ORDER BY radar_run_id, created_at ASC, id ASC`, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var action db.AgentRadarAction
+		if err := rows.Scan(
+			&action.ID,
+			&action.RadarRunID,
+			&action.WorkspaceID,
+			&action.AgentID,
+			&action.ActionType,
+			&action.Status,
+			&action.RiskLevel,
+			&action.Confidence,
+			&action.DedupeKey,
+			&action.TargetKind,
+			&action.TargetID,
+			&action.Reason,
+			&action.Evidence,
+			&action.Payload,
+			&action.Result,
+			&action.Error,
+			&action.CreatedAt,
+			&action.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		key := uuidToString(action.RadarRunID)
+		out[key] = append(out[key], action)
+	}
+	return out, rows.Err()
 }
 
 func agentRadarRunToResponse(run db.AgentRadarRun, actions []db.AgentRadarAction) AgentRadarRunResponse {

@@ -935,24 +935,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
-			// Squads
+			// Legacy Squad endpoints: product surface removed; keep explicit 410s for stale clients.
 			r.Route("/api/squads", func(r chi.Router) {
-				r.Get("/", h.ListSquads)
-				r.Post("/", h.CreateSquad)
+				r.Get("/", h.SquadFeatureRemoved)
+				r.Post("/", h.SquadFeatureRemoved)
 				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.GetSquad)
-					r.Put("/", h.UpdateSquad)
-					r.Delete("/", h.DeleteSquad)
-					r.Get("/members", h.ListSquadMembers)
-					r.Get("/members/status", h.ListSquadMemberStatus)
-					r.Post("/members", h.AddSquadMember)
-					r.Delete("/members", h.RemoveSquadMember)
-					r.Patch("/members/role", h.UpdateSquadMemberRole)
+					r.Get("/", h.SquadFeatureRemoved)
+					r.Put("/", h.SquadFeatureRemoved)
+					r.Delete("/", h.SquadFeatureRemoved)
+					r.Get("/members", h.SquadFeatureRemoved)
+					r.Get("/members/status", h.SquadFeatureRemoved)
+					r.Post("/members", h.SquadFeatureRemoved)
+					r.Delete("/members", h.SquadFeatureRemoved)
+					r.Patch("/members/role", h.SquadFeatureRemoved)
 				})
 			})
-
-			// Squad leader evaluation (writes to activity_log)
-			r.Post("/api/issues/{id}/squad-evaluated", h.RecordSquadLeaderEvaluation)
+			r.Post("/api/issues/{id}/squad-evaluated", h.SquadFeatureRemoved)
 
 			// Autopilots
 			r.Route("/api/autopilots", func(r chi.Router) {

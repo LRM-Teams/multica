@@ -1416,45 +1416,7 @@ func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issu
 	}
 	for _, m := range mentions {
 		if m.Type == "squad" {
-			// @squad mention → trigger the squad's leader agent.
-			squadUUID := parseUUID(m.ID)
-			squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-				ID:          squadUUID,
-				WorkspaceID: issue.WorkspaceID,
-			})
-			if err != nil {
-				continue
-			}
-			leaderID := squad.LeaderID
-			// Prevent self-trigger only when the agent's last activity on this
-			// issue was itself a leader task. An agent that holds both the
-			// leader and a worker role in the squad must still wake its
-			// leader role after posting a comment from its worker task.
-			if authorType == "agent" && authorID == uuidToString(leaderID) &&
-				h.lastTaskWasLeader(ctx, issue.ID, leaderID) {
-				continue
-			}
-			// Verify leader agent is ready (has runtime, not archived).
-			agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-				ID:          leaderID,
-				WorkspaceID: issue.WorkspaceID,
-			})
-			if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
-				continue
-			}
-			// Private-agent gate: prevent triggering a private leader via squad mention.
-			if !h.canAccessPrivateAgent(ctx, agent, authorType, authorID, wsID) {
-				continue
-			}
-			// Dedup: skip if leader already has a pending task for this issue.
-			hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-				IssueID: issue.ID,
-				AgentID: leaderID,
-			})
-			if err != nil || hasPending {
-				continue
-			}
-			add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceMentionSquadLeader, Squad: &squad})
+			// Squad mentions are legacy markup only; the backend no longer routes them.
 			continue
 		}
 		if m.Type != "agent" {

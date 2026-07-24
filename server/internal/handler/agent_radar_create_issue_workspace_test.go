@@ -520,7 +520,7 @@ func TestExecuteRadarCreateIssueRejectsUnsupportedAssigneeType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported assignee type to be rejected")
 	}
-	if got, want := err.Error(), "assignee_type must be 'member', 'agent', or 'squad'"; got != want {
+	if got, want := err.Error(), "assignee_type must be 'member' or 'agent'"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }

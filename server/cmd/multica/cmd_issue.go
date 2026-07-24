@@ -1685,7 +1685,7 @@ type assigneeKinds struct {
 }
 
 var (
-	issueAssigneeKinds = assigneeKinds{member: true, agent: true, squad: true}
+	issueAssigneeKinds = assigneeKinds{member: true, agent: true}
 	memberOrAgentKinds = assigneeKinds{member: true, agent: true}
 )
 

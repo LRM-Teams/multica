@@ -330,8 +330,8 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 		SELECT
 			(SELECT count(*) FROM agent_execution
 			 WHERE source_event_id BETWEEN
-			 	'70000000-0000-4000-8000-000000000201'
-			 	AND '70000000-0000-4000-8000-000000000207'),
+				'70000000-0000-4000-8000-000000000201'
+				AND '70000000-0000-4000-8000-000000000207'),
 			(SELECT count(*) FROM agent_usage
 			 WHERE execution_id = '70000000-0000-4000-8000-000000000205'),
 			(SELECT input_tokens FROM agent_usage
@@ -371,8 +371,8 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			   AND scope = 'agent'),
 			(SELECT count(*) FROM agent_event_delivery
 			 WHERE inbox_event_id BETWEEN
-			 	'70000000-0000-4000-8000-000000000201'
-			 	AND '70000000-0000-4000-8000-000000000207')
+				'70000000-0000-4000-8000-000000000201'
+				AND '70000000-0000-4000-8000-000000000207')
 	`).Scan(&retargetedFKs, &preservedFacts, &agentSessions, &deliveries); err != nil {
 		t.Fatalf("read retargeted dependencies: %v", err)
 	}
@@ -468,8 +468,8 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			),
 			(SELECT count(*) FROM agent_task_queue
 			 WHERE id BETWEEN
-			 	'70000000-0000-4000-8000-000000000201'
-			 	AND '70000000-0000-4000-8000-000000000207'),
+				'70000000-0000-4000-8000-000000000201'
+				AND '70000000-0000-4000-8000-000000000207'),
 			(SELECT count(*) FROM pg_constraint
 			 WHERE contype = 'f'
 			   AND confrelid = 'agent_task_queue'::regclass),

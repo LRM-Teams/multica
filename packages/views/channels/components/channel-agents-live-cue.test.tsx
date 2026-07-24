@@ -66,8 +66,19 @@ vi.mock("../../i18n", () => ({
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
-  ActorAvatar: ({ actorId }: { actorId: string }) => (
-    <span data-testid={`face-${actorId}`}>{actorId}</span>
+  ActorAvatar: ({
+    actorId,
+    showStatusDot,
+  }: {
+    actorId: string;
+    showStatusDot?: boolean;
+  }) => (
+    <span
+      data-testid={`face-${actorId}`}
+      data-show-status-dot={showStatusDot ? "true" : "false"}
+    >
+      {actorId}
+    </span>
   ),
 }));
 
@@ -193,7 +204,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(onStopAll).toHaveBeenCalledTimes(1);
   });
 
-  it("dismisses terminal rows from the mobile working list", () => {
+  it("terminal no_reply/failed alone do not open Working chrome (Activity SoT)", () => {
     mobileState.isMobile = true;
     render(
       <ChannelPresenceCluster
@@ -207,18 +218,48 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
             task_id: "t2",
             inbox_event_id: "inbox-2",
             status: "failed",
-            outcome: "failed",
+            outcome: "no_reply",
           }),
         ]}
       />,
     );
-    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
-    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("channel-agents-working-dismiss"));
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "false");
+    expect(screen.queryByTestId("channel-presence-working")).toBeNull();
+    fireEvent.click(chip);
     expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
-    expect(screen.getByTestId("channel-header-members-chip")).toHaveAttribute(
-      "data-presence-working",
-      "false",
+  });
+
+  it("facepile stacks with z-index and no status-dot punch-outs", () => {
+    const { container } = render(
+      <ChannelPresenceCluster
+        members={members(["a1", "a2", "u1"])}
+        memberCount={4}
+        agentCount={8}
+        tasks={[
+          task({ task_id: "t1", inbox_event_id: "i1", status: "running" }),
+          task({
+            agent_id: "a2",
+            agent_name: "Wendy",
+            task_id: "t2",
+            inbox_event_id: "i2",
+            status: "running",
+          }),
+        ]}
+      />,
     );
+    const faces = screen.getByTestId("channel-presence-faces");
+    expect(faces.className).toContain("isolate");
+    const stacked = faces.querySelectorAll(":scope > span");
+    expect(stacked.length).toBeGreaterThanOrEqual(2);
+    expect((stacked[0] as HTMLElement).style.zIndex).toBe("1");
+    expect((stacked[1] as HTMLElement).style.zIndex).toBe("2");
+    // Facepile must not enable status-dot punch-outs (collide with neighbor rings).
+    expect(
+      container.querySelectorAll('[data-show-status-dot="true"]').length,
+    ).toBe(0);
+    expect(
+      container.querySelectorAll('[data-show-status-dot="false"]').length,
+    ).toBeGreaterThanOrEqual(2);
   });
 });

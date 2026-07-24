@@ -782,15 +782,16 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // PendingChatTaskResponse is returned by GetPendingChatTask — either the
-// current in-flight task's id/status, or an empty object when none is active.
-// CreatedAt is the anchor the frontend uses to time the chat StatusPill
-// (elapsed seconds = now - CreatedAt). It must come from the server because
-// optimistic seeds don't have a real task created_at and the timer needs to
-// survive refresh / reopen.
+// current in-flight task's id/status/inbox_event_id, or an empty object when
+// none is active. CreatedAt is the anchor the frontend uses to time the chat
+// StatusPill (elapsed seconds = now - CreatedAt). It must come from the server
+// because optimistic seeds don't have a real task created_at and the timer
+// needs to survive refresh / reopen.
 type PendingChatTaskResponse struct {
-	TaskID    string `json:"task_id,omitempty"`
-	Status    string `json:"status,omitempty"`
-	CreatedAt string `json:"created_at,omitempty"`
+	TaskID       string  `json:"task_id,omitempty"`
+	Status       string  `json:"status,omitempty"`
+	CreatedAt    string  `json:"created_at,omitempty"`
+	InboxEventID *string `json:"inbox_event_id,omitempty"`
 }
 
 // MarkChatSessionRead clears the session's unread_since (→ has_unread=false)
@@ -936,9 +937,73 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, PendingChatTaskResponse{
-		TaskID:    uuidToString(task.ID),
-		Status:    task.Status,
-		CreatedAt: timestampToString(task.CreatedAt),
+		TaskID:       uuidToString(task.ID),
+		Status:       task.Status,
+		CreatedAt:    timestampToString(task.CreatedAt),
+		InboxEventID: uuidStringPtr(task.InboxEventID),
+	})
+}
+
+func (h *Handler) CancelChatAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionId")
+	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return
+	}
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "inbox event id")
+	if !ok {
+		return
+	}
+
+	var eventAgentID, eventStatus, terminalOutcome string
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT e.agent_id, e.status, COALESCE(e.terminal_outcome, '')
+		FROM agent_inbox_event e
+		WHERE e.id = $1
+		  AND e.workspace_id = $2
+		  AND e.chat_session_id = $3
+		  AND e.requires_wake
+	`, eventID, workspaceUUID, session.ID).Scan(&eventAgentID, &eventStatus, &terminalOutcome); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "inbox event not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load inbox event")
+		return
+	}
+
+	if terminalOutcome != "" || eventStatus == "acked" || eventStatus == "suppressed" {
+		writeError(w, http.StatusBadRequest, "task is not cancellable")
+		return
+	}
+
+	row, err := h.cancelAgentInboxEventCore(r.Context(), workspaceUUID, eventID)
+	if err != nil {
+		if errors.Is(err, errAgentInboxEventNotCancellable) {
+			writeError(w, http.StatusBadRequest, "task is not cancellable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to cancel chat inbox event")
+		return
+	}
+
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	payload := h.cancelledInboxEventTaskResponse(row, workspaceID)
+	h.publishCancelledAgentInboxEvent(workspaceID, actorType, actorID, row, payload)
+	writeJSON(w, http.StatusOK, ChannelCancelAgentInboxEventResponse{
+		OK:           true,
+		InboxEventID: uuidToString(row.ID),
+		AgentID:      eventAgentID,
+		Status:       "cancelled",
 	})
 }
 

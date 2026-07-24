@@ -160,9 +160,20 @@ LIMIT 1;
 -- created_at is the anchor for the chat StatusPill timer (it computes
 -- elapsed = now - task.created_at), so the pill survives refresh / reopen
 -- without "resetting to 0s".
-SELECT id, status, created_at FROM agent_task_queue
-WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-ORDER BY created_at DESC
+SELECT atq.id, atq.status, atq.created_at, aie.id AS inbox_event_id
+FROM agent_task_queue atq
+LEFT JOIN LATERAL (
+  SELECT e.id
+  FROM agent_inbox_event e
+  WHERE e.chat_session_id = atq.chat_session_id
+    AND e.requires_wake
+    AND e.terminal_outcome IS NULL
+    AND e.status NOT IN ('acked', 'suppressed')
+  ORDER BY e.created_at DESC, e.id DESC
+  LIMIT 1
+) aie ON true
+WHERE atq.chat_session_id = $1 AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+ORDER BY atq.created_at DESC
 LIMIT 1;
 
 -- name: ListPendingChatTasksByCreator :many

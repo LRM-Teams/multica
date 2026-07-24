@@ -27,8 +27,8 @@ type VolcengineTokenSigner interface {
 }
 
 type VolcengineProviderConfig struct {
-	ArkEndpointID       string
-	ArkModelName        string
+	CustomLLMURL        string
+	CustomLLMAPIKey     string
 	TTSVoiceID          string
 	CallbackURL         string
 	CallbackSignature   string
@@ -37,8 +37,8 @@ type VolcengineProviderConfig struct {
 
 type VolcengineProvider struct {
 	appID               string
-	arkEndpointID       string
-	arkModelName        string
+	customLLMURL        string
+	customLLMAPIKey     string
 	ttsVoiceID          string
 	callbackURL         string
 	callbackSignature   string
@@ -66,8 +66,8 @@ func NewVolcengineProvider(
 		return nil, errors.New("Volcengine compensation timeout must be positive")
 	}
 
-	arkEndpointID := strings.TrimSpace(config.ArkEndpointID)
-	arkModelName := strings.TrimSpace(config.ArkModelName)
+	customLLMURL := strings.TrimSpace(config.CustomLLMURL)
+	customLLMAPIKey := strings.TrimSpace(config.CustomLLMAPIKey)
 	ttsVoiceID := strings.TrimSpace(config.TTSVoiceID)
 	callbackURL := strings.TrimSpace(config.CallbackURL)
 	callbackSignature := strings.TrimSpace(config.CallbackSignature)
@@ -75,9 +75,10 @@ func NewVolcengineProvider(
 		volcenginertc.StartConfigurationInput{
 			TargetUserID:      "configuration-member",
 			AgentUserID:       "configuration-agent",
+			VoiceCallID:       "configuration-call",
 			SystemMessages:    []string{"configuration validation"},
-			ArkEndpointID:     arkEndpointID,
-			ArkModelName:      arkModelName,
+			CustomLLMURL:      customLLMURL,
+			CustomLLMAPIKey:   customLLMAPIKey,
 			TTSVoiceID:        ttsVoiceID,
 			CallbackURL:       callbackURL,
 			CallbackSignature: callbackSignature,
@@ -88,8 +89,8 @@ func NewVolcengineProvider(
 
 	return &VolcengineProvider{
 		appID:               appID,
-		arkEndpointID:       arkEndpointID,
-		arkModelName:        arkModelName,
+		customLLMURL:        customLLMURL,
+		customLLMAPIKey:     customLLMAPIKey,
 		ttsVoiceID:          ttsVoiceID,
 		callbackURL:         callbackURL,
 		callbackSignature:   callbackSignature,
@@ -107,10 +108,11 @@ func (provider *VolcengineProvider) Start(
 		volcenginertc.StartConfigurationInput{
 			TargetUserID:      input.TargetUserID,
 			AgentUserID:       input.AgentUserID,
+			VoiceCallID:       input.CallID,
 			WelcomeMessage:    input.WelcomeMessage,
 			SystemMessages:    input.SystemMessages,
-			ArkEndpointID:     provider.arkEndpointID,
-			ArkModelName:      provider.arkModelName,
+			CustomLLMURL:      provider.customLLMURL,
+			CustomLLMAPIKey:   provider.customLLMAPIKey,
 			TTSVoiceID:        provider.ttsVoiceID,
 			CallbackURL:       provider.callbackURL,
 			CallbackSignature: provider.callbackSignature,

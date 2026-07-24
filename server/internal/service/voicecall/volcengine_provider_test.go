@@ -47,7 +47,9 @@ func TestVolcengineProviderStartsWithTokenBeforeProviderTask(t *testing.T) {
 	}
 	if !strings.Contains(string(request.Config), `"ApiResourceId":"volc.seedasr.sauc.duration"`) ||
 		!strings.Contains(string(request.Config), `"ResourceId":"seed-tts-2.0"`) ||
-		!strings.Contains(string(request.Config), `"SystemMessages":["You are Beckham."]`) {
+		!strings.Contains(string(request.Config), `"SystemMessages":["You are Beckham."]`) ||
+		!strings.Contains(string(request.Config), `"Mode":"CustomLLM"`) ||
+		!strings.Contains(string(request.Config), `"Custom":"{\"voice_call_id\":\"call-1\"}"`) {
 		t.Fatalf("Config = %s", request.Config)
 	}
 	if string(request.AgentConfig) != `{"TargetUserId":["member-1"],"UserId":"voice-agent-1","WelcomeMessage":"你好，我是贝克汉姆。","EnableConversationStateCallback":true,"ServerMessageURLForRTS":"https://multica.example.com/api/voice-calls/callback","ServerMessageSignatureForRTS":"callback-secret"}` {
@@ -200,7 +202,8 @@ func newTestVolcengineProvider(
 ) *VolcengineProvider {
 	t.Helper()
 	provider, err := NewVolcengineProvider(VolcengineProviderConfig{
-		ArkEndpointID:       "ep-20260723",
+		CustomLLMURL:        "https://multica.example.com/api/voice-calls/llm",
+		CustomLLMAPIKey:     "llm-secret",
 		TTSVoiceID:          "zh_male_m191_uranus_bigtts",
 		CallbackURL:         "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature:   "callback-secret",
@@ -214,6 +217,7 @@ func newTestVolcengineProvider(
 
 func validProviderStartInput() ProviderStartInput {
 	return ProviderStartInput{
+		CallID:         "call-1",
 		RoomID:         "voice-call-1",
 		TaskID:         "voice-task-1",
 		TargetUserID:   "member-1",

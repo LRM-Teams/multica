@@ -121,6 +121,7 @@ type ConversationContext struct {
 }
 
 type ProviderStartInput struct {
+	CallID         string
 	RoomID         string
 	TaskID         string
 	TargetUserID   string
@@ -303,6 +304,7 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 
 	providerIdentity := ProviderCallIdentity{RoomID: roomID, TaskID: taskID}
 	providerResult, err := service.provider.Start(ctx, ProviderStartInput{
+		CallID:         session.ID,
 		RoomID:         roomID,
 		TaskID:         taskID,
 		TargetUserID:   memberUserID,

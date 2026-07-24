@@ -1852,18 +1852,18 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	}
 }
 
-func TestAcquireInboxAgentSlotSerializesSameAgentAndAllowsDifferentAgents(t *testing.T) {
+func TestAcquireAgentWakeSlotSerializesSameAgentAndAllowsDifferentAgents(t *testing.T) {
 	t.Parallel()
 
 	d := &Daemon{}
-	firstRelease, err := d.acquireInboxAgentSlot(context.Background(), "agent-a")
+	firstRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-a")
 	if err != nil {
 		t.Fatalf("acquire first agent-a slot: %v", err)
 	}
 
 	secondAcquired := make(chan func(), 1)
 	go func() {
-		release, acquireErr := d.acquireInboxAgentSlot(context.Background(), "agent-a")
+		release, acquireErr := d.acquireAgentWakeSlot(context.Background(), "agent-a")
 		if acquireErr == nil {
 			secondAcquired <- release
 		}
@@ -1875,7 +1875,7 @@ func TestAcquireInboxAgentSlotSerializesSameAgentAndAllowsDifferentAgents(t *tes
 	case <-time.After(30 * time.Millisecond):
 	}
 
-	differentRelease, err := d.acquireInboxAgentSlot(context.Background(), "agent-b")
+	differentRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-b")
 	if err != nil {
 		t.Fatalf("different agent should acquire concurrently: %v", err)
 	}

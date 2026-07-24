@@ -161,14 +161,14 @@ type Daemon struct {
 	activeEnvRootsMu sync.Mutex
 	activeEnvRoots   map[string]int // env root path -> reference count (handles reuse paths marked twice)
 
-	// inboxAgentSlots is a daemon-side fail-safe for the server's authoritative
-	// one-active-delivery-per-agent lease rule. Chat inbox execution is globally
-	// serial per agent and intentionally does not read agent.max_concurrent_tasks,
-	// which belongs to the issue/task scheduler. The server gate prevents normal
-	// duplicate leasing; this local gate also fences a stale delivery that is
-	// still unwinding after its lease is lost.
-	inboxAgentSlotsMu sync.Mutex
-	inboxAgentSlots   map[string]chan struct{}
+	// agentWakeSlots is a daemon-side fail-safe for the server's authoritative
+	// one-active-wake-per-agent rule. Every chat, DM, issue, autopilot, Radar,
+	// and quick-create wake shares this slot; different agents remain concurrent.
+	// The server gate prevents normal duplicate claims, while this local gate
+	// also fences an executor that is still unwinding after server ownership
+	// has ended.
+	agentWakeSlotsMu sync.Mutex
+	agentWakeSlots   map[string]chan struct{}
 
 	// localPathLocks serialises agent tasks whose project resource is a
 	// local_directory pinned to this daemon. Two tasks targeting the same
@@ -235,7 +235,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		agentVersions:             make(map[string]string),
 		wsHBLastAck:               make(map[string]time.Time),
 		activeEnvRoots:            make(map[string]int),
-		inboxAgentSlots:           make(map[string]chan struct{}),
+		agentWakeSlots:            make(map[string]chan struct{}),
 		localPathLocks:            NewLocalPathLocker(),
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
@@ -2660,26 +2660,26 @@ func newTaskSlotSemaphore(maxConcurrentTasks int) chan int {
 	return sem
 }
 
-// acquireInboxAgentSlot serializes raft-like chat inbox executions for one
-// agent inside this daemon. The returned release function is idempotent.
-// Different agents use different slots and remain fully concurrent.
-func (d *Daemon) acquireInboxAgentSlot(ctx context.Context, agentID string) (func(), error) {
+// acquireAgentWakeSlot serializes every wake execution for one agent inside
+// this daemon. The returned release function is idempotent. Different agents
+// use different slots and remain fully concurrent.
+func (d *Daemon) acquireAgentWakeSlot(ctx context.Context, agentID string) (func(), error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
-		return nil, errors.New("agent inbox execution requires agent_id")
+		return nil, errors.New("agent wake execution requires agent_id")
 	}
 
-	d.inboxAgentSlotsMu.Lock()
-	if d.inboxAgentSlots == nil {
-		d.inboxAgentSlots = make(map[string]chan struct{})
+	d.agentWakeSlotsMu.Lock()
+	if d.agentWakeSlots == nil {
+		d.agentWakeSlots = make(map[string]chan struct{})
 	}
-	slot := d.inboxAgentSlots[agentID]
+	slot := d.agentWakeSlots[agentID]
 	if slot == nil {
 		slot = make(chan struct{}, 1)
 		slot <- struct{}{}
-		d.inboxAgentSlots[agentID] = slot
+		d.agentWakeSlots[agentID] = slot
 	}
-	d.inboxAgentSlotsMu.Unlock()
+	d.agentWakeSlotsMu.Unlock()
 
 	select {
 	case <-ctx.Done():
@@ -2770,12 +2770,6 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		return
 	}
 	task = restrictTaskForExecutionProfile(task, profile)
-	if d.reminderAgents != nil {
-		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
-			d.requestReminderSnapshot(task.AgentID)
-		}
-		defer d.reminderAgents.markIdle(task.AgentID)
-	}
 
 	// Task-scoped logger with short ID for readable concurrent logs.
 	taskLog := d.logger.With("task", shortID(task.ID), "execution_profile", profile)
@@ -2800,14 +2794,17 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		"reuse_workdir", task.PriorWorkDir != "",
 	)
 
-	// The server lease query is the source-of-truth serialization gate, but a
-	// stale local executor may still be unwinding when its lease is rejected.
-	// Renew the lease while waiting, cancel immediately on a permanent lease
-	// loss, and do not let another inbox execution for this agent touch the
-	// provider session or filesystem until the prior one has fully returned.
+	// Server admission is the source-of-truth serialization gate, but a stale
+	// local executor may still be unwinding after server ownership has ended.
+	// Every wake therefore acquires the same daemon-side per-agent slot before
+	// touching current-turn state, provider sessions, or filesystems. Inbox
+	// wakes additionally renew their server lease while waiting and cancel
+	// immediately on permanent lease loss.
 	var inboxLeaseLost <-chan struct{}
+	executionCtx := ctx
+	var executionCancel context.CancelFunc
 	if task.isInboxTask() {
-		executionCtx, executionCancel := context.WithCancel(ctx)
+		executionCtx, executionCancel = context.WithCancel(ctx)
 		defer executionCancel()
 		inboxLeaseLost = d.watchInboxLease(executionCtx, *task.InboxEvent, d.cancelPollInterval, taskLog)
 		select {
@@ -2823,19 +2820,37 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			case <-executionCtx.Done():
 			}
 		}()
-
-		release, err := d.acquireInboxAgentSlot(executionCtx, task.AgentID)
+	}
+	if strings.TrimSpace(task.AgentID) != "" {
+		releaseWakeSlot, err := d.acquireAgentWakeSlot(executionCtx, task.AgentID)
 		if err != nil {
-			select {
-			case <-inboxLeaseLost:
-				taskLog.Info("agent inbox lease lost before execution; discarding delivery")
-			default:
-				taskLog.Info("agent inbox execution cancelled while waiting for agent slot", "error", err)
+			if task.isInboxTask() {
+				select {
+				case <-inboxLeaseLost:
+					taskLog.Info("agent inbox lease lost before execution; discarding delivery")
+				default:
+					taskLog.Info("agent wake cancelled while waiting for agent slot", "error", err)
+				}
+			} else {
+				taskLog.Info("agent wake cancelled while waiting for agent slot", "error", err)
 			}
 			return
 		}
-		defer release()
-		ctx = executionCtx
+		defer releaseWakeSlot()
+	} else {
+		// Persisted wakes cannot hit this path because agent_task_queue.agent_id
+		// and agent_inbox_event.agent_id are NOT NULL. Keep synthetic unit tasks
+		// usable without inventing a task-id fallback that would pretend to
+		// provide per-agent serialization.
+		taskLog.Debug("synthetic task has no agent_id; wake slot not applicable")
+	}
+	ctx = executionCtx
+
+	if d.reminderAgents != nil {
+		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
+			d.requestReminderSnapshot(task.AgentID)
+		}
+		defer d.reminderAgents.markIdle(task.AgentID)
 	}
 
 	// Managed project workdir: when the server flags a project that has no

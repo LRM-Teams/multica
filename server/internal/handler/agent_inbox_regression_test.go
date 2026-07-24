@@ -3,14 +3,18 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *testing.T) {
@@ -165,6 +169,140 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	if len(nextResp.Events) != 1 || nextResp.Events[0].AgentID != firstAgentID || nextResp.Events[0].ID == firstDelivery.ID {
 		t.Fatalf("queued first-agent drain = %+v, want the second event after release", nextResp.Events)
 	}
+}
+
+func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	type wakeFixture struct {
+		runtimeID string
+		agentID   string
+		taskID    string
+		eventID   string
+	}
+	newFixture := func(t *testing.T, inboxFirst bool) wakeFixture {
+		t.Helper()
+		runtimeID := createClaimReclaimRuntime(t, ctx, "Unified wake runtime "+uuid.NewString()[:8])
+		agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Unified wake agent "+uuid.NewString()[:8])
+		var sessionID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_session (
+			  workspace_id, agent_id, runtime_id, scope, status
+			)
+			VALUES ($1, $2, $3, 'direct_chat', 'active')
+			RETURNING id
+		`, testWorkspaceID, agentID, runtimeID).Scan(&sessionID); err != nil {
+			t.Fatalf("create agent session: %v", err)
+		}
+
+		base := time.Now().Add(-5 * time.Minute)
+		taskCreatedAt, eventCreatedAt := base, base.Add(time.Second)
+		taskPriority, eventPriority := 0, 100
+		if inboxFirst {
+			taskCreatedAt, eventCreatedAt = base.Add(time.Second), base
+			taskPriority, eventPriority = 100, 0
+		}
+		var taskID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_task_queue (
+			  agent_id, runtime_id, issue_id, status, priority, created_at
+			)
+			VALUES ($1, $2, $3, 'queued', $4, $5)
+			RETURNING id
+		`, agentID, runtimeID, issueID, taskPriority, taskCreatedAt).Scan(&taskID); err != nil {
+			t.Fatalf("create legacy wake: %v", err)
+		}
+		var eventID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_inbox_event (
+			  workspace_id, agent_session_id, runtime_id, agent_id,
+			  reason, requires_wake, status, priority, seq_from, seq_to, created_at
+			)
+			VALUES ($1, $2, $3, $4, 'dm', true, 'pending', $5, 1, 1, $6)
+			RETURNING id
+		`, testWorkspaceID, sessionID, runtimeID, agentID, eventPriority, eventCreatedAt).Scan(&eventID); err != nil {
+			t.Fatalf("create inbox wake: %v", err)
+		}
+		return wakeFixture{runtimeID: runtimeID, agentID: agentID, taskID: taskID, eventID: eventID}
+	}
+	loadRuntime := func(t *testing.T, runtimeID string) db.AgentRuntime {
+		t.Helper()
+		runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("load runtime: %v", err)
+		}
+		return runtime
+	}
+	expectNoInboxLease := func(t *testing.T, runtime db.AgentRuntime) {
+		t.Helper()
+		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("inbox lease error = %v, want no rows", err)
+		}
+	}
+
+	t.Run("legacy wake older", func(t *testing.T) {
+		fixture := newFixture(t, false)
+		runtime := loadRuntime(t, fixture.runtimeID)
+
+		expectNoInboxLease(t, runtime)
+		task, err := testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		if err != nil || task == nil || uuidToString(task.ID) != fixture.taskID {
+			t.Fatalf("legacy claim task=%+v err=%v, want %s", task, err, fixture.taskID)
+		}
+		expectNoInboxLease(t, runtime)
+
+		if _, err := testPool.Exec(ctx, `
+			UPDATE agent_task_queue
+			SET status = 'completed', completed_at = now()
+			WHERE id = $1
+		`, fixture.taskID); err != nil {
+			t.Fatalf("complete legacy wake: %v", err)
+		}
+		delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+		if err != nil || uuidToString(delivery.InboxEventID) != fixture.eventID {
+			t.Fatalf("inbox lease after legacy completion=%+v err=%v, want event %s", delivery, err, fixture.eventID)
+		}
+	})
+
+	t.Run("inbox wake older", func(t *testing.T) {
+		fixture := newFixture(t, true)
+		runtime := loadRuntime(t, fixture.runtimeID)
+
+		task, err := testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		if err != nil || task != nil {
+			t.Fatalf("legacy claim before older inbox task=%+v err=%v, want nil", task, err)
+		}
+		delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+		if err != nil || uuidToString(delivery.InboxEventID) != fixture.eventID {
+			t.Fatalf("older inbox lease=%+v err=%v, want event %s", delivery, err, fixture.eventID)
+		}
+		task, err = testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		if err != nil || task != nil {
+			t.Fatalf("legacy claim during active inbox task=%+v err=%v, want nil", task, err)
+		}
+
+		if _, err := testPool.Exec(ctx, `
+			UPDATE agent_event_delivery
+			SET status = 'acked', acked_at = now(), updated_at = now()
+			WHERE id = $1
+		`, delivery.ID); err != nil {
+			t.Fatalf("ack inbox delivery: %v", err)
+		}
+		if _, err := testPool.Exec(ctx, `
+			UPDATE agent_inbox_event
+			SET status = 'acked', acked_at = now(), updated_at = now()
+			WHERE id = $1
+		`, fixture.eventID); err != nil {
+			t.Fatalf("ack inbox wake: %v", err)
+		}
+		task, err = testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		if err != nil || task == nil || uuidToString(task.ID) != fixture.taskID {
+			t.Fatalf("legacy claim after inbox ack task=%+v err=%v, want %s", task, err, fixture.taskID)
+		}
+	})
 }
 
 // A renewed delivery is still the same provider run, but a reclaimed delivery

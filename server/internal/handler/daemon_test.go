@@ -350,6 +350,67 @@ func TestClaimTaskByRuntime_ReclaimsStaleDispatchedTask(t *testing.T) {
 	}
 }
 
+func TestClaimTaskByRuntime_ReclaimsMultiplePreCutoverDispatchesInFIFOOrder(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Multiple stale dispatch reclaim runtime")
+	agentID, firstIssueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Multiple stale dispatch reclaim agent")
+
+	var secondIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+		VALUES (
+			$1, 'Second stale dispatch issue', 'in_progress', 'none', $2, 'member',
+			(SELECT COALESCE(MAX(number), 82649) + 1 FROM issue WHERE workspace_id = $1),
+			0
+		)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&secondIssueID); err != nil {
+		t.Fatalf("setup: create second issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, secondIssueID) })
+
+	firstTaskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, firstIssueID, "180 seconds", false)
+	secondTaskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, secondIssueID, "150 seconds", false)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET created_at = CASE id
+			WHEN $1::uuid THEN now() - interval '3 minutes'
+			WHEN $2::uuid THEN now() - interval '2 minutes 30 seconds'
+		END
+		WHERE id IN ($1::uuid, $2::uuid)
+	`, firstTaskID, secondTaskID); err != nil {
+		t.Fatalf("setup: order stale dispatches: %v", err)
+	}
+
+	first, body := claimTaskByRuntimeForTest(t, runtimeID)
+	if first == nil {
+		t.Fatalf("expected oldest stale dispatched task %s, got nil response: %s", firstTaskID, body)
+	}
+	if first.ID != firstTaskID {
+		t.Fatalf("first reclaimed task id = %s, want oldest %s", first.ID, firstTaskID)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now()
+		WHERE id = $1
+	`, firstTaskID); err != nil {
+		t.Fatalf("complete first reclaimed task: %v", err)
+	}
+
+	second, body := claimTaskByRuntimeForTest(t, runtimeID)
+	if second == nil {
+		t.Fatalf("expected second stale dispatched task %s, got nil response: %s", secondTaskID, body)
+	}
+	if second.ID != secondTaskID {
+		t.Fatalf("second reclaimed task id = %s, want %s", second.ID, secondTaskID)
+	}
+}
+
 func TestClaimTaskByRuntime_DoesNotReclaimFreshDispatchedTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -435,7 +496,7 @@ func TestClaimTaskByRuntime_DoesNotReclaimDifferentRuntimeTask(t *testing.T) {
 	}
 }
 
-func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T) {
+func TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -481,21 +542,30 @@ func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T
 	}
 
 	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task == nil {
-		t.Fatalf("expected queued chat task to bypass issue capacity, got nil response: %s", body)
-	}
-	if task.ID != chatTaskID {
-		t.Fatalf("claimed task id = %s, want chat task %s", task.ID, chatTaskID)
+	if task != nil {
+		t.Fatalf("chat wake %s bypassed active issue wake as %s: %s", chatTaskID, task.ID, body)
 	}
 	if got := taskStatus(t, runningIssueTaskID); got != "running" {
 		t.Fatalf("running issue task status = %q, want running", got)
 	}
-	if got := taskStatus(t, chatTaskID); got != "dispatched" {
-		t.Fatalf("chat task status = %q, want dispatched", got)
+	if got := taskStatus(t, chatTaskID); got != "queued" {
+		t.Fatalf("chat task status = %q, want queued behind active issue wake", got)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now()
+		WHERE id = $1
+	`, runningIssueTaskID); err != nil {
+		t.Fatalf("complete issue wake: %v", err)
+	}
+	task, body = claimTaskByRuntimeForTest(t, runtimeID)
+	if task == nil || task.ID != chatTaskID {
+		t.Fatalf("claim after issue completion = %+v, want chat task %s: %s", task, chatTaskID, body)
 	}
 }
 
-func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
+func TestClaimTaskByRuntime_SerializesAcrossChatSessions(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -503,9 +573,6 @@ func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
 	ctx := context.Background()
 	runtimeID := createClaimReclaimRuntime(t, ctx, "Chat single slot runtime")
 	agentID, _ := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Chat single slot agent")
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET max_concurrent_tasks = 3 WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("setup: widen max_concurrent_tasks: %v", err)
-	}
 
 	var runningChatSessionID, queuedChatSessionID string
 	for i, dest := range []*string{&runningChatSessionID, &queuedChatSessionID} {
@@ -545,7 +612,118 @@ func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
 
 	task, body := claimTaskByRuntimeForTest(t, runtimeID)
 	if task != nil {
-		t.Fatalf("expected second chat task %s to wait for the single chat interrupt slot, got %s in %s", queuedChatTaskID, task.ID, body)
+		t.Fatalf("expected second chat wake %s to wait behind the active agent wake, got %s in %s", queuedChatTaskID, task.ID, body)
+	}
+}
+
+func TestClaimTaskByRuntime_ConcurrentClaimsKeepPerAgentFIFOWithoutDuplicates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Concurrent unified wake runtime")
+	agentID, firstIssueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Concurrent unified wake agent")
+	var secondIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+		  workspace_id, title, status, priority, creator_id, creator_type, number, position
+		)
+		VALUES (
+		  $1, 'Concurrent unified wake second issue', 'in_progress', 'none', $2, 'member',
+		  (SELECT COALESCE(MAX(number), 82649) + 1 FROM issue WHERE workspace_id = $1),
+		  0
+		)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&secondIssueID); err != nil {
+		t.Fatalf("create second issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, secondIssueID) })
+
+	base := time.Now().Add(-5 * time.Minute)
+	var firstTaskID, secondTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+		  agent_id, runtime_id, issue_id, status, priority, created_at
+		)
+		VALUES ($1, $2, $3, 'queued', 0, $4)
+		RETURNING id
+	`, agentID, runtimeID, firstIssueID, base).Scan(&firstTaskID); err != nil {
+		t.Fatalf("create oldest wake: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+		  agent_id, runtime_id, issue_id, status, priority, created_at
+		)
+		VALUES ($1, $2, $3, 'queued', 100, $4)
+		RETURNING id
+	`, agentID, runtimeID, secondIssueID, base.Add(time.Second)).Scan(&secondTaskID); err != nil {
+		t.Fatalf("create newer high-priority wake: %v", err)
+	}
+
+	claimRound := func() []string {
+		t.Helper()
+		const claimers = 8
+		start := make(chan struct{})
+		results := make(chan string, claimers)
+		errs := make(chan error, claimers)
+		for i := 0; i < claimers; i++ {
+			go func() {
+				<-start
+				task, err := testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(runtimeID))
+				if err != nil {
+					errs <- err
+					return
+				}
+				if task == nil {
+					results <- ""
+					return
+				}
+				results <- uuidToString(task.ID)
+			}()
+		}
+		close(start)
+
+		var claimed []string
+		for i := 0; i < claimers; i++ {
+			select {
+			case err := <-errs:
+				t.Fatalf("concurrent claim failed: %v", err)
+			case id := <-results:
+				if id != "" {
+					claimed = append(claimed, id)
+				}
+			}
+		}
+		return claimed
+	}
+
+	if claimed := claimRound(); len(claimed) != 1 || claimed[0] != firstTaskID {
+		t.Fatalf("first concurrent round claimed=%v, want oldest task %s exactly once", claimed, firstTaskID)
+	}
+	var dispatched, queued int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE status = 'dispatched'),
+		  count(*) FILTER (WHERE status = 'queued')
+		FROM agent_task_queue
+		WHERE id IN ($1, $2)
+	`, firstTaskID, secondTaskID).Scan(&dispatched, &queued); err != nil {
+		t.Fatalf("load wake states: %v", err)
+	}
+	if dispatched != 1 || queued != 1 {
+		t.Fatalf("wake states dispatched/queued=%d/%d, want 1/1", dispatched, queued)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now()
+		WHERE id = $1
+	`, firstTaskID); err != nil {
+		t.Fatalf("complete oldest wake: %v", err)
+	}
+	if claimed := claimRound(); len(claimed) != 1 || claimed[0] != secondTaskID {
+		t.Fatalf("second concurrent round claimed=%v, want next task %s exactly once", claimed, secondTaskID)
 	}
 }
 
@@ -4378,6 +4556,13 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	}
 	if task.PriorWorkDir != "/tmp/same-runtime-workdir" {
 		t.Fatalf("runtime match: expected PriorWorkDir='/tmp/same-runtime-workdir', got %q", task.PriorWorkDir)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now()
+		WHERE issue_id = $1 AND status IN ('dispatched', 'running')
+	`, resumeIssueID); err != nil {
+		t.Fatalf("setup: complete claimed resume task: %v", err)
 	}
 
 	var commentIssueID string

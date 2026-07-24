@@ -653,110 +653,65 @@ func (q *Queries) CancelAgentTasksByTriggerComment(ctx context.Context, triggerC
 	return items, nil
 }
 
-const claimAgentTask = `-- name: ClaimAgentTask :one
+const claimNextAgentWake = `-- name: ClaimNextAgentWake :one
 UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = $1 AND atq.status = 'queued' AND atq.chat_session_id IS NULL
+    WHERE atq.agent_id = $1
+      AND atq.runtime_id = $2
+      AND atq.status = 'queued'
+      AND (
+        atq.context->>'type' IS DISTINCT FROM 'agent_radar'
+        OR workspace_radar_task_is_authorized(atq.id)
+      )
       AND NOT EXISTS (
           SELECT 1 FROM agent_task_queue active
           WHERE active.agent_id = atq.agent_id
             AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
-            AND (
-              (atq.issue_id IS NOT NULL AND active.issue_id = atq.issue_id)
-              OR (atq.chat_session_id IS NOT NULL AND active.chat_session_id = atq.chat_session_id)
-              OR (
-                atq.issue_id IS NULL
-                AND atq.chat_session_id IS NULL
-                AND atq.autopilot_run_id IS NULL
-                AND active.issue_id IS NULL
-                AND active.chat_session_id IS NULL
-                AND active.autopilot_run_id IS NULL
-              )
-            )
       )
-    ORDER BY atq.priority DESC, atq.created_at ASC
-    LIMIT 1
-    FOR UPDATE SKIP LOCKED
-)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
-`
-
-// Claims the next queued task for an agent, enforcing per-(issue, agent) serialization:
-// a task is only claimable when no other task for the same issue AND same agent is
-// already dispatched or running. This allows different agents to work on the same
-// issue in parallel while preventing a single agent from running duplicate tasks.
-// Chat tasks (issue_id IS NULL) use chat_session_id for serialization instead.
-// Quick-create tasks have no issue / chat / autopilot link, so they serialize on
-// "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
-// otherwise a user mashing the create button could fire concurrent quick-creates
-// whose completion lookup would race over "most recent issue by this agent".
-func (q *Queries) ClaimAgentTask(ctx context.Context, agentID pgtype.UUID) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, claimAgentTask, agentID)
-	var i AgentTaskQueue
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.IssueID,
-		&i.Status,
-		&i.Priority,
-		&i.DispatchedAt,
-		&i.StartedAt,
-		&i.CompletedAt,
-		&i.Result,
-		&i.Error,
-		&i.CreatedAt,
-		&i.Context,
-		&i.RuntimeID,
-		&i.SessionID,
-		&i.WorkDir,
-		&i.TriggerCommentID,
-		&i.ChatSessionID,
-		&i.AutopilotRunID,
-		&i.Attempt,
-		&i.MaxAttempts,
-		&i.ParentTaskID,
-		&i.FailureReason,
-		&i.TriggerSummary,
-		&i.ForceFreshSession,
-		&i.IsLeaderTask,
-		&i.WaitReason,
-		&i.InitiatorUserID,
-	)
-	return i, err
-}
-
-const claimAgentChatTask = `-- name: ClaimAgentChatTask :one
-UPDATE agent_task_queue
-SET status = 'dispatched', dispatched_at = now()
-WHERE id = (
-    SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = $1 AND atq.runtime_id = $2 AND atq.status = 'queued' AND atq.chat_session_id IS NOT NULL
       AND NOT EXISTS (
-          SELECT 1 FROM agent_task_queue active
-          WHERE active.agent_id = atq.agent_id
-            AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
-            AND active.chat_session_id = atq.chat_session_id
+          SELECT 1
+          FROM agent_event_delivery active_delivery
+          JOIN agent_session active_session
+            ON active_session.id = active_delivery.agent_session_id
+          WHERE active_session.agent_id = atq.agent_id
+            AND active_delivery.status IN ('leased', 'processing')
+            AND active_delivery.lease_expires_at > now()
       )
-    ORDER BY atq.priority DESC, atq.created_at ASC
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_inbox_event inbox
+          JOIN agent_session inbox_session
+            ON inbox_session.id = inbox.agent_session_id
+          WHERE inbox.agent_id = atq.agent_id
+            AND COALESCE(inbox.runtime_id, inbox_session.runtime_id) = atq.runtime_id
+            AND inbox_session.status = 'active'
+            AND inbox.status IN ('pending', 'failed')
+            AND (inbox.created_at, inbox.id) < (atq.created_at, atq.id)
+      )
+    ORDER BY atq.created_at ASC, atq.id ASC
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF atq SKIP LOCKED
 )
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
-// Claims the next queued chat task for an agent without considering active
-// issue/autopilot/quick-create work. Group-channel @mentions are bridged
-// through chat_session rows, and must remain responsive even while an issue
-// task is running. Chat tasks still serialize per chat_session here.
-type ClaimAgentChatTaskParams struct {
+type ClaimNextAgentWakeParams struct {
 	AgentID   pgtype.UUID `json:"agent_id"`
 	RuntimeID pgtype.UUID `json:"runtime_id"`
 }
 
-func (q *Queries) ClaimAgentChatTask(ctx context.Context, arg ClaimAgentChatTaskParams) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, claimAgentChatTask, arg.AgentID, arg.RuntimeID)
+// Claims the oldest queued legacy wake for one agent. Chat, issue, autopilot,
+// quick-create, and Radar rows share one global per-agent FIFO; priority and
+// agent.max_concurrent_tasks no longer create parallel execution lanes.
+//
+// The caller must hold LockAgentWake in the same transaction. The inbox
+// predicates mirror leaseAgentInboxEventForRuntime so whichever source wins
+// the agent-row lock becomes the sole active wake and the other source sees
+// that committed ownership before it can proceed.
+func (q *Queries) ClaimNextAgentWake(ctx context.Context, arg ClaimNextAgentWakeParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, claimNextAgentWake, arg.AgentID, arg.RuntimeID)
 	var i AgentTaskQueue
 	err := row.Scan(
 		&i.ID,
@@ -2104,6 +2059,24 @@ func (q *Queries) UpsertAgentTaskProgressSnapshot(ctx context.Context, arg Upser
 	return err
 }
 
+const lockAgentWake = `-- name: LockAgentWake :one
+SELECT id FROM agent
+WHERE id = $1
+FOR UPDATE
+`
+
+// Serializes wake admission across the transitional task queue and the agent
+// inbox. Callers must hold this row lock in a transaction before either
+// ClaimNextAgentWake or the inbox lease's final eligibility check. A separate
+// statement after the lock observes the other source's committed state under
+// READ COMMITTED, closing the cross-table snapshot race.
+func (q *Queries) LockAgentWake(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockAgentWake, id)
+	var result pgtype.UUID
+	err := row.Scan(&result)
+	return result, err
+}
+
 const listActiveAgentsByRuntime = `-- name: ListActiveAgentsByRuntime :many
 SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, avatar_source FROM agent
 WHERE runtime_id = $1 AND archived_at IS NULL
@@ -2493,20 +2466,94 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 
 const listQueuedClaimCandidatesByRuntime = `-- name: ListQueuedClaimCandidatesByRuntime :many
 SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_task_queue
-WHERE runtime_id = $1 AND status = 'queued'
-ORDER BY priority DESC, created_at ASC
+WHERE runtime_id = $1
+  AND status = 'queued'
+  AND (
+    context->>'type' IS DISTINCT FROM 'agent_radar'
+    OR workspace_radar_task_is_authorized(agent_task_queue.id)
+  )
+ORDER BY created_at ASC, id ASC
 `
 
 // Returns rows the runtime can attempt to claim. Status is restricted to
 // 'queued' (in contrast to ListPendingTasksByRuntime which also includes
 // 'dispatched') because dispatched rows are by definition already owned
 // and cannot be re-claimed — including them in the candidate list pads
-// the result with rows that always lose the per-(issue, agent) race in
-// ClaimAgentTask, wasting CPU and a SELECT every poll cycle when the
-// runtime is busy on a long-running task. Backed by the partial index
-// idx_agent_task_queue_claim_candidates so the warm path is cheap.
+// the result with rows that always lose ClaimNextAgentWake's per-agent
+// admission check, wasting CPU and a transaction every poll cycle when
+// the runtime is busy on a long-running wake.
 func (q *Queries) ListQueuedClaimCandidatesByRuntime(ctx context.Context, runtimeID pgtype.UUID) ([]AgentTaskQueue, error) {
 	rows, err := q.db.Query(ctx, listQueuedClaimCandidatesByRuntime, runtimeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentTaskQueue{}
+	for rows.Next() {
+		var i AgentTaskQueue
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.IssueID,
+			&i.Status,
+			&i.Priority,
+			&i.DispatchedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.Result,
+			&i.Error,
+			&i.CreatedAt,
+			&i.Context,
+			&i.RuntimeID,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.TriggerCommentID,
+			&i.ChatSessionID,
+			&i.AutopilotRunID,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.FailureReason,
+			&i.TriggerSummary,
+			&i.ForceFreshSession,
+			&i.IsLeaderTask,
+			&i.WaitReason,
+			&i.InitiatorUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleDispatchedClaimCandidatesByRuntime = `-- name: ListStaleDispatchedClaimCandidatesByRuntime :many
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_task_queue
+WHERE runtime_id = $1
+  AND status = 'dispatched'
+  AND started_at IS NULL
+  AND dispatched_at < now() - make_interval(secs => $2::double precision)
+  AND (
+    context->>'type' IS DISTINCT FROM 'agent_radar'
+    OR workspace_radar_task_is_authorized(agent_task_queue.id)
+  )
+ORDER BY created_at ASC, id ASC
+`
+
+type ListStaleDispatchedClaimCandidatesByRuntimeParams struct {
+	RuntimeID         pgtype.UUID `json:"runtime_id"`
+	ClaimRecoverySecs float64     `json:"claim_recovery_secs"`
+}
+
+// Returns only claim-response-loss candidates. ClaimTaskForRuntime locks each
+// candidate's agent row before revalidating and refreshing the oldest stale
+// dispatch, so retry admission shares the same cross-source serialization
+// boundary as a fresh claim.
+func (q *Queries) ListStaleDispatchedClaimCandidatesByRuntime(ctx context.Context, arg ListStaleDispatchedClaimCandidatesByRuntimeParams) ([]AgentTaskQueue, error) {
+	rows, err := q.db.Query(ctx, listStaleDispatchedClaimCandidatesByRuntime, arg.RuntimeID, arg.ClaimRecoverySecs)
 	if err != nil {
 		return nil, err
 	}
@@ -2765,24 +2812,55 @@ func (q *Queries) MarkAgentTaskWaitingLocalDirectory(ctx context.Context, arg Ma
 	return i, err
 }
 
-const reclaimStaleDispatchedTaskForRuntime = `-- name: ReclaimStaleDispatchedTaskForRuntime :one
+const reclaimStaleDispatchedAgentWake = `-- name: ReclaimStaleDispatchedAgentWake :one
 UPDATE agent_task_queue
 SET dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
     WHERE atq.runtime_id = $1
+      AND atq.agent_id = $2
       AND atq.status = 'dispatched'
       AND atq.started_at IS NULL
-      AND atq.dispatched_at < now() - make_interval(secs => $2::double precision)
-    ORDER BY atq.priority DESC, atq.dispatched_at ASC
+      AND atq.dispatched_at < now() - make_interval(secs => $3::double precision)
+      AND (
+        atq.context->>'type' IS DISTINCT FROM 'agent_radar'
+        OR workspace_radar_task_is_authorized(atq.id)
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_task_queue active
+          WHERE active.agent_id = atq.agent_id
+            AND active.id <> atq.id
+            AND (
+              active.status IN ('running', 'waiting_local_directory')
+              OR (
+                active.status = 'dispatched'
+                AND (
+                  active.started_at IS NOT NULL
+                  OR active.dispatched_at >= now() - make_interval(secs => $3::double precision)
+                )
+              )
+            )
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_event_delivery active_delivery
+          JOIN agent_session active_session
+            ON active_session.id = active_delivery.agent_session_id
+          WHERE active_session.agent_id = atq.agent_id
+            AND active_delivery.status IN ('leased', 'processing')
+            AND active_delivery.lease_expires_at > now()
+      )
+    ORDER BY atq.created_at ASC, atq.id ASC
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF atq SKIP LOCKED
 )
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
-type ReclaimStaleDispatchedTaskForRuntimeParams struct {
+type ReclaimStaleDispatchedAgentWakeParams struct {
 	RuntimeID         pgtype.UUID `json:"runtime_id"`
+	AgentID           pgtype.UUID `json:"agent_id"`
 	ClaimRecoverySecs float64     `json:"claim_recovery_secs"`
 }
 
@@ -2790,9 +2868,12 @@ type ReclaimStaleDispatchedTaskForRuntimeParams struct {
 // whose response never reached the daemon. The task is still in `dispatched`
 // with no `started_at`, so the daemon has not acknowledged it via StartTask.
 // Refresh dispatched_at so the server-side dispatch timeout measures from the
-// recovered delivery attempt.
-func (q *Queries) ReclaimStaleDispatchedTaskForRuntime(ctx context.Context, arg ReclaimStaleDispatchedTaskForRuntimeParams) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, reclaimStaleDispatchedTaskForRuntime, arg.RuntimeID, arg.ClaimRecoverySecs)
+// recovered delivery attempt. Other stale, unstarted dispatches from the
+// pre-cutover scheduler do not deadlock recovery: the oldest one is retried
+// first, while genuinely running/waiting or still-fresh dispatches block it.
+// The caller must hold LockAgentWake in the same transaction.
+func (q *Queries) ReclaimStaleDispatchedAgentWake(ctx context.Context, arg ReclaimStaleDispatchedAgentWakeParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, reclaimStaleDispatchedAgentWake, arg.RuntimeID, arg.AgentID, arg.ClaimRecoverySecs)
 	var i AgentTaskQueue
 	err := row.Scan(
 		&i.ID,

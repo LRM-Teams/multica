@@ -749,7 +749,7 @@ func TestLeaveWorkspace_RevokesOwnRuntimes(t *testing.T) {
 // to their runtime gets archived — but tasks that agent queued under a
 // PRIOR runtime (still owned by another active member) keep their old
 // runtime_id and would not be caught by a runtime-only sweep. Because
-// ClaimAgentTask does not gate on agent.archived_at, those orphaned
+// ClaimNextAgentWake does not gate on agent.archived_at, those orphaned
 // queued tasks would remain claimable.
 func TestDeleteMember_CancelsTasksFromAgentReassignment(t *testing.T) {
 	fx := setupRevocationFixture(t, "handler-tests-revoke-reassign", "daemon-revoke-reassign")

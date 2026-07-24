@@ -61,7 +61,7 @@ const emptyClaimRedisTimeout = 250 * time.Millisecond
 // so the daemon's poll-based claim path can short-circuit before
 // hitting Postgres. Only the negative result is cached; positive
 // results always re-check the DB so concurrent claimers race fairly
-// in `ClaimAgentTask`'s `FOR UPDATE SKIP LOCKED`.
+// through `ClaimNextAgentWake`'s transactional per-agent gate.
 //
 // The cache is invalidated synchronously on every enqueue (see
 // TaskService.notifyTaskAvailable). A nil *EmptyClaimCache is safe to

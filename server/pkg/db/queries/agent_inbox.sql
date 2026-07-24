@@ -175,58 +175,6 @@ WHERE e.id IN (SELECT inbox_event_id FROM expired_delivery)
       AND d.lease_expires_at > now()
   );
 
--- name: LeaseAgentInboxEventForRuntime :one
-WITH next_event AS (
-  SELECT e.id
-  FROM agent_inbox_event e
-  JOIN agent_session s ON s.id = e.agent_session_id
-  JOIN agent a ON a.id = e.agent_id
-  WHERE COALESCE(e.runtime_id, s.runtime_id) = $1
-    AND s.status = 'active'
-    AND e.status IN ('pending', 'failed')
-    -- Chat inbox execution is globally serial per agent. This is deliberately
-    -- independent of agent.max_concurrent_tasks, which only controls the
-    -- issue/task scheduler. Locking the agent row makes the exclusion safe
-    -- when multiple drain requests race on different inbox-event rows.
-    AND NOT EXISTS (
-      SELECT 1
-      FROM agent_event_delivery active_delivery
-      JOIN agent_session active_session
-        ON active_session.id = active_delivery.agent_session_id
-      WHERE active_session.agent_id = e.agent_id
-        AND active_delivery.status IN ('leased', 'processing')
-        AND active_delivery.lease_expires_at > now()
-    )
-  ORDER BY e.priority DESC, e.requires_wake DESC, e.created_at ASC, e.id ASC
-  LIMIT 1
-  FOR UPDATE OF a, e SKIP LOCKED
-),
-leased_event AS (
-  UPDATE agent_inbox_event e
-  SET status = 'draining',
-      claimed_at = now(),
-      attempt = attempt + 1,
-      updated_at = now()
-  FROM next_event
-  WHERE e.id = next_event.id
-  RETURNING e.*
-)
-INSERT INTO agent_event_delivery (
-  workspace_id,
-  agent_session_id,
-  inbox_event_id,
-  runtime_id,
-  status
-)
-SELECT
-  e.workspace_id,
-  e.agent_session_id,
-  e.id,
-  $1,
-  'leased'
-FROM leased_event e
-RETURNING *;
-
 -- name: RenewAgentInboxDelivery :one
 UPDATE agent_event_delivery d
 SET lease_expires_at = now() + interval '2 minutes',

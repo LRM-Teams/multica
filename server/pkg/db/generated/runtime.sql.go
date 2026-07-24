@@ -31,7 +31,7 @@ type CancelAgentTasksByRuntimeOrAgentParams struct {
 // left behind from a prior UpdateAgent (agent.runtime_id can change, but
 // agent_task_queue.runtime_id does not get rewritten when it does, so a task
 // queued on runtime A by agent X — later moved to runtime B — survives the
-// runtime-only revoke and could still be claimed because ClaimAgentTask does
+// runtime-only revoke and could still be claimed because ClaimNextAgentWake does
 // not gate on agent.archived_at).
 //
 // We use 'cancelled' rather than 'failed' so the daemon's per-task status

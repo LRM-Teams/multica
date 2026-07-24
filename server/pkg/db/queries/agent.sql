@@ -316,21 +316,32 @@ SELECT atq.* FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE atq.id = $1 AND a.workspace_id = $2;
 
--- name: ClaimAgentTask :one
--- Claims the next queued task for an agent, enforcing per-(issue, agent) serialization:
--- a task is only claimable when no other task for the same issue AND same agent is
--- already dispatched or running. This allows different agents to work on the same
--- issue in parallel while preventing a single agent from running duplicate tasks.
--- Chat tasks (issue_id IS NULL) use chat_session_id for serialization instead.
--- Quick-create tasks have no issue / chat / autopilot link, so they serialize on
--- "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
--- otherwise a user mashing the create button could fire concurrent quick-creates
--- whose completion lookup would race over "most recent issue by this agent".
+-- name: LockAgentWake :one
+-- Serializes wake admission across the transitional task queue and the agent
+-- inbox. Callers must hold this row lock in a transaction before either
+-- ClaimNextAgentWake or the inbox lease's final eligibility check. A separate
+-- statement after the lock observes the other source's committed state under
+-- READ COMMITTED, closing the cross-table snapshot race.
+SELECT id FROM agent
+WHERE id = $1
+FOR UPDATE;
+
+-- name: ClaimNextAgentWake :one
+-- Claims the oldest queued legacy wake for one agent. Chat, issue, autopilot,
+-- quick-create, and Radar rows share one global per-agent FIFO; priority and
+-- agent.max_concurrent_tasks no longer create parallel execution lanes.
+--
+-- The caller must hold LockAgentWake in the same transaction. The inbox
+-- predicates mirror leaseAgentInboxEventForRuntime so whichever source wins
+-- the agent-row lock becomes the sole active wake and the other source sees
+-- that committed ownership before it can proceed.
 UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = $1 AND atq.status = 'queued' AND atq.chat_session_id IS NULL
+    WHERE atq.agent_id = @agent_id
+      AND atq.runtime_id = @runtime_id
+      AND atq.status = 'queued'
       AND (
         atq.context->>'type' IS DISTINCT FROM 'agent_radar'
         OR workspace_radar_task_is_authorized(atq.id)
@@ -339,58 +350,48 @@ WHERE id = (
           SELECT 1 FROM agent_task_queue active
           WHERE active.agent_id = atq.agent_id
             AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
-            AND (
-              (atq.issue_id IS NOT NULL AND active.issue_id = atq.issue_id)
-              OR (atq.chat_session_id IS NOT NULL AND active.chat_session_id = atq.chat_session_id)
-              OR (
-                atq.issue_id IS NULL
-                AND atq.chat_session_id IS NULL
-                AND atq.autopilot_run_id IS NULL
-                AND active.issue_id IS NULL
-                AND active.chat_session_id IS NULL
-                AND active.autopilot_run_id IS NULL
-              )
-            )
       )
-    ORDER BY atq.priority DESC, atq.created_at ASC
-    LIMIT 1
-    FOR UPDATE SKIP LOCKED
-)
-RETURNING *;
-
--- name: ClaimAgentChatTask :one
--- Claims the next queued chat task for an agent without considering active
--- issue/autopilot/quick-create work. Group-channel @mentions are bridged
--- through chat_session rows, and must remain responsive even while an issue
--- task is running. Chat tasks still serialize per chat_session here.
-UPDATE agent_task_queue
-SET status = 'dispatched', dispatched_at = now()
-WHERE id = (
-    SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = $1 AND atq.runtime_id = $2 AND atq.status = 'queued' AND atq.chat_session_id IS NOT NULL
       AND NOT EXISTS (
-          SELECT 1 FROM agent_task_queue active
-          WHERE active.agent_id = atq.agent_id
-            AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
-            AND active.chat_session_id = atq.chat_session_id
+          SELECT 1
+          FROM agent_event_delivery active_delivery
+          JOIN agent_session active_session
+            ON active_session.id = active_delivery.agent_session_id
+          WHERE active_session.agent_id = atq.agent_id
+            AND active_delivery.status IN ('leased', 'processing')
+            AND active_delivery.lease_expires_at > now()
       )
-    ORDER BY atq.priority DESC, atq.created_at ASC
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_inbox_event inbox
+          JOIN agent_session inbox_session
+            ON inbox_session.id = inbox.agent_session_id
+          WHERE inbox.agent_id = atq.agent_id
+            AND COALESCE(inbox.runtime_id, inbox_session.runtime_id) = atq.runtime_id
+            AND inbox_session.status = 'active'
+            AND inbox.status IN ('pending', 'failed')
+            AND (inbox.created_at, inbox.id) < (atq.created_at, atq.id)
+      )
+    ORDER BY atq.created_at ASC, atq.id ASC
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF atq SKIP LOCKED
 )
 RETURNING *;
 
--- name: ReclaimStaleDispatchedTaskForRuntime :one
+-- name: ReclaimStaleDispatchedAgentWake :one
 -- Re-delivers a task whose previous claim likely succeeded server-side but
 -- whose response never reached the daemon. The task is still in `dispatched`
 -- with no `started_at`, so the daemon has not acknowledged it via StartTask.
 -- Refresh dispatched_at so the server-side dispatch timeout measures from the
--- recovered delivery attempt.
+-- recovered delivery attempt. Other stale, unstarted dispatches from the
+-- pre-cutover scheduler do not deadlock recovery: the oldest one is retried
+-- first, while genuinely running/waiting or still-fresh dispatches block it.
+-- The caller must hold LockAgentWake in the same transaction.
 UPDATE agent_task_queue
 SET dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.runtime_id = $1
+    WHERE atq.runtime_id = @runtime_id
+      AND atq.agent_id = @agent_id
       AND atq.status = 'dispatched'
       AND atq.started_at IS NULL
       AND atq.dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
@@ -398,9 +399,34 @@ WHERE id = (
         atq.context->>'type' IS DISTINCT FROM 'agent_radar'
         OR workspace_radar_task_is_authorized(atq.id)
       )
-    ORDER BY atq.priority DESC, atq.dispatched_at ASC
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_task_queue active
+          WHERE active.agent_id = atq.agent_id
+            AND active.id <> atq.id
+            AND (
+              active.status IN ('running', 'waiting_local_directory')
+              OR (
+                active.status = 'dispatched'
+                AND (
+                  active.started_at IS NOT NULL
+                  OR active.dispatched_at >= now() - make_interval(secs => @claim_recovery_secs::double precision)
+                )
+              )
+            )
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_event_delivery active_delivery
+          JOIN agent_session active_session
+            ON active_session.id = active_delivery.agent_session_id
+          WHERE active_session.agent_id = atq.agent_id
+            AND active_delivery.status IN ('leased', 'processing')
+            AND active_delivery.lease_expires_at > now()
+      )
+    ORDER BY atq.created_at ASC, atq.id ASC
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF atq SKIP LOCKED
 )
 RETURNING *;
 
@@ -755,10 +781,9 @@ ORDER BY priority DESC, created_at ASC;
 -- 'queued' (in contrast to ListPendingTasksByRuntime which also includes
 -- 'dispatched') because dispatched rows are by definition already owned
 -- and cannot be re-claimed — including them in the candidate list pads
--- the result with rows that always lose the per-(issue, agent) race in
--- ClaimAgentTask, wasting CPU and a SELECT every poll cycle when the
--- runtime is busy on a long-running task. Backed by the partial index
--- idx_agent_task_queue_claim_candidates so the warm path is cheap.
+-- the result with rows that always lose ClaimNextAgentWake's per-agent
+-- admission check, wasting CPU and a transaction every poll cycle when
+-- the runtime is busy on a long-running wake.
 SELECT * FROM agent_task_queue
 WHERE runtime_id = $1
   AND status = 'queued'
@@ -766,7 +791,23 @@ WHERE runtime_id = $1
     context->>'type' IS DISTINCT FROM 'agent_radar'
     OR workspace_radar_task_is_authorized(agent_task_queue.id)
   )
-ORDER BY priority DESC, created_at ASC;
+ORDER BY created_at ASC, id ASC;
+
+-- name: ListStaleDispatchedClaimCandidatesByRuntime :many
+-- Returns only claim-response-loss candidates. ClaimTaskForRuntime locks each
+-- candidate's agent row before revalidating and refreshing the oldest stale
+-- dispatch, so retry admission shares the same cross-source serialization
+-- boundary as a fresh claim.
+SELECT * FROM agent_task_queue
+WHERE runtime_id = @runtime_id
+  AND status = 'dispatched'
+  AND started_at IS NULL
+  AND dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
+  AND (
+    context->>'type' IS DISTINCT FROM 'agent_radar'
+    OR workspace_radar_task_is_authorized(agent_task_queue.id)
+  )
+ORDER BY created_at ASC, id ASC;
 
 -- name: ListActiveTasksByIssue :many
 -- Backs the issue-detail "agent live" banner. Includes 'queued' so the

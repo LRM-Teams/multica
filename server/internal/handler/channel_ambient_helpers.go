@@ -145,10 +145,12 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 		sourceMessageID, seqFrom, seqTo).Scan(&eventID)
 }
 
-// leaseAgentInboxEventForRuntime keeps the historical per-agent serialization:
-// a runtime never receives two concurrently-active deliveries for the same
-// agent. The runtime advisory lock makes the lease exact across concurrent
-// drain requests for the same runtime.
+// leaseAgentInboxEventForRuntime admits the oldest eligible inbox wake while
+// sharing the same per-agent row lock as legacy task claims. Candidate
+// discovery happens first; after locking the agent, a second statement
+// revalidates every cross-source predicate against a fresh READ COMMITTED
+// snapshot. That two-statement shape is what makes the exclusion exact across
+// agent_inbox_event and agent_task_queue.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
@@ -162,12 +164,11 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		return db.AgentEventDelivery{}, err
 	}
 
-	var eventID pgtype.UUID
+	var eventID, agentID pgtype.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT event.id
+		SELECT event.id, event.agent_id
 		FROM agent_inbox_event event
 		JOIN agent_session session ON session.id = event.agent_session_id
-		JOIN agent ON agent.id = event.agent_id
 		WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
 		  AND session.status = 'active'
 		  AND event.status IN ('pending', 'failed')
@@ -179,9 +180,72 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		      AND active_delivery.status IN ('leased', 'processing')
 		      AND active_delivery.lease_expires_at > now()
 		  )
-		ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
-		LIMIT 1
-		FOR UPDATE OF agent, event SKIP LOCKED`, runtime.ID).Scan(&eventID)
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_task_queue active_task
+		    WHERE active_task.agent_id = event.agent_id
+		      AND active_task.status IN ('dispatched', 'running', 'waiting_local_directory')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_task_queue queued_task
+		    WHERE queued_task.agent_id = event.agent_id
+		      AND queued_task.runtime_id = COALESCE(event.runtime_id, session.runtime_id)
+		      AND queued_task.status = 'queued'
+		      AND (
+		        queued_task.context->>'type' IS DISTINCT FROM 'agent_radar'
+		        OR workspace_radar_task_is_authorized(queued_task.id)
+		      )
+		      AND (queued_task.created_at, queued_task.id) < (event.created_at, event.id)
+		  )
+		ORDER BY event.created_at, event.id
+		LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
+	if err != nil {
+		return db.AgentEventDelivery{}, err
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM agent
+		WHERE id = $1
+		FOR UPDATE`, agentID).Scan(&agentID); err != nil {
+		return db.AgentEventDelivery{}, err
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT event.id
+		FROM agent_inbox_event event
+		JOIN agent_session session ON session.id = event.agent_session_id
+		WHERE event.id = $1
+		  AND event.agent_id = $2
+		  AND COALESCE(event.runtime_id, session.runtime_id) = $3
+		  AND session.status = 'active'
+		  AND event.status IN ('pending', 'failed')
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_event_delivery active_delivery
+		    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+		    WHERE active_session.agent_id = event.agent_id
+		      AND active_delivery.status IN ('leased', 'processing')
+		      AND active_delivery.lease_expires_at > now()
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_task_queue active_task
+		    WHERE active_task.agent_id = event.agent_id
+		      AND active_task.status IN ('dispatched', 'running', 'waiting_local_directory')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_task_queue queued_task
+		    WHERE queued_task.agent_id = event.agent_id
+		      AND queued_task.runtime_id = COALESCE(event.runtime_id, session.runtime_id)
+		      AND queued_task.status = 'queued'
+		      AND (
+		        queued_task.context->>'type' IS DISTINCT FROM 'agent_radar'
+		        OR workspace_radar_task_is_authorized(queued_task.id)
+		      )
+		      AND (queued_task.created_at, queued_task.id) < (event.created_at, event.id)
+		  )
+		FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
 	if err != nil {
 		return db.AgentEventDelivery{}, err
 	}

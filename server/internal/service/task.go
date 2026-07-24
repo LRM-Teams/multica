@@ -1191,11 +1191,11 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
 	// #311: the system never cancels a directed chat request. A new message that
 	// arrives while an earlier one is still running must NOT cancel the in-flight
-	// run (interruptFollowup=false). It queues instead: ClaimAgentChatTask only
-	// claims a chat task when no active task exists for the same chat_session, and
-	// runs queued tasks FIFO (priority DESC, created_at ASC). So a different
-	// requester's request and a same-requester follow-up both get answered in
-	// order rather than one silently cancelling the other (the Frank+海鹏 case).
+	// run (interruptFollowup=false). It queues behind the agent's current wake;
+	// ClaimNextAgentWake admits every source through one created_at/id FIFO. So a
+	// different requester's request and a same-requester follow-up both get
+	// answered in order rather than one silently cancelling the other (the
+	// Frank+海鹏 case).
 	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, false, 2, false)
 }
 
@@ -1477,81 +1477,55 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 	return cancelled
 }
 
-// ClaimTask atomically claims the next queued task for an agent,
-// respecting max_concurrent_tasks.
-func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	return s.claimTask(ctx, agentID, pgtype.UUID{}, false)
-}
-
-// ClaimChatTask claims only chat-session-backed work for an agent. It is used
-// as a fallback when normal issue/autopilot/quick-create capacity is full so
-// channel @mentions stay responsive while long issue work is running.
-func (s *TaskService) ClaimChatTask(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	return s.claimTask(ctx, agentID, runtimeID, true)
-}
-
-func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.UUID, chatOnly bool) (*db.AgentTaskQueue, error) {
+// claimNextAgentWake claims the oldest queued legacy wake for one agent.
+// LockAgentWake and ClaimNextAgentWake intentionally run as separate
+// statements in one transaction: after the agent-row lock is acquired,
+// READ COMMITTED gives the claim statement a fresh snapshot of active inbox
+// deliveries and closes the cross-table race with inbox leasing.
+func (s *TaskService) claimNextAgentWake(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
 	start := time.Now()
 	var (
-		outcome                                                              = "unknown"
-		getAgentMs, countRunningMs, claimAgentMs, updateStatusMs, dispatchMs int64
+		outcome                                              = "unknown"
+		lockAgentMs, claimWakeMs, updateStatusMs, dispatchMs int64
 	)
 	defer func() {
-		s.maybeLogClaimSlow(agentID, outcome, start, getAgentMs, countRunningMs, claimAgentMs, updateStatusMs, dispatchMs)
+		s.maybeLogClaimSlow(agentID, outcome, start, lockAgentMs, claimWakeMs, updateStatusMs, dispatchMs)
 	}()
 
-	t0 := start
-	agent, err := s.Queries.GetAgent(ctx, agentID)
-	getAgentMs = time.Since(t0).Milliseconds()
-	if err != nil {
-		outcome = "error_get_agent"
-		return nil, fmt.Errorf("agent not found: %w", err)
-	}
-
-	t0 = time.Now()
-	var running int64
-	if chatOnly {
-		running, err = s.Queries.CountRunningChatTasks(ctx, agentID)
-	} else {
-		running, err = s.Queries.CountRunningTasks(ctx, agentID)
-	}
-	countRunningMs = time.Since(t0).Milliseconds()
-	if err != nil {
-		outcome = "error_count_running"
-		return nil, fmt.Errorf("count running tasks: %w", err)
-	}
-	capacity := int64(agent.MaxConcurrentTasks)
-	if chatOnly {
-		// Chat bypass is intentionally a single interrupt lane, not another full
-		// max_concurrent_tasks pool. This keeps @mention replies responsive without
-		// allowing max issue work + max chat work to run at once.
-		capacity = 1
-	}
-	if running >= capacity {
-		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks, "capacity", capacity, "chat_only", chatOnly)
-		outcome = "no_capacity"
-		return nil, nil // No capacity
-	}
-
-	t0 = time.Now()
 	var task db.AgentTaskQueue
-	if chatOnly {
-		task, err = s.Queries.ClaimAgentChatTask(ctx, db.ClaimAgentChatTaskParams{
+	var claimed bool
+	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		t0 := time.Now()
+		if _, err := qtx.LockAgentWake(ctx, agentID); err != nil {
+			lockAgentMs = time.Since(t0).Milliseconds()
+			return fmt.Errorf("lock agent wake: %w", err)
+		}
+		lockAgentMs = time.Since(t0).Milliseconds()
+
+		t0 = time.Now()
+		next, err := qtx.ClaimNextAgentWake(ctx, db.ClaimNextAgentWakeParams{
 			AgentID:   agentID,
 			RuntimeID: runtimeID,
 		})
-	} else {
-		task, err = s.Queries.ClaimAgentTask(ctx, agentID)
-	}
-	claimAgentMs = time.Since(t0).Milliseconds()
-	if err != nil {
+		claimWakeMs = time.Since(t0).Milliseconds()
 		if errors.Is(err, pgx.ErrNoRows) {
-			slog.Debug("task claim: no tasks available", "agent_id", util.UUIDToString(agentID), "chat_only", chatOnly)
-			outcome = "no_tasks"
-			return nil, nil // No tasks available
+			return nil
 		}
+		if err != nil {
+			return err
+		}
+		task = next
+		claimed = true
+		return nil
+	})
+	if err != nil {
 		outcome = "error_claim"
-		return nil, fmt.Errorf("claim task: %w", err)
+		return nil, fmt.Errorf("claim next agent wake: %w", err)
+	}
+	if !claimed {
+		slog.Debug("task claim: no wake available", "agent_id", util.UUIDToString(agentID))
+		outcome = "no_wake"
+		return nil, nil
 	}
 
 	slog.Info("task claimed", "task_id", util.UUIDToString(task.ID), "agent_id", util.UUIDToString(agentID))
@@ -1559,7 +1533,7 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 
 	// Refresh agent status from active tasks. This avoids a stale unconditional
 	// working write racing after a just-cancelled claim.
-	t0 = time.Now()
+	t0 := time.Now()
 	s.ReconcileAgentStatus(ctx, agentID)
 	updateStatusMs = time.Since(t0).Milliseconds()
 
@@ -1574,8 +1548,43 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 	return &task, nil
 }
 
-// ClaimTaskForRuntime claims the next runnable task for a runtime while
-// still respecting each agent's max_concurrent_tasks limit.
+// reclaimStaleAgentWake re-delivers the oldest unacknowledged legacy wake for
+// one agent. It uses the same agent-row transaction boundary as a fresh claim,
+// so an inbox lease cannot be admitted concurrently.
+func (s *TaskService) reclaimStaleAgentWake(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	var task db.AgentTaskQueue
+	var reclaimed bool
+	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		if _, err := qtx.LockAgentWake(ctx, agentID); err != nil {
+			return fmt.Errorf("lock agent wake: %w", err)
+		}
+		next, err := qtx.ReclaimStaleDispatchedAgentWake(ctx, db.ReclaimStaleDispatchedAgentWakeParams{
+			RuntimeID:         runtimeID,
+			AgentID:           agentID,
+			ClaimRecoverySecs: claimResponseRecoveryWindow.Seconds(),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		task = next
+		reclaimed = true
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reclaim stale agent wake: %w", err)
+	}
+	if !reclaimed {
+		return nil, nil
+	}
+	return &task, nil
+}
+
+// ClaimTaskForRuntime claims the next runnable legacy wake for a runtime.
+// Every source is globally serial and FIFO per agent; different agents remain
+// eligible in parallel.
 //
 // Empty-claim fast path: when EmptyClaim is configured and a recent
 // check verified the runtime had no queued tasks, returns immediately
@@ -1610,11 +1619,29 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 	runtimeKey := util.UUIDToString(runtimeID)
 	// Check this before EmptyClaim: a lost claim response moves the task out of
 	// `queued`, so the empty-queued cache cannot represent recoverability.
-	stale, err := s.Queries.ReclaimStaleDispatchedTaskForRuntime(ctx, db.ReclaimStaleDispatchedTaskForRuntimeParams{
+	staleCandidates, err := s.Queries.ListStaleDispatchedClaimCandidatesByRuntime(ctx, db.ListStaleDispatchedClaimCandidatesByRuntimeParams{
 		RuntimeID:         runtimeID,
 		ClaimRecoverySecs: claimResponseRecoveryWindow.Seconds(),
 	})
-	if err == nil {
+	if err != nil {
+		outcome = "error_reclaim_dispatched"
+		return nil, fmt.Errorf("list stale dispatched wakes: %w", err)
+	}
+	staleAgents := make(map[string]struct{}, len(staleCandidates))
+	for _, candidate := range staleCandidates {
+		agentKey := util.UUIDToString(candidate.AgentID)
+		if _, seen := staleAgents[agentKey]; seen {
+			continue
+		}
+		staleAgents[agentKey] = struct{}{}
+		stale, err := s.reclaimStaleAgentWake(ctx, candidate.AgentID, runtimeID)
+		if err != nil {
+			outcome = "error_reclaim_dispatched"
+			return nil, err
+		}
+		if stale == nil {
+			continue
+		}
 		outcome = "reclaimed_dispatched"
 		claimedFlag = true
 		slog.Info("stale dispatched task reclaimed",
@@ -1622,11 +1649,7 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 			"runtime_id", runtimeKey,
 			"agent_id", util.UUIDToString(stale.AgentID),
 		)
-		return &stale, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		outcome = "error_reclaim_dispatched"
-		return nil, fmt.Errorf("reclaim stale dispatched task: %w", err)
+		return stale, nil
 	}
 
 	if s.EmptyClaim.IsEmpty(ctx, runtimeKey) {
@@ -1668,19 +1691,11 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 		triedAgents[agentKey] = struct{}{}
 		tried++
 
-		task, err := s.ClaimTask(ctx, candidate.AgentID)
+		task, err := s.claimNextAgentWake(ctx, candidate.AgentID, runtimeID)
 		if err != nil {
 			loopMs = time.Since(loopStart).Milliseconds()
 			outcome = "error_claim"
 			return nil, err
-		}
-		if task == nil {
-			task, err = s.ClaimChatTask(ctx, candidate.AgentID, runtimeID)
-			if err != nil {
-				loopMs = time.Since(loopStart).Milliseconds()
-				outcome = "error_claim_chat"
-				return nil, err
-			}
 		}
 		if task != nil && task.RuntimeID == runtimeID {
 			claimed = task
@@ -1696,12 +1711,12 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 	return claimed, nil
 }
 
-// maybeLogClaimSlow emits one structured log per ClaimTask call when its total
+// maybeLogClaimSlow emits one structured log per per-agent claim call when its total
 // latency exceeds 300ms, so the prod tail can be diagnosed without flooding
 // logs at normal poll rates. Called via defer so it captures the full path
 // including post-claim updateAgentStatus / broadcastTaskDispatch (both of
 // which can hit the DB) and any error exit.
-func (s *TaskService) maybeLogClaimSlow(agentID pgtype.UUID, outcome string, start time.Time, getAgentMs, countRunningMs, claimAgentMs, updateStatusMs, dispatchMs int64) {
+func (s *TaskService) maybeLogClaimSlow(agentID pgtype.UUID, outcome string, start time.Time, lockAgentMs, claimWakeMs, updateStatusMs, dispatchMs int64) {
 	totalMs := time.Since(start).Milliseconds()
 	if totalMs < 300 {
 		return
@@ -1710,9 +1725,8 @@ func (s *TaskService) maybeLogClaimSlow(agentID pgtype.UUID, outcome string, sta
 		"agent_id", util.UUIDToString(agentID),
 		"outcome", outcome,
 		"total_ms", totalMs,
-		"get_agent_ms", getAgentMs,
-		"count_running_ms", countRunningMs,
-		"claim_agent_ms", claimAgentMs,
+		"lock_agent_ms", lockAgentMs,
+		"claim_wake_ms", claimWakeMs,
 		"update_status_ms", updateStatusMs,
 		"dispatch_ms", dispatchMs,
 	)

@@ -3228,7 +3228,7 @@ func TestFollowupChatDoesNotCancelRunningChatTask(t *testing.T) {
 	}
 	// #311: EnqueueChatTask no longer cancels an in-flight directed run. The
 	// running task stays running and the follow-up queues behind it (serialized
-	// per chat_session by ClaimAgentChatTask), so neither request is dropped.
+	// globally per agent by ClaimNextAgentWake), so neither request is dropped.
 	if status != "running" || reason != "" {
 		t.Fatalf("running chat task = (%q, %q), want (running, \"\") — #311 abolished the followup cancel", status, reason)
 	}

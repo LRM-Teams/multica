@@ -26,7 +26,8 @@ support the legacy conversational-AI AppID contract `2024-12-01`.
 - [x] Implement validated API-version configuration.
 - [x] Pass the setting through server wiring and deployment configuration.
 - [x] Run focused tests and repository checks.
-- [ ] Push one isolated pull request.
+- [x] Push isolated pull request
+  [#1181](https://github.com/LRM-Teams/multica/pull/1181).
 - [x] Configure the `aliyun-dev` environment for `2024-12-01`.
 - [ ] Verify the provider response after merge and deployment.
 

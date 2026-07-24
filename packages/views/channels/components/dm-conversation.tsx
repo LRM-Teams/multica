@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, Maximize2, MessageSquare, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   channelMessageThreadOptions,
@@ -35,11 +35,6 @@ import type {
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelMessage, ChannelMessageSearchResult } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -922,11 +917,21 @@ function DmChannelConversation({
     dispatch({ type: "openThread", message });
   };
 
+  const handleThreadViewParent = useCallback(() => {
+    if (!threadSurfaceRoot) return;
+    dispatch({
+      type: "setThreadParentHighlightId",
+      id: threadSurfaceRoot.id,
+    });
+    dispatch({ type: "closeThread" });
+  }, [threadSurfaceRoot]);
+
   const threadPanel =
     threadSurfaceRoot ? (
       <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
         <ConversationHeader
           isMobile={isMobile}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader leading slot; identity is not memo-sensitive
           leading={
             isMobile ? (
               <Button
@@ -938,20 +943,36 @@ function DmChannelConversation({
               >
                 <ArrowLeft className="size-5" />
               </Button>
+            ) : null
+          }
+          title={t(($) => $.thread.title)}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader meta slot; LRM-572 View-in-conversation link
+          meta={
+            threadLoading ? (
+              t(($) => $.thread.meta_loading)
+            ) : threadError ? (
+              t(($) => $.thread.meta_load_failed)
             ) : (
-              <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                <MessageSquare className="size-4" />
+              <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1">
+                <span className="truncate">
+                  {threadReplies.length > 0
+                    ? t(($) => $.thread.meta_count, { count: threadReplies.length })
+                    : t(($) => $.thread.meta_empty)}
+                </span>
+                <span aria-hidden className="text-muted-foreground/50">
+                  ·
+                </span>
+                <button
+                  type="button"
+                  className="min-h-8 shrink-0 rounded-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={handleThreadViewParent}
+                >
+                  {t(($) => $.thread.view_in_conversation)}
+                </button>
               </span>
             )
           }
-          title={t(($) => $.thread.title)}
-          meta={
-            threadReplies.length > 0
-              ? t(($) => $.thread.meta_count, {
-                  count: threadReplies.length,
-                })
-              : undefined
-          }
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader actions slot
           actions={
             <>
               <ThreadFollowButton
@@ -963,35 +984,7 @@ function DmChannelConversation({
                 }
                 onFollowChange={handleThreadFollowChange}
               />
-              {/* LRM-384 — desktop 28px ghost open-in-main; no dark float capsule / download.
-                  LRM-389 — tooltip + close thread so parent list actually opens. */}
-              {!isMobile && (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        aria-label={t(($) => $.thread.open_in_main_aria)}
-                        onClick={() => {
-                          dispatch({
-                            type: "setThreadParentHighlightId",
-                            id: threadSurfaceRoot.id,
-                          });
-                          dispatch({ type: "closeThread" });
-                        }}
-                      />
-                    }
-                  >
-                    <Maximize2 className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {t(($) => $.thread.open_in_main_aria)}
-                  </TooltipContent>
-                </Tooltip>
-              )}
+              {/* LRM-572 — no Maximize2;「在对话中查看」lives in the subtitle meta. */}
               {!isMobile && (
                 <Button
                   variant="ghost"
@@ -1014,15 +1007,13 @@ function DmChannelConversation({
           emptyLabel={t(($) => $.thread.empty_replies)}
           initialScroll="top"
           highlightMessageId={deepLinkHighlightId}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ChannelMessageList header slot
           header={
             <ThreadRootPreview
               message={threadSurfaceRoot}
               currentUserId={currentUserId}
               ownName={currentUserName ?? undefined}
-              onViewParent={() => {
-                dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
-                dispatch({ type: "closeThread" });
-              }}
+              onViewParent={handleThreadViewParent}
             />
           }
           loading={threadLoading}

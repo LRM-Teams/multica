@@ -1,16 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertCircle,
   Loader2,
   MessageSquare,
+  Square,
   Trash2,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import {
+  activeChannelTasksKeys,
+  activeChannelTasksOptions,
+} from "@multica/core/channels";
+import { dmKeys, dmListOptions } from "@multica/core/dm";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { cn } from "@multica/ui/lib/utils";
@@ -26,6 +33,7 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
+import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
 
 /**
  * LRM-448 · Profile v4 Actions stack (Computer IA + Multica tokens).
@@ -34,6 +42,9 @@ import { useT } from "../../i18n/use-t";
  * LRM-468: Restart/Reset · Copy diagnostic · Report issue are out of
  * scope this period (Frank「这几个功能删掉，先不做」). Keep Message +
  * Archive (danger zone) only — do not leave empty shell buttons.
+ *
+ * LRM-589: DM Agent Stop lives here (not beside the DM header cue). Show
+ * Stop only when this agent has a stoppable 1:1 DM task — never "Stop all".
  */
 export function AgentProfileActions({
   agent,
@@ -44,12 +55,31 @@ export function AgentProfileActions({
 }) {
   const { t } = useT("agents");
   const qc = useQueryClient();
+  const wsId = useWorkspaceId();
   const { openDM, isPending: openingDM } = useOpenDM();
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
+
+  const { data: dms = [] } = useQuery(dmListOptions(wsId));
+  const dmChannelId = useMemo(() => {
+    const dm = dms.find(
+      (row) => row.peer.type === "agent" && row.peer.id === agent.id,
+    );
+    return dm?.id ?? "";
+  }, [agent.id, dms]);
+
+  const { data: activeTasks = [] } = useQuery(
+    activeChannelTasksOptions(dmChannelId),
+  );
+
+  const stoppableTask = useMemo(
+    () => pickStoppableDmTask(activeTasks, agent.id),
+    [activeTasks, agent.id],
+  );
 
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
@@ -67,6 +97,30 @@ export function AgentProfileActions({
       );
     } finally {
       setArchiving(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (!dmChannelId || !stoppableTask || stopping) return;
+    const inboxEventId = stoppableTask.inbox_event_id?.trim();
+    if (!inboxEventId) {
+      toast.error(t(($) => $.side_panel.actions_stop_failed));
+      return;
+    }
+    setStopping(true);
+    try {
+      await api.cancelChannelInboxEvent(dmChannelId, inboxEventId);
+      toast.success(
+        t(($) => $.side_panel.actions_stop_success, { name: displayName }),
+      );
+      qc.invalidateQueries({
+        queryKey: activeChannelTasksKeys.all(dmChannelId),
+      });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    } catch {
+      toast.error(t(($) => $.side_panel.actions_stop_failed));
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -91,6 +145,25 @@ export function AgentProfileActions({
             {openingDM
               ? t(($) => $.side_panel.message_opening)
               : t(($) => $.side_panel.message_button)}
+          </ActionButton>
+        ) : null}
+
+        {!isArchived && stoppableTask ? (
+          <ActionButton
+            variant="danger"
+            testId="agent-profile-action-stop"
+            disabled={stopping}
+            onClick={() => void handleStop()}
+            ariaLabel={t(($) => $.side_panel.actions_stop_aria, {
+              name: displayName,
+            })}
+          >
+            {stopping ? (
+              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+            ) : (
+              <Square className="size-2.5 shrink-0 fill-current" aria-hidden />
+            )}
+            {t(($) => $.side_panel.actions_stop)}
           </ActionButton>
         ) : null}
 
@@ -154,12 +227,14 @@ function ActionButton({
   disabled,
   variant,
   testId,
+  ariaLabel,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
   variant: "primary" | "danger";
   testId: string;
+  ariaLabel?: string;
 }) {
   return (
     <button
@@ -167,7 +242,9 @@ function ActionButton({
       data-testid={testId}
       disabled={disabled}
       onClick={onClick}
+      aria-label={ariaLabel}
       className={cn(
+        // ≥32px touch target (desktop + mobile).
         "inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border text-[13px] font-semibold transition-colors disabled:cursor-wait disabled:opacity-70",
         variant === "primary" &&
           "border-brand/40 bg-brand/10 text-brand hover:bg-brand/15",

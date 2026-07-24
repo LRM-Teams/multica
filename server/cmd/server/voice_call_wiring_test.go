@@ -54,6 +54,7 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 	values["VOLCENGINE_RTC_TOKEN_TTL"] = "45m"
 	values["VOLCENGINE_RTC_COMPENSATION_TIMEOUT"] = "12s"
 	values["VOLCENGINE_RTC_CLEANUP_TIMEOUT"] = "14s"
+	values["VOLCENGINE_RTC_AGENT_TIMEOUT"] = "75s"
 
 	config, enabled, err := loadVoiceCallRuntimeConfig(func(name string) string {
 		return values[name]
@@ -75,12 +76,14 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 	}
 	if config.TokenTTL != 45*time.Minute ||
 		config.CompensationTimeout != 12*time.Second ||
-		config.CleanupTimeout != 14*time.Second {
+		config.CleanupTimeout != 14*time.Second ||
+		config.AgentTimeout != 75*time.Second {
 		t.Fatalf(
-			"durations = %s/%s/%s",
+			"durations = %s/%s/%s/%s",
 			config.TokenTTL,
 			config.CompensationTimeout,
 			config.CleanupTimeout,
+			config.AgentTimeout,
 		)
 	}
 }
@@ -94,6 +97,17 @@ func TestLoadVoiceCallRuntimeConfigRejectsInvalidDurationAndMissingLLMKey(t *tes
 		})
 		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_TOKEN_TTL") {
 			t.Fatalf("invalid duration error = %v", err)
+		}
+	})
+
+	t.Run("agent timeout", func(t *testing.T) {
+		values := completeVoiceCallEnvironment()
+		values["VOLCENGINE_RTC_AGENT_TIMEOUT"] = "0s"
+		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
+			return values[name]
+		})
+		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_AGENT_TIMEOUT") {
+			t.Fatalf("invalid Agent timeout error = %v", err)
 		}
 	})
 
@@ -128,6 +142,7 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 	if handler.VoiceCallService != nil ||
 		handler.VoiceCallCallbackProcessor != nil ||
 		handler.VoiceCallCallbackSignature != "" ||
+		handler.VoiceCallLLMProcessor != nil ||
 		handler.VoiceCallLLMAPIKey != "" {
 		t.Fatal("voice call runtime unexpectedly configured before explicit opt-in")
 	}
@@ -152,6 +167,9 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 	if handler.VoiceCallLLMAPIKey != values["VOLCENGINE_RTC_LLM_API_KEY"] {
 		t.Fatal("voice call LLM API key was not attached to handler")
 	}
+	if handler.VoiceCallLLMProcessor == nil {
+		t.Fatal("voice call LLM processor was not attached to handler")
+	}
 }
 
 func completeVoiceCallEnvironment() map[string]string {
@@ -168,5 +186,6 @@ func completeVoiceCallEnvironment() map[string]string {
 		"VOLCENGINE_RTC_TOKEN_TTL":            "30m",
 		"VOLCENGINE_RTC_COMPENSATION_TIMEOUT": "10s",
 		"VOLCENGINE_RTC_CLEANUP_TIMEOUT":      "10s",
+		"VOLCENGINE_RTC_AGENT_TIMEOUT":        "90s",
 	}
 }

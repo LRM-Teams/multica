@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
@@ -30,7 +31,7 @@ func TestVoiceCallAgentBridgePersistsAndDispatchesOneIdempotentDMTurn(t *testing
 		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID)
 	})
 
-	bridge, err := NewVoiceCallAgentBridge(testHandler)
+	bridge, err := NewVoiceCallAgentBridge(testHandler, 5*time.Second)
 	if err != nil {
 		t.Fatalf("create voice call agent bridge: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestVoiceCallAgentBridgeRejectsInactiveOrMismatchedScopeWithoutWriting(t *t
 		testPool.Exec(context.Background(), `DELETE FROM voice_call_session WHERE channel_id = $1`, channelID)
 		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID)
 	})
-	bridge, err := NewVoiceCallAgentBridge(testHandler)
+	bridge, err := NewVoiceCallAgentBridge(testHandler, 5*time.Second)
 	if err != nil {
 		t.Fatalf("create voice call agent bridge: %v", err)
 	}
@@ -233,8 +234,11 @@ func TestVoiceCallAgentBridgeRejectsInactiveOrMismatchedScopeWithoutWriting(t *t
 }
 
 func TestVoiceCallAgentBridgeConstructorRequiresRuntimeDependencies(t *testing.T) {
-	if _, err := NewVoiceCallAgentBridge(&Handler{}); err == nil {
+	if _, err := NewVoiceCallAgentBridge(&Handler{}, time.Second); err == nil {
 		t.Fatal("bridge constructor accepted an unconfigured handler")
+	}
+	if _, err := NewVoiceCallAgentBridge(testHandler, 0); err == nil {
+		t.Fatal("bridge constructor accepted a zero wait timeout")
 	}
 }
 

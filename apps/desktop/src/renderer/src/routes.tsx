@@ -27,7 +27,6 @@ import { DesktopAgentsPage } from "./components/desktop-agents-page";
 import { SandboxesPage } from "@multica/views/sandboxes";
 import { SandboxDetailPage } from "./pages/sandbox-detail-page";
 import { SandboxNodeSetupPage } from "./pages/sandbox-node-setup-page";
-import { SquadsPage, SquadDetailPage as SquadDetailPageView } from "@multica/views/squads/components";
 import { InboxPage } from "@multica/views/inbox";
 import { SettingsPage } from "@multica/views/settings";
 import { useT } from "@multica/views/i18n";
@@ -199,12 +198,6 @@ export const appRoutes: RouteObject[] = [
             path: "members/:id",
             element: <MemberDetailPage />,
             handle: { title: "Member" },
-          },
-          { path: "squads", element: <SquadsPage />, handle: { title: "Squads" } },
-          {
-            path: "squads/:id",
-            element: <SquadDetailPageView />,
-            handle: { title: "Squad" },
           },
           { path: "inbox", element: <InboxPage />, handle: { title: "Activity" } },
           {

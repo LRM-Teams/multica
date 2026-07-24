@@ -23,7 +23,6 @@ import enLayout from "./en/layout.json";
 import enOverview from "./en/overview.json";
 import enUsage from "./en/usage.json";
 import enUi from "./en/ui.json";
-import enSquads from "./en/squads.json";
 import enBilling from "./en/billing.json";
 import enChannels from "./en/channels.json";
 import enEvolution from "./en/evolution.json";
@@ -52,7 +51,6 @@ import zhHansLayout from "./zh-Hans/layout.json";
 import zhHansOverview from "./zh-Hans/overview.json";
 import zhHansUsage from "./zh-Hans/usage.json";
 import zhHansUi from "./zh-Hans/ui.json";
-import zhHansSquads from "./zh-Hans/squads.json";
 import zhHansBilling from "./zh-Hans/billing.json";
 import zhHansChannels from "./zh-Hans/channels.json";
 import zhHansEvolution from "./zh-Hans/evolution.json";
@@ -81,7 +79,6 @@ import koLayout from "./ko/layout.json";
 import koOverview from "./ko/overview.json";
 import koUsage from "./ko/usage.json";
 import koUi from "./ko/ui.json";
-import koSquads from "./ko/squads.json";
 import koBilling from "./ko/billing.json";
 import koChannels from "./ko/channels.json";
 import koEvolution from "./ko/evolution.json";
@@ -110,7 +107,6 @@ import jaLayout from "./ja/layout.json";
 import jaOverview from "./ja/overview.json";
 import jaUsage from "./ja/usage.json";
 import jaUi from "./ja/ui.json";
-import jaSquads from "./ja/squads.json";
 import jaBilling from "./ja/billing.json";
 import jaChannels from "./ja/channels.json";
 import jaEvolution from "./ja/evolution.json";
@@ -145,7 +141,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     "overview": enOverview,
     usage: enUsage,
     ui: enUi,
-    squads: enSquads,
     billing: enBilling,
     channels: enChannels,
     evolution: enEvolution,
@@ -176,7 +171,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     "overview": zhHansOverview,
     usage: zhHansUsage,
     ui: zhHansUi,
-    squads: zhHansSquads,
     billing: zhHansBilling,
     channels: zhHansChannels,
     evolution: zhHansEvolution,
@@ -207,7 +201,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     "overview": koOverview,
     usage: koUsage,
     ui: koUi,
-    squads: koSquads,
     billing: koBilling,
     channels: koChannels,
     evolution: koEvolution,
@@ -238,7 +231,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     "overview": jaOverview,
     usage: jaUsage,
     ui: jaUi,
-    squads: jaSquads,
     billing: jaBilling,
     channels: jaChannels,
     evolution: jaEvolution,

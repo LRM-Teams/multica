@@ -245,7 +245,7 @@
     "section_agent": "智能体",
     "section_assignee": "执行方",
     "select_agent": "选择智能体",
-    "select_assignee": "选择智能体或小队",
+    "select_assignee": "选择智能体",
     "section_project": "关联项目",
     "no_project": "不关联项目",
     "section_output_mode": "输出模式",
@@ -340,11 +340,10 @@
     }
   },
   "agent_picker": {
-    "filter_placeholder": "筛选智能体或小队...",
+    "filter_placeholder": "筛选智能体...",
     "select_agent": "选择智能体",
-    "select_assignee": "选择智能体或小队",
-    "agents_group": "智能体",
-    "squads_group": "小队"
+    "select_assignee": "选择智能体",
+    "agents_group": "智能体"
   },
   "timezone_picker": {
     "search_placeholder": "搜索时区..."

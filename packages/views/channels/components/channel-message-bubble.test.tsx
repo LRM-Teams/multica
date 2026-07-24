@@ -127,7 +127,6 @@ vi.mock("@multica/core/paths", () => ({
       `/acme/profile/${memberType}/${memberId}`,
     agentDetail: (id: string) => `/acme/agents/${id}`,
     memberDetail: (id: string) => `/acme/members/${id}`,
-    squadDetail: (id: string) => `/acme/squads/${id}`,
   }),
 }));
 

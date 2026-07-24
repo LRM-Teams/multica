@@ -79,7 +79,6 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getAgentName: (agentId: string) =>
       agentNameByIdRef.current.get(agentId) ?? "Unknown Agent",
     getMemberName: () => "Unknown",
-    getSquadName: () => "Unknown Squad",
     getActorName: () => "Unknown",
     getActorInitials: () => "??",
     getActorAvatarUrl: () => null,

@@ -14,7 +14,7 @@ const mockToastSuccess = vi.hoisted(() => vi.fn());
 const mockUploadWithToast = vi.hoisted(() => vi.fn());
 
 const mockQuickCreateStore = {
-  lastActorType: null as "agent" | "squad" | null,
+  lastActorType: null as "agent" | null,
   lastActorId: null as string | null,
   setLastActor: mockSetLastActor,
   lastProjectId: null as string | null,
@@ -34,12 +34,6 @@ const mockProjectsQuery = vi.hoisted(() => ({
   isSuccess: true,
 }));
 
-// Per-test override for the squads list so we can flip between "squads
-// exist and one's leader is reachable" and "no squads" cases without
-// re-mocking the whole module.
-const mockSquadsData = vi.hoisted(
-  () => ({ list: [] as Array<{ id: string; name: string; leader_id: string; archived_at: string | null }> }),
-);
 
 // Agents are mutable per-test so a case can hand an agent whose display_name
 // differs from its routing handle (the #433 bug: the picker rendered the raw
@@ -61,10 +55,7 @@ const mockAgentsData = vi.hoisted(
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
     // Workspace-scoped query keys carry the wsId as `queryKey[1]`; the
-    // discriminator is at `queryKey[2]` (e.g. ["workspaces", wsId, "squads"]).
-    if (queryKey[0] === "workspaces" && queryKey[2] === "squads") {
-      return { data: mockSquadsData.list };
-    }
+    // discriminator is at `queryKey[2]` (e.g. ["workspaces", wsId, "agents"]).
     switch (queryKey[0]) {
       case "members":
         return { data: [{ user_id: "user-1", role: "admin" }] };
@@ -100,9 +91,6 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
-  squadListOptions: (wsId: string) => ({
-    queryKey: ["workspaces", wsId, "squads"],
-  }),
 }));
 
 vi.mock("@multica/core/projects/queries", () => ({
@@ -309,7 +297,6 @@ describe("AgentCreatePanel", () => {
     mockQuickCreateStore.keepOpen = false;
     mockProjectsQuery.data = [];
     mockProjectsQuery.isSuccess = true;
-    mockSquadsData.list = [];
     mockAgentsData.list = [
       { id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" },
     ];
@@ -450,54 +437,6 @@ describe("AgentCreatePanel", () => {
       });
     });
     expect(mockToastSuccess).not.toHaveBeenCalled();
-  });
-
-  // Picking a squad routes the submission through `squad_id` (not
-  // `agent_id`) so the backend can resolve the squad's leader agent and
-  // inject the squad-leader briefing on dispatch. The persisted preference
-  // remembers the actor type so the next open defaults back to the squad.
-  it("submits squad_id when the user picks a squad in the actor picker", async () => {
-    mockSquadsData.list = [
-      { id: "squad-1", name: "Frontend Squad", leader_id: "agent-1", archived_at: null },
-    ];
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-
-    renderPanel({ onClose, isExpanded: false, setIsExpanded: vi.fn() });
-
-    // The picker mock renders both sections inline as buttons; click the
-    // squad row directly.
-    await user.click(screen.getByRole("button", { name: /Frontend Squad/ }));
-
-    const editor = screen.getByPlaceholderText(
-      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
-    );
-    await user.clear(editor);
-    await user.type(editor, "Investigate the regression");
-
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
-
-    await waitFor(() => {
-      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
-        squad_id: "squad-1",
-        prompt: "Investigate the regression",
-        project_id: undefined,
-      });
-    });
-    expect(mockSetLastActor).toHaveBeenCalledWith("squad", "squad-1");
-  });
-
-  // Squads whose leader agent isn't visible (archived, private, etc.) must
-  // not appear in the picker — the backend would reject the pick on
-  // validateAssigneePair, and showing them invites a confusing dead path.
-  it("hides squads whose leader agent is not in the visible-agents list", () => {
-    mockSquadsData.list = [
-      { id: "squad-orphan", name: "Orphan Squad", leader_id: "agent-missing", archived_at: null },
-    ];
-
-    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
-
-    expect(screen.queryByRole("button", { name: /Orphan Squad/ })).toBeNull();
   });
 
   // #433: the agent picker rendered the raw routing handle (agent_f0…) instead

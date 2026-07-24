@@ -317,7 +317,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         title: "更安全的评论触发、更稳定的智能体和附件",
         changes: [],
         features: [
-          "评论输入框现在会在发送前显示哪些智能体或小队会开始工作，也可以避免误触发运行",
           "智能体运行记录现在会显示时间点，回看进度和交接信息更清楚",
           "自动任务详情页现在会显示创建人",
           "Claude Fable 5 现在已加入 Multica 支持的模型和价格列表",
@@ -368,7 +367,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "看板泳道筛选现在可以正确生效",
           "移动端切换工作区时会更稳定地显示工作区图标，并使用更清晰的英文文案",
           "桌面端更新窗口和任务记录弹窗不会再操作已经关闭的窗口或页面",
-          "删除运行时时，现在会在同一套清理流程里处理已归档小队并暂停自动任务",
           "守护进程现在会明确显示自重启失败原因；从服务端结束终端任务时会停止本地智能体；仓库维护时也会清理过期分支",
           "使用 X-Forwarded-Host 的代理后方，自托管 WebSocket 连接现在可以正常工作",
           "项目列表顶部在紧凑模式下会保持正确的模糊样式",
@@ -470,7 +468,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "项目里的 Issue 筛选现在会在列表、看板和时间线视图中一致应用智能体工作中筛选",
         ],
         fixes: [
-          "无权限用户不能再通过间接的 Issue 或评论路径触发私有小队负责人",
           "项目进度统计和重新进入工作的智能体状态刷新更可靠",
           "桌面端和网页端在空白工作区、无访问权限页面、渲染错误和崩溃后恢复更稳定",
           "图片和文件卡片的名称包含 Markdown 字符时也能正常显示",
@@ -487,7 +484,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         changes: [],
         features: [
           "命令行现在可以搜索 Skill，也可以列出某个 Issue 关联的合并请求，发布检查和自动化排查更方便",
-          "团队可以直接在命令行调整小队成员角色，不用进入应用界面",
           "智能体列表可以按运行机器筛选，更快找到绑定到某台设备或本机运行服务的智能体",
           "邮件发送服务现在支持安全的 465 端口连接",
           "OpenCode 运行环境可以使用智能体里保存的 MCP 设置",
@@ -519,7 +515,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "OpenClaw 运行环境现在可以使用智能体里保存的 MCP 设置，Claude Opus 4.8 也可用于模型选择和用量估算",
         ],
         improvements: [
-          "详情页统一了面包屑导航，Issue、项目、运行环境、技能、智能体和小队的返回路径更清楚",
           "恢复中的智能体任务会少读重复评论，更快回到触发它的那条讨论",
           "Issue 提及说明和命令行片段更容易阅读，复制命令时不容易误读参数",
         ],
@@ -569,7 +564,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         improvements: [
           "中文界面文案在导航、设置、搜索和运行时页面里更一致",
           "常用界面做了无障碍和 React 清理，移动端检查也只在移动端代码变化时运行",
-          "命令行列表输出对自动化读取更安静，小队列表也会显示可用的成员数量",
         ],
         fixes: [
           "泳道里超过第一页才加载到的嵌套 Issue 不再显示为空",
@@ -618,7 +612,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "官网新增使用场景页面能力，并让文档、更新日志和开始使用入口更清晰",
         ],
         improvements: [
-          "小队头像和看板卡片会显示更完整的悬浮信息、成员状态和实时工作状态",
           "桌面端在长 Issue 和聊天中切换标签页时，会更好地保留滚动位置，并避免重复的历史记录",
           "代码和富文本内容更容易阅读，命令文本会按原样显示，编辑器样式也拆分得更清晰",
           "工作区仓库描述会进入智能体的任务上下文，让分配的工作带上更有用的项目背景",
@@ -655,7 +648,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "在线本地运行环境不再显示会立刻失效的删除操作，并会说明原因",
           "Pi 回复中的工具调用标记不再泄露到可见消息或 Issue 评论里",
           "SVG 上传和内联文件预览使用更安全的处理方式",
-          "小队负责人会看到更明确的提醒，避免重复触发同一个智能体",
           "自托管部署默认不再暴露数据库端口，删除云端运行节点时也会发送正确信息",
           "桌面端更新设置、移动端技能页面和负责人选择器在不同语言与窄屏下更稳定",
         ],
@@ -692,7 +684,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         title: "自动任务项目归属、智能体思考设置与更稳的桌面端",
         changes: [],
         features: [
-          "自动任务现在可以通过小队分配工作，并把创建的 Issue 直接归入指定项目",
           "智能体设置新增 Claude 和 Codex 的思考强度控制，并可在详情面板里直接调整",
           "桌面端标签页可以固定，重要页面会留在左侧，打开新内容时不打断原页面",
           "用户资料可以补充请求者背景，让代码智能体在处理 Issue 时更理解上下文",
@@ -703,7 +694,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "运行环境页面减少重复信息，桌面端停止本机服务后仍能看到本机行并重新启动",
           "Issue 面包屑会显示所属项目，查看来源更清楚",
           "HTML 预览和附件预览拥有更合适的默认尺寸，查看内容更自然",
-          "小队列表加载状态更完整，归档小队时会使用更清晰的确认弹窗",
           "智能体运行前会收到父 Issue / 子 Issue 协作规则，完成子任务后的回传更稳定",
         ],
         fixes: [
@@ -730,7 +720,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         ],
         improvements: [
           "Onboarding 改为一次回答一个问题，并能用更少步骤引导 runtime 设置",
-          "My Issues 会包含分配给小队的工作，相关标签也更容易理解",
           "查看智能体执行日志时可以切换排序方向，回看运行过程更方便",
         ],
         fixes: [
@@ -762,7 +751,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         fixes: [
           "Autopilot 创建 Issue 时可以稳定重复触发，并正确归属到负责的 assignee agent",
           "Runtime 设置默认优先选择本地机器，机器列表中的名称也更清晰",
-          "Squad 页面可以正常滚动，并能看到成员当前是否已经在处理工作",
           "桌面端缩放快捷键在常见组合下恢复正常",
           "登录、安全补丁和本地服务配置更新，让托管版和自托管部署都更安全",
         ],
@@ -770,20 +758,17 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.1",
         date: "2026-05-15",
-        title: "更快的导航、后台更新与更可靠的小队协作",
+        title: "更快的导航、后台更新与更可靠的 Agent 运行",
         changes: [],
         features: [
           "成员和 agent 详情页现在可以看到关联任务，方便回看每个人和每个 agent 正在推进的工作",
           "桌面端会在后台提前下载新版本，等你准备好时再安装更新",
           "自托管部署可以使用 SMTP 发送邮件，不再只依赖 Resend",
-          "创建 Squad 的流程更清晰，成员选择和初始设置更适合团队协作",
         ],
         improvements: [
           "页面切换更快，Issue 页面会提前准备内容，并在加载时展示更自然的过渡状态",
           "Issue 时间线会把较长的活动记录收起，重点评论和结论更容易扫读",
-          "Agents 和 Squads 页会记住你上次选择的 Mine/All 视图，返回列表时不再重置",
           "仓库设置、项目资源和快速创建流程更好地支持 SSH 形式的仓库地址",
-          "小队分工更稳定，leader 能正确接续双角色 agent 的回复，也会更明确地把任务交给指定成员",
         ],
         fixes: [
           "自托管本地文件卡片可以正常展示和预览",
@@ -796,23 +781,16 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.0",
         date: "2026-05-14",
-        title: "Squads 与附件预览",
+        title: "附件预览",
         changes: [],
         features: [
-          "Squads 支持把任务交给一个小组，由 leader agent 负责协调下一步",
           "附件可以直接预览，支持 PDF、音频、视频、Markdown、代码、日志和纯文本",
-          "中文姓名支持用拼音搜索，适用于 mention、负责人、订阅人、agents、projects 和 squads",
         ],
         improvements: [
-          "Squad 页面补齐成员管理、从 squad 内快速创建 agent、清晰的成员操作按钮，以及更宽的详情布局",
-          "快速创建和各类选择器更容易搜索，并能识别 squad 相关的指派和提及",
           "Usage 图表可以在费用和 token 视图之间切换，并复用 runtime 的时区控制",
-          "工作区管理员可以通过命令行管理 squads，并在必要时停止失控的 issue 执行",
           "共享界面文案的中英文翻译更完整",
         ],
         fixes: [
-          "当成员已经明确把讨论指向某个人或小组时，Squad leader 不再重复发言",
-          "提及 squad 时会正确唤起对应 leader，同时保留私有 agent 的访问限制",
           "删除 Issue 后列表刷新更准确，后续评论也不再触发过期的 Done 回复",
           "在撰写或编辑 issue 和评论时新增的附件，也可以稳定使用预览",
         ],

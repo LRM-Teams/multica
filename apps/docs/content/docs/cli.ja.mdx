@@ -92,19 +92,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 multica skill import --url https://skills.sh/acme/repo/review-helper --on-conflict skip
 ```
 
-## スクワッド
-
-| コマンド | 用途 |
-|---|---|
-| `multica squad list` | ワークスペースのスクワッドを一覧 |
-| `multica squad get <id>` | 単一のスクワッドを表示 |
-| `multica squad create --name "..." --leader <agent>` | スクワッドを作成（owner / admin） |
-| `multica squad update <id> ...` | 名前、説明、指示、リーダー、またはアバターを更新 |
-| `multica squad delete <id>` | アーカイブ（ソフト削除） — 割り当て済みのイシューをリーダーに移管 |
-| `multica squad member list/add/remove <squad-id>` | スクワッドメンバーを管理 |
-| `multica squad activity <issue-id> <action\|no_action\|failed> --reason "..."` | スクワッドリーダーエージェントがターンごとに評価を記録するために使用 |
-
-完全なモデルについては[スクワッド](/squads)を参照してください。
 
 ## オートパイロット
 

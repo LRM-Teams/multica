@@ -244,7 +244,7 @@
     "section_agent": "에이전트",
     "section_assignee": "담당자",
     "select_agent": "에이전트 선택",
-    "select_assignee": "에이전트 또는 스쿼드 선택",
+    "select_assignee": "에이전트 선택",
     "section_project": "프로젝트",
     "no_project": "프로젝트 없음",
     "section_output_mode": "출력 모드",
@@ -339,11 +339,10 @@
     }
   },
   "agent_picker": {
-    "filter_placeholder": "에이전트 또는 스쿼드 필터...",
+    "filter_placeholder": "에이전트 필터...",
     "select_agent": "에이전트 선택",
-    "select_assignee": "에이전트 또는 스쿼드 선택",
-    "agents_group": "에이전트",
-    "squads_group": "스쿼드"
+    "select_assignee": "에이전트 선택",
+    "agents_group": "에이전트"
   },
   "timezone_picker": {
     "search_placeholder": "시간대 검색..."

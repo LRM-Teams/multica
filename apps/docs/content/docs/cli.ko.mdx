@@ -92,19 +92,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 multica skill import --url https://skills.sh/acme/repo/review-helper --on-conflict skip
 ```
 
-## 스쿼드
-
-| 명령어 | 용도 |
-|---|---|
-| `multica squad list` | 워크스페이스의 스쿼드 나열 |
-| `multica squad get <id>` | 단일 스쿼드 표시 |
-| `multica squad create --name "..." --leader <agent>` | 스쿼드 생성(owner / admin) |
-| `multica squad update <id> ...` | 이름, 설명, 지침, 리더, 또는 아바타 업데이트 |
-| `multica squad delete <id>` | 보관(소프트 삭제) — 할당된 이슈를 리더에게 이관 |
-| `multica squad member list/add/remove/set-role <squad-id>` | 스쿼드 멤버 관리 및 역할 직접 업데이트 |
-| `multica squad activity <issue-id> <action\|no_action\|failed> --reason "..."` | 스쿼드 리더 에이전트가 매 턴마다 평가를 기록할 때 사용 |
-
-전체 모델은 [스쿼드](/squads)를 참고하세요.
 
 ## 오토파일럿
 

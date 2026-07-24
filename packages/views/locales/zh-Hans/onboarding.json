@@ -220,7 +220,7 @@
           "subtitle": "让我用 1-2 段话讲清楚 Multica 是什么、能干嘛。"
         },
         "tour": {
-          "subtitle": "陪你走一遍 issue、agent、squad、autopilot 怎么配合。"
+          "subtitle": "陪你走一遍 issue、agent、autopilot 怎么配合。"
         },
         "welcome_page": {
           "subtitle": "我用单文件 HTML 演示稿介绍 Multica 能为你做什么，按你的角色定制，复制下来双击就能在浏览器里打开。"

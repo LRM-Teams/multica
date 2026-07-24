@@ -15,7 +15,6 @@ const mockQueryData = vi.hoisted(() => ({
   dmsPending: false,
   agents: [] as Array<Record<string, unknown>>,
   members: [] as Array<Record<string, unknown>>,
-  squads: [] as Array<Record<string, unknown>>,
 }));
 const openDMMocks = vi.hoisted(() => ({
   openDM: vi.fn(),
@@ -51,7 +50,6 @@ vi.mock("@multica/core/dm", () => ({
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ kind: "agents" as const }),
   memberListOptions: () => ({ kind: "members" as const }),
-  squadListOptions: () => ({ kind: "squads" as const }),
 }));
 
 vi.mock("../../common/use-open-dm", () => ({
@@ -80,9 +78,7 @@ vi.mock("@tanstack/react-query", async () => {
           ? mockQueryData.dms
           : opts?.kind === "agents"
             ? mockQueryData.agents
-            : opts?.kind === "squads"
-              ? mockQueryData.squads
-              : mockQueryData.members,
+            : mockQueryData.members,
         isLoading: isDms ? mockQueryData.dmsPending : false,
         isPending: isDms ? mockQueryData.dmsPending : false,
       };
@@ -195,7 +191,6 @@ describe("DmList new-DM picker", () => {
     mockQueryData.dmsPending = false;
     mockQueryData.agents = [];
     mockQueryData.members = [];
-    mockQueryData.squads = [];
     openDMMocks.isPending = false;
     openDMMocks.openDM.mockReset();
     openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
@@ -319,7 +314,6 @@ describe("DmList unread affordance (read-model)", () => {
     mockQueryData.dms = [];
     mockQueryData.agents = [];
     mockQueryData.members = [];
-    mockQueryData.squads = [];
     openDMMocks.openDM.mockReset();
     openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
   });
@@ -381,7 +375,6 @@ describe("DmList no Ask Wendy promo card (LRM-294)", () => {
     mockQueryData.dms = [];
     mockQueryData.agents = [];
     mockQueryData.members = [];
-    mockQueryData.squads = [];
   });
 
   it("does not render the promo card in the empty DM list", () => {
@@ -442,7 +435,6 @@ describe("DmList sidebar contrast (LRM-354)", () => {
     mockQueryData.dmsPending = false;
     mockQueryData.agents = [];
     mockQueryData.members = [];
-    mockQueryData.squads = [];
   });
 
   it("marks the active DM row with sidebar-accent (not primary wash)", () => {
@@ -483,7 +475,6 @@ describe("DmList loading skeleton (LRM-459)", () => {
     mockQueryData.dmsPending = false;
     mockQueryData.agents = [];
     mockQueryData.members = [];
-    mockQueryData.squads = [];
   });
 
   it("shows row skeleton while DM list is pending (not empty CTA)", () => {

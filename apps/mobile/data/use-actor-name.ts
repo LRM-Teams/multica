@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { memberListOptions, memberProfileOptions } from "@/data/queries/members";
 import { agentListOptions } from "@/data/queries/agents";
-import { squadListOptions } from "@/data/queries/squads";
 import {
   isDirectoryActorMiss,
   profileActorDisplayName,
@@ -12,7 +11,7 @@ import {
 import { resolveActorDisplayName } from "@multica/core/identity";
 
 /**
- * Resolve actor (member / agent / squad) name + avatar URL from the
+ * Resolve actor (member / agent) name + avatar URL from the
  * workspace lists. Mirrors packages/core/workspace/hooks.ts useActorName.
  *
  * LRM-391: when ListAgents omits channel/private / group-manager agents,
@@ -27,7 +26,6 @@ export function useActorLookup() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
   const getName = (
     type: "member" | "agent" | "squad" | null | undefined,
@@ -42,7 +40,7 @@ export function useActorLookup() {
       const a = agents.find((a) => a.id === id);
       return resolveActorDisplayName(a, "Unknown Agent");
     }
-    return squads.find((s) => s.id === id)?.name ?? "Squad";
+    return "Unsupported assignee (squad)";
   };
 
   const getAvatarUrl = (
@@ -56,7 +54,7 @@ export function useActorLookup() {
     if (type === "agent") {
       return agents.find((a) => a.id === id)?.avatar_url ?? null;
     }
-    return squads.find((s) => s.id === id)?.avatar_url ?? null;
+    return null;
   };
 
   return { getName, getAvatarUrl };

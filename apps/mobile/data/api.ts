@@ -47,7 +47,6 @@ import type {
   SearchIssuesResponse,
   SearchProjectsResponse,
   SendChatMessageResponse,
-  Squad,
   NotificationPreferenceResponse,
   NotificationPreferences,
   TaskMessagePayload,
@@ -96,7 +95,6 @@ import {
   EMPTY_RUNTIME_LIST,
   EMPTY_SEARCH_ISSUES_RESPONSE,
   EMPTY_SEARCH_PROJECTS_RESPONSE,
-  EMPTY_SQUAD_LIST,
   EMPTY_USER,
   EMPTY_WORKSPACE_LIST,
   InboxListSchema,
@@ -112,7 +110,6 @@ import {
   SearchIssuesResponseSchema,
   SearchProjectsResponseSchema,
   SendChatMessageResponseSchema,
-  SquadListSchema,
   TaskMessageListSchema,
   EMPTY_TASK_MESSAGE_LIST,
   UserSchema,
@@ -545,14 +542,6 @@ class ApiClient {
     });
   }
 
-  async listSquads(opts?: { signal?: AbortSignal }): Promise<Squad[]> {
-    const raw = await this.fetch<unknown>("/api/squads", {
-      signal: opts?.signal,
-    });
-    return parseWithFallback(raw, SquadListSchema, EMPTY_SQUAD_LIST, {
-      endpoint: "listSquads",
-    });
-  }
 
   // --- Issues ---
   async listIssues(

@@ -51,7 +51,6 @@
     "section_label": "Label",
     "members_group": "Members",
     "agents_group": "Agents",
-    "squads_group": "Squads",
     "issue_count_one": "{{count}} issue",
     "issue_count_other": "{{count}} issues",
     "reset": "Reset all filters",
@@ -455,8 +454,7 @@
       "trigger_unassigned": "Unassigned",
       "search_placeholder": "Assign to...",
       "members_group": "Members",
-      "agents_group": "Agents",
-      "squads_group": "Squads"
+      "agents_group": "Agents"
     },
     "start_date": {
       "trigger_label": "Start date",

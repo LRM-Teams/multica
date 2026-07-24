@@ -10,7 +10,6 @@
  *   1. `@all` (pinned top, filtered by query)
  *   2. People
  *   3. Agents
- *   4. Squads (archived hidden)
  *   5. Issues (server-side `api.searchIssues`, debounced 200ms; empty
  *      query → no issues section, matching web's mention-suggestion.tsx)
  *
@@ -28,14 +27,12 @@ import type {
   Agent,
   Issue,
   MemberWithUser,
-  Squad,
 } from "@multica/core/types";
 import { Text } from "@/components/ui/text";
 import { ActorAvatar } from "@/components/ui/actor-avatar";
 import { StatusIcon } from "@/components/ui/status-icon";
 import { memberListOptions } from "@/data/queries/members";
 import { agentListOptions } from "@/data/queries/agents";
-import { squadListOptions } from "@/data/queries/squads";
 import { api } from "@/data/api";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import {
@@ -53,12 +50,11 @@ type Row =
   | { kind: "all" }
   | { kind: "member"; member: MemberWithUser }
   | { kind: "agent"; agent: Agent }
-  | { kind: "squad"; squad: Squad }
   | { kind: "issue"; issue: Issue };
 
 interface Props {
   query: string;
-  /** "comment" (default) renders @all + People + Agents + Squads + Issues.
+  /** "comment" (default) renders @all + People + Agents + Issues.
    *  "chat" hides the people-style sections (member / agent / squad /
    *  @all) because chat is user ↔ single agent — mentioning a person
    *  there generates unintended notifications. Only Issues remain useful
@@ -70,7 +66,6 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const listRef = useScrollToTopOnChange(query);
   const { colorScheme } = useColorScheme();
   const checkColor =
@@ -114,7 +109,6 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
     if (row.kind === "member")
       return isSelectedKey("member", row.member.user_id);
     if (row.kind === "agent") return isSelectedKey("agent", row.agent.id);
-    if (row.kind === "squad") return isSelectedKey("squad", row.squad.id);
     return isSelectedKey("issue", row.issue.id);
   };
 
@@ -146,13 +140,6 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
       if (agentRows.length > 0) {
         out.push({ kind: "section", label: "Agents" }, ...agentRows);
       }
-      const squadRows = [...squads]
-        .filter((s) => !s.archived_at && matchName(s.name))
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((s): Row => ({ kind: "squad", squad: s }));
-      if (squadRows.length > 0) {
-        out.push({ kind: "section", label: "Squads" }, ...squadRows);
-      }
     }
 
     if (issueResults.length > 0) {
@@ -162,7 +149,7 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
       }
     }
     return out;
-  }, [mode, members, agents, squads, issueResults, query]);
+  }, [mode, members, agents, issueResults, query]);
 
   const pick = (row: Row) => {
     let chip: MentionChipDraft | null = null;
@@ -175,8 +162,6 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
       };
     else if (row.kind === "agent")
       chip = { type: "agent", id: row.agent.id, name: row.agent.name };
-    else if (row.kind === "squad")
-      chip = { type: "squad", id: row.squad.id, name: row.squad.name };
     else if (row.kind === "issue")
       chip = {
         type: "issue",
@@ -202,7 +187,6 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
         if (row.kind === "all") return "all";
         if (row.kind === "member") return `m:${row.member.user_id}`;
         if (row.kind === "agent") return `a:${row.agent.id}`;
-        if (row.kind === "squad") return `s:${row.squad.id}`;
         return `i:${row.issue.id}`;
       }}
       renderItem={({ item }) => {
@@ -235,8 +219,6 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
               />
             ) : item.kind === "agent" ? (
               <ActorAvatar type="agent" id={item.agent.id} size={AVATAR_SIZE} />
-            ) : item.kind === "squad" ? (
-              <ActorAvatar type="squad" id={item.squad.id} size={AVATAR_SIZE} />
             ) : (
               <View
                 className="items-center justify-center"
@@ -263,15 +245,11 @@ export function MentionPickerBody({ query, mode = "comment" }: Props) {
                   ? "Everyone (@all)"
                   : item.kind === "member"
                     ? item.member.name
-                    : item.kind === "agent"
-                      ? item.agent.name
-                      : item.squad.name}
+                    : item.agent.name}
               </Text>
             )}
             {item.kind === "agent" ? (
               <Text className="text-sm text-muted-foreground">Agent</Text>
-            ) : item.kind === "squad" ? (
-              <Text className="text-sm text-muted-foreground">Squad</Text>
             ) : null}
             {isSelected(item) ? (
               <Ionicons name="checkmark" size={20} color={checkColor} />

@@ -81,17 +81,12 @@ function fakeQc(data: {
     visibility?: "workspace" | "private";
     owner_id?: string | null;
   }>;
-  squads?: Array<{
-    id: string;
-    name: string;
-    archived_at: string | null;
-  }>;
+  squads?: never;
   issues?: Array<{ id: string; identifier: string; title: string; status: string }>;
 }): QueryClient {
   const map = new Map<string, unknown>();
   map.set(JSON.stringify(workspaceKeys.members("ws-1")), data.members ?? []);
   map.set(JSON.stringify(workspaceKeys.agents("ws-1")), data.agents ?? []);
-  map.set(JSON.stringify(workspaceKeys.squads("ws-1")), data.squads ?? []);
   const byStatus: ListIssuesCache["byStatus"] = {};
   for (const status of PAGINATED_STATUSES) {
     const bucket = (data.issues ?? []).filter((i) => i.status === status);
@@ -648,10 +643,6 @@ describe("createMentionSuggestion", () => {
     // squad bare-token contract exists.
     const qc = fakeQc({
       members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      squads: [
-        { id: "s1", name: "Jiayuan's Coding Team", archived_at: null },
-        { id: "s2", name: "独立团", archived_at: null },
-      ],
     });
     searchIssuesMock.mockReturnValue(new Promise(() => {}));
 

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bot } from "lucide-react";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import type { AutopilotAssigneeType } from "@multica/core/types";
 import {
   actorHandleSearchRank,
@@ -15,7 +15,6 @@ import { ActorAvatar } from "../../../common/actor-avatar";
 import { ActorPickerItem } from "../../../common/actor-picker-item";
 import {
   PropertyPicker,
-  PickerItem,
   PickerSection,
   PickerEmpty,
 } from "../../../issues/components/pickers/property-picker";
@@ -47,18 +46,12 @@ export function AgentPicker({
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
-
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
-  const activeSquads = useMemo(() => squads.filter((s) => !s.archived_at), [squads]);
-
   const selectedAgent =
     assignee?.type === "agent" ? activeAgents.find((a) => a.id === assignee.id) : undefined;
-  const selectedSquad =
-    assignee?.type === "squad" ? activeSquads.find((s) => s.id === assignee.id) : undefined;
   const selectedName = selectedAgent
     ? resolveActorDisplayName(selectedAgent, selectedAgent.name)
-    : selectedSquad?.name;
+    : undefined;
 
   const query = filter.trim();
   const filteredAgents = activeAgents
@@ -73,14 +66,6 @@ export function AgentPicker({
     .toSorted(
       (a, b) => actorHandleSearchRank(a.name, query) - actorHandleSearchRank(b.name, query),
     );
-  const squadQuery = query.toLowerCase();
-  const filteredSquads = activeSquads.filter(
-    (s) =>
-      !squadQuery ||
-      s.name.toLowerCase().includes(squadQuery) ||
-      matchesPinyin(s.name, squadQuery),
-  );
-
   const isSelected = (type: AutopilotAssigneeType, id: string) =>
     assignee?.type === type && assignee?.id === id;
 
@@ -102,7 +87,7 @@ export function AgentPicker({
       trigger={
         customTrigger ?? (
           <>
-            {assignee && (selectedAgent || selectedSquad) ? (
+            {assignee && selectedAgent ? (
               <>
                 <ActorAvatar
                   actorType={assignee.type}
@@ -122,7 +107,7 @@ export function AgentPicker({
         )
       }
     >
-      {filteredAgents.length === 0 && filteredSquads.length === 0 ? (
+      {filteredAgents.length === 0 ? (
         <PickerEmpty />
       ) : (
         <>
@@ -138,20 +123,6 @@ export function AgentPicker({
                   selected={isSelected("agent", a.id)}
                   onClick={() => handlePick("agent", a.id)}
                 />
-              ))}
-            </PickerSection>
-          )}
-          {filteredSquads.length > 0 && (
-            <PickerSection label={t(($) => $.agent_picker.squads_group)}>
-              {filteredSquads.map((s) => (
-                <PickerItem
-                  key={s.id}
-                  selected={isSelected("squad", s.id)}
-                  onClick={() => handlePick("squad", s.id)}
-                >
-                  <ActorAvatar actorType="squad" actorId={s.id} size={16} />
-                  <span className="truncate">{s.name}</span>
-                </PickerItem>
               ))}
             </PickerSection>
           )}

@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "../hooks";
-import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
+import { memberListOptions, agentListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
 import { resolveActorDisplayName, resolveActorHandle } from "../identity";
 import type { MemberRole } from "../types/workspace";
@@ -12,7 +12,6 @@ export function useActorName() {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
   // Each resolver takes an optional fallback used when the id isn't in the
   // workspace cache — e.g. a mention to someone who left the workspace, or an
@@ -44,18 +43,13 @@ export function useActorName() {
     return resolveActorHandle(a, fallback);
   }, [agents]);
 
-  const getSquadName = useCallback((squadId: string, fallback?: string) => {
-    const s = squads.find((s) => s.id === squadId);
-    return s?.name ?? fallback ?? "Unknown Squad";
-  }, [squads]);
-
   const getActorName = useCallback((type: string, id: string, fallback?: string) => {
     if (type === "member") return getMemberName(id, fallback);
     if (type === "agent") return getAgentName(id, fallback);
-    if (type === "squad") return getSquadName(id, fallback);
+    if (type === "squad") return fallback ?? "Unsupported assignee (squad)";
     if (type === "system") return "Multica";
     return fallback ?? "System";
-  }, [getAgentName, getMemberName, getSquadName]);
+  }, [getAgentName, getMemberName]);
 
   const getActorHandle = useCallback((type: string, id: string, fallback?: string) => {
     if (type === "member") return getMemberHandle(id, fallback);
@@ -76,9 +70,8 @@ export function useActorName() {
     // Missing values fall back to the actor's initials in the avatar
     // component; never derive a second display truth from the mutable pool.
     if (type === "agent") return resolvePublicFileUrl(agents.find((a) => a.id === id)?.avatar_url);
-    if (type === "squad") return resolvePublicFileUrl(squads.find((s) => s.id === id)?.avatar_url);
     return null;
-  }, [agents, members, squads]);
+  }, [agents, members]);
 
   return useMemo(
     () => ({
@@ -87,7 +80,6 @@ export function useActorName() {
       getMemberRole,
       getAgentName,
       getAgentHandle,
-      getSquadName,
       getActorName,
       getActorHandle,
       getActorInitials,
@@ -103,7 +95,6 @@ export function useActorName() {
       getMemberHandle,
       getMemberName,
       getMemberRole,
-      getSquadName,
     ],
   );
 }

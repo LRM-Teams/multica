@@ -21,7 +21,6 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     agentDetail: (id: string) => `/test/agents/${id}`,
     memberDetail: (id: string) => `/test/members/${id}`,
-    squadDetail: (id: string) => `/test/squads/${id}`,
   }),
 }));
 

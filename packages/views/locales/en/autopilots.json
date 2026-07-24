@@ -245,7 +245,7 @@
     "section_agent": "Agent",
     "section_assignee": "Assignee",
     "select_agent": "Select agent",
-    "select_assignee": "Select agent or squad",
+    "select_assignee": "Select agent",
     "section_project": "Project",
     "no_project": "No project",
     "section_output_mode": "Output mode",
@@ -340,11 +340,10 @@
     }
   },
   "agent_picker": {
-    "filter_placeholder": "Filter agents or squads...",
+    "filter_placeholder": "Filter agents...",
     "select_agent": "Select agent",
-    "select_assignee": "Select agent or squad",
-    "agents_group": "Agents",
-    "squads_group": "Squads"
+    "select_assignee": "Select agent",
+    "agents_group": "Agents"
   },
   "timezone_picker": {
     "search_placeholder": "Search timezone..."

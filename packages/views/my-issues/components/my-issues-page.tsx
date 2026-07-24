@@ -69,7 +69,7 @@ export function MyIssuesPage() {
 
   // Build server-side filter based on scope. The `agents` tab uses
   // `involves_user_id` so the server expands the user's identity to all
-  // assignees that indirectly belong to them (owned agents + related squads).
+  // assignees that indirectly belong to them (owned agents).
   // Direct member assignment is intentionally excluded — that is the
   // `assigned` tab's semantics.
   const filter: MyIssuesFilter = useMemo(() => {

@@ -211,6 +211,10 @@ type Daemon struct {
 	// piPersistentRuntimes owns native Pi RPC chat sessions. Issue work stays
 	// on the existing one-shot Pi path.
 	piPersistentRuntimes *piPersistentPool
+	// agentRuntimeTurns is the dormant D4a handoff from canonical runtime
+	// state/workspace/current-turn transport into the provider-neutral D4
+	// pool. D6 activates Begin after server and daemon serialization are live.
+	agentRuntimeTurns *agentRuntimeTurnCoordinator
 }
 
 // New creates a new Daemon instance.
@@ -243,6 +247,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		persistentRuntimes:        newPersistentRuntimePool(),
 		piPersistentRuntimes:      newPiPersistentPool(),
 	}
+	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
 	d.reminderCache.setPersistence(cfg.WorkspacesRoot)

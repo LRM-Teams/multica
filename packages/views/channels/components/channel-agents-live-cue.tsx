@@ -28,8 +28,6 @@ import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 const STOPPING_ALL_TASKS_ID = "__all__";
 const FACE_MAX = 3;
 const FACE_SIZE = 22;
-/** Stable empty default — avoid `members = []` recreating an array each render. */
-const EMPTY_MEMBERS: readonly ChannelMemberBrief[] = [];
 
 export interface ChannelPresenceClusterProps {
   members: readonly ChannelMemberBrief[];
@@ -530,53 +528,5 @@ export function ChannelPresenceCluster({
         {listBody}
       </HoverCardContent>
     </HoverCard>
-  );
-}
-
-/** @deprecated Prefer ChannelPresenceCluster for channel headers (lock A v3). */
-export interface ChannelAgentsLiveCueProps {
-  agentCount: number;
-  tasks: readonly ChannelActiveTask[];
-  stoppingTaskId?: string | null;
-  canStop?: boolean;
-  onStopTask?: (task: ChannelActiveTask) => void;
-  onStopAll?: () => void;
-  members?: readonly ChannelMemberBrief[];
-  memberCount?: number;
-  onOpenMembers?: () => void;
-  className?: string;
-}
-
-/**
- * Compatibility export → ChannelPresenceCluster.
- * LRM-594: DM header no longer mounts a live cue (Working/Thinking removed;
- * work state → Activity). Callers that still import this name get the channel
- * Presence Cluster only.
- */
-export function ChannelAgentsLiveCue({
-  agentCount,
-  tasks,
-  stoppingTaskId,
-  canStop,
-  onStopTask,
-  onStopAll,
-  members = EMPTY_MEMBERS,
-  memberCount = 0,
-  onOpenMembers,
-  className,
-}: ChannelAgentsLiveCueProps) {
-  return (
-    <ChannelPresenceCluster
-      members={members}
-      memberCount={memberCount}
-      agentCount={agentCount}
-      tasks={tasks}
-      stoppingTaskId={stoppingTaskId}
-      canStop={canStop}
-      onStopTask={onStopTask}
-      onStopAll={onStopAll}
-      onOpenMembers={onOpenMembers}
-      className={className}
-    />
   );
 }

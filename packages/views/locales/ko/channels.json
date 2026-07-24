@@ -82,8 +82,6 @@
     "working_dismiss": "닫기",
     "working_dismiss_aria": "{{name}} 상태 닫기",
     "settings_aria": "그룹 설정",
-    "dm_live": "처리 중",
-    "dm_attention": "확인 필요",
     "presence_counts": "{{members}} · {{agents}}",
     "presence_working": "{{working}} 처리 중",
     "presence_attention": "확인 필요",

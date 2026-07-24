@@ -17,8 +17,9 @@ describe("conversation-sidebar-styles (LRM-354)", () => {
     expect(CONVERSATION_SIDEBAR_ROW_ACTIVE).not.toMatch(/#|rgb|oklch/);
   });
 
-  it("idle hover uses shared accent token", () => {
-    expect(CONVERSATION_SIDEBAR_ROW_IDLE).toBe("hover:bg-accent");
+  it("idle hover uses sidebar-accent (readable on bg-sidebar chrome)", () => {
+    expect(CONVERSATION_SIDEBAR_ROW_IDLE).toBe("hover:bg-sidebar-accent");
+    expect(CONVERSATION_SIDEBAR_ROW_IDLE).not.toBe("hover:bg-accent");
   });
 
   it("collapsed unread badge uses brand-solid + solid-foreground (≥4.5:1 on dark)", () => {

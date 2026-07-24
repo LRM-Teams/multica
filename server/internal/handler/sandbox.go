@@ -803,7 +803,7 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to create sandbox")
 		return
 	}
-	runtimeEnv, err := h.sandboxRuntimeEnv(r, wsUUID, userUUID, uuidToString(inst.ID))
+	runtimeEnv, err := h.sandboxRuntimeEnv(r, wsUUID, userUUID, uuidToString(inst.ID), req.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare sandbox runtime")
 		return
@@ -844,7 +844,7 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.UUID, instanceID string) (map[string]string, error) {
+func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.UUID, instanceID, displayName string) (map[string]string, error) {
 	serverURL := firstNonEmptyString(os.Getenv("MULTICA_PUBLIC_URL"), os.Getenv("MULTICA_APP_URL"), os.Getenv("MULTICA_SERVER_URL"))
 	if serverURL == "" {
 		scheme := "http"
@@ -853,13 +853,18 @@ func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.
 		}
 		serverURL = scheme + "://" + r.Host
 	}
-	return h.mintSandboxRuntimeEnv(r.Context(), workspaceID, userID, instanceID, serverURL)
+	return h.mintSandboxRuntimeEnv(r.Context(), workspaceID, userID, instanceID, serverURL, displayName)
 }
 
 // mintSandboxRuntimeEnv builds the daemon bootstrap env for a sandbox: it mints
 // a personal access token for the actor and returns the env map the in-sandbox
 // daemon reads on boot (server URL + token + workspace id +
 // MULTICA_DAEMON_ENABLED=1 + a per-instance profile + a fresh MULTICA_DAEMON_ID).
+//
+// When displayName is non-empty it is also written as MULTICA_DAEMON_DEVICE_NAME
+// and MULTICA_SANDBOX_NAME so the in-sandbox daemon registers with the control-
+// plane sandbox name instead of falling back to the Cube VM hostname (which is
+// typically a truncated template id like "tpl-1876").
 //
 // MULTICA_DAEMON_ID must be unique per sandbox instance. Snapshot templates
 // freeze ~/.multica/daemon.id from the source sandbox; without an explicit
@@ -871,7 +876,7 @@ func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.
 // falls back to the request host; server-side dispatch (env-dispatch) uses the
 // configured public URL only. The returned map carries the raw token - keep it
 // within the create path.
-func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID pgtype.UUID, instanceID, serverURL string) (map[string]string, error) {
+func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID pgtype.UUID, instanceID, serverURL, displayName string) (map[string]string, error) {
 	profile := "sandbox-" + instanceID
 	rawToken, err := auth.GeneratePATToken()
 	if err != nil {
@@ -892,7 +897,7 @@ func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{
+	env := map[string]string{
 		"MULTICA_SERVER_URL":          serverURL,
 		"MULTICA_APP_URL":             firstNonEmptyString(os.Getenv("MULTICA_APP_URL"), serverURL),
 		"MULTICA_WORKSPACE_ID":        uuidToString(workspaceID),
@@ -901,7 +906,48 @@ func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID
 		"MULTICA_PROFILE":             profile,
 		"MULTICA_DAEMON_ID":           uuid.NewString(),
 		"MULTICA_SANDBOX_INSTANCE_ID": instanceID,
-	}, nil
+	}
+	applySandboxDisplayNameToRuntimeEnv(env, displayName)
+	return env, nil
+}
+
+// applySandboxDisplayNameToRuntimeEnv writes the control-plane sandbox display
+// name into the daemon bootstrap env. Empty names are ignored so callers can
+// pass through an unset field without clearing an existing value.
+func applySandboxDisplayNameToRuntimeEnv(env map[string]string, displayName string) {
+	if env == nil {
+		return
+	}
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		return
+	}
+	env["MULTICA_DAEMON_DEVICE_NAME"] = name
+	env["MULTICA_SANDBOX_NAME"] = name
+}
+
+func sandboxDisplayNameFromMetadata(raw []byte) string {
+	meta := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &meta)
+	}
+	return strings.TrimSpace(stringFromAny(meta["name"]))
+}
+
+// syncSandboxDisplayNameInRuntimeEnvMetadata updates MULTICA_DAEMON_DEVICE_NAME /
+// MULTICA_SANDBOX_NAME inside metadata.runtime_env when present, so resume /
+// reconfigure jobs keep carrying the latest control-plane name.
+func syncSandboxDisplayNameInRuntimeEnvMetadata(metadata json.RawMessage, displayName string) json.RawMessage {
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		return metadata
+	}
+	env := runtimeEnvFromMetadata(metadata)
+	if env == nil {
+		return metadata
+	}
+	applySandboxDisplayNameToRuntimeEnv(env, name)
+	return mergeRuntimeEnvMetadata(metadata, env)
 }
 
 func firstNonEmptyString(vals ...string) string {
@@ -987,6 +1033,7 @@ func (h *Handler) UpdateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	metadata := buildSandboxMetadata(row.Metadata, req.Name, req.Runtime)
+	metadata = syncSandboxDisplayNameInRuntimeEnvMetadata(metadata, req.Name)
 	inst, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
 		ID:       instanceID,
 		Metadata: jsonBytesOrDefault(metadata, "{}"),
@@ -1009,13 +1056,23 @@ func (h *Handler) UpdateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) enqueueSandboxReconfigureJob(r *http.Request, wsUUID, userUUID pgtype.UUID, row db.GetSandboxInstanceForWorkspaceRow, metadata json.RawMessage) error {
+	displayName := sandboxDisplayNameFromMetadata(metadata)
 	runtimeEnv := runtimeEnvFromMetadata(metadata)
 	if runtimeEnv == nil {
 		var err error
-		runtimeEnv, err = h.sandboxRuntimeEnv(r, wsUUID, userUUID, uuidToString(row.ID))
+		runtimeEnv, err = h.sandboxRuntimeEnv(r, wsUUID, userUUID, uuidToString(row.ID), displayName)
 		if err != nil {
 			return err
 		}
+		metadata = mergeRuntimeEnvMetadata(metadata, runtimeEnv)
+		if _, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
+			ID:       row.ID,
+			Metadata: jsonBytesOrDefault(metadata, "{}"),
+		}); err != nil {
+			return err
+		}
+	} else {
+		applySandboxDisplayNameToRuntimeEnv(runtimeEnv, displayName)
 		metadata = mergeRuntimeEnvMetadata(metadata, runtimeEnv)
 		if _, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
 			ID:       row.ID,

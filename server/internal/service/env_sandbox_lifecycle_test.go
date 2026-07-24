@@ -34,6 +34,7 @@ type mintRuntimeEnvCall struct {
 	WorkspaceID string
 	ActorUserID string
 	InstanceID  string
+	DisplayName string
 }
 
 type createSandboxInstanceCall struct {
@@ -122,22 +123,32 @@ func (f *fakeEnvSandboxLifecycleDeps) InsertSandboxInstance(_ context.Context, i
 	return f.insertedRef, nil
 }
 
-func (f *fakeEnvSandboxLifecycleDeps) MintSandboxRuntimeEnv(_ context.Context, workspaceID, actorUserID, instanceID string) (map[string]string, error) {
-	f.mintCalls = append(f.mintCalls, mintRuntimeEnvCall{WorkspaceID: workspaceID, ActorUserID: actorUserID, InstanceID: instanceID})
+func (f *fakeEnvSandboxLifecycleDeps) MintSandboxRuntimeEnv(_ context.Context, workspaceID, actorUserID, instanceID, displayName string) (map[string]string, error) {
+	f.mintCalls = append(f.mintCalls, mintRuntimeEnvCall{
+		WorkspaceID: workspaceID,
+		ActorUserID: actorUserID,
+		InstanceID:  instanceID,
+		DisplayName: displayName,
+	})
 	if f.mintErr != nil {
 		return nil, f.mintErr
 	}
 	if f.mintEnv != nil {
 		return f.mintEnv, nil
 	}
-	return map[string]string{
+	env := map[string]string{
 		"MULTICA_SERVER_URL":     "http://multica.test",
 		"MULTICA_TOKEN":          "tok-" + instanceID,
 		"MULTICA_WORKSPACE_ID":   workspaceID,
 		"MULTICA_DAEMON_ENABLED": "1",
 		"MULTICA_PROFILE":        "sandbox-" + instanceID,
 		"MULTICA_DAEMON_ID":      "daemon-" + instanceID,
-	}, nil
+	}
+	if name := strings.TrimSpace(displayName); name != "" {
+		env["MULTICA_DAEMON_DEVICE_NAME"] = name
+		env["MULTICA_SANDBOX_NAME"] = name
+	}
+	return env, nil
 }
 
 func lifecycleRef() SandboxInstanceRef {
@@ -403,6 +414,7 @@ func TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled(t *testing.T) {
 		WorkspaceID:   "ws-1",
 		NodeID:        "node-1",
 		Template:      "python",
+		Name:          "friendly-sandbox",
 		DaemonEnabled: true,
 	}
 	ref, err := svc.Create(ctx, in, "user-1")
@@ -417,6 +429,9 @@ func TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled(t *testing.T) {
 	mc := deps.mintCalls[0]
 	if mc.WorkspaceID != "ws-1" || mc.ActorUserID != "user-1" || mc.InstanceID != ref.InstanceID {
 		t.Fatalf("unexpected mint call: %+v", mc)
+	}
+	if mc.DisplayName != "friendly-sandbox" {
+		t.Fatalf("DisplayName = %q, want friendly-sandbox", mc.DisplayName)
 	}
 	// The minted env is folded into the create job payload.
 	if len(deps.jobs) != 1 || deps.jobs[0].JobType != "create" {
@@ -443,6 +458,12 @@ func TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled(t *testing.T) {
 	wantDaemonID := "daemon-" + ref.InstanceID
 	if env["MULTICA_DAEMON_ID"] != wantDaemonID {
 		t.Fatalf("MULTICA_DAEMON_ID = %v, want %v", env["MULTICA_DAEMON_ID"], wantDaemonID)
+	}
+	if env["MULTICA_DAEMON_DEVICE_NAME"] != "friendly-sandbox" {
+		t.Fatalf("MULTICA_DAEMON_DEVICE_NAME = %v", env["MULTICA_DAEMON_DEVICE_NAME"])
+	}
+	if env["MULTICA_SANDBOX_NAME"] != "friendly-sandbox" {
+		t.Fatalf("MULTICA_SANDBOX_NAME = %v", env["MULTICA_SANDBOX_NAME"])
 	}
 	// The token must NOT leak onto the returned ref (it would otherwise be
 	// serialized into the rollout response + idempotency ledger).

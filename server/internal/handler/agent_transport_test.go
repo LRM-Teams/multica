@@ -1212,7 +1212,6 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 		"parts": []protocol.MessagePart{
 			{Type: protocol.MessagePartTypeText, Text: "here's the file"},
 			{Type: protocol.MessagePartTypeAttachment, AttachmentID: ownedAttachmentID},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: foreignAttachmentID},
 		},
 		"client_message_id": clientID,
 	})
@@ -1230,20 +1229,152 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 		t.Fatalf("message parts = %+v, want text + attachment parts", body.Message.Parts)
 	}
 
-	var ownedChannelID, ownedMessageID string
-	if err := testPool.QueryRow(ctx, `SELECT channel_id, channel_message_id FROM attachment WHERE id = $1`, ownedAttachmentID).Scan(&ownedChannelID, &ownedMessageID); err != nil {
+	var ownedChannelID pgtype.UUID
+	var ownedReferences int
+	if err := testPool.QueryRow(ctx, `
+		SELECT attachment.channel_id,
+		       count(reference.channel_message_id)
+		FROM attachment
+		LEFT JOIN channel_message_attachment reference ON reference.attachment_id = attachment.id
+		WHERE attachment.id = $1
+		GROUP BY attachment.channel_id
+	`, ownedAttachmentID).Scan(&ownedChannelID, &ownedReferences); err != nil {
 		t.Fatalf("load owned attachment: %v", err)
 	}
-	if ownedChannelID != channelID || ownedMessageID != body.Message.ID {
-		t.Fatalf("owned attachment not linked: channel_id=%s message_id=%s, want channel=%s message=%s", ownedChannelID, ownedMessageID, channelID, body.Message.ID)
+	if ownedChannelID.Valid || ownedReferences != 1 {
+		t.Fatalf("owned attachment link: upload_channel=%+v references=%d, want NULL/1", ownedChannelID, ownedReferences)
 	}
 
-	var foreignChannelID, foreignMessageID pgtype.UUID
-	if err := testPool.QueryRow(ctx, `SELECT channel_id, channel_message_id FROM attachment WHERE id = $1`, foreignAttachmentID).Scan(&foreignChannelID, &foreignMessageID); err != nil {
+	var foreignChannelID pgtype.UUID
+	var foreignReferences int
+	if err := testPool.QueryRow(ctx, `
+		SELECT attachment.channel_id,
+		       count(reference.channel_message_id)
+		FROM attachment
+		LEFT JOIN channel_message_attachment reference ON reference.attachment_id = attachment.id
+		WHERE attachment.id = $1
+		GROUP BY attachment.channel_id
+	`, foreignAttachmentID).Scan(&foreignChannelID, &foreignReferences); err != nil {
 		t.Fatalf("load foreign attachment: %v", err)
 	}
-	if foreignChannelID.Valid || foreignMessageID.Valid {
-		t.Fatalf("foreign attachment got linked: channel_id=%+v message_id=%+v, want both NULL", foreignChannelID, foreignMessageID)
+	if foreignChannelID.Valid || foreignReferences != 0 {
+		t.Fatalf("foreign attachment got linked: channel_id=%+v references=%d, want NULL/0", foreignChannelID, foreignReferences)
+	}
+}
+
+func TestAgentTransportSendMessageRejectsMixedForeignAttachmentsAtomically(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	ownedAttachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "owned.png")
+	foreignAttachmentID := seedUnboundAgentAttachmentForTest(t, uuid.NewString(), "foreign.png")
+	clientID := "transport-mixed-foreign-" + uuid.NewString()
+
+	response := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  "#" + channelNameForTransportTest(t, channelID),
+		"content": "must stay atomic",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "must stay atomic"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: ownedAttachmentID},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: foreignAttachmentID},
+		},
+		"client_message_id": clientID,
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("mixed foreign attachment send: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	var messages, references int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND client_message_id = $2`, channelID, clientID).Scan(&messages); err != nil {
+		t.Fatalf("count rolled-back messages: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_attachment
+		WHERE attachment_id = ANY($1::uuid[])`, []string{ownedAttachmentID, foreignAttachmentID}).Scan(&references); err != nil {
+		t.Fatalf("count rolled-back attachment references: %v", err)
+	}
+	if messages != 0 || references != 0 {
+		t.Fatalf("mixed foreign send left messages/references=%d/%d, want 0/0", messages, references)
+	}
+}
+
+func TestAgentTransportSendMessageReusesOwnedAttachmentAcrossGroupAndDM(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, groupChannelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "reuse-across-conversations.png")
+
+	groupResponse := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  "#" + channelNameForTransportTest(t, groupChannelID),
+		"content": "group copy",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "group copy"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
+		},
+		"client_message_id": "transport-group-reuse-" + uuid.NewString(),
+	})
+	if groupResponse.Code != http.StatusCreated {
+		t.Fatalf("send shared attachment to group: status=%d body=%s", groupResponse.Code, groupResponse.Body.String())
+	}
+
+	humanHandle := userHandleForTransportTest(t, testUserID)
+	dmResponse := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  "dm:@" + humanHandle,
+		"content": "dm copy",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "dm copy"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
+		},
+		"client_message_id": "transport-dm-reuse-" + uuid.NewString(),
+	})
+	if dmResponse.Code != http.StatusCreated {
+		t.Fatalf("reuse shared attachment in DM: status=%d body=%s", dmResponse.Code, dmResponse.Body.String())
+	}
+
+	var groupBody, dmBody AgentTransportSendResponse
+	if err := json.Unmarshal(groupResponse.Body.Bytes(), &groupBody); err != nil {
+		t.Fatalf("decode group send: %v", err)
+	}
+	if err := json.Unmarshal(dmResponse.Body.Bytes(), &dmBody); err != nil {
+		t.Fatalf("decode DM send: %v", err)
+	}
+	for label, message := range map[string]ChannelMessageResponse{
+		"group": groupBody.Message,
+		"dm":    dmBody.Message,
+	} {
+		if len(message.Attachments) != 1 || message.Attachments[0].ID != attachmentID {
+			t.Fatalf("%s message attachments=%+v, want reused attachment %s", label, message.Attachments, attachmentID)
+		}
+	}
+	if groupBody.Message.ChannelID == dmBody.Message.ChannelID {
+		t.Fatalf("group and DM unexpectedly share channel %s", groupBody.Message.ChannelID)
+	}
+
+	var referenceCount, distinctMessageCount, distinctChannelCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(DISTINCT reference.channel_message_id),
+		       count(DISTINCT message.channel_id)
+		FROM channel_message_attachment reference
+		JOIN channel_message message ON message.id = reference.channel_message_id
+		WHERE reference.attachment_id = $1
+	`, attachmentID).Scan(&referenceCount, &distinctMessageCount, &distinctChannelCount); err != nil {
+		t.Fatalf("load shared attachment references: %v", err)
+	}
+	if referenceCount != 2 || distinctMessageCount != 2 || distinctChannelCount != 2 {
+		t.Fatalf("shared attachment references=%d messages=%d channels=%d, want 2/2/2", referenceCount, distinctMessageCount, distinctChannelCount)
 	}
 }
 
@@ -1291,9 +1422,9 @@ func TestAgentTransportSendMessageNormalizesLegacyOwnedAudioAsVoice(t *testing.T
 	}
 }
 
-// Regression: `multica attachment upload --target '#channel'` sets channel_id
-// before send. LinkOwned used to require channel_id IS NULL, so the send kept
-// attachment parts but never bound channel_message_id → "Attachment unavailable".
+// Regression: `multica attachment upload --target '#channel'` records the upload
+// provenance before send. The message still needs its own canonical reference;
+// otherwise its attachment part hydrates as "Attachment unavailable".
 func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1332,7 +1463,12 @@ func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testin
 	}
 
 	var gotChannelID, gotMessageID string
-	if err := testPool.QueryRow(ctx, `SELECT channel_id, channel_message_id FROM attachment WHERE id = $1`, preboundID).Scan(&gotChannelID, &gotMessageID); err != nil {
+	if err := testPool.QueryRow(ctx, `
+		SELECT attachment.channel_id, reference.channel_message_id
+		FROM attachment
+		JOIN channel_message_attachment reference ON reference.attachment_id = attachment.id
+		WHERE attachment.id = $1
+	`, preboundID).Scan(&gotChannelID, &gotMessageID); err != nil {
 		t.Fatalf("load prebound attachment: %v", err)
 	}
 	if gotChannelID != channelID || gotMessageID != body.Message.ID {

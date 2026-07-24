@@ -83,40 +83,51 @@ SELECT * FROM attachment
 WHERE chat_message_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC;
 
--- name: LinkAttachmentsToChannelMessage :exec
-UPDATE attachment
-SET channel_message_id = $1
-WHERE channel_id = $2
-  AND channel_message_id IS NULL
-  AND id = ANY($3::uuid[]);
-
 -- name: ListAttachmentsByChannelMessageIDs :many
-SELECT * FROM attachment
-WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2
-ORDER BY created_at ASC;
+SELECT reference.channel_message_id AS linked_channel_message_id,
+       sqlc.embed(attachment)
+FROM channel_message_attachment reference
+JOIN attachment ON attachment.id = reference.attachment_id
+WHERE reference.channel_message_id = ANY($1::uuid[])
+  AND reference.workspace_id = $2
+ORDER BY reference.created_at, attachment.created_at;
 
--- name: LinkOwnedAttachmentsToChannelMessage :exec
--- Binds channel_id + channel_message_id for attachments the agent owns.
--- Accepts either:
---   1) unbound uploads (channel_id IS NULL) — channel resolved at send time, or
---   2) uploads already scoped to this channel via `attachment upload --target`
---      (channel_id already set, channel_message_id still NULL).
--- Previously requiring channel_id IS NULL broke the documented --target flow:
--- send succeeded with attachment parts, but LinkOwned matched 0 rows → UI
--- rendered "Attachment unavailable".
-UPDATE attachment
-SET channel_id = $1, channel_message_id = $2
-WHERE workspace_id = $3
-  AND uploader_type = $4
-  AND uploader_id = $5
-  AND channel_message_id IS NULL
-  AND (channel_id IS NULL OR channel_id = $1)
-  AND id = ANY(sqlc.arg(attachment_ids)::uuid[]);
+-- name: LinkOwnedAttachmentsToChannelMessage :one
+-- Creates message references for attachment resources owned by the sender.
+-- A resource may be reused across group, DM, thread, and multiple messages;
+-- channel_id remains upload provenance and never limits later references.
+WITH owned AS (
+  SELECT attachment.workspace_id, attachment.id
+  FROM attachment
+  WHERE attachment.workspace_id = $2
+    AND attachment.uploader_type = $3
+    AND attachment.uploader_id = $4
+    AND attachment.id = ANY(sqlc.arg(attachment_ids)::uuid[])
+), linked AS (
+  INSERT INTO channel_message_attachment (
+    workspace_id, channel_message_id, attachment_id
+  )
+  SELECT owned.workspace_id, $1, owned.id
+  FROM owned
+  ON CONFLICT (channel_message_id, attachment_id) DO NOTHING
+)
+SELECT count(*) FROM owned;
 
 -- name: ListAttachmentsByChannel :many
-SELECT * FROM attachment
-WHERE channel_id = $1 AND workspace_id = $2
-ORDER BY created_at DESC;
+SELECT attachment.*
+FROM attachment
+WHERE attachment.workspace_id = $2
+  AND (
+    attachment.channel_id = $1
+    OR attachment.id IN (
+      SELECT reference.attachment_id
+      FROM channel_message_attachment reference
+      JOIN channel_message message ON message.id = reference.channel_message_id
+      WHERE reference.workspace_id = $2
+        AND message.channel_id = $1
+    )
+  )
+ORDER BY attachment.created_at DESC;
 
 -- name: LinkAttachmentsToIssue :exec
 UPDATE attachment

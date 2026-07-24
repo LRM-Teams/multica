@@ -4221,8 +4221,8 @@ func TestSendChannelMessageClientMessageIDDedupesAttachmentsAndParts(t *testing.
 	var bound int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM attachment
-		WHERE id = $1 AND channel_message_id = $2`, attachmentID, duplicate.ID).Scan(&bound); err != nil {
+		FROM channel_message_attachment
+		WHERE attachment_id = $1 AND channel_message_id = $2`, attachmentID, duplicate.ID).Scan(&bound); err != nil {
 		t.Fatalf("count attachment bindings: %v", err)
 	}
 	if bound != 1 {
@@ -4358,12 +4358,140 @@ func TestSendChannelMessageAttachmentOnlyFromParts(t *testing.T) {
 	var boundMessageID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT channel_message_id::text
-		FROM attachment
-		WHERE id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
+		FROM channel_message_attachment
+		WHERE attachment_id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
 		t.Fatalf("load attachment binding: %v", err)
 	}
 	if boundMessageID != created.ID {
 		t.Fatalf("attachment bound to message %q, want %q", boundMessageID, created.ID)
+	}
+}
+
+func TestSendChannelMessageReusesOwnedAttachmentAcrossChannels(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstChannelID := seedChannelForTest(t, "attachment-reuse-first-"+uuid.NewString(), testUserID)
+	secondChannelID := seedChannelForTest(t, "attachment-reuse-second-"+uuid.NewString(), testUserID)
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'shared.png', 's3://shared.png', 'image/png', 42)
+		RETURNING id`, testWorkspaceID, firstChannelID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed reusable attachment: %v", err)
+	}
+
+	send := func(channelID, content string) ChannelMessageResponse {
+		t.Helper()
+		rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+			"content": content,
+			"parts": []protocol.MessagePart{
+				{Type: protocol.MessagePartTypeText, Text: content},
+				{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
+			},
+		})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("send shared attachment to channel %s: status=%d body=%s", channelID, rec.Code, rec.Body.String())
+		}
+		var message ChannelMessageResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &message); err != nil {
+			t.Fatalf("decode shared attachment send: %v", err)
+		}
+		if len(message.Attachments) != 1 || message.Attachments[0].ID != attachmentID {
+			t.Fatalf("message attachments=%+v, want shared attachment %s", message.Attachments, attachmentID)
+		}
+		return message
+	}
+
+	first := send(firstChannelID, "first channel copy")
+	second := send(secondChannelID, "second channel copy")
+	if first.ID == second.ID {
+		t.Fatalf("two sends unexpectedly reused message id %s", first.ID)
+	}
+
+	var referenceCount, distinctMessageCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), count(DISTINCT channel_message_id)
+		FROM channel_message_attachment
+		WHERE attachment_id = $1`, attachmentID).Scan(&referenceCount, &distinctMessageCount); err != nil {
+		t.Fatalf("load reusable attachment references: %v", err)
+	}
+	if referenceCount != 2 || distinctMessageCount != 2 {
+		t.Fatalf("reusable attachment references/messages=%d/%d, want 2/2", referenceCount, distinctMessageCount)
+	}
+}
+
+func TestUpdateChannelMessageReplacesAttachmentReferencesFromParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "attachment-edit-references-"+uuid.NewString(), testUserID)
+	seed := func(filename string) string {
+		t.Helper()
+		var attachmentID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+			VALUES ($1, $2, 'member', $3, $4, 's3://'||$4, 'image/png', 42)
+			RETURNING id`, testWorkspaceID, channelID, testUserID, filename).Scan(&attachmentID); err != nil {
+			t.Fatalf("seed attachment %s: %v", filename, err)
+		}
+		return attachmentID
+	}
+	firstAttachmentID := seed("before-edit.png")
+	secondAttachmentID := seed("after-edit.png")
+
+	createdRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": "before edit",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "before edit"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: firstAttachmentID},
+		},
+	})
+	if createdRec.Code != http.StatusCreated {
+		t.Fatalf("create message before edit: status=%d body=%s", createdRec.Code, createdRec.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(createdRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+
+	req := newRequest(http.MethodPatch, "/api/channels/"+channelID+"/messages/"+created.ID, map[string]any{
+		"content": "after edit",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "after edit"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: secondAttachmentID},
+		},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", created.ID)
+	rec := httptest.NewRecorder()
+	testHandler.UpdateChannelMessage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replace message attachment: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var updated ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated message: %v", err)
+	}
+	if len(updated.Attachments) != 1 || updated.Attachments[0].ID != secondAttachmentID {
+		t.Fatalf("updated attachments=%+v, want only %s", updated.Attachments, secondAttachmentID)
+	}
+
+	var firstReferences, secondReferences int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE attachment_id = $2),
+		  count(*) FILTER (WHERE attachment_id = $3)
+		FROM channel_message_attachment
+		WHERE channel_message_id = $1`, created.ID, firstAttachmentID, secondAttachmentID).Scan(&firstReferences, &secondReferences); err != nil {
+		t.Fatalf("load edited attachment references: %v", err)
+	}
+	if firstReferences != 0 || secondReferences != 1 {
+		t.Fatalf("edited attachment references before/after=%d/%d, want 0/1", firstReferences, secondReferences)
 	}
 }
 
@@ -4433,8 +4561,8 @@ func TestSendChannelMessageTextWithTwoAttachmentParts(t *testing.T) {
 	var bound int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM attachment
-		WHERE channel_message_id = $1 AND id = ANY($2::uuid[])`,
+		FROM channel_message_attachment
+		WHERE channel_message_id = $1 AND attachment_id = ANY($2::uuid[])`,
 		created.ID, []string{firstID, secondID}).Scan(&bound); err != nil {
 		t.Fatalf("count bound attachments: %v", err)
 	}
@@ -4565,7 +4693,7 @@ func TestSendChannelMessageBindsVoiceRecordingAttachment(t *testing.T) {
 
 	var boundMessageID string
 	if err := testPool.QueryRow(ctx, `
-		SELECT channel_message_id::text FROM attachment WHERE id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
+		SELECT channel_message_id::text FROM channel_message_attachment WHERE attachment_id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
 		t.Fatalf("load recording binding: %v", err)
 	}
 	if boundMessageID != created.ID {
@@ -4692,10 +4820,15 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	}
 	var attachmentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO attachment (workspace_id, channel_id, channel_message_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
-		VALUES ($1, $2, $3, 'member', $4, 'secret.png', 's3://secret.png', 'image/png', 12)
-		RETURNING id`, testWorkspaceID, channelID, msg.ID, testUserID).Scan(&attachmentID); err != nil {
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'secret.png', 's3://secret.png', 'image/png', 12)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
 		t.Fatalf("seed channel message attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, msg.ID, attachmentID); err != nil {
+		t.Fatalf("seed channel message attachment reference: %v", err)
 	}
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherUserID), "Other", "thread reply", "multica", nil, pgtype.UUID{}, parseUUID(msg.ID), msg.ThreadID, 0); err != nil {
 		t.Fatalf("insert thread reply: %v", err)
@@ -4837,12 +4970,12 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	var stillBound int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM attachment
-		WHERE id = $1 AND channel_message_id = $2`, attachmentID, msg.ID).Scan(&stillBound); err != nil {
+		FROM channel_message_attachment
+		WHERE attachment_id = $1 AND channel_message_id = $2`, attachmentID, msg.ID).Scan(&stillBound); err != nil {
 		t.Fatalf("count attachment binding: %v", err)
 	}
-	if stillBound != 1 {
-		t.Fatalf("attachment binding rows = %d, want preserved audit row", stillBound)
+	if stillBound != 0 {
+		t.Fatalf("attachment binding rows = %d, want removed when edit drops the attachment part", stillBound)
 	}
 	sessionsAfter, tasksAfter := channelAgentRunCountsForTest(t, channelID)
 	if sessionsAfter != sessionsBefore || tasksAfter != tasksBefore {
@@ -4861,11 +4994,17 @@ func TestChannelMessageDeleteWithoutRepliesDisappearsFromReadModel(t *testing.T)
 	if err != nil {
 		t.Fatalf("insert channel message: %v", err)
 	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO attachment (workspace_id, channel_id, channel_message_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
-		VALUES ($1, $2, $3, 'member', $4, 'secret.txt', 's3://secret.txt', 'text/plain', 9)`,
-		testWorkspaceID, channelID, msg.ID, testUserID); err != nil {
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'secret.txt', 's3://secret.txt', 'text/plain', 9)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
 		t.Fatalf("seed attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, msg.ID, attachmentID); err != nil {
+		t.Fatalf("seed attachment reference: %v", err)
 	}
 
 	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID, nil)

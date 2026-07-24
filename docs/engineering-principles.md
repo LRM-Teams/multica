@@ -188,6 +188,12 @@
 - HTTP 面必须同时经过登录、workspace membership 和 human-actor guard。语音额度不能由 task token、agent credential 或 cloud PAT 消耗。
 - **物**：`server/internal/integrations/doubaospeech`；`POST /api/voice/asr`、`POST /api/voice/tts`；协议 frame、header、错误脱敏、handler 输入边界测试；可选 live test 用 TTS 生成 PCM 再送 ASR，已用实际账号见过完整往返成功。
 
+### 4.7.1 消息引用附件资源，不占有附件 — `可执行`（①PostgreSQL 关联事实 + ②parts 类型 + ⑤跨会话/迁移回归；owner: @Barry）
+- `attachment` 是 workspace 内一次上传得到的文件资源；`channel_message_attachment` 是消息对该资源的引用。一个合法且归发送者所有的 attachment id 可以同时被群聊、DM、thread 和多条消息引用，文件字节只上传/存储一次。`attachment.channel_id` 只记录上传来源，不是后续复用范围，也不能重新充当 message ownership。
+- `parts[]` 决定某条消息展示哪些 attachment；server 在同一发送事务中验证 workspace/uploader 后创建关联行，读模型只从关联表 hydration。禁止用同一 attachment 的旧单值 `channel_message_id`、同频道猜测、re-upload 或“发消息成功但留下 unavailable part”的兜底替代正式多引用路径。
+- 历史修复只允许从 canonical message parts 中提取合法 UUID，并关联同 workspace 已存在的 attachment 资源；缺失、已删或非法 id 保持 unavailable，不从正文/文件名猜元数据。migration 必须保留旧单值绑定、补出同资源的全部合法多消息引用，然后删除单值列。
+- **物**：migration 224 `channel_message_attachment` + parts backfill；shared owner-authorized link helper；channel/DM/thread readers、voice/Radar/Wendy/quick-create/runtime-cleanup 全部走关联表；人类跨频道复用、Agent 群聊→DM 复用和可回滚数据迁移回归。
+
 ### 4.8 消息语音形态由结构化 part 决定 — `可执行`（②协议类型 + ③共享 Composer/播放组件 + ⑤消息链回归；owner: @Codex）
 - 人类录音先以空正文 + `{type:"voice", duration_ms, attachment_id, transcription_status:"pending"}` 原子落库，附件是 16 kHz 单声道 PCM WAV。server 在持久队列中完成 ASR 后，把同一消息更新为 transcript text + `transcription_status:"completed"`，再触发 Agent；永久失败标为 `failed`，原声仍可播放。客户端不得在发送前调用 ASR，避免 provider 短暂故障使录音本身无法发送。Agent 语音回复先落库为完整 transcript text + `{type:"voice", synthesis_status:"pending"}`，server 生成一次 24 kHz PCM WAV 并作为同一消息的私有附件持久化，再把 part 更新为 `synthesis_status:"completed"`；重启由持久队列恢复，永久失败标为 `failed`。除 pending 人类录音这一种形状外，`voice` part 没有非空 text part 时服务端拒绝；消息形态不能靠正文关键词猜。
 - 人类语音消息要求 Agent 通过现有 `multica message send --voice` 输出；普通文字仍走文字，文字明确要求语音时由 Agent 语义判断后加 `--voice`。前端不维护“语音回复”关键词表。

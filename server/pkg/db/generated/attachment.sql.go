@@ -20,7 +20,7 @@ VALUES (
   $1, $2, $9, $10, $11, $12,
   $3, $4, $5, $6, $7, $8
 )
-RETURNING id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id
+RETURNING id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id
 `
 
 type CreateAttachmentParams struct {
@@ -69,7 +69,6 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		&i.ChatSessionID,
 		&i.ChatMessageID,
 		&i.ChannelID,
-		&i.ChannelMessageID,
 	)
 	return i, err
 }
@@ -89,7 +88,7 @@ func (q *Queries) DeleteAttachment(ctx context.Context, arg DeleteAttachmentPara
 }
 
 const getAttachment = `-- name: GetAttachment :one
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -116,13 +115,12 @@ func (q *Queries) GetAttachment(ctx context.Context, arg GetAttachmentParams) (A
 		&i.ChatSessionID,
 		&i.ChatMessageID,
 		&i.ChannelID,
-		&i.ChannelMessageID,
 	)
 	return i, err
 }
 
 const getAttachmentByIDOnly = `-- name: GetAttachmentByIDOnly :one
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE id = $1
 `
 
@@ -150,28 +148,8 @@ func (q *Queries) GetAttachmentByIDOnly(ctx context.Context, id pgtype.UUID) (At
 		&i.ChatSessionID,
 		&i.ChatMessageID,
 		&i.ChannelID,
-		&i.ChannelMessageID,
 	)
 	return i, err
-}
-
-const linkAttachmentsToChannelMessage = `-- name: LinkAttachmentsToChannelMessage :exec
-UPDATE attachment
-SET channel_message_id = $1
-WHERE channel_id = $2
-  AND channel_message_id IS NULL
-  AND id = ANY($3::uuid[])
-`
-
-type LinkAttachmentsToChannelMessageParams struct {
-	ChannelMessageID pgtype.UUID   `json:"channel_message_id"`
-	ChannelID        pgtype.UUID   `json:"channel_id"`
-	Column3          []pgtype.UUID `json:"column_3"`
-}
-
-func (q *Queries) LinkAttachmentsToChannelMessage(ctx context.Context, arg LinkAttachmentsToChannelMessageParams) error {
-	_, err := q.db.Exec(ctx, linkAttachmentsToChannelMessage, arg.ChannelMessageID, arg.ChannelID, arg.Column3)
-	return err
 }
 
 const linkAttachmentsToChatMessage = `-- name: LinkAttachmentsToChatMessage :exec
@@ -231,19 +209,26 @@ func (q *Queries) LinkAttachmentsToIssue(ctx context.Context, arg LinkAttachment
 	return err
 }
 
-const linkOwnedAttachmentsToChannelMessage = `-- name: LinkOwnedAttachmentsToChannelMessage :exec
-UPDATE attachment
-SET channel_id = $1, channel_message_id = $2
-WHERE workspace_id = $3
-  AND uploader_type = $4
-  AND uploader_id = $5
-  AND channel_message_id IS NULL
-  AND (channel_id IS NULL OR channel_id = $1)
-  AND id = ANY($6::uuid[])
+const linkOwnedAttachmentsToChannelMessage = `-- name: LinkOwnedAttachmentsToChannelMessage :one
+WITH owned AS (
+  SELECT attachment.workspace_id, attachment.id
+  FROM attachment
+  WHERE attachment.workspace_id = $2
+    AND attachment.uploader_type = $3
+    AND attachment.uploader_id = $4
+    AND attachment.id = ANY($5::uuid[])
+), linked AS (
+  INSERT INTO channel_message_attachment (
+    workspace_id, channel_message_id, attachment_id
+  )
+  SELECT owned.workspace_id, $1, owned.id
+  FROM owned
+  ON CONFLICT (channel_message_id, attachment_id) DO NOTHING
+)
+SELECT count(*) FROM owned
 `
 
 type LinkOwnedAttachmentsToChannelMessageParams struct {
-	ChannelID        pgtype.UUID   `json:"channel_id"`
 	ChannelMessageID pgtype.UUID   `json:"channel_message_id"`
 	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
 	UploaderType     string        `json:"uploader_type"`
@@ -251,19 +236,20 @@ type LinkOwnedAttachmentsToChannelMessageParams struct {
 	AttachmentIds    []pgtype.UUID `json:"attachment_ids"`
 }
 
-// Binds channel_id + channel_message_id for attachments the agent owns.
-// Accepts unbound uploads and uploads already scoped to this channel via
-// `attachment upload --target` (channel_id set, channel_message_id still NULL).
-func (q *Queries) LinkOwnedAttachmentsToChannelMessage(ctx context.Context, arg LinkOwnedAttachmentsToChannelMessageParams) error {
-	_, err := q.db.Exec(ctx, linkOwnedAttachmentsToChannelMessage,
-		arg.ChannelID,
+// Creates message references for attachment resources owned by the sender.
+// A resource may be reused across group, DM, thread, and multiple messages;
+// channel_id remains upload provenance and never limits later references.
+func (q *Queries) LinkOwnedAttachmentsToChannelMessage(ctx context.Context, arg LinkOwnedAttachmentsToChannelMessageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, linkOwnedAttachmentsToChannelMessage,
 		arg.ChannelMessageID,
 		arg.WorkspaceID,
 		arg.UploaderType,
 		arg.UploaderID,
 		arg.AttachmentIds,
 	)
-	return err
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const listAttachmentURLsByCommentID = `-- name: ListAttachmentURLsByCommentID :many
@@ -318,9 +304,20 @@ func (q *Queries) ListAttachmentURLsByIssueOrComments(ctx context.Context, issue
 }
 
 const listAttachmentsByChannel = `-- name: ListAttachmentsByChannel :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
-WHERE channel_id = $1 AND workspace_id = $2
-ORDER BY created_at DESC
+SELECT attachment.id, attachment.workspace_id, attachment.issue_id, attachment.comment_id, attachment.uploader_type, attachment.uploader_id, attachment.filename, attachment.url, attachment.content_type, attachment.size_bytes, attachment.created_at, attachment.chat_session_id, attachment.chat_message_id, attachment.channel_id
+FROM attachment
+WHERE attachment.workspace_id = $2
+  AND (
+    attachment.channel_id = $1
+    OR attachment.id IN (
+      SELECT reference.attachment_id
+      FROM channel_message_attachment reference
+      JOIN channel_message message ON message.id = reference.channel_message_id
+      WHERE reference.workspace_id = $2
+        AND message.channel_id = $1
+    )
+  )
+ORDER BY attachment.created_at DESC
 `
 
 type ListAttachmentsByChannelParams struct {
@@ -352,7 +349,6 @@ func (q *Queries) ListAttachmentsByChannel(ctx context.Context, arg ListAttachme
 			&i.ChatSessionID,
 			&i.ChatMessageID,
 			&i.ChannelID,
-			&i.ChannelMessageID,
 		); err != nil {
 			return nil, err
 		}
@@ -365,9 +361,13 @@ func (q *Queries) ListAttachmentsByChannel(ctx context.Context, arg ListAttachme
 }
 
 const listAttachmentsByChannelMessageIDs = `-- name: ListAttachmentsByChannelMessageIDs :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
-WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2
-ORDER BY created_at ASC
+SELECT reference.channel_message_id AS linked_channel_message_id,
+       attachment.id, attachment.workspace_id, attachment.issue_id, attachment.comment_id, attachment.uploader_type, attachment.uploader_id, attachment.filename, attachment.url, attachment.content_type, attachment.size_bytes, attachment.created_at, attachment.chat_session_id, attachment.chat_message_id, attachment.channel_id
+FROM channel_message_attachment reference
+JOIN attachment ON attachment.id = reference.attachment_id
+WHERE reference.channel_message_id = ANY($1::uuid[])
+  AND reference.workspace_id = $2
+ORDER BY reference.created_at, attachment.created_at
 `
 
 type ListAttachmentsByChannelMessageIDsParams struct {
@@ -375,31 +375,36 @@ type ListAttachmentsByChannelMessageIDsParams struct {
 	WorkspaceID pgtype.UUID   `json:"workspace_id"`
 }
 
-func (q *Queries) ListAttachmentsByChannelMessageIDs(ctx context.Context, arg ListAttachmentsByChannelMessageIDsParams) ([]Attachment, error) {
+type ListAttachmentsByChannelMessageIDsRow struct {
+	LinkedChannelMessageID pgtype.UUID `json:"linked_channel_message_id"`
+	Attachment             Attachment  `json:"attachment"`
+}
+
+func (q *Queries) ListAttachmentsByChannelMessageIDs(ctx context.Context, arg ListAttachmentsByChannelMessageIDsParams) ([]ListAttachmentsByChannelMessageIDsRow, error) {
 	rows, err := q.db.Query(ctx, listAttachmentsByChannelMessageIDs, arg.Column1, arg.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Attachment{}
+	items := []ListAttachmentsByChannelMessageIDsRow{}
 	for rows.Next() {
-		var i Attachment
+		var i ListAttachmentsByChannelMessageIDsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.IssueID,
-			&i.CommentID,
-			&i.UploaderType,
-			&i.UploaderID,
-			&i.Filename,
-			&i.Url,
-			&i.ContentType,
-			&i.SizeBytes,
-			&i.CreatedAt,
-			&i.ChatSessionID,
-			&i.ChatMessageID,
-			&i.ChannelID,
-			&i.ChannelMessageID,
+			&i.LinkedChannelMessageID,
+			&i.Attachment.ID,
+			&i.Attachment.WorkspaceID,
+			&i.Attachment.IssueID,
+			&i.Attachment.CommentID,
+			&i.Attachment.UploaderType,
+			&i.Attachment.UploaderID,
+			&i.Attachment.Filename,
+			&i.Attachment.Url,
+			&i.Attachment.ContentType,
+			&i.Attachment.SizeBytes,
+			&i.Attachment.CreatedAt,
+			&i.Attachment.ChatSessionID,
+			&i.Attachment.ChatMessageID,
+			&i.Attachment.ChannelID,
 		); err != nil {
 			return nil, err
 		}
@@ -412,7 +417,7 @@ func (q *Queries) ListAttachmentsByChannelMessageIDs(ctx context.Context, arg Li
 }
 
 const listAttachmentsByChatMessage = `-- name: ListAttachmentsByChatMessage :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE chat_message_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -446,7 +451,6 @@ func (q *Queries) ListAttachmentsByChatMessage(ctx context.Context, arg ListAtta
 			&i.ChatSessionID,
 			&i.ChatMessageID,
 			&i.ChannelID,
-			&i.ChannelMessageID,
 		); err != nil {
 			return nil, err
 		}
@@ -459,7 +463,7 @@ func (q *Queries) ListAttachmentsByChatMessage(ctx context.Context, arg ListAtta
 }
 
 const listAttachmentsByChatMessageIDs = `-- name: ListAttachmentsByChatMessageIDs :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE chat_message_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -493,7 +497,6 @@ func (q *Queries) ListAttachmentsByChatMessageIDs(ctx context.Context, arg ListA
 			&i.ChatSessionID,
 			&i.ChatMessageID,
 			&i.ChannelID,
-			&i.ChannelMessageID,
 		); err != nil {
 			return nil, err
 		}
@@ -506,7 +509,7 @@ func (q *Queries) ListAttachmentsByChatMessageIDs(ctx context.Context, arg ListA
 }
 
 const listAttachmentsByComment = `-- name: ListAttachmentsByComment :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE comment_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -540,7 +543,6 @@ func (q *Queries) ListAttachmentsByComment(ctx context.Context, arg ListAttachme
 			&i.ChatSessionID,
 			&i.ChatMessageID,
 			&i.ChannelID,
-			&i.ChannelMessageID,
 		); err != nil {
 			return nil, err
 		}
@@ -553,7 +555,7 @@ func (q *Queries) ListAttachmentsByComment(ctx context.Context, arg ListAttachme
 }
 
 const listAttachmentsByCommentIDs = `-- name: ListAttachmentsByCommentIDs :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE comment_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -587,7 +589,6 @@ func (q *Queries) ListAttachmentsByCommentIDs(ctx context.Context, arg ListAttac
 			&i.ChatSessionID,
 			&i.ChatMessageID,
 			&i.ChannelID,
-			&i.ChannelMessageID,
 		); err != nil {
 			return nil, err
 		}
@@ -600,7 +601,7 @@ func (q *Queries) ListAttachmentsByCommentIDs(ctx context.Context, arg ListAttac
 }
 
 const listAttachmentsByIssue = `-- name: ListAttachmentsByIssue :many
-SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id FROM attachment
 WHERE issue_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -634,7 +635,6 @@ func (q *Queries) ListAttachmentsByIssue(ctx context.Context, arg ListAttachment
 			&i.ChatSessionID,
 			&i.ChatMessageID,
 			&i.ChannelID,
-			&i.ChannelMessageID,
 		); err != nil {
 			return nil, err
 		}

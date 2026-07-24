@@ -143,12 +143,18 @@ func (h *Handler) loadQuickCreateSourceMessage(ctx context.Context, workspaceID,
 
 func (h *Handler) quickCreateSourceAttachmentIDs(ctx context.Context, workspaceID, channelID, rootID, messageID pgtype.UUID) []string {
 	rows, err := h.DB.Query(ctx, `
-		SELECT DISTINCT id
-		FROM attachment
-		WHERE workspace_id = $1
-		  AND channel_id = $2
-		  AND (channel_message_id = $3 OR channel_message_id = $4)
-		ORDER BY id`, workspaceID, channelID, rootID, messageID)
+		SELECT DISTINCT attachment.id
+		FROM channel_message_attachment reference
+		JOIN channel_message message
+		  ON message.workspace_id = reference.workspace_id
+		 AND message.id = reference.channel_message_id
+		JOIN attachment
+		  ON attachment.workspace_id = reference.workspace_id
+		 AND attachment.id = reference.attachment_id
+		WHERE reference.workspace_id = $1
+		  AND message.channel_id = $2
+		  AND reference.channel_message_id IN ($3, $4)
+		ORDER BY attachment.id`, workspaceID, channelID, rootID, messageID)
 	if err != nil {
 		return nil
 	}

@@ -193,8 +193,10 @@ func (h *Handler) loadChannelVoiceRecording(ctx context.Context, job claimedChan
 		JOIN attachment
 		  ON attachment.id = transcription.attachment_id
 		 AND attachment.workspace_id = transcription.workspace_id
-		 AND attachment.channel_id = transcription.channel_id
-		 AND attachment.channel_message_id = transcription.message_id
+		JOIN channel_message_attachment reference
+		  ON reference.attachment_id = attachment.id
+		 AND reference.workspace_id = transcription.workspace_id
+		 AND reference.channel_message_id = transcription.message_id
 		WHERE transcription.message_id = $1
 		  AND transcription.attachment_id = $2`,
 		job.MessageID, job.AttachmentID).Scan(&recording.URL, &recording.ContentType, &recording.SizeBytes)

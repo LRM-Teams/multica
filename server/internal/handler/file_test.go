@@ -391,8 +391,8 @@ func TestUploadFile_RejectsForeignChatSession(t *testing.T) {
 	}
 }
 
-// TestUploadFile_AttachesToChannel verifies multipart upload with channel_id
-// binds the attachment row (channel_message_id stays NULL until send).
+// TestUploadFile_AttachesToChannel verifies multipart upload records its
+// channel provenance without creating a message reference before send.
 func TestUploadFile_AttachesToChannel(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -448,9 +448,6 @@ func TestUploadFile_AttachesToChannel(t *testing.T) {
 	}
 	if resp.ChannelID == nil || *resp.ChannelID != channelID {
 		t.Fatalf("channel_id in response: want %s, got %v", channelID, resp.ChannelID)
-	}
-	if resp.ChannelMessageID != nil {
-		t.Fatalf("channel_message_id should be NULL before send, got %v", resp.ChannelMessageID)
 	}
 	if resp.DownloadURL == "" {
 		t.Fatal("expected download_url so FE schema validation succeeds")

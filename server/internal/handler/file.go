@@ -55,19 +55,18 @@ const maxPreviewTextSize = 2 << 20 // 2 MB
 // ---------------------------------------------------------------------------
 
 type AttachmentResponse struct {
-	ID               string  `json:"id"`
-	WorkspaceID      string  `json:"workspace_id"`
-	IssueID          *string `json:"issue_id"`
-	CommentID        *string `json:"comment_id"`
-	ChatSessionID    *string `json:"chat_session_id"`
-	ChatMessageID    *string `json:"chat_message_id"`
-	ChannelID        *string `json:"channel_id"`
-	ChannelMessageID *string `json:"channel_message_id"`
-	UploaderType     string  `json:"uploader_type"`
-	UploaderID       string  `json:"uploader_id"`
-	Filename         string  `json:"filename"`
-	URL              string  `json:"url"`
-	DownloadURL      string  `json:"download_url"`
+	ID            string  `json:"id"`
+	WorkspaceID   string  `json:"workspace_id"`
+	IssueID       *string `json:"issue_id"`
+	CommentID     *string `json:"comment_id"`
+	ChatSessionID *string `json:"chat_session_id"`
+	ChatMessageID *string `json:"chat_message_id"`
+	ChannelID     *string `json:"channel_id"`
+	UploaderType  string  `json:"uploader_type"`
+	UploaderID    string  `json:"uploader_id"`
+	Filename      string  `json:"filename"`
+	URL           string  `json:"url"`
+	DownloadURL   string  `json:"download_url"`
 	// MarkdownURL is the durable, absolute-when-possible URL the client
 	// SHOULD persist into markdown bodies (issue descriptions, comments,
 	// chat messages). It is computed per deployment policy by
@@ -136,10 +135,6 @@ func (h *Handler) attachmentToResponse(a db.Attachment) AttachmentResponse {
 	if a.ChannelID.Valid {
 		s := uuidToString(a.ChannelID)
 		resp.ChannelID = &s
-	}
-	if a.ChannelMessageID.Valid {
-		s := uuidToString(a.ChannelMessageID)
-		resp.ChannelMessageID = &s
 	}
 	return resp
 }
@@ -320,7 +315,7 @@ func (h *Handler) groupChatMessageAttachments(ctx context.Context, workspaceID s
 }
 
 // groupChannelMessageAttachments loads attachments for multiple channel
-// messages and groups them by channel_message_id. Mirrors
+// messages and groups them by canonical message reference. Mirrors
 // groupChatMessageAttachments so the channel thread can surface file cards
 // without an N+1 query per message.
 func (h *Handler) groupChannelMessageAttachments(ctx context.Context, workspaceID string, messageIDs []pgtype.UUID) map[string][]AttachmentResponse {
@@ -336,9 +331,9 @@ func (h *Handler) groupChannelMessageAttachments(ctx context.Context, workspaceI
 		return nil
 	}
 	grouped := make(map[string][]AttachmentResponse, len(messageIDs))
-	for _, a := range attachments {
-		mid := uuidToString(a.ChannelMessageID)
-		grouped[mid] = append(grouped[mid], h.attachmentToResponse(a))
+	for _, row := range attachments {
+		mid := uuidToString(row.LinkedChannelMessageID)
+		grouped[mid] = append(grouped[mid], h.attachmentToResponse(row.Attachment))
 	}
 	return grouped
 }
@@ -467,9 +462,9 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			params.ChatSessionID = session.ID
 		}
 		if channelID := r.FormValue("channel_id"); channelID != "" {
-			// Bind the upload to the channel so SendChannelMessage can later
-			// back-fill channel_message_id (same unbound-then-link flow as
-			// chat). Gate on channel membership — only members may attach.
+			// Record the upload's channel provenance. A later send creates an
+			// independent message reference to this resource. Gate on channel
+			// membership — only members may attach.
 			chUUID, ok := parseUUIDOrBadRequest(w, channelID, "channel_id")
 			if !ok {
 				return

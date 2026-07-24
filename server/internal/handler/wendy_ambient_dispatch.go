@@ -611,12 +611,12 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		if err != nil {
 			return "", fmt.Errorf("list ambient channel message attachments: %w", err)
 		}
-		for _, attachment := range attachments {
-			if !attachment.ChannelMessageID.Valid {
+		for _, row := range attachments {
+			if !row.LinkedChannelMessageID.Valid {
 				continue
 			}
-			key := uuidToString(attachment.ChannelMessageID)
-			attachmentsByMessage[key] = append(attachmentsByMessage[key], attachment)
+			key := uuidToString(row.LinkedChannelMessageID)
+			attachmentsByMessage[key] = append(attachmentsByMessage[key], row.Attachment)
 		}
 	}
 	for i := len(messages) - 1; i >= 0; i-- {

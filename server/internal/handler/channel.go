@@ -57,6 +57,7 @@ const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 const systemChannelProtectedCode = "system_channel_protected"
 
 var errChannelClientMessageConflict = errors.New("client_message_id already used for different channel message payload")
+var errChannelAttachmentUnavailable = errors.New("one or more attachments are unavailable")
 
 var channelIssueLabelPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d+\b`)
 
@@ -147,8 +148,8 @@ type ChannelMessageResponse struct {
 	CreatedAt             string                        `json:"created_at"`
 	EditedAt              *string                       `json:"edited_at,omitempty"`
 	DeletedAt             *string                       `json:"deleted_at,omitempty"`
-	// Attachments linked to this message via channel_message_id. The chat
-	// bubble renders file/image cards from these.
+	// Attachments referenced by this message. The chat bubble renders
+	// file/image cards from these canonical associations.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
 }
 
@@ -1674,113 +1675,20 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	return msg
 }
 
-// attachChannelMessageAttachments hydrates message.Attachments for the UI
-// attachment zone. Primary source is rows linked via channel_message_id.
-// Additionally, attachment parts that reference same-channel rows (including
-// uploads bound with `attachment upload --target` but never linked to a
-// message id) are merged in — otherwise the FE renders "Attachment unavailable".
+// attachChannelMessageAttachments hydrates message.Attachments from the
+// canonical message-resource references. Message parts preserve presentation
+// order; the association table owns which messages may project each resource.
 func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
 	if len(messages) == 0 {
 		return
 	}
 	messageIDs := make([]pgtype.UUID, len(messages))
-	channelIDs := make([]pgtype.UUID, 0, len(messages))
-	seenChannels := map[string]struct{}{}
 	for i, msg := range messages {
 		messageIDs[i] = parseUUID(msg.ID)
-		if _, ok := seenChannels[msg.ChannelID]; ok || msg.ChannelID == "" {
-			continue
-		}
-		seenChannels[msg.ChannelID] = struct{}{}
-		channelIDs = append(channelIDs, parseUUID(msg.ChannelID))
 	}
 	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
-
-	missingIDs := make([]pgtype.UUID, 0)
-	seenMissing := map[string]struct{}{}
-	for _, msg := range messages {
-		have := map[string]struct{}{}
-		for _, att := range grouped[msg.ID] {
-			have[att.ID] = struct{}{}
-		}
-		for _, part := range msg.Parts {
-			if part.Type != protocol.MessagePartTypeAttachment && part.Type != protocol.MessagePartTypeVoice {
-				continue
-			}
-			id := strings.TrimSpace(part.AttachmentID)
-			if id == "" {
-				continue
-			}
-			if _, ok := have[id]; ok {
-				continue
-			}
-			if _, ok := seenMissing[id]; ok {
-				continue
-			}
-			seenMissing[id] = struct{}{}
-			missingIDs = append(missingIDs, parseUUID(id))
-		}
-	}
-
-	byID := map[string]AttachmentResponse{}
-	if len(missingIDs) > 0 && len(channelIDs) > 0 {
-		rows, err := h.DB.Query(ctx, `
-			SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id,
-			       filename, url, content_type, size_bytes, created_at,
-			       chat_session_id, chat_message_id, channel_id, channel_message_id
-			FROM attachment a
-			WHERE a.workspace_id = $1
-			  AND a.id = ANY($2::uuid[])
-			  AND (
-			    a.channel_id = ANY($3::uuid[])
-			    OR a.channel_message_id = ANY($4::uuid[])
-			    OR EXISTS (
-			      SELECT 1 FROM channel_message m
-			      WHERE m.id = a.channel_message_id
-			        AND m.channel_id = ANY($3::uuid[])
-			    )
-			  )`, parseUUID(workspaceID), missingIDs, channelIDs, messageIDs)
-		if err != nil {
-			slog.Error("failed to load part-referenced channel attachments", "error", err)
-		} else {
-			defer rows.Close()
-			for rows.Next() {
-				var a db.Attachment
-				if err := rows.Scan(
-					&a.ID, &a.WorkspaceID, &a.IssueID, &a.CommentID, &a.UploaderType, &a.UploaderID,
-					&a.Filename, &a.Url, &a.ContentType, &a.SizeBytes, &a.CreatedAt,
-					&a.ChatSessionID, &a.ChatMessageID, &a.ChannelID, &a.ChannelMessageID,
-				); err != nil {
-					continue
-				}
-				byID[uuidToString(a.ID)] = h.attachmentToResponse(a)
-			}
-		}
-	}
-
 	for i := range messages {
-		atts := append([]AttachmentResponse(nil), grouped[messages[i].ID]...)
-		have := map[string]struct{}{}
-		for _, att := range atts {
-			have[att.ID] = struct{}{}
-		}
-		for _, part := range messages[i].Parts {
-			if part.Type != protocol.MessagePartTypeAttachment && part.Type != protocol.MessagePartTypeVoice {
-				continue
-			}
-			id := strings.TrimSpace(part.AttachmentID)
-			if id == "" {
-				continue
-			}
-			if _, ok := have[id]; ok {
-				continue
-			}
-			if att, ok := byID[id]; ok {
-				atts = append(atts, att)
-				have[id] = struct{}{}
-			}
-		}
-		messages[i].Attachments = atts
+		messages[i].Attachments = grouped[messages[i].ID]
 	}
 }
 
@@ -2460,7 +2368,17 @@ func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "content is too long")
 		return
 	}
-	msg, err := scanChannelMessage(h.DB.QueryRow(r.Context(), `
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
+	if !ok {
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update channel message")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	msg, err := scanChannelMessage(tx.QueryRow(r.Context(), `
 		UPDATE channel_message
 		SET content = $5, parts = $6::jsonb, edited_at = now()
 		WHERE id = $1
@@ -2476,6 +2394,27 @@ func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "message not found")
 			return
 		}
+		writeError(w, http.StatusInternalServerError, "failed to update channel message")
+		return
+	}
+	qtx := h.Queries.WithTx(tx)
+	if err := linkOwnedAttachmentsToChannelMessage(r.Context(), qtx, messageID, parseUUID(workspaceID), "member", parseUUID(userID), attachmentIDs); err != nil {
+		if errors.Is(err, errChannelAttachmentUnavailable) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to update channel message")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM channel_message_attachment
+		WHERE workspace_id = $1
+		  AND channel_message_id = $2
+		  AND NOT (attachment_id = ANY($3::uuid[]))`, parseUUID(workspaceID), messageID, attachmentIDs); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update channel message")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update channel message")
 		return
 	}
@@ -2842,7 +2781,8 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	// Bind from attachment parts only (parts win; do not dual-merge attachment_ids).
+	// Reference attachment resources from parts only (parts win; do not
+	// dual-merge attachment_ids).
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
 	if !ok {
 		return
@@ -2901,6 +2841,10 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		if errors.Is(err, errChannelAttachmentUnavailable) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to create channel thread message")
@@ -3577,9 +3521,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Bind from attachment parts only (parts win; do not dual-merge attachment_ids).
+	// Reference attachment resources from parts only (parts win; do not
+	// dual-merge attachment_ids).
 	// Pre-validate ids early so invalid input returns 400 before any state mutation.
-	// The actual link runs after insert so we have a message_id to back-fill.
+	// The association is created after insert so it has a message id.
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
 	if !ok {
 		return
@@ -3629,6 +3574,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		if errors.Is(err, errChannelAttachmentUnavailable) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to create channel message")
@@ -5905,7 +5854,8 @@ func normalizeChannelClientMessageID(w http.ResponseWriter, raw *string) (*strin
 }
 
 // attachmentIDsFromParts collects attachment_id values from file and recorded
-// voice parts in order. This is the sole bind source for channel/DM/thread sends.
+// voice parts in order. This is the sole reference source for
+// channel/DM/thread sends.
 func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	var ids []string
 	for _, p := range parts {
@@ -5966,11 +5916,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	}
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
-		if err := qtx.LinkAttachmentsToChannelMessage(ctx, db.LinkAttachmentsToChannelMessageParams{
-			ChannelMessageID: parseUUID(msg.ID),
-			ChannelID:        in.ChannelID,
-			Column3:          attachmentIDs,
-		}); err != nil {
+		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), in.WorkspaceID, "member", in.AuthorID, attachmentIDs); err != nil {
 			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, err
 		}
@@ -5982,10 +5928,12 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 			)
 			SELECT $1, $2, $3, attachment.id
 			FROM attachment
+			JOIN channel_message_attachment reference
+			  ON reference.attachment_id = attachment.id
 			WHERE attachment.id = $4
 			  AND attachment.workspace_id = $2
-			  AND attachment.channel_id = $3
-			  AND attachment.channel_message_id = $1`,
+			  AND reference.workspace_id = $2
+			  AND reference.channel_message_id = $1`,
 			parseUUID(msg.ID), in.WorkspaceID, in.ChannelID, parseUUID(voiceAttachmentID))
 		if err != nil {
 			_ = tx.Rollback(ctx)
@@ -6056,8 +6004,8 @@ func (h *Handler) matchesChannelMessageIdempotencyPayload(ctx context.Context, e
 
 func (h *Handler) channelMessageAttachmentIDSet(ctx context.Context, workspaceID, messageID pgtype.UUID) (map[string]struct{}, error) {
 	rows, err := h.DB.Query(ctx, `
-		SELECT id
-		FROM attachment
+		SELECT attachment_id
+		FROM channel_message_attachment
 		WHERE channel_message_id = $1 AND workspace_id = $2`, messageID, workspaceID)
 	if err != nil {
 		return nil, err
@@ -6072,6 +6020,35 @@ func (h *Handler) channelMessageAttachmentIDSet(ctx context.Context, workspaceID
 		out[uuidToString(id)] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+func linkOwnedAttachmentsToChannelMessage(
+	ctx context.Context,
+	queries *db.Queries,
+	messageID pgtype.UUID,
+	workspaceID pgtype.UUID,
+	uploaderType string,
+	uploaderID pgtype.UUID,
+	attachmentIDs []pgtype.UUID,
+) error {
+	expected := len(channelAttachmentIDSet(attachmentIDs))
+	if expected == 0 {
+		return nil
+	}
+	linked, err := queries.LinkOwnedAttachmentsToChannelMessage(ctx, db.LinkOwnedAttachmentsToChannelMessageParams{
+		ChannelMessageID: messageID,
+		WorkspaceID:      workspaceID,
+		UploaderType:     uploaderType,
+		UploaderID:       uploaderID,
+		AttachmentIds:    attachmentIDs,
+	})
+	if err != nil {
+		return err
+	}
+	if linked != int64(expected) {
+		return errChannelAttachmentUnavailable
+	}
+	return nil
 }
 
 func channelAttachmentIDSet(ids []pgtype.UUID) map[string]struct{} {

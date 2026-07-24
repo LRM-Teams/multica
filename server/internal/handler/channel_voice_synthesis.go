@@ -202,13 +202,20 @@ func (h *Handler) persistChannelVoiceSynthesis(
 	)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO attachment (
-		  id, workspace_id, channel_id, channel_message_id, uploader_type,
+		  id, workspace_id, channel_id, uploader_type,
 		  uploader_id, filename, url, content_type, size_bytes
 		)
-		VALUES ($1, $2, $3, $4, 'agent', $5, $6, $7, 'audio/wav', $8)`,
-		job.AttachmentID, job.WorkspaceID, job.ChannelID, job.MessageID,
+		VALUES ($1, $2, $3, 'agent', $4, $5, $6, 'audio/wav', $7)`,
+		job.AttachmentID, job.WorkspaceID, job.ChannelID,
 		parseUUID(*locked.AuthorID), filename, link, sizeBytes); err != nil {
 		return fmt.Errorf("persist Agent voice attachment: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_message_attachment (
+		  workspace_id, channel_message_id, attachment_id
+		) VALUES ($1, $2, $3)`,
+		job.WorkspaceID, job.MessageID, job.AttachmentID); err != nil {
+		return fmt.Errorf("link Agent voice attachment: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE channel_message

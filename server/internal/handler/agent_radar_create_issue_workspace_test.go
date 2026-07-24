@@ -236,11 +236,16 @@ func TestExecuteRadarCreateIssuePersistsSourceAndReferenceAttachment(t *testing.
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO attachment (
 			workspace_id, uploader_type, uploader_id, filename, url, content_type,
-			size_bytes, channel_id, channel_message_id
-		) VALUES ($1, 'member', $2, 'approved-reference.webp', '/reference.webp', 'image/webp', 42, $3, $4)
+			size_bytes, channel_id
+		) VALUES ($1, 'member', $2, 'approved-reference.webp', '/reference.webp', 'image/webp', 42, $3)
 		RETURNING id
-	`, testWorkspaceID, testUserID, channelID, messageID).Scan(&attachmentID); err != nil {
+	`, testWorkspaceID, testUserID, channelID).Scan(&attachmentID); err != nil {
 		t.Fatalf("create source attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, messageID, attachmentID); err != nil {
+		t.Fatalf("create source attachment reference: %v", err)
 	}
 
 	run := enqueueProjectScopedRadarRunForTest(t, creator, projectID)
@@ -324,11 +329,16 @@ func TestExecuteRadarCreateIssuePersistsSourceAndReferenceAttachment(t *testing.
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO attachment (
 			workspace_id, uploader_type, uploader_id, filename, url, content_type,
-			size_bytes, channel_id, channel_message_id
-		) VALUES ($1, 'member', $2, 'deleted-reference.webp', '/deleted-reference.webp', 'image/webp', 42, $3, $4)
+			size_bytes, channel_id
+		) VALUES ($1, 'member', $2, 'deleted-reference.webp', '/deleted-reference.webp', 'image/webp', 42, $3)
 		RETURNING id
-	`, testWorkspaceID, testUserID, channelID, deletedMessageID).Scan(&deletedAttachmentID); err != nil {
+	`, testWorkspaceID, testUserID, channelID).Scan(&deletedAttachmentID); err != nil {
 		t.Fatalf("create deleted evidence attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, deletedMessageID, deletedAttachmentID); err != nil {
+		t.Fatalf("create deleted evidence attachment reference: %v", err)
 	}
 	deletedTitle := "Radar deleted evidence issue " + uuid.NewString()
 	cleanupRadarIssueTitle(t, deletedTitle)

@@ -83,7 +83,10 @@ Go `protocol.MessagePart` and `messageparts.normalizePart` gain `attachment`:
 | `parts[]` | Sole message content truth (ordered text / sticker / attachment) | Encoding attachments as `![](url)` in text |
 | `content` / future `text` column | Derived search/preview string from text (+ sticker alt if needed) | Source of truth for files |
 | `attachment` table | File asset (storage, ACL, filename/mime/size, signed URLs) | Raw host paths as chat links |
+| `channel_message_attachment` | Canonical many-to-many message → file-resource references | Treating one message as the resource owner |
 | Response `attachments[]` | Hydration: id → metadata + usable URL | Second write-path list |
+
+An upload creates one `attachment` resource. Sending creates a reference after workspace/uploader authorization; it does not move or clone that resource. `attachment.channel_id` remains provenance only, so the same owned id can be referenced by group, DM, thread, and later messages without another byte upload.
 
 ### 1.3 What `attachment_ids` was (and is not)
 
@@ -277,7 +280,7 @@ message.attachments[]  → hydrate by attachment_id
 **Server pipeline:**
 
 1. Normalize parts (including `attachment`).
-2. Collect attachment ids from **parts** → authorize → link to `channel_message_id`.
+2. Collect attachment ids from **parts** → authorize workspace/uploader → insert message-resource associations.
 3. Persist `parts`; set `content`/`text` **derived** from text (+ sticker alt for preview), **without** attachment URLs.
 4. Allow attachment-only messages (fix current “content is required” for pure-file cases).
 5. Response: normalized `parts` + hydrated `attachments[]` in attachment-part order.
@@ -298,7 +301,7 @@ Same contract: `parts` only; re-bind from attachment parts.
 | Rule | Meaning |
 |------|---------|
 | One write implementation | Chat FE/CLI only assemble `parts`; no URL-scan → `attachment_ids` |
-| One bind implementation | Server links attachments from attachment parts only |
+| One reference implementation | Server creates attachment associations from attachment parts only |
 | Delete dead code | Remove cursor-inline upload for chat surfaces, tray-less send, markdown-bind maps |
 | No dual-write | Do not also embed `![](url)` in text for the same files |
 | Stray fields | Not a product concern if nothing we ship sends them; no required 400 |
@@ -337,6 +340,8 @@ Not a task plan — orientation for `writing-plans`:
 5. Attachment-only message succeeds.
 6. Agent send path documented and implemented as attachment parts, not markdown embeds.
 7. Issue comment/description inline images still work (unchanged).
+8. Human and Agent sends can reuse one owned id across multiple messages and conversations, including group → DM, while each message hydrates the resource normally.
+9. Migration preserves old links and repairs valid same-workspace ids found in historical attachment/voice parts; invalid/deleted ids are not fabricated.
 
 ## 7. Risks
 
@@ -357,7 +362,7 @@ Not a task plan — orientation for `writing-plans`:
 | Where files live in message | Markdown order | `parts` attachment |
 | Bind list | Client URL scan → `attachment_ids` | Server derives from parts |
 | Multi-image UI | Interleaved / tiny inline | Slack group gallery |
-| History | — | No migration promise |
+| History | Singular message ownership could strand valid parts | Backfill valid part references, then drop singular ownership |
 | Transition | — | **Latest only; old paths deleted** |
 
 ## Appendix B — Open implementation choices (non-blocking for product)

@@ -6,8 +6,8 @@
  * Takes one attachment-shaped input (a full record, a URL-only reference, or
  * an in-flight upload) and dispatches by PreviewKind:
  *
- *   - image  → ImageAttachmentView (figure + hover toolbar + lightbox via
- *              the shared AttachmentPreviewModal)
+ *   - image  → ImageAttachmentView (figure + click-to-preview lightbox via
+ *              the shared AttachmentPreviewModal; compose-only hover toolbar)
  *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar), unless
  *              `inlineHtmlPreview={false}` (channel/thread message stream —
  *              LRM-285: Slack file-card in the stream; click still previews)
@@ -484,7 +484,7 @@ export function Attachment({
 }
 
 // ---------------------------------------------------------------------------
-// ImageAttachmentView — inline image with hover toolbar
+// ImageAttachmentView — inline image; compose hover toolbar only
 // ---------------------------------------------------------------------------
 //
 // DOM and styling are intentionally a direct port of the original
@@ -492,6 +492,11 @@ export function Attachment({
 // styles/attachment.css under `.image-figure / .image-content / .image-toolbar`
 // so standalone surfaces (chat messages, AttachmentList) get identical visuals
 // without depending on the editor stylesheet being imported elsewhere.
+//
+// LRM-546 — read-only display surfaces (channel/DM/comment message stream) do
+// NOT render the dark expand+download floating bar. Click the thumb to open
+// the lightbox. The hover toolbar is compose-only (View / Download / Copy /
+// Delete).
 
 interface ImageAttachmentViewProps {
   src: string;
@@ -567,7 +572,7 @@ function ImageAttachmentView({
           className={cn("image-content", uploading && "image-uploading")}
           draggable={false}
         />
-        {!uploading && src && (
+        {!uploading && src && editable && (
           <span
             className="image-toolbar"
             onMouseDown={(e) => e.stopPropagation()}
@@ -579,15 +584,10 @@ function ImageAttachmentView({
             <button type="button" onClick={onDownload} title={t(($) => $.image.download)}>
               <Download className="size-3.5" />
             </button>
-            {/* Copy-link is an editor-compose affordance. On read-only display
-                surfaces (chat / comments) the hover toolbar stays minimal —
-                fullscreen + download only (task #339, Slack parity). */}
-            {editable && (
-              <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
-                <LinkIcon className="size-3.5" />
-              </button>
-            )}
-            {editable && onDelete && (
+            <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
+              <LinkIcon className="size-3.5" />
+            </button>
+            {onDelete && (
               <button type="button" onClick={onDelete} title={t(($) => $.image.delete)}>
                 <Trash2 className="size-3.5" />
               </button>

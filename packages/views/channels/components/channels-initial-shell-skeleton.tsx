@@ -15,12 +15,14 @@ export function InitialChannelsShellSkeleton() {
       data-testid="channels-initial-shell-skeleton"
       aria-busy="true"
     >
-      <aside className="flex w-full min-h-0 flex-col bg-sidebar md:w-72 md:shrink-0 md:border-r">
+      {/* LRM-551: match live listPane chrome (bg-sidebar + column border). */}
+      <aside className="flex w-full min-h-0 flex-col bg-sidebar md:w-72 md:shrink-0 md:border-r md:border-border">
         <div className="flex items-center gap-2 px-4 pb-1 pt-4">
           <Skeleton className="h-6 w-28" />
         </div>
         <div className="px-3 pb-2">
-          <Skeleton className="h-9 w-full rounded-md" />
+          {/* Search field placeholder — inset on sidebar like live Input bg-background */}
+          <Skeleton className="h-9 w-full rounded-md bg-background" />
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-hidden px-2 pb-2">
           <div className="space-y-1">

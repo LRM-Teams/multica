@@ -2542,13 +2542,15 @@ export function ChannelsPage({
   };
 
   // Channel list pane. Full-width on mobile (list-first); a 280px sidebar on
-  // desktop. The `border-r` only makes sense beside the stream pane, so it's
-  // dropped on mobile where the list stands alone.
+  // desktop. LRM-551 lock A: same chrome plane as app sidebar (`bg-sidebar`);
+  // 1px `border-r border-border` only beside the stream pane (dropped on
+  // mobile where the list stands alone). Search is explicit `bg-background`
+  // so it reads as an inset white field on sidebar chrome.
   const listPane = (
     <aside
       className={cn(
         "flex flex-1 min-h-0 flex-col bg-sidebar",
-        isMobile ? "min-w-0" : "border-r",
+        isMobile ? "min-w-0" : "border-r border-border",
       )}
     >
           <div className="flex items-center gap-2 px-4 pb-1 pt-4">
@@ -2562,7 +2564,7 @@ export function ChannelsPage({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t(($) => $.sidebar.search)}
-                className="h-9 pl-8"
+                className="h-9 bg-background pl-8"
               />
             </div>
           </div>
@@ -2755,7 +2757,7 @@ export function ChannelsPage({
                         <ContextMenu key={channel.id}>
                           <ContextMenuTrigger
                             render={
-                              <div className="group/archived relative mb-0.5 rounded-lg transition-colors hover:bg-accent" />
+                              <div className="group/archived relative mb-0.5 rounded-lg transition-colors hover:bg-sidebar-accent" />
                             }
                           >
                             <button

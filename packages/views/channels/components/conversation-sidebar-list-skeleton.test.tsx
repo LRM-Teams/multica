@@ -25,8 +25,13 @@ describe("conversation-sidebar-list-skeleton (LRM-459)", () => {
 
   it("initial shell paints list chrome (mobile-visible) plus desktop detail", () => {
     render(<InitialChannelsShellSkeleton />);
-    expect(screen.getByTestId("channels-initial-shell-skeleton")).toBeInTheDocument();
+    const shell = screen.getByTestId("channels-initial-shell-skeleton");
+    expect(shell).toBeInTheDocument();
     expect(screen.getByTestId("dm-list-skeleton")).toBeInTheDocument();
     expect(screen.getByTestId("channel-list-skeleton")).toBeInTheDocument();
+    // LRM-551: skeleton aside matches live listPane chrome plane
+    const aside = shell.querySelector("aside");
+    expect(aside?.className).toMatch(/\bbg-sidebar\b/);
+    expect(aside?.className).toMatch(/\bborder-border\b/);
   });
 });

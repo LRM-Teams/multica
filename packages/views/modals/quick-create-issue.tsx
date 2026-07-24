@@ -429,10 +429,7 @@ export function AgentCreatePanel({
           </div>
         </div>
 
-        {/* Actor picker — agents and squads in one searchable list. Squads
-            route to their leader agent on the backend; the leader runs the
-            quick-create flow with the squad's Operating Protocol layered
-            on top, so a squad pick is "ask this squad to file the issue". */}
+        {/* Actor picker — searchable list of workspace agents. */}
         <div className="px-5 pt-1 pb-2 shrink-0">
           <ActorPicker
             actor={actor}

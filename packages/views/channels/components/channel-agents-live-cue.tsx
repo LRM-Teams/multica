@@ -26,6 +26,7 @@ import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 const STOPPING_ALL_TASKS_ID = "__all__";
 const FACE_MAX = 3;
 const FACE_SIZE = 22;
+const EMPTY_MEMBERS: readonly ChannelMemberBrief[] = [];
 
 export interface ChannelAgentsLiveCueProps {
   agentCount: number;
@@ -130,7 +131,7 @@ export function ChannelAgentsLiveCue({
   onStopAll,
   variant = "channel",
   memberCount = 0,
-  members = [],
+  members = EMPTY_MEMBERS,
   onOpenMembers,
   membersOpen = false,
   className,

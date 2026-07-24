@@ -1105,6 +1105,36 @@ describe("ChannelMessageBubble", () => {
     expect(fade.className).not.toContain("from-background");
   });
 
+  it("#689: does not construct a per-row ResizeObserver — window resize alone drives re-measurement", () => {
+    // A per-row ResizeObserver used to exist to catch late content growth
+    // and re-apply the collapse cap. Two late-growth paths still exist
+    // (markdown inline images without forwarded dimensions, sticker
+    // placeholder→loaded-box swaps) — the tradeoff is accepted as
+    // cosmetic-only (see the component's #689 comment for the full
+    // reasoning): removing this observer stops it from double-firing
+    // Virtuoso's own per-item re-settle on every one of those events, which
+    // is the actual mid-scroll jank source. Assert it stays gone.
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    const ctorSpy = vi.fn();
+    class SpyingResizeObserver extends OriginalResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super(callback);
+        ctorSpy();
+      }
+    }
+    vi.stubGlobal("ResizeObserver", SpyingResizeObserver);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n") })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(ctorSpy).not.toHaveBeenCalled();
+    vi.stubGlobal("ResizeObserver", OriginalResizeObserver);
+  });
+
   it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble

@@ -30,9 +30,14 @@ function handleWithSpy() {
   return { scrollToIndex, ref };
 }
 
-// A DOM element whose top edge sits `top` px from the viewport top.
+// A real jsdom element (not a bare object stub) whose top edge sits `top` px
+// from the viewport top — needs real addEventListener/removeEventListener
+// since #689's gesture-tracking effect attaches touch/wheel listeners to
+// scrollContainerEl.
 function elAt(top: number): HTMLElement {
-  return { getBoundingClientRect: () => ({ top }) } as unknown as HTMLElement;
+  const el = document.createElement("div");
+  el.getBoundingClientRect = () => ({ top }) as DOMRect;
+  return el;
 }
 
 // The hook only reads `.id`; keep fixtures minimal.
@@ -99,6 +104,39 @@ describe("scrollToIndexUntilSettled (#883 measurement-race guard)", () => {
       onSettleTimeout,
     });
     expect(onSettleTimeout).not.toHaveBeenCalled();
+  });
+
+  // #689: real-device jank — scrolling *during* cold load fights the settle
+  // loop's own re-issued scrollToIndex every frame. A live gesture must pause
+  // the imperative scroll entirely rather than race the user's own input.
+  it("skips scrollToIndex while a gesture is active, then resumes and completes once it ends", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    // 15 skipped (gesture-active) frames, well past maxFrames, before the
+    // gesture ends and the loop is allowed its first real scroll attempt.
+    let ticks = 0;
+    scrollToIndexUntilSettled(ref.current, () => true, { index: 3, align: "start" }, {
+      maxFrames: 3,
+      isGestureActive: () => ++ticks <= 15,
+    });
+    // Exactly one real scroll attempt — the 15 gesture-active ticks were
+    // skipped, not spent, and hasReached is immediate once it actually runs.
+    expect(scrollToIndex.mock.calls.length).toBe(1);
+  });
+
+  it("does not erode the settle budget while skipping gesture-active frames — timeout still needs maxFrames real attempts", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    const onSettleTimeout = vi.fn();
+    let ticks = 0;
+    scrollToIndexUntilSettled(ref.current, () => false, { index: 3, align: "start" }, {
+      maxFrames: 2,
+      isGestureActive: () => ++ticks <= 20, // 20 skipped frames before gesture ends
+      onSettleTimeout,
+    });
+    // Only maxFrames=2 real scroll attempts happened, not 20 — the gesture
+    // window didn't count against the budget, but the real work still hits
+    // the cap and reports timeout normally once it's genuinely exhausted.
+    expect(scrollToIndex.mock.calls.length).toBe(2);
+    expect(onSettleTimeout).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -395,5 +433,38 @@ describe("useUnreadAnchorScroll", () => {
     );
     expect(result.current.unreadAnchorIndex).toBe(-1);
     expect(scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  // #689: the hook must wire real touch/wheel gesture state into the settle
+  // loop's isGestureActive check — verified here at the listener-attachment
+  // level (the yield/resume mechanics themselves are covered directly above
+  // against scrollToIndexUntilSettled).
+  it("#689: attaches touch/wheel gesture listeners to the scroll container and detaches them on unmount", () => {
+    const { ref } = handleWithSpy();
+    const container = elAt(0);
+    const addSpy = vi.spyOn(container, "addEventListener");
+    const removeSpy = vi.spyOn(container, "removeEventListener");
+    const { unmount } = renderHook(() =>
+      useUnreadAnchorScroll({
+        channelId: "c1",
+        messages: messages(["m1", "m2", "m3"]),
+        newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+        highlightMessageId: null,
+        firstItemIndex: 0,
+        handleAttached: true,
+        virtuosoRef: ref,
+        scrollContainerEl: container,
+        messageRefMap: new Map([["m3", elAt(0)]]),
+      }),
+    );
+    const attachedTypes = addSpy.mock.calls.map((call) => call[0]);
+    expect(attachedTypes).toEqual(
+      expect.arrayContaining(["touchstart", "touchend", "touchcancel", "wheel"]),
+    );
+    unmount();
+    const detachedTypes = removeSpy.mock.calls.map((call) => call[0]);
+    expect(detachedTypes).toEqual(
+      expect.arrayContaining(["touchstart", "touchend", "touchcancel", "wheel"]),
+    );
   });
 });

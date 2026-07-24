@@ -388,21 +388,36 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     editDraft,
   ]);
 
+  // #689: no per-row ResizeObserver here. It used to exist to catch content
+  // growing the body past the collapse threshold after the useLayoutEffect
+  // above (which only depends on message.attachments/parts — metadata, not
+  // asset bytes) already ran, and re-apply the 160px cap. Two real late-
+  // growth paths still exist (Wren's #1146 review, not eliminated, accepted
+  // as a tradeoff): a markdown inline `![]()` image resolves through the
+  // `kind: "url"` AttachmentInput (markdown.tsx renderImage →
+  // attachment.tsx), which never forwards a resolved record's width/height
+  // into the aspect-ratio box even when one exists, so it can grow on load;
+  // and a sticker's placeholder (`min-h-20`, message-parts-renderer.tsx
+  // StickerPlaceholder) sits at a different height than its loaded fixed
+  // `size-32/40` box (StickerImage) — the swap depends on the sticker-
+  // catalog query settling, which isn't in this effect's deps either. Both
+  // are UPLOADED-attachment-only reservations (attachment.tsx
+  // ImageAttachmentView aspect-ratio from record width/height): a normal
+  // record-backed image/attachment paints at final size and never needed
+  // this observer to begin with. The accepted cost of removing it is
+  // cosmetic-only for the two paths above — a message may render slightly
+  // taller than 160px without the "see more" affordance until the next
+  // window resize or content-prop change re-measures it — never a wrong
+  // clipped height or a stuck state. Virtuoso's own per-item ResizeObserver
+  // still re-settles the surrounding rows regardless of what this component
+  // does; keeping this observer double-fires that re-settle on every one of
+  // these late-growth events, and doing so while the row is on/near screen
+  // during a scroll is exactly the mid-scroll jank #689 reported.
   useEffect(() => {
-    if (!collapseLongContent || message.deleted_at || message.type === "system") return;
-    const body = messageBodyRef.current;
-    if (!body) return;
-
     const handleOverflow = () => measureContentOverflowRef.current();
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(handleOverflow);
-    resizeObserver?.observe(body);
     window.addEventListener("resize", handleOverflow);
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", handleOverflow);
-    };
-  }, [collapseLongContent, message.id, message.deleted_at, message.type]);
+    return () => window.removeEventListener("resize", handleOverflow);
+  }, []);
 
   if (message.deleted_at) {
     return (

@@ -31,7 +31,7 @@ export function scrollToIndexUntilSettled(
   handle: VirtuosoHandle | null,
   hasReached: () => boolean,
   location: { index: number; align: "start" | "center" | "end"; behavior?: "auto" | "smooth" },
-  options?: { maxFrames?: number; onSettleTimeout?: () => void },
+  options?: { maxFrames?: number; onSettleTimeout?: () => void; isGestureActive?: () => boolean },
 ): () => void {
   if (!handle) {
     // Permanent, not temp: a null handle here means the caller fired before
@@ -47,6 +47,27 @@ export function scrollToIndexUntilSettled(
   let raf = 0;
   let frame = 0;
   const tick = () => {
+    // #689: a live touch/wheel gesture owns scroll position — re-issuing
+    // scrollToIndex on top of it fights the user's own input on every frame,
+    // which is exactly the jank Frank hit scrolling during cold load. Skip
+    // this frame's imperative scroll (don't count it toward maxFrames either,
+    // so a long gesture can't exhaust the settle budget) and keep polling
+    // hasReached/gesture-state until the user lets go, then resume settling
+    // from wherever the anchor row actually is.
+    //
+    // Two known boundaries (Wren's #1146 review, accepted as-is): touchend
+    // fires the instant a mobile flick lifts, so the settle loop can resume
+    // scrollToIndex while native momentum scrolling is still animating —
+    // the two briefly compete rather than handing off cleanly. And skipped
+    // frames not counting toward maxFrames means a gesture that never
+    // reports inactive (touchend/touchcancel/wheel-idle all missing —
+    // no known path, but not provably impossible) removes the #365 timeout
+    // backstop for as long as that lasts; the disposer + unmount cleanup is
+    // the real safety net in that case, not the frame cap.
+    if (options?.isGestureActive?.()) {
+      raf = requestAnimationFrame(tick);
+      return;
+    }
     handle.scrollToIndex(location);
     frame += 1;
     if (hasReached()) return;
@@ -161,6 +182,43 @@ export function useUnreadAnchorScroll({
   // just one failed geometry check — the list stayed at its cold-load fallback
   // position forever. Only a genuine outcome (reached or timed out) may set it.
   const scrolledDividerChannelRef = useRef<string | null>(null);
+
+  // #689: whether the user currently has an active touch/wheel gesture on the
+  // scroller, so the settle loop below can yield to it instead of re-issuing
+  // scrollToIndex on top of native scroll every frame — the jank only shows
+  // up scrolling *during* cold load (real device only; headless scrollTop
+  // injection doesn't trigger real touch state and can't reproduce it, see
+  // #689 audit). A ref, not state: this flips on every touchmove/wheel tick
+  // and must never trigger a re-render.
+  const activeGestureRef = useRef(false);
+  useEffect(() => {
+    if (!scrollContainerEl) return;
+    const setActive = () => {
+      activeGestureRef.current = true;
+    };
+    const setInactive = () => {
+      activeGestureRef.current = false;
+    };
+    // Wheel has no native "end" event — debounce idle to infer release.
+    let wheelIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    const onWheel = () => {
+      activeGestureRef.current = true;
+      if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = setTimeout(setInactive, 150);
+    };
+    scrollContainerEl.addEventListener("touchstart", setActive, { passive: true });
+    scrollContainerEl.addEventListener("touchend", setInactive, { passive: true });
+    scrollContainerEl.addEventListener("touchcancel", setInactive, { passive: true });
+    scrollContainerEl.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
+      scrollContainerEl.removeEventListener("touchstart", setActive);
+      scrollContainerEl.removeEventListener("touchend", setInactive);
+      scrollContainerEl.removeEventListener("touchcancel", setInactive);
+      scrollContainerEl.removeEventListener("wheel", onWheel);
+    };
+  }, [scrollContainerEl]);
+
   useEffect(() => {
     if (!scrollContainerEl || !handleAttached || highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
@@ -191,6 +249,7 @@ export function useUnreadAnchorScroll({
       hasReached,
       { index: firstItemIndex + unreadAnchorIndex, align: "start", behavior: "auto" },
       {
+        isGestureActive: () => activeGestureRef.current,
         onSettleTimeout: () => {
           // Give up cleanly instead of retrying forever (e.g. the anchor row was
           // deleted and can never render) — mark this visit resolved so we don't

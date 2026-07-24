@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpenText, BrainCircuit, Sparkles } from "lucide-react";
 import {
@@ -78,30 +78,27 @@ export function MemoryCurationDailyLedger({ wsId }: { wsId: string }) {
   const open = !!selectedDate;
 
   const candidateKind = tab === "skill" ? "skill" : "memory";
-  const candidatesQuery = useQuery({
+  const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
     ...memoryCurationCandidatesOptions(wsId, {
       date: selectedDate,
       kind: candidateKind,
     }),
     enabled: open && !!wsId && !!selectedDate && tab !== "team",
   });
-  const teamQuery = useQuery({
+  const { data: teamData, isLoading: teamLoading } = useQuery({
     ...teamKnowledgeListOptions(wsId, { date: selectedDate }),
     enabled: open && !!wsId && !!selectedDate && tab === "team",
   });
-  const candidateDetail = useQuery({
+  const { data: candidateDetailData, isLoading: candidateDetailLoading } = useQuery({
     ...memoryCurationCandidateOptions(wsId, selectedCandidateId),
     enabled: open && !!wsId && !!selectedCandidateId,
   });
-  const teamDetail = useQuery({
+  const { data: teamDetailData, isLoading: teamDetailLoading } = useQuery({
     ...teamKnowledgeItemOptions(wsId, selectedTeamId),
     enabled: open && !!wsId && !!selectedTeamId,
   });
 
-  const selectedDay = useMemo(
-    () => days.find((day) => day.date === selectedDate),
-    [days, selectedDate],
-  );
+  const selectedDay = data?.days?.find((day) => day.date === selectedDate);
 
   const openDay = (day: MemoryCurationDailySummaryDay) => {
     setSelectedDate(day.date);
@@ -206,9 +203,9 @@ export function MemoryCurationDailyLedger({ wsId }: { wsId: string }) {
 
               <TabsContent value="memory" className="mt-3 min-h-0 flex-1 overflow-auto">
                 <CandidateList
-                  loading={candidatesQuery.isLoading}
-                  items={candidatesQuery.data?.items ?? []}
-                  total={candidatesQuery.data?.total ?? 0}
+                  loading={candidatesLoading}
+                  items={candidatesData?.items ?? []}
+                  total={candidatesData?.total ?? 0}
                   selectedId={selectedCandidateId}
                   onSelect={setSelectedCandidateId}
                   emptyText={copy("dailyLedgerNoMemories")}
@@ -216,9 +213,9 @@ export function MemoryCurationDailyLedger({ wsId }: { wsId: string }) {
               </TabsContent>
               <TabsContent value="skill" className="mt-3 min-h-0 flex-1 overflow-auto">
                 <CandidateList
-                  loading={candidatesQuery.isLoading}
-                  items={candidatesQuery.data?.items ?? []}
-                  total={candidatesQuery.data?.total ?? 0}
+                  loading={candidatesLoading}
+                  items={candidatesData?.items ?? []}
+                  total={candidatesData?.total ?? 0}
                   selectedId={selectedCandidateId}
                   onSelect={setSelectedCandidateId}
                   emptyText={copy("dailyLedgerNoSkills")}
@@ -226,9 +223,9 @@ export function MemoryCurationDailyLedger({ wsId }: { wsId: string }) {
               </TabsContent>
               <TabsContent value="team" className="mt-3 min-h-0 flex-1 overflow-auto">
                 <TeamList
-                  loading={teamQuery.isLoading}
-                  items={teamQuery.data?.items ?? []}
-                  total={teamQuery.data?.total ?? 0}
+                  loading={teamLoading}
+                  items={teamData?.items ?? []}
+                  total={teamData?.total ?? 0}
                   selectedId={selectedTeamId}
                   onSelect={setSelectedTeamId}
                   emptyText={copy("dailyLedgerNoTeamKnowledge")}
@@ -254,22 +251,22 @@ export function MemoryCurationDailyLedger({ wsId }: { wsId: string }) {
                 </div>
                 {selectedCandidateId && (
                   <DetailBody
-                    loading={candidateDetail.isLoading}
-                    title={candidateDetail.data?.title}
+                    loading={candidateDetailLoading}
+                    title={candidateDetailData?.title}
                     meta={[
-                      candidateDetail.data?.candidate_type,
-                      candidateDetail.data?.status,
-                      candidateDetail.data?.source_agent_name,
+                      candidateDetailData?.candidate_type,
+                      candidateDetailData?.status,
+                      candidateDetailData?.source_agent_name,
                     ].filter(Boolean).join(" · ")}
-                    content={candidateDetail.data?.content || candidateDetail.data?.snippet}
+                    content={candidateDetailData?.content || candidateDetailData?.snippet}
                   />
                 )}
                 {selectedTeamId && (
                   <DetailBody
-                    loading={teamDetail.isLoading}
-                    title={teamDetail.data?.title}
-                    meta={[teamDetail.data?.kind, teamDetail.data?.status].filter(Boolean).join(" · ")}
-                    content={teamDetail.data?.content || teamDetail.data?.snippet}
+                    loading={teamDetailLoading}
+                    title={teamDetailData?.title}
+                    meta={[teamDetailData?.kind, teamDetailData?.status].filter(Boolean).join(" · ")}
+                    content={teamDetailData?.content || teamDetailData?.snippet}
                   />
                 )}
               </div>

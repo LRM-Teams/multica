@@ -352,6 +352,9 @@ describe("MessageViewport", () => {
         emptyLabel="No replies"
         initialScroll="top"
         header={<div data-testid="thread-root-preview">Root preview</div>}
+        // #1194 regression guard: a large firstItemIndex must NOT leak into
+        // the thread-top local index (0).
+        firstItemIndex={1_000_000}
       />,
     );
 
@@ -376,6 +379,9 @@ describe("MessageViewport", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         lastReadSeq={6}
+        // #1194 regression guard: a large firstItemIndex must NOT leak into
+        // the unread-anchor local index (2) below.
+        firstItemIndex={1_000_000}
       />,
     );
 

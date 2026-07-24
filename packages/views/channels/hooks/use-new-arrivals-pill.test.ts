@@ -1,8 +1,26 @@
-import { describe, expect, it } from "vitest";
-import { computeNewArrivals } from "./use-new-arrivals-pill";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import type { VirtuosoHandle } from "react-virtuoso";
+import type { ChannelMessage } from "@multica/core/types";
+import { computeNewArrivals, useNewMessagesPill } from "./use-new-arrivals-pill";
 
 const authored = (...items: Array<[number, string]>) =>
   items.map(([seq, author_id]) => ({ id: `m${seq}`, seq, author_id }));
+
+function handleWithSpy() {
+  const scrollToIndex = vi.fn();
+  const ref = { current: { scrollToIndex } as unknown as VirtuosoHandle };
+  return { scrollToIndex, ref };
+}
+
+// The hook only reads id/seq/channel_id/author_id; keep fixtures minimal.
+function withSeq(items: Array<[string, number, string | null]>): ChannelMessage[] {
+  return items.map(
+    ([id, seq, author_id]) =>
+      ({ id, seq, author_id, channel_id: "c1" }) as unknown as ChannelMessage,
+  );
+}
 
 describe("computeNewArrivals", () => {
   it("returns null when the seen-through boundary is unknown", () => {
@@ -33,5 +51,58 @@ describe("computeNewArrivals", () => {
       count: 2,
       firstMessageId: "m1",
     });
+  });
+});
+
+describe("useNewMessagesPill onPillClick (#1194 index-contract regression)", () => {
+  it("scrolls to the pill target's LOCAL index, never offset by a large firstItemIndex", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    const initial = withSeq([
+      ["m1", 1, "self"],
+      ["m2", 2, "self"],
+    ]);
+    const { result, rerender } = renderHook(
+      ({ messages }) =>
+        useNewMessagesPill({ messages, currentUserId: "self", virtuosoRef: ref }),
+      { initialProps: { messages: initial } },
+    );
+    expect(result.current.pill).toBeNull();
+
+    // Simulate a large-offset channel (base ~1,000,000 in production) receiving
+    // a live arrival from someone else past the entry high-water mark. The
+    // hook itself never sees firstItemIndex — it only ever deals in the local
+    // `messages` array — so the offset must NOT leak into the scrollToIndex call.
+    const withArrival = withSeq([
+      ["m1", 1, "self"],
+      ["m2", 2, "self"],
+      ["m3", 3, "other"],
+    ]);
+    rerender({ messages: withArrival });
+    expect(result.current.pill).toEqual({ count: 1, firstMessageId: "m3" });
+
+    result.current.onPillClick();
+
+    // m3 is at local index 2 in `withArrival` — never `firstItemIndex + 2`.
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "smooth" });
+  });
+
+  it("dismisses the pill after a click (caught up to the latest seq)", () => {
+    const { ref } = handleWithSpy();
+    const initial = withSeq([["m1", 1, "self"]]);
+    const { result, rerender } = renderHook(
+      ({ messages }) =>
+        useNewMessagesPill({ messages, currentUserId: "self", virtuosoRef: ref }),
+      { initialProps: { messages: initial } },
+    );
+    const withArrival = withSeq([
+      ["m1", 1, "self"],
+      ["m2", 2, "other"],
+    ]);
+    rerender({ messages: withArrival });
+    expect(result.current.pill).not.toBeNull();
+
+    result.current.onPillClick();
+    rerender({ messages: withArrival });
+    expect(result.current.pill).toBeNull();
   });
 });

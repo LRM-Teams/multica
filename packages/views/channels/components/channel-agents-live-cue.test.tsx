@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import type { ChannelActiveTask } from "@multica/core/types";
+import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
 
 const mobileState = { isMobile: false };
@@ -23,13 +23,10 @@ vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (picker: (ns: Record<string, unknown>) => unknown, vars?: Record<string, unknown>) => {
       const header = {
-        members_prefix: `{{members}} members ·`,
-        members_only: `{{members}} members`,
-        agents_idle: `{{agents}} agents`,
-        agents_live: `{{agents}} agents · {{working}} working`,
-        agents_attention: `{{agents}} agents · needs attention`,
-        dm_live: `{{working}} working`,
-        dm_attention: `Needs attention`,
+        presence_idle: `{{members}} · {{agents}}`,
+        presence_live: `{{members}} · {{agents}} · {{working}} working`,
+        presence_attention: `{{members}} · {{agents}} · needs attention`,
+        view_members_aria: `View members`,
         working_list_title: `Working · {{count}}`,
         working_verb_with_duration: `{{verb}} · {{duration}}`,
         working_failed: `Couldn't reply · try @ again`,
@@ -72,62 +69,148 @@ function task(over: Partial<ChannelActiveTask>): ChannelActiveTask {
   };
 }
 
-describe("ChannelAgentsLiveCue (LRM-581)", () => {
+function member(over: Partial<ChannelMemberBrief>): ChannelMemberBrief {
+  return {
+    member_type: "user",
+    member_id: "u1",
+    name: "alice",
+    display_name: "Alice",
+    ...over,
+  };
+}
+
+describe("ChannelAgentsLiveCue (LRM-581 Presence Cluster)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mobileState.isMobile = false;
   });
 
-  it("idle channel roster is plain agents text with no live chrome", () => {
-    render(
-      <ChannelAgentsLiveCue memberCount={4} agentCount={8} tasks={[]} />,
-    );
-    const cue = screen.getByTestId("channel-agents-live-cue");
-    expect(cue).toHaveTextContent("8 agents");
-    expect(cue.tagName).toBe("SPAN");
-    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
-    expect(screen.getByTestId("channel-roster-summary")).toHaveTextContent(
-      "4 members ·",
-    );
-  });
-
-  it("running tasks change the cue and expose Stop next to it", () => {
-    const onStop = vi.fn();
+  it("idle cluster shows facepile + N · M with no outer Stop", () => {
+    const onOpen = vi.fn();
     render(
       <ChannelAgentsLiveCue
         memberCount={4}
         agentCount={8}
-        tasks={[task({ status: "running" })]}
-        onStopTask={onStop}
+        members={[
+          member({ member_id: "u1", display_name: "Alice" }),
+          member({
+            member_type: "agent",
+            member_id: "a1",
+            name: "beckham",
+            display_name: "Beckham",
+          }),
+        ]}
+        tasks={[]}
+        onOpenMembers={onOpen}
       />,
     );
     const cue = screen.getByTestId("channel-agents-live-cue");
-    expect(cue).toHaveTextContent("8 agents · 1 working");
-    expect(cue.querySelector(".animate-chat-text-shimmer")).not.toBeNull();
-    fireEvent.click(screen.getByTestId("channel-agents-cue-stop"));
-    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(cue).toHaveAttribute("data-presence-state", "idle");
+    expect(screen.getByTestId("channel-presence-count")).toHaveTextContent("4 · 8");
+    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
+    expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
+    fireEvent.click(cue);
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("shows danger attention cue for failed/no_reply without silent blank", () => {
+  it("K≥2 working shows shimmer count and Stop only inside hover card", () => {
+    const onStop = vi.fn();
+    const onStopAll = vi.fn();
     render(
       <ChannelAgentsLiveCue
         memberCount={4}
         agentCount={8}
+        members={[
+          member({
+            member_type: "agent",
+            member_id: "a1",
+            name: "beckham",
+            display_name: "Beckham",
+          }),
+          member({
+            member_type: "agent",
+            member_id: "a2",
+            name: "wendy",
+            display_name: "Wendy",
+          }),
+        ]}
         tasks={[
+          task({ status: "running" }),
           task({
             agent_id: "a2",
             agent_name: "Wendy",
             task_id: "t2",
             inbox_event_id: "inbox-2",
-            status: "failed",
-            outcome: "no_reply",
+            status: "queued",
           }),
         ]}
+        onStopTask={onStop}
+        onStopAll={onStopAll}
       />,
     );
     const cue = screen.getByTestId("channel-agents-live-cue");
-    expect(cue).toHaveTextContent("8 agents · needs attention");
-    expect(cue.querySelector(".text-destructive")).not.toBeNull();
+    expect(cue).toHaveAttribute("data-presence-state", "live");
+    expect(screen.getByTestId("channel-presence-count")).toHaveTextContent(
+      "4 · 8 · 2 working",
+    );
+    expect(cue.querySelector(".animate-chat-text-shimmer")).not.toBeNull();
+    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
+    expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
+
+    // HoverCard content is portaled / may need pointer — open via focus path:
+    // for unit test we render mobile popover path instead.
+  });
+
+  it("K=1 suppresses Working chrome even when tasks are running", () => {
+    render(
+      <ChannelAgentsLiveCue
+        memberCount={2}
+        agentCount={1}
+        members={[
+          member({
+            member_type: "agent",
+            member_id: "a1",
+            name: "beckham",
+            display_name: "Beckham",
+          }),
+        ]}
+        tasks={[task({ status: "running" })]}
+        onStopTask={vi.fn()}
+        onStopAll={vi.fn()}
+      />,
+    );
+    const cue = screen.getByTestId("channel-agents-live-cue");
+    expect(cue).toHaveAttribute("data-presence-state", "idle");
+    expect(screen.getByTestId("channel-presence-count")).toHaveTextContent("2 · 1");
+    expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
+  });
+
+  it("mobile live cluster opens Working list with Stop all footer", () => {
+    mobileState.isMobile = true;
+    const onStopAll = vi.fn();
+    render(
+      <ChannelAgentsLiveCue
+        memberCount={4}
+        agentCount={8}
+        members={[]}
+        tasks={[
+          task({ task_id: "t1", inbox_event_id: "i1", status: "running" }),
+          task({
+            agent_id: "a2",
+            agent_name: "Wendy",
+            task_id: "t2",
+            inbox_event_id: "i2",
+            status: "queued",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+        onStopAll={onStopAll}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("channel-agents-live-cue"));
+    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("channel-agents-working-stop-all"));
+    expect(onStopAll).toHaveBeenCalledTimes(1);
   });
 
   it("dismisses terminal rows from the mobile working list", () => {
@@ -136,6 +219,7 @@ describe("ChannelAgentsLiveCue (LRM-581)", () => {
       <ChannelAgentsLiveCue
         memberCount={4}
         agentCount={8}
+        members={[]}
         tasks={[
           task({
             agent_id: "a2",
@@ -152,18 +236,17 @@ describe("ChannelAgentsLiveCue (LRM-581)", () => {
     expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("channel-agents-working-dismiss"));
     expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
-    // Idle again — no live chrome.
-    expect(screen.getByTestId("channel-agents-live-cue").tagName).toBe("SPAN");
-    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "8 agents",
+    expect(screen.getByTestId("channel-agents-live-cue")).toHaveAttribute(
+      "data-presence-state",
+      "idle",
     );
   });
 
-  it("dm variant is idle-null and live-compact", () => {
+  it("dm variant is always null (K=1 — no header Working chrome)", () => {
     const { rerender } = render(
       <ChannelAgentsLiveCue variant="dm" agentCount={1} tasks={[]} />,
     );
-    expect(screen.queryByTestId("channel-roster-summary")).toBeNull();
+    expect(screen.queryByTestId("channel-agents-live-cue")).toBeNull();
 
     rerender(
       <ChannelAgentsLiveCue
@@ -173,32 +256,6 @@ describe("ChannelAgentsLiveCue (LRM-581)", () => {
         onStopTask={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "1 working",
-    );
-  });
-
-  it("Stop all appears for multiple stoppable tasks", () => {
-    const onStopAll = vi.fn();
-    render(
-      <ChannelAgentsLiveCue
-        memberCount={2}
-        agentCount={3}
-        tasks={[
-          task({ task_id: "t1", inbox_event_id: "i1", status: "running" }),
-          task({
-            agent_id: "a2",
-            agent_name: "Wendy",
-            task_id: "t2",
-            inbox_event_id: "i2",
-            status: "queued",
-          }),
-        ]}
-        onStopTask={vi.fn()}
-        onStopAll={onStopAll}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("channel-agents-cue-stop-all"));
-    expect(onStopAll).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("channel-agents-live-cue")).toBeNull();
   });
 });

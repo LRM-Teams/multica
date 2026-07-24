@@ -628,10 +628,9 @@ describe("ChannelsPage header — title column width (LRM-279)", () => {
   });
 });
 
-// LRM-452 — Frank: members chip must not carry a visible bg/border container.
-// Wide rail stays equal-weight ghost (transparent default; muted on hover only).
-describe("ChannelsPage header — members chip ghost chrome (LRM-452)", () => {
-  it("keeps the action rail and members chip free of stacked border/bg chrome", async () => {
+// LRM-581 — Presence Cluster replaces members chip; no outer Stop / border chrome.
+describe("ChannelsPage header — Presence Cluster ghost chrome (LRM-581)", () => {
+  it("keeps the action rail and presence cluster free of stacked border/bg chrome", async () => {
     resizeContainerTo(1024);
     renderPage();
     await screen.findByTestId("message-list");
@@ -640,13 +639,11 @@ describe("ChannelsPage header — members chip ghost chrome (LRM-452)", () => {
     expect(rail.className).not.toMatch(/\bborder\b/);
     expect(rail.className).not.toMatch(/\bbg-/);
 
-    const members = screen.getByTestId("channel-header-members-chip");
-    expect(members.className).not.toMatch(/\bborder\b/);
-    expect(members.className).not.toMatch(/\bbg-background\b/);
-    expect(members.className).toMatch(/hover:bg-muted/);
-    // Avatars + count remain present and clickable.
-    expect(members).toHaveAttribute("aria-label", "View members");
-    expect(within(members).getByLabelText("1 members")).toBeInTheDocument();
+    const cluster = screen.getByTestId("channel-agents-live-cue");
+    expect(cluster.className).not.toMatch(/\bborder\b/);
+    expect(cluster.className).not.toMatch(/\bbg-background\b/);
+    expect(cluster.className).toMatch(/hover:bg-muted/);
+    expect(screen.getByTestId("channel-presence-count")).toBeInTheDocument();
 
     const search = screen.getByRole("button", { name: "Search in conversation" });
     expect(search.className).not.toMatch(/\bborder-border\b/);

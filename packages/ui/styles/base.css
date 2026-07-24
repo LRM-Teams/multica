@@ -135,6 +135,25 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* LRM-581 Presence Cluster — brand ring pulse on working agent faces. */
+@keyframes presence-working-ring {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+.animate-presence-working-ring {
+  animation: presence-working-ring 1.6s ease-in-out infinite;
+}
+
+@keyframes presence-face-enter {
+  from { opacity: 0; transform: translateY(4px) scale(0.86); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-presence-face-enter {
+  animation: presence-face-enter 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
 /* Navigation progress bar: 2px brand-colored indeterminate sweep with a
  * right-edge glow that shows across the top of the dashboard while a
  * transition-wrapped push/replace is committing. Driven by useIsNavigating();

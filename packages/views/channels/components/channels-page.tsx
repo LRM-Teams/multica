@@ -229,7 +229,6 @@ import {
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
-import { StopAllAgentsHeaderButton } from "./stop-all-agents-control";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
 
@@ -286,41 +285,6 @@ const identitySearchOptions = { extendedMatch: matchesPinyin };
 // narrow<->wide<->narrow container at/near 360px can't thrash: the same
 // container width always yields the same decision.
 const HEADER_ACTIONS_COMPACT_BREAKPOINT = 360;
-
-// LRM-447 design A — up to 3 faces inside the Members chip (Invite lives in
-// the Members dialog, not the header rail).
-function MemberPresenceStack({
-  members,
-  max = 3,
-  size = 22,
-}: {
-  members: ChannelMemberBrief[];
-  max?: number;
-  size?: number;
-}) {
-  const visible = members.slice(0, max);
-  const overlap = Math.round(size * 0.28);
-  return (
-    <span className="inline-flex items-center">
-      {visible.map((m, i) => (
-        <span
-          key={`${m.member_type}:${m.member_id}`}
-          style={{ marginLeft: i === 0 ? 0 : -overlap }}
-          className="inline-flex rounded-full ring-2 ring-background"
-        >
-          <ActorAvatar
-            actorType={m.member_type === "agent" ? "agent" : "member"}
-            actorId={m.member_id}
-            size={size}
-            avatarUrlHint={m.avatar_url}
-            showStatusDot
-            profileLink={false}
-          />
-        </span>
-      ))}
-    </span>
-  );
-}
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useT("channels");
@@ -3067,17 +3031,7 @@ export function ChannelsPage({
                 )}
               </button>
             }
-            meta={
-              <ChannelAgentsLiveCue
-                memberCount={rosterSummary.memberCount}
-                agentCount={rosterSummary.agentCount}
-                tasks={activeTasks}
-                stoppingTaskId={stoppingChannelTaskId}
-                canStop={canPostInChannel}
-                onStopTask={handleStopChannelTask}
-                onStopAll={openStopAllAgentsConfirm}
-              />
-            }
+            meta={undefined}
             badges={
               <>
                 {isConversationMuted(active) && (
@@ -3097,47 +3051,47 @@ export function ChannelsPage({
             }
             actions={
               isMobile || isHeaderActionsCompact ? (
-                // Mobile / narrow (#568): ⋯ menu. Stop / Members / Search live
-                // inside the drawer — no desktop More in the wide rail (LRM-447).
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("shrink-0 text-muted-foreground", isMobile ? "size-10" : "size-8")}
-                  aria-label={t(($) => $.header.more_aria)}
-                  onClick={() => openChannelDetails("about")}
-                  data-testid="channel-header-more"
-                >
-                  <MoreHorizontal className="size-5" />
-                </Button>
+                // Mobile / narrow: Presence Cluster + ⋯. Stop lives in cluster hover/tap card (LRM-581).
+                <div className="flex items-center gap-0.5">
+                  <ChannelAgentsLiveCue
+                    memberCount={rosterSummary.memberCount}
+                    agentCount={rosterSummary.agentCount}
+                    members={channelMembers}
+                    tasks={activeTasks}
+                    stoppingTaskId={stoppingChannelTaskId}
+                    canStop={canPostInChannel}
+                    onStopTask={handleStopChannelTask}
+                    onStopAll={openStopAllAgentsConfirm}
+                    onOpenMembers={openMembersDialog}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn("shrink-0 text-muted-foreground", isMobile ? "size-10" : "size-8")}
+                    aria-label={t(($) => $.header.more_aria)}
+                    onClick={() => openChannelDetails("about")}
+                    data-testid="channel-header-more"
+                  >
+                    <MoreHorizontal className="size-5" />
+                  </Button>
+                </div>
               ) : (
-                // LRM-447 / LRM-452 — right action rail: Members · Search · Stop.
-                // Equal-weight ghost controls: no outer stacked bg/border, no
-                // per-control chip chrome; transparent default, muted on hover.
-                // Invite moves into Members dialog; no More/⋯ on the wide rail.
+                // LRM-581 lock A — right Presence Cluster · Search. Outer Stop chrome removed.
                 <div
                   className="flex items-center gap-0.5"
                   data-testid="channel-header-action-rail"
                 >
-                  <button
-                    type="button"
-                    onClick={openMembersDialog}
-                    className={cn(
-                      "inline-flex h-7 items-center gap-1.5 rounded-md py-0 pl-1 pr-1.5 text-foreground transition-colors hover:bg-muted",
-                      membersDialogOpen && "bg-muted",
-                    )}
-                    aria-label={t(($) => $.header.view_members_aria)}
-                    data-testid="channel-header-members-chip"
-                  >
-                    <MemberPresenceStack members={channelMembers} />
-                    <span
-                      className="text-xs font-semibold text-muted-foreground"
-                      aria-label={t(($) => $.header.member_count_aria, {
-                        count: channelMembers.length,
-                      })}
-                    >
-                      {channelMembers.length}
-                    </span>
-                  </button>
+                  <ChannelAgentsLiveCue
+                    memberCount={rosterSummary.memberCount}
+                    agentCount={rosterSummary.agentCount}
+                    members={channelMembers}
+                    tasks={activeTasks}
+                    stoppingTaskId={stoppingChannelTaskId}
+                    canStop={canPostInChannel}
+                    onStopTask={handleStopChannelTask}
+                    onStopAll={openStopAllAgentsConfirm}
+                    onOpenMembers={openMembersDialog}
+                  />
                   <Button
                     variant="ghost"
                     size="icon"
@@ -3147,13 +3101,6 @@ export function ChannelsPage({
                   >
                     <Search className="size-3.5" />
                   </Button>
-                  {canPostInChannel ? (
-                    <StopAllAgentsHeaderButton
-                      hasRunning={hasStoppableChannelTasks}
-                      stopping={isStoppingAllChannelTasks}
-                      onOpenConfirm={openStopAllAgentsConfirm}
-                    />
-                  ) : null}
                 </div>
               )
             }

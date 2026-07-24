@@ -10,15 +10,16 @@ services:
       GOOGLE_REDIRECT_URI: https://leagent.me/auth/callback
       MULTICA_APP_URL: https://leagent.me
       MULTICA_PUBLIC_URL: https://leagent.me
-      # LLM proxy base_url injected into env-dispatch training sandboxes. Points at
-      # the db_bridge multica-side chat stub on the AReaL host (10.110.158.143:9100),
-      # which bridges chat/completions over the shared Supabase to the DeepSeek
-      # gateway. Port 9100 is the one the cube sandbox egress firewall allowlists
-      # (the sandbox VM is default-deny egress; 9100 is permitted). NO /v1 suffix:
-      # the stub serves the channel path "/chat/completions" (the OpenAI client
-      # appends /chat/completions to this base); a /v1 suffix makes the sandbox
-      # call /v1/chat/completions and the stub returns 404.
-      AREAL_PROXY_URL: http://10.110.158.143:9100
+      # LLM proxy base_url injected into env-dispatch training sandboxes. Must be
+      # the address the cube sandbox VM can actually route to. The training pi
+      # agent runs inside a cube microVM on the 192.168.0.0/18 network whose
+      # gateway is the host's cube-dev bridge 192.168.0.1; the VM cannot reach the
+      # host's LAN IP 10.110.158.143 (different interface, egress default-deny).
+      # The db_bridge chat stub binds 0.0.0.0:9100 so it also listens on
+      # 192.168.0.1:9100, which the sandbox reaches via its gateway (port 9100 is
+      # egress-allowlisted). NO /v1 suffix: the stub serves "/chat/completions".
+      # From there it bridges over the shared Supabase to the DeepSeek gateway.
+      AREAL_PROXY_URL: http://192.168.0.1:9100
 
   frontend:
     ports: !reset []

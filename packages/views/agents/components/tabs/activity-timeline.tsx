@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { MemoizedMarkdown } from "../../../common/markdown";
@@ -17,6 +17,7 @@ import {
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
+  normalizeActivityExpandText,
 } from "./activity-event";
 
 // All dots are STATIC — no `animate-pulse` (#404 follow-up). A perpetually
@@ -25,6 +26,11 @@ import {
 // and the avatar pulse, not a blinking or colored dot. Tone → color lives in
 // ONE shared table (ACTIVITY_TONE_DOT_CLASS) so the header can't drift from it.
 const TONE_DOT = ACTIVITY_TONE_DOT_CLASS;
+
+// Spine column width — continuous 1.5px border line + hanging nodes (LRM-560).
+const SPINE_COL_CLASS = "relative w-3 shrink-0 self-stretch";
+const SPINE_LINE_CLASS =
+  "pointer-events-none absolute left-1/2 w-[1.5px] -translate-x-1/2 bg-border";
 
 // Keep long Activity details on the exact existing history-message baseline.
 // The detail header is already the sole expand/collapse control, so this is a
@@ -58,14 +64,93 @@ function ToolTargetPath({ value }: { value: string }) {
   );
 }
 
+/** Hanging node + per-row spine segment so the column reads as one continuous line. */
+function TimelineSpine({
+  tone,
+  isFirst,
+  isLast,
+  compact,
+}: {
+  tone: keyof typeof TONE_DOT;
+  isFirst: boolean;
+  isLast: boolean;
+  compact: boolean;
+}) {
+  return (
+    <span className={SPINE_COL_CLASS} aria-hidden>
+      {!compact && !isFirst ? (
+        <span className={cn(SPINE_LINE_CLASS, "top-0 h-[calc(0.625rem+1px)]")} />
+      ) : null}
+      <span
+        className={cn(
+          "relative z-10 mt-2.5 block size-1.5 rounded-full",
+          TONE_DOT[tone],
+        )}
+      />
+      {!compact && !isLast ? (
+        <span className={cn(SPINE_LINE_CLASS, "top-[calc(0.625rem+7px)] bottom-0")} />
+      ) : null}
+    </span>
+  );
+}
+
+/** Command surface: muted + mono + clamp-2 + hover copy (LRM-560). */
+function CommandBlock({
+  content,
+  clamped,
+  copied,
+  copyLabel,
+  onCopy,
+}: {
+  content: string;
+  clamped: boolean;
+  copied: boolean;
+  copyLabel: string;
+  onCopy: () => void;
+}) {
+  return (
+    <div
+      className="group/cmd relative mt-1 rounded-md bg-muted"
+      data-testid="activity-command-block"
+    >
+      <pre
+        className={cn(
+          "overflow-x-auto px-2.5 py-1.5 pr-9 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-muted-foreground",
+          clamped && "line-clamp-2",
+        )}
+      >
+        <code>{content}</code>
+      </pre>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onCopy();
+        }}
+        aria-label={copyLabel}
+        className={cn(
+          "absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground transition-opacity hover:bg-background/80 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          copied ? "opacity-100" : "opacity-0 group-hover/cmd:opacity-100",
+        )}
+      >
+        <Copy className="size-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
 function ActivityRow({
   event,
   time,
   compact = false,
+  isFirst,
+  isLast,
 }: {
   event: ActivityEvent;
   time: string;
   compact?: boolean;
+  isFirst: boolean;
+  isLast: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -90,6 +175,7 @@ function ActivityRow({
   // remains a non-interactive, scannable summary surface.
   const expansion = compact ? undefined : activityExpansionContent(event, presentation);
   const isCommand = expansion?.kind === "command";
+  const isIdle = presentation.labelKey === "idle";
 
   const handleCopyCommand = async () => {
     if (expansion?.kind !== "command") return;
@@ -169,6 +255,22 @@ function ActivityRow({
     };
   }, [expanded]);
 
+  const timeNode = (
+    <span
+      className={cn(
+        "ml-auto shrink-0 pt-0.5 font-mono text-[11px] tabular-nums",
+        isIdle ? "text-muted-foreground/40" : "text-muted-foreground/55",
+      )}
+    >
+      {time}
+    </span>
+  );
+
+  const labelClass = cn(
+    "text-[13.5px] font-semibold leading-[1.45]",
+    isIdle ? "text-muted-foreground" : "text-foreground",
+  );
+
   if (expansion) {
     return (
       <div
@@ -176,140 +278,164 @@ function ActivityRow({
         data-testid="activity-row"
         data-activity-kind={event.activity_kind}
       >
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          aria-controls={expanded ? detailId : undefined}
-          className="group flex min-h-11 w-full items-start gap-3 rounded-md py-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
-        >
-          <span className="w-12 shrink-0 pt-1 font-mono text-[11px] tabular-nums text-muted-foreground/70">
-            {time}
-          </span>
-          <span
-            className={cn("mt-2.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
-            aria-hidden
+        <div className="flex items-start gap-3">
+          <TimelineSpine
+            tone={presentation.tone}
+            isFirst={isFirst}
+            isLast={isLast}
+            compact={false}
           />
-          <span className="min-w-0 flex-1 pt-0.5">
-            <span className="block text-sm text-foreground">{label}</span>
-            {!expanded && subtext && (
+          <div className="min-w-0 flex-1 pt-0.5">
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-controls={expanded ? detailId : undefined}
+              className="group flex min-h-11 w-full items-baseline gap-2 rounded-md text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
+            >
+              <span className={labelClass}>{label}</span>
+              {timeNode}
               <span
-                className={cn(
-                  "mt-0.5 block text-xs text-muted-foreground",
-                  isCommand ? "line-clamp-2 break-words font-mono" : "line-clamp-1",
-                )}
+                className="mt-0.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground"
+                aria-hidden
               >
+                {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+              </span>
+            </button>
+            {!expanded && isCommand && expansion.kind === "command" ? (
+              <CommandBlock
+                content={expansion.content}
+                clamped
+                copied={copied}
+                copyLabel={copyLabel}
+                onCopy={() => {
+                  void handleCopyCommand();
+                }}
+              />
+            ) : null}
+            {!expanded && !isCommand && subtext ? (
+              <span className="mt-0.5 block line-clamp-1 text-xs text-muted-foreground">
                 {subtext}
               </span>
-            )}
-          </span>
-          <span className="mt-1 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground" aria-hidden>
-            {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-          </span>
-        </button>
-        {expanded && (
-          <div
-            id={detailId}
-            ref={detailRef}
-            data-testid="activity-expanded-detail"
-            className={cn(
-              "relative ml-[4.875rem] mt-1 text-xs text-muted-foreground sm:ml-[5.25rem]",
-              ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
-              detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
-            )}
-            tabIndex={detailOverflowed ? 0 : undefined}
-            role={detailOverflowed ? "region" : undefined}
-            aria-label={detailOverflowed ? ACTIVITY_CHROME_EN.expanded_detail_scrollable : undefined}
-            onScroll={updateDetailOverflow}
-          >
-            {expansion?.kind === "freshness_hold" ? (
-              <div className="flex flex-col gap-1" data-testid="activity-freshness-hold">
-                {expansion.target ? (
-                  <div className="flex items-center gap-1">
-                    <span className="text-muted-foreground/70">
-                      {ACTIVITY_CHROME_EN.hold_target_label}
-                    </span>
-                    <ChannelChip name={expansion.target} />
-                  </div>
-                ) : null}
-                {expansion.newCount != null ? (
-                  <div>
-                    <span className="text-muted-foreground/70">
-                      {ACTIVITY_CHROME_EN.hold_new_messages_label}
-                    </span>{" "}
-                    {expansion.newCount}{" "}
-                    {expansion.newCount === 1
-                      ? ACTIVITY_CHROME_EN.hold_newer_message
-                      : ACTIVITY_CHROME_EN.hold_newer_messages}
-                  </div>
-                ) : null}
-                <div>
-                  <span className="text-muted-foreground/70">
-                    {ACTIVITY_CHROME_EN.hold_decision_label}
-                  </span>{" "}
-                  {ACTIVITY_CHROME_EN.hold_decision_value}
-                </div>
-              </div>
-            ) : isCommand ? (
-              <div className="relative">
-                <pre className="overflow-x-auto bg-muted/30 px-2 py-1.5 pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
-                  <code>{expansion.content}</code>
-                </pre>
-                <button
-                  type="button"
-                  onClick={handleCopyCommand}
-                  aria-label={copyLabel}
-                  className="absolute right-0 top-0 rounded border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {copyLabel}
-                </button>
-              </div>
-            ) : (
-              <MemoizedMarkdown
-                mode="minimal"
-                enableStickerShortcodes={false}
-                className="activity-expanded-markdown break-words text-xs leading-5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
-              >
-                {expansion.content}
-              </MemoizedMarkdown>
-            )}
-            {showDetailFade && (
+            ) : null}
+            {expanded ? (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
-                data-testid="activity-detail-scroll-fade"
-              />
-            )}
+                id={detailId}
+                ref={detailRef}
+                data-testid="activity-expanded-detail"
+                className={cn(
+                  "relative mt-1 text-xs text-muted-foreground",
+                  ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
+                  detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
+                )}
+                tabIndex={detailOverflowed ? 0 : undefined}
+                role={detailOverflowed ? "region" : undefined}
+                aria-label={
+                  detailOverflowed ? ACTIVITY_CHROME_EN.expanded_detail_scrollable : undefined
+                }
+                onScroll={updateDetailOverflow}
+              >
+                {expansion?.kind === "freshness_hold" ? (
+                  <div
+                    className="rounded-md border-l-2 border-l-brand bg-muted px-2.5 py-2"
+                    data-testid="activity-freshness-hold"
+                  >
+                    <div className="flex flex-col gap-1">
+                      {expansion.target ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground/70">
+                            {ACTIVITY_CHROME_EN.hold_target_label}
+                          </span>
+                          <ChannelChip name={expansion.target} />
+                        </div>
+                      ) : null}
+                      {expansion.newCount != null ? (
+                        <div>
+                          <span className="text-muted-foreground/70">
+                            {ACTIVITY_CHROME_EN.hold_new_messages_label}
+                          </span>{" "}
+                          {expansion.newCount}{" "}
+                          {expansion.newCount === 1
+                            ? ACTIVITY_CHROME_EN.hold_newer_message
+                            : ACTIVITY_CHROME_EN.hold_newer_messages}
+                        </div>
+                      ) : null}
+                      <div>
+                        <span className="text-muted-foreground/70">
+                          {ACTIVITY_CHROME_EN.hold_decision_label}
+                        </span>{" "}
+                        {ACTIVITY_CHROME_EN.hold_decision_value}
+                      </div>
+                    </div>
+                  </div>
+                ) : isCommand && expansion.kind === "command" ? (
+                  <CommandBlock
+                    content={expansion.content}
+                    clamped={false}
+                    copied={copied}
+                    copyLabel={copyLabel}
+                    onCopy={() => {
+                      void handleCopyCommand();
+                    }}
+                  />
+                ) : (
+                  <div
+                    className="rounded-md border-l-2 border-l-brand bg-muted px-2.5 py-2 whitespace-pre-wrap"
+                    data-testid="activity-expand-surface"
+                  >
+                    <MemoizedMarkdown
+                      mode="minimal"
+                      enableStickerShortcodes={false}
+                      className="activity-expanded-markdown break-words text-xs leading-5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+                    >
+                      {normalizeActivityExpandText(expansion.content)}
+                    </MemoizedMarkdown>
+                  </div>
+                )}
+                {showDetailFade && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                    data-testid="activity-detail-scroll-fade"
+                  />
+                )}
+              </div>
+            ) : null}
           </div>
-        )}
+        </div>
       </div>
     );
   }
 
   return (
     <div
-      className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
+      className={cn(
+        "flex items-start gap-3",
+        compact ? "py-0.5" : "py-1",
+        isIdle && "opacity-70",
+      )}
       data-testid="activity-row"
       data-activity-kind={event.activity_kind}
     >
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
-        {time}
-      </span>
-      <span
-        className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
-        aria-hidden
+      <TimelineSpine
+        tone={presentation.tone}
+        isFirst={isFirst}
+        isLast={isLast}
+        compact={compact}
       />
       {presentation.subtextKind === "command" && compact ? (
         // Compact Profile Recent: clamp + no expand / copy (title-only).
-        <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words text-sm leading-[1.45] text-foreground">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2 pt-0.5">
+          <div className="min-w-0 flex-1 line-clamp-2 break-words text-[13.5px] font-semibold leading-[1.45] text-foreground">
             <span>{label} </span>
-            <span className="font-mono text-xs text-muted-foreground">{subtext}</span>
+            <span className="font-mono text-xs font-normal text-muted-foreground">{subtext}</span>
           </div>
+          {timeNode}
         </div>
       ) : (
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="shrink-0 text-sm text-foreground">{label}</span>
+        <div className="flex min-w-0 flex-1 items-baseline gap-2 pt-0.5">
+          <span className={cn(labelClass, "shrink-0")}>{label}</span>
           {subtextNode}
+          {timeNode}
         </div>
       )}
     </div>
@@ -322,7 +448,7 @@ const COMPACT_RECENT_LIMIT = 5;
 
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
- * each row = `time · source dot · human label · optional subtext`. Shows only
+ * each row = `spine · human label · optional subtext · time` (LRM-560). Shows only
  * mainline narrative events (kept by `isNarrativeActivityEvent`, driven by raft
  * `activity_kind` semantics #389); diagnostic kinds (transport / telemetry /
  * internal_progress / runtime_diagnostic / …) stay out. Never renders raw
@@ -365,13 +491,15 @@ export function ActivityTimeline({
   }
 
   return (
-    <div className="flex flex-col">
-      {shown.map((event) => (
+    <div className="flex flex-col" data-testid="activity-timeline">
+      {shown.map((event, index) => (
         <ActivityRow
           key={event.id}
           event={event}
           time={formatActivityTime(event.occurred_at, tz)}
           compact={compact}
+          isFirst={index === 0}
+          isLast={index === shown.length - 1}
         />
       ))}
     </div>

@@ -281,13 +281,27 @@ describe("ActivityTimeline", () => {
     expect(detail).toHaveAttribute("id", header.getAttribute("aria-controls"));
     expect(header.contains(detail)).toBe(false);
     // Expanded content replaces the compact preview in the same text column;
-    // it is not rendered as a second bordered card below the row.
+    // LRM-560: muted surface + brand left bar (not a second bordered card below).
     expect(header).not.toHaveTextContent(markdownOutput.text!);
-    expect(detail).toHaveClass("ml-[4.875rem]", "mt-1", "text-xs", "text-muted-foreground");
-    expect(detail).not.toHaveClass("rounded-md", "border", "bg-muted/20", "px-3", "py-2");
+    expect(detail).toHaveClass("mt-1", "text-xs", "text-muted-foreground");
+    const surface = screen.getByTestId("activity-expand-surface");
+    expect(surface).toHaveClass("rounded-md", "border-l-2", "border-l-brand", "bg-muted");
     const markdown = screen.getByTestId("activity-markdown");
     expect(markdown).toHaveAttribute("data-source", markdownOutput.text!);
     expect(markdown).toHaveAttribute("data-sticker-shortcodes", "false");
+  });
+
+  it("normalizes blank runs in expanded markdown (LRM-554 / LRM-560)", () => {
+    const padded: ActivityEvent = {
+      ...TEXT,
+      text: "  line one  \n\n\n\nline two  \n",
+    };
+    render(<ActivityTimeline events={[padded]} />);
+    fireEvent.click(screen.getByRole("button", { name: /Output/ }));
+    expect(screen.getByTestId("activity-markdown")).toHaveAttribute(
+      "data-source",
+      "line one\n\nline two",
+    );
   });
 
   it("keeps expanded detail bounded only when it truly overflows, with a fade until scrolled to the end", () => {
@@ -351,7 +365,7 @@ describe("ActivityTimeline", () => {
     expect(screen.queryByText("Reply 0")).toBeNull();
   });
 
-  it("renders a shell command as a full-width hanging block (not path-mangled) (#v0/#404)", () => {
+  it("renders a shell command as a muted clamp-2 block with hover copy (not path-mangled) (#v0/#404/LRM-560)", () => {
     const full = 'cd /a/b && multica send --target "#c"';
     const CMD: ActivityEvent = {
       id: "cmd1",
@@ -381,14 +395,17 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("Running command")).toBeInTheDocument();
     // Command is one plain node (never path head/tail); full entries[].command.
     expect(screen.getByText(full)).toBeInTheDocument();
-    // Collapsed: the header holds the two-line command preview.
+    // Collapsed: muted command surface under the header, clamp-2 + hover Copy.
     const toggle = screen.getByRole("button", { expanded: false });
-    const clamped = toggle.querySelector(".line-clamp-2");
-    expect(clamped).not.toBeNull();
     expect(toggle).toHaveTextContent("Running command");
-    expect(toggle).toHaveTextContent(full);
-    // Copy is expanded-only — not present while collapsed.
-    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    expect(toggle).not.toHaveTextContent(full);
+    const cmdBlock = screen.getByTestId("activity-command-block");
+    expect(cmdBlock).toHaveClass("bg-muted", "rounded-md");
+    expect(cmdBlock.querySelector(".line-clamp-2")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    // Token spine colors: command=running, in-progress=brand (LRM-560).
+    expect(container.querySelector(".bg-running")).not.toBeNull();
+    expect(container.querySelector(".bg-brand")).not.toBeNull();
     // No dot pulses — all static (#404).
     expect(container.querySelector(".animate-pulse")).toBeNull();
   });
@@ -409,7 +426,7 @@ describe("ActivityTimeline", () => {
     };
     render(<ActivityTimeline events={[CMD]} />);
     const toggle = screen.getByRole("button", { expanded: false });
-    expect(toggle.querySelector(".line-clamp-2")).not.toBeNull();
+    expect(screen.getByTestId("activity-command-block").querySelector(".line-clamp-2")).not.toBeNull();
     fireEvent.click(toggle);
 
     const open = screen.getByRole("button", { expanded: true });
@@ -419,9 +436,9 @@ describe("ActivityTimeline", () => {
     // while their pre keeps its independent horizontal handling.
     expect(detail).toHaveClass("max-h-[min(260px,55vh)]", "md:max-h-[360px]");
     expect(detail.querySelector("pre")).toHaveClass("overflow-x-auto");
+    expect(detail.querySelector("pre")).not.toHaveClass("line-clamp-2");
     expect(detail.querySelector("pre code")).toHaveTextContent(full);
     const copy = screen.getByRole("button", { name: "Copy" });
-    expect(copy).toHaveTextContent("Copy");
 
     Object.defineProperties(detail, {
       clientHeight: { configurable: true, value: 260 },
@@ -444,10 +461,20 @@ describe("ActivityTimeline", () => {
     fireEvent.scroll(detail);
     expect(screen.queryByTestId("activity-detail-scroll-fade")).toBeNull();
 
-    // Collapse again.
+    // Collapse again — clamp + hover Copy return on the command surface.
     fireEvent.click(open);
-    expect(screen.getByRole("button", { expanded: false }).querySelector(".line-clamp-2")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    expect(screen.getByTestId("activity-command-block").querySelector(".line-clamp-2")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Copy|Copied/ })).toBeInTheDocument();
+  });
+
+  it("draws a continuous spine column across rows (LRM-560)", () => {
+    const { container } = render(<ActivityTimeline events={[WAKE, TEXT, IDLE_STATUS]} />);
+    expect(screen.getByTestId("activity-timeline")).toBeInTheDocument();
+    // Per-row spine segments use the 1.5px border line; at least one mid-row has both halves.
+    expect(container.querySelectorAll(".w-\\[1\\.5px\\]").length).toBeGreaterThan(0);
+    // Timestamp sits right-aligned (weakest weight), not leading the row.
+    const idleRow = screen.getByText("Idle").closest("[data-testid=activity-row]");
+    expect(idleRow?.querySelector(".ml-auto")).toHaveTextContent("09:36:14");
   });
 
   it("compact mode drops the command expand/copy affordance (title-only, non-interactive) (#v0)", () => {

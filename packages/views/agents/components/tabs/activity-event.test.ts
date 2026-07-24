@@ -1,11 +1,32 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEvent } from "./activity-event";
 import {
+  ACTIVITY_TONE_DOT_CLASS,
   activityExpansionContent,
   activityPresentation,
   isNarrativeActivityEvent,
+  normalizeActivityExpandText,
   type ActivityLabelKey,
 } from "./activity-event";
+
+describe("ACTIVITY_TONE_DOT_CLASS (LRM-560)", () => {
+  it("maps tones to design tokens — no hardcoded hex", () => {
+    expect(ACTIVITY_TONE_DOT_CLASS.running).toBe("bg-running");
+    expect(ACTIVITY_TONE_DOT_CLASS.active).toBe("bg-brand");
+    expect(ACTIVITY_TONE_DOT_CLASS.waiting).toBe("bg-warning");
+    expect(ACTIVITY_TONE_DOT_CLASS.failure).toBe("bg-destructive");
+    expect(ACTIVITY_TONE_DOT_CLASS.neutral).toBe("bg-muted-foreground/40");
+    expect(Object.values(ACTIVITY_TONE_DOT_CLASS).join(" ")).not.toMatch(/#F5B301/i);
+  });
+});
+
+describe("normalizeActivityExpandText (LRM-554 / LRM-560)", () => {
+  it("trims ends, strips trailing line whitespace, and folds blank runs to one", () => {
+    expect(normalizeActivityExpandText("  a  \n\n\n\nb  \n")).toBe("a\n\nb");
+    expect(normalizeActivityExpandText("only")).toBe("only");
+    expect(normalizeActivityExpandText("\n\n")).toBe("");
+  });
+});
 
 describe("activityExpansionContent", () => {
   function event(

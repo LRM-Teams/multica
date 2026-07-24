@@ -286,12 +286,12 @@ func (f *fakeIssueCreator) Create(ctx context.Context, p service.IssueCreatePara
 
 type fakeEnqueuer struct {
 	called           int
-	task             db.AgentTaskQueue
+	task             db.AgentInboxEvent
 	err              error
 	lastInitiatorUID pgtype.UUID
 }
 
-func (f *fakeEnqueuer) EnqueueChatTask(ctx context.Context, _ db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (f *fakeEnqueuer) EnqueueChatTask(ctx context.Context, _ db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
 	f.called++
 	f.lastInitiatorUID = initiatorUserID
 	return f.task, f.err
@@ -434,7 +434,7 @@ func TestDispatcher_PlainMessageEnqueuesTask(t *testing.T) {
 		ensureID:     sessionID,
 		appendResult: AppendResult{},
 	}
-	enq := &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}}
+	enq := &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}}
 	d := &Dispatcher{
 		Queries:     queries,
 		Chat:        chat,
@@ -489,7 +489,7 @@ func TestDispatcher_GroupMessageUsesInstallerAsCreator(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	_, _ = d.Handle(context.Background(), InboundMessage{
@@ -522,7 +522,7 @@ func TestDispatcher_GroupMessageEnqueuesWithSenderAsInitiator(t *testing.T) {
 		chatSession:       db.ChatSession{ID: sessionID, AgentID: inst.AgentID},
 	}
 	chat := &fakeChat{ensureID: sessionID, appendResult: AppendResult{}}
-	enq := &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}}
+	enq := &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}}
 	d := &Dispatcher{
 		Queries:     queries,
 		Chat:        chat,
@@ -730,7 +730,7 @@ func TestDispatcher_IssueCommandCreatesIssue(t *testing.T) {
 		Chat:         chat,
 		Audit:        &fakeAudit{},
 		IssueService: issueSvc,
-		TaskService:  &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService:  &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	res, err := d.Handle(context.Background(), InboundMessage{
@@ -801,7 +801,7 @@ func TestDispatcher_IssueIdentifierFallsBackToNumberOnWorkspaceLookupErr(t *test
 		Chat:         chat,
 		Audit:        &fakeAudit{},
 		IssueService: issueSvc,
-		TaskService:  &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService:  &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	res, err := d.Handle(context.Background(), InboundMessage{
@@ -1014,7 +1014,7 @@ func TestDispatcher_DebounceCoalescesRunTrigger(t *testing.T) {
 		chatSession:       db.ChatSession{ID: sessionID, AgentID: validUUID(0x33)},
 	}
 	chat := &fakeChat{ensureID: sessionID, appendResult: AppendResult{}}
-	enq := &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}}
+	enq := &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}}
 	f := &fakeTimerFactory{}
 	d := &Dispatcher{Queries: queries, Chat: chat, Audit: &fakeAudit{}, TaskService: enq}
 	d.batcher = newTestBatcher(f)
@@ -1075,7 +1075,7 @@ func TestDispatcher_LatestSenderWinsAsInitiator(t *testing.T) {
 		userBindingByOpenID: map[string]db.LarkUserBinding{"ou_alice": alice, "ou_bob": bob},
 	}
 	chat := &fakeChat{ensureID: sessionID, appendResult: AppendResult{}}
-	enq := &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}}
+	enq := &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}}
 	f := &fakeTimerFactory{}
 	d := &Dispatcher{Queries: queries, Chat: chat, Audit: &fakeAudit{}, TaskService: enq}
 	d.batcher = newTestBatcher(f)
@@ -1131,7 +1131,7 @@ func TestDispatcher_EnsureChatSessionFailureReleasesClaim(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	// First attempt — infra error in EnsureChatSession.
@@ -1227,7 +1227,7 @@ func TestDispatcher_AppendUserMessageFailureReleasesClaim(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	// First attempt — append fails.
@@ -1427,7 +1427,7 @@ func TestDispatcher_StaleInFlightClaimReclaimable(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	res, err := d.Handle(context.Background(), InboundMessage{
@@ -1479,7 +1479,7 @@ func TestDispatcher_StaleReclaimRaceDoesNotDoubleWrite(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	// Inject worker B's reclaim. The hook fires while worker A's
@@ -1596,7 +1596,7 @@ func TestDispatcher_InTxMarkPreventsPostCommitReclaim(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	res, err := d.Handle(context.Background(), InboundMessage{
@@ -1683,7 +1683,7 @@ func TestDispatcher_InTxMarkSucceedsAndSkipsPostFinalize(t *testing.T) {
 		Queries:     queries,
 		Chat:        chat,
 		Audit:       &fakeAudit{},
-		TaskService: &fakeEnqueuer{task: db.AgentTaskQueue{ID: validUUID(0x77)}},
+		TaskService: &fakeEnqueuer{task: db.AgentInboxEvent{ID: validUUID(0x77)}},
 	}
 
 	_, err := d.Handle(context.Background(), InboundMessage{

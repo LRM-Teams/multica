@@ -67,7 +67,7 @@ RETURNING *;
 -- name: CountRecentWorkspaceScheduledRadarRuns :one
 SELECT count(*)::bigint
 FROM agent_radar_run rr
-LEFT JOIN agent_task_queue atq ON atq.id = rr.task_id
+LEFT JOIN agent_inbox_event atq ON atq.id = rr.task_id
 WHERE rr.workspace_id = $1
   AND rr.trigger_kind = 'scheduled'
   AND rr.cooldown_key = 'workspace_supervisor_radar'
@@ -96,11 +96,11 @@ WHERE rr.workspace_id = $1
 WITH victims AS MATERIALIZED (
     SELECT rr.id AS radar_run_id, atq.id AS task_id
     FROM agent_radar_run rr
-    JOIN agent_task_queue atq ON atq.id = rr.task_id
+    JOIN agent_inbox_event atq ON atq.id = rr.task_id
     WHERE rr.status = 'queued'
       AND rr.started_at IS NULL
       AND rr.created_at < now() - make_interval(secs => @stale_age_secs::double precision)
-      AND atq.status = 'dispatched'
+      AND atq.status = 'draining'
       AND atq.started_at IS NULL
       AND atq.created_at < now() - make_interval(secs => @stale_age_secs::double precision)
       AND atq.agent_id = rr.agent_id
@@ -115,15 +115,18 @@ WITH victims AS MATERIALIZED (
     -- only that row and let HandleFailedTasks terminalize the run afterwards.
     FOR UPDATE OF atq SKIP LOCKED
 )
-UPDATE agent_task_queue atq
+UPDATE agent_inbox_event atq
 SET
-    status = 'failed',
+    status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
     error = 'Radar task remained dispatched without starting',
     failure_reason = 'radar_stale_dispatch_repair'
 FROM victims v
 WHERE atq.id = v.task_id
-  AND atq.status = 'dispatched'
+  AND atq.status = 'draining'
   AND atq.started_at IS NULL
   AND atq.created_at < now() - make_interval(secs => @stale_age_secs::double precision)
 RETURNING atq.*;
@@ -158,12 +161,13 @@ SET
     status = 'executing',
     started_at = COALESCE(run.started_at, now()),
     updated_at = now()
-FROM agent_task_queue task
+FROM agent_inbox_event task
 WHERE run.id = sqlc.arg('run_id')
   AND run.task_id = sqlc.arg('task_id')
   AND task.id = sqlc.arg('task_id')
   AND task.agent_id = run.agent_id
-  AND task.status = 'completed'
+  AND task.status = 'acked'
+  AND task.terminal_outcome = 'completed'
   AND task.context->>'type' = 'agent_radar'
   AND task.context->>'radar_run_id' = run.id::text
   AND run.status IN ('queued', 'running')
@@ -409,23 +413,25 @@ WHERE run.workspace_id = state.workspace_id
 -- after its execution claim has been stale for five minutes.
 WITH terminalized AS MATERIALIZED (
     UPDATE agent_radar_run run
-    SET status = CASE WHEN task.status = 'cancelled' THEN 'cancelled' ELSE 'failed' END,
+    SET status = CASE WHEN task.terminal_outcome = 'cancelled' THEN 'cancelled' ELSE 'failed' END,
         error = CASE
           WHEN run.error <> '' THEN run.error
-          WHEN task.status = 'completed' THEN 'Radar completion processing was interrupted'
+          WHEN task.terminal_outcome = 'completed' THEN 'Radar completion processing was interrupted'
           ELSE COALESCE(task.error, task.failure_reason, 'Radar task terminated')
         END,
         finished_at = COALESCE(run.finished_at, now()),
         updated_at = now()
-    FROM agent_task_queue task
+    FROM agent_inbox_event task
     WHERE run.task_id = task.id
       AND (
         (
-          task.status IN ('failed', 'cancelled')
+          task.status IN ('acked', 'suppressed')
+          AND task.terminal_outcome IN ('failed', 'cancelled')
           AND run.status IN ('planned', 'queued', 'running', 'executing')
         )
         OR (
-          task.status = 'completed'
+          task.status = 'acked'
+          AND task.terminal_outcome = 'completed'
           AND (
             (
               run.status IN ('planned', 'queued', 'running')

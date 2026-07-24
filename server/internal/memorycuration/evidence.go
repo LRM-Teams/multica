@@ -116,7 +116,7 @@ func collectTaskEvidence(ctx context.Context, db EvidenceDB, workspaceID, agentI
 		       COALESCE(i.title, cs.title, atq.status) AS title,
 		       COALESCE(atq.error, atq.result::text, '') AS snippet,
 		       COALESCE(atq.completed_at, atq.started_at, atq.dispatched_at, atq.created_at) AS event_at
-		  FROM agent_task_queue atq
+		  FROM agent_inbox_event atq
 		  JOIN agent a ON a.id = atq.agent_id
 		  LEFT JOIN issue i ON i.id = atq.issue_id
 		  LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id

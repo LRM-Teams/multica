@@ -14,12 +14,12 @@ import (
 
 type radarReplayRecorder struct {
 	mu    sync.Mutex
-	tasks []db.AgentTaskQueue
+	tasks []db.AgentInboxEvent
 	runs  []db.AgentRadarRun
 	err   error
 }
 
-func (r *radarReplayRecorder) ReplayCompletedAgentRadarTask(_ context.Context, task db.AgentTaskQueue, run db.AgentRadarRun) error {
+func (r *radarReplayRecorder) ReplayCompletedAgentRadarTask(_ context.Context, task db.AgentInboxEvent, run db.AgentRadarRun) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tasks = append(r.tasks, task)

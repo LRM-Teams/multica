@@ -16,12 +16,12 @@ const (
 )
 
 type fakeInFlightResetter struct {
-	task   db.AgentTaskQueue
+	task   db.AgentInboxEvent
 	err    error
 	called bool
 }
 
-func (f *fakeInFlightResetter) ResetInFlightTaskForResume(_ context.Context, _ db.ResetInFlightTaskForResumeParams) (db.AgentTaskQueue, error) {
+func (f *fakeInFlightResetter) ResetInFlightTaskForResume(_ context.Context, _ db.ResetInFlightTaskForResumeParams) (db.AgentInboxEvent, error) {
 	f.called = true
 	return f.task, f.err
 }
@@ -37,7 +37,7 @@ func (f *fakeWaker) NotifyTaskAvailable(runtimeID, taskID string) {
 func TestResumeAgentRunReactivatesExistingTask(t *testing.T) {
 	taskID := util.MustParseUUID(resumeTestTaskID)
 	runtimeID := util.MustParseUUID(resumeTestRuntimeID)
-	resetter := &fakeInFlightResetter{task: db.AgentTaskQueue{ID: taskID, RuntimeID: runtimeID}}
+	resetter := &fakeInFlightResetter{task: db.AgentInboxEvent{ID: taskID, RuntimeID: runtimeID}}
 	waker := &fakeWaker{}
 	runner := NewTaskResumeRunner(resetter, waker)
 

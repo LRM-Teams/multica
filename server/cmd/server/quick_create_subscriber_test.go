@@ -373,7 +373,7 @@ func quickCreateFixtureAgentID(t *testing.T) string {
 	return agentID
 }
 
-func enqueueStartedQuickCreateTask(t *testing.T, queries *db.Queries, taskSvc *service.TaskService, agentID string, source *protocol.QuickCreateSourceContext) db.AgentTaskQueue {
+func enqueueStartedQuickCreateTask(t *testing.T, queries *db.Queries, taskSvc *service.TaskService, agentID string, source *protocol.QuickCreateSourceContext) db.AgentInboxEvent {
 	t.Helper()
 	ctx := context.Background()
 	task, err := taskSvc.EnqueueQuickCreateTask(ctx,

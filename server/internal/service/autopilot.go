@@ -51,7 +51,7 @@ func NewAutopilotService(q *db.Queries, tx TxStarter, bus *events.Bus, taskSvc *
 // agent's runtime: if it is not online, we record a `skipped` run with a
 // failure_reason and return without enqueueing. This is the "触发时准入" gate
 // from MUL-1899 — without it a paused laptop / offline daemon causes scheduled
-// autopilots to pile thousands of doomed tasks onto agent_task_queue.
+// autopilots to pile thousands of doomed tasks onto agent_inbox_event.
 //
 // When assignee_type='squad' the gate runs against the squad leader (Path A
 // from MUL-2429: Autopilot-on-squad ≈ Autopilot-on-leader), so an offline or
@@ -230,7 +230,7 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	// Enqueue agent task via the existing flow. Squad-assigned autopilots
 	// route to the resolved leader as the executing agent (Path A from
 	// MUL-2429); agent-assigned autopilots go through the standard issue
-	// path. Both code paths land in agent_task_queue with agent_id = leader.
+	// path. Both code paths land in agent_inbox_event with agent_id = leader.
 	if ap.AssigneeType == "squad" {
 		// Fail-closed private-leader gate: if the leader is private, verify
 		// the autopilot creator still has access. This catches illegitimate
@@ -392,7 +392,7 @@ func (s *AutopilotService) SyncRunFromIssue(ctx context.Context, issue db.Issue)
 }
 
 // SyncRunFromTask updates the autopilot run when a run_only task completes or fails.
-func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentTaskQueue) {
+func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentInboxEvent) {
 	if !task.AutopilotRunID.Valid {
 		return
 	}
@@ -452,7 +452,7 @@ func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentTas
 // here means another attempt is already in flight — we wait for it instead of
 // failing the run prematurely. Once retries are exhausted (or the failure was
 // never retryable in the first place), the run fails carrying the task's reason.
-func (s *AutopilotService) SyncRunFromLinkedIssueTask(ctx context.Context, task db.AgentTaskQueue) {
+func (s *AutopilotService) SyncRunFromLinkedIssueTask(ctx context.Context, task db.AgentInboxEvent) {
 	if task.AutopilotRunID.Valid || !task.IssueID.Valid || task.Status != "failed" {
 		return
 	}
@@ -501,7 +501,7 @@ func (s *AutopilotService) SyncRunFromLinkedIssueTask(ctx context.Context, task 
 	s.publishRunDone(util.UUIDToString(autopilot.WorkspaceID), updatedRun, "failed")
 }
 
-func taskFailureReasonForAutopilotRun(task db.AgentTaskQueue) string {
+func taskFailureReasonForAutopilotRun(task db.AgentInboxEvent) string {
 	if task.Error.Valid && strings.TrimSpace(task.Error.String) != "" {
 		return task.Error.String
 	}

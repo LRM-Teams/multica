@@ -61,5 +61,5 @@ WHERE project_id = $1;
 -- assembly.
 SELECT atq.status
 FROM env_dispatch_run r
-JOIN agent_task_queue atq ON atq.id = r.root_task_id
+JOIN agent_inbox_event atq ON atq.id = r.root_task_id
 WHERE r.project_id = $1 AND r.workspace_id = $2;

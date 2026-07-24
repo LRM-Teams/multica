@@ -416,7 +416,7 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 // DeleteChatSession hard-deletes a chat session owned by the caller. The
 // row lock + cancel + delete run inside a single tx so a concurrent
 // SendChatMessage cannot enqueue a task that would later be orphaned by
-// the FK ON DELETE SET NULL on agent_task_queue.chat_session_id. Cancel
+// the FK ON DELETE SET NULL on agent_inbox_event.chat_session_id. Cancel
 // failure aborts the delete; events fire only after commit.
 func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
@@ -440,7 +440,7 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	qtx := h.Queries.WithTx(tx)
 
 	// FOR UPDATE on the chat_session row blocks any concurrent INSERT into
-	// agent_task_queue that references it (the FK validation needs a
+	// agent_inbox_event that references it (the FK validation needs a
 	// KEY SHARE lock). After we commit the delete, the blocked INSERT
 	// fails its FK check, so it can't land an orphaned task.
 	if _, err := qtx.LockChatSessionForDelete(r.Context(), session.ID); err != nil {
@@ -1066,7 +1066,7 @@ func (h *Handler) ListChatAgentInboxEventTimeline(w http.ResponseWriter, r *http
 // current workspace.
 //
 // Tenancy is enforced uniformly through the task's owning agent: every
-// agent_task_queue row carries a NOT NULL agent_id (ON DELETE CASCADE, so the
+// agent_inbox_event row carries a NOT NULL agent_id (ON DELETE CASCADE, so the
 // agent always exists), and agents are workspace-scoped. GetAgentTaskInWorkspace
 // is therefore the single tenant guard that works regardless of which optional
 // source FK (issue / chat_session / autopilot_run) is set — which is what makes

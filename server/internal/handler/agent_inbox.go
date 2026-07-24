@@ -446,6 +446,10 @@ func (h *Handler) StartAgentInboxExecution(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to verify inbox execution")
 		return
 	}
+	if _, err := h.TaskService.StartTask(r.Context(), event.ID); err != nil {
+		writeError(w, http.StatusConflict, "inbox event is no longer runnable")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -529,6 +533,24 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	if err := h.normalizeTaskCompleteOutput(r.Context(), task, &req.TaskCompleteRequest); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	var workCompletion *service.CompleteTaskOutcome
+	if !event.ChatSessionID.Valid {
+		result, _ := json.Marshal(req.TaskCompleteRequest)
+		var completionErr error
+		workCompletion, completionErr = h.TaskService.CompleteDaemonTask(
+			r.Context(),
+			event.ID,
+			result,
+			req.SessionID,
+			req.WorkDir,
+		)
+		if completionErr != nil {
+			writeError(w, http.StatusBadRequest, completionErr.Error())
+			return
+		}
+		event = workCompletion.Task
+		task = agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
 	}
 	if h.TxStarter == nil {
 		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
@@ -614,8 +636,10 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusInternalServerError, "failed to complete channel onboarding")
 			return
 		}
-	} else {
+	} else if event.ChatSessionID.Valid {
 		terminalOutcome = agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
+	} else {
+		terminalOutcome = "completed"
 	}
 	if !isChannelOnboarding && req.MustReplyFailure {
 		// A Raft freshness hold already persisted the attempted output as a
@@ -647,7 +671,21 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
 	}
+	if executionID, parseErr := util.ParseUUID(req.ExecutionID); parseErr == nil {
+		_, _ = h.DB.Exec(r.Context(), `
+			UPDATE agent_execution
+			SET status = 'completed',
+			    result = $2,
+			    completed_at = now()
+			WHERE id = $1
+			  AND source_event_id = $3`,
+			executionID, event.Result, event.ID)
+	}
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
+	if workCompletion != nil && workCompletion.CompletedNow {
+		h.emitIssueExecutedOnFirstCompletion(r, &workCompletion.Task)
+		h.handleClaimedAgentRadarTask(r.Context(), workCompletion.Task, workCompletion.RadarRun)
+	}
 	for _, wake := range collaborationWakes {
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}
@@ -720,6 +758,12 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	failureReason := strings.TrimSpace(req.FailureReason)
 	reasonCode := agentInboxFailureReasonCode(errText, failureReason, req.ReasonCode)
 	if failureReason != "" && event.Reason != channelOnboardingReason {
+		if !event.ChatSessionID.Valid {
+			if _, err := h.TaskService.FailTask(r.Context(), event.ID, errText, req.SessionID, req.WorkDir, failureReason); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		h.completeFailedAgentInboxEvent(w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir)
 		return
 	}
@@ -903,6 +947,15 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
 	}
+	_, _ = h.DB.Exec(r.Context(), `
+		UPDATE agent_execution
+		SET status = 'failed',
+		    error = $2,
+		    failure_reason = NULLIF($3, ''),
+		    completed_at = now()
+		WHERE source_event_id = $1
+		  AND status = 'running'`,
+		event.ID, errText, failureReason)
 	for _, wake := range collaborationWakes {
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}
@@ -1276,7 +1329,7 @@ func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentR
 		}
 		resp.Messages = h.channelAmbientUnreadMessages(ctx, h.DB, uuidToString(event.WorkspaceID), uuidToString(event.ChannelID), from, event.SeqTo, agentInboxDrainMessageLimit)
 	}
-	if event.RequiresWake && event.ChatSessionID.Valid {
+	if event.RequiresWake {
 		if task := h.agentInboxTaskResponse(ctx, runtime, event, delivery); task != nil {
 			resp.Task = task
 		}
@@ -1299,10 +1352,18 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		SeqTo:          event.SeqTo,
 		RequiresWake:   event.RequiresWake,
 	}
-	if !h.populateAgentInboxChatContext(ctx, event, &resp) {
-		slog.Warn("agent inbox claim: exact prompt missing",
+	if event.ChatSessionID.Valid {
+		if !h.populateAgentInboxChatContext(ctx, event, &resp) {
+			slog.Warn("agent inbox claim: exact prompt missing",
+				"inbox_event_id", uuidToString(event.ID),
+				"chat_session_id", uuidToString(event.ChatSessionID),
+			)
+			return nil
+		}
+	} else if !h.populateAgentInboxWorkContext(ctx, runtime, event, &resp) {
+		slog.Error("agent inbox claim: work context missing",
 			"inbox_event_id", uuidToString(event.ID),
-			"chat_session_id", uuidToString(event.ChatSessionID),
+			"reason", event.Reason,
 		)
 		return nil
 	}
@@ -1403,21 +1464,36 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	return &resp
 }
 
-func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db.AgentTaskQueue {
+func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db.AgentInboxEvent {
 	if event.RuntimeID.Valid {
 		runtimeID = event.RuntimeID
 	}
-	return db.AgentTaskQueue{
-		ID:            event.ID,
-		AgentID:       event.AgentID,
-		RuntimeID:     runtimeID,
-		Context:       event.ExecutionConfig,
-		ChatSessionID: event.ChatSessionID,
-		Status:        "dispatched",
-		Priority:      event.Priority,
-		Attempt:       event.Attempt,
-		MaxAttempts:   1,
-		CreatedAt:     event.CreatedAt,
+	return db.AgentInboxEvent{
+		ID:                event.ID,
+		WorkspaceID:       event.WorkspaceID,
+		AgentSessionID:    event.AgentSessionID,
+		ConversationID:    event.ConversationID,
+		ChannelID:         event.ChannelID,
+		AgentID:           event.AgentID,
+		RuntimeID:         runtimeID,
+		ExecutionConfig:   event.ExecutionConfig,
+		Context:           event.Context,
+		IssueID:           event.IssueID,
+		ChatSessionID:     event.ChatSessionID,
+		AutopilotRunID:    event.AutopilotRunID,
+		TriggerCommentID:  event.TriggerCommentID,
+		TriggerSummary:    event.TriggerSummary,
+		InitiatorUserID:   event.InitiatorUserID,
+		ForceFreshSession: event.ForceFreshSession,
+		IsLeaderTask:      event.IsLeaderTask,
+		SessionID:         event.SessionID,
+		WorkDir:           event.WorkDir,
+		Status:            "running",
+		Priority:          event.Priority,
+		Attempt:           event.Attempt,
+		MaxAttempts:       event.MaxAttempts,
+		ParentTaskID:      event.ParentTaskID,
+		CreatedAt:         event.CreatedAt,
 	}
 }
 
@@ -1685,7 +1761,7 @@ func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, eve
 	)
 }
 
-func (h *Handler) recordTaskVisibleOutputActivity(ctx context.Context, workspaceID pgtype.UUID, task db.AgentTaskQueue, req TaskCompleteRequest) {
+func (h *Handler) recordTaskVisibleOutputActivity(ctx context.Context, workspaceID pgtype.UUID, task db.AgentInboxEvent, req TaskCompleteRequest) {
 	if req.Type != protocol.ChatOutputKindMessage {
 		return
 	}
@@ -1734,7 +1810,7 @@ func (h *Handler) recordMissingArtifactActivity(ctx context.Context, workspaceID
 	)
 }
 
-func (h *Handler) taskActivityTarget(ctx context.Context, task db.AgentTaskQueue) (string, pgtype.UUID, string) {
+func (h *Handler) taskActivityTarget(ctx context.Context, task db.AgentInboxEvent) (string, pgtype.UUID, string) {
 	if task.IssueID.Valid {
 		return "issue", task.IssueID, ""
 	}
@@ -1808,6 +1884,160 @@ func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart
 		return fmt.Sprintf("Sent %d attachments", len(attachments))
 	}
 	return "Sent a message"
+}
+
+func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.AgentRuntime, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {
+	resp.WorkspaceID = uuidToString(event.WorkspaceID)
+	if event.InitiatorUserID.Valid {
+		resp.InitiatorType = "member"
+		resp.InitiatorID = uuidToString(event.InitiatorUserID)
+		if user, err := h.Queries.GetUser(ctx, event.InitiatorUserID); err == nil {
+			resp.InitiatorName = userDisplayName(user)
+			resp.InitiatorEmail = user.Email
+		}
+	}
+
+	loadWorkspaceRepos := func() {
+		if len(resp.Repos) > 0 || resp.ProvisionManagedWorkdir {
+			return
+		}
+		if workspace, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && workspace.Repos != nil {
+			var repos []RepoData
+			if json.Unmarshal(workspace.Repos, &repos) == nil {
+				resp.Repos = repos
+			}
+		}
+	}
+	loadProject := func(projectID pgtype.UUID) {
+		if !projectID.Valid {
+			return
+		}
+		resp.ProjectID = uuidToString(projectID)
+		if project, err := h.Queries.GetProject(ctx, projectID); err == nil {
+			resp.ProjectTitle = project.Title
+		}
+		resources, repos := h.mapProjectResources(ctx, projectID)
+		resp.ProjectResources = resources
+		resp.Repos = repos
+		if len(resources) == 0 {
+			resp.ProvisionManagedWorkdir = true
+			resp.ManagedWorkdirRelPath = managedWorkdirRelPath(resp.ProjectID)
+		}
+	}
+
+	if event.IssueID.Valid {
+		issue, err := h.Queries.GetIssue(ctx, event.IssueID)
+		if err != nil || issue.WorkspaceID != event.WorkspaceID {
+			return false
+		}
+		resp.ThreadName = issue.Title
+		loadProject(issue.ProjectID)
+		if event.TriggerCommentID.Valid {
+			if comment, err := h.Queries.GetComment(ctx, event.TriggerCommentID); err == nil {
+				resp.TriggerCommentContent = comment.Content
+				resp.TriggerThreadID = uuidToString(comment.ID)
+				if comment.ParentID.Valid {
+					resp.TriggerThreadID = uuidToString(comment.ParentID)
+				}
+				resp.TriggerAuthorType = comment.AuthorType
+				resp.InitiatorType = comment.AuthorType
+				resp.InitiatorID = uuidToString(comment.AuthorID)
+				switch comment.AuthorType {
+				case "agent":
+					if author, err := h.Queries.GetAgent(ctx, comment.AuthorID); err == nil {
+						resp.TriggerAuthorName = agentDisplayName(author)
+						resp.InitiatorName = resp.TriggerAuthorName
+					}
+				case "member":
+					if user, err := h.Queries.GetUser(ctx, comment.AuthorID); err == nil {
+						resp.TriggerAuthorName = userDisplayName(user)
+						resp.InitiatorName = resp.TriggerAuthorName
+						resp.InitiatorEmail = user.Email
+					}
+				}
+			}
+		}
+		if !event.ForceFreshSession {
+			if prior, err := h.Queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
+				AgentID: event.AgentID,
+				IssueID: event.IssueID,
+			}); err == nil {
+				if prior.RuntimeID == runtime.ID && prior.SessionID.Valid {
+					resp.PriorSessionID = prior.SessionID.String
+				}
+				if prior.WorkDir.Valid {
+					resp.PriorWorkDir = prior.WorkDir.String
+				}
+			}
+		}
+		loadWorkspaceRepos()
+		return true
+	}
+
+	if event.AutopilotRunID.Valid {
+		run, err := h.Queries.GetAutopilotRun(ctx, event.AutopilotRunID)
+		if err != nil {
+			return false
+		}
+		resp.AutopilotID = uuidToString(run.AutopilotID)
+		resp.AutopilotSource = run.Source
+		resp.AutopilotTriggerPayload = json.RawMessage(run.TriggerPayload)
+		if autopilot, err := h.Queries.GetAutopilot(ctx, run.AutopilotID); err == nil {
+			resp.AutopilotTitle = autopilot.Title
+			resp.ThreadName = autopilot.Title
+			if autopilot.Description.Valid {
+				resp.AutopilotDescription = autopilot.Description.String
+			}
+		}
+		loadWorkspaceRepos()
+		return true
+	}
+
+	var quickCreate service.QuickCreateContext
+	if json.Unmarshal(event.Context, &quickCreate) == nil && quickCreate.Type == service.QuickCreateContextType {
+		resp.Kind = "quick_create"
+		resp.QuickCreatePrompt = quickCreate.Prompt
+		resp.QuickCreateAttachmentIDs = append([]string(nil), quickCreate.AttachmentIDs...)
+		resp.ThreadName = quickCreate.Prompt
+		if quickCreate.Source != nil {
+			source := *quickCreate.Source
+			source.AttachmentIDs = append([]string(nil), quickCreate.Source.AttachmentIDs...)
+			resp.QuickCreateSource = &source
+		}
+		if projectID, err := util.ParseUUID(quickCreate.ProjectID); err == nil {
+			loadProject(projectID)
+		}
+		resp.ParentIssueID = quickCreate.ParentIssueID
+		loadWorkspaceRepos()
+		return strings.TrimSpace(resp.QuickCreatePrompt) != ""
+	}
+
+	var radar service.AgentRadarContext
+	if json.Unmarshal(event.Context, &radar) == nil && radar.Type == service.AgentRadarContextType {
+		resp.Kind = "agent_radar"
+		resp.AgentRadarPrompt = radar.Prompt
+		resp.ThreadName = "agent radar"
+		if channelID, err := util.ParseUUID(radar.ChannelID); err == nil {
+			if channel, found := h.getChannel(ctx, resp.WorkspaceID, channelID); found {
+				resp.ChannelID = channel.ID
+				loadProject(ambientChannelProjectID(channel))
+			}
+		}
+		if resp.ProjectID == "" {
+			if projectID, err := util.ParseUUID(radar.ProjectID); err == nil {
+				loadProject(projectID)
+			}
+		}
+		loadWorkspaceRepos()
+		return strings.TrimSpace(resp.AgentRadarPrompt) != ""
+	}
+
+	// Environment dispatch, memory curation, Reminder, and other internal
+	// wake kinds carry their exact prompt/config in the canonical context.
+	resp.Kind = event.Reason
+	resp.ThreadName = event.TriggerSummary.String
+	loadWorkspaceRepos()
+	return len(event.Context) > 0 || len(event.ExecutionConfig) > 0
 }
 
 func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {

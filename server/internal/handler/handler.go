@@ -258,7 +258,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	// Wire the subagent-lifecycle callback so retry child tasks get an
 	// activity event record. Uses the shared executor (pool), not the
 	// Handler, to avoid a circular init dependency.
-	taskSvc.OnChildTaskCreated = func(ctx context.Context, parent, child db.AgentTaskQueue) {
+	taskSvc.OnChildTaskCreated = func(ctx context.Context, parent, child db.AgentInboxEvent) {
 		// Resolve workspace_id from the agent (task row doesn't carry it).
 		var wsID pgtype.UUID
 		_ = executor.QueryRow(ctx, `SELECT workspace_id FROM agent WHERE id = $1`, parent.AgentID).Scan(&wsID)

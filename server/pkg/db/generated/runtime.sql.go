@@ -12,11 +12,12 @@ import (
 )
 
 const cancelAgentTasksByRuntimeOrAgent = `-- name: CancelAgentTasksByRuntimeOrAgent :many
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE (runtime_id = ANY($1::uuid[]) OR agent_id = ANY($2::uuid[]))
-  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+  AND status IN ('pending', 'draining', 'failed')
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type CancelAgentTasksByRuntimeOrAgentParams struct {
@@ -29,7 +30,7 @@ type CancelAgentTasksByRuntimeOrAgentParams struct {
 // the runtime-side covers tasks queued against the leaving member's runtimes;
 // the agent-side covers tasks pinned to a different runtime that those agents
 // left behind from a prior UpdateAgent (agent.runtime_id can change, but
-// agent_task_queue.runtime_id does not get rewritten when it does, so a task
+// agent_inbox_event.runtime_id does not get rewritten when it does, so a task
 // queued on runtime A by agent X — later moved to runtime B — survives the
 // runtime-only revoke and could still be claimed because ClaimNextAgentWake does
 // not gate on agent.archived_at).
@@ -38,35 +39,57 @@ type CancelAgentTasksByRuntimeOrAgentParams struct {
 // poller (watchTaskCancellation) interrupts the running agent gracefully.
 // Returns the affected rows so the caller can broadcast task:cancelled and
 // reconcile per-agent status.
-func (q *Queries) CancelAgentTasksByRuntimeOrAgent(ctx context.Context, arg CancelAgentTasksByRuntimeOrAgentParams) ([]AgentTaskQueue, error) {
+func (q *Queries) CancelAgentTasksByRuntimeOrAgent(ctx context.Context, arg CancelAgentTasksByRuntimeOrAgentParams) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, cancelAgentTasksByRuntimeOrAgent, arg.RuntimeIds, arg.AgentIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentTaskQueue{}
+	items := []AgentInboxEvent{}
 	for rows.Next() {
-		var i AgentTaskQueue
+		var i AgentInboxEvent
 		if err := rows.Scan(
 			&i.ID,
+			&i.WorkspaceID,
+			&i.AgentSessionID,
+			&i.ConversationID,
+			&i.ChannelID,
+			&i.ChatSessionID,
 			&i.AgentID,
-			&i.IssueID,
+			&i.SourceMessageID,
+			&i.Reason,
+			&i.RequiresWake,
 			&i.Status,
 			&i.Priority,
+			&i.SeqFrom,
+			&i.SeqTo,
+			&i.Attempt,
+			&i.LastError,
+			&i.ClaimedAt,
+			&i.AckedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TerminalOutcome,
+			&i.TerminalDeliveryID,
+			&i.Retryable,
+			&i.TerminalAt,
+			&i.RuntimeID,
+			&i.ExecutionConfig,
+			&i.DeliveryMode,
+			&i.ResponseMode,
+			&i.ChannelOnboardingID,
+			&i.IssueID,
+			&i.SourceChatMessageID,
+			&i.Context,
 			&i.DispatchedAt,
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.Result,
 			&i.Error,
-			&i.CreatedAt,
-			&i.Context,
-			&i.RuntimeID,
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
-			&i.ChatSessionID,
 			&i.AutopilotRunID,
-			&i.Attempt,
 			&i.MaxAttempts,
 			&i.ParentTaskID,
 			&i.FailureReason,
@@ -97,6 +120,24 @@ func (q *Queries) CountActiveAgentsByRuntime(ctx context.Context, runtimeID pgty
 	return count, err
 }
 
+const countActiveTasksByRuntimeIDs = `-- name: CountActiveTasksByRuntimeIDs :one
+SELECT count(*)::bigint
+FROM agent_inbox_event
+WHERE runtime_id = ANY($1::uuid[])
+  AND status IN ('pending', 'draining', 'failed')
+`
+
+// Active (queued/dispatched/running/waiting_local_directory) tasks pinned to
+// any of the given runtimes. Used by computer-level bulk delete to refuse
+// with a structured 4xx when the machine still has live work (LRM-238 /
+// LRM-438) instead of silently leaving orphaned tasks.
+func (q *Queries) CountActiveTasksByRuntimeIDs(ctx context.Context, runtimeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveTasksByRuntimeIDs, runtimeIds)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteAgentRuntime = `-- name: DeleteAgentRuntime :exec
 DELETE FROM agent_runtime WHERE id = $1
 `
@@ -115,6 +156,11 @@ type DeleteAgentRuntimeForWorkspaceParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
+// Workspace-scoped delete used by env-dispatch to reclaim a pre-created
+// runtime R' when its rollout fails before the task is created. Scoping on
+// workspace_id is defense-in-depth: R' is server-generated, but this keeps the
+// delete inside the dispatch's own workspace. The task FK is ON DELETE CASCADE,
+// so callers must ensure no task references R' (the failure path creates none).
 func (q *Queries) DeleteAgentRuntimeForWorkspace(ctx context.Context, arg DeleteAgentRuntimeForWorkspaceParams) error {
 	_, err := q.db.Exec(ctx, deleteAgentRuntimeForWorkspace, arg.ID, arg.WorkspaceID)
 	return err
@@ -166,49 +212,71 @@ func (q *Queries) DeleteStaleOfflineRuntimes(ctx context.Context, staleSeconds f
 }
 
 const failTasksForOfflineRuntimes = `-- name: FailTasksForOfflineRuntimes :many
-UPDATE agent_task_queue
-SET status = 'failed', completed_at = now(), error = 'runtime went offline',
-    failure_reason = 'runtime_offline',
+UPDATE agent_inbox_event
+SET status = 'pending', last_error = 'runtime went offline',
+    failure_reason = 'runtime_offline', claimed_at = NULL,
     wait_reason = NULL
-WHERE status IN ('dispatched', 'running', 'waiting_local_directory')
+WHERE status = 'draining'
   AND runtime_id IN (
     SELECT id FROM agent_runtime WHERE status = 'offline'
   )
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 // Marks dispatched/running/waiting_local_directory tasks as failed when
 // their runtime is offline. This cleans up orphaned tasks after a daemon
 // crash or network partition.
-func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]AgentTaskQueue, error) {
+func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, failTasksForOfflineRuntimes)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentTaskQueue{}
+	items := []AgentInboxEvent{}
 	for rows.Next() {
-		var i AgentTaskQueue
+		var i AgentInboxEvent
 		if err := rows.Scan(
 			&i.ID,
+			&i.WorkspaceID,
+			&i.AgentSessionID,
+			&i.ConversationID,
+			&i.ChannelID,
+			&i.ChatSessionID,
 			&i.AgentID,
-			&i.IssueID,
+			&i.SourceMessageID,
+			&i.Reason,
+			&i.RequiresWake,
 			&i.Status,
 			&i.Priority,
+			&i.SeqFrom,
+			&i.SeqTo,
+			&i.Attempt,
+			&i.LastError,
+			&i.ClaimedAt,
+			&i.AckedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TerminalOutcome,
+			&i.TerminalDeliveryID,
+			&i.Retryable,
+			&i.TerminalAt,
+			&i.RuntimeID,
+			&i.ExecutionConfig,
+			&i.DeliveryMode,
+			&i.ResponseMode,
+			&i.ChannelOnboardingID,
+			&i.IssueID,
+			&i.SourceChatMessageID,
+			&i.Context,
 			&i.DispatchedAt,
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.Result,
 			&i.Error,
-			&i.CreatedAt,
-			&i.Context,
-			&i.RuntimeID,
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
-			&i.ChatSessionID,
 			&i.AutopilotRunID,
-			&i.Attempt,
 			&i.MaxAttempts,
 			&i.ParentTaskID,
 			&i.FailureReason,
@@ -292,6 +360,50 @@ func (q *Queries) FindLegacyRuntimesByDaemonID(ctx context.Context, arg FindLega
 	return items, nil
 }
 
+const findOnlineSandboxRuntime = `-- name: FindOnlineSandboxRuntime :one
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility FROM agent_runtime
+WHERE workspace_id = $1
+  AND provider = 'pi'
+  AND daemon_id = $2
+  AND status = 'online'
+  AND metadata->>'sandbox_instance_id' = $3
+LIMIT 1
+`
+
+type FindOnlineSandboxRuntimeParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	DaemonID          pgtype.Text `json:"daemon_id"`
+	SandboxInstanceID []byte      `json:"sandbox_instance_id"`
+}
+
+// Resolves the daemon-registered Pi runtime for an env-dispatch binding by
+// immutable identity (workspace, daemon_id, sandbox_instance_id) once the
+// provider reports online. Runtime display names are intentionally not used;
+// matching by name would let an unrelated runtime bind to the dispatch. Used
+// by WaitForOnlineSandboxRuntime during first-address provisioning.
+func (q *Queries) FindOnlineSandboxRuntime(ctx context.Context, arg FindOnlineSandboxRuntimeParams) (AgentRuntime, error) {
+	row := q.db.QueryRow(ctx, findOnlineSandboxRuntime, arg.WorkspaceID, arg.DaemonID, arg.SandboxInstanceID)
+	var i AgentRuntime
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Name,
+		&i.RuntimeMode,
+		&i.Provider,
+		&i.Status,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerID,
+		&i.LegacyDaemonID,
+		&i.Visibility,
+	)
+	return i, err
+}
+
 const forceOfflineRuntimesByIDs = `-- name: ForceOfflineRuntimesByIDs :many
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
@@ -337,6 +449,42 @@ func (q *Queries) ForceOfflineRuntimesByIDs(ctx context.Context, runtimeIds []pg
 		return nil, err
 	}
 	return items, nil
+}
+
+const getAgentBoundRuntimeForWorkspace = `-- name: GetAgentBoundRuntimeForWorkspace :one
+SELECT r.id, r.workspace_id, r.daemon_id, r.name, r.runtime_mode, r.provider, r.status, r.device_info, r.metadata, r.last_seen_at, r.created_at, r.updated_at, r.owner_id, r.legacy_daemon_id, r.visibility
+FROM agent a
+JOIN agent_runtime r ON r.id = a.runtime_id
+WHERE a.id = $1 AND a.workspace_id = $2
+  AND r.workspace_id = $2
+`
+
+type GetAgentBoundRuntimeForWorkspaceParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetAgentBoundRuntimeForWorkspace(ctx context.Context, arg GetAgentBoundRuntimeForWorkspaceParams) (AgentRuntime, error) {
+	row := q.db.QueryRow(ctx, getAgentBoundRuntimeForWorkspace, arg.AgentID, arg.WorkspaceID)
+	var i AgentRuntime
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Name,
+		&i.RuntimeMode,
+		&i.Provider,
+		&i.Status,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerID,
+		&i.LegacyDaemonID,
+		&i.Visibility,
+	)
+	return i, err
 }
 
 const getAgentRuntime = `-- name: GetAgentRuntime :one
@@ -400,42 +548,6 @@ func (q *Queries) GetAgentRuntimeForWorkspace(ctx context.Context, arg GetAgentR
 	return i, err
 }
 
-const getAgentBoundRuntimeForWorkspace = `-- name: GetAgentBoundRuntimeForWorkspace :one
-SELECT r.id, r.workspace_id, r.daemon_id, r.name, r.runtime_mode, r.provider, r.status, r.device_info, r.metadata, r.last_seen_at, r.created_at, r.updated_at, r.owner_id, r.legacy_daemon_id, r.visibility
-FROM agent a
-JOIN agent_runtime r ON r.id = a.runtime_id
-WHERE a.id = $1 AND a.workspace_id = $2
-  AND r.workspace_id = $2
-`
-
-type GetAgentBoundRuntimeForWorkspaceParams struct {
-	AgentID     pgtype.UUID `json:"agent_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) GetAgentBoundRuntimeForWorkspace(ctx context.Context, arg GetAgentBoundRuntimeForWorkspaceParams) (AgentRuntime, error) {
-	row := q.db.QueryRow(ctx, getAgentBoundRuntimeForWorkspace, arg.AgentID, arg.WorkspaceID)
-	var i AgentRuntime
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.DaemonID,
-		&i.Name,
-		&i.RuntimeMode,
-		&i.Provider,
-		&i.Status,
-		&i.DeviceInfo,
-		&i.Metadata,
-		&i.LastSeenAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerID,
-		&i.LegacyDaemonID,
-		&i.Visibility,
-	)
-	return i, err
-}
-
 const listAgentRuntimes = `-- name: ListAgentRuntimes :many
 SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility FROM agent_runtime
 WHERE workspace_id = $1
@@ -444,6 +556,66 @@ ORDER BY created_at ASC
 
 func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID) ([]AgentRuntime, error) {
 	rows, err := q.db.Query(ctx, listAgentRuntimes, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentRuntime{}
+	for rows.Next() {
+		var i AgentRuntime
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.DaemonID,
+			&i.Name,
+			&i.RuntimeMode,
+			&i.Provider,
+			&i.Status,
+			&i.DeviceInfo,
+			&i.Metadata,
+			&i.LastSeenAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.OwnerID,
+			&i.LegacyDaemonID,
+			&i.Visibility,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentRuntimesByDaemonID = `-- name: ListAgentRuntimesByDaemonID :many
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility
+FROM agent_runtime
+WHERE workspace_id = $1
+  AND daemon_id IS NOT NULL
+  AND LOWER(daemon_id) = LOWER($2)
+  AND (
+    $3::text = ''
+    OR runtime_mode = $3
+  )
+ORDER BY created_at ASC
+`
+
+type ListAgentRuntimesByDaemonIDParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	DaemonID    string      `json:"daemon_id"`
+	RuntimeMode string      `json:"runtime_mode"`
+}
+
+// Computer / host scope: every runtime row sharing a daemon_id inside a
+// workspace. Case-insensitive match matches FindLegacyRuntimesByDaemonID —
+// os.Hostname()-derived ids have drifted in casing across reboots. Optional
+// runtime_mode narrows to the FE machine key (`local:<daemon>` vs
+// `cloud:<daemon>`). Empty @runtime_mode means "any mode".
+func (q *Queries) ListAgentRuntimesByDaemonID(ctx context.Context, arg ListAgentRuntimesByDaemonIDParams) ([]AgentRuntime, error) {
+	rows, err := q.db.Query(ctx, listAgentRuntimesByDaemonID, arg.WorkspaceID, arg.DaemonID, arg.RuntimeMode)
 	if err != nil {
 		return nil, err
 	}
@@ -757,6 +929,67 @@ func (q *Queries) PauseAutopilotsByAgentAssignees(ctx context.Context, assigneeI
 	return err
 }
 
+const precreateAgentRuntime = `-- name: PrecreateAgentRuntime :one
+INSERT INTO agent_runtime (
+    workspace_id,
+    daemon_id,
+    name,
+    runtime_mode,
+    provider,
+    status,
+    device_info,
+    metadata,
+    owner_id,
+    last_seen_at
+) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', $5, now())
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility
+`
+
+type PrecreateAgentRuntimeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	DaemonID    pgtype.Text `json:"daemon_id"`
+	Name        string      `json:"name"`
+	Provider    string      `json:"provider"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+// Inserts a pending (offline) agent_runtime row keyed by a caller-supplied
+// daemon_id, so an in-sandbox daemon booted with MULTICA_DAEMON_ID=<daemon_id>
+// adopts THIS row on register: UpsertAgentRuntime's ON CONFLICT
+// (workspace_id, daemon_id, provider) DO UPDATE matches it, flips status to
+// online, and reuses this id (R'). Used by env-dispatch to make a sandbox's
+// runtime_id deterministic at dispatch time so the task can carry it
+// immediately (no NULL, no deferred binding). runtime_mode='local',
+// status='offline' until the daemon registers.
+func (q *Queries) PrecreateAgentRuntime(ctx context.Context, arg PrecreateAgentRuntimeParams) (AgentRuntime, error) {
+	row := q.db.QueryRow(ctx, precreateAgentRuntime,
+		arg.WorkspaceID,
+		arg.DaemonID,
+		arg.Name,
+		arg.Provider,
+		arg.OwnerID,
+	)
+	var i AgentRuntime
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Name,
+		&i.RuntimeMode,
+		&i.Provider,
+		&i.Status,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerID,
+		&i.LegacyDaemonID,
+		&i.Visibility,
+	)
+	return i, err
+}
+
 const reassignAgentsToRuntime = `-- name: ReassignAgentsToRuntime :execrows
 UPDATE agent
 SET runtime_id = $1
@@ -778,7 +1011,7 @@ func (q *Queries) ReassignAgentsToRuntime(ctx context.Context, arg ReassignAgent
 }
 
 const reassignTasksToRuntime = `-- name: ReassignTasksToRuntime :execrows
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET runtime_id = $1
 WHERE runtime_id = $2
 `
@@ -789,7 +1022,7 @@ type ReassignTasksToRuntimeParams struct {
 }
 
 // Re-points every queued/running/completed task referencing old_runtime_id.
-// Required before deleting the old runtime row because agent_task_queue has
+// Required before deleting the old runtime row because agent_inbox_event has
 // an ON DELETE CASCADE FK that would otherwise drop historical tasks.
 func (q *Queries) ReassignTasksToRuntime(ctx context.Context, arg ReassignTasksToRuntimeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, reassignTasksToRuntime, arg.NewRuntimeID, arg.OldRuntimeID)
@@ -1054,158 +1287,4 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		&i.Inserted,
 	)
 	return i, err
-}
-
-const precreateAgentRuntime = `-- name: PrecreateAgentRuntime :one
-INSERT INTO agent_runtime (
-    workspace_id,
-    daemon_id,
-    name,
-    runtime_mode,
-    provider,
-    status,
-    device_info,
-    metadata,
-    owner_id,
-    last_seen_at
-) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', $5, now())
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility
-`
-
-type PrecreateAgentRuntimeParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	DaemonID    pgtype.Text `json:"daemon_id"`
-	Name        string      `json:"name"`
-	Provider    string      `json:"provider"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
-}
-
-type PrecreateAgentRuntimeRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	DaemonID       pgtype.Text        `json:"daemon_id"`
-	Name           string             `json:"name"`
-	RuntimeMode    string             `json:"runtime_mode"`
-	Provider       string             `json:"provider"`
-	Status         string             `json:"status"`
-	DeviceInfo     string             `json:"device_info"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	OwnerID        pgtype.UUID        `json:"owner_id"`
-	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
-	Visibility     string             `json:"visibility"`
-}
-
-func (q *Queries) PrecreateAgentRuntime(ctx context.Context, arg PrecreateAgentRuntimeParams) (PrecreateAgentRuntimeRow, error) {
-	row := q.db.QueryRow(ctx, precreateAgentRuntime,
-		arg.WorkspaceID,
-		arg.DaemonID,
-		arg.Name,
-		arg.Provider,
-		arg.OwnerID,
-	)
-	var i PrecreateAgentRuntimeRow
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.DaemonID,
-		&i.Name,
-		&i.RuntimeMode,
-		&i.Provider,
-		&i.Status,
-		&i.DeviceInfo,
-		&i.Metadata,
-		&i.LastSeenAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerID,
-		&i.LegacyDaemonID,
-		&i.Visibility,
-	)
-	return i, err
-}
-
-const listAgentRuntimesByDaemonID = `-- name: ListAgentRuntimesByDaemonID :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility FROM agent_runtime
-WHERE workspace_id = $1
-  AND daemon_id IS NOT NULL
-  AND LOWER(daemon_id) = LOWER($2)
-  AND (
-    $3::text = ''
-    OR runtime_mode = $3
-  )
-ORDER BY created_at ASC
-`
-
-type ListAgentRuntimesByDaemonIDParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	DaemonID    string      `json:"daemon_id"`
-	RuntimeMode string      `json:"runtime_mode"`
-}
-
-// Computer / host scope: every runtime row sharing a daemon_id inside a
-// workspace. Case-insensitive match matches FindLegacyRuntimesByDaemonID —
-// os.Hostname()-derived ids have drifted in casing across reboots. Optional
-// runtime_mode narrows to the FE machine key (`local:<daemon>` vs
-// `cloud:<daemon>`). Empty RuntimeMode means "any mode".
-//
-// Hand-written (sqlc generate is broken in this repo) — keep in sync with
-// queries/runtime.sql ListAgentRuntimesByDaemonID.
-func (q *Queries) ListAgentRuntimesByDaemonID(ctx context.Context, arg ListAgentRuntimesByDaemonIDParams) ([]AgentRuntime, error) {
-	rows, err := q.db.Query(ctx, listAgentRuntimesByDaemonID, arg.WorkspaceID, arg.DaemonID, arg.RuntimeMode)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AgentRuntime{}
-	for rows.Next() {
-		var i AgentRuntime
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.DaemonID,
-			&i.Name,
-			&i.RuntimeMode,
-			&i.Provider,
-			&i.Status,
-			&i.DeviceInfo,
-			&i.Metadata,
-			&i.LastSeenAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.OwnerID,
-			&i.LegacyDaemonID,
-			&i.Visibility,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const countActiveTasksByRuntimeIDs = `-- name: CountActiveTasksByRuntimeIDs :one
-SELECT count(*)::bigint
-FROM agent_task_queue
-WHERE runtime_id = ANY($1::uuid[])
-  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-`
-
-// Active (queued/dispatched/running/waiting_local_directory) tasks pinned to
-// any of the given runtimes. Used by computer-level bulk delete to refuse
-// with a structured 4xx when the machine still has live work (LRM-238 /
-// LRM-438) instead of silently leaving orphaned tasks.
-//
-// Hand-written (sqlc generate is broken in this repo) — keep in sync with
-// queries/runtime.sql CountActiveTasksByRuntimeIDs.
-func (q *Queries) CountActiveTasksByRuntimeIDs(ctx context.Context, runtimeIds []pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countActiveTasksByRuntimeIDs, runtimeIds)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
 }

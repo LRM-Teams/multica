@@ -37,12 +37,12 @@ func (f *fakeDispatchLookup) GetTrainingDispatchByProject(_ context.Context, _ p
 }
 
 type fakeTaskStore struct {
-	task   db.AgentTaskQueue
+	task   db.AgentInboxEvent
 	getErr error
 	merged []db.MergeTaskArealProxyContextParams
 }
 
-func (f *fakeTaskStore) GetAgentTask(_ context.Context, _ pgtype.UUID) (db.AgentTaskQueue, error) {
+func (f *fakeTaskStore) GetAgentTask(_ context.Context, _ pgtype.UUID) (db.AgentInboxEvent, error) {
 	return f.task, f.getErr
 }
 
@@ -198,7 +198,7 @@ func TestMaybeOpenTrainingSession_NonTargetAgent_NoOp(t *testing.T) {
 func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	store := &fakeTaskStore{
-		task: db.AgentTaskQueue{
+		task: db.AgentInboxEvent{
 			Context: []byte(`{"areal_proxy":{"provider":"areal","session_id":"sess-old"}}`),
 		},
 	}
@@ -226,7 +226,7 @@ func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
 func TestMaybeOpenTrainingSession_RecordsSessionAgentRun(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	store := &fakeTaskStore{
-		task: db.AgentTaskQueue{
+		task: db.AgentInboxEvent{
 			IssueID: util.MustParseUUID(testTrainingProjectID),
 		},
 	}
@@ -363,7 +363,7 @@ func TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession(t 
 	rl := &fakeRLClient{}
 	deps := newTrainingDeps(lookup, nil, rl)
 
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"provider":"areal","model":"areal-default","api_key":"pk-xyz","base_url":"http://test","session_id":"sess-abc"}}`),
@@ -404,7 +404,7 @@ func TestMaybeCloseTrainingSession_FailedTask_AlsoCloses(t *testing.T) {
 	rl := &fakeRLClient{}
 	deps := newTrainingDeps(lookup, nil, rl)
 
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "failed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
@@ -426,7 +426,7 @@ func TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses(t *testing.T) {
 	rl := &fakeRLClient{}
 	deps := newTrainingDeps(lookup, nil, rl)
 
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "cancelled",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
@@ -448,7 +448,7 @@ func TestMaybeCloseTrainingSession_NoArealProxy_NoOp(t *testing.T) {
 	rl := &fakeRLClient{}
 	deps := newTrainingDeps(lookup, nil, rl)
 
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "completed",
 		Context: []byte(`{"other_key":"value"}`),
@@ -470,7 +470,7 @@ func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
 	rl := &fakeRLClient{err: fmt.Errorf("rl bridge error")}
 	deps := newTrainingDeps(lookup, nil, rl)
 
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
@@ -491,7 +491,7 @@ func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
 // TestMaybeCloseTrainingSession_NoTrainingDeps_NoOp:
 // s.Training == nil -> no-op.
 func TestMaybeCloseTrainingSession_NoTrainingDeps_NoOp(t *testing.T) {
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
@@ -509,7 +509,7 @@ func TestMaybeCloseTrainingSession_NoTrainingDispatch_FallbackReward(t *testing.
 	rl := &fakeRLClient{}
 	deps := newTrainingDeps(lookup, nil, rl)
 
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
@@ -534,11 +534,11 @@ type fakeCheckpointTrigger struct {
 }
 
 type fakeCheckpointTriggerCall struct {
-	task      db.AgentTaskQueue
+	task      db.AgentInboxEvent
 	projectID pgtype.UUID
 }
 
-func (f *fakeCheckpointTrigger) TriggerCheckpoint(_ context.Context, task db.AgentTaskQueue, projectID pgtype.UUID) error {
+func (f *fakeCheckpointTrigger) TriggerCheckpoint(_ context.Context, task db.AgentInboxEvent, projectID pgtype.UUID) error {
 	f.calls = append(f.calls, fakeCheckpointTriggerCall{task, projectID})
 	return f.err
 }
@@ -546,7 +546,7 @@ func (f *fakeCheckpointTrigger) TriggerCheckpoint(_ context.Context, task db.Age
 func TestTrainingCheckpointTriggerCreatesForTrainedStructuralEvent(t *testing.T) {
 	trigger := &fakeCheckpointTrigger{}
 	deps := &TrainingSessionDeps{CheckpointTrigger: trigger}
-	task := db.AgentTaskQueue{ID: util.MustParseUUID(testTrainingTaskID)}
+	task := db.AgentInboxEvent{ID: util.MustParseUUID(testTrainingTaskID)}
 	projectID := util.MustParseUUID(testTrainingProjectID)
 
 	maybeTriggerCheckpoint(context.Background(), deps, task, projectID)
@@ -564,7 +564,7 @@ func TestTrainingCheckpointTriggerSkipsNonTrainingProject(t *testing.T) {
 	// maybeTriggerCheckpoint is a no-op — no panic, no call.
 	trigger := &fakeCheckpointTrigger{}
 	deps := &TrainingSessionDeps{CheckpointTrigger: nil}
-	task := db.AgentTaskQueue{ID: util.MustParseUUID(testTrainingTaskID)}
+	task := db.AgentInboxEvent{ID: util.MustParseUUID(testTrainingTaskID)}
 
 	maybeTriggerCheckpoint(context.Background(), deps, task, util.MustParseUUID(testTrainingProjectID))
 
@@ -577,7 +577,7 @@ func TestTrainingCheckpointTriggerSkipsSweeperAutopilotAndSandboxLifecycleEvents
 	trigger := &fakeCheckpointTrigger{}
 	deps := &TrainingSessionDeps{CheckpointTrigger: trigger}
 	projectID := util.MustParseUUID(testTrainingProjectID)
-	baseTask := db.AgentTaskQueue{ID: util.MustParseUUID(testTrainingTaskID)}
+	baseTask := db.AgentInboxEvent{ID: util.MustParseUUID(testTrainingTaskID)}
 
 	t.Run("autopilot", func(t *testing.T) {
 		trigger.calls = nil
@@ -669,8 +669,8 @@ func diagnosisDeps(diag *fakeDiagnoser, store *fakeInteractionDAGStore, closer a
 	}
 }
 
-func rootTrainingTask() db.AgentTaskQueue {
-	return db.AgentTaskQueue{
+func rootTrainingTask() db.AgentInboxEvent {
+	return db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		AgentID: util.MustParseUUID(testTrainAgentID), // root: agent_id == train_agent_id
 		Status:  "completed",
@@ -818,7 +818,7 @@ func TestDiagnosisBeforeCloseHook_Ordering(t *testing.T) {
 func TestLinkExistingTrainingSession_ReusesPersistsNoStartSession(t *testing.T) {
 	ctx := context.Background()
 	taskUUID := util.MustParseUUID(testTrainingTaskID)
-	store := &fakeTaskStore{task: db.AgentTaskQueue{ID: taskUUID}}
+	store := &fakeTaskStore{task: db.AgentInboxEvent{ID: taskUUID}}
 	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "fresh", ProxyKey: "fresh-key"}}
 	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
 

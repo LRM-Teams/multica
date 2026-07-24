@@ -36,7 +36,7 @@ WITH active_delivery AS (
       FROM agent_inbox_event e
       WHERE e.id = d.inbox_event_id
         AND e.agent_session_id = d.agent_session_id
-        AND e.status IN ('pending', 'draining', 'failed')
+        AND e.status IN ('pending', 'draining', 'failed', 'acked')
     )
   RETURNING d.id, d.workspace_id, d.agent_session_id, d.inbox_event_id, d.runtime_id, d.status, d.lease_token, d.leased_at, d.lease_expires_at, d.acked_at, d.last_error, d.created_at, d.updated_at
 ),
@@ -48,8 +48,8 @@ acked_event AS (
   FROM active_delivery d
   WHERE e.id = d.inbox_event_id
     AND e.agent_session_id = d.agent_session_id
-    AND e.status IN ('pending', 'draining', 'failed')
-  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
+    AND e.status IN ('pending', 'draining', 'failed', 'acked')
+  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config, e.delivery_mode, e.response_mode, e.channel_onboarding_id, e.issue_id, e.source_chat_message_id, e.context, e.dispatched_at, e.started_at, e.completed_at, e.result, e.error, e.session_id, e.work_dir, e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id, e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task, e.wait_reason, e.initiator_user_id
 ),
 acked_session AS (
 UPDATE agent_session s
@@ -60,7 +60,7 @@ FROM acked_event
 WHERE s.id = acked_event.agent_session_id
 RETURNING s.id
 )
-SELECT acked_event.id, acked_event.workspace_id, acked_event.agent_session_id, acked_event.conversation_id, acked_event.channel_id, acked_event.chat_session_id, acked_event.agent_id, acked_event.source_message_id, acked_event.reason, acked_event.requires_wake, acked_event.status, acked_event.priority, acked_event.seq_from, acked_event.seq_to, acked_event.attempt, acked_event.last_error, acked_event.claimed_at, acked_event.acked_at, acked_event.created_at, acked_event.updated_at, acked_event.terminal_outcome, acked_event.terminal_delivery_id, acked_event.retryable, acked_event.terminal_at, acked_event.runtime_id, acked_event.execution_config
+SELECT acked_event.id, acked_event.workspace_id, acked_event.agent_session_id, acked_event.conversation_id, acked_event.channel_id, acked_event.chat_session_id, acked_event.agent_id, acked_event.source_message_id, acked_event.reason, acked_event.requires_wake, acked_event.status, acked_event.priority, acked_event.seq_from, acked_event.seq_to, acked_event.attempt, acked_event.last_error, acked_event.claimed_at, acked_event.acked_at, acked_event.created_at, acked_event.updated_at, acked_event.terminal_outcome, acked_event.terminal_delivery_id, acked_event.retryable, acked_event.terminal_at, acked_event.runtime_id, acked_event.execution_config, acked_event.delivery_mode, acked_event.response_mode, acked_event.channel_onboarding_id, acked_event.issue_id, acked_event.source_chat_message_id, acked_event.context, acked_event.dispatched_at, acked_event.started_at, acked_event.completed_at, acked_event.result, acked_event.error, acked_event.session_id, acked_event.work_dir, acked_event.trigger_comment_id, acked_event.autopilot_run_id, acked_event.max_attempts, acked_event.parent_task_id, acked_event.failure_reason, acked_event.trigger_summary, acked_event.force_fresh_session, acked_event.is_leader_task, acked_event.wait_reason, acked_event.initiator_user_id
 FROM acked_event
 JOIN acked_session ON acked_session.id = acked_event.agent_session_id
 `
@@ -72,32 +72,55 @@ type AckAgentInboxDeliveryParams struct {
 }
 
 type AckAgentInboxDeliveryRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	AgentSessionID     pgtype.UUID        `json:"agent_session_id"`
-	ConversationID     pgtype.UUID        `json:"conversation_id"`
-	ChannelID          pgtype.UUID        `json:"channel_id"`
-	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
-	AgentID            pgtype.UUID        `json:"agent_id"`
-	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
-	Reason             string             `json:"reason"`
-	RequiresWake       bool               `json:"requires_wake"`
-	Status             string             `json:"status"`
-	Priority           int32              `json:"priority"`
-	SeqFrom            int64              `json:"seq_from"`
-	SeqTo              int64              `json:"seq_to"`
-	Attempt            int32              `json:"attempt"`
-	LastError          pgtype.Text        `json:"last_error"`
-	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
-	AckedAt            pgtype.Timestamptz `json:"acked_at"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	TerminalOutcome    pgtype.Text        `json:"terminal_outcome"`
-	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
-	Retryable          bool               `json:"retryable"`
-	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
-	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	ExecutionConfig    []byte             `json:"execution_config"`
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID      pgtype.UUID        `json:"agent_session_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	ChatSessionID       pgtype.UUID        `json:"chat_session_id"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	SourceMessageID     pgtype.UUID        `json:"source_message_id"`
+	Reason              string             `json:"reason"`
+	RequiresWake        bool               `json:"requires_wake"`
+	Status              string             `json:"status"`
+	Priority            int32              `json:"priority"`
+	SeqFrom             int64              `json:"seq_from"`
+	SeqTo               int64              `json:"seq_to"`
+	Attempt             int32              `json:"attempt"`
+	LastError           pgtype.Text        `json:"last_error"`
+	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt             pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome     pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID  pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable           bool               `json:"retryable"`
+	TerminalAt          pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID           pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig     []byte             `json:"execution_config"`
+	DeliveryMode        string             `json:"delivery_mode"`
+	ResponseMode        string             `json:"response_mode"`
+	ChannelOnboardingID pgtype.UUID        `json:"channel_onboarding_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	SourceChatMessageID pgtype.UUID        `json:"source_chat_message_id"`
+	Context             []byte             `json:"context"`
+	DispatchedAt        pgtype.Timestamptz `json:"dispatched_at"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	Result              []byte             `json:"result"`
+	Error               pgtype.Text        `json:"error"`
+	SessionID           pgtype.Text        `json:"session_id"`
+	WorkDir             pgtype.Text        `json:"work_dir"`
+	TriggerCommentID    pgtype.UUID        `json:"trigger_comment_id"`
+	AutopilotRunID      pgtype.UUID        `json:"autopilot_run_id"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	ParentTaskID        pgtype.UUID        `json:"parent_task_id"`
+	FailureReason       pgtype.Text        `json:"failure_reason"`
+	TriggerSummary      pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession   bool               `json:"force_fresh_session"`
+	IsLeaderTask        bool               `json:"is_leader_task"`
+	WaitReason          pgtype.Text        `json:"wait_reason"`
+	InitiatorUserID     pgtype.UUID        `json:"initiator_user_id"`
 }
 
 func (q *Queries) AckAgentInboxDelivery(ctx context.Context, arg AckAgentInboxDeliveryParams) (AckAgentInboxDeliveryRow, error) {
@@ -130,6 +153,29 @@ func (q *Queries) AckAgentInboxDelivery(ctx context.Context, arg AckAgentInboxDe
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -189,7 +235,7 @@ VALUES (
   $8,
   $9
 )
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type CreateAgentInboxEventParams struct {
@@ -250,6 +296,29 @@ func (q *Queries) CreateAgentInboxEvent(ctx context.Context, arg CreateAgentInbo
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -292,9 +361,9 @@ failed_event AS (
   WHERE e.id = d.inbox_event_id
     AND e.agent_session_id = d.agent_session_id
     AND e.status IN ('pending', 'draining')
-  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
+  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config, e.delivery_mode, e.response_mode, e.channel_onboarding_id, e.issue_id, e.source_chat_message_id, e.context, e.dispatched_at, e.started_at, e.completed_at, e.result, e.error, e.session_id, e.work_dir, e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id, e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task, e.wait_reason, e.initiator_user_id
 )
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config FROM failed_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM failed_event
 `
 
 type FailAgentInboxDeliveryParams struct {
@@ -305,32 +374,55 @@ type FailAgentInboxDeliveryParams struct {
 }
 
 type FailAgentInboxDeliveryRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	AgentSessionID     pgtype.UUID        `json:"agent_session_id"`
-	ConversationID     pgtype.UUID        `json:"conversation_id"`
-	ChannelID          pgtype.UUID        `json:"channel_id"`
-	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
-	AgentID            pgtype.UUID        `json:"agent_id"`
-	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
-	Reason             string             `json:"reason"`
-	RequiresWake       bool               `json:"requires_wake"`
-	Status             string             `json:"status"`
-	Priority           int32              `json:"priority"`
-	SeqFrom            int64              `json:"seq_from"`
-	SeqTo              int64              `json:"seq_to"`
-	Attempt            int32              `json:"attempt"`
-	LastError          pgtype.Text        `json:"last_error"`
-	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
-	AckedAt            pgtype.Timestamptz `json:"acked_at"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	TerminalOutcome    pgtype.Text        `json:"terminal_outcome"`
-	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
-	Retryable          bool               `json:"retryable"`
-	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
-	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	ExecutionConfig    []byte             `json:"execution_config"`
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID      pgtype.UUID        `json:"agent_session_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	ChatSessionID       pgtype.UUID        `json:"chat_session_id"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	SourceMessageID     pgtype.UUID        `json:"source_message_id"`
+	Reason              string             `json:"reason"`
+	RequiresWake        bool               `json:"requires_wake"`
+	Status              string             `json:"status"`
+	Priority            int32              `json:"priority"`
+	SeqFrom             int64              `json:"seq_from"`
+	SeqTo               int64              `json:"seq_to"`
+	Attempt             int32              `json:"attempt"`
+	LastError           pgtype.Text        `json:"last_error"`
+	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt             pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome     pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID  pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable           bool               `json:"retryable"`
+	TerminalAt          pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID           pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig     []byte             `json:"execution_config"`
+	DeliveryMode        string             `json:"delivery_mode"`
+	ResponseMode        string             `json:"response_mode"`
+	ChannelOnboardingID pgtype.UUID        `json:"channel_onboarding_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	SourceChatMessageID pgtype.UUID        `json:"source_chat_message_id"`
+	Context             []byte             `json:"context"`
+	DispatchedAt        pgtype.Timestamptz `json:"dispatched_at"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	Result              []byte             `json:"result"`
+	Error               pgtype.Text        `json:"error"`
+	SessionID           pgtype.Text        `json:"session_id"`
+	WorkDir             pgtype.Text        `json:"work_dir"`
+	TriggerCommentID    pgtype.UUID        `json:"trigger_comment_id"`
+	AutopilotRunID      pgtype.UUID        `json:"autopilot_run_id"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	ParentTaskID        pgtype.UUID        `json:"parent_task_id"`
+	FailureReason       pgtype.Text        `json:"failure_reason"`
+	TriggerSummary      pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession   bool               `json:"force_fresh_session"`
+	IsLeaderTask        bool               `json:"is_leader_task"`
+	WaitReason          pgtype.Text        `json:"wait_reason"`
+	InitiatorUserID     pgtype.UUID        `json:"initiator_user_id"`
 }
 
 func (q *Queries) FailAgentInboxDelivery(ctx context.Context, arg FailAgentInboxDeliveryParams) (FailAgentInboxDeliveryRow, error) {
@@ -368,6 +460,29 @@ func (q *Queries) FailAgentInboxDelivery(ctx context.Context, arg FailAgentInbox
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -399,7 +514,7 @@ func (q *Queries) GetAgentEventDelivery(ctx context.Context, id pgtype.UUID) (Ag
 }
 
 const getAgentInboxEvent = `-- name: GetAgentInboxEvent :one
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
 WHERE id = $1
 `
 
@@ -433,6 +548,29 @@ func (q *Queries) GetAgentInboxEvent(ctx context.Context, id pgtype.UUID) (Agent
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -555,7 +693,7 @@ func (q *Queries) RenewAgentInboxDelivery(ctx context.Context, arg RenewAgentInb
 
 const retryAgentInboxEvent = `-- name: RetryAgentInboxEvent :one
 WITH original AS (
-  SELECT e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
+  SELECT e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config, e.delivery_mode, e.response_mode, e.channel_onboarding_id, e.issue_id, e.source_chat_message_id, e.context, e.dispatched_at, e.started_at, e.completed_at, e.result, e.error, e.session_id, e.work_dir, e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id, e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task, e.wait_reason, e.initiator_user_id
   FROM agent_inbox_event e
   WHERE e.id = $1
     AND e.workspace_id = $2
@@ -566,7 +704,7 @@ WITH original AS (
   FOR UPDATE
 ),
 guarded AS (
-  SELECT original.id, original.workspace_id, original.agent_session_id, original.conversation_id, original.channel_id, original.chat_session_id, original.agent_id, original.source_message_id, original.reason, original.requires_wake, original.status, original.priority, original.seq_from, original.seq_to, original.attempt, original.last_error, original.claimed_at, original.acked_at, original.created_at, original.updated_at, original.terminal_outcome, original.terminal_delivery_id, original.retryable, original.terminal_at, original.runtime_id, original.execution_config
+  SELECT original.id, original.workspace_id, original.agent_session_id, original.conversation_id, original.channel_id, original.chat_session_id, original.agent_id, original.source_message_id, original.reason, original.requires_wake, original.status, original.priority, original.seq_from, original.seq_to, original.attempt, original.last_error, original.claimed_at, original.acked_at, original.created_at, original.updated_at, original.terminal_outcome, original.terminal_delivery_id, original.retryable, original.terminal_at, original.runtime_id, original.execution_config, original.delivery_mode, original.response_mode, original.channel_onboarding_id, original.issue_id, original.source_chat_message_id, original.context, original.dispatched_at, original.started_at, original.completed_at, original.result, original.error, original.session_id, original.work_dir, original.trigger_comment_id, original.autopilot_run_id, original.max_attempts, original.parent_task_id, original.failure_reason, original.trigger_summary, original.force_fresh_session, original.is_leader_task, original.wait_reason, original.initiator_user_id
   FROM original
   WHERE EXISTS (
     SELECT 1
@@ -639,7 +777,7 @@ retried_event AS (
   FROM guarded
   JOIN agent a ON a.id = guarded.agent_id
   JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
-  RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
+  RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 ),
 copied_prompt AS (
   INSERT INTO chat_message (
@@ -667,7 +805,7 @@ copied_prompt AS (
   WHERE prompt.role = 'user'
   RETURNING id
 )
-SELECT retried_event.id, retried_event.workspace_id, retried_event.agent_session_id, retried_event.conversation_id, retried_event.channel_id, retried_event.chat_session_id, retried_event.agent_id, retried_event.source_message_id, retried_event.reason, retried_event.requires_wake, retried_event.status, retried_event.priority, retried_event.seq_from, retried_event.seq_to, retried_event.attempt, retried_event.last_error, retried_event.claimed_at, retried_event.acked_at, retried_event.created_at, retried_event.updated_at, retried_event.terminal_outcome, retried_event.terminal_delivery_id, retried_event.retryable, retried_event.terminal_at, retried_event.runtime_id, retried_event.execution_config
+SELECT retried_event.id, retried_event.workspace_id, retried_event.agent_session_id, retried_event.conversation_id, retried_event.channel_id, retried_event.chat_session_id, retried_event.agent_id, retried_event.source_message_id, retried_event.reason, retried_event.requires_wake, retried_event.status, retried_event.priority, retried_event.seq_from, retried_event.seq_to, retried_event.attempt, retried_event.last_error, retried_event.claimed_at, retried_event.acked_at, retried_event.created_at, retried_event.updated_at, retried_event.terminal_outcome, retried_event.terminal_delivery_id, retried_event.retryable, retried_event.terminal_at, retried_event.runtime_id, retried_event.execution_config, retried_event.delivery_mode, retried_event.response_mode, retried_event.channel_onboarding_id, retried_event.issue_id, retried_event.source_chat_message_id, retried_event.context, retried_event.dispatched_at, retried_event.started_at, retried_event.completed_at, retried_event.result, retried_event.error, retried_event.session_id, retried_event.work_dir, retried_event.trigger_comment_id, retried_event.autopilot_run_id, retried_event.max_attempts, retried_event.parent_task_id, retried_event.failure_reason, retried_event.trigger_summary, retried_event.force_fresh_session, retried_event.is_leader_task, retried_event.wait_reason, retried_event.initiator_user_id
 FROM retried_event
 WHERE EXISTS (SELECT 1 FROM copied_prompt)
 `
@@ -679,32 +817,55 @@ type RetryAgentInboxEventParams struct {
 }
 
 type RetryAgentInboxEventRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	AgentSessionID     pgtype.UUID        `json:"agent_session_id"`
-	ConversationID     pgtype.UUID        `json:"conversation_id"`
-	ChannelID          pgtype.UUID        `json:"channel_id"`
-	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
-	AgentID            pgtype.UUID        `json:"agent_id"`
-	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
-	Reason             string             `json:"reason"`
-	RequiresWake       bool               `json:"requires_wake"`
-	Status             string             `json:"status"`
-	Priority           int32              `json:"priority"`
-	SeqFrom            int64              `json:"seq_from"`
-	SeqTo              int64              `json:"seq_to"`
-	Attempt            int32              `json:"attempt"`
-	LastError          pgtype.Text        `json:"last_error"`
-	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
-	AckedAt            pgtype.Timestamptz `json:"acked_at"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	TerminalOutcome    pgtype.Text        `json:"terminal_outcome"`
-	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
-	Retryable          bool               `json:"retryable"`
-	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
-	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	ExecutionConfig    []byte             `json:"execution_config"`
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID      pgtype.UUID        `json:"agent_session_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	ChatSessionID       pgtype.UUID        `json:"chat_session_id"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	SourceMessageID     pgtype.UUID        `json:"source_message_id"`
+	Reason              string             `json:"reason"`
+	RequiresWake        bool               `json:"requires_wake"`
+	Status              string             `json:"status"`
+	Priority            int32              `json:"priority"`
+	SeqFrom             int64              `json:"seq_from"`
+	SeqTo               int64              `json:"seq_to"`
+	Attempt             int32              `json:"attempt"`
+	LastError           pgtype.Text        `json:"last_error"`
+	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt             pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome     pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID  pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable           bool               `json:"retryable"`
+	TerminalAt          pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID           pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig     []byte             `json:"execution_config"`
+	DeliveryMode        string             `json:"delivery_mode"`
+	ResponseMode        string             `json:"response_mode"`
+	ChannelOnboardingID pgtype.UUID        `json:"channel_onboarding_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	SourceChatMessageID pgtype.UUID        `json:"source_chat_message_id"`
+	Context             []byte             `json:"context"`
+	DispatchedAt        pgtype.Timestamptz `json:"dispatched_at"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	Result              []byte             `json:"result"`
+	Error               pgtype.Text        `json:"error"`
+	SessionID           pgtype.Text        `json:"session_id"`
+	WorkDir             pgtype.Text        `json:"work_dir"`
+	TriggerCommentID    pgtype.UUID        `json:"trigger_comment_id"`
+	AutopilotRunID      pgtype.UUID        `json:"autopilot_run_id"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	ParentTaskID        pgtype.UUID        `json:"parent_task_id"`
+	FailureReason       pgtype.Text        `json:"failure_reason"`
+	TriggerSummary      pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession   bool               `json:"force_fresh_session"`
+	IsLeaderTask        bool               `json:"is_leader_task"`
+	WaitReason          pgtype.Text        `json:"wait_reason"`
+	InitiatorUserID     pgtype.UUID        `json:"initiator_user_id"`
 }
 
 func (q *Queries) RetryAgentInboxEvent(ctx context.Context, arg RetryAgentInboxEventParams) (RetryAgentInboxEventRow, error) {
@@ -737,6 +898,29 @@ func (q *Queries) RetryAgentInboxEvent(ctx context.Context, arg RetryAgentInboxE
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -750,7 +934,7 @@ SET terminal_outcome = $3,
     updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type SetAgentInboxTerminalOutcomeParams struct {
@@ -797,6 +981,29 @@ func (q *Queries) SetAgentInboxTerminalOutcome(ctx context.Context, arg SetAgent
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -925,7 +1132,7 @@ DO UPDATE SET
   seq_from = LEAST(agent_inbox_event.seq_from, EXCLUDED.seq_from),
   seq_to = GREATEST(agent_inbox_event.seq_to, EXCLUDED.seq_to),
   updated_at = now()
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type UpsertAmbientAgentInboxEventParams struct {
@@ -978,6 +1185,29 @@ func (q *Queries) UpsertAmbientAgentInboxEvent(ctx context.Context, arg UpsertAm
 		&i.TerminalAt,
 		&i.RuntimeID,
 		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }

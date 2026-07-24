@@ -645,7 +645,7 @@ func TestAgentTransportFreshnessDecisionFactIsScopedToTaskOrInboxSource(t *testi
 	agentID := parseUUID(uuid.NewString())
 	target := agentTransportTarget{raw: "#same-target"}
 	base := agentTransportSource{
-		task:   db.AgentTaskQueue{ID: parseUUID(uuid.NewString())},
+		task:   db.AgentInboxEvent{ID: parseUUID(uuid.NewString())},
 		origin: chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
 	}
 	otherTask := base

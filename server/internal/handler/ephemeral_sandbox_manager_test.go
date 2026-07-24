@@ -54,7 +54,7 @@ func TestEphemeralSandboxManagerPrepareRetryCreatesNewRuntimeAndSandbox(t *testi
 		createRef: service.SandboxInstanceRef{InstanceID: "new", WorkspaceID: testWorkspaceID, Template: "old-template"},
 	}
 	manager := newEphemeralSandboxManager(testHandler, lifecycle)
-	parent := db.AgentTaskQueue{
+	parent := db.AgentInboxEvent{
 		AgentID: parseUUID(agentID),
 		Context: mergeEphemeralSandboxContext(nil, "old", testUserID),
 	}
@@ -98,7 +98,7 @@ func TestEphemeralSandboxManagerPrepareRetryCompensatesRuntimeOnCreateFailure(t 
 		createErr: errors.New("create failed"),
 	}
 	manager := newEphemeralSandboxManager(testHandler, lifecycle)
-	_, err := manager.PrepareRetry(ctx, db.AgentTaskQueue{
+	_, err := manager.PrepareRetry(ctx, db.AgentInboxEvent{
 		AgentID: parseUUID(agentID),
 		Context: mergeEphemeralSandboxContext(nil, "old", testUserID),
 	})
@@ -142,7 +142,7 @@ func testEphemeralSandboxManagerCleanupActor(t *testing.T, markerActor, wantActo
 	}
 	manager := newEphemeralSandboxManager(testHandler, lifecycle)
 	contextJSON := mergeEphemeralSandboxContext(nil, "old", markerActor)
-	err = manager.Cleanup(ctx, db.AgentTaskQueue{
+	err = manager.Cleanup(ctx, db.AgentInboxEvent{
 		ID:        util.MustParseUUID("aaaaaaaa-0000-0000-0000-000000000001"),
 		AgentID:   parseUUID(agentID),
 		RuntimeID: parseUUID(runtimeID),
@@ -163,7 +163,7 @@ func TestEphemeralSandboxManagerCleanupPropagatesTransientLookupError(t *testing
 	agentID, _ := setupBoundRuntimeAgent(t, "pi")
 	lookupErr := errors.New("lookup temporarily unavailable")
 	manager := newEphemeralSandboxManager(testHandler, &fakeRetrySandboxLifecycle{lookupErr: lookupErr})
-	err := manager.Cleanup(context.Background(), db.AgentTaskQueue{
+	err := manager.Cleanup(context.Background(), db.AgentInboxEvent{
 		AgentID: parseUUID(agentID),
 		Context: mergeEphemeralSandboxContext(nil, "old", testUserID),
 	})

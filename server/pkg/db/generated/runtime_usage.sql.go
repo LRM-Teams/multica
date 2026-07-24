@@ -14,7 +14,7 @@ import (
 const getRuntimeTaskHourlyActivity = `-- name: GetRuntimeTaskHourlyActivity :many
 SELECT EXTRACT(HOUR FROM started_at AT TIME ZONE $2::text)::int AS hour,
        COUNT(*)::int AS count
-FROM agent_task_queue
+FROM agent_inbox_event
 WHERE runtime_id = $1 AND started_at IS NOT NULL
 GROUP BY hour
 ORDER BY hour

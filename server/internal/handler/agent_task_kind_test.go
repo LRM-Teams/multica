@@ -7,7 +7,7 @@ import (
 )
 
 func TestComputeTaskKindRecognizesAgentRadarContext(t *testing.T) {
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		Context: []byte(`{"type":"agent_radar","radar_run_id":"radar-run-1"}`),
 	}
 

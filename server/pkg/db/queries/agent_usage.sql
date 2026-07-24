@@ -64,7 +64,7 @@ SELECT
     atq.issue_id,
     i.project_id,
     COALESCE(atq.started_at, now())
-FROM agent_task_queue atq
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE atq.id = @task_id
@@ -170,12 +170,13 @@ SELECT
         0
     )::bigint AS total_seconds,
     COUNT(*)::int AS task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count
-FROM agent_task_queue atq
+    COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed')::int AS failed_count
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE a.workspace_id = $1
-  AND atq.status IN ('completed', 'failed')
+  AND atq.status = 'acked'
+  AND atq.terminal_outcome IN ('completed', 'failed')
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= sqlc.arg('since')::timestamptz
@@ -200,12 +201,13 @@ SELECT
         0
     )::bigint AS total_seconds,
     COUNT(*)::int AS task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count
-FROM agent_task_queue atq
+    COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed')::int AS failed_count
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE a.workspace_id = $1
-  AND atq.status IN ('completed', 'failed')
+  AND atq.status = 'acked'
+  AND atq.terminal_outcome IN ('completed', 'failed')
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= @since::timestamptz

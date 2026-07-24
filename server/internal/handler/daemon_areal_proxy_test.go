@@ -17,7 +17,7 @@ func TestTaskToResponseMapsArealProxyFromContext(t *testing.T) {
 		`"api_key":"proxy-key-123","base_url":"http://db_bridge_stub:9100/v1",` +
 		`"session_id":"task-1-0"}}`)
 
-	resp := taskToResponse(db.AgentTaskQueue{Context: ctx}, "ws-1")
+	resp := taskToResponse(db.AgentInboxEvent{Context: ctx}, "ws-1")
 
 	if resp.ArealProxy == nil {
 		t.Fatal("expected ArealProxy populated from context.areal_proxy, got nil")
@@ -48,7 +48,7 @@ func TestTaskToResponseNoArealProxyForNormalTask(t *testing.T) {
 		[]byte(`{"areal_proxy":{"provider":"areal","api_key":"pk"}}`), // missing base_url
 	}
 	for _, ctx := range cases {
-		resp := taskToResponse(db.AgentTaskQueue{Context: ctx}, "ws-1")
+		resp := taskToResponse(db.AgentInboxEvent{Context: ctx}, "ws-1")
 		if resp.ArealProxy != nil {
 			t.Errorf("context %q: expected nil ArealProxy, got %+v", ctx, resp.ArealProxy)
 		}

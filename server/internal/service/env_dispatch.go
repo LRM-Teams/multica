@@ -368,7 +368,7 @@ type EnvDispatchDeps interface {
 	// EXCLUSIVELY from this row, not from training_dispatch. Returns
 	// pgx.ErrNoRows when no env_dispatch_run row exists or root_task_id is NULL
 	// (rollout not started / root not enqueued); the caller treats both as
-	// in_progress. Otherwise returns the agent_task_queue.status of the bound
+	// in_progress. Otherwise returns the agent_inbox_event.status of the bound
 	// root task.
 	GetEnvDispatchRootTaskStatus(ctx context.Context, projectID, workspaceID string) (string, error)
 
@@ -388,7 +388,7 @@ type EnvDispatchDeps interface {
 	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (ResolvedPerAgentSandboxPolicy, error)
 }
 
-// rootTaskTerminalStatuses is the terminal subset of agent_task_queue.status
+// rootTaskTerminalStatuses is the terminal subset of agent_inbox_event.status
 // (migrations 001 + 109): completed/failed/cancelled are the transitions that
 // fire the terminal hook. The rest are in-progress. Used by GetDagReadiness to
 // decide 202 (still polling) vs proceeding to DAG assembly (200).

@@ -2057,7 +2057,7 @@ type CreateIssueRequest struct {
 	// platform-internal flows can deterministically locate it later. Only
 	// trusted callers should set these — currently the daemon CLI passes
 	// them through for quick-create tasks (origin_type=quick_create,
-	// origin_id=agent_task_queue.id).
+	// origin_id=agent_inbox_event.id).
 	OriginType *string `json:"origin_type,omitempty"`
 	OriginID   *string `json:"origin_id,omitempty"`
 	// Source records the visible message that triggered a chat-originated

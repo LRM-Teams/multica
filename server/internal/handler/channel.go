@@ -5803,7 +5803,7 @@ func (h *Handler) channelInitiatorForChatSession(ctx context.Context, chatSessio
 	var initiator pgtype.UUID
 	err := h.DB.QueryRow(ctx, `
 		SELECT initiator_user_id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE chat_session_id = $1 AND initiator_user_id IS NOT NULL
 		ORDER BY created_at DESC
 		LIMIT 1`, chatSessionID).Scan(&initiator)

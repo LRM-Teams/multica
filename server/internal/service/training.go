@@ -26,7 +26,7 @@ const (
 	arealProxyProvider = "openai"
 	arealProxyModel    = "areal-default"
 	// arealProxyContextKey is the top-level key under which the RL proxy config
-	// is merged into agent_task_queue.context.
+	// is merged into agent_inbox_event.context.
 	arealProxyContextKey = "areal_proxy"
 )
 
@@ -52,7 +52,7 @@ type trainingDispatchLookup interface {
 // trainingTaskStore reads a task's current context (for the idempotency guard)
 // and merges the areal_proxy config back in. *db.Queries satisfies it.
 type trainingTaskStore interface {
-	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
+	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentInboxEvent, error)
 	MergeTaskArealProxyContext(ctx context.Context, arg db.MergeTaskArealProxyContextParams) error
 }
 
@@ -80,8 +80,8 @@ type arealSessionCloser interface {
 // criticTaskCreator creates critic tasks and reads existing ones for the
 // critic-spawn hook's idempotency guard. *db.Queries satisfies it.
 type criticTaskCreator interface {
-	FindCriticTaskForTrained(ctx context.Context, trainedTaskID string) (db.AgentTaskQueue, error)
-	CreateCriticTask(ctx context.Context, arg db.CreateCriticTaskParams) (db.AgentTaskQueue, error)
+	FindCriticTaskForTrained(ctx context.Context, trainedTaskID string) (db.AgentInboxEvent, error)
+	CreateCriticTask(ctx context.Context, arg db.CreateCriticTaskParams) (db.AgentInboxEvent, error)
 }
 
 // Diagnoser runs the Pi diagnosis agent for a project, returning one StepReward
@@ -106,7 +106,7 @@ var _ Diagnoser = (*DiagnosisAgentRunner)(nil)
 // not autopilot, not a sandbox lifecycle job). Errors are logged but do not
 // block the terminal routing flow.
 type CheckpointTrigger interface {
-	TriggerCheckpoint(ctx context.Context, task db.AgentTaskQueue, projectID pgtype.UUID) error
+	TriggerCheckpoint(ctx context.Context, task db.AgentInboxEvent, projectID pgtype.UUID) error
 }
 
 type TrainingSessionDeps struct {
@@ -155,7 +155,7 @@ func (s *TaskService) MaybeOpenTrainingSession(ctx context.Context, taskID, agen
 // Enqueue* chokepoints: it derives taskID/agentID from the freshly-created task
 // row + owning projectID and logs any error loudly (the task otherwise runs
 // un-proxied, which must never be silent) without failing the enqueue.
-func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentTaskQueue, projectID pgtype.UUID, envID string) {
+func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentInboxEvent, projectID pgtype.UUID, envID string) {
 	if s.Training == nil {
 		return
 	}
@@ -428,7 +428,7 @@ func extractArealProxyConfig(raw []byte) (*arealProxyConfig, bool) {
 // to failed, bypassing FailTask — so timeout-killed tasks will NOT auto-close
 // their RL session. A reaper that sweeps orphaned sessions is future hardening,
 // out of D scope.
-func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, task db.AgentTaskQueue, projectID pgtype.UUID) {
+func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, task db.AgentInboxEvent, projectID pgtype.UUID) {
 	if deps == nil || deps.Closer == nil {
 		return
 	}
@@ -487,7 +487,7 @@ func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, t
 // MaybeCloseTrainingSession is the public entry point invoked at terminal task
 // transitions (complete/fail/cancel). It delegates to the shared helper using
 // the service's injected training deps.
-func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.AgentInboxEvent) {
 	projectID := pgtype.UUID{}
 	if task.IssueID.Valid {
 		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
@@ -511,7 +511,7 @@ func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.Age
 // runtime-offline / timeout), and sandbox lifecycle jobs — these are not
 // structural events that should produce a checkpoint. Errors are logged but
 // do not block the terminal routing flow.
-func maybeTriggerCheckpoint(ctx context.Context, deps *TrainingSessionDeps, task db.AgentTaskQueue, projectID pgtype.UUID) {
+func maybeTriggerCheckpoint(ctx context.Context, deps *TrainingSessionDeps, task db.AgentInboxEvent, projectID pgtype.UUID) {
 	if deps == nil || deps.CheckpointTrigger == nil {
 		return
 	}
@@ -567,7 +567,7 @@ func hasSandboxLifecycleContext(raw []byte) bool {
 // does NOT call RecordStepRewards or block the close hook. A RecordStepRewards
 // error is logged and still lets the close hook proceed. Best-effort, never
 // fatal - the task is already terminal.
-func maybeDiagnoseProject(ctx context.Context, deps *TrainingSessionDeps, task db.AgentTaskQueue, projectID pgtype.UUID, dispatch db.TrainingDispatch) {
+func maybeDiagnoseProject(ctx context.Context, deps *TrainingSessionDeps, task db.AgentInboxEvent, projectID pgtype.UUID, dispatch db.TrainingDispatch) {
 	if deps == nil || deps.Diagnosis == nil || deps.DAG == nil || !deps.DAG.Enabled() {
 		return
 	}
@@ -595,7 +595,7 @@ func maybeDiagnoseProject(ctx context.Context, deps *TrainingSessionDeps, task d
 	}
 }
 
-func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.AgentInboxEvent) {
 	if s.Training == nil {
 		return
 	}
@@ -668,7 +668,7 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 // Returns nil in all expected cases (including spawn-failure fallback). An
 // error is returned only for pre-spawn lookup failures that prevent the
 // fallback from firing safely — the caller logs but does not double-close.
-func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, trained db.AgentTaskQueue, td db.TrainingDispatch, projectID pgtype.UUID) error {
+func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, trained db.AgentInboxEvent, td db.TrainingDispatch, projectID pgtype.UUID) error {
 	if deps == nil {
 		return nil
 	}
@@ -783,7 +783,7 @@ func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, traine
 // from TRAINING_DEFAULT_REWARD, default 1.0). When DefaultReward is zero
 // (e.g., tests constructing TrainingSessionDeps directly), the package constant
 // trainingDefaultReward is used.
-func maybeCloseTrainingSessionFromCritic(ctx context.Context, deps *TrainingSessionDeps, critic db.AgentTaskQueue) bool {
+func maybeCloseTrainingSessionFromCritic(ctx context.Context, deps *TrainingSessionDeps, critic db.AgentInboxEvent) bool {
 	if deps == nil || deps.Closer == nil {
 		return false
 	}

@@ -30,7 +30,7 @@ type EnvDispatchRunChecker interface {
 
 // closeSegmentForDelegation is the normal delegation event seam (D11): the
 // trained parent that posted the trigger comment is delegating to a child task.
-func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
+func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.AgentInboxEvent, projectID string, envSnapshot map[string]any) {
 	s.closeSegmentForDelegationEvent(ctx, parent, projectID, closingEventDelegation, envSnapshot)
 }
 
@@ -38,11 +38,11 @@ func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.A
 // a squad-context handoff. The segment records squad-specific provenance via
 // closing_event="squad_briefing", while the graph edge remains structural
 // delegation when the child later closes.
-func (s *TaskService) closeSegmentForSquadContextDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
+func (s *TaskService) closeSegmentForSquadContextDelegation(ctx context.Context, parent db.AgentInboxEvent, projectID string, envSnapshot map[string]any) {
 	s.closeSegmentForDelegationEvent(ctx, parent, projectID, closingEventSquadBriefing, envSnapshot)
 }
 
-func isSquadContextHandoff(parent db.AgentTaskQueue, childIsSquadLeader bool) bool {
+func isSquadContextHandoff(parent db.AgentInboxEvent, childIsSquadLeader bool) bool {
 	return childIsSquadLeader || parent.IsLeaderTask
 }
 
@@ -59,7 +59,7 @@ func isSquadContextHandoff(parent db.AgentTaskQueue, childIsSquadLeader bool) bo
 //   - Non-training env-dispatch task (no proxy, but env_dispatch_run exists) → local
 //     task_messages recording via RecordLocalSegmentForEvent
 //   - Neither → no-op (ordinary task, not in an env-dispatch project)
-func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent db.AgentTaskQueue, projectID string, closingEvent string, envSnapshot map[string]any) {
+func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent db.AgentInboxEvent, projectID string, closingEvent string, envSnapshot map[string]any) {
 	if s.Training == nil || s.Training.DAG == nil || !s.Training.DAG.Enabled() {
 		return
 	}
@@ -73,7 +73,7 @@ func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent
 }
 
 // closeTrainedSegmentForDelegation handles the AReaL bridge path for a training task.
-func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID, closingEvent string, envSnapshot map[string]any, cfg *arealProxyConfig) {
+func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, parent db.AgentInboxEvent, projectID, closingEvent string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	parentRunID := util.UUIDToString(parent.ID)
 	// One-segment-per-task: skip if the parent already recorded a segment (a
 	// prior delegation closed it). SegmentIDForAgentRun returns ("", ErrNoRows)
@@ -113,7 +113,7 @@ func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, pare
 //   - Non-training env-dispatch task (no proxy, but env_dispatch_run exists) → local
 //     task_messages recording via RecordLocalSegmentForEvent
 //   - Neither → no-op (ordinary task, not in an env-dispatch project)
-func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
+func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.AgentInboxEvent, projectID string, envSnapshot map[string]any) {
 	if s.Training == nil || s.Training.DAG == nil || !s.Training.DAG.Enabled() {
 		return
 	}
@@ -127,7 +127,7 @@ func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.Agent
 }
 
 // closeTrainedSegmentForTerminal handles the AReaL bridge path for a training task.
-func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task db.AgentTaskQueue, projectID string, envSnapshot map[string]any, cfg *arealProxyConfig) {
+func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task db.AgentInboxEvent, projectID string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	runID := util.UUIDToString(task.ID)
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
 		return // already closed via an earlier delegation
@@ -156,7 +156,7 @@ func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task d
 // RecordLocalSegmentForEvent. The task is non-training (no areal_proxy context).
 // Zero AReaL client calls are made in this path. Recording is best-effort:
 // errors are logged and the run continues.
-func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task db.AgentTaskQueue, projectID, closingEvent string, envSnapshot map[string]any) {
+func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task db.AgentInboxEvent, projectID, closingEvent string, envSnapshot map[string]any) {
 	if s.EnvDispatchCheck == nil {
 		return
 	}
@@ -232,20 +232,20 @@ func (s *TaskService) leanEnvSnapshot(ctx context.Context, projectID pgtype.UUID
 // is no such parent (e.g. a user-authored mention, or the parent is not a
 // trained run) so the caller skips the delegation seam. Best-effort: any lookup
 // miss yields ok=false.
-func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, triggerCommentID, excludeTaskID pgtype.UUID) (db.AgentTaskQueue, bool) {
+func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, triggerCommentID, excludeTaskID pgtype.UUID) (db.AgentInboxEvent, bool) {
 	if !triggerCommentID.Valid {
-		return db.AgentTaskQueue{}, false
+		return db.AgentInboxEvent{}, false
 	}
 	comment, err := s.Queries.GetComment(ctx, triggerCommentID)
 	if err != nil {
-		return db.AgentTaskQueue{}, false
+		return db.AgentInboxEvent{}, false
 	}
 	if comment.AuthorType != "agent" || !comment.AuthorID.Valid {
-		return db.AgentTaskQueue{}, false
+		return db.AgentInboxEvent{}, false
 	}
 	tasks, err := s.Queries.ListActiveTasksByIssue(ctx, issueID)
 	if err != nil {
-		return db.AgentTaskQueue{}, false
+		return db.AgentInboxEvent{}, false
 	}
 	for _, t := range tasks {
 		if excludeTaskID.Valid && t.ID == excludeTaskID {
@@ -255,5 +255,5 @@ func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, tri
 			return t, true
 		}
 	}
-	return db.AgentTaskQueue{}, false
+	return db.AgentInboxEvent{}, false
 }

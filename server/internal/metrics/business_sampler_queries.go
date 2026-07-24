@@ -46,7 +46,7 @@ SELECT count(DISTINCT user_id) FROM (
   FROM issue i
   WHERE i.creator_type = 'member'
     AND EXISTS (
-      SELECT 1 FROM agent_task_queue atq
+      SELECT 1 FROM agent_inbox_event atq
       WHERE atq.issue_id = i.id
         AND atq.created_at > now() - $1::interval
     )
@@ -82,7 +82,7 @@ SELECT count(DISTINCT workspace_id) FROM (
   SELECT i.workspace_id
   FROM issue i
   WHERE EXISTS (
-    SELECT 1 FROM agent_task_queue atq
+    SELECT 1 FROM agent_inbox_event atq
     WHERE atq.issue_id = i.id
       AND atq.created_at > now() - $1::interval
   )
@@ -98,7 +98,7 @@ SELECT count(DISTINCT workspace_id) FROM (
 	return nil
 }
 
-// queryTaskQueued counts agent_task_queue rows in `queued` status, grouped
+// queryTaskQueued counts agent_inbox_event rows in `queued` status, grouped
 // by inferred source. The CASE expression here mirrors the source
 // derivation in service/task.go so sampler and event-time metrics agree.
 func (c *BusinessSamplerCollector) queryTaskQueued(
@@ -113,8 +113,8 @@ SELECT
     ELSE 'other'
   END AS source,
   count(*) AS n
-FROM agent_task_queue
-WHERE status = 'queued'
+FROM agent_inbox_event
+WHERE status IN ('pending', 'failed')
 GROUP BY 1
 LIMIT 100
 `
@@ -134,7 +134,7 @@ LIMIT 100
 	return rows.Err()
 }
 
-// queryTaskRunning counts agent_task_queue rows in `dispatched` or
+// queryTaskRunning counts agent_inbox_event rows in `dispatched` or
 // `running` status, grouped by source × runtime_mode. runtime_mode comes
 // from the joined agent_runtime row; values outside the allow-list collapse
 // to "unknown".
@@ -147,12 +147,8 @@ func (c *BusinessSamplerCollector) queryTaskRunning(
 	const stmt = `
 WITH in_flight AS (
   SELECT chat_session_id, autopilot_run_id, issue_id, runtime_id
-  FROM agent_task_queue
-  WHERE status = 'dispatched'
-  UNION ALL
-  SELECT chat_session_id, autopilot_run_id, issue_id, runtime_id
-  FROM agent_task_queue
-  WHERE status = 'running'
+  FROM agent_inbox_event
+  WHERE status = 'draining'
 )
 SELECT
   CASE
@@ -188,7 +184,7 @@ LIMIT 100
 	return rows.Err()
 }
 
-// queryTaskStuck counts `running` agent_task_queue rows whose started_at
+// queryTaskStuck counts `running` agent_inbox_event rows whose started_at
 // crosses the stuck threshold, grouped by inferred source.
 func (c *BusinessSamplerCollector) queryTaskStuck(
 	ctx context.Context, tx pgx.Tx, snap *samplerSnapshot,
@@ -202,8 +198,8 @@ SELECT
     ELSE 'other'
   END AS source,
   count(*) AS n
-FROM agent_task_queue
-WHERE status = 'running'
+FROM agent_inbox_event
+WHERE status = 'draining'
   AND started_at IS NOT NULL
   AND started_at < now() - interval '` + stuckRunningInterval + `'
 GROUP BY 1

@@ -147,31 +147,51 @@ WHERE id = $1
 RETURNING *;
 
 -- name: ListAgentTasks :many
-SELECT * FROM agent_task_queue
+SELECT * FROM agent_inbox_event
 WHERE agent_id = $1
 ORDER BY created_at DESC
 LIMIT 50;
 
 -- name: CreateAgentTask :one
-INSERT INTO agent_task_queue (
-    agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
+INSERT INTO agent_inbox_event (
+    workspace_id, agent_session_id, agent_id, runtime_id, execution_config,
+    issue_id, reason, requires_wake, status, priority, trigger_comment_id,
     trigger_summary, force_fresh_session, is_leader_task, context
 )
-VALUES (
-    $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
+SELECT
+    a.workspace_id, ensure_agent_wake_session(a.id), a.id,
+    sqlc.arg(runtime_id), sqlc.narg(context),
+    sqlc.arg(issue_id),
+    CASE
+      WHEN sqlc.narg(context)->>'type' = 'agent_radar' THEN 'agent_radar'
+      WHEN sqlc.narg(context)->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
+      WHEN sqlc.narg(context)->>'type' = 'memory_curation' THEN 'memory_curation'
+      WHEN sqlc.narg(context)->>'type' = 'reminder' THEN 'reminder'
+      ELSE 'issue'
+    END,
+    true, 'pending', sqlc.arg(priority), sqlc.narg(trigger_comment_id),
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
     COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
     sqlc.narg(context)
-)
+FROM agent a
+WHERE a.id = sqlc.arg(agent_id)
 RETURNING *;
 
 -- name: CreateQuickCreateTask :one
 -- Quick-create tasks have no issue / chat / autopilot link; the entire job
 -- description (prompt, requester, workspace) lives in context JSONB. The
 -- daemon detects this variant via context.type == "quick_create".
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
-VALUES ($1, $2, NULL, 'queued', $3, $4)
+INSERT INTO agent_inbox_event (
+  workspace_id, agent_session_id, agent_id, runtime_id, execution_config,
+  issue_id, reason, requires_wake, status, priority, context
+)
+SELECT
+  a.workspace_id, ensure_agent_wake_session(a.id), a.id,
+  sqlc.arg(runtime_id), sqlc.arg(context),
+  NULL, 'quick_create', true, 'pending', sqlc.arg(priority), sqlc.arg(context)
+FROM agent a
+WHERE a.id = sqlc.arg(agent_id)
 RETURNING *;
 
 -- name: LinkTaskToIssue :exec
@@ -180,14 +200,14 @@ RETURNING *;
 -- so this never overwrites an issue id that was set at task creation (only
 -- quick-create tasks land here unset). Fixes the activity row staying on
 -- "Creating issue" forever after completion.
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET issue_id = $2
 WHERE id = $1 AND issue_id IS NULL;
 
 -- name: SetAgentTaskMaxAttempts :exec
 -- Radar owns provider backoff at the workspace scheduler, so its queue row
 -- must never also create an automatic retry attempt.
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET max_attempts = $2
 WHERE id = $1;
 
@@ -211,21 +231,27 @@ SET summary = EXCLUDED.summary,
 -- inherited so the retried task keeps the same squad-role provenance as its
 -- parent and the self-trigger guard in shouldEnqueueSquadLeaderOnComment
 -- continues to recognise it as a leader task.
-INSERT INTO agent_task_queue (
-    agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
-    status, priority, trigger_comment_id, trigger_summary, context,
+INSERT INTO agent_inbox_event (
+    workspace_id, agent_session_id, conversation_id, channel_id,
+    agent_id, runtime_id, execution_config, issue_id, chat_session_id,
+    autopilot_run_id, reason, requires_wake, status, priority,
+    trigger_comment_id, trigger_summary, context,
     session_id, work_dir,
     attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task
 )
 SELECT
-    p.agent_id, COALESCE(sqlc.narg('runtime_id')::uuid, p.runtime_id), p.issue_id, p.chat_session_id, p.autopilot_run_id,
-    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, COALESCE(sqlc.narg('context')::jsonb, p.context),
+    p.workspace_id, ensure_agent_wake_session(p.agent_id), p.conversation_id, p.channel_id,
+    p.agent_id, COALESCE(sqlc.narg('runtime_id')::uuid, p.runtime_id),
+    COALESCE(sqlc.narg('context')::jsonb, p.context), p.issue_id,
+    p.chat_session_id, p.autopilot_run_id, p.reason, true, 'pending',
+    p.priority, p.trigger_comment_id, p.trigger_summary,
+    COALESCE(sqlc.narg('context')::jsonb, p.context),
     CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.session_id END,
     CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
     COALESCE(p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow'), false),
     p.is_leader_task
-FROM agent_task_queue p
+FROM agent_inbox_event p
 WHERE p.id = @id
 RETURNING *;
 
@@ -235,9 +261,10 @@ RETURNING *;
 -- (#1587). Prior :exec form silently dropped that info, so internal cancel
 -- paths (issue status flips to cancelled/done, etc.) left agents stuck at
 -- status="working" with no self-correction.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
-WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
+WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: CancelAgentTasksByIssueAndAgent :many
@@ -245,26 +272,31 @@ RETURNING *;
 -- tasks belonging to other agents on the same issue. Used by the manual
 -- rerun flow so re-running the assignee doesn't collateral-cancel a
 -- still-running @-mention agent on the same issue.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
-WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
+WHERE issue_id = $1 AND agent_id = $2 AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: CancelInFlightTasksByIssueAndAgent :many
 -- Cancels only already-claimed/running work for a single (issue, agent) pair.
 -- Queued follow-up tasks are deliberately left alone so the daemon can pick up
 -- the latest human guidance immediately after interrupting the stale run.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now(), failure_reason = 'followup_interrupt'
-WHERE issue_id = $1 AND agent_id = $2 AND id <> $3 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now(),
+    failure_reason = 'followup_interrupt'
+WHERE issue_id = $1 AND agent_id = $2 AND id <> $3 AND status = 'draining'
 RETURNING *;
 
 -- name: CancelInFlightChatTasksBySessionAndAgent :many
 -- Same interrupt path for chat sessions: leave queued follow-up chat turns in
 -- place, but stop the currently claimed turn so fresh guidance can run next.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now(), failure_reason = 'followup_interrupt'
-WHERE chat_session_id = $1 AND agent_id = $2 AND id <> $3 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now(),
+    failure_reason = 'followup_interrupt'
+WHERE chat_session_id = $1 AND agent_id = $2 AND id <> $3 AND status = 'draining'
 RETURNING *;
 
 -- name: CancelAgentTasksByAgent :many
@@ -273,9 +305,10 @@ RETURNING *;
 -- Mirrors the shape of CancelAgentTasksByIssue / CancelAgentTasksByIssueAndAgent
 -- (also :many + RETURNING + completed_at) so the three sibling cancel paths
 -- behave consistently.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
-WHERE agent_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
+WHERE agent_id = $1 AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: CancelAgentTasksByTriggerComment :many
@@ -284,9 +317,10 @@ RETURNING *;
 -- already embedded in its prompt. Must run BEFORE the comment row is deleted
 -- because the FK ON DELETE SET NULL would otherwise nullify trigger_comment_id
 -- and we'd lose the ability to find the affected tasks.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
-WHERE trigger_comment_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
+WHERE trigger_comment_id = $1 AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: CancelAgentTasksByChatSession :many
@@ -295,13 +329,14 @@ RETURNING *;
 -- has nowhere to land. Must run BEFORE the chat_session row is deleted —
 -- the FK ON DELETE SET NULL would otherwise nullify chat_session_id and we
 -- could no longer reach those tasks.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
-WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
+WHERE chat_session_id = $1 AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: GetAgentTask :one
-SELECT * FROM agent_task_queue
+SELECT * FROM agent_inbox_event
 WHERE id = $1;
 
 -- name: GetAgentTaskInWorkspace :one
@@ -312,123 +347,9 @@ WHERE id = $1;
 -- (issue / chat_session / autopilot_run) happens to be set. It is what lets
 -- run_only autopilot tasks and quick_create tasks (whose issue does not exist
 -- yet) be cancelled at all, instead of 404-ing on a missing source FK.
-SELECT atq.* FROM agent_task_queue atq
+SELECT atq.* FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE atq.id = $1 AND a.workspace_id = $2;
-
--- name: LockAgentWake :one
--- Serializes wake admission across the transitional task queue and the agent
--- inbox. Callers must hold this row lock in a transaction before either
--- ClaimNextAgentWake or the inbox lease's final eligibility check. A separate
--- statement after the lock observes the other source's committed state under
--- READ COMMITTED, closing the cross-table snapshot race.
-SELECT id FROM agent
-WHERE id = $1
-FOR UPDATE;
-
--- name: ClaimNextAgentWake :one
--- Claims the oldest queued legacy wake for one agent. Chat, issue, autopilot,
--- quick-create, and Radar rows share one global per-agent FIFO; priority and
--- agent.max_concurrent_tasks no longer create parallel execution lanes.
---
--- The caller must hold LockAgentWake in the same transaction. The inbox
--- predicates mirror leaseAgentInboxEventForRuntime so whichever source wins
--- the agent-row lock becomes the sole active wake and the other source sees
--- that committed ownership before it can proceed.
-UPDATE agent_task_queue
-SET status = 'dispatched', dispatched_at = now()
-WHERE id = (
-    SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = @agent_id
-      AND atq.runtime_id = @runtime_id
-      AND atq.status = 'queued'
-      AND (
-        atq.context->>'type' IS DISTINCT FROM 'agent_radar'
-        OR workspace_radar_task_is_authorized(atq.id)
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM agent_task_queue active
-          WHERE active.agent_id = atq.agent_id
-            AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM agent_event_delivery active_delivery
-          JOIN agent_session active_session
-            ON active_session.id = active_delivery.agent_session_id
-          WHERE active_session.agent_id = atq.agent_id
-            AND active_delivery.status IN ('leased', 'processing')
-            AND active_delivery.lease_expires_at > now()
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM agent_inbox_event inbox
-          JOIN agent_session inbox_session
-            ON inbox_session.id = inbox.agent_session_id
-          WHERE inbox.agent_id = atq.agent_id
-            AND COALESCE(inbox.runtime_id, inbox_session.runtime_id) = atq.runtime_id
-            AND inbox_session.status = 'active'
-            AND inbox.status IN ('pending', 'failed')
-            AND (inbox.created_at, inbox.id) < (atq.created_at, atq.id)
-      )
-    ORDER BY atq.created_at ASC, atq.id ASC
-    LIMIT 1
-    FOR UPDATE OF atq SKIP LOCKED
-)
-RETURNING *;
-
--- name: ReclaimStaleDispatchedAgentWake :one
--- Re-delivers a task whose previous claim likely succeeded server-side but
--- whose response never reached the daemon. The task is still in `dispatched`
--- with no `started_at`, so the daemon has not acknowledged it via StartTask.
--- Refresh dispatched_at so the server-side dispatch timeout measures from the
--- recovered delivery attempt. Other stale, unstarted dispatches from the
--- pre-cutover scheduler do not deadlock recovery: the oldest one is retried
--- first, while genuinely running/waiting or still-fresh dispatches block it.
--- The caller must hold LockAgentWake in the same transaction.
-UPDATE agent_task_queue
-SET dispatched_at = now()
-WHERE id = (
-    SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.runtime_id = @runtime_id
-      AND atq.agent_id = @agent_id
-      AND atq.status = 'dispatched'
-      AND atq.started_at IS NULL
-      AND atq.dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
-      AND (
-        atq.context->>'type' IS DISTINCT FROM 'agent_radar'
-        OR workspace_radar_task_is_authorized(atq.id)
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM agent_task_queue active
-          WHERE active.agent_id = atq.agent_id
-            AND active.id <> atq.id
-            AND (
-              active.status IN ('running', 'waiting_local_directory')
-              OR (
-                active.status = 'dispatched'
-                AND (
-                  active.started_at IS NOT NULL
-                  OR active.dispatched_at >= now() - make_interval(secs => @claim_recovery_secs::double precision)
-                )
-              )
-            )
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM agent_event_delivery active_delivery
-          JOIN agent_session active_session
-            ON active_session.id = active_delivery.agent_session_id
-          WHERE active_session.agent_id = atq.agent_id
-            AND active_delivery.status IN ('leased', 'processing')
-            AND active_delivery.lease_expires_at > now()
-      )
-    ORDER BY atq.created_at ASC, atq.id ASC
-    LIMIT 1
-    FOR UPDATE OF atq SKIP LOCKED
-)
-RETURNING *;
 
 -- name: StartAgentTask :one
 -- Transitions a task to running. Accepts either 'dispatched' (the normal
@@ -437,10 +358,10 @@ RETURNING *;
 -- the lock was acquired the daemon flips here). wait_reason is cleared on
 -- the transition so a future read can't conflate "currently waiting" with
 -- "previously waited".
-UPDATE agent_task_queue AS atq
-SET status = 'running', started_at = now(), wait_reason = NULL
+UPDATE agent_inbox_event AS atq
+SET started_at = COALESCE(started_at, now()), wait_reason = NULL
 WHERE atq.id = $1
-  AND atq.status IN ('dispatched', 'waiting_local_directory')
+  AND atq.status = 'draining'
   AND (
     atq.context->>'type' IS DISTINCT FROM 'agent_radar'
     OR workspace_radar_task_is_authorized(atq.id)
@@ -457,15 +378,17 @@ RETURNING atq.*;
 -- The CHECK only allows the transition from 'dispatched' so a daemon can't
 -- mark an already-running or terminal task as waiting; the StartAgentTask
 -- mutation handles the reverse transition once the lock is acquired.
-UPDATE agent_task_queue
-SET status = 'waiting_local_directory', wait_reason = $2
-WHERE id = $1 AND status = 'dispatched'
+UPDATE agent_inbox_event
+SET wait_reason = $2
+WHERE id = $1 AND status = 'draining'
 RETURNING *;
 
 -- name: CompleteAgentTask :one
-UPDATE agent_task_queue
-SET status = 'completed', completed_at = now(), result = $2, session_id = $3, work_dir = $4
-WHERE id = $1 AND status = 'running'
+UPDATE agent_inbox_event
+SET status = 'acked', completed_at = now(), terminal_at = now(),
+    terminal_outcome = 'completed', retryable = false, acked_at = now(),
+    result = $2, session_id = $3, work_dir = $4
+WHERE id = $1 AND status = 'draining'
 RETURNING *;
 
 -- name: GetLastTaskSession :one
@@ -501,13 +424,14 @@ RETURNING *;
 -- error text. Migration 079 backfills the failure_reason column itself,
 -- so observability stays accurate; this clause guarantees session resume
 -- never picks up a bad session even when failure_reason hasn't caught up.
-SELECT session_id, work_dir, runtime_id FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id FROM agent_inbox_event
 WHERE agent_id = $1 AND issue_id = $2
   AND (
-    status = 'completed'
-    OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
+    (status = 'acked' AND terminal_outcome = 'completed')
+    OR (status = 'suppressed' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
-      status = 'failed'
+      status = 'acked'
+      AND terminal_outcome = 'failed'
       AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
       AND NOT (COALESCE(error, '') ILIKE '%context window%' OR COALESCE(error, '') ILIKE '%context length%' OR COALESCE(error, '') ILIKE '%context_length_exceeded%' OR COALESCE(error, '') ILIKE '%maximum context%' OR COALESCE(error, '') ILIKE '%prompt is too long%' OR (COALESCE(error, '') ILIKE '%token%' AND COALESCE(error, '') ILIKE '%limit%'))
@@ -524,7 +448,7 @@ LIMIT 1;
 -- no started_at (never dispatched / the just-claimed current task) are excluded,
 -- so this never returns the current claim's own row. MUST use started_at, never
 -- completed_at: a long run would otherwise miss comments posted while it ran.
-SELECT started_at FROM agent_task_queue
+SELECT started_at FROM agent_inbox_event
 WHERE agent_id = $1 AND issue_id = $2 AND started_at IS NOT NULL
 ORDER BY started_at DESC
 LIMIT 1;
@@ -539,14 +463,18 @@ LIMIT 1;
 --
 -- failure_reason is a coarse classifier consumed by the auto-retry path;
 -- 'agent_error' is the safe default when the daemon doesn't supply one.
-UPDATE agent_task_queue
-SET status = 'failed',
+UPDATE agent_inbox_event
+SET status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
+    retryable = false,
     error = $2,
     failure_reason = COALESCE(sqlc.narg('failure_reason'), 'agent_error'),
     session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir = COALESCE(sqlc.narg('work_dir'), work_dir)
-WHERE id = $1 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+WHERE id = $1 AND status = 'draining'
 RETURNING *;
 
 -- name: UpdateAgentTaskSession :exec
@@ -554,17 +482,17 @@ RETURNING *;
 -- session_id/work_dir on the task row. No-op if the task is no longer
 -- in dispatched/running. waiting_local_directory tasks have no session yet
 -- so this query intentionally skips them.
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir  = COALESCE(sqlc.narg('work_dir'), work_dir)
-WHERE id = $1 AND status IN ('dispatched', 'running');
+WHERE id = $1 AND status = 'draining';
 
 -- name: SetTaskParentTaskID :exec
 -- Links a mention-delegated child task to its trained parent (D11 delegation
 -- edge). CreateAgentTask has no parent_task_id parameter, so this post-insert
 -- UPDATE sets it. Used so the delegation edge parent->child can be recorded at
 -- the child's close via SegmentIDForAgentRun(parent_task_id).
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET parent_task_id = $2
 WHERE id = $1;
 
@@ -573,11 +501,11 @@ WHERE id = $1;
 -- single read-modify-write. COALESCE handles a NULL/empty context; the `||`
 -- operator preserves every existing top-level key (e.g. squad_id) and
 -- overwrites only the areal_proxy sub-object. Used by the session-open hook.
--- This intentionally does NOT touch agent_task_queue.session_id, which is the
+-- This intentionally does NOT touch agent_inbox_event.session_id, which is the
 -- runtime/chat session pointer, not the RL session.
-UPDATE agent_task_queue
-SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $2::jsonb)
-WHERE id = $1;
+UPDATE agent_inbox_event
+SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', sqlc.arg('areal_proxy')::jsonb)
+WHERE id = sqlc.arg('id');
 
 -- name: StripArealProxyFromTaskContext :exec
 -- Removes the areal_proxy sub-object from the task's context JSONB. Used by the
@@ -588,7 +516,7 @@ WHERE id = $1;
 -- squad_id) and the chat session_id/work_dir resume pointers (separate columns).
 -- No-op when the key is absent. Propagates errors (the strip is load-bearing for
 -- D9, not best-effort).
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET context = COALESCE(context, '{}'::jsonb) - 'areal_proxy'
 WHERE id = $1;
 
@@ -599,13 +527,14 @@ WHERE id = $1;
 -- them to the auto-retry path. waiting_local_directory rows are included
 -- because the daemon holding the path lock is the same process that just
 -- died — without us, the row would sit waiting forever.
-UPDATE agent_task_queue
-SET status = 'failed',
+UPDATE agent_inbox_event
+SET status = 'pending',
     completed_at = now(),
-    error = 'daemon restarted while task was in flight',
+    last_error = 'daemon restarted while event was in flight',
     failure_reason = 'runtime_recovery',
-    wait_reason = NULL
-WHERE runtime_id = $1 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+    wait_reason = NULL,
+    claimed_at = NULL
+WHERE runtime_id = $1 AND status = 'draining'
 RETURNING *;
 
 -- name: FailStaleTasks :many
@@ -617,11 +546,14 @@ RETURNING *;
 -- of this task can exceed the dispatch / running timeouts without being
 -- "stuck". If the daemon dies, RecoverOrphanedTasksForRuntime reclaims
 -- those rows at restart.
-UPDATE agent_task_queue
-SET status = 'failed', completed_at = now(), error = 'task timed out',
-    failure_reason = 'timeout'
-WHERE (status = 'dispatched' AND dispatched_at < now() - make_interval(secs => @dispatch_timeout_secs::double precision))
-   OR (status = 'running' AND started_at < now() - make_interval(secs => @running_timeout_secs::double precision))
+UPDATE agent_inbox_event
+SET status = 'pending', last_error = 'event delivery timed out',
+    failure_reason = 'timeout', claimed_at = NULL
+WHERE status = 'draining'
+  AND (
+    (started_at IS NULL AND claimed_at < now() - make_interval(secs => @dispatch_timeout_secs::double precision))
+    OR (started_at < now() - make_interval(secs => @running_timeout_secs::double precision))
+  )
 RETURNING *;
 
 -- name: ExpireStaleQueuedTasks :many
@@ -648,21 +580,24 @@ RETURNING *;
 -- the DB when the backlog is large — the sweeper drains the rest on
 -- subsequent ticks.
 WITH victims AS (
-    SELECT id FROM agent_task_queue
-    WHERE status = 'queued'
+    SELECT id FROM agent_inbox_event
+    WHERE status IN ('pending', 'failed')
       AND created_at < now() - make_interval(secs => @ttl_secs::double precision)
     ORDER BY created_at ASC
     LIMIT @max_per_tick::int
     FOR UPDATE SKIP LOCKED
 )
-UPDATE agent_task_queue t
-SET status = 'failed',
+UPDATE agent_inbox_event t
+SET status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
     error = 'task expired in queue',
     failure_reason = 'queued_expired'
 FROM victims v
 WHERE t.id = v.id
-  AND t.status = 'queued'
+  AND t.status IN ('pending', 'failed')
   AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
 RETURNING t.*;
 
@@ -688,9 +623,9 @@ RETURNING t.*;
 -- bounded by max_attempts).
 WITH victims AS (
     SELECT t.id
-    FROM agent_task_queue t
+    FROM agent_inbox_event t
     JOIN agent_runtime r ON r.id = t.runtime_id
-    WHERE t.status = 'queued'
+    WHERE t.status IN ('pending', 'failed')
       AND r.status = 'offline'
       AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
       AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
@@ -698,42 +633,46 @@ WITH victims AS (
     LIMIT @max_per_tick::int
     FOR UPDATE SKIP LOCKED
 )
-UPDATE agent_task_queue t
-SET status = 'failed',
+UPDATE agent_inbox_event t
+SET status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
     error = 'runtime offline: sandbox daemon did not register in time',
     failure_reason = 'runtime_offline'
 FROM victims v
 WHERE t.id = v.id
-  AND t.status = 'queued'
+  AND t.status IN ('pending', 'failed')
   AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
   AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
   AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
 RETURNING t.*;
 
 -- name: CancelAgentTask :one
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
-WHERE id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
+WHERE id = $1 AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: CountRunningTasks :one
-SELECT count(*) FROM agent_task_queue
+SELECT count(*) FROM agent_inbox_event
 WHERE agent_id = $1
   AND chat_session_id IS NULL
-  AND status IN ('dispatched', 'running', 'waiting_local_directory');
+  AND status = 'draining';
 
 -- name: CountRunningChatTasks :one
-SELECT count(*) FROM agent_task_queue
+SELECT count(*) FROM agent_inbox_event
 WHERE agent_id = $1
   AND chat_session_id IS NOT NULL
-  AND status IN ('dispatched', 'running', 'waiting_local_directory');
+  AND status = 'draining';
 
 -- name: HasActiveTaskForIssue :one
 -- Returns true if there is any queued, dispatched, waiting_local_directory,
 -- or running task for the issue.
-SELECT count(*) > 0 AS has_active FROM agent_task_queue
-WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');
+SELECT count(*) > 0 AS has_active FROM agent_inbox_event
+WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed');
 
 -- name: HasOtherActiveTaskForRuntime :one
 -- Returns true if any queued/dispatched/running/waiting_local_directory task
@@ -741,23 +680,24 @@ WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_l
 -- ephemeral-sandbox cleanup guard: a retry child inherits the parent's runtime_id
 -- (CreateRetryTask copies runtime_id), so the sandbox + runtime must not be
 -- torn down while a sibling/child task is still active on R'.
-SELECT count(*) > 0 AS has_active FROM agent_task_queue
-WHERE runtime_id = $1 AND id <> $2
-  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');
+SELECT count(*) > 0 AS has_active FROM agent_inbox_event
+WHERE runtime_id = sqlc.arg('runtime_id')
+  AND id <> sqlc.arg('exclude_task')
+  AND status IN ('pending', 'draining', 'failed');
 
 -- name: HasPendingTaskForIssue :one
 -- Returns true if there is a queued or dispatched (but not yet running) task for the issue.
 -- Used by the coalescing queue: allow enqueue when a task is running (so
 -- the agent picks up new comments on the next cycle) but skip if a pending
 -- task already exists (natural dedup).
-SELECT count(*) > 0 AS has_pending FROM agent_task_queue
-WHERE issue_id = $1 AND status IN ('queued', 'dispatched');
+SELECT count(*) > 0 AS has_pending FROM agent_inbox_event
+WHERE issue_id = $1 AND status IN ('pending', 'failed');
 
 -- name: HasPendingTaskForIssueAndAgent :one
 -- Returns true if a specific agent already has a queued or dispatched task
 -- for the given issue. Used by @mention trigger dedup.
-SELECT count(*) > 0 AS has_pending FROM agent_task_queue
-WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched');
+SELECT count(*) > 0 AS has_pending FROM agent_inbox_event
+WHERE issue_id = $1 AND agent_id = $2 AND status IN ('pending', 'failed');
 
 -- name: GetLatestTaskIsLeaderForIssueAndAgent :one
 -- Returns the is_leader_task flag of the agent's most recent task on this
@@ -766,48 +706,15 @@ WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched');
 -- activity on the issue was in the leader role or the worker role (an
 -- agent that holds both roles in a squad would otherwise be skipped by
 -- the role-blind authorID == leaderID check).
-SELECT is_leader_task FROM agent_task_queue
+SELECT is_leader_task FROM agent_inbox_event
 WHERE issue_id = $1 AND agent_id = $2
 ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: ListPendingTasksByRuntime :many
-SELECT * FROM agent_task_queue
-WHERE runtime_id = $1 AND status IN ('queued', 'dispatched')
+SELECT * FROM agent_inbox_event
+WHERE runtime_id = $1 AND status IN ('pending', 'draining', 'failed')
 ORDER BY priority DESC, created_at ASC;
-
--- name: ListQueuedClaimCandidatesByRuntime :many
--- Returns rows the runtime can attempt to claim. Status is restricted to
--- 'queued' (in contrast to ListPendingTasksByRuntime which also includes
--- 'dispatched') because dispatched rows are by definition already owned
--- and cannot be re-claimed — including them in the candidate list pads
--- the result with rows that always lose ClaimNextAgentWake's per-agent
--- admission check, wasting CPU and a transaction every poll cycle when
--- the runtime is busy on a long-running wake.
-SELECT * FROM agent_task_queue
-WHERE runtime_id = $1
-  AND status = 'queued'
-  AND (
-    context->>'type' IS DISTINCT FROM 'agent_radar'
-    OR workspace_radar_task_is_authorized(agent_task_queue.id)
-  )
-ORDER BY created_at ASC, id ASC;
-
--- name: ListStaleDispatchedClaimCandidatesByRuntime :many
--- Returns only claim-response-loss candidates. ClaimTaskForRuntime locks each
--- candidate's agent row before revalidating and refreshing the oldest stale
--- dispatch, so retry admission shares the same cross-source serialization
--- boundary as a fresh claim.
-SELECT * FROM agent_task_queue
-WHERE runtime_id = @runtime_id
-  AND status = 'dispatched'
-  AND started_at IS NULL
-  AND dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
-  AND (
-    context->>'type' IS DISTINCT FROM 'agent_radar'
-    OR workspace_radar_task_is_authorized(agent_task_queue.id)
-  )
-ORDER BY created_at ASC, id ASC;
 
 -- name: ListActiveTasksByIssue :many
 -- Backs the issue-detail "agent live" banner. Includes 'queued' so the
@@ -815,8 +722,8 @@ ORDER BY created_at ASC, id ASC;
 -- claims it. The queued window can be long when the runtime is offline or
 -- busy on a prior task, and a silent UI during that window looks like the
 -- platform never received the trigger.
-SELECT * FROM agent_task_queue
-WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+SELECT * FROM agent_inbox_event
+WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
 ORDER BY created_at DESC;
 
 -- name: GetWorkspaceAgentRunCounts :many
@@ -827,7 +734,7 @@ ORDER BY created_at DESC;
 SELECT
     atq.agent_id,
     COUNT(*)::int AS run_count
-FROM agent_task_queue atq
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.created_at > now() - INTERVAL '30 days'
@@ -852,8 +759,8 @@ SELECT
     atq.agent_id,
     DATE_TRUNC('day', atq.completed_at)::timestamptz AS bucket,
     COUNT(*)::int AS task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count
-FROM agent_task_queue atq
+    COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed')::int AS failed_count
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.completed_at IS NOT NULL
@@ -878,12 +785,12 @@ ORDER BY atq.agent_id, bucket;
 -- clears it.
 --
 -- No UI windows in SQL: stickiness is decided by "is the latest outcome a
--- failure?", not a 2-minute clock. JOINs agent because agent_task_queue has
+-- failure?", not a 2-minute clock. JOINs agent because agent_inbox_event has
 -- no workspace_id column.
-SELECT atq.* FROM agent_task_queue atq
+SELECT atq.* FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
-  AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  AND atq.status IN ('pending', 'draining', 'failed')
   AND (
     atq.issue_id IS NOT NULL
     OR atq.chat_session_id IS NOT NULL
@@ -898,10 +805,11 @@ UNION ALL
 
 SELECT t.* FROM (
   SELECT DISTINCT ON (atq.agent_id) atq.*
-  FROM agent_task_queue atq
+  FROM agent_inbox_event atq
   JOIN agent a ON a.id = atq.agent_id
   WHERE a.workspace_id = $1
-    AND atq.status IN ('completed', 'failed')
+    AND atq.status = 'acked'
+    AND atq.terminal_outcome IN ('completed', 'failed')
     AND (
       atq.issue_id IS NOT NULL
       OR atq.chat_session_id IS NOT NULL
@@ -915,7 +823,7 @@ SELECT t.* FROM (
 ) t;
 
 -- name: ListTasksByIssue :many
-SELECT * FROM agent_task_queue
+SELECT * FROM agent_inbox_event
 WHERE issue_id = $1
 ORDER BY created_at DESC;
 
@@ -927,8 +835,8 @@ RETURNING *;
 -- name: RefreshAgentStatusFromTasks :one
 UPDATE agent AS a
 SET status = CASE WHEN EXISTS (
-    SELECT 1 FROM agent_task_queue q
-    WHERE q.agent_id = a.id AND q.status IN ('dispatched', 'running', 'waiting_local_directory')
+    SELECT 1 FROM agent_inbox_event q
+    WHERE q.agent_id = a.id AND q.status = 'draining'
 ) THEN 'working' ELSE 'idle' END,
     updated_at = now()
 WHERE a.id = $1
@@ -941,20 +849,21 @@ RETURNING *;
 -- eligible; a terminal task or a runtime mismatch returns no rows (caller
 -- treats that as a stale/unresumable trigger). Preserves context/runtime_id/
 -- issue_id/chat_session_id - this is the SAME task row, not a new one.
-UPDATE agent_task_queue
-SET status = 'queued', started_at = NULL, dispatched_at = NULL, updated_at = now()
+UPDATE agent_inbox_event
+SET status = 'pending', started_at = NULL, dispatched_at = NULL,
+    claimed_at = NULL, updated_at = now()
 WHERE id = @task_id
   AND runtime_id = @runtime_id
-  AND status IN ('running', 'dispatched')
+  AND status = 'draining'
 RETURNING *;
 
 -- name: ListInFlightTasksForProject :many
 -- Resolves a project's in-flight (running/dispatched) agent tasks for
 -- resume-trigger capture at checkpoint-create time. Joins via issue or
 -- chat_session to the project; project_id is workspace-scoped by nature.
-SELECT atq.* FROM agent_task_queue atq
+SELECT atq.* FROM agent_inbox_event atq
 LEFT JOIN issue i ON atq.issue_id = i.id
 LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
 WHERE (i.project_id = @project_id OR cs.project_id = @project_id)
-  AND atq.status IN ('running', 'dispatched')
+  AND atq.status = 'draining'
 ORDER BY atq.created_at ASC;

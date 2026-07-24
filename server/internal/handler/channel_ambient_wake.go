@@ -13,10 +13,10 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, bool, bool) {
+func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, bool, bool) {
 	conversationID, workspaceID, cursorSeq, pendingToSeq, ok := h.channelAmbientWakeCursorTx(ctx, tx, ch, agent, trigger)
 	if !ok {
-		return db.AgentTaskQueue{}, false, false
+		return db.AgentInboxEvent{}, false, false
 	}
 
 	var existingTaskID pgtype.UUID
@@ -25,12 +25,12 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 	err := tx.QueryRow(ctx, `
 		SELECT w.task_id, w.pending_to_seq, COALESCE(atq.status, '')
 		FROM channel_ambient_pending_wake w
-		LEFT JOIN agent_task_queue atq ON atq.id = w.task_id
+		LEFT JOIN agent_inbox_event atq ON atq.id = w.task_id
 		WHERE w.conversation_id = $1 AND w.agent_id = $2
 		FOR UPDATE OF w`, conversationID, agent.ID).Scan(&existingTaskID, &existingPendingToSeq, &existingTaskStatus)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		slog.Warn("channel ambient wake: load pending row failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.AgentTaskQueue{}, false, false
+		return db.AgentInboxEvent{}, false, false
 	}
 	if err == nil && isActiveTaskStatus(existingTaskStatus) {
 		if _, updateErr := tx.Exec(ctx, `
@@ -42,10 +42,10 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 			WHERE conversation_id = $1 AND agent_id = $2`,
 			conversationID, agent.ID, pendingToSeq, nullableUUID(channelAmbientTriggerID(trigger)), channelAmbientGateReasonAgentActive); updateErr != nil {
 			slog.Warn("channel ambient wake: coalesce failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", updateErr)
-			return db.AgentTaskQueue{}, false, false
+			return db.AgentInboxEvent{}, false, false
 		}
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionCoalesced, channelAmbientGateReasonAgentActive, ch, agent, trigger)
-		return db.AgentTaskQueue{}, false, true
+		return db.AgentInboxEvent{}, false, true
 	}
 
 	if existingPendingToSeq > pendingToSeq {
@@ -54,7 +54,7 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 	prompt := h.buildChannelAmbientUnreadPromptWithDB(ctx, tx, ch, agent, trigger, cursorSeq, pendingToSeq)
 	session, task, queued := h.createChannelAmbientPromptTaskRowTx(ctx, tx, ch, agent, trigger, initiatorUserID, prompt)
 	if !queued {
-		return db.AgentTaskQueue{}, false, false
+		return db.AgentInboxEvent{}, false, false
 	}
 	lastTriggerID := channelAmbientTriggerID(trigger)
 	if _, err := tx.Exec(ctx, `
@@ -79,7 +79,7 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 		              completed_at = NULL`,
 		conversationID, parseUUID(ch.ID), workspaceID, agent.ID, session.ID, task.ID, cursorSeq+1, pendingToSeq, nullableUUID(lastTriggerID), channelAmbientGateReasonAccepted); err != nil {
 		slog.Warn("channel ambient wake: upsert pending row failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-		return db.AgentTaskQueue{}, false, false
+		return db.AgentInboxEvent{}, false, false
 	}
 	return task, true, true
 }

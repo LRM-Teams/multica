@@ -31,7 +31,7 @@ import (
 // condition records no segment/edge across both seams: Training nil, DAG
 // disabled, and a task without areal_proxy (not a trained run).
 func TestInteractionDAG_NonTrainedRolloutRecordsNothing(t *testing.T) {
-	trained := db.AgentTaskQueue{ID: testUUID(1), Context: arealProxyContext("sess-1", "key-1")}
+	trained := db.AgentInboxEvent{ID: testUUID(1), Context: arealProxyContext("sess-1", "key-1")}
 
 	// (a) Training nil -> both seams no-op (no panic, nothing to record against).
 	nilSvc := &TaskService{}
@@ -49,7 +49,7 @@ func TestInteractionDAG_NonTrainedRolloutRecordsNothing(t *testing.T) {
 	// (c) task without areal_proxy (not a trained run) -> both seams no-op.
 	npStore := newFakeInteractionDAGStore()
 	npSvc := newSeamTaskService(npStore, &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(shardExport)})
-	nonTrained := db.AgentTaskQueue{ID: testUUID(2), Context: nil}
+	nonTrained := db.AgentInboxEvent{ID: testUUID(2), Context: nil}
 	npSvc.closeSegmentForDelegation(context.Background(), nonTrained, "proj-1", leanSnap())
 	npSvc.closeSegmentForTerminal(context.Background(), nonTrained, "proj-1", leanSnap())
 	assert.Empty(t, npStore.segmentSnapshots, "non-trained task records nothing")
@@ -99,7 +99,7 @@ func TestInteractionDAG_NonTrainEnvDispatchRecordsLocal(t *testing.T) {
 	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
 
 	taskID := testUUID(1)
-	task := db.AgentTaskQueue{ID: taskID, Context: nil} // no areal_proxy
+	task := db.AgentInboxEvent{ID: taskID, Context: nil} // no areal_proxy
 	msgs.addTaskMessage(util.UUIDToString(taskID), taskMsg(taskID, 1, "assistant", "hello"))
 
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
@@ -128,7 +128,7 @@ func TestInteractionDAG_NonTrainEnvDispatchDelegationRecordsLocal(t *testing.T) 
 	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
 
 	parentID := testUUID(1)
-	parent := db.AgentTaskQueue{ID: parentID, Context: nil}
+	parent := db.AgentInboxEvent{ID: parentID, Context: nil}
 	msgs.addTaskMessage(util.UUIDToString(parentID), taskMsg(parentID, 1, "assistant", "delegating"))
 
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
@@ -158,7 +158,7 @@ func TestInteractionDAG_MixedTrainNonTrainRecordsBothSources(t *testing.T) {
 
 	// Parent closes via delegation with areal_proxy (training path).
 	client.closeSegmentID = 3
-	parent := db.AgentTaskQueue{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
+	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
 
 	require.Len(t, store.segmentSnapshots, 1, "parent segment recorded via AReaL")
@@ -167,7 +167,7 @@ func TestInteractionDAG_MixedTrainNonTrainRecordsBothSources(t *testing.T) {
 	require.Len(t, client.closeCalls, 1, "one AReaL close call for trained parent")
 
 	// Child completes without areal_proxy (non-training path).
-	child := db.AgentTaskQueue{ID: childID, ParentTaskID: parentID, Context: nil}
+	child := db.AgentInboxEvent{ID: childID, ParentTaskID: parentID, Context: nil}
 	msgs.addTaskMessage(util.UUIDToString(childID), taskMsg(childID, 1, "assistant", "done"))
 
 	svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
@@ -195,7 +195,7 @@ func TestInteractionDAG_NonEnvDispatchTaskNoop(t *testing.T) {
 	checker := &fakeEnvDispatchChecker{hasRun: false} // not an env-dispatch project
 	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
 
-	task := db.AgentTaskQueue{ID: testUUID(1), Context: nil}
+	task := db.AgentInboxEvent{ID: testUUID(1), Context: nil}
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
 
 	assert.Empty(t, store.segmentSnapshots, "non-env-dispatch task records nothing")
@@ -215,7 +215,7 @@ func TestInteractionDAG_NonTrainNoFakeArealCalls(t *testing.T) {
 
 	for i := 1; i <= 3; i++ {
 		taskID := testUUID(byte(i))
-		task := db.AgentTaskQueue{ID: taskID, Context: nil}
+		task := db.AgentInboxEvent{ID: taskID, Context: nil}
 		msgs.addTaskMessage(util.UUIDToString(taskID), taskMsg(taskID, 1, "assistant", "msg"))
 		svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
 	}
@@ -237,7 +237,7 @@ func TestInteractionDAG_RecordingErrorIsBestEffort(t *testing.T) {
 	store := newFakeInteractionDAGStore()
 	client := &fakeArealSegmentClient{closeSegmentErr: errors.New("bridge down"), exportPayload: json.RawMessage(shardExport)}
 	svc := newSeamTaskService(store, client)
-	parent := db.AgentTaskQueue{ID: testUUID(1), ParentTaskID: testUUID(9), Context: arealProxyContext("sess-1", "key-1")}
+	parent := db.AgentInboxEvent{ID: testUUID(1), ParentTaskID: testUUID(9), Context: arealProxyContext("sess-1", "key-1")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parent.ID), "issue-1"))
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
 	assert.Empty(t, store.segmentSnapshots, "close failure must not record a segment")
@@ -253,7 +253,7 @@ func TestInteractionDAG_RecordingErrorIsBestEffort(t *testing.T) {
 	require.NoError(t, svc2.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
 	_, err := svc2.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-p", "key-p", "delegation", leanSnap())
 	require.NoError(t, err)
-	child := db.AgentTaskQueue{ID: testUUID(2), ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
+	child := db.AgentInboxEvent{ID: testUUID(2), ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
 	require.NoError(t, svc2.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-c", util.UUIDToString(child.ID), "issue-1"))
 	svc2.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
 	assert.Len(t, store2.segmentSnapshots, 2, "terminal segment recorded even when the edge insert fails")

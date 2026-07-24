@@ -12,16 +12,16 @@ import (
 )
 
 type MemberProfileResponse struct {
-	MemberType     string                    `json:"member_type"`
-	MemberID       string                    `json:"member_id"`
-	Name           string                    `json:"name"`
-	DisplayName    string                    `json:"display_name"`
-	AvatarURL      *string                   `json:"avatar_url"`
-	Description    string                    `json:"description"`
-	Role           string                    `json:"role"`
-	Status         *string                   `json:"status"`
-	RecentActivity []AgentRecentActivityItem `json:"recent_activity"`
-	ProfileAccess  string                    `json:"profile_access"`
+	MemberType     string                     `json:"member_type"`
+	MemberID       string                     `json:"member_id"`
+	Name           string                     `json:"name"`
+	DisplayName    string                     `json:"display_name"`
+	AvatarURL      *string                    `json:"avatar_url"`
+	Description    string                     `json:"description"`
+	Role           string                     `json:"role"`
+	Status         *string                    `json:"status"`
+	RecentActivity []AgentRecentActivityItem  `json:"recent_activity"`
+	ProfileAccess  string                     `json:"profile_access"`
 	MemoryGrowth   *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
 }
 
@@ -142,13 +142,19 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 
 func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, limit int) ([]AgentRecentActivityItem, error) {
 	rows, err := h.DB.Query(ctx, `
-		SELECT atq.id, atq.status,
+		SELECT atq.id,
+		       CASE
+		         WHEN atq.status IN ('pending', 'failed') THEN 'queued'
+		         WHEN atq.status = 'draining' THEN 'running'
+		         WHEN atq.status = 'suppressed' THEN 'cancelled'
+		         ELSE COALESCE(atq.terminal_outcome, 'completed')
+		       END AS status,
 		       COALESCE(atq.completed_at, atq.started_at, atq.dispatched_at, atq.created_at) AS occurred_at
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		JOIN agent a ON a.id = atq.agent_id
 		WHERE atq.agent_id = $1
 		  AND a.workspace_id = $2
-		  AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'completed', 'failed', 'cancelled')
+		  AND atq.status IN ('pending', 'draining', 'failed', 'acked', 'suppressed')
 		ORDER BY occurred_at DESC, atq.id DESC
 		LIMIT $3`,
 		agent.ID, agent.WorkspaceID, int32(limit))

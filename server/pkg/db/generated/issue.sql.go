@@ -571,7 +571,7 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 const getIssueForTask = `-- name: GetIssueForTask :one
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.forked_from_issue_id, i.forked_at_seq, i.forked_at_task_id
 FROM issue i
-JOIN agent_task_queue atq ON atq.issue_id = i.id
+JOIN agent_inbox_event atq ON atq.issue_id = i.id
 WHERE atq.id::text = $1::text
 `
 
@@ -673,7 +673,7 @@ type GetIssueByOriginParams struct {
 
 // Finds the issue stamped with a specific (origin_type, origin_id) pair.
 // Used by quick-create completion to deterministically locate the issue
-// produced by a given agent_task_queue.id — robust against concurrent
+// produced by a given agent_inbox_event.id — robust against concurrent
 // issue creates by the same agent (assignment task + quick-create both
 // running with max_concurrent_tasks > 1).
 func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginParams) (Issue, error) {

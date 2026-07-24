@@ -59,7 +59,7 @@ func TestDelegation_ClosesParentSegment(t *testing.T) {
 	svc := newSeamTaskService(store, client)
 
 	parentID := testUUID(1)
-	parent := db.AgentTaskQueue{ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
+	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
 
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
@@ -89,7 +89,7 @@ func TestDelegation_LinksGrandparentEdge(t *testing.T) {
 
 	// Parent (with grandparent) now delegates.
 	client.closeSegmentID = 5
-	parent := db.AgentTaskQueue{ID: parentID, ParentTaskID: gpID, Context: arealProxyContext("sess-p", "key-p")}
+	parent := db.AgentInboxEvent{ID: parentID, ParentTaskID: gpID, Context: arealProxyContext("sess-p", "key-p")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
 
@@ -107,9 +107,9 @@ func TestDelegation_LinksGrandparentEdge(t *testing.T) {
 // edge as type="delegation" when the child later closes. The receiver/child
 // session is not closed at handoff time.
 func TestSquadContextHandoffSignal(t *testing.T) {
-	assert.False(t, isSquadContextHandoff(db.AgentTaskQueue{}, false), "plain mention is normal delegation")
-	assert.True(t, isSquadContextHandoff(db.AgentTaskQueue{}, true), "new squad-leader task is squad context")
-	assert.True(t, isSquadContextHandoff(db.AgentTaskQueue{IsLeaderTask: true}, false), "squad leader delegating onward remains squad context")
+	assert.False(t, isSquadContextHandoff(db.AgentInboxEvent{}, false), "plain mention is normal delegation")
+	assert.True(t, isSquadContextHandoff(db.AgentInboxEvent{}, true), "new squad-leader task is squad context")
+	assert.True(t, isSquadContextHandoff(db.AgentInboxEvent{IsLeaderTask: true}, false), "squad leader delegating onward remains squad context")
 }
 
 func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
@@ -173,7 +173,7 @@ func TestSquadContextDelegation_ClosesProducerWithSquadBriefingAndDelegationEdge
 	parentID, childID := testUUID(1), testUUID(2)
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
 	client.closeSegmentID = 11
-	parent := db.AgentTaskQueue{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
+	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
 	svc.closeSegmentForSquadContextDelegation(context.Background(), parent, "proj-1", leanSnap())
 
 	require.Len(t, store.segmentSnapshots, 1)
@@ -184,7 +184,7 @@ func TestSquadContextDelegation_ClosesProducerWithSquadBriefingAndDelegationEdge
 	require.Equal(t, []string{"key-p"}, client.closeCalls, "handoff must close only the producer session")
 
 	client.closeSegmentID = 12
-	child := db.AgentTaskQueue{ID: childID, ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
+	child := db.AgentInboxEvent{ID: childID, ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-c", util.UUIDToString(childID), "issue-1"))
 	svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
 
@@ -213,7 +213,7 @@ func TestCompletion_ClosesChildSegmentAndRecordsDelegationEdge(t *testing.T) {
 
 	// Child completes.
 	client.closeSegmentID = 9
-	child := db.AgentTaskQueue{ID: childID, ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
+	child := db.AgentInboxEvent{ID: childID, ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-c", util.UUIDToString(childID), "issue-1"))
 	svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
 
@@ -236,7 +236,7 @@ func TestLeaf_ClosesSegmentWithEmptyClosingEvent(t *testing.T) {
 	svc := newSeamTaskService(store, client)
 
 	taskID := testUUID(1)
-	task := db.AgentTaskQueue{ID: taskID, Context: arealProxyContext("sess-1", "key-1")} // no ParentTaskID
+	task := db.AgentInboxEvent{ID: taskID, Context: arealProxyContext("sess-1", "key-1")} // no ParentTaskID
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
 
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
@@ -254,7 +254,7 @@ func TestOneSegmentPerTask_SkipsSecondClose(t *testing.T) {
 	svc := newSeamTaskService(store, client)
 
 	taskID := testUUID(1)
-	task := db.AgentTaskQueue{ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
+	task := db.AgentInboxEvent{ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
 
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
@@ -275,7 +275,7 @@ func TestConcurrentFanOut_RecordsDelegationEdges(t *testing.T) {
 	parentID := testUUID(1)
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
 	client.closeSegmentID = 1
-	parent := db.AgentTaskQueue{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
+	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
 	// A second delegation by the same parent is a no-op (one segment per task).
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
@@ -285,7 +285,7 @@ func TestConcurrentFanOut_RecordsDelegationEdges(t *testing.T) {
 	for i := 1; i <= n; i++ {
 		childID := testUUID(byte(i + 1))
 		sess := "sess-c" + strconv.Itoa(i)
-		child := db.AgentTaskQueue{ID: childID, ParentTaskID: parentID, Context: arealProxyContext(sess, "key-c")}
+		child := db.AgentInboxEvent{ID: childID, ParentTaskID: parentID, Context: arealProxyContext(sess, "key-c")}
 		require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", sess, util.UUIDToString(childID), "issue-1"))
 		client.closeSegmentID = i
 		svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
@@ -306,7 +306,7 @@ func TestSeams_NoopWhenDisabled(t *testing.T) {
 	svc := &TaskService{
 		Training: &TrainingSessionDeps{DAG: NewInteractionDAGService(store, &fakeArealSegmentClient{}, false)},
 	}
-	task := db.AgentTaskQueue{ID: testUUID(1), Context: arealProxyContext("sess-1", "key-1")}
+	task := db.AgentInboxEvent{ID: testUUID(1), Context: arealProxyContext("sess-1", "key-1")}
 	svc.closeSegmentForDelegation(context.Background(), task, "proj-1", leanSnap())
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
 	assert.Empty(t, store.segmentSnapshots)
@@ -319,7 +319,7 @@ func TestSeams_NoopWithoutArealProxy(t *testing.T) {
 	store := newFakeInteractionDAGStore()
 	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(shardExport)}
 	svc := newSeamTaskService(store, client)
-	task := db.AgentTaskQueue{ID: testUUID(1), Context: nil}
+	task := db.AgentInboxEvent{ID: testUUID(1), Context: nil}
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
 	assert.Empty(t, store.segmentSnapshots, "non-trained task records nothing")
 }
@@ -332,7 +332,7 @@ func TestSeams_BestEffortOnCloseError(t *testing.T) {
 	svc := newSeamTaskService(store, client)
 
 	parentID := testUUID(1)
-	parent := db.AgentTaskQueue{ID: parentID, ParentTaskID: testUUID(9), Context: arealProxyContext("sess-1", "key-1")}
+	parent := db.AgentInboxEvent{ID: parentID, ParentTaskID: testUUID(9), Context: arealProxyContext("sess-1", "key-1")}
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
 
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())

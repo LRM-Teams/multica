@@ -371,7 +371,7 @@ func (h *Handler) resolveActiveMemoryCurationTargetAgentIDs(ctx context.Context,
 		     AND (($4 <> 'selected' AND a.owner_id = $2) OR ($4 = 'selected' AND a.id::text = ANY($5)))
 		), active AS (
 		  SELECT DISTINCT agent_id
-		    FROM agent_task_queue
+		    FROM agent_inbox_event
 		   WHERE COALESCE(completed_at, started_at, dispatched_at, created_at) >= $3::date
 		     AND COALESCE(completed_at, started_at, dispatched_at, created_at) < ($3::date + interval '1 day')
 		  UNION

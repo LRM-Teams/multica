@@ -14,7 +14,7 @@ import (
 
 // mockRow implements pgx.Row, returning either a scanned task or pgx.ErrNoRows.
 type mockRow struct {
-	task *db.AgentTaskQueue
+	task *db.AgentInboxEvent
 	err  error
 }
 
@@ -56,8 +56,8 @@ func (r *mockRow) Scan(dest ...any) error {
 // mockDBTX routes QueryRow calls: complete/fail queries return ErrNoRows,
 // getAgentTask returns the stored task.
 type mockDBTX struct {
-	task       db.AgentTaskQueue
-	failedTask *db.AgentTaskQueue
+	task       db.AgentInboxEvent
+	failedTask *db.AgentInboxEvent
 	executed   []string
 	execArgs   [][]interface{}
 	queried    []string
@@ -91,7 +91,7 @@ func (m *mockDBTX) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx
 
 func TestFailTaskWithoutPublicOutputSkipsChatFailureMessage(t *testing.T) {
 	taskID := testUUID(11)
-	failed := db.AgentTaskQueue{
+	failed := db.AgentInboxEvent{
 		ID:            taskID,
 		AgentID:       testUUID(12),
 		ChatSessionID: testUUID(13),
@@ -132,7 +132,7 @@ func TestCompleteTask_AlreadyFinalized(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockDBTX{task: db.AgentTaskQueue{
+			mock := &mockDBTX{task: db.AgentInboxEvent{
 				ID:      taskID,
 				AgentID: agentID,
 				Status:  tt.status,
@@ -174,7 +174,7 @@ func TestFailTask_AlreadyFinalized(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockDBTX{task: db.AgentTaskQueue{
+			mock := &mockDBTX{task: db.AgentInboxEvent{
 				ID:      taskID,
 				AgentID: agentID,
 				Status:  tt.status,
@@ -237,7 +237,7 @@ func TestFailTask_ClearsMatchingChatResumeAfterGrokNoProgress(t *testing.T) {
 	taskID := testUUID(1)
 	chatSessionID := testUUID(2)
 	agentID := testUUID(3)
-	failed := db.AgentTaskQueue{
+	failed := db.AgentInboxEvent{
 		ID:            taskID,
 		AgentID:       agentID,
 		ChatSessionID: chatSessionID,

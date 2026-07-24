@@ -921,7 +921,7 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 	})
 }
 
-func seedQueuedWorkspaceRadar(t *testing.T) (radarTestAgent, db.AgentRadarRun, db.AgentTaskQueue) {
+func seedQueuedWorkspaceRadar(t *testing.T) (radarTestAgent, db.AgentRadarRun, db.AgentInboxEvent) {
 	t.Helper()
 	agent := seedRadarTestAgent(t, "online")
 	bindRadarSupervisor(t, agent)
@@ -1743,7 +1743,7 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 	taskSvc := service.NewTaskService(q, pool, nil, events.New())
 	now := time.Now().UTC()
 
-	enqueue := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentTaskQueue) {
+	enqueue := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentInboxEvent) {
 		t.Helper()
 		run, task, err := taskSvc.EnqueueAgentRadarRun(t.Context(), service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    agent.workspaceID,
@@ -1861,7 +1861,7 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 	taskSvc := service.NewTaskService(q, pool, nil, events.New())
 	now := time.Now().UTC()
 
-	enqueueStaleDispatched := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentTaskQueue) {
+	enqueueStaleDispatched := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentInboxEvent) {
 		t.Helper()
 		run, task, err := taskSvc.EnqueueAgentRadarRun(t.Context(), service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    agent.workspaceID,
@@ -1926,7 +1926,7 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 
 	for name, pair := range map[string]struct {
 		run  db.AgentRadarRun
-		task db.AgentTaskQueue
+		task db.AgentInboxEvent
 	}{
 		"mismatched runtime": {run: mismatchRun, task: mismatchTask},
 		"null run runtime":   {run: nullRuntimeRun, task: nullRuntimeTask},
@@ -1951,7 +1951,7 @@ func TestAgentRadarRunFollowsTaskRunningFailureAndCancellation(t *testing.T) {
 	pool := integrationPool(t)
 	taskSvc := service.NewTaskService(db.New(pool), pool, nil, events.New())
 
-	enqueue := func(ref string) (db.AgentRadarRun, db.AgentTaskQueue) {
+	enqueue := func(ref string) (db.AgentRadarRun, db.AgentInboxEvent) {
 		t.Helper()
 		run, task, err := taskSvc.EnqueueAgentRadarRun(t.Context(), service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    agent.workspaceID,
@@ -2014,7 +2014,7 @@ func TestAgentRadarRunFollowsTaskRunningFailureAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc.HandleFailedTasks(t.Context(), []db.AgentTaskQueue{sweptTask})
+	taskSvc.HandleFailedTasks(t.Context(), []db.AgentInboxEvent{sweptTask})
 	if got := loadStatus(sweptRun.ID); got != "failed" {
 		t.Fatalf("run after sweeper failure = %q, want failed", got)
 	}

@@ -150,7 +150,7 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 // discovery happens first; after locking the agent, a second statement
 // revalidates every cross-source predicate against a fresh READ COMMITTED
 // snapshot. That two-statement shape is what makes the exclusion exact across
-// agent_inbox_event and agent_task_queue.
+// agent_inbox_event and agent_inbox_event.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
@@ -179,24 +179,6 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		    WHERE active_session.agent_id = event.agent_id
 		      AND active_delivery.status IN ('leased', 'processing')
 		      AND active_delivery.lease_expires_at > now()
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_task_queue active_task
-		    WHERE active_task.agent_id = event.agent_id
-		      AND active_task.status IN ('dispatched', 'running', 'waiting_local_directory')
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_task_queue queued_task
-		    WHERE queued_task.agent_id = event.agent_id
-		      AND queued_task.runtime_id = COALESCE(event.runtime_id, session.runtime_id)
-		      AND queued_task.status = 'queued'
-		      AND (
-		        queued_task.context->>'type' IS DISTINCT FROM 'agent_radar'
-		        OR workspace_radar_task_is_authorized(queued_task.id)
-		      )
-		      AND (queued_task.created_at, queued_task.id) < (event.created_at, event.id)
 		  )
 		ORDER BY event.created_at, event.id
 		LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
@@ -227,31 +209,17 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		      AND active_delivery.status IN ('leased', 'processing')
 		      AND active_delivery.lease_expires_at > now()
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_task_queue active_task
-		    WHERE active_task.agent_id = event.agent_id
-		      AND active_task.status IN ('dispatched', 'running', 'waiting_local_directory')
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_task_queue queued_task
-		    WHERE queued_task.agent_id = event.agent_id
-		      AND queued_task.runtime_id = COALESCE(event.runtime_id, session.runtime_id)
-		      AND queued_task.status = 'queued'
-		      AND (
-		        queued_task.context->>'type' IS DISTINCT FROM 'agent_radar'
-		        OR workspace_radar_task_is_authorized(queued_task.id)
-		      )
-		      AND (queued_task.created_at, queued_task.id) < (event.created_at, event.id)
-		  )
 		FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
 	if err != nil {
 		return db.AgentEventDelivery{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_inbox_event
-		SET status = 'draining', claimed_at = now(), attempt = attempt + 1, updated_at = now()
+		SET status = 'draining',
+		    claimed_at = now(),
+		    dispatched_at = now(),
+		    attempt = attempt + 1,
+		    updated_at = now()
 		WHERE id = $1`, eventID); err != nil {
 		return db.AgentEventDelivery{}, err
 	}

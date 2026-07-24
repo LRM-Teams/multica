@@ -273,12 +273,13 @@ func (h *Handler) loadEvolutionTaskEfficiency(r *http.Request, workspaceID strin
 		         sum(COALESCE(tu.cache_read_tokens, 0)) AS cache_read_tokens,
 		         sum(COALESCE(tu.cache_write_tokens, 0)) AS cache_write_tokens,
 		         count(DISTINCT COALESCE(f.unit_id::text, f.local_unit_id)) FILTER (WHERE f.event IN ('used','success','failure')) AS evolved_units_used
-		    FROM agent_task_queue atq
+		    FROM agent_inbox_event atq
 		    JOIN issue i ON i.id = atq.issue_id AND i.workspace_id = $1
 		    LEFT JOIN agent_usage tu ON tu.execution_id = atq.id
 		    LEFT JOIN evolution_unit_feedback_event f ON f.task_id = atq.id AND f.workspace_id = $1
 		   WHERE atq.completed_at >= current_date - (($2::int - 1) * interval '1 day')
-		     AND atq.status IN ('completed','failed')
+		     AND atq.status = 'acked'
+		     AND atq.terminal_outcome IN ('completed','failed')
 		   GROUP BY atq.issue_id
 		), issue_rollup AS (
 		  SELECT issue_id,

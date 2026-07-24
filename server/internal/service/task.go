@@ -49,9 +49,9 @@ type EphemeralRetryResources struct {
 }
 
 type EphemeralSandboxManager interface {
-	PrepareRetry(context.Context, db.AgentTaskQueue) (*EphemeralRetryResources, error)
+	PrepareRetry(context.Context, db.AgentInboxEvent) (*EphemeralRetryResources, error)
 	Reclaim(context.Context, *EphemeralRetryResources) error
-	Cleanup(context.Context, db.AgentTaskQueue) error
+	Cleanup(context.Context, db.AgentInboxEvent) error
 }
 
 type TaskService struct {
@@ -73,10 +73,10 @@ type TaskService struct {
 	// task is created (subagent lifecycle). When set, it receives the parent
 	// and child task so the caller can record activity events. Failures in
 	// the callback are logged but never block task processing.
-	OnChildTaskCreated func(ctx context.Context, parent, child db.AgentTaskQueue)
+	OnChildTaskCreated func(ctx context.Context, parent, child db.AgentInboxEvent)
 	// OnTaskCompleted is an optional best-effort callback fired only after a
 	// task completion transaction commits successfully.
-	OnTaskCompleted func(ctx context.Context, task db.AgentTaskQueue)
+	OnTaskCompleted func(ctx context.Context, task db.AgentInboxEvent)
 
 	// Training, when non-nil, enables the RL session-open hook at task
 	// creation (see maybeOpenTrainingSession). Nil = training not configured
@@ -210,39 +210,39 @@ func isTrivialDoneOutput(output string) bool {
 	return false
 }
 
-func (s *TaskService) captureTaskQueued(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) captureTaskQueued(ctx context.Context, task db.AgentInboxEvent) {
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskEnqueued(source, runtimeMode)
 	}
 }
 
-func (s *TaskService) captureTaskDispatched(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) captureTaskDispatched(ctx context.Context, task db.AgentInboxEvent) {
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskDispatched(util.UUIDToString(task.ID), source, runtimeMode, taskQueueWaitSeconds(task))
 	}
 }
 
-func (s *TaskService) AnalyticsContextForTask(ctx context.Context, task db.AgentTaskQueue) analytics.TaskContext {
+func (s *TaskService) AnalyticsContextForTask(ctx context.Context, task db.AgentInboxEvent) analytics.TaskContext {
 	return s.taskAnalyticsContext(ctx, task)
 }
 
-func (s *TaskService) captureTaskStarted(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) captureTaskStarted(ctx context.Context, task db.AgentInboxEvent) {
 	if s.Metrics != nil {
 		source, runtimeMode, provider := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskStarted(source, runtimeMode, provider)
 	}
 }
 
-func (s *TaskService) captureTaskCompleted(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) captureTaskCompleted(ctx context.Context, task db.AgentInboxEvent) {
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskTerminal(util.UUIDToString(task.ID), source, runtimeMode, task.Status, taskRunSeconds(task), taskTotalSeconds(task), task.Attempt)
 	}
 }
 
-func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentInboxEvent) {
 	s.syncAgentRadarRunTerminal(ctx, task, "failed")
 	failureReason := taskFailureReason(task)
 	if s.Metrics != nil {
@@ -252,7 +252,7 @@ func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentTaskQu
 	}
 }
 
-func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentInboxEvent) {
 	s.syncAgentRadarRunTerminal(ctx, task, "cancelled")
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
@@ -270,7 +270,7 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTas
 	}
 }
 
-func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.AgentTaskQueue, status string) {
+func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.AgentInboxEvent, status string) {
 	errText := task.Error
 	if !errText.Valid && task.FailureReason.Valid {
 		errText = pgtype.Text{String: task.FailureReason.String, Valid: true}
@@ -311,7 +311,7 @@ func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.Age
 	}
 }
 
-func (s *TaskService) CaptureTaskUsage(ctx context.Context, task db.AgentTaskQueue, provider, model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) {
+func (s *TaskService) CaptureTaskUsage(ctx context.Context, task db.AgentInboxEvent, provider, model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) {
 	if s.Metrics == nil {
 		return
 	}
@@ -319,7 +319,7 @@ func (s *TaskService) CaptureTaskUsage(ctx context.Context, task db.AgentTaskQue
 	s.Metrics.RecordLLMUsage(source, runtimeMode, provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)
 }
 
-func (s *TaskService) CaptureQueuedExpiredTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
+func (s *TaskService) CaptureQueuedExpiredTasks(ctx context.Context, tasks []db.AgentInboxEvent) {
 	if s.Metrics == nil {
 		return
 	}
@@ -329,7 +329,7 @@ func (s *TaskService) CaptureQueuedExpiredTasks(ctx context.Context, tasks []db.
 	}
 }
 
-func (s *TaskService) CaptureLeaseExpiredTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
+func (s *TaskService) CaptureLeaseExpiredTasks(ctx context.Context, tasks []db.AgentInboxEvent) {
 	if s.Metrics == nil {
 		return
 	}
@@ -339,7 +339,7 @@ func (s *TaskService) CaptureLeaseExpiredTasks(ctx context.Context, tasks []db.A
 	}
 }
 
-func (s *TaskService) cachedTaskAnalyticsContext(task db.AgentTaskQueue) (analytics.TaskContext, bool) {
+func (s *TaskService) cachedTaskAnalyticsContext(task db.AgentInboxEvent) (analytics.TaskContext, bool) {
 	key := taskAnalyticsContextKey(task)
 	if key == "" {
 		return analytics.TaskContext{}, false
@@ -353,7 +353,7 @@ func (s *TaskService) cachedTaskAnalyticsContext(task db.AgentTaskQueue) (analyt
 	return tc, ok
 }
 
-func (s *TaskService) storeTaskAnalyticsContext(task db.AgentTaskQueue, tc analytics.TaskContext) {
+func (s *TaskService) storeTaskAnalyticsContext(task db.AgentInboxEvent, tc analytics.TaskContext) {
 	if tc.WorkspaceID == "" {
 		return
 	}
@@ -377,7 +377,7 @@ func (s *TaskService) storeTaskAnalyticsContext(task db.AgentTaskQueue, tc analy
 	s.analyticsContextCache[key] = tc
 }
 
-func taskAnalyticsContextKey(task db.AgentTaskQueue) string {
+func taskAnalyticsContextKey(task db.AgentInboxEvent) string {
 	taskID := util.UUIDToString(task.ID)
 	if taskID == "" {
 		return ""
@@ -391,7 +391,7 @@ func taskAnalyticsContextKey(task db.AgentTaskQueue) string {
 	}, "|")
 }
 
-func (s *TaskService) taskMetricsContext(ctx context.Context, task db.AgentTaskQueue) (source, runtimeMode, provider string) {
+func (s *TaskService) taskMetricsContext(ctx context.Context, task db.AgentInboxEvent) (source, runtimeMode, provider string) {
 	tc := s.taskAnalyticsContext(ctx, task)
 	source = "other"
 	switch {
@@ -415,7 +415,7 @@ func (s *TaskService) taskMetricsContext(ctx context.Context, task db.AgentTaskQ
 	return source, tc.RuntimeMode, tc.Provider
 }
 
-func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentTaskQueue) analytics.TaskContext {
+func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentInboxEvent) analytics.TaskContext {
 	if tc, ok := s.cachedTaskAnalyticsContext(task); ok {
 		return tc
 	}
@@ -500,15 +500,15 @@ func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentTas
 	return tc
 }
 
-func taskQueueWaitSeconds(task db.AgentTaskQueue) float64 {
+func taskQueueWaitSeconds(task db.AgentInboxEvent) float64 {
 	return durationSeconds(task.CreatedAt, task.DispatchedAt)
 }
 
-func taskRunSeconds(task db.AgentTaskQueue) float64 {
+func taskRunSeconds(task db.AgentInboxEvent) float64 {
 	return durationSeconds(task.StartedAt, task.CompletedAt)
 }
 
-func taskTotalSeconds(task db.AgentTaskQueue) float64 {
+func taskTotalSeconds(task db.AgentInboxEvent) float64 {
 	return durationSeconds(task.CreatedAt, task.CompletedAt)
 }
 
@@ -523,7 +523,7 @@ func durationSeconds(start, end pgtype.Timestamptz) float64 {
 	return seconds
 }
 
-func taskFailureReason(task db.AgentTaskQueue) string {
+func taskFailureReason(task db.AgentInboxEvent) string {
 	if task.FailureReason.Valid && task.FailureReason.String != "" {
 		return task.FailureReason.String
 	}
@@ -550,7 +550,7 @@ func taskErrorType(reason string) string {
 // EnqueueTaskForIssue creates a queued task for an agent-assigned issue.
 // No context snapshot is stored — the agent fetches all data it needs at
 // runtime via the multica CLI.
-func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, triggerCommentID ...pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, triggerCommentID ...pgtype.UUID) (db.AgentInboxEvent, error) {
 	var commentID pgtype.UUID
 	if len(triggerCommentID) > 0 {
 		commentID = triggerCommentID[0]
@@ -563,28 +563,28 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 // daemon claim handler skips the (agent_id, issue_id) resume lookup — the
 // user already judged the prior output bad, a fresh agent session is the
 // expected behavior.
-func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool) (db.AgentInboxEvent, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
-		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
+		return db.AgentInboxEvent{}, fmt.Errorf("issue has no assignee")
 	}
 
 	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("load agent: %w", err)
 	}
 	if agent.ArchivedAt.Valid {
 		slog.Debug("task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent is archived")
 	}
 	if !agent.RuntimeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent has no runtime")
 	}
 	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("snapshot issue task execution config: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("snapshot issue task execution config: %w", err)
 	}
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
@@ -599,7 +599,7 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 	})
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("create task: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("create task: %w", err)
 	}
 
 	slog.Info("task enqueued",
@@ -624,7 +624,7 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 	return task, nil
 }
 
-func (s *TaskService) interruptInFlightIssueTasksForFollowup(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) interruptInFlightIssueTasksForFollowup(ctx context.Context, task db.AgentInboxEvent) {
 	if !task.TriggerCommentID.Valid || !task.IssueID.Valid {
 		return
 	}
@@ -640,7 +640,7 @@ func (s *TaskService) interruptInFlightIssueTasksForFollowup(ctx context.Context
 	s.broadcastFollowupInterruptedTasks(ctx, cancelled)
 }
 
-func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context, task db.AgentInboxEvent) {
 	if !task.ChatSessionID.Valid {
 		return
 	}
@@ -656,7 +656,7 @@ func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context,
 	s.broadcastFollowupInterruptedTasks(ctx, cancelled)
 }
 
-func (s *TaskService) broadcastFollowupInterruptedTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
+func (s *TaskService) broadcastFollowupInterruptedTasks(ctx context.Context, tasks []db.AgentInboxEvent) {
 	for _, t := range tasks {
 		slog.Info("task interrupted by newer guidance", "task_id", util.UUIDToString(t.ID), "issue_id", util.UUIDToString(t.IssueID), "chat_session_id", util.UUIDToString(t.ChatSessionID), "agent_id", util.UUIDToString(t.AgentID))
 		s.finalizeCancelledTask(ctx, t)
@@ -668,7 +668,7 @@ func (s *TaskService) broadcastFollowupInterruptedTasks(ctx context.Context, tas
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
 // Unlike EnqueueTaskForIssue, this takes an explicit agent ID rather than
 // deriving it from the issue assignee.
-func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentInboxEvent, error) {
 	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false)
 }
 
@@ -676,7 +676,7 @@ func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue,
 // task through q without publishing realtime, training, cancellation, or daemon
 // wake side effects. Transactional callers must invoke PublishMentionTaskQueued
 // only after the transaction commits.
-func (s *TaskService) CreateMentionTaskRow(ctx context.Context, q *db.Queries, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) CreateMentionTaskRow(ctx context.Context, q *db.Queries, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentInboxEvent, error) {
 	return s.createMentionTaskRow(ctx, q, issue, agentID, triggerCommentID, false, false)
 }
 
@@ -686,35 +686,35 @@ func (s *TaskService) CreateMentionTaskRow(ctx context.Context, q *db.Queries, i
 // acting as the squad's leader (skip) from one posted while it was acting
 // as a worker (do not skip). This matters for agents that are simultaneously
 // the leader and a worker of the same squad — see migration 090.
-func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentInboxEvent, error) {
 	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false)
 }
 
-func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentInboxEvent, error) {
 	task, err := s.createMentionTaskRow(ctx, s.Queries, issue, agentID, triggerCommentID, isLeader, forceFreshSession)
 	if err != nil {
-		return db.AgentTaskQueue{}, err
+		return db.AgentInboxEvent{}, err
 	}
 	return s.publishMentionTaskQueued(ctx, task, issue, triggerCommentID), nil
 }
 
-func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentInboxEvent, error) {
 	agent, err := q.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Error("mention task enqueue failed: agent not found", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("load agent: %w", err)
 	}
 	if agent.ArchivedAt.Valid {
 		slog.Debug("mention task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent is archived")
 	}
 	if !agent.RuntimeID.Valid {
 		slog.Error("mention task enqueue failed: agent has no runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent has no runtime")
 	}
 	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("snapshot mention task execution config: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("snapshot mention task execution config: %w", err)
 	}
 
 	task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
@@ -730,7 +730,7 @@ func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, i
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("create task: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("create task: %w", err)
 	}
 	return task, nil
 }
@@ -738,11 +738,11 @@ func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, i
 // PublishMentionTaskQueued emits all post-commit effects for a task inserted by
 // CreateMentionTaskRow. It must never be called before the creating transaction
 // commits, because it can wake the daemon and cancel older in-flight work.
-func (s *TaskService) PublishMentionTaskQueued(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID) {
+func (s *TaskService) PublishMentionTaskQueued(ctx context.Context, task db.AgentInboxEvent, issue db.Issue, triggerCommentID pgtype.UUID) {
 	s.publishMentionTaskQueuedWithInterruptPolicy(ctx, task, issue, triggerCommentID, true)
 }
 
-func (s *TaskService) publishMentionTaskQueued(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID) db.AgentTaskQueue {
+func (s *TaskService) publishMentionTaskQueued(ctx context.Context, task db.AgentInboxEvent, issue db.Issue, triggerCommentID pgtype.UUID) db.AgentInboxEvent {
 	return s.publishMentionTaskQueuedWithInterruptPolicy(ctx, task, issue, triggerCommentID, true)
 }
 
@@ -750,11 +750,11 @@ func (s *TaskService) publishMentionTaskQueued(ctx context.Context, task db.Agen
 // follow-up without cancelling work the target agent has already started. The
 // new task remains queued behind the running task and carries the new comment
 // as its trigger.
-func (s *TaskService) PublishMentionTaskQueuedPreservingInFlight(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID) {
+func (s *TaskService) PublishMentionTaskQueuedPreservingInFlight(ctx context.Context, task db.AgentInboxEvent, issue db.Issue, triggerCommentID pgtype.UUID) {
 	s.publishMentionTaskQueuedWithInterruptPolicy(ctx, task, issue, triggerCommentID, false)
 }
 
-func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID, interruptInFlight bool) db.AgentTaskQueue {
+func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Context, task db.AgentInboxEvent, issue db.Issue, triggerCommentID pgtype.UUID, interruptInFlight bool) db.AgentInboxEvent {
 	isLeader := task.IsLeaderTask
 	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(task.AgentID), "is_leader_task", isLeader)
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
@@ -861,16 +861,16 @@ type AgentRadarContext struct {
 // parentIssueID is optional (zero-valued pgtype.UUID when the user didn't
 // open the modal from "Add sub issue"). The handler is responsible for
 // validating it belongs to the same workspace before passing it in.
-func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID, source *protocol.QuickCreateSourceContext) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID, source *protocol.QuickCreateSourceContext) (db.AgentInboxEvent, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("load agent: %w", err)
 	}
 	if agent.ArchivedAt.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent is archived")
 	}
 	if !agent.RuntimeID.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent has no runtime")
 	}
 
 	payload := QuickCreateContext{
@@ -903,11 +903,11 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	}
 	contextJSON, err := json.Marshal(payload)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("marshal quick-create context: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("marshal quick-create context: %w", err)
 	}
 	contextJSON, err = WithTaskExecutionConfig(contextJSON, agent.Model.String, agent.ThinkingLevel.String)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("snapshot quick-create execution config: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("snapshot quick-create execution config: %w", err)
 	}
 
 	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
@@ -917,7 +917,7 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		Context:   contextJSON,
 	})
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("create quick-create task: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("create quick-create task: %w", err)
 	}
 
 	slog.Info("quick-create task enqueued",
@@ -965,9 +965,9 @@ type EnqueueAgentRadarRunParams struct {
 // EnqueueAgentRadarRun atomically creates a radar run, its queue task, and the
 // run-to-task link. The daemon notification is deliberately emitted only after
 // commit so a wakeup can never race a partially-created run.
-func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentRadarRunParams) (db.AgentRadarRun, db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentRadarRunParams) (db.AgentRadarRun, db.AgentInboxEvent, error) {
 	var run db.AgentRadarRun
-	var task db.AgentTaskQueue
+	var task db.AgentInboxEvent
 	enqueue := func(qtx *db.Queries) error {
 		agent, err := qtx.GetAgent(ctx, in.AgentID)
 		if err != nil {
@@ -1047,30 +1047,30 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 	var err error
 	if in.TriggerKind == "scheduled" {
 		if in.CooldownKey != radar.WorkspaceSupervisorCooldownKey {
-			return db.AgentRadarRun{}, db.AgentTaskQueue{}, errors.New("scheduled Radar is reserved for the workspace supervisor")
+			return db.AgentRadarRun{}, db.AgentInboxEvent{}, errors.New("scheduled Radar is reserved for the workspace supervisor")
 		}
 		if s.TxStarter == nil {
-			return db.AgentRadarRun{}, db.AgentTaskQueue{}, errors.New("scheduled Radar transaction starter unavailable")
+			return db.AgentRadarRun{}, db.AgentInboxEvent{}, errors.New("scheduled Radar transaction starter unavailable")
 		}
 		tx, beginErr := s.TxStarter.Begin(ctx)
 		if beginErr != nil {
-			return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("begin scheduled Radar enqueue: %w", beginErr)
+			return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("begin scheduled Radar enqueue: %w", beginErr)
 		}
 		defer tx.Rollback(ctx)
 		if authErr := lockAuthorizedWorkspaceRadarSupervisor(ctx, tx, in.WorkspaceID, in.AgentID); authErr != nil {
-			return db.AgentRadarRun{}, db.AgentTaskQueue{}, authErr
+			return db.AgentRadarRun{}, db.AgentInboxEvent{}, authErr
 		}
 		if enqueueErr := enqueue(s.Queries.WithTx(tx)); enqueueErr != nil {
-			return db.AgentRadarRun{}, db.AgentTaskQueue{}, enqueueErr
+			return db.AgentRadarRun{}, db.AgentInboxEvent{}, enqueueErr
 		}
 		if in.Scan != nil {
 			nextCursors, marshalErr := json.Marshal(in.Scan.StaticNextCursors)
 			if marshalErr != nil {
-				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("marshal Radar static cursors: %w", marshalErr)
+				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("marshal Radar static cursors: %w", marshalErr)
 			}
 			wrappedSections, marshalErr := json.Marshal(in.Scan.StaticWrappedSections)
 			if marshalErr != nil {
-				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("marshal Radar wrapped sections: %w", marshalErr)
+				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("marshal Radar wrapped sections: %w", marshalErr)
 			}
 			if _, scanErr := tx.Exec(ctx, `
 				INSERT INTO workspace_radar_run_scan (
@@ -1081,7 +1081,7 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 			`, run.ID, in.WorkspaceID, in.Scan.ObservedAt,
 				in.Scan.ObservedChangeVersion, in.Scan.ChangeCursorThroughVersion,
 				in.Scan.ChangesHasMore, nextCursors, wrappedSections); scanErr != nil {
-				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("persist Radar scan receipt: %w", scanErr)
+				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("persist Radar scan receipt: %w", scanErr)
 			}
 		} else {
 			// Non-scheduler callers may enqueue an explicit scheduled fixture/run.
@@ -1100,7 +1100,7 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 				FROM workspace_radar_state state
 				WHERE state.workspace_id = $2
 			`, run.ID, in.WorkspaceID, in.ScheduledFor); scanErr != nil {
-				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("persist conservative Radar scan receipt: %w", scanErr)
+				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("persist conservative Radar scan receipt: %w", scanErr)
 			}
 		}
 		err = tx.Commit(ctx)
@@ -1108,7 +1108,7 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 		err = s.runInTx(ctx, enqueue)
 	}
 	if err != nil {
-		return db.AgentRadarRun{}, db.AgentTaskQueue{}, err
+		return db.AgentRadarRun{}, db.AgentInboxEvent{}, err
 	}
 
 	slog.Info("agent radar task enqueued",
@@ -1188,7 +1188,7 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 // passes the request user; the lark dispatcher passes the inbound sender of the
 // latest message in the silence window. Stored on the task so the daemon brief
 // can attribute the run to the right person. See MUL-2645.
-func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
 	// #311: the system never cancels a directed chat request. A new message that
 	// arrives while an earlier one is still running must NOT cancel the in-flight
 	// run (interruptFollowup=false). It queues behind the agent's current wake;
@@ -1203,7 +1203,7 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 // session. Channel re-mentions use this after interrupting stale in-flight work
 // so the agent starts from the latest channel context instead of continuing the
 // previous mistaken execution path.
-func (s *TaskService) EnqueueFreshChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueFreshChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
 	// #311: interruptFollowup=false — a fresh-session chat run still must not
 	// cancel an in-flight directed run; it queues and serializes like EnqueueChatTask.
 	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 2, false)
@@ -1211,7 +1211,7 @@ func (s *TaskService) EnqueueFreshChatTask(ctx context.Context, chatSession db.C
 
 // EnqueueAmbientChatTask is for low-priority channel observation runs where the
 // agent may stay silent or add a reaction instead of posting a full reply.
-func (s *TaskService) EnqueueAmbientChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueAmbientChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
 	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 1, false)
 }
 
@@ -1219,7 +1219,7 @@ func (s *TaskService) EnqueueAmbientChatTask(ctx context.Context, chatSession db
 // the supplied query handle without publishing realtime or daemon wake side
 // effects. Callers that pass transaction-bound queries must call
 // PublishChatTaskQueued only after the transaction commits successfully.
-func (s *TaskService) CreateAmbientChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) CreateAmbientChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
 	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 1)
 }
 
@@ -1227,14 +1227,14 @@ func (s *TaskService) CreateAmbientChatTaskRow(ctx context.Context, q *db.Querie
 // using the supplied query handle without publishing realtime or daemon wake
 // side effects. Transactional callers must call PublishChatTaskQueued only
 // after the transaction commits successfully.
-func (s *TaskService) CreateFreshChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) CreateFreshChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
 	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 2)
 }
 
-func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentInboxEvent, error) {
 	task, err := s.createChatTaskRow(ctx, s.Queries, chatSession, initiatorUserID, forceFreshSession, priority)
 	if err != nil {
-		return db.AgentTaskQueue{}, err
+		return db.AgentInboxEvent{}, err
 	}
 	// Training session-open chokepoint (spec §4.3): chat-bound task. Project
 	// resolves via chatSession.ProjectID (seam 1e).
@@ -1243,22 +1243,22 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	return task, nil
 }
 
-func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32) (db.AgentTaskQueue, error) {
+func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32) (db.AgentInboxEvent, error) {
 	agent, err := q.GetAgent(ctx, chatSession.AgentID)
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("load agent: %w", err)
 	}
 	if agent.ArchivedAt.Valid {
-		return db.AgentTaskQueue{}, ErrChatTaskAgentArchived
+		return db.AgentInboxEvent{}, ErrChatTaskAgentArchived
 	}
 	if !agent.RuntimeID.Valid {
 		slog.Info("chat task enqueue refused: agent has no runtime", "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID))
-		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
+		return db.AgentInboxEvent{}, ErrChatTaskAgentNoRuntime
 	}
 	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("snapshot chat task execution config: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("snapshot chat task execution config: %w", err)
 	}
 
 	task, err := q.CreateChatTask(ctx, db.CreateChatTaskParams{
@@ -1272,7 +1272,7 @@ func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chat
 	})
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("create chat task: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("create chat task: %w", err)
 	}
 	return task, nil
 }
@@ -1280,7 +1280,7 @@ func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chat
 // PublishChatTaskQueued emits the side effects for a committed chat task row.
 // Transactional callers must invoke this only after a successful commit so
 // realtime clients and daemons never observe a rolled-back task.
-func (s *TaskService) PublishChatTaskQueued(ctx context.Context, task db.AgentTaskQueue, interruptFollowup bool) {
+func (s *TaskService) PublishChatTaskQueued(ctx context.Context, task db.AgentInboxEvent, interruptFollowup bool) {
 	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(task.ChatSessionID), "agent_id", util.UUIDToString(task.AgentID), "force_fresh_session", task.ForceFreshSession)
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
@@ -1290,7 +1290,7 @@ func (s *TaskService) PublishChatTaskQueued(ctx context.Context, task db.AgentTa
 	s.NotifyTaskEnqueued(ctx, task)
 }
 
-func (s *TaskService) finalizeCancelledTask(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) finalizeCancelledTask(ctx context.Context, task db.AgentInboxEvent) {
 	s.captureTaskCancelled(ctx, task)
 	s.RouteTerminalTrainingTask(ctx, task)
 	s.maybeCleanupEphemeralSandbox(ctx, task)
@@ -1324,7 +1324,7 @@ func (s *TaskService) CancelTasksForIssue(ctx context.Context, issueID pgtype.UU
 // tasks" action — same shape as CancelTasksForIssue but scoped on agent_id.
 //
 // Returns the cancelled rows so callers can report counts / log them.
-func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UUID) ([]db.AgentInboxEvent, error) {
 	cancelled, err := s.Queries.CancelAgentTasksByAgent(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -1363,7 +1363,7 @@ func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID
 // task:cancelled for every row. Callers must invoke this AFTER committing the
 // cancellation so subscribers don't observe a "cancelled" event for a row
 // that the tx might still roll back.
-func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, cancelled []db.AgentTaskQueue) {
+func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, cancelled []db.AgentInboxEvent) {
 	for _, t := range cancelled {
 		s.finalizeCancelledTask(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
@@ -1371,7 +1371,7 @@ func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, cancelled []d
 	}
 }
 
-func (s *TaskService) CaptureCancelledTasks(ctx context.Context, cancelled []db.AgentTaskQueue) {
+func (s *TaskService) CaptureCancelledTasks(ctx context.Context, cancelled []db.AgentInboxEvent) {
 	for _, t := range cancelled {
 		s.finalizeCancelledTask(ctx, t)
 	}
@@ -1385,13 +1385,13 @@ type CancelledChatMessageResult struct {
 }
 
 type CancelTaskResult struct {
-	Task                 db.AgentTaskQueue
+	Task                 db.AgentInboxEvent
 	CancelledChatMessage *CancelledChatMessageResult
 }
 
 // CancelTask cancels a single task by ID. It broadcasts a task:cancelled event
 // so frontends can update immediately.
-func (s *TaskService) CancelTask(ctx context.Context, taskID pgtype.UUID) (*db.AgentTaskQueue, error) {
+func (s *TaskService) CancelTask(ctx context.Context, taskID pgtype.UUID) (*db.AgentInboxEvent, error) {
 	result, err := s.CancelTaskWithResult(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -1430,7 +1430,7 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 	}, nil
 }
 
-func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.AgentTaskQueue) *CancelledChatMessageResult {
+func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.AgentInboxEvent) *CancelledChatMessageResult {
 	if !task.ChatSessionID.Valid {
 		return nil
 	}
@@ -1477,265 +1477,10 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 	return cancelled
 }
 
-// claimNextAgentWake claims the oldest queued legacy wake for one agent.
-// LockAgentWake and ClaimNextAgentWake intentionally run as separate
-// statements in one transaction: after the agent-row lock is acquired,
-// READ COMMITTED gives the claim statement a fresh snapshot of active inbox
-// deliveries and closes the cross-table race with inbox leasing.
-func (s *TaskService) claimNextAgentWake(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	start := time.Now()
-	var (
-		outcome                                              = "unknown"
-		lockAgentMs, claimWakeMs, updateStatusMs, dispatchMs int64
-	)
-	defer func() {
-		s.maybeLogClaimSlow(agentID, outcome, start, lockAgentMs, claimWakeMs, updateStatusMs, dispatchMs)
-	}()
-
-	var task db.AgentTaskQueue
-	var claimed bool
-	err := s.runInTx(ctx, func(qtx *db.Queries) error {
-		t0 := time.Now()
-		if _, err := qtx.LockAgentWake(ctx, agentID); err != nil {
-			lockAgentMs = time.Since(t0).Milliseconds()
-			return fmt.Errorf("lock agent wake: %w", err)
-		}
-		lockAgentMs = time.Since(t0).Milliseconds()
-
-		t0 = time.Now()
-		next, err := qtx.ClaimNextAgentWake(ctx, db.ClaimNextAgentWakeParams{
-			AgentID:   agentID,
-			RuntimeID: runtimeID,
-		})
-		claimWakeMs = time.Since(t0).Milliseconds()
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		task = next
-		claimed = true
-		return nil
-	})
-	if err != nil {
-		outcome = "error_claim"
-		return nil, fmt.Errorf("claim next agent wake: %w", err)
-	}
-	if !claimed {
-		slog.Debug("task claim: no wake available", "agent_id", util.UUIDToString(agentID))
-		outcome = "no_wake"
-		return nil, nil
-	}
-
-	slog.Info("task claimed", "task_id", util.UUIDToString(task.ID), "agent_id", util.UUIDToString(agentID))
-	s.captureTaskDispatched(ctx, task)
-
-	// Refresh agent status from active tasks. This avoids a stale unconditional
-	// working write racing after a just-cancelled claim.
-	t0 := time.Now()
-	s.ReconcileAgentStatus(ctx, agentID)
-	updateStatusMs = time.Since(t0).Milliseconds()
-
-	// Broadcast task:dispatch. ResolveTaskWorkspaceID inside this path can
-	// re-query issue/chat_session/autopilot_run, so it can also be a real
-	// contributor to claim latency.
-	t0 = time.Now()
-	s.broadcastTaskDispatch(ctx, task)
-	dispatchMs = time.Since(t0).Milliseconds()
-
-	outcome = "claimed"
-	return &task, nil
-}
-
-// reclaimStaleAgentWake re-delivers the oldest unacknowledged legacy wake for
-// one agent. It uses the same agent-row transaction boundary as a fresh claim,
-// so an inbox lease cannot be admitted concurrently.
-func (s *TaskService) reclaimStaleAgentWake(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	var task db.AgentTaskQueue
-	var reclaimed bool
-	err := s.runInTx(ctx, func(qtx *db.Queries) error {
-		if _, err := qtx.LockAgentWake(ctx, agentID); err != nil {
-			return fmt.Errorf("lock agent wake: %w", err)
-		}
-		next, err := qtx.ReclaimStaleDispatchedAgentWake(ctx, db.ReclaimStaleDispatchedAgentWakeParams{
-			RuntimeID:         runtimeID,
-			AgentID:           agentID,
-			ClaimRecoverySecs: claimResponseRecoveryWindow.Seconds(),
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		task = next
-		reclaimed = true
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("reclaim stale agent wake: %w", err)
-	}
-	if !reclaimed {
-		return nil, nil
-	}
-	return &task, nil
-}
-
-// ClaimTaskForRuntime claims the next runnable legacy wake for a runtime.
-// Every source is globally serial and FIFO per agent; different agents remain
-// eligible in parallel.
-//
-// Empty-claim fast path: when EmptyClaim is configured and a recent
-// check verified the runtime had no queued tasks, returns immediately
-// without touching Postgres. The cache is invalidated synchronously on
-// every enqueue (notifyTaskAvailable), so a queued task becomes
-// claimable on the next call rather than waiting for the TTL.
-func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	start := time.Now()
-	var (
-		outcome          = "no_task"
-		listMs, loopMs   int64
-		listCount, tried int
-		claimedFlag      bool
-	)
-	defer func() {
-		totalMs := time.Since(start).Milliseconds()
-		if totalMs < 300 {
-			return
-		}
-		slog.Info("claim_for_runtime slow",
-			"runtime_id", util.UUIDToString(runtimeID),
-			"outcome", outcome,
-			"total_ms", totalMs,
-			"list_pending_ms", listMs,
-			"list_pending_count", listCount,
-			"agents_tried", tried,
-			"claim_loop_ms", loopMs,
-			"claimed", claimedFlag,
-		)
-	}()
-
-	runtimeKey := util.UUIDToString(runtimeID)
-	// Check this before EmptyClaim: a lost claim response moves the task out of
-	// `queued`, so the empty-queued cache cannot represent recoverability.
-	staleCandidates, err := s.Queries.ListStaleDispatchedClaimCandidatesByRuntime(ctx, db.ListStaleDispatchedClaimCandidatesByRuntimeParams{
-		RuntimeID:         runtimeID,
-		ClaimRecoverySecs: claimResponseRecoveryWindow.Seconds(),
-	})
-	if err != nil {
-		outcome = "error_reclaim_dispatched"
-		return nil, fmt.Errorf("list stale dispatched wakes: %w", err)
-	}
-	staleAgents := make(map[string]struct{}, len(staleCandidates))
-	for _, candidate := range staleCandidates {
-		agentKey := util.UUIDToString(candidate.AgentID)
-		if _, seen := staleAgents[agentKey]; seen {
-			continue
-		}
-		staleAgents[agentKey] = struct{}{}
-		stale, err := s.reclaimStaleAgentWake(ctx, candidate.AgentID, runtimeID)
-		if err != nil {
-			outcome = "error_reclaim_dispatched"
-			return nil, err
-		}
-		if stale == nil {
-			continue
-		}
-		outcome = "reclaimed_dispatched"
-		claimedFlag = true
-		slog.Info("stale dispatched task reclaimed",
-			"task_id", util.UUIDToString(stale.ID),
-			"runtime_id", runtimeKey,
-			"agent_id", util.UUIDToString(stale.AgentID),
-		)
-		return stale, nil
-	}
-
-	if s.EmptyClaim.IsEmpty(ctx, runtimeKey) {
-		outcome = "empty_cache_hit"
-		return nil, nil
-	}
-
-	// Sample the invalidation version BEFORE the SELECT. If a
-	// concurrent enqueue Bumps between this read and the post-SELECT
-	// MarkEmpty, the next IsEmpty will see the empty key tagged with
-	// a stale version and reject it — closing the race that would
-	// otherwise stall the just-queued task until the empty key's TTL
-	// expired.
-	preSelectVersion := s.EmptyClaim.CurrentVersion(ctx, runtimeKey)
-
-	t0 := time.Now()
-	tasks, err := s.Queries.ListQueuedClaimCandidatesByRuntime(ctx, runtimeID)
-	listMs = time.Since(t0).Milliseconds()
-	listCount = len(tasks)
-	if err != nil {
-		outcome = "error_list"
-		return nil, fmt.Errorf("list queued claim candidates: %w", err)
-	}
-
-	if len(tasks) == 0 {
-		s.EmptyClaim.MarkEmpty(ctx, runtimeKey, preSelectVersion)
-		outcome = "empty_db"
-		return nil, nil
-	}
-
-	loopStart := time.Now()
-	triedAgents := map[string]struct{}{}
-	var claimed *db.AgentTaskQueue
-	for _, candidate := range tasks {
-		agentKey := util.UUIDToString(candidate.AgentID)
-		if _, seen := triedAgents[agentKey]; seen {
-			continue
-		}
-		triedAgents[agentKey] = struct{}{}
-		tried++
-
-		task, err := s.claimNextAgentWake(ctx, candidate.AgentID, runtimeID)
-		if err != nil {
-			loopMs = time.Since(loopStart).Milliseconds()
-			outcome = "error_claim"
-			return nil, err
-		}
-		if task != nil && task.RuntimeID == runtimeID {
-			claimed = task
-			break
-		}
-	}
-	loopMs = time.Since(loopStart).Milliseconds()
-	if claimed != nil {
-		claimedFlag = true
-		outcome = "claimed"
-	}
-
-	return claimed, nil
-}
-
-// maybeLogClaimSlow emits one structured log per per-agent claim call when its total
-// latency exceeds 300ms, so the prod tail can be diagnosed without flooding
-// logs at normal poll rates. Called via defer so it captures the full path
-// including post-claim updateAgentStatus / broadcastTaskDispatch (both of
-// which can hit the DB) and any error exit.
-func (s *TaskService) maybeLogClaimSlow(agentID pgtype.UUID, outcome string, start time.Time, lockAgentMs, claimWakeMs, updateStatusMs, dispatchMs int64) {
-	totalMs := time.Since(start).Milliseconds()
-	if totalMs < 300 {
-		return
-	}
-	slog.Info("claim_task slow",
-		"agent_id", util.UUIDToString(agentID),
-		"outcome", outcome,
-		"total_ms", totalMs,
-		"lock_agent_ms", lockAgentMs,
-		"claim_wake_ms", claimWakeMs,
-		"update_status_ms", updateStatusMs,
-		"dispatch_ms", dispatchMs,
-	)
-}
-
 // StartTask transitions a dispatched task to running.
 // Issue status is NOT changed here — the agent manages it via the CLI.
-func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	var task db.AgentTaskQueue
+func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.AgentInboxEvent, error) {
+	var task db.AgentInboxEvent
 	err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		started, err := qtx.StartAgentTask(ctx, taskID)
 		if err != nil {
@@ -1769,7 +1514,7 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 // human-readable hint (typically the contested path) that the UI surfaces
 // next to the status. Returns the updated row so the daemon can confirm the
 // transition and so the broadcast carries the up-to-date snapshot.
-func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID pgtype.UUID, reason string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID pgtype.UUID, reason string) (*db.AgentInboxEvent, error) {
 	reason = strings.TrimSpace(reason)
 	task, err := s.Queries.MarkAgentTaskWaitingLocalDirectory(ctx, db.MarkAgentTaskWaitingLocalDirectoryParams{
 		ID:         taskID,
@@ -1789,7 +1534,7 @@ func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID 
 }
 
 type CompleteTaskOutcome struct {
-	Task         db.AgentTaskQueue
+	Task         db.AgentInboxEvent
 	CompletedNow bool
 	RadarRun     *db.AgentRadarRun
 }
@@ -1797,7 +1542,7 @@ type CompleteTaskOutcome struct {
 // CompleteTask marks a task as completed. Callers that execute Radar output
 // must use CompleteDaemonTask so completing the task and claiming its Radar
 // run are one atomic transition.
-func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentInboxEvent, error) {
 	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false)
 	if err != nil {
 		return nil, err
@@ -1822,7 +1567,7 @@ func (s *TaskService) CompleteDaemonTask(ctx context.Context, taskID pgtype.UUID
 // flipping to 'completed' and chat_session.session_id being refreshed,
 // causing the new task to resume against a stale (or NULL) session.
 func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string, claimRadar bool) (*CompleteTaskOutcome, error) {
-	var task db.AgentTaskQueue
+	var task db.AgentInboxEvent
 	var radarRun *db.AgentRadarRun
 	completeAgentTaskUpdated := false
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
@@ -2083,7 +1828,7 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 	}, nil
 }
 
-func (s *TaskService) terminalTaskProjectID(ctx context.Context, task db.AgentTaskQueue) (pgtype.UUID, error) {
+func (s *TaskService) terminalTaskProjectID(ctx context.Context, task db.AgentInboxEvent) (pgtype.UUID, error) {
 	if task.IssueID.Valid {
 		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
 		if err != nil {
@@ -2126,7 +1871,7 @@ func isTerminalAgentTaskStatus(status string) bool {
 // coarse bucket. Daemon callers that already produced a refined reason
 // (via classifyPoisonedError, the timeout / runtime classifier, etc.)
 // will have their value preserved untouched.
-func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentInboxEvent, error) {
 	return s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false)
 }
 
@@ -2134,14 +1879,14 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // issue comments, chat messages, and requester notifications. Restricted
 // cognition profiles use this fail-closed path so provider/config/schema
 // failures remain internal and can never become a public agent response.
-func (s *TaskService) FailTaskWithoutPublicOutput(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) FailTaskWithoutPublicOutput(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentInboxEvent, error) {
 	return s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true)
 }
 
-func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool) (*db.AgentTaskQueue, error) {
+func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool) (*db.AgentInboxEvent, error) {
 	// MUL-2946: synthesise a refined reason from the error text whenever the
 	// caller didn't supply one. This is the last write-path guard against
-	// "agent_error" coarse rows ending up in agent_task_queue.failure_reason
+	// "agent_error" coarse rows ending up in agent_inbox_event.failure_reason
 	// — every other path either provides a classified reason directly
 	// (sweepers writing 'queued_expired' / 'runtime_offline' / 'timeout'
 	// / 'runtime_recovery' via SQL) or runs the daemon's classifyPoisonedError
@@ -2149,7 +1894,7 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	if failureReason == "" {
 		failureReason = taskfailure.Classify(errMsg).String()
 	}
-	var task db.AgentTaskQueue
+	var task db.AgentInboxEvent
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		t, err := qtx.FailAgentTask(ctx, db.FailAgentTaskParams{
 			ID:            taskID,
@@ -2315,7 +2060,7 @@ func resumeUnsafeFailureReason(reason string) bool {
 //
 // Autopilot tasks are NOT auto-retried here; the autopilot scheduler owns
 // its own re-run cadence and we don't want to double-fire it.
-func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentTaskQueue) (*db.AgentTaskQueue, error) {
+func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentInboxEvent) (*db.AgentInboxEvent, error) {
 	if parent.Status != "failed" {
 		return nil, nil
 	}
@@ -2411,7 +2156,7 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 // nil and logs errors loudly without failing the enqueue, so this helper is
 // best-effort: a resolution miss or session-open error is logged and skipped,
 // never failing the retry.
-func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child db.AgentTaskQueue) {
+func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child db.AgentInboxEvent) {
 	if !child.IssueID.Valid {
 		return
 	}
@@ -2440,7 +2185,7 @@ func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child d
 	s.tryOpenTrainingSession(ctx, child, issue.ProjectID, envID)
 }
 
-func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID, resources *EphemeralRetryResources) (db.AgentTaskQueue, error) {
+func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID, resources *EphemeralRetryResources) (db.AgentInboxEvent, error) {
 	params := db.CreateRetryTaskParams{ID: parentID}
 	if resources != nil {
 		params.RuntimeID = resources.RuntimeID
@@ -2449,36 +2194,36 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	if s.TxStarter == nil {
 		child, err := s.Queries.CreateRetryTask(ctx, params)
 		if err != nil {
-			return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+			return db.AgentInboxEvent{}, fmt.Errorf("create retry task: %w", err)
 		}
 		// D9: CreateRetryTask copies the parent's context verbatim, so the child
 		// would inherit the parent's (now-closed) RL session. Strip areal_proxy so
 		// the child opens a fresh session at its own session-open chokepoint. maybe
 		// OpenTrainingSession re-loads the task from DB, so no in-memory fixup needed.
 		if err := s.Queries.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
-			return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
+			return db.AgentInboxEvent{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
 		}
 		return child, nil
 	}
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("begin retry task transaction: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("begin retry task transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	qtx := s.Queries.WithTx(tx)
 	child, err := qtx.CreateRetryTask(ctx, params)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("create retry task: %w", err)
 	}
 	if err := qtx.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
 	}
 	if err := transferQueuedPendingWakeTask(ctx, tx, parentID, child.ID); err != nil {
-		return db.AgentTaskQueue{}, err
+		return db.AgentInboxEvent{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return db.AgentTaskQueue{}, err
+		return db.AgentInboxEvent{}, err
 	}
 	return child, nil
 }
@@ -2551,7 +2296,7 @@ func transferQueuedPendingWakeTask(ctx context.Context, tx pgx.Tx, parentID, chi
 // Tasks owned by other agents on the same issue (e.g. a parallel
 // @-mention agent) are left alone — rerun must not collateral-cancel
 // them.
-func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourceTaskID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentTaskQueue, error) {
+func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourceTaskID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentInboxEvent, error) {
 	issue, err := s.Queries.GetIssue(ctx, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("load issue: %w", err)
@@ -2636,7 +2381,7 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 // stays in sync; otherwise (squad member, prior assignee that has since been
 // reassigned, mention agent) we use the mention path with the same
 // force_fresh_session=true contract.
-func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool) (db.AgentInboxEvent, error) {
 	if issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid &&
 		util.UUIDToString(issue.AssigneeID) == util.UUIDToString(agentID) {
 		return s.enqueueIssueTask(ctx, issue, triggerCommentID, true)
@@ -2689,7 +2434,7 @@ func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 // is still bound to the same pre-created runtime R', reclaim the sandbox
 // instance (stop+delete via sandboxd) and mark R' offline. Best-effort — errors
 // are logged but never fail the terminal flow.
-func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentInboxEvent) {
 	marker, ok := extractEphemeralSandbox(task.Context)
 	if !ok {
 		return // not an ephemeral rollout
@@ -2777,7 +2522,7 @@ func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.
 // All callers that surface a task as failed — sweepers, FailTask,
 // recover-orphans — funnel through here so the same UI-consistency
 // guarantees apply on every code path.
-func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTaskQueue) int {
+func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentInboxEvent) int {
 	if len(tasks) == 0 {
 		return 0
 	}
@@ -3194,7 +2939,7 @@ type AgentSkillFileData struct {
 // "Failed after 12s". Uses created_at — not started_at — because users
 // experience total wait time, including queue + dispatch, not just the
 // daemon's actual run time.
-func computeChatElapsedMs(task db.AgentTaskQueue) pgtype.Int8 {
+func computeChatElapsedMs(task db.AgentInboxEvent) pgtype.Int8 {
 	if !task.CompletedAt.Valid || !task.CreatedAt.Valid {
 		return pgtype.Int8{}
 	}
@@ -3222,10 +2967,10 @@ func priorityToInt(p string) int32 {
 
 // NotifyTaskEnqueued is the cross-package shim for callers outside
 // TaskService (e.g. AutopilotService.dispatchRunOnly) that insert a
-// row into agent_task_queue directly. Invalidates the empty-claim
+// row into agent_inbox_event directly. Invalidates the empty-claim
 // cache and kicks the daemon WS so the new task is claimed without
 // waiting for the next poll.
-func (s *TaskService) NotifyTaskEnqueued(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) NotifyTaskEnqueued(ctx context.Context, task db.AgentInboxEvent) {
 	s.captureTaskQueued(ctx, task)
 	s.notifyTaskAvailable(task)
 }
@@ -3237,7 +2982,7 @@ func (s *TaskService) NotifyTaskEnqueued(ctx context.Context, task db.AgentTaskQ
 // next poll. Order matters — Bump must happen before the wakeup,
 // otherwise the wakeup-driven claim could read the still-current
 // empty verdict and return null.
-func (s *TaskService) notifyTaskAvailable(task db.AgentTaskQueue) {
+func (s *TaskService) notifyTaskAvailable(task db.AgentInboxEvent) {
 	if !task.RuntimeID.Valid {
 		return
 	}
@@ -3255,7 +3000,7 @@ func (s *TaskService) notifyTaskAvailable(task db.AgentTaskQueue) {
 	s.Wakeup.NotifyTaskAvailable(runtimeKey, util.UUIDToString(task.ID))
 }
 
-func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTaskQueue) {
+func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentInboxEvent) {
 	var payload map[string]any
 	if task.Context != nil {
 		json.Unmarshal(task.Context, &payload)
@@ -3287,7 +3032,7 @@ func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTa
 	})
 }
 
-func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, task db.AgentTaskQueue) {
+func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, task db.AgentInboxEvent) {
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
 		return
@@ -3315,7 +3060,7 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 // For autopilot tasks, from the autopilot via its run. For Radar tasks, from
 // the linked Radar run after verifying that the run points back to this task.
 // Returns "" when none of the links resolve — callers treat that as "not found".
-func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentTaskQueue) string {
+func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentInboxEvent) string {
 	if task.IssueID.Valid {
 		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
 			return util.UUIDToString(issue.WorkspaceID)
@@ -3352,7 +3097,7 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	return ""
 }
 
-func parseAgentRadarContext(task db.AgentTaskQueue) (AgentRadarContext, bool) {
+func parseAgentRadarContext(task db.AgentInboxEvent) (AgentRadarContext, bool) {
 	if len(task.Context) == 0 {
 		return AgentRadarContext{}, false
 	}
@@ -3366,7 +3111,7 @@ func parseAgentRadarContext(task db.AgentTaskQueue) (AgentRadarContext, bool) {
 	return radarContext, true
 }
 
-func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType, target string, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
+func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentInboxEvent, msg *db.ChatMessage, outputType, target string, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
 		return
@@ -3561,7 +3306,7 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 // false so callers can short-circuit. Tasks linked to an issue / chat /
 // autopilot are never quick-create even if they happen to carry a
 // context blob, so those are filtered up front.
-func (s *TaskService) parseQuickCreateContext(task db.AgentTaskQueue) (QuickCreateContext, bool) {
+func (s *TaskService) parseQuickCreateContext(task db.AgentInboxEvent) (QuickCreateContext, bool) {
 	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
 		return QuickCreateContext{}, false
 	}
@@ -3585,7 +3330,7 @@ func (s *TaskService) parseQuickCreateContext(task db.AgentTaskQueue) (QuickCrea
 // deterministic — robust against the same agent creating other issues in
 // parallel (e.g. assignment task running while max_concurrent_tasks > 1
 // permits another quick-create alongside it).
-func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.AgentTaskQueue, qc QuickCreateContext) {
+func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.AgentInboxEvent, qc QuickCreateContext) {
 	requesterID, err := util.ParseUUID(qc.RequesterID)
 	if err != nil {
 		slog.Warn("quick-create completion: invalid requester id", "task_id", util.UUIDToString(task.ID), "error", err)
@@ -3695,7 +3440,7 @@ func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.Ag
 // original prompt + agent ID so the frontend can render an "Edit as
 // advanced form" entry that pre-fills the legacy create-issue modal
 // without asking the user to retype.
-func (s *TaskService) notifyQuickCreateFailed(ctx context.Context, task db.AgentTaskQueue, qc QuickCreateContext, errMsg string) {
+func (s *TaskService) notifyQuickCreateFailed(ctx context.Context, task db.AgentInboxEvent, qc QuickCreateContext, errMsg string) {
 	requesterID, err := util.ParseUUID(qc.RequesterID)
 	if err != nil {
 		return

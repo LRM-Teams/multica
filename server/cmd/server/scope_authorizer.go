@@ -13,7 +13,7 @@ import (
 // authorizer. Declared as an interface so the authorizer can be unit tested
 // with an in-memory fake (no DB required).
 type scopeAuthQuerier interface {
-	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
+	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentInboxEvent, error)
 	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
 	GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
 }

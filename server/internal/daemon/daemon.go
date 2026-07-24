@@ -2513,29 +2513,6 @@ func (d *Daemon) runRuntimePoller(
 			continue
 		}
 		if task == nil {
-			task, err = d.client.ClaimTask(pollerCtx, rid)
-			if err != nil {
-				d.exitClaim()
-				sem <- slot
-				if pollerCtx.Err() == nil {
-					if isRuntimeNotFoundError(err) {
-						// Server says this runtime is gone — recover and exit
-						// the poller; the runtime-set watcher will tear this
-						// goroutine down via pollerCtx once the workspace is
-						// re-registered with a new runtime ID.
-						go d.handleRuntimeGone(rid)
-						return
-					}
-					d.logger.Warn("claim task failed", "runtime_id", rid, "error", err)
-				}
-				if err := sleepAfterIdleClaim(); err != nil {
-					return
-				}
-				continue
-			}
-		}
-
-		if task == nil {
 			d.exitClaim()
 			sem <- slot
 			if err := sleepAfterIdleClaim(); err != nil {
@@ -2566,10 +2543,6 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 	for {
 		event, err := d.client.DrainAgentInbox(ctx, runtimeID)
 		if err != nil {
-			if isAgentInboxDrainUnsupportedError(err) {
-				d.logger.Debug("agent inbox drain unsupported; falling back to legacy claim", "runtime_id", runtimeID)
-				return nil, nil
-			}
 			return nil, err
 		}
 		if event == nil {
@@ -2838,7 +2811,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		}
 		defer releaseWakeSlot()
 	} else {
-		// Persisted wakes cannot hit this path because agent_task_queue.agent_id
+		// Persisted wakes cannot hit this path because agent_inbox_event.agent_id
 		// and agent_inbox_event.agent_id are NOT NULL. Keep synthetic unit tasks
 		// usable without inventing a task-id fallback that would pretend to
 		// provide per-agent serialization.
@@ -2982,8 +2955,6 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			if usageErr := d.client.ReportAgentInboxUsage(ctx, *task.InboxEvent, executionID, result.Usage); usageErr != nil {
 				taskLog.Warn("report inbox usage failed", "execution_id", executionID, "error", usageErr)
 			}
-		} else if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
-			taskLog.Warn("report task usage failed", "error", usageErr)
 		}
 	}
 
@@ -3086,9 +3057,7 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	assignment, err := findLocalDirectoryAssignment(task.ProjectResources, d.cfg.DaemonID)
 	if err != nil {
 		taskLog.Error("local_directory: resolve resource failed", "error", err)
-		if failErr := d.client.FailTask(ctx, task.ID, err.Error(), "", "", "local_directory_error"); failErr != nil {
-			taskLog.Error("fail task after local_directory resolve error", "error", failErr)
-		}
+		d.reportTaskFailure(ctx, task, err.Error(), "", "", "local_directory_error", taskLog)
 		return nil, true
 	}
 	if assignment == nil {
@@ -3097,9 +3066,7 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	taskLog = taskLog.With("local_directory", assignment.AbsPath)
 	if err := validateLocalPath(assignment.AbsPath); err != nil {
 		taskLog.Error("local_directory: path validation failed", "error", err)
-		if failErr := d.client.FailTask(ctx, task.ID, err.Error(), "", "", "local_directory_error"); failErr != nil {
-			taskLog.Error("fail task after local_directory validation error", "error", failErr)
-		}
+		d.reportTaskFailure(ctx, task, err.Error(), "", "", "local_directory_error", taskLog)
 		return nil, true
 	}
 
@@ -3169,9 +3136,7 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			failureReason = "cancelled"
 		}
-		if failErr := d.client.FailTask(ctx, task.ID, fmt.Sprintf("local_directory wait cancelled: %s", err.Error()), "", "", failureReason); failErr != nil {
-			taskLog.Error("fail task after local_directory lock cancel", "error", failErr)
-		}
+		d.reportTaskFailure(ctx, task, fmt.Sprintf("local_directory wait cancelled: %s", err.Error()), "", "", failureReason, taskLog)
 		return nil, true
 	}
 	taskLog.Info("local_directory: lock acquired")
@@ -3213,16 +3178,14 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 }
 
 func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result TaskResult, taskLog *slog.Logger) {
-	taskID := task.ID
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		var err error
-		if task.isInboxTask() {
-			err = d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
-		} else {
-			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Type, result.SessionID, result.WorkDir, result.OutputSuppressedReason, result.Parts, result.Reaction, result.RuntimeStats)
+		if !task.isInboxTask() {
+			taskLog.Error("task is missing its canonical inbox lease")
+			return
 		}
+		err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
 			if result.Status == "completed" {
 				d.maybeAppendDailyCloseoutStub(task, result)
@@ -3331,24 +3294,16 @@ func (d *Daemon) watchInboxLease(ctx context.Context, lease AgentInboxLease, int
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
-	if task.isInboxTask() {
-		reasonCode := failureReason
-		if strings.Contains(errMsg, agent.ProviderAuthRequiredMarker) {
-			reasonCode = agent.ProviderAuthRequiredMarker
-		}
-		if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
-			taskLog.Error("report failed inbox event failed", "error", err)
-		}
+	if !task.isInboxTask() {
+		taskLog.Error("failed task is missing its canonical inbox lease")
 		return
 	}
-	var err error
-	if suppressPublicOutputForTask(task) {
-		err = d.client.FailTaskWithoutPublicOutput(ctx, task.ID, errMsg, sessionID, workDir, failureReason)
-	} else {
-		err = d.client.FailTask(ctx, task.ID, errMsg, sessionID, workDir, failureReason)
+	reasonCode := failureReason
+	if strings.Contains(errMsg, agent.ProviderAuthRequiredMarker) {
+		reasonCode = agent.ProviderAuthRequiredMarker
 	}
-	if err != nil {
-		taskLog.Error("report failed task failed", "error", err)
+	if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
+		taskLog.Error("report failed inbox event failed", "error", err)
 	}
 }
 
@@ -3631,10 +3586,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// "start task failed: <…>" string and the same failure_reason
 	// taxonomy as before — see MUL-2946 for the classifier contract.
 	if !task.isInboxTask() {
-		if err := d.client.StartTask(ctx, task.ID); err != nil {
-			return TaskResult{}, fmt.Errorf("start task failed: %w", err)
-		}
-		_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
+		return TaskResult{}, errors.New("task is missing its canonical inbox lease")
 	}
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
@@ -4565,7 +4517,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				if task.isInboxTask() {
 					err = d.client.ReportAgentInboxMessages(sendCtx, *task.InboxEvent, toSend)
 				} else {
-					err = d.client.ReportTaskMessages(sendCtx, taskID, toSend)
+					err = errors.New("task is missing its canonical inbox lease")
 				}
 				if err != nil {
 					taskLog.Debug("failed to report task messages", "inbox_task", task.isInboxTask(), "error", err)
@@ -4607,21 +4559,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				activitySeq.Add(1)
 				switch msg.Type {
 				case agent.MessageStatus:
-					// Persist the session/work_dir as soon as the backend
-					// reveals them. Without this, a daemon crash mid-run
-					// loses the resume pointer and the auto-retry fires
-					// without context.
-					if msg.SessionID != "" && !task.isInboxTask() && !sessionPinned.Swap(true) {
-						sid := msg.SessionID
-						wd := opts.Cwd
-						go func() {
-							pinCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-							defer cancel()
-							if err := d.client.PinTaskSession(pinCtx, taskID, sid, wd); err != nil {
-								taskLog.Debug("pin session failed", "error", err)
-							}
-						}()
-					}
+					sessionPinned.Store(msg.SessionID != "")
 				case agent.MessageToolUse:
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)

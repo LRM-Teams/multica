@@ -67,8 +67,8 @@ WHERE id = sqlc.arg('id')
 -- name: LockChatSessionForDelete :one
 -- Acquires an exclusive (FOR UPDATE) row lock on chat_session(id). Used by
 -- the delete path so that a concurrent SendChatMessage cannot enqueue a new
--- agent_task_queue row referencing this session between our cancel and
--- delete steps. The FK from agent_task_queue.chat_session_id takes a
+-- agent_inbox_event row referencing this session between our cancel and
+-- delete steps. The FK from agent_inbox_event.chat_session_id takes a
 -- KEY SHARE lock on the parent row during INSERT validation, which
 -- conflicts with FOR UPDATE — concurrent inserts block here and then fail
 -- their FK check after we commit the delete.
@@ -78,7 +78,7 @@ FOR UPDATE;
 
 -- name: DeleteChatSession :exec
 -- Hard delete. chat_message rows cascade via FK ON DELETE CASCADE; the
--- chat_session_id on agent_task_queue is set NULL by FK so completed/failed
+-- chat_session_id on agent_inbox_event is set NULL by FK so completed/failed
 -- task history survives the session being removed. Callers MUST run inside
 -- the same transaction that holds LockChatSessionForDelete and that has
 -- already cancelled any in-flight tasks (see CancelAgentTasksByChatSession)
@@ -126,8 +126,19 @@ SELECT * FROM chat_message
 WHERE id = $1;
 
 -- name: CreateChatTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id, force_fresh_session, context)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5, COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE), sqlc.narg('context'))
+INSERT INTO agent_inbox_event (
+  workspace_id, agent_session_id, agent_id, runtime_id, execution_config,
+  issue_id, reason, requires_wake, status, priority, chat_session_id,
+  initiator_user_id, force_fresh_session, context
+)
+SELECT
+  a.workspace_id, ensure_agent_wake_session(a.id), a.id, sqlc.arg(runtime_id),
+  sqlc.narg('context'), NULL, 'dm', true, 'pending',
+  sqlc.arg(priority), sqlc.arg(chat_session_id), sqlc.arg(initiator_user_id),
+  COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
+  sqlc.narg('context')
+FROM agent a
+WHERE a.id = sqlc.arg(agent_id)
 RETURNING *;
 
 -- name: GetLastChatTaskSession :one
@@ -138,13 +149,14 @@ RETURNING *;
 -- fallback when chat_session.session_id is NULL. Resume-unsafe failures are
 -- excluded because replaying those sessions deterministically reproduces the
 -- same terminal state.
-SELECT session_id, work_dir, runtime_id FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id FROM agent_inbox_event
 WHERE chat_session_id = $1
   AND (
-    status = 'completed'
-    OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
+    (status = 'acked' AND terminal_outcome = 'completed')
+    OR (status = 'suppressed' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
-      status = 'failed'
+      status = 'acked'
+      AND terminal_outcome = 'failed'
       AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
       AND NOT (COALESCE(error, '') ILIKE '%context window%' OR COALESCE(error, '') ILIKE '%context length%' OR COALESCE(error, '') ILIKE '%context_length_exceeded%' OR COALESCE(error, '') ILIKE '%maximum context%' OR COALESCE(error, '') ILIKE '%prompt is too long%' OR (COALESCE(error, '') ILIKE '%token%' AND COALESCE(error, '') ILIKE '%limit%'))
@@ -160,20 +172,11 @@ LIMIT 1;
 -- created_at is the anchor for the chat StatusPill timer (it computes
 -- elapsed = now - task.created_at), so the pill survives refresh / reopen
 -- without "resetting to 0s".
-SELECT atq.id, atq.status, atq.created_at, aie.id AS inbox_event_id
-FROM agent_task_queue atq
-LEFT JOIN LATERAL (
-  SELECT e.id
-  FROM agent_inbox_event e
-  WHERE e.chat_session_id = atq.chat_session_id
-    AND e.requires_wake
-    AND e.terminal_outcome IS NULL
-    AND e.status NOT IN ('acked', 'suppressed')
-  ORDER BY e.created_at DESC, e.id DESC
-  LIMIT 1
-) aie ON true
-WHERE atq.chat_session_id = $1 AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-ORDER BY atq.created_at DESC
+SELECT id, status, created_at, id AS inbox_event_id
+FROM agent_inbox_event
+WHERE chat_session_id = $1
+  AND status IN ('pending', 'draining', 'failed')
+ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: ListPendingChatTasksByCreator :many
@@ -181,11 +184,11 @@ LIMIT 1;
 -- workspace. Drives the FAB's "running" indicator when the chat window is
 -- closed and no single session's query is active.
 SELECT atq.id AS task_id, atq.status, atq.chat_session_id
-FROM agent_task_queue atq
+FROM agent_inbox_event atq
 JOIN chat_session cs ON cs.id = atq.chat_session_id
 WHERE cs.workspace_id = $1
   AND cs.creator_id = $2
-  AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  AND atq.status IN ('pending', 'draining', 'failed')
 ORDER BY atq.created_at DESC;
 
 -- name: MarkChatSessionRead :exec

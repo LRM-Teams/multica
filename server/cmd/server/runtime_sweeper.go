@@ -322,7 +322,7 @@ func sweepExpiredQueuedTasks(ctx context.Context, queries *db.Queries, taskSvc *
 // per-agent sandbox liveness backstop (Phase 2b): when the in-sandbox daemon
 // never registers, R' stays offline and the routed task would otherwise linger
 // in 'queued' until the 2h sweep. R' is intentionally NOT deleted here - the
-// task row still references it (agent_task_queue.runtime_id ON DELETE CASCADE),
+// task row still references it (agent_inbox_event.runtime_id ON DELETE CASCADE),
 // so deleting R' would cascade-delete the failure record. R' reclamation is
 // left to the dispatch-failure path and the 7d offline-runtime GC. The failed
 // task reuses the runtime_offline retry/metrics path via HandleFailedTasks.
@@ -347,7 +347,7 @@ func sweepQueuedTasksOnOfflineRuntimes(ctx context.Context, queries *db.Queries,
 // in this package. New call sites should use TaskService.HandleFailedTasks
 // directly so the side effects (event broadcast, agent reconcile, issue
 // rollback, auto-retry) are guaranteed in one place.
-func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService, bus *events.Bus, tasks []db.AgentTaskQueue) {
+func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService, bus *events.Bus, tasks []db.AgentInboxEvent) {
 	if taskSvc != nil {
 		taskSvc.HandleFailedTasks(ctx, tasks)
 		return

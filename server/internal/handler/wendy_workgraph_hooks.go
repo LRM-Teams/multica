@@ -42,7 +42,7 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 	}
 }
 
-func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task db.AgentTaskQueue) {
+func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task db.AgentInboxEvent) {
 	if h.WorkGraph == nil || !task.IssueID.Valid {
 		return
 	}

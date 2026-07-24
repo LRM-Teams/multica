@@ -224,7 +224,7 @@ WITH active_delivery AS (
       FROM agent_inbox_event e
       WHERE e.id = d.inbox_event_id
         AND e.agent_session_id = d.agent_session_id
-        AND e.status IN ('pending', 'draining', 'failed')
+        AND e.status IN ('pending', 'draining', 'failed', 'acked')
     )
   RETURNING d.*
 ),
@@ -236,7 +236,7 @@ acked_event AS (
   FROM active_delivery d
   WHERE e.id = d.inbox_event_id
     AND e.agent_session_id = d.agent_session_id
-    AND e.status IN ('pending', 'draining', 'failed')
+    AND e.status IN ('pending', 'draining', 'failed', 'acked')
   RETURNING e.*
 ),
 acked_session AS (

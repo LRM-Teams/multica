@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	APIVersion = "2025-06-01"
+	DefaultAPIVersion = "2025-06-01"
+	LegacyAPIVersion  = "2024-12-01"
 
 	defaultEndpoint = "https://rtc.volcengineapi.com"
 	defaultRegion   = "cn-north-1"
@@ -32,6 +33,7 @@ type Config struct {
 	SessionToken    string
 	Endpoint        string
 	Region          string
+	APIVersion      string
 	HTTPClient      *http.Client
 }
 
@@ -39,6 +41,7 @@ type Client struct {
 	endpoint    *url.URL
 	httpClient  *http.Client
 	credentials volcbase.Credentials
+	apiVersion  string
 	now         func() time.Time
 }
 
@@ -145,6 +148,20 @@ func New(config Config) (*Client, error) {
 	if region == "" {
 		region = defaultRegion
 	}
+	apiVersion := strings.TrimSpace(config.APIVersion)
+	if apiVersion == "" {
+		apiVersion = DefaultAPIVersion
+	}
+	switch apiVersion {
+	case DefaultAPIVersion, LegacyAPIVersion:
+	default:
+		return nil, fmt.Errorf(
+			"volcengine RTC API version %q is unsupported; use %s or %s",
+			apiVersion,
+			DefaultAPIVersion,
+			LegacyAPIVersion,
+		)
+	}
 	httpClient := &http.Client{
 		Timeout:       15 * time.Second,
 		CheckRedirect: rejectRedirect,
@@ -166,7 +183,8 @@ func New(config Config) (*Client, error) {
 			Service:         defaultService,
 			Region:          region,
 		},
-		now: time.Now,
+		apiVersion: apiVersion,
+		now:        time.Now,
 	}, nil
 }
 
@@ -217,7 +235,7 @@ func (c *Client) call(ctx context.Context, action string, body any) (Response, e
 	requestURL := *c.endpoint
 	query := requestURL.Query()
 	query.Set("Action", action)
-	query.Set("Version", APIVersion)
+	query.Set("Version", c.apiVersion)
 	requestURL.RawQuery = query.Encode()
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bytes.NewReader(payload))

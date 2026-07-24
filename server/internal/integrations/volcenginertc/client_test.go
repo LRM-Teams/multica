@@ -18,7 +18,7 @@ func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, err
 	return fn(request)
 }
 
-func TestStartVoiceChatUsesCurrentProtocolAndExactSignature(t *testing.T) {
+func TestStartVoiceChatUsesDefaultProtocolAndExactSignature(t *testing.T) {
 	var captured *http.Request
 	var capturedBody []byte
 	httpClient := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
@@ -76,8 +76,8 @@ func TestStartVoiceChatUsesCurrentProtocolAndExactSignature(t *testing.T) {
 	if got := captured.URL.Query().Get("Action"); got != "StartVoiceChat" {
 		t.Fatalf("Action = %q", got)
 	}
-	if got := captured.URL.Query().Get("Version"); got != APIVersion {
-		t.Fatalf("Version = %q, want %s", got, APIVersion)
+	if got := captured.URL.Query().Get("Version"); got != DefaultAPIVersion {
+		t.Fatalf("Version = %q, want %s", got, DefaultAPIVersion)
 	}
 	if got := captured.Header.Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q", got)
@@ -95,6 +95,46 @@ func TestStartVoiceChatUsesCurrentProtocolAndExactSignature(t *testing.T) {
 	const expectedBody = `{"AppId":"app-1","RoomId":"room-1","TaskId":"task-1","BusinessId":"biz-1","Config":{"InterruptMode":0},"AgentConfig":{"TargetUserId":["member-1"],"UserId":"beckham"}}`
 	if string(capturedBody) != expectedBody {
 		t.Fatalf("body = %s, want %s", capturedBody, expectedBody)
+	}
+}
+
+func TestClientUsesConfiguredCompatibleAPIVersion(t *testing.T) {
+	var capturedVersion string
+	httpClient := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		capturedVersion = request.URL.Query().Get("Version")
+		return jsonResponse(http.StatusOK, `{"ResponseMetadata":{"RequestId":"request-old-app"}}`), nil
+	})}
+	client, err := New(Config{
+		AccessKeyID:     "access",
+		SecretAccessKey: "secret",
+		APIVersion:      LegacyAPIVersion,
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.StopVoiceChat(context.Background(), StopVoiceChatRequest{
+		AppID:  "app-1",
+		RoomID: "room-1",
+		TaskID: "task-1",
+	})
+	if err != nil {
+		t.Fatalf("stop voice chat: %v", err)
+	}
+	if capturedVersion != LegacyAPIVersion {
+		t.Fatalf("Version = %q, want %s", capturedVersion, LegacyAPIVersion)
+	}
+}
+
+func TestClientRejectsUnsupportedAPIVersion(t *testing.T) {
+	_, err := New(Config{
+		AccessKeyID:     "access",
+		SecretAccessKey: "secret",
+		APIVersion:      "2024-06-01",
+	})
+	if err == nil || !strings.Contains(err.Error(), "API version") {
+		t.Fatalf("unsupported API version error = %v", err)
 	}
 }
 

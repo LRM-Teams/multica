@@ -65,6 +65,8 @@ type Task struct {
 	ManagedWorkdirRelPath    string                             `json:"managed_workdir_rel_path,omitempty"`
 	PriorSessionID           string                             `json:"prior_session_id,omitempty"`            // Claude session ID from a previous task on this issue
 	PriorWorkDir             string                             `json:"prior_work_dir,omitempty"`              // work_dir from a previous task on this issue
+	RuntimeStateGeneration   int64                              `json:"runtime_state_generation,omitempty"`    // canonical runtime-state CAS generation; populated after D6 activates the cutover
+	FreshSessionNoticeReason string                             `json:"fresh_session_notice_reason,omitempty"` // transport signal for the one-time fresh provider-session brief
 	TriggerCommentID         string                             `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
 	TriggerThreadID          string                             `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread; falls back to trigger_comment_id on old servers
 	TriggerCommentContent    string                             `json:"trigger_comment_content,omitempty"`     // content of the triggering comment

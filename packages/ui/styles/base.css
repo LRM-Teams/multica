@@ -135,6 +135,31 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* LRM-581 Presence Cluster — brand breathing ring on working faces. */
+@keyframes presence-ring-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* LRM-581 Presence Cluster — working faces enter the stack. */
+@keyframes presence-face-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* Navigation progress bar: 2px brand-colored indeterminate sweep with a
  * right-edge glow that shows across the top of the dashboard while a
  * transition-wrapped push/replace is committing. Driven by useIsNavigating();

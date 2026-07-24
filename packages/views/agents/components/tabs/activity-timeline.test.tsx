@@ -305,9 +305,10 @@ describe("ActivityTimeline", () => {
     render(<ActivityTimeline events={[TOOL, READ_RUNNING]} />);
     expect(screen.getByTestId("activity-timeline-spine")).toHaveClass("w-[1.5px]", "bg-border");
     const rows = screen.getAllByTestId("activity-row");
+    expect(rows).toHaveLength(2);
     // Command → bg-running; in-progress file tool → bg-brand
-    expect(rows[0].querySelector(".bg-running")).not.toBeNull();
-    expect(rows[1].querySelector(".bg-brand")).not.toBeNull();
+    expect(rows[0]!.querySelector(".bg-running")).not.toBeNull();
+    expect(rows[1]!.querySelector(".bg-brand")).not.toBeNull();
   });
 
   it("normalizes blank lines in expanded thinking/output (LRM-554 / LRM-560)", () => {

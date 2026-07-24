@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, Clock, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { Button } from "@multica/ui/components/ui/button";
+import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { MemoizedMarkdown } from "../../../common/markdown";
 import { ChannelChip } from "../../../channels/components/channel-chip";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
@@ -33,6 +35,9 @@ const ACTIVITY_DETAIL_SCROLL_EPSILON = 1;
 
 /** Spine column width — dots sit on the 1.5px border line (LRM-560). */
 const SPINE_COL = "w-3";
+
+/** Loading skeleton bar widths — bars only, no spine / fake nodes (LRM-563). */
+const LOADING_SKELETON_WIDTHS = ["w-[72%]", "w-[58%]", "w-[81%]", "w-[45%]", "w-[66%]"] as const;
 
 /** Command surface: muted + rounded + mono + optional clamp-2 + hover copy (LRM-560). */
 function CommandBlock({
@@ -393,22 +398,89 @@ function ActivityRow({
   );
 }
 
+function ActivityTimelineLoading() {
+  return (
+    <div
+      className="flex flex-col gap-3 py-1"
+      data-testid="activity-timeline-loading"
+      aria-busy="true"
+      aria-label={ACTIVITY_CHROME_EN.loading}
+    >
+      {LOADING_SKELETON_WIDTHS.map((width) => (
+        <Skeleton key={width} className={cn("h-3.5 rounded-md", width)} />
+      ))}
+    </div>
+  );
+}
+
+function ActivityTimelineEmpty() {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 px-4 py-16 text-center"
+      data-testid="activity-timeline-empty"
+    >
+      <Clock className="size-8 text-muted-foreground/50" aria-hidden />
+      <p className="text-sm font-medium text-foreground">{ACTIVITY_CHROME_EN.timeline_empty}</p>
+      <p className="max-w-xs text-xs text-muted-foreground">
+        {ACTIVITY_CHROME_EN.timeline_empty_hint}
+      </p>
+    </div>
+  );
+}
+
+function ActivityTimelineError({ onRetry }: { onRetry?: () => void }) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 px-4 py-16 text-center"
+      data-testid="activity-timeline-error"
+    >
+      <AlertCircle className="size-8 text-destructive" aria-hidden />
+      <p className="text-sm font-medium text-foreground">
+        {ACTIVITY_CHROME_EN.timeline_load_failed}
+      </p>
+      <p className="max-w-xs text-xs text-muted-foreground">
+        {ACTIVITY_CHROME_EN.timeline_load_failed_hint}
+      </p>
+      {onRetry ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={onRetry}
+        >
+          {ACTIVITY_CHROME_EN.retry}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 // The compact profile "Recent activity" surface shows only the most recent
 // handful of narrative rows (§2.1 / #383). Layout-only delta — same projection.
 const COMPACT_RECENT_LIMIT = 5;
 
 /**
- * Read-only agent-activity narrative timeline (#267 / LRM-560).
- * Spine + token nodes + three-tier weight; expandable thinking/output normalize
- * blank lines (LRM-554). Compact mode keeps the same projection, denser layout.
+ * Read-only agent-activity narrative timeline (#267 / LRM-560 / LRM-563).
+ * Spine + token nodes + three-tier weight when there are real events; full-tab
+ * loading / empty / error are parameterized (no spine on loading — Frank).
+ * Compact mode keeps the denser profile peek + simple empty string.
  */
 export function ActivityTimeline({
   events,
   compact = false,
+  isLoading = false,
+  isError = false,
+  onRetry,
 }: {
   events: ActivityEvent[];
   /** Profile "Recent activity" compact mode: last N narrative rows, no expand. */
   compact?: boolean;
+  /** Full-tab first paint — skeleton bars only, no spine (LRM-563). */
+  isLoading?: boolean;
+  /** Full-tab load failure with no rows — separate from empty (LRM-563). */
+  isError?: boolean;
+  onRetry?: () => void;
 }) {
   const tz = useViewingTimezone();
 
@@ -425,7 +497,13 @@ export function ActivityTimeline({
       .slice(-COMPACT_RECENT_LIMIT);
   }, [events, compact]);
 
-  if (shown.length === 0) {
+  // Compact profile peek keeps the legacy one-line empty; loading/error belong
+  // to the full Activity tab only.
+  if (!compact) {
+    if (isError) return <ActivityTimelineError onRetry={onRetry} />;
+    if (isLoading) return <ActivityTimelineLoading />;
+    if (shown.length === 0) return <ActivityTimelineEmpty />;
+  } else if (shown.length === 0) {
     return (
       <p className="text-xs italic text-muted-foreground/60">
         {ACTIVITY_CHROME_EN.timeline_empty}
@@ -435,7 +513,8 @@ export function ActivityTimeline({
 
   return (
     <div className="relative flex flex-col" data-testid="activity-timeline">
-      {/* LRM-560 rule 1: continuous 1.5px spine behind hang-off nodes */}
+      {/* LRM-560 rule 1: continuous 1.5px spine behind hang-off nodes — only when
+          there are real event nodes (LRM-563: never on loading skeleton). */}
       {!compact ? (
         <div
           className="pointer-events-none absolute bottom-2 left-[5px] top-2 w-[1.5px] bg-border"

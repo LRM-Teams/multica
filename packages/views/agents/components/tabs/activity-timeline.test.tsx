@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { ActivityTimeline } from "./activity-timeline";
-import { formatActivityTime, type ActivityEvent } from "./activity-event";
+import { formatActivityTime, formatActivityRelativeTime, type ActivityEvent } from "./activity-event";
 
 vi.mock("../../../common/use-viewing-timezone", () => ({
   useViewingTimezone: () => "UTC",
@@ -203,7 +203,32 @@ describe("ActivityTimeline", () => {
 
   it("shows the empty state when there are no mainline events", () => {
     render(<ActivityTimeline events={[DIAG]} />);
+    expect(screen.getByTestId("activity-timeline-empty")).toBeInTheDocument();
     expect(screen.getByText("No activity yet")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-timeline-spine")).toBeNull();
+  });
+
+  it("renders loading skeleton bars without a spine (LRM-563)", () => {
+    const { container } = render(<ActivityTimeline events={[]} isLoading />);
+    expect(screen.getByTestId("activity-timeline-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-timeline-spine")).toBeNull();
+    expect(container.querySelectorAll("[data-slot='skeleton']").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("renders error state with retry and no red wash (LRM-563)", () => {
+    const onRetry = vi.fn();
+    render(<ActivityTimeline events={[]} isError onRetry={onRetry} />);
+    expect(screen.getByTestId("activity-timeline-error")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load activity")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-timeline-spine")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps compact empty as a one-line italic (profile peek)", () => {
+    render(<ActivityTimeline events={[DIAG]} compact />);
+    expect(screen.getByText("No activity yet")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-timeline-empty")).toBeNull();
   });
 
   it("never renders raw command text — labels come from the read model", () => {
@@ -511,5 +536,15 @@ describe("formatActivityTime", () => {
 
   it("returns empty string for an invalid date", () => {
     expect(formatActivityTime("not-a-date", "UTC")).toBe("");
+  });
+});
+
+describe("formatActivityRelativeTime", () => {
+  it("formats compact English relative times", () => {
+    const now = Date.parse("2026-07-06T10:00:00Z");
+    expect(formatActivityRelativeTime("2026-07-06T09:59:30Z", now)).toBe("just now");
+    expect(formatActivityRelativeTime("2026-07-06T09:55:00Z", now)).toBe("5m ago");
+    expect(formatActivityRelativeTime("2026-07-06T08:00:00Z", now)).toBe("2h ago");
+    expect(formatActivityRelativeTime("2026-07-04T10:00:00Z", now)).toBe("2d ago");
   });
 });

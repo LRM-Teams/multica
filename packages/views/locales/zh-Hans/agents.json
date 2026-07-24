@@ -363,7 +363,12 @@
       "members_note": "只有工作区的所有者和管理员才能为智能体绑定飞书 Bot。你可以在「设置 → 集成」中查看已连接的 Bot。"
     },
     "activity": {
-      "timeline_empty": "暂无活动",
+      "timeline_empty": "还没有活动",
+      "timeline_empty_hint": "这个 agent 开始工作后会在这里按时间线展示",
+      "timeline_load_failed": "活动加载失败",
+      "timeline_load_failed_hint": "连接中断或服务异常",
+      "retry": "重试",
+      "loading": "加载中",
       "jump_to_latest": "回到最新",
       "labels": {
         "thinking": "思考中",

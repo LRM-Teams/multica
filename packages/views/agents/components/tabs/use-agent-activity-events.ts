@@ -32,6 +32,10 @@ export function useAgentActivityEvents(agentId: string): {
   events: ActivityEvent[];
   latest: ActivityEvent | null;
   isLoading: boolean;
+  /** First-paint REST failed with no cached rows (LRM-563 empty vs error). */
+  isError: boolean;
+  /** Retry the activity events query after a load failure. */
+  refetch: () => void;
   /** Load the next (older) page — drives scroll-up history in the timeline. */
   loadOlder: () => void;
   /** More (older) pages remain beyond what's already fetched. */
@@ -40,11 +44,18 @@ export function useAgentActivityEvents(agentId: string): {
   isLoadingOlder: boolean;
 } {
   const queryClient = useQueryClient();
-  const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useInfiniteQuery({
-      ...agentActivityEventsOptions(agentId),
-      enabled: !!agentId,
-    });
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    ...agentActivityEventsOptions(agentId),
+    enabled: !!agentId,
+  });
   // Flatten every fetched page's events, deduped by id. Pages are newest-first
   // and older pages append as the reader scrolls up; a boundary row can recur
   // across two pages, so dedupe here (the reducer's WS-merge only dedupes
@@ -123,10 +134,16 @@ export function useAgentActivityEvents(agentId: string): {
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const handleRefetch = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
   return {
     events,
     latest,
     isLoading,
+    isError,
+    refetch: handleRefetch,
     loadOlder,
     hasOlder: hasNextPage,
     isLoadingOlder: isFetchingNextPage,

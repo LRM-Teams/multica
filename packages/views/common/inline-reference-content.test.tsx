@@ -217,6 +217,17 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.queryByText("#MUL-123")).toBeNull();
   });
 
+  it("renders a **bold**-wrapped issue ref as actual bold, not literal asterisks (#635)", () => {
+    // Each text run either side of the reference span is markdown-parsed
+    // independently, so a lone "**" on each side used to fall through as
+    // literal text instead of forming a matched emphasis pair.
+    render(<InlineReferenceContent content="Fixed **MUL-123** today" parts={[issueRef(8, 15)]} />);
+    const link = screen.getByText("MUL-123").closest("a");
+    expect(link).not.toBeNull();
+    expect(link?.closest("strong")).not.toBeNull();
+    expect(screen.queryByText("**", { exact: false })).toBeNull();
+  });
+
   it("peeks with the LIVE issue title + status (#469)", () => {
     resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "in_progress" };
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);

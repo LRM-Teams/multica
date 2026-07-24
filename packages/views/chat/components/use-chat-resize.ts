@@ -58,8 +58,13 @@ export function useChatResize(
   // ── Derive rendered size ──────────────────────────────────────────────
   const { maxW, maxH } = boundsRef.current;
 
-  const renderWidth = isExpanded ? maxW : clamp(chatWidth, CHAT_MIN_W, maxW);
-  const renderHeight = isExpanded ? maxH : clamp(chatHeight, CHAT_MIN_H, maxH);
+  // When the parent is narrower than CHAT_MIN_W (mobile web / squeezed
+  // panes), never force the floating window past the available box —
+  // Math.max(CHAT_MIN_W, …) used to keep 560px on ~390px phones.
+  const minW = Math.min(CHAT_MIN_W, maxW);
+  const minH = Math.min(CHAT_MIN_H, maxH);
+  const renderWidth = isExpanded ? maxW : clamp(chatWidth, minW, maxW);
+  const renderHeight = isExpanded ? maxH : clamp(chatHeight, minH, maxH);
 
   // ── Expand / Restore ──────────────────────────────────────────────────
   const isAtMax = renderWidth >= maxW && renderHeight >= maxH;

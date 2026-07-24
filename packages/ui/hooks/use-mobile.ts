@@ -1,21 +1,36 @@
 import * as React from "react"
 
 const MOBILE_BREAKPOINT = 768
+const MOBILE_QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`
 
+function subscribeMobile(onChange: () => void) {
+  const mql = window.matchMedia(MOBILE_QUERY)
+  mql.addEventListener("change", onChange)
+  return () => mql.removeEventListener("change", onChange)
+}
+
+function getMobileSnapshot() {
+  return window.innerWidth < MOBILE_BREAKPOINT
+}
+
+function getServerMobileSnapshot() {
+  return false
+}
+
+/**
+ * Viewport mobile breakpoint (`width < 768`).
+ *
+ * Uses `useSyncExternalStore` so the first client render already sees the
+ * real viewport width — the previous `useState(undefined)` + `useEffect`
+ * path returned `false` for one frame (`!!undefined`), which made DM chat
+ * bubbles open as the desktop floating window (min 560×480) on phones.
+ */
 export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
-
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    }
-    mql.addEventListener("change", onChange)
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    return () => mql.removeEventListener("change", onChange)
-  }, [])
-
-  return !!isMobile
+  return React.useSyncExternalStore(
+    subscribeMobile,
+    getMobileSnapshot,
+    getServerMobileSnapshot,
+  )
 }
 
 /**

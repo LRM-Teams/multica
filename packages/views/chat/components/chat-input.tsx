@@ -57,6 +57,11 @@ interface ChatInputProps {
   /** Project currently bound to the active session, if any. Drives the
    *  project picker's selected value. */
   currentProjectId?: string | null;
+  /**
+   * Fullscreen mobile sheet: pad the bottom with the device safe-area so the
+   * composer isn't tucked under the home indicator / browser chrome.
+   */
+  safeArea?: boolean;
 }
 
 export function ChatInput({
@@ -75,6 +80,7 @@ export function ChatInput({
   wsId,
   sessionId,
   currentProjectId,
+  safeArea = false,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -264,7 +270,10 @@ export function ChatInput({
   return (
     <div
       className={cn(
-        "px-5 pb-3 pt-0",
+        "shrink-0 px-4 pt-0 sm:px-5",
+        safeArea
+          ? "pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          : "pb-3",
         // Outer wrapper carries the disabled cursor. Inner card sets
         // pointer-events-none, which suppresses hover (and therefore
         // any cursor of its own) — splitting the two layers lets hover

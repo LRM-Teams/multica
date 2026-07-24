@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { Minus, Maximize2, Minimize2, ChevronDown, Plus, Check, Trash2, Pencil, Loader2, Square, Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
@@ -47,6 +48,14 @@ import {
   useUpdateChatSession,
 } from "@multica/core/chat/mutations";
 import { useChatStore } from "@multica/core/chat";
+import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
+import { ChatInput } from "./chat-input";
+import { ChatContactList } from "./chat-contact-list";
+import { ChatResizeHandles } from "./chat-resize-handles";
+import { useChatResize } from "./use-chat-resize";
+import { createLogger } from "@multica/core/logger";
+import type { Agent, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
+import { useT } from "../../i18n";
 
 export interface ChatWindowProps {
   /**
@@ -61,14 +70,6 @@ export interface ChatWindowProps {
    */
   layout?: "floating" | "fullscreen";
 }
-import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
-import { ChatInput } from "./chat-input";
-import { ChatContactList } from "./chat-contact-list";
-import { ChatResizeHandles } from "./chat-resize-handles";
-import { useChatResize } from "./use-chat-resize";
-import { createLogger } from "@multica/core/logger";
-import type { Agent, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
-import { useT } from "../../i18n";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -750,31 +751,58 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const isVisible = isOpen && (effectiveLayout === "fullscreen" || isExpanded || boundsReady);
 
   const isFullscreen = effectiveLayout === "fullscreen";
+  const activeAgentDisplayName = activeAgent
+    ? resolveActorDisplayName(activeAgent, activeAgent.id)
+    : undefined;
+
+  // Fullscreen sheet must cover the *viewport*, not just the DM `<main>`.
+  // Absolute+parent was leaving the DM composer visible underneath on mobile
+  // web, and framer-motion could keep floating width/height inline styles
+  // after a layout flip (min 560×480 overflowing ~390px phones).
+  useEffect(() => {
+    if (!isFullscreen || !isOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isFullscreen, isOpen]);
+
   const containerClass = isFullscreen
-    ? "absolute inset-0 z-50 flex flex-row bg-background overflow-hidden"
+    ? "fixed inset-0 z-50 flex h-dvh max-h-dvh w-full flex-row bg-background overflow-hidden pt-[env(safe-area-inset-top,0px)]"
     : "absolute bottom-2 right-2 z-50 flex flex-row rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
   const containerStyle: React.CSSProperties = isFullscreen
     ? {
         pointerEvents: isOpen ? "auto" : "none",
+        // Explicit size beats any leftover motion width/height from a prior
+        // floating layout on the same component instance.
+        width: "100%",
+        height: "100dvh",
+        maxHeight: "100dvh",
       }
     : {
         transformOrigin: "bottom right",
         pointerEvents: isOpen ? "auto" : "none",
       };
 
-  return (
+  const shell = (
     <motion.div
       ref={windowRef}
       className={containerClass}
       style={containerStyle}
       initial={
         isFullscreen
-          ? { opacity: 0 }
+          ? { opacity: 0, width: "100%", height: "100%" }
           : { opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }
       }
       animate={
         isFullscreen
-          ? { opacity: isVisible ? 1 : 0 }
+          ? {
+              opacity: isVisible ? 1 : 0,
+              width: "100%",
+              height: "100%",
+              scale: 1,
+            }
           : {
               opacity: isVisible ? 1 : 0,
               scale: isVisible ? 1 : 0.95,
@@ -788,6 +816,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         opacity: { duration: 0.15 },
         scale: { type: "spring", duration: 0.2, bounce: 0 },
       }}
+      aria-hidden={!isOpen}
     >
       {!isFullscreen && <ChatResizeHandles onDragStart={startDrag} />}
       {/* Left IM pane: agent contacts — hidden in DM bubble (locked agent). */}
@@ -802,16 +831,21 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       {/* Right pane: the selected agent's thread. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header — ⊕ new + session dropdown | window tools */}
-      <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
-        <div className="flex items-center gap-1 min-w-0">
+      <div
+        className={cn(
+          "flex items-center justify-between border-b gap-2",
+          isFullscreen ? "px-3 py-2" : "px-4 py-2.5",
+        )}
+      >
+        <div className="flex items-center gap-0.5 min-w-0">
           {isFullscreen && (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <Button
                     variant="ghost"
-                    size="icon-sm"
-                    className="rounded-full text-muted-foreground"
+                    size="icon"
+                    className="size-10 shrink-0 rounded-full text-muted-foreground"
                     onClick={handleMinimize}
                   />
                 }
@@ -826,8 +860,11 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
               render={
                 <Button
                   variant="ghost"
-                  size="icon-sm"
-                  className="rounded-full text-muted-foreground"
+                  size={isFullscreen ? "icon" : "icon-sm"}
+                  className={cn(
+                    "rounded-full text-muted-foreground",
+                    isFullscreen && "size-10 shrink-0",
+                  )}
                   onClick={handleNewChat}
                 />
               }
@@ -905,7 +942,8 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       ) : (
         <EmptyState
           hasSessions={sessions.length > 0}
-          agentName={activeAgent?.name}
+          agentName={activeAgentDisplayName}
+          compact={isFullscreen}
           onPickPrompt={(text) => {
             if (isSessionArchived || noAgent) return;
             void handleSend(text);
@@ -936,11 +974,12 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         isRunning={!!pendingTaskId}
         disabled={isSessionArchived}
         noAgent={noAgent}
-        agentName={activeAgent?.name}
+        agentName={activeAgentDisplayName}
         agentId={activeAgent?.id ?? null}
         wsId={wsId}
         sessionId={activeSessionId}
         currentProjectId={currentSession?.project_id ?? null}
+        safeArea={isFullscreen}
         leftAdornment={
           isDmBubble ? undefined : (
             <AgentDropdown
@@ -955,6 +994,11 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       </div>
     </motion.div>
   );
+
+  if (isFullscreen && typeof document !== "undefined") {
+    return createPortal(shell, document.body);
+  }
+  return shell;
 }
 
 /**
@@ -1779,10 +1823,13 @@ function EmptyState({
   hasSessions,
   agentName,
   onPickPrompt,
+  compact = false,
 }: {
   hasSessions: boolean;
   agentName?: string;
   onPickPrompt: (text: string) => void;
+  /** Mobile fullscreen sheet: tighter padding, scrollable, wrap long names. */
+  compact?: boolean;
 }) {
   const { t } = useT("chat");
   // First-time experience: the user has never started a chat in this
@@ -1790,19 +1837,26 @@ function EmptyState({
   // presume the user already knows what chat is for.
   if (!hasSessions) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-8">
-        <div className="text-center space-y-3">
-          <h3 className="text-base font-semibold text-foreground">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col items-center overflow-y-auto",
+          compact
+            ? "justify-start gap-3 px-4 py-5"
+            : "justify-center gap-3 px-6 py-8",
+        )}
+      >
+        <div className="w-full max-w-sm text-center space-y-3">
+          <h3 className="text-base font-semibold text-foreground text-balance break-words">
             {t(($) => $.empty_state.first_time_title)}
           </h3>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground text-pretty">
             {t(($) => $.empty_state.first_time_intro)}{" "}
             <span className="font-medium text-foreground">
               {t(($) => $.empty_state.first_time_pillars)}
             </span>
             {t(($) => $.empty_state.first_time_pillars_suffix)}
           </p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground text-pretty">
             {t(($) => $.empty_state.first_time_actions)}
           </p>
         </div>
@@ -1812,9 +1866,16 @@ function EmptyState({
 
   // Returning user: starter prompts are the fastest path back to action.
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 py-8">
-      <div className="text-center space-y-1">
-        <h3 className="text-base font-semibold text-foreground">
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col items-center overflow-y-auto",
+        compact
+          ? "justify-start gap-3 px-4 py-5"
+          : "justify-center gap-5 px-6 py-8",
+      )}
+    >
+      <div className="w-full max-w-sm text-center space-y-1 px-1">
+        <h3 className="text-base font-semibold text-foreground text-balance break-words">
           {agentName
             ? t(($) => $.empty_state.returning_title_named, { name: agentName })
             : t(($) => $.empty_state.returning_title_default)}
@@ -1823,7 +1884,7 @@ function EmptyState({
           {t(($) => $.empty_state.returning_subtitle)}
         </p>
       </div>
-      <div className="w-full max-w-xs space-y-2">
+      <div className="w-full max-w-sm space-y-2">
         {STARTER_KEYS.map((key) => {
           const text = t(($) => $.starter_prompts[key]);
           return (
@@ -1831,10 +1892,15 @@ function EmptyState({
               key={key}
               type="button"
               onClick={() => onPickPrompt(text)}
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent hover:border-brand/40"
+              className={cn(
+                "w-full rounded-lg border border-border bg-card px-3 text-left text-sm text-foreground transition-colors hover:bg-accent hover:border-brand/40",
+                compact ? "min-h-10 py-2.5" : "py-2",
+              )}
             >
-              <span className="mr-2">{STARTER_ICONS[key]}</span>
-              {text}
+              <span className="mr-2" aria-hidden="true">
+                {STARTER_ICONS[key]}
+              </span>
+              <span className="text-pretty break-words">{text}</span>
             </button>
           );
         })}

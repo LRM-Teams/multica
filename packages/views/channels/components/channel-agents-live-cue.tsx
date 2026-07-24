@@ -74,9 +74,30 @@ export function ChannelAgentsLiveCue({
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const firstSeenRef = useRef<Map<string, number>>(new Map());
+  // Lazy Map init — avoid `useRef(new Map())` allocating every render
+  // (react-doctor/rerender-lazy-ref-init).
+  const firstSeenRef = useRef<Map<string, number> | null>(null);
+  if (firstSeenRef.current === null) {
+    firstSeenRef.current = new Map();
+  }
   const [now, setNow] = useState(() => Date.now());
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+
+  // Prune dismiss keys against the live snapshot during render (no sync
+  // effect — react-doctor/no-derived-state). Stale keys drop out when the
+  // server no longer returns that inbox row, so a later failure can surface.
+  const presentKeys = useMemo(
+    () =>
+      new Set(filterComposerStripTasks(tasks).map((task) => taskRowKey(task))),
+    [tasks],
+  );
+  const activeDismissed = useMemo(() => {
+    const next = new Set<string>();
+    for (const key of dismissedKeys) {
+      if (presentKeys.has(key)) next.add(key);
+    }
+    return next;
+  }, [dismissedKeys, presentKeys]);
 
   const { stoppable, terminal, listTasks, runningCount } = useMemo(() => {
     const scoped = filterComposerStripTasks(tasks);
@@ -85,7 +106,7 @@ export function ChannelAgentsLiveCue({
     let running = 0;
     for (const task of scoped) {
       const key = taskRowKey(task);
-      if (dismissedKeys.has(key)) continue;
+      if (activeDismissed.has(key)) continue;
       if (isTerminalChannelActiveTask(task)) {
         const outcome = task.outcome?.trim();
         if (outcome === "failed" || outcome === "no_reply") {
@@ -102,12 +123,12 @@ export function ChannelAgentsLiveCue({
       listTasks: [...stop, ...term],
       runningCount: running,
     };
-  }, [tasks, dismissedKeys]);
+  }, [tasks, activeDismissed]);
 
   // Track first-seen wall time so running rows can show a live duration
   // without a server-side started_at on ChannelActiveTask.
   useEffect(() => {
-    const seen = firstSeenRef.current;
+    const seen = firstSeenRef.current!;
     const liveKeys = new Set<string>();
     for (const task of listTasks) {
       if (isTerminalChannelActiveTask(task)) continue;
@@ -125,23 +146,6 @@ export function ChannelAgentsLiveCue({
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [runningCount]);
-
-  // Drop dismiss keys that are no longer in the server snapshot so a later
-  // failure for the same agent can surface again.
-  useEffect(() => {
-    const present = new Set(
-      filterComposerStripTasks(tasks).map((task) => taskRowKey(task)),
-    );
-    setDismissedKeys((prev) => {
-      let changed = false;
-      const next = new Set<string>();
-      for (const key of prev) {
-        if (present.has(key)) next.add(key);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [tasks]);
 
   const agentsOnly = variant === "dm";
 
@@ -219,7 +223,7 @@ export function ChannelAgentsLiveCue({
           const isFailed = outcome === "failed";
           const isNoReply = outcome === "no_reply";
           const isRunning = task.status === "running";
-          const firstSeen = firstSeenRef.current.get(taskRowKey(task));
+          const firstSeen = firstSeenRef.current!.get(taskRowKey(task));
           const duration =
             !isTerminal && firstSeen
               ? formatDuration(new Date(firstSeen).toISOString(), now)

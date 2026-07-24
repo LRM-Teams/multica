@@ -378,6 +378,7 @@ function DmHeader({
       }
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
+      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
       status={agentLiveStatus}
       badges={mutedBadge}
       actions={

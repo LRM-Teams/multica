@@ -831,6 +831,73 @@ export const EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE = {
   skip_days: 0,
 };
 
+export const MemoryCurationDailySummaryDaySchema = z.object({
+  date: z.string().default(""),
+  memory_candidates: z.number().default(0),
+  skill_candidates: z.number().default(0),
+  team_knowledge_items: z.number().default(0),
+  team_skills: z.number().default(0),
+}).loose();
+
+export const MemoryCurationDailySummaryResponseSchema = z.object({
+  timezone: z.string().default("Asia/Shanghai"),
+  since: z.string().default(""),
+  until: z.string().default(""),
+  days: z.array(MemoryCurationDailySummaryDaySchema).default([]),
+}).loose();
+
+export const EMPTY_MEMORY_CURATION_DAILY_SUMMARY = {
+  timezone: "Asia/Shanghai",
+  since: "",
+  until: "",
+  days: [],
+};
+
+export const MemoryCurationCandidateItemSchema = z.object({
+  id: z.string().default(""),
+  source_agent_id: z.string().optional(),
+  source_agent_name: z.string().optional(),
+  run_id: z.string().optional(),
+  candidate_type: z.string().default(""),
+  scope: z.string().default(""),
+  title: z.string().default(""),
+  snippet: z.string().default(""),
+  content: z.string().optional(),
+  confidence: z.number().default(0),
+  status: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const MemoryCurationCandidateListResponseSchema = z.object({
+  items: z.array(MemoryCurationCandidateItemSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_MEMORY_CURATION_CANDIDATE_LIST = {
+  items: [],
+  total: 0,
+};
+
+export const TeamKnowledgeListItemSchema = z.object({
+  id: z.string().default(""),
+  kind: z.string().default(""),
+  title: z.string().default(""),
+  snippet: z.string().default(""),
+  content: z.string().optional(),
+  status: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const TeamKnowledgeListResponseSchema = z.object({
+  items: z.array(TeamKnowledgeListItemSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_TEAM_KNOWLEDGE_LIST = {
+  items: [],
+  total: 0,
+};
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),

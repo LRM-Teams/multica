@@ -505,6 +505,56 @@ export interface MemoryCurationBackfillResponse {
   skip_days: number;
 }
 
+export interface MemoryCurationDailySummaryDay {
+  date: string;
+  memory_candidates: number;
+  skill_candidates: number;
+  team_knowledge_items: number;
+  team_skills: number;
+}
+
+export interface MemoryCurationDailySummaryResponse {
+  timezone: string;
+  since: string;
+  until: string;
+  days: MemoryCurationDailySummaryDay[];
+}
+
+export interface MemoryCurationCandidateItem {
+  id: string;
+  source_agent_id?: string;
+  source_agent_name?: string;
+  run_id?: string;
+  candidate_type: string;
+  scope: string;
+  title: string;
+  snippet: string;
+  content?: string;
+  confidence: number;
+  status: string;
+  created_at: string;
+}
+
+export interface MemoryCurationCandidateListResponse {
+  items: MemoryCurationCandidateItem[];
+  total: number;
+}
+
+export interface TeamKnowledgeListItem {
+  id: string;
+  kind: string;
+  title: string;
+  snippet: string;
+  content?: string;
+  status: string;
+  created_at: string;
+}
+
+export interface TeamKnowledgeListResponse {
+  items: TeamKnowledgeListItem[];
+  total: number;
+}
+
 export interface EvolutionReviewDecisionRequest {
   reason?: string;
   apply_review_suggestions?: boolean;

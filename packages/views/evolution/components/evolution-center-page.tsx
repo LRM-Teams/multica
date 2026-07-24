@@ -88,6 +88,7 @@ import {
   aggregateAgentTokens,
   formatDuration,
 } from "../../dashboard/utils";
+import { MemoryCurationDailyLedger } from "./memory-curation-daily-ledger";
 
 const COPY = {
   title: "Evolution Center",
@@ -267,6 +268,8 @@ const COPY = {
   withLearnedUnits: "With learned units",
   avgUnitsUsed: "Avg units used",
   skills: "Skills",
+  dailyLedger: "Daily memory ledger",
+  dailyLedgerHint: "Self-review memories/skills produced each day, and team knowledge promoted by the curator. Click a day to inspect each item.",
 };
 
 type EvolutionCopy = (key: keyof typeof COPY) => string;
@@ -696,6 +699,7 @@ export function EvolutionCenterPage() {
                   unavailable={curationStatusUnavailable}
                   onSelectRun={setSelectedCurationRunId}
                 />
+                <MemoryCurationDailyLedger wsId={wsId} />
                 <CurationRunDetailCard run={selectedCurationRun} selectedRunId={selectedCurationRunId} />
               </div>
               <div className="grid gap-4">

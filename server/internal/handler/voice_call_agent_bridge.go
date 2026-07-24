@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,9 @@ var (
 )
 
 type VoiceCallAgentBridge struct {
-	handler *Handler
+	handler      *Handler
+	waitTimeout  time.Duration
+	pollInterval time.Duration
 }
 
 type voiceCallAgentDispatchResult struct {
@@ -46,14 +49,24 @@ type voiceCallAgentDispatchResult struct {
 	Created      bool
 }
 
-func NewVoiceCallAgentBridge(handler *Handler) (*VoiceCallAgentBridge, error) {
+func NewVoiceCallAgentBridge(
+	handler *Handler,
+	waitTimeout time.Duration,
+) (*VoiceCallAgentBridge, error) {
 	if handler == nil ||
 		handler.DB == nil ||
 		handler.TxStarter == nil ||
 		handler.Queries == nil {
 		return nil, errors.New("voice call agent bridge requires a configured handler")
 	}
-	return &VoiceCallAgentBridge{handler: handler}, nil
+	if waitTimeout <= 0 {
+		return nil, errors.New("voice call agent bridge wait timeout must be positive")
+	}
+	return &VoiceCallAgentBridge{
+		handler:      handler,
+		waitTimeout:  waitTimeout,
+		pollInterval: 200 * time.Millisecond,
+	}, nil
 }
 
 func (bridge *VoiceCallAgentBridge) dispatch(

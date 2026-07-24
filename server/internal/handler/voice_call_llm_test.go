@@ -244,6 +244,31 @@ func TestVoiceCallLLMUnavailableAndProcessorFailuresStayOpaque(t *testing.T) {
 			t.Fatalf("response leaked processor error: %s", response.Body.String())
 		}
 	})
+
+	t.Run("processor timeout", func(t *testing.T) {
+		handler := &Handler{
+			VoiceCallLLMProcessor: &fakeVoiceCallLLMProcessor{
+				err: errVoiceCallAgentTurnTimeout,
+			},
+			VoiceCallLLMAPIKey: testVoiceCallLLMAPIKey,
+		}
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/voice-calls/llm",
+			strings.NewReader(
+				`{"stream":true,"voice_call_id":"`+testVoiceCallLLMCallID+
+					`","round_id":1,"messages":[{"role":"user","content":"hello"}]}`,
+			),
+		)
+		request.Header.Set("Authorization", "Bearer "+testVoiceCallLLMAPIKey)
+
+		handler.HandleVoiceCallLLM(response, request)
+
+		if response.Code != http.StatusGatewayTimeout {
+			t.Fatalf("status = %d, want %d", response.Code, http.StatusGatewayTimeout)
+		}
+	})
 }
 
 type fakeVoiceCallLLMProcessor struct {

@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/service/voicecall"
 )
 
 const (
@@ -115,7 +116,7 @@ func (h *Handler) HandleVoiceCallLLM(w http.ResponseWriter, r *http.Request) {
 			"round_id", input.RoundID,
 			"error", err,
 		)
-		writeError(w, http.StatusBadGateway, "voice call agent turn failed")
+		writeVoiceCallLLMProcessorError(w, err)
 		return
 	}
 	reply.Content = strings.TrimSpace(reply.Content)
@@ -136,6 +137,29 @@ func (h *Handler) HandleVoiceCallLLM(w http.ResponseWriter, r *http.Request) {
 			"round_id", input.RoundID,
 			"error", err,
 		)
+	}
+}
+
+func writeVoiceCallLLMProcessorError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errVoiceCallAgentTurnTimeout),
+		errors.Is(err, context.DeadlineExceeded):
+		writeError(w, http.StatusGatewayTimeout, "voice call agent turn timed out")
+	case errors.Is(err, voicecall.ErrCallNotFound),
+		errors.Is(err, voicecall.ErrScopeNotFound):
+		writeError(w, http.StatusNotFound, "voice call agent turn was not found")
+	case errors.Is(err, voicecall.ErrScopeForbidden):
+		writeError(w, http.StatusForbidden, "voice call agent turn is forbidden")
+	case errors.Is(err, errVoiceCallAgentTurnUnavailable),
+		errors.Is(err, voicecall.ErrScopeUnavailable),
+		errors.Is(err, errVoiceCallAgentTurnConflict):
+		writeError(w, http.StatusConflict, "voice call agent turn is unavailable")
+	case errors.Is(err, errVoiceCallAgentNoReply):
+		writeError(w, http.StatusBadGateway, "voice call agent returned no spoken reply")
+	case errors.Is(err, errVoiceCallAgentHeld):
+		writeError(w, http.StatusConflict, "voice call agent reply was held for fresh context")
+	default:
+		writeError(w, http.StatusBadGateway, "voice call agent turn failed")
 	}
 }
 

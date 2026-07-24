@@ -136,6 +136,7 @@ services:
       VOLCENGINE_RTC_TOKEN_TTL: ${VOLCENGINE_RTC_TOKEN_TTL:-30m}
       VOLCENGINE_RTC_COMPENSATION_TIMEOUT: ${VOLCENGINE_RTC_COMPENSATION_TIMEOUT:-10s}
       VOLCENGINE_RTC_CLEANUP_TIMEOUT: ${VOLCENGINE_RTC_CLEANUP_TIMEOUT:-10s}
+      VOLCENGINE_RTC_AGENT_TIMEOUT: ${VOLCENGINE_RTC_AGENT_TIMEOUT:-90s}
       # Point multica's arealrl client (server/internal/arealrl/client.go) at
       # the multica-side gateway stub (db-bridge-stub-multica), which serves
       # /rl/* and /chat/completions and relays them through the shared Supabase

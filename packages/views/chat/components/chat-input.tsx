@@ -80,7 +80,9 @@ export function ChatInput({
   const editorRef = useRef<ContentEditorRef>(null);
   // ChatWindow always passes sessionId/agentId. Prefer those for draft
   // scoping so DM-bubble mode never bleeds into the global desktop chat store.
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- prop→local alias for draft/storage key only; not an event-handler-in-effect pattern
   const activeSessionId = sessionId ?? null;
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- same prop→local alias as above for per-agent new-chat draft slot
   const selectedAgentId = agentId ?? null;
   // Two keys with deliberately different concerns:
   //

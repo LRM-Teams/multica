@@ -196,6 +196,7 @@ function replaceOptimisticChatMessageId(
 export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowProps = {}) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
   const isDmBubble = Boolean(lockedAgentId);
   const effectiveLayout: "floating" | "fullscreen" = layout;
 

@@ -36,8 +36,6 @@ vi.mock("../../i18n", () => ({
         presence_counts: `{{members}} · {{agents}}`,
         presence_working: `{{working}} working`,
         presence_attention: `Needs attention`,
-        dm_live: `Working`,
-        dm_attention: `Needs attention`,
         working_list_title: `Working · {{count}}`,
         working_verb_with_duration: `{{verb}} · {{duration}}`,
         working_failed: `Couldn't reply · try @ again`,

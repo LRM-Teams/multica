@@ -82,8 +82,6 @@
     "working_dismiss": "閉じる",
     "working_dismiss_aria": "{{name}} の状態を閉じる",
     "settings_aria": "グループ設定",
-    "dm_live": "処理中",
-    "dm_attention": "要確認",
     "presence_counts": "{{members}} · {{agents}}",
     "presence_working": "{{working}} 処理中",
     "presence_attention": "要確認",

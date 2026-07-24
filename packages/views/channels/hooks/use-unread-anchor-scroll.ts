@@ -106,7 +106,6 @@ export function useUnreadAnchorScroll({
   messages,
   newMessagesDivider,
   highlightMessageId,
-  firstItemIndex,
   handleAttached,
   virtuosoRef,
   scrollContainerEl,
@@ -116,7 +115,6 @@ export function useUnreadAnchorScroll({
   messages: readonly ChannelMessage[];
   newMessagesDivider: NewMessagesDivider | null;
   highlightMessageId: string | null | undefined;
-  firstItemIndex: number;
   /**
    * True once Virtuoso's imperative handle has attached — a value-comparable
    * BOOLEAN, not the handle object itself. Ref attachment doesn't trigger a
@@ -244,10 +242,16 @@ export function useUnreadAnchorScroll({
     // mount, so the list may still be measuring — re-issue until the anchor row
     // actually reaches the top, else a big-list far jump to the "N new messages"
     // divider lands far below the viewport.
+    //
+    // #689/#1189 index-contract fix: `scrollToIndex` resolves against the
+    // LOCAL data array (0..messages.length-1), never offset by
+    // `firstItemIndex` — see channel-message-list.tsx's matching comment for
+    // the evidence. `unreadAnchorIndex` is already local
+    // (`messages.findIndex(...)`, see below).
     const disposeSettle = scrollToIndexUntilSettled(
       virtuosoRef.current,
       hasReached,
-      { index: firstItemIndex + unreadAnchorIndex, align: "start", behavior: "auto" },
+      { index: unreadAnchorIndex, align: "start", behavior: "auto" },
       {
         isGestureActive: () => activeGestureRef.current,
         onSettleTimeout: () => {
@@ -262,7 +266,7 @@ export function useUnreadAnchorScroll({
             { channelId, anchorId },
           );
           virtuosoRef.current?.scrollToIndex({
-            index: firstItemIndex + Math.max(0, messages.length - 1),
+            index: Math.max(0, messages.length - 1),
             align: "start",
             behavior: "auto",
           });
@@ -283,7 +287,6 @@ export function useUnreadAnchorScroll({
     channelId,
     unreadAnchorIndex,
     highlightMessageId,
-    firstItemIndex,
     virtuosoRef,
     anchorId,
     messageRefMap,

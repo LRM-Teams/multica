@@ -46,20 +46,18 @@ export function computeNewArrivals(
  * plugin hook. Owns its own boundary state (the per-visit entry high-water + the
  * `caughtUpSeq` bumped at the bottom / on click, set only in event handlers) and
  * its imperative "jump to first new" scroll — the core list just renders `pill`
- * and forwards `onReachedBottom`/`onPillClick`. It only READS `messages`/
- * `firstItemIndex` and scrolls via the Virtuoso ref; it never touches the core
- * render/scroll ownership (`isNearBottom` stays in the core, passed in nowhere —
- * the caller gates the pill's visibility on it).
+ * and forwards `onReachedBottom`/`onPillClick`. It only READS `messages` and
+ * scrolls via the Virtuoso ref; it never touches the core render/scroll
+ * ownership (`isNearBottom` stays in the core, passed in nowhere — the caller
+ * gates the pill's visibility on it).
  */
 export function useNewMessagesPill({
   messages,
   currentUserId,
-  firstItemIndex,
   virtuosoRef,
 }: {
   messages: readonly ChannelMessage[];
   currentUserId: string | null;
-  firstItemIndex: number;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
 }): { pill: NewArrivalsPill | null; onReachedBottom: () => void; onPillClick: () => void } {
   const channelId = messages[0]?.channel_id ?? null;
@@ -85,14 +83,17 @@ export function useNewMessagesPill({
   const onPillClick = useCallback(() => {
     const target = pill ? messages.findIndex((m) => m.id === pill.firstMessageId) : -1;
     if (target >= 0) {
+      // #689/#1189 index-contract fix: `scrollToIndex` resolves against the
+      // LOCAL data array (0..messages.length-1), never offset by
+      // `firstItemIndex` — see channel-message-list.tsx's matching comment.
       virtuosoRef.current?.scrollToIndex({
-        index: firstItemIndex + target,
+        index: target,
         align: "start",
         behavior: "smooth",
       });
     }
     // Clicking = caught up: dismiss the pill until more arrive.
     setCaughtUpSeq(maxSeqOrNull(messages));
-  }, [pill, messages, firstItemIndex, virtuosoRef]);
+  }, [pill, messages, virtuosoRef]);
   return { pill, onReachedBottom, onPillClick };
 }

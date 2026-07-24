@@ -178,6 +178,22 @@ describe("ChannelAgentsLiveCue (LRM-581)", () => {
     );
   });
 
+  it("dm variant with canStop=false keeps status and hides outer Stop (LRM-589)", () => {
+    render(
+      <ChannelAgentsLiveCue
+        variant="dm"
+        agentCount={1}
+        tasks={[task({ status: "running" })]}
+        canStop={false}
+      />,
+    );
+    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
+      "1 working",
+    );
+    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
+    expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
+  });
+
   it("Stop all appears for multiple stoppable tasks", () => {
     const onStopAll = vi.fn();
     render(

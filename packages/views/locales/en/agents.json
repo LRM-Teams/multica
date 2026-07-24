@@ -570,6 +570,10 @@
     "actions_report": "Report issue",
     "actions_report_title": "Issue with agent {{name}}",
     "actions_report_body_intro": "Please describe the problem. Diagnostic info is included below:",
+    "actions_stop": "Stop",
+    "actions_stop_aria": "Stop {{name}}'s current task",
+    "actions_stop_success": "Stopped {{name}}",
+    "actions_stop_failed": "Failed to stop agent task",
     "actions_archive": "Archive agent"
   },
   "live_peek": {

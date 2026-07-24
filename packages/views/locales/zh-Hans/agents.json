@@ -560,6 +560,10 @@
     "actions_report": "反馈问题",
     "actions_report_title": "Agent {{name}} 相关问题",
     "actions_report_body_intro": "请描述问题。下方已附带诊断信息：",
+    "actions_stop": "停止",
+    "actions_stop_aria": "停止 {{name}} 的当前任务",
+    "actions_stop_success": "已停止 {{name}}",
+    "actions_stop_failed": "停止任务失败",
     "actions_archive": "归档 Agent"
   },
   "live_peek": {

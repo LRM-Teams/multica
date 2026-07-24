@@ -570,6 +570,10 @@
     "actions_report": "문제 신고",
     "actions_report_title": "에이전트 {{name}} 관련 문제",
     "actions_report_body_intro": "문제를 설명해 주세요. 아래에 진단 정보가 포함되어 있습니다:",
+    "actions_stop": "중지",
+    "actions_stop_aria": "{{name}}의 현재 작업 중지",
+    "actions_stop_success": "{{name}}을(를) 중지했습니다",
+    "actions_stop_failed": "작업 중지에 실패했습니다",
     "actions_archive": "에이전트 보관"
   },
   "live_peek": {

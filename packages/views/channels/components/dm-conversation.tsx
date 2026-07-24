@@ -21,10 +21,8 @@ import {
   useSetChannelThreadFollowed,
   useSetChannelTyping,
   activeChannelTasksOptions,
-  activeChannelTasksKeys,
 } from "@multica/core/channels";
-import { dmKeys } from "@multica/core/dm";
-import type { DMItem } from "@multica/core/dm";
+import { dmKeys, type DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
@@ -36,7 +34,6 @@ import type {
 } from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
 import type {
-  ChannelActiveTask,
   ChannelMessage,
   ChannelMessageSearchResult,
 } from "@multica/core/types";
@@ -83,7 +80,6 @@ import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
-import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 
 /**
@@ -95,6 +91,10 @@ import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
  * LRM-537: DM composer no longer renders ConversationActivityStrip /
  * ConversationAgentActivityLine (preparing / Thinking / Stop). Status
  * perception redesign is a separate issue.
+ *
+ * LRM-589: agent DM header keeps the live cue (Thinking / working) only —
+ * Stop lives in AgentProfileActions (profile card), not beside the cue.
+ * 1:1 has no Stop all.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -266,8 +266,6 @@ function DmHeader({
   voiceCallAction?: React.ReactNode;
 }) {
   const { t } = useT("channels");
-  const qc = useQueryClient();
-  const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
   const peerId = dm.peer.id;
@@ -276,49 +274,19 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-581 — agent DM: live cue beside peer name (same language as channel
-  // roster). Human peers keep the static "Human" meta.
+  // LRM-581 / LRM-589 — agent DM: live cue beside peer name (status only).
+  // Stop is in AgentProfileActions, not outer header chrome. Human peers keep
+  // the static "Human" meta.
   const channelIdForTasks = isAgentPeer ? (filesChannelId ?? dm.id) : "";
   const { data: activeTasks = [] } = useQuery(
     activeChannelTasksOptions(channelIdForTasks),
-  );
-  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
-  const handleStopTask = useCallback(
-    async (task: ChannelActiveTask) => {
-      if (!channelIdForTasks || isTerminalChannelActiveTask(task)) return;
-      const inboxEventId = task.inbox_event_id?.trim();
-      if (!inboxEventId) {
-        toast.error(t(($) => $.agent_status.stop_failed));
-        return;
-      }
-      setStoppingTaskId(task.task_id);
-      try {
-        await api.cancelChannelInboxEvent(channelIdForTasks, inboxEventId);
-        toast.success(
-          t(($) => $.agent_status.stop_success, { name: task.agent_name }),
-        );
-        qc.invalidateQueries({
-          queryKey: activeChannelTasksKeys.all(channelIdForTasks),
-        });
-        qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-      } catch {
-        toast.error(t(($) => $.agent_status.stop_failed));
-      } finally {
-        setStoppingTaskId((current) =>
-          current === task.task_id ? null : current,
-        );
-      }
-    },
-    [channelIdForTasks, qc, t, wsId],
   );
   const agentLiveStatus = isAgentPeer ? (
     <ChannelAgentsLiveCue
       variant="dm"
       agentCount={1}
       tasks={activeTasks}
-      stoppingTaskId={stoppingTaskId}
-      canStop
-      onStopTask={handleStopTask}
+      canStop={false}
     />
   ) : undefined;
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);

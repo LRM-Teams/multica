@@ -552,6 +552,10 @@
     "actions_report": "問題を報告",
     "actions_report_title": "エージェント {{name}} の問題",
     "actions_report_body_intro": "問題を説明してください。診断情報を以下に含めます:",
+    "actions_stop": "停止",
+    "actions_stop_aria": "{{name}} の現在のタスクを停止",
+    "actions_stop_success": "{{name}} を停止しました",
+    "actions_stop_failed": "タスクの停止に失敗しました",
     "actions_archive": "エージェントをアーカイブ"
   },
   "live_peek": {

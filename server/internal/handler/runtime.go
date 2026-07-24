@@ -934,6 +934,20 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	activeInboxEventCount, err := countActiveInboxEventsByRuntimeIDs(r.Context(), h.DB, []pgtype.UUID{rt.ID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check runtime inbox dependencies")
+		return
+	}
+	if activeInboxEventCount > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":                    "cannot delete runtime: it has active inbox events. Wait for them to finish or cancel them first.",
+			"code":                     "runtime_has_active_inbox_events",
+			"active_inbox_event_count": activeInboxEventCount,
+		})
+		return
+	}
+
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")

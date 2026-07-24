@@ -127,7 +127,8 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 	)
 	if handler.VoiceCallService != nil ||
 		handler.VoiceCallCallbackProcessor != nil ||
-		handler.VoiceCallCallbackSignature != "" {
+		handler.VoiceCallCallbackSignature != "" ||
+		handler.VoiceCallLLMAPIKey != "" {
 		t.Fatal("voice call runtime unexpectedly configured before explicit opt-in")
 	}
 
@@ -147,6 +148,9 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 	}
 	if handler.VoiceCallCallbackSignature != values["VOLCENGINE_RTC_CALLBACK_SIGNATURE"] {
 		t.Fatal("voice call callback signature was not attached to handler")
+	}
+	if handler.VoiceCallLLMAPIKey != values["VOLCENGINE_RTC_LLM_API_KEY"] {
+		t.Fatal("voice call LLM API key was not attached to handler")
 	}
 }
 

@@ -61,9 +61,9 @@ export function ConversationHeader({
         {status}
       </div>
       {meta && (
-        <p className="truncate text-[11px] leading-4 text-muted-foreground/75">
+        <div className="min-w-0 truncate text-[11px] leading-4 text-muted-foreground/75">
           {meta}
-        </p>
+        </div>
       )}
     </div>
   );

@@ -1,13 +1,8 @@
 "use client";
 
 import { useMemo, type ReactNode } from "react";
-import { ArrowLeft, Maximize2, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, MessageSquare, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
@@ -35,6 +30,13 @@ export interface ThreadPanelProps {
   onFollowChange: (followed: boolean) => void;
   /** Jump to the root in the main timeline. */
   onViewParent?: () => void;
+  /**
+   * LRM-572 — parent surface for the header “view in …” link.
+   * Channel threads pass the channel display name; DM threads use `"dm"`.
+   */
+  parentKind?: "channel" | "dm";
+  /** Channel display name (without `#`). Ignored when `parentKind === "dm"`. */
+  parentChannelName?: string;
   loading?: boolean;
   loadError?: boolean;
   onRetry?: () => void;
@@ -78,6 +80,10 @@ export interface ThreadPanelProps {
  * `<Composer surface="thread">`. A thread reply stays in that thread; the
  * header exposes the same minimal explicit follow control for group and DM
  * threads while reply/mention auto-follow remains a server responsibility.
+ *
+ * LRM-572 / LRM-568 — Slack-style chrome: no Maximize2; header meta carries a
+ * readable “View in #channel” / “View in conversation” text control that shares
+ * `onViewParent` with the root preview link.
  */
 export function ThreadPanel({
   root,
@@ -90,6 +96,8 @@ export function ThreadPanel({
   followDisabled,
   onFollowChange,
   onViewParent,
+  parentKind = "channel",
+  parentChannelName,
   loading,
   loadError,
   onRetry,
@@ -138,12 +146,38 @@ export function ThreadPanel({
     [isMobile, onBack, t],
   );
 
-  // LRM-384 / scheme A — no dark floating Maximize+Download capsule on the
-  // thread surface. Desktop keeps a 28px ghost "open in main" control in the
-  // header; download stays out of the main UI (no ⋯ export entry yet).
-  // LRM-389 — Tooltip must spell “open parent / main column” (Maximize2 alone
-  // reads as expand); omit the control when onViewParent is absent.
-  const openInMainLabel = t(($) => $.thread.open_in_main_aria);
+  const viewInParentLabel = useMemo(() => {
+    if (!onViewParent) return null;
+    if (parentKind === "dm") return t(($) => $.thread.view_in_dm);
+    if (!parentChannelName) return null;
+    return t(($) => $.thread.view_in_channel, { name: parentChannelName });
+  }, [onViewParent, parentChannelName, parentKind, t]);
+
+  const headerMeta = useMemo(() => {
+    const countLabel =
+      replies.length > 0
+        ? t(($) => $.thread.meta_count, { count: replies.length })
+        : t(($) => $.thread.meta_empty);
+    if (!viewInParentLabel) return countLabel;
+    return (
+      <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+        <span className="truncate">{countLabel}</span>
+        <span aria-hidden className="shrink-0 text-muted-foreground/50">
+          ·
+        </span>
+        <button
+          type="button"
+          className="min-h-8 shrink-0 rounded-md px-0.5 text-left font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onViewParent}
+        >
+          {viewInParentLabel}
+        </button>
+      </span>
+    );
+  }, [onViewParent, replies.length, t, viewInParentLabel]);
+
+  // LRM-384 / LRM-572 — no dark floating Maximize+Download capsule; no Maximize2
+  // icon (reads as expand). Desktop keeps ✕; open-in-parent lives in header meta.
   const headerActions = useMemo(
     () => (
       <>
@@ -152,25 +186,6 @@ export function ThreadPanel({
           disabled={followDisabled}
           onFollowChange={onFollowChange}
         />
-        {!isMobile && onViewParent && (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label={openInMainLabel}
-                  onClick={onViewParent}
-                />
-              }
-            >
-              <Maximize2 className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{openInMainLabel}</TooltipContent>
-          </Tooltip>
-        )}
         {!isMobile && (
           <Button
             variant="ghost"
@@ -184,7 +199,7 @@ export function ThreadPanel({
         )}
       </>
     ),
-    [followDisabled, followed, isMobile, onBack, onFollowChange, onViewParent, openInMainLabel, t],
+    [followDisabled, followed, isMobile, onBack, onFollowChange, t],
   );
 
   const composerActions = useMemo(() => composerLeadingActions, [composerLeadingActions]);
@@ -195,9 +210,7 @@ export function ThreadPanel({
         isMobile={isMobile}
         leading={headerLeading}
         title={t(($) => $.thread.title)}
-        meta={
-          replies.length > 0 ? t(($) => $.thread.meta_count, { count: replies.length }) : undefined
-        }
+        meta={headerMeta}
         actions={headerActions}
       />
 

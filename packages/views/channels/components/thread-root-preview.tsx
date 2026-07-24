@@ -14,6 +14,7 @@ import { resolveChannelAuthorDisplayName } from "./message-preview";
 import { MessageBody } from "./message-body";
 import { VoiceMessageAudio } from "./voice-message-audio";
 import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
+import { unwrapStructuredPreviewContent } from "./message-parts-preview";
 
 export function ThreadRootPreview({
   message,
@@ -92,9 +93,19 @@ export function ThreadRootPreview({
       avatar
     );
   const nameNode = <span className="font-medium text-foreground">{displayName}</span>;
+  // Full body (LRM-572) but never leak structured-action envelope JSON — same
+  // unwrap the compact path / main-column copy path already use.
+  const bodyContent =
+    unwrapStructuredPreviewContent(message.content) ?? message.content;
 
+  // LRM-572 / LRM-568 — Slack root: same weight as replies; only top position +
+  // border-b separates (no brand spine/tint). Full body (not compact clamp);
+  // “View original message” shares onViewParent with the header meta link.
   return (
-    <div className="shrink-0 border-b border-border/40 bg-background px-5 py-3">
+    <div
+      className="shrink-0 border-b border-border bg-background px-5 py-3"
+      data-testid="thread-root-preview"
+    >
       <div className="flex gap-2.5">
         {avatarNode}
         <div className="min-w-0 flex-1">
@@ -121,10 +132,9 @@ export function ThreadRootPreview({
           </div>
           <div className="message-surface mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">
             <MessageBody
-              content={message.content}
+              content={bodyContent}
               parts={message.parts}
               attachments={message.attachments}
-              compact
               sourceMessageId={message.id}
               consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
               contentMode={hidesVoiceTranscript ? "non-transcript" : "all"}
@@ -134,7 +144,7 @@ export function ThreadRootPreview({
           {onViewParent && (
             <button
               type="button"
-              className="mt-2 rounded-md text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-2 min-h-8 rounded-md text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={onViewParent}
             >
               {t(($) => $.thread.view_parent)}

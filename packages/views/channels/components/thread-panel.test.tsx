@@ -61,8 +61,17 @@ vi.mock("./thread-root-preview", () => ({
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (r: Record<string, Record<string, string>>) => string) =>
-      selector(RESOURCES as never),
+    t: (
+      selector: (r: Record<string, Record<string, string>>) => string,
+      vars?: Record<string, string | number>,
+    ) => {
+      const raw = selector(RESOURCES as never);
+      if (!vars) return raw;
+      return Object.entries(vars).reduce(
+        (s, [k, v]) => s.replaceAll(`{{${k}}}`, String(v)),
+        raw,
+      );
+    },
   }),
 }));
 
@@ -70,9 +79,12 @@ const RESOURCES = {
   thread: {
     title: "Thread",
     meta_count: "{{count}} replies",
-    empty_replies: "No replies yet.",
+    meta_empty: "No replies yet",
+    empty_replies: "Be the first to reply",
     load_failed: "Failed to load thread.",
-    view_parent: "Back to main chat",
+    view_parent: "View original message",
+    view_in_channel: "View in #{{name}}",
+    view_in_dm: "View in conversation",
     close_aria: "Close thread",
     open_in_main_aria: "Open in main chat",
     back_to_conversation: "Back to conversation",
@@ -208,35 +220,53 @@ describe("ThreadPanel", () => {
     expect(mobileToggle).toHaveBeenCalledWith(true);
   });
 
-  // LRM-384 scheme A — header 28px ghost open-in-main; no dark float Maximize/Download.
-  // LRM-389 — tooltip labels “open in main”; omitted when no handler.
-  it("exposes a desktop header open-in-main control and hides it on mobile", async () => {
+  // LRM-572 / LRM-568 — header meta “View in #channel” text control; no Maximize2.
+  it("exposes a desktop header view-in-channel control and keeps it on mobile", () => {
     const onViewParent = vi.fn();
     const { unmount } = renderPanel(
-      <ThreadPanel {...baseProps()} onViewParent={onViewParent} />,
+      <ThreadPanel
+        {...baseProps()}
+        parentChannelName="LRM2.0开发群"
+        onViewParent={onViewParent}
+      />,
     );
 
-    const openInMain = screen.getByRole("button", { name: "Open in main chat" });
-    expect(openInMain.className).toMatch(/size-7/);
-    expect(openInMain.className).toMatch(/text-muted-foreground/);
-    expect(openInMain.className).toMatch(/hover:bg-muted/);
-    // Focus opens the tooltip so Maximize2 is not misread as “expand”.
-    fireEvent.focus(openInMain);
-    expect(openInMain).toHaveAttribute("data-popup-open");
-    expect(await screen.findByText("Open in main chat", { selector: "[data-slot=tooltip-content]" })).toBeInTheDocument();
-    fireEvent.click(openInMain);
+    const openInChannel = screen.getByRole("button", { name: "View in #LRM2.0开发群" });
+    expect(openInChannel.className).toMatch(/text-primary/);
+    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+    fireEvent.click(openInChannel);
     expect(onViewParent).toHaveBeenCalledTimes(1);
-    // Download stays out of the thread header main path.
     expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
 
     unmount();
-    renderPanel(<ThreadPanel {...baseProps()} isMobile onViewParent={onViewParent} />);
-    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+    renderPanel(
+      <ThreadPanel
+        {...baseProps()}
+        isMobile
+        parentChannelName="LRM2.0开发群"
+        onViewParent={onViewParent}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "View in #LRM2.0开发群" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close thread" })).toBeNull();
   });
 
-  it("omits the open-in-main control when onViewParent is not provided", () => {
-    renderPanel(<ThreadPanel {...baseProps()} />);
-    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+  it("uses the DM copy when parentKind is dm", () => {
+    const onViewParent = vi.fn();
+    renderPanel(
+      <ThreadPanel
+        {...baseProps()}
+        parentKind="dm"
+        onViewParent={onViewParent}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "View in conversation" }));
+    expect(onViewParent).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the view-in-parent control when onViewParent is not provided", () => {
+    renderPanel(<ThreadPanel {...baseProps()} parentChannelName="general" />);
+    expect(screen.queryByRole("button", { name: /View in/ })).toBeNull();
   });
 });
 

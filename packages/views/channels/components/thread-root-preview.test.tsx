@@ -120,7 +120,7 @@ vi.mock("../../i18n/use-t", () => ({
         thread: {
           collapse_message: "Collapse message",
           show_full_message: "Show full message",
-          view_parent: "Back to main chat",
+          view_parent: "View original message",
         },
       }),
   }),
@@ -139,14 +139,14 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
     source: "multica",
     external_message_id: null,
     client_message_id: null,
-    created_at: "2026-06-17T09:15:00Z",
+    created_at: "2026-07-17T09:15:00Z",
     ...overrides,
     seq,
   };
 }
 
 describe("ThreadRootPreview", () => {
-  it("keeps parent preview lightweight without duplicate navigation actions", () => {
+  it("keeps parent preview without duplicate navigation when no onViewParent", () => {
     render(
       <ThreadRootPreview
         message={makeMessage()}
@@ -156,10 +156,10 @@ describe("ThreadRootPreview", () => {
 
     expect(screen.getByText("Thread root content")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Back to main chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View original message" })).not.toBeInTheDocument();
   });
 
-  it("uses a compact root preview with a local view-parent action", async () => {
+  it("renders full root body (not compact clamp) with a local view-parent action", () => {
     const onViewParent = vi.fn();
     const { container } = render(
       <ThreadRootPreview
@@ -171,8 +171,9 @@ describe("ThreadRootPreview", () => {
       />,
     );
 
-    expect(container.querySelector(".line-clamp-3")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back to main chat" }));
+    expect(container.querySelector(".line-clamp-3")).toBeNull();
+    expect(screen.getByText(/line 5/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View original message" }));
     expect(onViewParent).toHaveBeenCalledTimes(1);
   });
 
@@ -319,10 +320,8 @@ describe("ThreadRootPreview", () => {
 
   // GAP 2 — load-bearing invariant. A structured-action envelope with no
   // renderable text parts and no output must unwrap to the neutral "…"
-  // placeholder, which keeps `compactBody` truthy so the compact body NEVER
-  // falls through to rendering the raw envelope JSON as markdown. If a future
-  // change made the placeholder empty, `compactBody` would become falsy and the
-  // raw JSON would leak — this test would then fail.
+  // placeholder (via unwrapStructuredPreviewContent), so the root NEVER
+  // falls through to rendering the raw envelope JSON as markdown.
   it("shows the neutral placeholder, never raw envelope JSON, for a root with no renderable text", () => {
     const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
     const { container } = render(

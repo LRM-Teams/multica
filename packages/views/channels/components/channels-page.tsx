@@ -2877,6 +2877,8 @@ export function ChannelsPage({
             setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
         }
         onFollowChange={handleThreadFollowChange}
+        parentKind="channel"
+        parentChannelName={active.name}
         onViewParent={() => {
           if (embedded) {
             if (!onOpenInChannels) {
@@ -2889,7 +2891,7 @@ export function ChannelsPage({
             });
             return;
           }
-          // LRM-389 — close the side panel so the parent main column is
+          // LRM-389 / LRM-572 — close the side panel so the parent main column is
           // actually opened (desktop used to only set highlight behind the
           // still-open thread, which felt like a dead Maximize click).
           setHighlightMessageId(threadSurfaceRoot.id);

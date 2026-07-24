@@ -334,14 +334,14 @@ func TestDeleteRuntimesByDaemon_RefusesActiveInboxEvents(t *testing.T) {
 	}
 
 	var body struct {
-		Code                  string `json:"code"`
-		ActiveInboxEventCount int64  `json:"active_inbox_event_count"`
+		Code            string `json:"code"`
+		ActiveTaskCount int64  `json:"active_task_count"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Code != "computer_has_active_inbox_events" || body.ActiveInboxEventCount < 1 {
-		t.Fatalf("expected active inbox conflict, got %+v", body)
+	if body.Code != "computer_has_active_tasks" || body.ActiveTaskCount < 1 {
+		t.Fatalf("expected active work conflict, got %+v", body)
 	}
 	assertRuntimeExists(t, ctx, targetRuntimeID)
 	assertRuntimeExists(t, ctx, otherRuntimeID)

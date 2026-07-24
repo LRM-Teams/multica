@@ -333,10 +333,9 @@ describe("ThreadRootPreview", () => {
   });
 
   // GAP 2 — load-bearing invariant. A structured-action envelope with no
-  // renderable text parts and no output must NEVER leak raw envelope JSON into
-  // the thread root (full body path, LRM-572). Compact used to force "…"; full
-  // MessageBody may render empty — either is fine as long as JSON stays hidden.
-  it("never shows raw envelope JSON for a root with no renderable text", () => {
+  // renderable text parts and no output must NOT fall through to rendering the
+  // raw envelope JSON as markdown in the thread root (LRM-572 full body path).
+  it("never renders raw envelope JSON for a root with no renderable text", () => {
     const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
     const { container } = render(
       <ThreadRootPreview
@@ -348,6 +347,5 @@ describe("ThreadRootPreview", () => {
     expect(container.textContent).not.toContain('"action"');
     expect(container.textContent).not.toContain("{");
     expect(container.textContent).not.toContain("image");
-    expect(container.textContent).not.toContain(raw);
   });
 });

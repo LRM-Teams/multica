@@ -16,8 +16,9 @@ import { resolveChannelAuthorDisplayName } from "./message-preview";
 import { MessageBody } from "./message-body";
 import { VoiceMessageAudio } from "./voice-message-audio";
 import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
-import { MESSAGE_COLLAPSE_MAX_HEIGHT_PX } from "./channel-message-bubble";
 
+/** Match main-column long-message clamp (channel-message-bubble LRM-268). */
+const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
 const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 

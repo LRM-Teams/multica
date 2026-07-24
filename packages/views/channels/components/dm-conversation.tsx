@@ -917,11 +917,21 @@ function DmChannelConversation({
     dispatch({ type: "openThread", message });
   };
 
+  const handleThreadViewParent = useCallback(() => {
+    if (!threadSurfaceRoot) return;
+    dispatch({
+      type: "setThreadParentHighlightId",
+      id: threadSurfaceRoot.id,
+    });
+    dispatch({ type: "closeThread" });
+  }, [threadSurfaceRoot]);
+
   const threadPanel =
     threadSurfaceRoot ? (
       <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
         <ConversationHeader
           isMobile={isMobile}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader leading slot; identity is not memo-sensitive
           leading={
             isMobile ? (
               <Button
@@ -936,6 +946,7 @@ function DmChannelConversation({
             ) : null
           }
           title={t(($) => $.thread.title)}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader meta slot; LRM-572 View-in-conversation link
           meta={
             threadLoading ? (
               t(($) => $.thread.meta_loading)
@@ -954,19 +965,14 @@ function DmChannelConversation({
                 <button
                   type="button"
                   className="min-h-8 shrink-0 rounded-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => {
-                    dispatch({
-                      type: "setThreadParentHighlightId",
-                      id: threadSurfaceRoot.id,
-                    });
-                    dispatch({ type: "closeThread" });
-                  }}
+                  onClick={handleThreadViewParent}
                 >
                   {t(($) => $.thread.view_in_conversation)}
                 </button>
               </span>
             )
           }
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader actions slot
           actions={
             <>
               <ThreadFollowButton
@@ -1001,15 +1007,13 @@ function DmChannelConversation({
           emptyLabel={t(($) => $.thread.empty_replies)}
           initialScroll="top"
           highlightMessageId={deepLinkHighlightId}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ChannelMessageList header slot
           header={
             <ThreadRootPreview
               message={threadSurfaceRoot}
               currentUserId={currentUserId}
               ownName={currentUserName ?? undefined}
-              onViewParent={() => {
-                dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
-                dispatch({ type: "closeThread" });
-              }}
+              onViewParent={handleThreadViewParent}
             />
           }
           loading={threadLoading}

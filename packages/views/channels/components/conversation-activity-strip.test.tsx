@@ -17,7 +17,15 @@ describe("ConversationActivityStrip", () => {
   it("renders human typing only", () => {
     renderStrip(
       <ConversationActivityStrip
-        typingActors={[{ actorId: "u1", actorType: "member", actorName: "Lee" }]}
+        typingActors={[
+          {
+            key: "u1",
+            channelId: "ch-1",
+            actorType: "user",
+            actorName: "Lee",
+            expiresAt: Date.now() + 60_000,
+          },
+        ]}
       />,
     );
 

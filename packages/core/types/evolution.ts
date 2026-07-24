@@ -112,6 +112,7 @@ export interface EvolutionDailyMetric {
   skill_candidates: number;
   promoted_memory: number;
   promoted_skill: number;
+  team_knowledge_items: number;
   archived_or_deprecated: number;
   feedback_injected: number;
   feedback_used: number;

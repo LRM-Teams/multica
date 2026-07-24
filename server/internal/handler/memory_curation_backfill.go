@@ -353,6 +353,24 @@ func formatDateUTC(t time.Time) string {
 	return t.UTC().Format("2006-01-02")
 }
 
+// defaultMemoryCurationPlanDay matches the nightly scheduler: plan date is
+// yesterday in the curator profile timezone, stored as a UTC calendar date.
+func defaultMemoryCurationPlanDay(timezone string, now time.Time) (since, until time.Time) {
+	loc := time.UTC
+	if timezone != "" {
+		if loaded, err := time.LoadLocation(timezone); err == nil {
+			loc = loaded
+		} else if loaded, err := time.LoadLocation(memorycuration.DefaultTimezone); err == nil {
+			loc = loaded
+		}
+	} else if loaded, err := time.LoadLocation(memorycuration.DefaultTimezone); err == nil {
+		loc = loaded
+	}
+	localNow := now.In(loc)
+	day := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	return day, day
+}
+
 func firstDateToken(value string) string {
 	if len(value) >= 10 {
 		return value[:10]

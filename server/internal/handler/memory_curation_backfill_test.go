@@ -42,6 +42,21 @@ func TestResolveMemoryCurationBackfillRangeAllowsThirtyInclusiveDays(t *testing.
 	}
 }
 
+func TestDefaultMemoryCurationPlanDayUsesBeijingYesterday(t *testing.T) {
+	// 2026-07-24 01:00 UTC == 2026-07-24 09:00 Asia/Shanghai → yesterday 2026-07-23
+	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
+	since, until := defaultMemoryCurationPlanDay("Asia/Shanghai", now)
+	if formatDateUTC(since) != "2026-07-23" || formatDateUTC(until) != "2026-07-23" {
+		t.Fatalf("plan day = %s..%s, want 2026-07-23", formatDateUTC(since), formatDateUTC(until))
+	}
+	// Near UTC midnight still uses local yesterday.
+	now = time.Date(2026, 7, 24, 16, 0, 0, 0, time.UTC) // 2026-07-25 00:00 CST
+	since, until = defaultMemoryCurationPlanDay("Asia/Shanghai", now)
+	if formatDateUTC(since) != "2026-07-24" || formatDateUTC(until) != "2026-07-24" {
+		t.Fatalf("plan day after local midnight = %s..%s, want 2026-07-24", formatDateUTC(since), formatDateUTC(until))
+	}
+}
+
 func TestSucceededCurationDaysMarksAllAsBoth(t *testing.T) {
 	days := succeededCurationDays{
 		self: map[string]struct{}{"2026-07-14": {}},

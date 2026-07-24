@@ -255,7 +255,8 @@ const COPY = {
   noPerAgentDetails: "No per-agent details were reported by this daemon.",
   artifacts: "Artifacts",
   evolutionOutputTrend: "Evolution output trend",
-  evolutionOutputTrendHint: "Daily memory/skill candidates, promotions, and lifecycle changes.",
+  evolutionOutputTrendHint: "Daily self-review memory/skill candidates, shared evolution promotions, and team_knowledge items from curator runs.",
+  teamKnowledgeShort: "Team knowledge",
   noTrendData: "No trend data yet.",
   taskEfficiency: "Task efficiency",
   taskEfficiencyHint: "Issue-level duration and token averages with evolved-memory usage attribution.",
@@ -1411,13 +1412,14 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
 function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetric[] }) {
   const copy = useEvolutionCopy();
   const recent = dailyMetrics.slice(-14);
-  const maxValue = Math.max(1, ...recent.map((item) => item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill));
+  const maxValue = Math.max(1, ...recent.map((item) => item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill + (item.team_knowledge_items ?? 0)));
   const totals = dailyMetrics.reduce((acc, item) => ({
     memory: acc.memory + item.memory_candidates,
     skill: acc.skill + item.skill_candidates,
     promoted: acc.promoted + item.promoted_memory + item.promoted_skill,
+    teamKnowledge: acc.teamKnowledge + (item.team_knowledge_items ?? 0),
     archived: acc.archived + item.archived_or_deprecated,
-  }), { memory: 0, skill: 0, promoted: 0, archived: 0 });
+  }), { memory: 0, skill: 0, promoted: 0, teamKnowledge: 0, archived: 0 });
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -1425,15 +1427,16 @@ function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetr
         <p className="text-sm text-muted-foreground">{copy("evolutionOutputTrendHint")}</p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
           <MiniStat label={copy("memory")} value={String(totals.memory)} />
           <MiniStat label="Skills" value={String(totals.skill)} />
           <MiniStat label="Promoted" value={String(totals.promoted)} />
+          <MiniStat label={copy("teamKnowledgeShort")} value={String(totals.teamKnowledge)} />
           <MiniStat label="Archived" value={String(totals.archived)} />
         </div>
         <div className="flex h-36 items-end gap-1 rounded-2xl border bg-muted/20 p-3">
           {recent.length === 0 ? <EmptyState text={copy("noTrendData")} /> : recent.map((item) => {
-            const total = item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill;
+            const total = item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill + (item.team_knowledge_items ?? 0);
             return <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-1"><div className="w-full rounded-t bg-brand/70" style={{ height: `${Math.max(4, (total / maxValue) * 110)}px` }} title={`${item.date}: ${total}`} /><div className="w-full truncate text-center text-[10px] text-muted-foreground">{item.date.slice(5)}</div></div>;
           })}
         </div>

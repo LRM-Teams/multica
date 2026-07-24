@@ -222,23 +222,6 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	now := time.Now().UTC()
-	until := now
-	if req.Until != "" {
-		until, err = time.Parse("2006-01-02", req.Until)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid until date")
-			return
-		}
-	}
-	since := until
-	if req.Since != "" {
-		since, err = time.Parse("2006-01-02", req.Since)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid since date")
-			return
-		}
-	}
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
 		return
@@ -255,6 +238,26 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		}
 		writeError(w, http.StatusInternalServerError, "failed to load memory curator profile")
 		return
+	}
+	// Match the scheduled curator: default to yesterday in the profile timezone.
+	// Explicit since/until (or the backfill API) still overrides this.
+	since, until := defaultMemoryCurationPlanDay(profile.Timezone, time.Now().UTC())
+	if req.Until != "" {
+		until, err = time.Parse("2006-01-02", req.Until)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid until date")
+			return
+		}
+		if req.Since == "" {
+			since = until
+		}
+	}
+	if req.Since != "" {
+		since, err = time.Parse("2006-01-02", req.Since)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid since date")
+			return
+		}
 	}
 	runStatus, err := h.memoryCuratorRunStatus(r.Context(), profile)
 	if err != nil {

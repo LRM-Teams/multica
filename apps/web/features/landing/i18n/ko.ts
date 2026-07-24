@@ -292,7 +292,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
           title: "더 안전한 댓글 트리거, 안정적인 에이전트와 첨부 파일",
           changes: [],
           features: [
-            "댓글 입력창에서 보내기 전에 어떤 에이전트나 스쿼드가 작업을 시작할지 확인하고, 실수로 실행되는 일을 줄일 수 있습니다.",
             "실행 기록에 시간이 표시되어 에이전트 진행 상황과 인계를 더 쉽게 검토할 수 있습니다.",
             "오토파일럿 상세 페이지에서 누가 만들었는지 확인할 수 있습니다.",
             "Claude Fable 5가 Multica의 지원 모델과 가격 목록에 추가되었습니다.",
@@ -343,7 +342,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "스윔레인 필터가 올바르게 적용됩니다.",
             "모바일 워크스페이스 전환에서 로고가 안정적으로 표시되고 영어 문구도 더 명확해졌습니다.",
             "데스크톱 업데이트 화면과 실행 기록 대화상자는 이미 닫힌 창이나 페이지에 작동하지 않습니다.",
-            "런타임 삭제 시 보관된 스쿼드 정리와 오토파일럿 일시 중지를 같은 정리 흐름에서 처리합니다.",
             "데몬 실행은 자체 재시작 실패를 명확히 보여 주고, 서버에서 종료된 터미널 작업은 로컬 에이전트도 멈추며, 저장소 정리 중 오래된 브랜치도 정리합니다.",
             "X-Forwarded-Host를 설정하는 프록시 뒤에서도 셀프호스트 WebSocket 연결이 올바르게 동작합니다.",
             "프로젝트 목록의 컴팩트 헤더가 흐림 스타일을 올바르게 유지합니다.",
@@ -445,7 +443,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "프로젝트 이슈의 agents-working 필터가 목록, 보드, 타임라인에서 일관되게 적용됩니다.",
           ],
           fixes: [
-            "권한이 없는 사용자가 간접적인 이슈나 댓글 경로로 private 스쿼드 리더를 실행할 수 없게 했습니다.",
             "프로젝트 진행률 집계와 다시 시작된 에이전트 작업 상태가 더 안정적으로 새로고침됩니다.",
             "데스크톱과 웹에서 빈 워크스페이스 상태, 접근 불가 페이지, 화면 오류, 충돌 이후 더 잘 복구됩니다.",
             "이미지와 파일 카드 이름에 Markdown 문자가 있어도 올바르게 표시됩니다.",
@@ -462,7 +459,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
           changes: [],
           features: [
             "CLI에서 Skill을 검색하고 이슈에 연결된 pull request를 확인할 수 있어 릴리스 확인과 자동화 점검이 더 쉬워졌습니다.",
-            "스쿼드 구성원의 역할을 CLI에서 바로 변경할 수 있습니다.",
             "에이전트 목록을 런타임 머신별로 필터링해 특정 기기나 로컬 서비스에 연결된 에이전트를 더 빨리 찾을 수 있습니다.",
             "메일 발송 설정에서 465번 포트의 보안 SMTP 연결을 사용할 수 있습니다.",
             "OpenCode 런타임이 에이전트에 저장된 MCP 설정을 사용할 수 있습니다.",
@@ -494,7 +490,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "OpenClaw 런타임은 에이전트에 저장된 MCP 설정을 사용할 수 있고, Claude Opus 4.8도 모델 선택과 사용량 추정에 반영됩니다.",
           ],
           improvements: [
-            "이슈, 프로젝트, 런타임, 스킬, 에이전트, 스쿼드 상세 화면의 breadcrumb가 통일되어 위치와 이동 경로가 더 분명해졌습니다.",
             "재개된 에이전트 작업은 이미 읽은 댓글을 덜 반복해서 읽고, 트리거된 대화로 더 빠르게 돌아갑니다.",
             "이슈 언급 안내와 CLI 명령 표시가 더 읽기 쉬워져, 팀이 댓글과 설정 명령을 더 안전하게 다룰 수 있습니다.",
           ],
@@ -516,7 +511,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "스윔레인 보기에 상위 이슈, 프로젝트, 담당자 기준 그룹화가 추가되어, 큰 보드도 팀이 계획하는 방식에 맞게 살펴볼 수 있습니다.",
           ],
           improvements: [
-            "중국어 제품 문구와 공통 화면 접근성, React 코드가 정돈되었고, CLI 목록 출력과 스쿼드 목록 표시도 한층 읽기 편해졌습니다.",
           ],
           fixes: [
             "스윔레인, 하위 이슈 생성, 예약된 오토파일럿 제목, 댓글 편집, 코드 블록, 아바타 경로, 런타임 진단 관련 문제를 수정했습니다.",
@@ -549,7 +543,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "프로젝트 리소스 선택기에 저장소 검색이 추가되었고, 런타임 사용량은 주요 모델 비용을 더 정확히 집계합니다.",
           ],
           improvements: [
-            "스쿼드와 보드 카드, 데스크톱 탭 전환, 코드/리치 텍스트 표시, 저장소 설명 전달, 문서와 README가 개선되었습니다.",
           ],
           fixes: [
             "이슈 타임라인 순서, Codex와 Pi 실행 입력 처리, 로컬 런타임 삭제, 제목 새로고침, Markdown 코드 표시 문제를 수정했습니다.",
@@ -569,7 +562,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "이슈 보드 카드, 이슈 생성 속성 바, 비밀 값 가시성, 워크스페이스 목록 로딩, Helper 안내가 개선되었습니다.",
           ],
           fixes: [
-            "워크스페이스 컨텍스트 전달, 로컬 런타임 삭제 UI, Pi 응답 표시, SVG/파일 미리보기, 스쿼드 트리거 보호, 셀프 호스팅 기본값을 수정했습니다.",
           ],
         },
         {
@@ -595,12 +587,10 @@ export function createKoDict(allowSignup: boolean): LandingDict {
           title: "더 똑똑한 오토파일럿과 에이전트 제어",
           changes: [],
           features: [
-            "오토파일럿이 스쿼드를 통해 새 작업을 할당하고, 생성된 이슈를 지정한 프로젝트에 바로 넣을 수 있습니다.",
             "에이전트 설정에 Claude와 Codex용 추론 제어가 추가되었고, 데스크톱 탭 고정과 사용자 프로필 기반 요청자 컨텍스트 기능도 함께 들어갔습니다.",
             "워크스페이스 설정에 GitHub 전용 페이지가 생겨, 일반 멤버도 연결된 설치 정보를 확인할 수 있습니다.",
           ],
           improvements: [
-            "신규 사용자 런타임 연결, 런타임 페이지, 이슈 breadcrumb, HTML/첨부 미리보기, 스쿼드 보관 확인, 부모/하위 이슈 안내가 개선되었습니다.",
           ],
           fixes: [
             "리스트 편집, Homebrew 실패 시 설치 fallback, 실행 로그 재시도, 임시 task ID 처리, OpenCode 질문 프롬프트, Gemini 아이콘 문제를 수정했습니다.",
@@ -617,7 +607,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "에이전트는 최신 이슈 토론부터 읽을 수 있으며, 사용량 화면과 에이전트 상세 보드도 개선되었습니다.",
           ],
           improvements: [
-            "온보딩 질문 흐름, 내 이슈의 스쿼드 작업 표시, 에이전트 실행 로그 정렬이 개선되었습니다.",
           ],
           fixes: [
             "데스크톱 HTML 미리보기, HTML 소스 보기, 이슈 생성 모드 전환, 런타임 작업 컨텍스트, 셀프 호스팅 세션 기간 설정을 수정했습니다.",
@@ -637,7 +626,6 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "실패한 이슈 작업 오류, GitHub PR 상태 표시, 셀프 호스팅 기본값과 검색 결과 품질이 개선되었습니다.",
           ],
           fixes: [
-            "오토파일럿 생성 이슈 반복, 런타임 기본 선택, 스쿼드 스크롤, 데스크톱 확대/축소, 인증/로컬 서비스 안정성을 수정했습니다.",
           ],
         },
         {
@@ -648,10 +636,8 @@ export function createKoDict(allowSignup: boolean): LandingDict {
           features: [
             "멤버와 에이전트 상세 페이지에서 관련 작업을 볼 수 있습니다.",
             "데스크톱 앱은 업데이트를 백그라운드에서 다운로드하고, 셀프 호스팅은 SMTP 이메일 전송을 지원합니다.",
-            "스쿼드 생성 흐름의 멤버 선택이 팀 조율에 더 적합해졌습니다.",
           ],
           improvements: [
-            "페이지 전환, 긴 이슈 활동 접기, Agents/Squads 목록 보기 기억, SSH 저장소 URL 처리, 스쿼드 handoff가 개선되었습니다.",
           ],
           fixes: [
             "셀프 호스팅 파일 카드, 로컬 도구와 스킬 탐색, Claude 사용량, 워크스페이스 전환 후 실시간 업데이트, 좁은 화면 메뉴를 수정했습니다.",
@@ -663,15 +649,12 @@ export function createKoDict(allowSignup: boolean): LandingDict {
           title: "스쿼드와 첨부 파일 미리보기",
           changes: [],
           features: [
-            "스쿼드를 통해 작업을 그룹에 할당하고 리더 에이전트가 다음 단계를 조율할 수 있습니다.",
             "PDF, 오디오, 비디오, Markdown, 코드, 로그, 일반 텍스트 첨부 파일을 제자리에서 미리볼 수 있습니다.",
             "중국어 이름을 pinyin으로 검색할 수 있습니다.",
           ],
           improvements: [
-            "스쿼드 페이지, quick create와 picker 검색, 사용량 차트, CLI 스쿼드 관리, 공유 인터페이스 라벨이 개선되었습니다.",
           ],
           fixes: [
-            "스쿼드 리더 라우팅, 스쿼드 멘션, 이슈 목록 새로고침, 첨부 미리보기 문제를 수정했습니다.",
           ],
         },
         {

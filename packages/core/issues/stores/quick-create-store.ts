@@ -5,9 +5,9 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { createWorkspaceAwareStorage, registerForWorkspaceRehydration } from "../../platform/workspace-storage";
 import { defaultStorage } from "../../platform/storage";
 
-export type QuickCreateActorType = "agent" | "squad";
+export type QuickCreateActorType = "agent";
 
-// Per-workspace memory of the last actor (agent or squad) and project the
+// Per-workspace memory of the last actor (agent) and project the
 // user picked in the Quick Create modal. Defaulted to those values on next
 // open so frequent users skip the pickers entirely — without this, anyone
 // targeting a single project ends up retyping "in project A" on every
@@ -17,10 +17,8 @@ export type QuickCreateActorType = "agent" | "squad";
 // draft-store / issues-scope-store / comment-collapse-store already
 // namespace themselves.
 //
-// lastActorType + lastActorId replace the prior `lastAgentId` field once
-// squads became selectable. Users who had a persisted agent preference
-// land back on whatever the picker shows first; a one-time re-pick is
-// preferable to the type-tag ambiguity of overloading a single UUID.
+// lastActorType + lastActorId replace the prior `lastAgentId` field so the
+// actor type tag is explicit when more assignee kinds are added later.
 interface QuickCreateState {
   lastActorType: QuickCreateActorType | null;
   lastActorId: string | null;

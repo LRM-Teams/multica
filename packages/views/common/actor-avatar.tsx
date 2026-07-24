@@ -21,7 +21,6 @@ import { resolveHealthDotClass } from "../agents/health";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
-import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
@@ -39,8 +38,7 @@ import {
  *   owner). Used by 20+ "who is this agent?" surfaces (comment authors,
  *   pickers, list rows).
  * - `"live"` — live activity peek (workload, current issue, last activity).
- *   Used where the user already knows the identity and wants the live state,
- *   e.g. the squad members tab.
+ *   Used where the user already knows the identity and wants the live state.
  *
  * Has no effect for non-agent actors (members always render the member card).
  */
@@ -100,7 +98,7 @@ function ActorAvatarWorkspaceProfileLink({
   actorId,
   children,
 }: {
-  actorType: "member" | "squad" | string;
+  actorType: "member" | string;
   actorId: string;
   children: React.ReactNode;
 }) {
@@ -108,9 +106,7 @@ function ActorAvatarWorkspaceProfileLink({
   const href =
     actorType === "member"
       ? workspacePaths.memberDetail(actorId)
-      : actorType === "squad"
-        ? workspacePaths.squadDetail(actorId)
-        : null;
+      : null;
   return href ? (
     <ActorAvatarProfileLink href={href}>{children}</ActorAvatarProfileLink>
   ) : (
@@ -195,17 +191,16 @@ export function ActorAvatar({
     );
   const shouldLinkToProfile =
     profileLink ??
-    (actorType === "member" || actorType === "agent" || actorType === "squad");
+    (actorType === "member" || actorType === "agent");
   // Agents open the #349 side panel (inline in channels/DM via
   // AgentPanelProvider, a global overlay everywhere else via the fallback
   // store — see agent-panel-context.tsx / panel-store.ts) instead of routing
-  // to the full agent detail page. Members/squads still route — no side
-  // panel exists for those actor types yet.
+  // to the full agent detail page. Members route to their profile page.
   const content = !shouldLinkToProfile
     ? withXpBurst
     : actorType === "agent"
       ? <ActorAvatarPanelTrigger agentId={actorId}>{withXpBurst}</ActorAvatarPanelTrigger>
-      : actorType === "member" || actorType === "squad"
+      : actorType === "member"
         ? (
             <ActorAvatarWorkspaceProfileLink actorType={actorType} actorId={actorId}>
               {withXpBurst}
@@ -225,9 +220,6 @@ export function ActorAvatar({
   }
   if (actorType === "member") {
     return <MemberAvatarHoverCard userId={actorId}>{content}</MemberAvatarHoverCard>;
-  }
-  if (actorType === "squad") {
-    return <SquadAvatarHoverCard squadId={actorId}>{content}</SquadAvatarHoverCard>;
   }
   return content;
 }
@@ -559,20 +551,6 @@ function MemberAvatarHoverCard({
 }) {
   return (
     <ActorAvatarHoverCardShell content={<MemberProfileCard userId={userId} />}>
-      {children}
-    </ActorAvatarHoverCardShell>
-  );
-}
-
-function SquadAvatarHoverCard({
-  squadId,
-  children,
-}: {
-  squadId: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <ActorAvatarHoverCardShell content={<SquadProfileCard squadId={squadId} />}>
       {children}
     </ActorAvatarHoverCardShell>
   );

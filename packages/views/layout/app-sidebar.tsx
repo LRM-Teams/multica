@@ -37,7 +37,6 @@ import {
   CreditCard,
   X,
   Zap,
-  Users,
   MessageCircle,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
@@ -117,7 +116,6 @@ type NavKey =
   | "channels"
   | "autopilots"
   | "agents"
-  | "squads"
   | "usage"
   | "evolution"
   | "planBilling"
@@ -135,7 +133,6 @@ type NavLabelKey =
   | "channels"
   | "autopilots"
   | "agents"
-  | "squads"
   | "usage"
   | "evolution"
   | "plan_billing"
@@ -157,7 +154,6 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
-  { key: "squads", labelKey: "squads", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
   { key: "evolution", labelKey: "evolution", icon: Sparkles },
   { key: "planBilling", labelKey: "plan_billing", icon: CreditCard },

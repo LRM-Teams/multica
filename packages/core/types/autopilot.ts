@@ -2,11 +2,9 @@ export type AutopilotStatus = "active" | "paused" | "archived";
 
 export type AutopilotExecutionMode = "create_issue" | "run_only";
 
-// `assignee_type` selects which polymorphic actor backs the autopilot:
-// "agent" → assignee_id references agent(id); "squad" → assignee_id references
-// squad(id) and dispatch resolves to squad.leader_id at run time (MUL-2429,
-// Path A). Older servers omit this field — callers should default to "agent".
-export type AutopilotAssigneeType = "agent" | "squad";
+// `assignee_type` selects which polymorphic actor backs the autopilot.
+// Squad assignees were removed (LRM-582); only agent is supported.
+export type AutopilotAssigneeType = "agent";
 
 export type AutopilotTriggerKind = "schedule" | "webhook" | "api";
 

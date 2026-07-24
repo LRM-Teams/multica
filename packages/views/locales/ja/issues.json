@@ -51,7 +51,6 @@
     "section_label": "ラベル",
     "members_group": "メンバー",
     "agents_group": "エージェント",
-    "squads_group": "スクワッド",
     "issue_count_other": "イシュー {{count}} 件",
     "reset": "すべてのフィルターをリセット",
     "active_count_other": "フィルター {{count}} 件"
@@ -436,8 +435,7 @@
       "trigger_unassigned": "未割り当て",
       "search_placeholder": "担当者を割り当て...",
       "members_group": "メンバー",
-      "agents_group": "エージェント",
-      "squads_group": "スクワッド"
+      "agents_group": "エージェント"
     },
     "start_date": {
       "trigger_label": "開始日",

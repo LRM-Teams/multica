@@ -16,7 +16,6 @@
     "agents",
     "agents-create",
     "skills",
-    "squads",
     "---エージェントの実行方法---",
     "daemon-runtimes",
     "install-agent-runtime",

@@ -16,7 +16,6 @@
     "agents",
     "agents-create",
     "skills",
-    "squads",
     "---에이전트 실행 방식---",
     "daemon-runtimes",
     "install-agent-runtime",

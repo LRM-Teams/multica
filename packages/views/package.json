@@ -36,8 +36,6 @@
     "./dashboard": "./dashboard/index.ts",
     "./overview": "./overview/index.ts",
     "./evolution": "./evolution/index.ts",
-    "./squads": "./squads/index.ts",
-    "./squads/components": "./squads/components/index.ts",
     "./workspace/workspace-avatar": "./workspace/workspace-avatar.tsx",
     "./workspace/create-workspace-form": "./workspace/create-workspace-form.tsx",
     "./workspace/no-access-page": "./workspace/no-access-page.tsx",

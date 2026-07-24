@@ -14,7 +14,7 @@ import {
 } from "@multica/core/identity";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
-import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
   useQuickCreateStore,
@@ -30,7 +30,7 @@ import {
 } from "@multica/core/runtimes";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { formatShortcut, modKey, enterKey } from "@multica/core/platform";
-import { contentReferencesAttachment, type Agent, type Attachment, type Squad } from "@multica/core/types";
+import { contentReferencesAttachment, type Agent, type Attachment } from "@multica/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ActorPickerItem } from "../common/actor-picker-item";
 import { PillButton } from "../common/pill-button";
@@ -38,7 +38,6 @@ import { ProjectPicker } from "../projects/components/project-picker";
 import { canAssignAgent } from "../issues/components/pickers/assignee-picker";
 import {
   PropertyPicker,
-  PickerItem,
   PickerSection,
   PickerEmpty,
 } from "../issues/components/pickers/property-picker";
@@ -54,9 +53,7 @@ import { FileUploadButton } from "@multica/ui/components/common/file-upload-butt
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
 
-type ActorSelection =
-  | { type: "agent"; id: string }
-  | { type: "squad"; id: string };
+type ActorSelection = { type: "agent"; id: string };
 
 type QuickCreateSourceSeed = {
   channel_id: string;
@@ -114,7 +111,6 @@ export function AgentCreatePanel({
   const userId = useAuthStore((s) => s.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   // Pull `isSuccess` so the stale-id sweep below can distinguish "still
   // loading" from "loaded as empty". Reading length alone treats both as
   // empty and incorrectly clears a valid persisted preference on every open.
@@ -127,10 +123,7 @@ export function AgentCreatePanel({
     [members, userId],
   );
 
-  // Visible = not archived AND assignable by this user. Squads inherit
-  // their leader agent's reachability: the backend always routes a squad
-  // pick to the leader, so hiding squads whose leader isn't visible keeps
-  // the picker honest with what the server would actually accept.
+  // Visible = not archived AND assignable by this user.
   const visibleAgents = useMemo(
     () =>
       agents.filter(
@@ -142,14 +135,6 @@ export function AgentCreatePanel({
     () => new Set(visibleAgents.map((a) => a.id)),
     [visibleAgents],
   );
-  const visibleSquads = useMemo(
-    () =>
-      squads.filter(
-        (s) => !s.archived_at && visibleAgentIds.has(s.leader_id),
-      ),
-    [squads, visibleAgentIds],
-  );
-
   const lastActorType = useQuickCreateStore((s) => s.lastActorType);
   const lastActorId = useQuickCreateStore((s) => s.lastActorId);
   const setLastActor = useQuickCreateStore((s) => s.setLastActor);
@@ -168,35 +153,28 @@ export function AgentCreatePanel({
   // through to the next seed in the chain.
   const resolveActor = useCallback(
     (
-      type: QuickCreateActorType | "agent" | "squad" | null | undefined,
+      type: QuickCreateActorType | "agent" | null | undefined,
       id: string | null | undefined,
     ): ActorSelection | null => {
       if (!type || !id) return null;
-      if (type === "squad" && visibleSquads.some((s) => s.id === id)) {
-        return { type: "squad", id };
-      }
       if (type === "agent" && visibleAgentIds.has(id)) {
         return { type: "agent", id };
       }
       return null;
     },
-    [visibleSquads, visibleAgentIds],
+    [visibleAgentIds],
   );
 
   const seedActor = useCallback((): ActorSelection | null => {
-    // Caller-provided seed wins (e.g. shell pre-seeds with `agent_id` /
-    // `squad_id`), then persisted preference, then first visible agent.
     const dataAgent = data?.agent_id as string | undefined;
-    const dataSquad = data?.squad_id as string | undefined;
     return (
       resolveActor("agent", dataAgent) ||
-      resolveActor("squad", dataSquad) ||
       resolveActor(lastActorType, lastActorId) ||
       (visibleAgents[0]
         ? ({ type: "agent", id: visibleAgents[0].id } as const)
         : null)
     );
-  }, [resolveActor, data?.agent_id, data?.squad_id, lastActorType, lastActorId, visibleAgents]);
+  }, [resolveActor, data?.agent_id, lastActorType, lastActorId, visibleAgents]);
 
   const [actor, setActor] = useState<ActorSelection | null>(() => seedActor());
 
@@ -208,16 +186,8 @@ export function AgentCreatePanel({
 
   const selectedAgent = useMemo<Agent | undefined>(() => {
     if (!actor) return undefined;
-    if (actor.type === "agent") return visibleAgents.find((a) => a.id === actor.id);
-    const squad = visibleSquads.find((s) => s.id === actor.id);
-    if (!squad) return undefined;
-    return visibleAgents.find((a) => a.id === squad.leader_id);
-  }, [actor, visibleAgents, visibleSquads]);
-
-  const selectedSquad = useMemo<Squad | undefined>(() => {
-    if (actor?.type !== "squad") return undefined;
-    return visibleSquads.find((s) => s.id === actor.id);
-  }, [actor, visibleSquads]);
+    return visibleAgents.find((a) => a.id === actor.id);
+  }, [actor, visibleAgents]);
 
   // Project selection — defaults to the last project the user picked in this
   // workspace. `data?.project_id` lets the modal opener seed a one-shot
@@ -322,9 +292,7 @@ export function AgentCreatePanel({
     setError(null);
     try {
       await api.quickCreateIssue({
-        ...(actor.type === "agent"
-          ? { agent_id: actor.id }
-          : { squad_id: actor.id }),
+        agent_id: actor.id,
         prompt: md,
         project_id: projectId ?? undefined,
         parent_issue_id: parentIssueId,
@@ -469,9 +437,7 @@ export function AgentCreatePanel({
           <ActorPicker
             actor={actor}
             visibleAgents={visibleAgents}
-            visibleSquads={visibleSquads}
             selectedAgent={selectedAgent}
-            selectedSquad={selectedSquad}
             onPick={(next) => {
               setActor(next);
               setError(null);
@@ -611,24 +577,20 @@ export function AgentCreatePanel({
 }
 
 // ActorPicker — the "Created by" trigger + searchable popover listing
-// agents and squads. Lives in this file (not under issues/components/pickers)
+// agents. Lives in this file (not under issues/components/pickers)
 // because it composes the generic PropertyPicker with a quick-create-shaped
 // trigger styled to match the modal header row — promoting it would invite
 // reuse pressure on a UI that's deliberately tuned for this one surface.
 function ActorPicker({
   actor,
   visibleAgents,
-  visibleSquads,
   selectedAgent,
-  selectedSquad,
   onPick,
   t,
 }: {
   actor: ActorSelection | null;
   visibleAgents: Agent[];
-  visibleSquads: Squad[];
   selectedAgent: Agent | undefined;
-  selectedSquad: Squad | undefined;
   onPick: (next: ActorSelection) => void;
   t: ReturnType<typeof useT<"modals">>["t"];
 }) {
@@ -647,21 +609,12 @@ function ActorPicker({
       ),
     [visibleAgents, query],
   );
-  const filteredSquads = useMemo(
-    () => visibleSquads.filter((s) => s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)),
-    [visibleSquads, query],
-  );
-
-  const displayLabel =
-    selectedSquad?.name ??
-    (selectedAgent
-      ? resolveActorDisplayName(selectedAgent, selectedAgent.name)
-      : undefined);
-  const displayActor: ActorSelection | null = selectedSquad
-    ? { type: "squad", id: selectedSquad.id }
-    : selectedAgent
-      ? { type: "agent", id: selectedAgent.id }
-      : null;
+  const displayLabel = selectedAgent
+    ? resolveActorDisplayName(selectedAgent, selectedAgent.name)
+    : undefined;
+  const displayActor: ActorSelection | null = selectedAgent
+    ? { type: "agent", id: selectedAgent.id }
+    : null;
 
   return (
     <PropertyPicker
@@ -693,7 +646,7 @@ function ActorPicker({
         </span>
       }
     >
-      {filteredAgents.length === 0 && filteredSquads.length === 0 ? (
+      {filteredAgents.length === 0 ? (
         query ? (
           <PickerEmpty />
         ) : (
@@ -721,23 +674,6 @@ function ActorPicker({
                     setOpen(false);
                   }}
                 />
-              ))}
-            </PickerSection>
-          )}
-          {filteredSquads.length > 0 && (
-            <PickerSection label={t(($) => $.create_issue.agent.squads_group)}>
-              {filteredSquads.map((s) => (
-                <PickerItem
-                  key={s.id}
-                  selected={actor?.type === "squad" && actor.id === s.id}
-                  onClick={() => {
-                    onPick({ type: "squad", id: s.id });
-                    setOpen(false);
-                  }}
-                >
-                  <ActorAvatar actorType="squad" actorId={s.id} size={18} />
-                  <span className="truncate">{s.name}</span>
-                </PickerItem>
               ))}
             </PickerSection>
           )}

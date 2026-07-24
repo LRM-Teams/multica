@@ -759,7 +759,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.1",
         date: "2026-05-15",
-        title: "Faster Navigation, Background Updates & More Reliable Squads",
+        title: "Faster Navigation, Background Updates & Smoother Agent Runs",
         changes: [],
         features: [
           "Member and agent detail pages now show related tasks so teams can review who is working on what",
@@ -782,7 +782,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.0",
         date: "2026-05-14",
-        title: "Squads & Attachment Previews",
+        title: "Attachment Previews",
         changes: [],
         features: [
           "Attachments can be previewed in place for PDFs, audio, video, markdown, code, logs, and plain text",

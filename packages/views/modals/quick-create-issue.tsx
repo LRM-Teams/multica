@@ -147,7 +147,7 @@ export function AgentCreatePanel({
   const setKeepOpen = useQuickCreateStore((s) => s.setKeepOpen);
   const setLastMode = useCreateModeStore((s) => s.setLastMode);
 
-  // Resolve a candidate actor against the currently-visible agents / squads.
+  // Resolve a candidate actor against the currently-visible agents.
   // Returns null when the candidate doesn't exist in this workspace right
   // now (deleted, archived, permission revoked, etc.) so callers can fall
   // through to the next seed in the chain.
@@ -366,10 +366,10 @@ export function AgentCreatePanel({
 
   // Switch to the manual form, carrying what the user typed over as the
   // description (markdown, including any pasted images) so they don't lose
-  // their work. The picked actor (agent or squad) becomes the default
-  // assignee candidate (still editable). We seed the shared issue-draft
-  // store directly because the manual panel reads its initial values from
-  // there. Persist the mode flip so the next `c` lands in manual.
+  // their work. The picked agent becomes the default assignee candidate
+  // (still editable). We seed the shared issue-draft store directly because
+  // the manual panel reads its initial values from there. Persist the mode
+  // flip so the next `c` lands in manual.
   const switchToManual = () => {
     const md = editorRef.current?.getMarkdown() ?? "";
     useIssueDraftStore.getState().setDraft({
@@ -429,10 +429,7 @@ export function AgentCreatePanel({
           </div>
         </div>
 
-        {/* Actor picker — agents and squads in one searchable list. Squads
-            route to their leader agent on the backend; the leader runs the
-            quick-create flow with the squad's Operating Protocol layered
-            on top, so a squad pick is "ask this squad to file the issue". */}
+        {/* Actor picker — agents in one searchable list. */}
         <div className="px-5 pt-1 pb-2 shrink-0">
           <ActorPicker
             actor={actor}

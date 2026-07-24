@@ -758,7 +758,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.1",
         date: "2026-05-15",
-        title: "更快的导航、后台更新与更可靠的小队协作",
+        title: "更快的导航、后台更新与更可靠的 Agent 运行",
         changes: [],
         features: [
           "成员和 agent 详情页现在可以看到关联任务，方便回看每个人和每个 agent 正在推进的工作",
@@ -781,7 +781,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.0",
         date: "2026-05-14",
-        title: "Squads 与附件预览",
+        title: "附件预览",
         changes: [],
         features: [
           "附件可以直接预览，支持 PDF、音频、视频、Markdown、代码、日志和纯文本",

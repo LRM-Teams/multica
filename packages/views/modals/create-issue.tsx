@@ -349,9 +349,6 @@ export function ManualCreatePanel({
   // Also forward the picked project so the agent panel pins the new issue
   // to it; without this the agent panel would fall back to its persisted
   // `lastProjectId`, silently routing the issue to the wrong project.
-  // Forward squad picks alongside agent picks so the agent panel honors
-  // the actor the user already chose — otherwise a squad selection silently
-  // falls back to the persisted actor / first visible agent on flip.
   // parent_issue_id rides through the same carry channel: the modal opener
   // (openCreateSubIssue) seeded it on the manual panel, and the agent panel
   // needs it so the new issue is still created as a sub-issue when the user

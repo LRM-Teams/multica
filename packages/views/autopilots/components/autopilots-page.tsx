@@ -146,7 +146,7 @@ function AutopilotRow({ autopilot }: { autopilot: Autopilot }) {
       </AppLink>
 
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pl-6 text-xs sm:contents sm:pl-0">
-        {/* Assignee — agent or squad */}
+        {/* Assignee — agent */}
         <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground sm:w-32 sm:shrink-0">
           <ActorAvatar
             actorType={autopilot.assignee_type}

@@ -720,7 +720,6 @@ export class ApiClient {
 
   async quickCreateIssue(data: {
     agent_id?: string;
-    squad_id?: string;
     prompt: string;
     project_id?: string | null;
     parent_issue_id?: string | null;

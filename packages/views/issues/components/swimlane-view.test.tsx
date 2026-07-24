@@ -66,7 +66,6 @@ const { mockActorNameResult } = vi.hoisted(() => ({
     getActorAvatarUrl: () => null,
     getMemberName: () => "Mock Member",
     getAgentName: () => "Mock Agent",
-    getSquadName: () => "Mock Squad",
   },
 }));
 vi.mock("@multica/core/workspace/hooks", () => ({

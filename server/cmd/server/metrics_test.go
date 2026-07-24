@@ -44,3 +44,19 @@ func TestMainRouterHasChannelMessageEditDeleteRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestMainRouterHasPublicVoiceCallCallbackRoute(t *testing.T) {
+	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
+	found := false
+	if err := chi.Walk(router, func(method string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method == http.MethodPost && route == voiceCallCallbackPath {
+			found = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk router: %v", err)
+	}
+	if !found {
+		t.Fatalf("missing route POST %s", voiceCallCallbackPath)
+	}
+}

@@ -52,6 +52,7 @@ import {
   useProfilePanelWidth,
 } from "../../layout/use-profile-panel-width";
 import { useT } from "../../i18n/use-t";
+import { DmAgentVoiceCall } from "../../voice-calls";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
@@ -244,6 +245,7 @@ function DmHeader({
   onBack,
   filesChannelId,
   onSearchOpen,
+  voiceCallAction,
 }: {
   dm: DMItem;
   onBack: () => void;
@@ -251,6 +253,8 @@ function DmHeader({
   filesChannelId?: string;
   /** When provided, renders a magnifying-glass button (source gate: dm_channel only). */
   onSearchOpen?: () => void;
+  /** Agent-only call control; kept outside the shared header chrome. */
+  voiceCallAction?: React.ReactNode;
 }) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
@@ -324,6 +328,7 @@ function DmHeader({
       badges={mutedBadge}
       actions={
         <>
+          {voiceCallAction}
           {onSearchOpen && (
             <Button
               variant="ghost"
@@ -1109,6 +1114,13 @@ function DmChannelConversation({
         onBack={onBack}
         filesChannelId={channelId}
         onSearchOpen={() => dispatch({ type: "openSearch" })}
+        voiceCallAction={
+          <DmAgentVoiceCall
+            workspaceId={wsId}
+            channelId={channelId}
+            peer={dm.peer}
+          />
+        }
       />
       {convSearch.open && (
         <div

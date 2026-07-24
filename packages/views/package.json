@@ -59,6 +59,7 @@
     "./platform": "./platform/index.ts",
     "./i18n": "./i18n/index.ts",
     "./attachments": "./attachments/index.ts",
+    "./voice-calls": "./voice-calls/index.ts",
     "./locales": "./locales/index.ts",
     "./locales/*": "./locales/*"
   },
@@ -99,6 +100,7 @@
     "@tiptap/starter-kit": "^3.22.1",
     "@tiptap/suggestion": "^3.22.1",
     "@uiw/react-codemirror": "catalog:",
+    "@volcengine/rtc": "~4.68.5",
     "cmdk": "^1.1.1",
     "hast-util-to-html": "^9.0.5",
     "katex": "catalog:",

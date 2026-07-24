@@ -125,7 +125,10 @@
     "./skills": "./skills/index.ts",
     "./skills/frontmatter": "./skills/frontmatter.ts",
     "./stickers": "./stickers/index.ts",
-    "./stickers/queries": "./stickers/queries.ts"
+    "./stickers/queries": "./stickers/queries.ts",
+    "./voice-calls": "./voice-calls/index.ts",
+    "./voice-calls/queries": "./voice-calls/queries.ts",
+    "./voice-calls/mutations": "./voice-calls/mutations.ts"
   },
   "dependencies": {
     "@formatjs/intl-localematcher": "catalog:",

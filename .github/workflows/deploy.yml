@@ -223,6 +223,14 @@ jobs:
       # Secret values are never copied into the host dotenv. Compose propagates
       # this ambient value into the backend container.
       DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
+      VOLCENGINE_RTC_APP_ID: ${{ secrets.VOLCENGINE_RTC_APP_ID }}
+      VOLCENGINE_RTC_APP_KEY: ${{ secrets.VOLCENGINE_RTC_APP_KEY }}
+      VOLCENGINE_RTC_ACCESS_KEY_ID: ${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}
+      VOLCENGINE_RTC_SECRET_ACCESS_KEY: ${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY }}
+      VOLCENGINE_RTC_SESSION_TOKEN: ${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN }}
+      VOLCENGINE_RTC_ARK_ENDPOINT_ID: ${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}
+      VOLCENGINE_RTC_ARK_MODEL_NAME: ${{ secrets.VOLCENGINE_RTC_ARK_MODEL_NAME }}
+      VOLCENGINE_RTC_CALLBACK_SIGNATURE: ${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}
       # The tag to deploy: a rollback input if given, otherwise the freshly built one.
       IMAGE_TAG: >-
         ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')

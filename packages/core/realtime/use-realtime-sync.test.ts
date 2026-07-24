@@ -8,6 +8,7 @@ import { inboxKeys } from "../inbox/queries";
 import { issueKeys } from "../issues/queries";
 import { notificationPreferenceKeys } from "../notification-preferences/queries";
 import { workspaceKeys } from "../workspace/queries";
+import { voiceCallKeys } from "../voice-calls/queries";
 import type {
   ChatDonePayload,
   ChatMessage,
@@ -24,6 +25,7 @@ import {
   handleChannelMessageNotification,
   handleInboxNew,
   invalidateChatMessageQueries,
+  invalidateVoiceCallFromRealtime,
   resolveInboxSourceSlug,
   shouldNotifyChannelMessage,
 } from "./use-realtime-sync";
@@ -165,6 +167,39 @@ describe("invalidateChatMessageQueries", () => {
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.messages(sessionId) });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.messagesPage(sessionId) });
+  });
+});
+
+describe("invalidateVoiceCallFromRealtime", () => {
+  it("invalidates only the call identified by the event payload", () => {
+    const qc = createQueryClient();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+
+    invalidateVoiceCallFromRealtime(qc, {
+      workspace_id: "workspace-1",
+      call_id: "call-1",
+    });
+
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: voiceCallKeys.detail("workspace-1", "call-1"),
+    });
+  });
+
+  it("ignores malformed payloads instead of invalidating a broad cache", () => {
+    const qc = createQueryClient();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+
+    invalidateVoiceCallFromRealtime(qc, {
+      workspace_id: "",
+      call_id: "call-1",
+    });
+    invalidateVoiceCallFromRealtime(qc, {
+      workspace_id: "workspace-1",
+      call_id: "",
+    });
+
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });
 

@@ -6,8 +6,9 @@
  * Takes one attachment-shaped input (a full record, a URL-only reference, or
  * an in-flight upload) and dispatches by PreviewKind:
  *
- *   - image  → ImageAttachmentView (figure + hover toolbar + lightbox via
- *              the shared AttachmentPreviewModal)
+ *   - image  → ImageAttachmentView (figure + lightbox via the shared
+ *              AttachmentPreviewModal; hover toolbar only when editable —
+ *              LRM-546 removes expand/download on message display)
  *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar), unless
  *              `inlineHtmlPreview={false}` (channel/thread message stream —
  *              LRM-285: Slack file-card in the stream; click still previews)
@@ -484,7 +485,8 @@ export function Attachment({
 }
 
 // ---------------------------------------------------------------------------
-// ImageAttachmentView — inline image with hover toolbar
+// ImageAttachmentView — inline image; compose keeps hover toolbar, message
+// display surfaces do not (LRM-546).
 // ---------------------------------------------------------------------------
 //
 // DOM and styling are intentionally a direct port of the original
@@ -567,7 +569,10 @@ function ImageAttachmentView({
           className={cn("image-content", uploading && "image-uploading")}
           draggable={false}
         />
-        {!uploading && src && (
+        {/* LRM-546 — message/comment display surfaces: no expand/download float
+            capsule (Frank). Click the figure still opens preview. Compose
+            (editable) keeps the full toolbar. */}
+        {!uploading && src && editable && (
           <span
             className="image-toolbar"
             onMouseDown={(e) => e.stopPropagation()}
@@ -579,15 +584,10 @@ function ImageAttachmentView({
             <button type="button" onClick={onDownload} title={t(($) => $.image.download)}>
               <Download className="size-3.5" />
             </button>
-            {/* Copy-link is an editor-compose affordance. On read-only display
-                surfaces (chat / comments) the hover toolbar stays minimal —
-                fullscreen + download only (task #339, Slack parity). */}
-            {editable && (
-              <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
-                <LinkIcon className="size-3.5" />
-              </button>
-            )}
-            {editable && onDelete && (
+            <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
+              <LinkIcon className="size-3.5" />
+            </button>
+            {onDelete && (
               <button type="button" onClick={onDelete} title={t(($) => $.image.delete)}>
                 <Trash2 className="size-3.5" />
               </button>

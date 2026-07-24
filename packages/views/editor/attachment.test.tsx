@@ -198,7 +198,7 @@ afterEach(() => {
 });
 
 describe("Attachment — image dispatch", () => {
-  it("record image renders <img> with a minimal display toolbar (View/Download only)", () => {
+  it("record image on display surfaces has no expand/download float (LRM-546)", () => {
     const att = makeRecord();
     renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
     const img = document.querySelector("img");
@@ -210,12 +210,12 @@ describe("Attachment — image dispatch", () => {
     // attachment.tsx for the rationale (MUL-3130 review follow-up).
     expect(img?.getAttribute("src")).toBe(att.download_url);
     expect(img?.getAttribute("alt")).toBe("shot.png");
-    expect(screen.getByTitle("View")).toBeTruthy();
-    expect(screen.getByTitle("Download")).toBeTruthy();
-    // Read-only display surfaces keep the hover toolbar to two actions
-    // (task #339). Copy-link and Trash are editor-compose affordances.
+    // LRM-546 — read-only chat/comment: no hover capsule; click figure opens preview.
+    expect(screen.queryByTitle("View")).toBeNull();
+    expect(screen.queryByTitle("Download")).toBeNull();
     expect(screen.queryByTitle("Copy link")).toBeNull();
     expect(screen.queryByTitle("Delete")).toBeNull();
+    expect(document.querySelector(".image-toolbar")).toBeNull();
   });
 
   it("clicking the inline image opens the lightbox (preview modal dialog)", () => {
@@ -271,6 +271,7 @@ describe("Attachment — image dispatch", () => {
           url: att.url,
           filename: "from-resolver.png",
         }}
+        editable
       />,
     );
     const img = document.querySelector("img");
@@ -342,6 +343,7 @@ describe("Attachment — image dispatch", () => {
           url: "https://external.example/foo.png",
           filename: "foo.png",
         }}
+        editable
       />,
     );
     const img = document.querySelector("img");

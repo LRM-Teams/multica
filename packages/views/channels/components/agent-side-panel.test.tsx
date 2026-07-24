@@ -200,8 +200,6 @@ const RESOURCES = {
     display_name_label: "Display name",
     description_label: "Description",
     info_section: "Info",
-    role_label: "Role",
-    role_agent: "Agent",
     actions_section: "Actions",
   },
   inspector: {
@@ -332,6 +330,15 @@ describe("AgentSidePanel", () => {
     expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+  });
+
+  it("does not render an Agent role pill in Info (LRM-469)", () => {
+    renderPanel();
+    // Roles = workspace member roles (Admin/Member), not an "Agent" pill.
+    // The agent's identity is conveyed by avatar / handle / visibility, so
+    // the Profile Info section renders no Role row at all.
+    expect(screen.queryByText("Role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
   });
 
   it("shows Usage as its own tab — not stacked in Profile (LRM-448)", () => {

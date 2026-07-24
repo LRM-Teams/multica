@@ -558,8 +558,6 @@
     "display_name_label": "Display name",
     "description_label": "Description",
     "info_section": "Info",
-    "role_label": "Role",
-    "role_agent": "Agent",
     "actions_section": "Actions",
     "actions_restart": "Restart / Reset",
     "actions_restart_dialog_title": "Restart / reset \"{{name}}\"?",
@@ -574,7 +572,13 @@
     "actions_stop_aria": "Stop {{name}}'s current task",
     "actions_stop_success": "Stopped {{name}}",
     "actions_stop_failed": "Failed to stop agent task",
-    "actions_archive": "Archive agent"
+    "actions_delete": "Delete",
+    "delete_dialog_title": "Delete agent?",
+    "delete_dialog_description": "\"{{name}}\" will be deleted. It won't be assignable or mentionable, but all history is preserved. You can restore it later.",
+    "delete_dialog_cancel": "Cancel",
+    "delete_dialog_confirm": "Delete",
+    "agent_deleted_toast": "Agent deleted",
+    "delete_failed_toast": "Failed to delete agent"
   },
   "live_peek": {
     "current_issue_label": "Now on",

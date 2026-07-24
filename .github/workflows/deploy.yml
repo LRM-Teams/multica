@@ -71,6 +71,7 @@ jobs:
           install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
           install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
+          install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
 
       - name: Validate deploy bundle
         run: |
@@ -320,6 +321,7 @@ jobs:
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
           }
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/validate-rtc-environment.sh"
           compose_environment="$(compose config --environment)"
           compose_env_value() {
             printf '%s\n' "$compose_environment" |
@@ -361,7 +363,7 @@ jobs:
             exit 1
           fi
           unset db_user db_name db_password voice_api_key
-          echo "Host-local database identity and protected speech configuration preflight passed."
+          echo "Host-local database identity and protected speech/RTC configuration preflight passed."
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           # Validate the immutable artifact source before touching the runtime
           # file. A bad config must not be left behind for the next host restart.

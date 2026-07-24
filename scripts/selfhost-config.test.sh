@@ -82,7 +82,8 @@ require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
 require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
 require_config "$deploy_workflow" 'scripts/assert-served-app-image-provenance.sh'
 require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
-require_config "$deploy_workflow" 'Host-local database identity and protected speech configuration preflight passed.'
+require_config "$deploy_workflow" 'scripts/validate-rtc-environment.sh'
+require_config "$deploy_workflow" 'Host-local database identity and protected speech/RTC configuration preflight passed.'
 require_config "$deploy_workflow" '--project-name multica'
 require_config "$deploy_workflow" 'db_user="$(compose_env_value POSTGRES_USER multica)"'
 require_config "$deploy_workflow" 'db_name="$(compose_env_value POSTGRES_DB multica)"'
@@ -146,6 +147,7 @@ require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"'
 bash scripts/runner-workspace-ownership.test.sh
 bash scripts/served-app-image-provenance.test.sh
 bash scripts/compose-environment-value.test.sh
+bash scripts/validate-rtc-environment.test.sh
 
 if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then
   echo "self-host static topology ok"

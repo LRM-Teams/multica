@@ -37,6 +37,8 @@ memory, tools, permissions, and channel history.
 
 - [x] PR 1: configure RTC `CustomLLM`, per-call identity, and deployment
   settings.
+- [x] PR 1b (#1172): reject partial RTC secret configuration before deployment
+  changes the running containers.
 - [ ] PR 2: authenticate and validate the OpenAI-compatible RTC endpoint.
 - [ ] PR 3: persist an idempotent DM speech turn and dispatch the selected
   agent.
@@ -63,6 +65,8 @@ memory, tools, permissions, and channel history.
 - [x] Self-host deployment contract now checks the CustomLLM URL and API key;
   the obsolete Ark endpoint assertion was removed.
 - [x] `bash scripts/selfhost-config.test.sh`
+- [x] RTC deployment preflight tests cover disabled, complete, partial,
+  optional-only opt-in, blank, and secret-value non-disclosure cases.
 - [ ] Full `./cmd/server` currently fails in the pre-existing
   `TestAgentsThroughRouter`: the local integration database returns 500 while
   loading an agent detail. The focused voice-call tests pass, and the failing

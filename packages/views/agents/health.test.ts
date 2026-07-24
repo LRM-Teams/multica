@@ -74,6 +74,17 @@ describe("resolveHealthDotClass — LRM-248 Online/Offline live badge", () => {
   it("falls back gracefully when the summary is unavailable (API not live)", () => {
     expect(resolveHealthDotClass(undefined, "bg-success")).toBe("bg-success");
   });
+
+  // LRM-548: workspace agent + owned private runtime can yield health
+  // offline/runtime_missing while runtime heartbeat (presence) is Online.
+  it("does not paint Offline when live presence is Online (LRM-548)", () => {
+    expect(
+      resolveHealthDotClass(summary("offline"), "bg-success", "online"),
+    ).toBe("bg-success");
+    expect(
+      resolveHealthDotClass(summary("offline"), "bg-fallback", "offline"),
+    ).toBe("bg-muted-foreground/40");
+  });
 });
 
 describe("formatHealthDuration", () => {

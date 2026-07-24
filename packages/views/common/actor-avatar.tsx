@@ -415,17 +415,21 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   if (!live) return null;
   const { dotClass: availabilityDotClass, label } = availabilityConfig[live];
   // Live badge folds reconnecting / suspected_disconnect → Online green
-  // (LRM-248). Offline stays gray.
-  const dotClass = resolveHealthDotClass(healthSummary, availabilityDotClass);
+  // (LRM-248). Offline stays gray. LRM-548: health offline cannot override
+  // live Online from runtime heartbeat (see resolveHealthDotClass).
+  const dotClass = resolveHealthDotClass(
+    healthSummary,
+    availabilityDotClass,
+    live,
+  );
   // Diameter tracks the avatar so the indicator is proportional everywhere,
   // with a floor so it never disappears on the smallest (14–16px) avatars.
   const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
   const dotStyle = { width: diameter, height: diameter };
   // Pulse is a motion cue on Online while a task runs — not a third presence
-  // word. Gate on the live Online axis (unstable counts as online).
-  const connectivityOk = healthSummary
-    ? healthSummary.state !== "offline"
-    : live === "online";
+  // word. Gate on the live Online axis (unstable counts as online). Health
+  // offline while live Online still counts as connected (LRM-548).
+  const connectivityOk = live === "online";
   const isWorking = connectivityOk && detail.workload === "working";
   // aria/title: Online / Offline only — never "Working" / "Unstable" as a
   // live status label (LRM-248).
@@ -434,11 +438,14 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
   // so "unavailable" reads distinctly from the filled active states. On tiny
   // participant-stack dots (~5px) a hollow ring is unreadable, so those fall
-  // back to the filled gray. Only the known-offline health state is hollow;
-  // the transitional availability fallback and all other states stay filled.
+  // back to the filled gray. Hollow only when live presence is Offline AND
+  // health confirms offline — never when runtime heartbeat says Online
+  // (LRM-548 / Frank hollow-dot false positive).
   const HOLLOW_MIN_PX = 8;
   const isOfflineHollow =
-    healthSummary?.state === "offline" && diameter >= HOLLOW_MIN_PX;
+    live === "offline" &&
+    healthSummary?.state === "offline" &&
+    diameter >= HOLLOW_MIN_PX;
   const dotColorClass = isOfflineHollow
     ? "border-2 border-muted-foreground/50 bg-transparent"
     : dotClass;

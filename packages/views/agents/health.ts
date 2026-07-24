@@ -84,12 +84,20 @@ export const healthStateConfig: Record<AgentHealthState, HealthStateVisual> = {
 // suspected_disconnect / reconnecting fold to Online green; offline stays gray.
 // When the summary is unavailable, return `fallbackDotClass` (already folded
 // through toLiveAvailability at the call site).
+//
+// LRM-548: when live presence (runtime heartbeat) is Online, health `offline`
+// must NOT paint Offline. GET /health can return offline with reason
+// `runtime_missing` for a workspace-visible agent bound to an owned private
+// runtime that is still heartbeat-online (Runtime Config green). That is a
+// capacity/visibility gate, not daemon connectivity — presence stays Online.
 export function resolveHealthDotClass(
   summary: AgentHealthSummary | undefined,
   fallbackDotClass: string,
+  liveAvailability?: "online" | "offline" | null,
 ): string {
   if (!summary) return fallbackDotClass;
   if (summary.state === "offline") {
+    if (liveAvailability === "online") return fallbackDotClass;
     return healthStateConfig.offline.dotClass;
   }
   // online | recovered | suspected_disconnect | reconnecting → Online green

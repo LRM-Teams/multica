@@ -241,7 +241,7 @@ describe("AgentStatusDot", () => {
     expect(dot).not.toHaveClass("bg-warning");
   });
 
-  it("shows the working pulse only when health is online/recovered (#266, Iris)", () => {
+  it("shows the working pulse only when live presence is Online (#266 / LRM-548)", () => {
     // Working on a healthy link → breathing pulse present.
     presenceDetailMock.mockReturnValue({
       availability: "online",
@@ -265,8 +265,16 @@ describe("AgentStatusDot", () => {
     const { container, rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).not.toBeNull();
 
-    // Same "working" workload but the link is offline — a disconnected agent
-    // must NOT appear to be working, so the pulse is suppressed.
+    // Live Offline + working leftover → pulse suppressed (disconnected agent
+    // must NOT appear to be working). Health offline alone is no longer enough
+    // to suppress when presence is Online (LRM-548).
+    presenceDetailMock.mockReturnValue({
+      availability: "offline",
+      workload: "working",
+      runningCount: 1,
+      queuedCount: 0,
+      capacity: 1,
+    });
     healthSummaryMock.mockReturnValue({
       summary: {
         agent_id: "agent-1",
@@ -316,6 +324,60 @@ describe("AgentStatusDot", () => {
     dot = screen.getByLabelText(/^Status:/);
     expect(dot).toHaveClass("bg-muted-foreground/40");
     expect(dot).not.toHaveClass("border-2");
+  });
+
+  // Frank repro (LRM-548): Runtime Config green + health offline/runtime_missing
+  // (workspace agent on owned private runtime) must NOT hollow-paint Offline.
+  it("keeps Online green when presence is online but health says offline (LRM-548)", () => {
+    presenceDetailMock.mockReturnValue({
+      availability: "online",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: 1,
+    });
+    healthSummaryMock.mockReturnValue({
+      summary: {
+        agent_id: "agent-1",
+        state: "offline",
+        state_since: "2026-07-06T09:00:00Z",
+        last_seen_at: "2026-07-06T09:40:00Z",
+        last_event_at: "2026-07-06T09:40:00Z",
+      },
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    render(<AgentStatusDot agentId="agent-1" size={56} />);
+    const dot = screen.getByLabelText("Status: Online");
+    expect(dot).toHaveClass("bg-success");
+    expect(dot).not.toHaveClass("bg-transparent");
+    expect(dot).not.toHaveClass("border-2");
+  });
+
+  it("still pulses Working when presence is online despite health offline (LRM-548)", () => {
+    presenceDetailMock.mockReturnValue({
+      availability: "online",
+      workload: "working",
+      runningCount: 1,
+      queuedCount: 0,
+      capacity: 1,
+    });
+    healthSummaryMock.mockReturnValue({
+      summary: {
+        agent_id: "agent-1",
+        state: "offline",
+        state_since: "2026-07-06T09:00:00Z",
+        last_seen_at: "2026-07-06T09:40:00Z",
+        last_event_at: "2026-07-06T09:40:00Z",
+      },
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    const { container } = render(<AgentStatusDot agentId="agent-1" size={40} />);
+    expect(screen.getByLabelText("Status: Online")).toHaveClass("bg-success");
+    expect(container.querySelector(".animate-ping")).not.toBeNull();
   });
 });
 

@@ -584,7 +584,17 @@ function MessageViewport({
           firstItemIndex={firstItemIndex}
           initialTopMostItemIndex={initialTopMostItemIndex}
           increaseViewportBy={{ top: 320, bottom: 520 }}
-          atBottomThreshold={120}
+          // 2026-07-24: was 120px — generous enough that scrolling up even a
+          // little to reread the last couple messages still read as "at
+          // bottom" to Virtuoso, so a live message arriving mid-read yanked
+          // the viewport back down (Frank: "我一上翻就是不想被拽走" — the
+          // moment I scroll up, I don't want to be pulled back). The product
+          // bar is intent, not distance: any deliberate upward scroll should
+          // release follow immediately. 24px keeps a small allowance for
+          // rubber-band/inertia settle noise right at the true bottom (avoids
+          // flapping isNearBottom on sub-pixel scroll jitter) without reading
+          // as "still at the bottom" for an actual reposition.
+          atBottomThreshold={24}
           atBottomStateChange={handleAtBottomStateChange}
           // Scroll position has exactly one owner at a time (#348 postmortem):
           // while the unread-anchor settle loop is in flight it's re-issuing

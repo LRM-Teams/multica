@@ -314,6 +314,37 @@ export function invalidateChannelMessages(qc: QueryClient, channelId: string) {
   qc.invalidateQueries({ queryKey: channelKeys.messagesPage(channelId) });
 }
 
+/**
+ * Patch one message's `reactions` array in place (#689 perf audit) instead of
+ * invalidating the whole channel message list. A `channel_reaction:added` /
+ * `channel_reaction:removed` WS event carries enough data to compute the new
+ * reaction row set itself — a full-list refetch on every reaction is a
+ * virtualized-list-wide re-render for a one-field change on one row, and was
+ * the single largest contributor to mobile scroll jank in the perf audit.
+ *
+ * Same reach as {@link upsertChannelMessageInCache}: the flat array cache and
+ * every loaded page of the infinite cache. Messages not currently cached are
+ * a no-op (`setQueryData`'s updater only runs against an existing entry).
+ */
+export function patchChannelMessageReactionInCache(
+  qc: QueryClient,
+  channelId: string,
+  messageId: string,
+  updateReactions: (reactions: ChannelMessage["reactions"]) => ChannelMessage["reactions"],
+) {
+  const patchOne = (message: ChannelMessage): ChannelMessage =>
+    message.id === messageId ? { ...message, reactions: updateReactions(message.reactions) } : message;
+
+  qc.setQueryData<ChannelMessage[]>(channelKeys.messages(channelId), (old) => old?.map(patchOne));
+  qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage(channelId), (old) => {
+    if (!old) return old;
+    return {
+      ...old,
+      pages: old.pages.map((page) => ({ ...page, messages: page.messages.map(patchOne) })),
+    };
+  });
+}
+
 function shouldRenderChannelMessage(message: ChannelMessage | null | undefined): boolean {
   if (!message) return false;
   return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;

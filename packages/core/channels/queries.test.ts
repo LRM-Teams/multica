@@ -22,6 +22,7 @@ import {
   enrichChannelMessagesPreservingAvatars,
   findChannelMessageMatchIndex,
   flattenChannelMessagePages,
+  patchChannelMessageReactionInCache,
   upsertChannelMessageInCache,
   withPreservedAuthorAvatar,
 } from "./queries";
@@ -225,6 +226,81 @@ describe("findChannelMessageMatchIndex (optimistic ACK)", () => {
       thread_root_message_id: "root-1",
     } as ChannelMessage;
     expect(findChannelMessageMatchIndex([optimistic], ack)).toBe(0);
+  });
+});
+
+describe("patchChannelMessageReactionInCache (#689 perf audit)", () => {
+  function messageWithReactions(id: string, reactions: ChannelMessage["reactions"]): ChannelMessage {
+    return { id, channel_id: "c1", reactions } as ChannelMessage;
+  }
+
+  it("appends a reaction to the matching message in the flat list cache, leaving others untouched", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(channelKeys.messages("c1"), [
+      messageWithReactions("m1", []),
+      messageWithReactions("m2", [{ id: "r-existing", channel_id: "c1", message_id: "m2", actor_type: "member", actor_id: "u2", emoji: "👍", created_at: "t" }]),
+    ]);
+
+    patchChannelMessageReactionInCache(qc, "c1", "m1", (reactions) => [
+      ...(reactions ?? []),
+      { id: "r1", channel_id: "c1", message_id: "m1", actor_type: "member", actor_id: "u1", emoji: "🎉", created_at: "t" },
+    ]);
+
+    const cached = qc.getQueryData<ChannelMessage[]>(channelKeys.messages("c1")) ?? [];
+    expect(cached[0]?.reactions).toEqual([
+      { id: "r1", channel_id: "c1", message_id: "m1", actor_type: "member", actor_id: "u1", emoji: "🎉", created_at: "t" },
+    ]);
+    // m2 is a different object reference than what setQueryData originally
+    // stored only if map() re-wraps it — the CONTENT must be untouched.
+    expect(cached[1]?.reactions).toHaveLength(1);
+    expect(cached[1]?.reactions?.[0]?.id).toBe("r-existing");
+  });
+
+  it("removes a reaction by (emoji, actor_type, actor_id) triple", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(channelKeys.messages("c1"), [
+      messageWithReactions("m1", [
+        { id: "r1", channel_id: "c1", message_id: "m1", actor_type: "member", actor_id: "u1", emoji: "🎉", created_at: "t" },
+        { id: "r2", channel_id: "c1", message_id: "m1", actor_type: "agent", actor_id: "a1", emoji: "🎉", created_at: "t" },
+      ]),
+    ]);
+
+    patchChannelMessageReactionInCache(qc, "c1", "m1", (reactions) =>
+      reactions?.filter((r) => !(r.emoji === "🎉" && r.actor_type === "member" && r.actor_id === "u1")),
+    );
+
+    const cached = qc.getQueryData<ChannelMessage[]>(channelKeys.messages("c1")) ?? [];
+    expect(cached[0]?.reactions).toEqual([
+      { id: "r2", channel_id: "c1", message_id: "m1", actor_type: "agent", actor_id: "a1", emoji: "🎉", created_at: "t" },
+    ]);
+  });
+
+  it("patches the message inside every loaded page of the infinite cache", () => {
+    const qc = new QueryClient();
+    const data = {
+      pages: [page(["a"]), page(["b", "c"])],
+      pageParams: [],
+    } as unknown as InfiniteData<ChannelMessagesPage>;
+    qc.setQueryData(channelKeys.messagesPage("c1"), data);
+
+    patchChannelMessageReactionInCache(qc, "c1", "b", () => [
+      { id: "r1", channel_id: "c1", message_id: "b", actor_type: "member", actor_id: "u1", emoji: "👍", created_at: "t" },
+    ]);
+
+    const cached = qc.getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("c1"));
+    const patched = cached?.pages.flatMap((p) => p.messages).find((m) => m.id === "b");
+    expect(patched?.reactions).toHaveLength(1);
+    // Untouched siblings keep no reactions field.
+    const sibling = cached?.pages.flatMap((p) => p.messages).find((m) => m.id === "c");
+    expect(sibling?.reactions ?? undefined).toBeUndefined();
+  });
+
+  it("is a no-op when neither cache has the channel loaded (message never opened yet)", () => {
+    const qc = new QueryClient();
+    expect(() =>
+      patchChannelMessageReactionInCache(qc, "never-opened", "m1", (r) => r),
+    ).not.toThrow();
+    expect(qc.getQueryData(channelKeys.messages("never-opened"))).toBeUndefined();
   });
 });
 

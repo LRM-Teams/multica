@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/turntransport"
 )
 
 var (
@@ -105,6 +106,10 @@ func init() {
 }
 
 func main() {
+	if err := turntransport.ApplyFromEnvironment(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent transport unavailable: %v\n", err)
+		os.Exit(1)
+	}
 	cli.CleanupStaleUpdateArtifacts()
 	if err := rootCmd.Execute(); err != nil {
 		if err != errSilent {

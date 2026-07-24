@@ -150,14 +150,13 @@ DELETE FROM squad
 WHERE leader_id IN (
     SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
 )
-  AND archived_at IS NOT NULL
 `
 
-// Removes archived squads whose leader_id references an archived agent on the
-// given runtime. Must run before DeleteArchivedAgentsByRuntime so the RESTRICT
-// FK on squad.leader_id does not block the agent deletion. Active squads are
-// handled separately by CountActiveSquadsWithArchivedLeadersByRuntime, which
-// returns a 409 until the caller archives them or assigns a new leader.
+// Removes squads whose leader_id references an archived agent on the given
+// runtime. Must run before DeleteArchivedAgentsByRuntime so the RESTRICT FK on
+// squad.leader_id does not block the agent deletion. Squad is no longer a
+// blocking product surface, so active squads with archived leaders are removed
+// with the archived leader during runtime teardown.
 func (q *Queries) DeleteSquadsByArchivedAgentsOnRuntime(ctx context.Context, runtimeID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteSquadsByArchivedAgentsOnRuntime, runtimeID)
 	return err

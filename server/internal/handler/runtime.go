@@ -922,18 +922,6 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Refuse before any teardown-side effects if the runtime still has active
-	// squads whose leader is already archived on this runtime.
-	activeSquadCount, err := h.Queries.CountActiveSquadsWithArchivedLeadersByRuntime(r.Context(), rt.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check runtime squad dependencies")
-		return
-	}
-	if activeSquadCount > 0 {
-		writeError(w, http.StatusConflict, "cannot delete runtime: it has active squads led by archived agents. Archive those squads or assign them a new leader first.")
-		return
-	}
-
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
@@ -943,8 +931,9 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	qtx := h.Queries.WithTx(tx)
 
 	// Shared teardown with computer bulk-delete (DeleteRuntimesByDaemon):
-	// pause autopilots → drop archived squads/agents → fail memory curation
-	// → delete the runtime row. Active squads are already refused above.
+	// pause autopilots -> drop squads/archived agents -> fail memory curation
+	// -> delete the runtime row. Squads led by archived agents are teardown
+	// debris now that squads are no longer a blocking product surface.
 	if err := teardownRuntimeWithoutActiveAgents(r.Context(), qtx, tx, rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return

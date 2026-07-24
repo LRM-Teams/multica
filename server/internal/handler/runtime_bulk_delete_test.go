@@ -121,6 +121,31 @@ func TestDeleteRuntimesByDaemon_RefusesActiveAgents(t *testing.T) {
 	assertRuntimeExists(t, ctx, rtID)
 }
 
+func TestDeleteRuntimesByDaemon_RemovesSquadsLedByArchivedAgents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-squad-" + uuid.NewString()
+
+	rtID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+	archivedLeader := seedAgentOnRuntime(t, rtID, "Bulk Archived Squad Leader", true)
+	activeSquad := seedSquad(t, archivedLeader, "Bulk Active Squad To Drop", false)
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if squadExists(t, activeSquad) {
+		t.Fatalf("active squad led by archived agent should be removed during computer delete")
+	}
+	assertRuntimeGone(t, ctx, rtID)
+}
+
 func TestDeleteRuntimesByDaemon_RefusesActiveTasks(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

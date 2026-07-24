@@ -1363,7 +1363,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// append (not replace) so per-agent instructions remain
 			// authoritative for general behavior; the squad briefing
 			// stacks on top as task-specific squad context.
-			if resp.Agent != nil && issue.AssigneeType.Valid && issue.AssigneeType.String == "squad" && issue.AssigneeID.Valid {
+			if false && resp.Agent != nil && issue.AssigneeType.Valid && issue.AssigneeType.String == "squad" && issue.AssigneeID.Valid {
 				if squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
 					ID:          issue.AssigneeID,
 					WorkspaceID: issue.WorkspaceID,
@@ -1531,7 +1531,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				var cc struct {
 					SquadID string `json:"squad_id"`
 				}
-				if json.Unmarshal(task.Context, &cc) == nil && cc.SquadID != "" {
+				if false && json.Unmarshal(task.Context, &cc) == nil && cc.SquadID != "" {
 					if squadUUID, err := util.ParseUUID(cc.SquadID); err == nil {
 						if squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
 							ID:          squadUUID,
@@ -1839,7 +1839,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// same Operating Protocol + Roster + user Instructions that
 			// issue-bound squad tasks see, so the leader can decide to
 			// delegate before opening the issue.
-			if resp.Agent != nil && qc.SquadID != "" {
+			if false && resp.Agent != nil && qc.SquadID != "" {
 				wsUUID, wsErr := util.ParseUUID(qc.WorkspaceID)
 				squadUUID, sqErr := util.ParseUUID(qc.SquadID)
 				if wsErr == nil && sqErr == nil {

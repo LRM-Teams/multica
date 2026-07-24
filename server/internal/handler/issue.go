@@ -982,35 +982,11 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if involvesUserFilter.Valid {
 		ref := addArg(involvesUserFilter)
 		where = append(where, fmt.Sprintf(`(
-    (i.assignee_type = 'agent' AND i.assignee_id IN (
+    i.assignee_type = 'agent' AND i.assignee_id IN (
        SELECT a.id FROM agent a
         WHERE a.workspace_id = $1
           AND a.owner_id     = %[1]s::uuid
-    ))
-    OR (i.assignee_type = 'squad' AND i.assignee_id IN (
-       SELECT sm.squad_id
-         FROM squad_member sm
-         JOIN squad s ON s.id = sm.squad_id
-        WHERE s.workspace_id = $1
-          AND sm.member_type = 'member'
-          AND sm.member_id   = %[1]s::uuid
-       UNION
-       SELECT s.id
-         FROM squad s
-         JOIN agent a ON a.id = s.leader_id
-        WHERE s.workspace_id = $1
-          AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
-       UNION
-       SELECT sm.squad_id
-         FROM squad_member sm
-         JOIN squad s ON s.id = sm.squad_id
-         JOIN agent a ON a.id = sm.member_id
-        WHERE s.workspace_id = $1
-          AND sm.member_type = 'agent'
-          AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
-    ))
+    )
 )`, ref))
 	}
 
@@ -1137,7 +1113,7 @@ func splitCommaParam(raw string) []string {
 }
 
 func isIssueActorType(s string) bool {
-	return s == "member" || s == "agent" || s == "squad"
+	return s == "member" || s == "agent"
 }
 
 func parseUUIDParamList(w http.ResponseWriter, raw, fieldName string) ([]pgtype.UUID, bool) {
@@ -1287,10 +1263,8 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	} else if filter != nil {
 		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(filter))))
 	}
-	// Mirror the involves_user_id 4-branch UNION from sqlc's ListIssues /
-	// ListOpenIssues / CountIssues. ListGroupedIssues is a hand-written dynamic
-	// SQL builder that does not share parameters with sqlc, so the fragment is
-	// re-implemented here in lock-step. Member-direct assignment is excluded by
+	// Mirror the involves_user_id owned-agent filter from sqlc's ListIssues /
+	// ListOpenIssues / CountIssues. Member-direct assignment is excluded by
 	// design: that semantics belongs to tab 1 (`assignee_id`), and tab 3 must
 	// stay disjoint from tab 1.
 	if raw := r.URL.Query().Get("involves_user_id"); raw != "" {
@@ -1300,35 +1274,11 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		ref := addArg(id)
 		where = append(where, fmt.Sprintf(`(
-    (i.assignee_type = 'agent' AND i.assignee_id IN (
+    i.assignee_type = 'agent' AND i.assignee_id IN (
        SELECT a.id FROM agent a
         WHERE a.workspace_id = $1
           AND a.owner_id     = %[1]s::uuid
-    ))
-    OR (i.assignee_type = 'squad' AND i.assignee_id IN (
-       SELECT sm.squad_id
-         FROM squad_member sm
-         JOIN squad s ON s.id = sm.squad_id
-        WHERE s.workspace_id = $1
-          AND sm.member_type = 'member'
-          AND sm.member_id   = %[1]s::uuid
-       UNION
-       SELECT s.id
-         FROM squad s
-         JOIN agent a ON a.id = s.leader_id
-        WHERE s.workspace_id = $1
-          AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
-       UNION
-       SELECT sm.squad_id
-         FROM squad_member sm
-         JOIN squad s ON s.id = sm.squad_id
-         JOIN agent a ON a.id = sm.member_id
-        WHERE s.workspace_id = $1
-          AND sm.member_type = 'agent'
-          AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
-    ))
+    )
 )`, ref))
 	}
 
@@ -1859,8 +1809,12 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	hasAgent := strings.TrimSpace(req.AgentID) != ""
 	hasSquad := strings.TrimSpace(req.SquadID) != ""
-	if hasAgent == hasSquad {
-		writeError(w, http.StatusBadRequest, "exactly one of agent_id or squad_id is required")
+	if hasSquad {
+		writeError(w, http.StatusGone, "squad feature has been removed")
+		return
+	}
+	if !hasAgent {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
 		return
 	}
 
@@ -1879,48 +1833,18 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the actor to the agent that will actually run the task. For
-	// agent picks that's the agent itself; for squad picks it's the squad's
-	// leader agent. The leader receives a squad-leader briefing on dispatch
-	// (see daemon.go), matching the behavior of an issue assigned to the
-	// squad — picking a squad here is functionally "ask the squad leader to
-	// create this issue, on behalf of the squad".
+	// Resolve the selected agent that will run the quick-create task.
 	var agentUUID pgtype.UUID
 	var squadUUID pgtype.UUID
-	if hasSquad {
-		var ok bool
-		squadUUID, ok = parseUUIDOrBadRequest(w, req.SquadID, "squad_id")
-		if !ok {
-			return
-		}
-		squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
-			ID:          squadUUID,
-			WorkspaceID: wsUUID,
-		})
-		if err != nil {
-			writeError(w, http.StatusNotFound, "squad not found")
-			return
-		}
-		if squad.ArchivedAt.Valid {
-			writeError(w, http.StatusBadRequest, "squad is archived")
-			return
-		}
-		agentUUID = squad.LeaderID
-	} else {
-		var ok bool
-		agentUUID, ok = parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
-		if !ok {
-			return
-		}
+	agentUUID, ok = parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
+	if !ok {
+		return
 	}
 
 	// Reuse the same workspace-membership / archived / private-agent
 	// ownership rules as `validateAssigneePair` so a user can't POST a
 	// private agent_id they shouldn't be able to dispatch (the frontend
-	// filters them out, but the handler is the trust boundary). Squad
-	// picks reach this with the resolved leader agent; the same rules
-	// apply — a private leader behind a squad the user can't reach
-	// should still be rejected.
+	// filters them out, but the handler is the trust boundary).
 	if status, msg := h.validateAssigneePair(
 		r.Context(), r, workspaceID,
 		pgtype.Text{String: "agent", Valid: true},
@@ -2771,27 +2695,9 @@ func (h *Handler) validateAssigneePair(ctx context.Context, r *http.Request, wor
 		}
 		return 0, ""
 	case "squad":
-		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-			ID:          assigneeID,
-			WorkspaceID: wsUUID,
-		})
-		if err != nil {
-			return http.StatusBadRequest, "assignee_id does not refer to a squad in this workspace"
-		}
-		if squad.ArchivedAt.Valid {
-			return http.StatusBadRequest, "cannot assign to an archived squad"
-		}
-		leader, err := h.Queries.GetAgent(ctx, squad.LeaderID)
-		if err != nil || leader.ArchivedAt.Valid {
-			return http.StatusBadRequest, "squad leader is archived; cannot assign to this squad"
-		}
-		actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-		if !h.canAccessPrivateAgent(ctx, leader, actorType, actorID, workspaceID) {
-			return http.StatusForbidden, "cannot assign to squad with private leader"
-		}
-		return 0, ""
+		return http.StatusGone, "squad feature has been removed"
 	default:
-		return http.StatusBadRequest, "assignee_type must be 'member', 'agent', or 'squad'"
+		return http.StatusBadRequest, "assignee_type must be 'member' or 'agent'"
 	}
 }
 

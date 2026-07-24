@@ -1173,35 +1173,6 @@ func TestResolveAssignee(t *testing.T) {
 	// MUL-2165: squad names must resolve to (squad, <id>) so the autopilot
 	// quick-create prompt can route work to a squad (e.g. "Super Human")
 	// instead of falling through to "Unrecognized assignee".
-	t.Run("match squad by exact name", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("match squad by case-insensitive substring", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "super", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("match squad by bare @ display name", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "@Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
 
 	t.Run("no match", func(t *testing.T) {
 		_, _, err := resolveAssignee(ctx, client, "nobody", issueAssigneeKinds)
@@ -1324,15 +1295,6 @@ func TestResolveAssigneeRespectsKinds(t *testing.T) {
 		}
 	})
 
-	t.Run("issueAssigneeKinds still resolves the same squad name (control)", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "ccccccc1-2222-3333-4444-555555555555" {
-			t.Errorf("got (%q, %q), want (squad, ccccccc1-...)", aType, aID)
-		}
-	})
 }
 
 // TestResolveAssigneeExactMatchWins covers the substring-collision scenario from
@@ -1544,15 +1506,6 @@ func TestResolveAssigneeByIDStrict(t *testing.T) {
 	// MUL-2165: --assignee-id <squad-uuid> must resolve to (squad, <id>) so
 	// scripts that read the squad list and pin its UUID can assign work to a
 	// squad in a single deterministic call.
-	t.Run("UUID resolves a squad", func(t *testing.T) {
-		aType, aID, err := resolveAssigneeByID(ctx, client, "ccccccc1-2222-3333-4444-555555555555", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "ccccccc1-2222-3333-4444-555555555555" {
-			t.Errorf("got (%q, %q), want squad Super Human", aType, aID)
-		}
-	})
 
 	t.Run("non-UUID input is rejected without name fallback", func(t *testing.T) {
 		_, _, err := resolveAssigneeByID(ctx, client, "Alice", issueAssigneeKinds)
@@ -1571,12 +1524,12 @@ func TestResolveAssigneeByIDStrict(t *testing.T) {
 		}
 	})
 
-	t.Run("well-formed UUID with no matching entity errors", func(t *testing.T) {
+	t.Run("well-formed UUID with no matching member/agent errors", func(t *testing.T) {
 		_, _, err := resolveAssigneeByID(ctx, client, "deadbeef-1111-1111-1111-111111111111", issueAssigneeKinds)
 		if err == nil {
 			t.Fatal("expected error for missing entity")
 		}
-		if !strings.Contains(err.Error(), "no member, agent, or squad") {
+		if !strings.Contains(err.Error(), "no member or agent") {
 			t.Errorf("expected not-found error, got: %v", err)
 		}
 	})

@@ -97,22 +97,6 @@ func (q *Queries) CountActiveAgentsByRuntime(ctx context.Context, runtimeID pgty
 	return count, err
 }
 
-const countActiveSquadsWithArchivedLeadersByRuntime = `-- name: CountActiveSquadsWithArchivedLeadersByRuntime :one
-SELECT count(*)
-FROM squad
-WHERE archived_at IS NULL
-  AND leader_id IN (
-    SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
-  )
-`
-
-func (q *Queries) CountActiveSquadsWithArchivedLeadersByRuntime(ctx context.Context, runtimeID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countActiveSquadsWithArchivedLeadersByRuntime, runtimeID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const deleteAgentRuntime = `-- name: DeleteAgentRuntime :exec
 DELETE FROM agent_runtime WHERE id = $1
 `
@@ -142,24 +126,6 @@ DELETE FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
 
 func (q *Queries) DeleteArchivedAgentsByRuntime(ctx context.Context, runtimeID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteArchivedAgentsByRuntime, runtimeID)
-	return err
-}
-
-const deleteSquadsByArchivedAgentsOnRuntime = `-- name: DeleteSquadsByArchivedAgentsOnRuntime :exec
-DELETE FROM squad
-WHERE leader_id IN (
-    SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
-)
-  AND archived_at IS NOT NULL
-`
-
-// Removes archived squads whose leader_id references an archived agent on the
-// given runtime. Must run before DeleteArchivedAgentsByRuntime so the RESTRICT
-// FK on squad.leader_id does not block the agent deletion. Active squads are
-// handled separately by CountActiveSquadsWithArchivedLeadersByRuntime, which
-// returns a 409 until the caller archives them or assigns a new leader.
-func (q *Queries) DeleteSquadsByArchivedAgentsOnRuntime(ctx context.Context, runtimeID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteSquadsByArchivedAgentsOnRuntime, runtimeID)
 	return err
 }
 

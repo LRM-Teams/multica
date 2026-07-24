@@ -77,18 +77,8 @@ func (h *Handler) validateRadarIssueCreateWorkspaceTargets(
 			}
 			return err
 		}
-	case "squad":
-		if _, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-			ID:          assigneeID,
-			WorkspaceID: workspaceID,
-		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return errors.New("assignee_id does not refer to a squad in the radar run workspace")
-			}
-			return err
-		}
 	default:
-		return errors.New("assignee_type must be 'member', 'agent', or 'squad'")
+		return errors.New("assignee_type must be 'member' or 'agent'")
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package execenv
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -857,6 +858,92 @@ func TestAllocateCollisionFreeSkillDir(t *testing.T) {
 	}
 	if dir != filepath.Join(parent, "issue-review-multica-2") {
 		t.Errorf("third allocation path = %q, want under parent", dir)
+	}
+}
+
+func TestAllocateCollisionFreeSkillDir_ReclaimsManaged(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	managed := filepath.Join(parent, "issue-review")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, managedSkillMarker), []byte("Issue Review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, "SKILL.md"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Also seed a stale Multica collision sibling that should be cleaned
+	// after a successful writeSkillFiles (covered below via reclaim helper).
+	stale := filepath.Join(parent, "issue-review-multica-3")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, managedSkillMarker), []byte("Issue Review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	slug, dir, err := allocateCollisionFreeSkillDir(parent, "issue-review")
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if slug != "issue-review" {
+		t.Fatalf("expected reclaim natural slug, got %q", slug)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("managed dir should be removed before rewrite, err=%v", err)
+	}
+
+	reclaimManagedSkillCollisionSiblings(parent, "issue-review", "issue-review")
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale managed collision sibling should be removed, err=%v", err)
+	}
+}
+
+func TestWriteSkillFiles_ReclaimPreventsCollisionExhaustion(t *testing.T) {
+	t.Parallel()
+	skillsDir := t.TempDir()
+	// Simulate 64 prior Multica leftover dirs for the same skill.
+	for i := 0; i < 64; i++ {
+		var name string
+		switch {
+		case i == 0:
+			name = "multica-autopilots"
+		case i == 1:
+			name = "multica-autopilots-multica"
+		default:
+			name = fmt.Sprintf("multica-autopilots-multica-%d", i)
+		}
+		dir := filepath.Join(skillsDir, name)
+		if err := os.MkdirAll(filepath.Join(dir, "references"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, managedSkillMarker), []byte("multica-autopilots\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("old\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := writeSkillFiles(skillsDir, []SkillContextForEnv{{
+		Name:    "multica-autopilots",
+		Content: "# Autopilots\n",
+	}}, nil)
+	if err != nil {
+		t.Fatalf("writeSkillFiles should reclaim managed dirs, got: %v", err)
+	}
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "multica-autopilots" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("want single multica-autopilots dir, got %v", names)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // sidecarManifestFile is the on-disk JSON Prepare writes into envRoot to
@@ -154,23 +155,34 @@ func recordWriteFile(path string, data []byte, perm os.FileMode, m *sidecarManif
 	return nil
 }
 
+// managedSkillMarker is written into every skill directory Multica creates
+// under a provider-native skills parent (e.g. .cursor/skills/). It lets a
+// later Prepare reclaim our own leftover dirs — critical for local_directory
+// tasks, which skip Reuse and can otherwise accumulate `-multica-N` siblings
+// until allocateCollisionFreeSkillDir exhausts its attempt budget.
+const managedSkillMarker = ".multica-managed-skill"
+
+func isManagedSkillDir(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, managedSkillMarker))
+	return err == nil
+}
+
 // allocateCollisionFreeSkillDir picks a directory under skillsParent
-// whose path does NOT currently exist, so writeSkillFiles can lay
-// down a Multica skill without colliding with a user-installed skill
-// of the same slug. The first attempt is always the natural baseSlug
-// — that's the path provider-native discovery already knows. On
-// collision we append `-multica`, then `-multica-2`, `-multica-3`,
-// … until a free slot is found. The chosen slug is returned alongside
-// the absolute path so callers can use it in frontmatter and brief
-// listings.
+// for writeSkillFiles. The first attempt is always the natural baseSlug.
+// On collision with an *unmarked* (user-owned) directory we append
+// `-multica`, then `-multica-2`, `-multica-3`, … until a free slot is found.
+//
+// Directories Multica previously created (bearing managedSkillMarker) are
+// reclaimed in place instead of bumping the slug — otherwise local_directory
+// Prepare loops leave 64 collision siblings and inbox delivery fails with
+// "exhausted N attempts".
 //
 // The collision-free fallback name is still a sibling under the same
-// skillsParent, so provider-native discovery still picks the skill up
-// (each subdir under .claude/skills/ etc. is scanned independently).
-// The user's directory at baseSlug is left bit-for-bit intact.
+// skillsParent, so provider-native discovery still picks the skill up.
+// Unmarked user directories at baseSlug are left bit-for-bit intact.
 //
 // The probe is bounded to a small ceiling — a user with thousands of
-// collisions on the same slug indicates an upstream bug, not a
+// unmarked collisions on the same slug indicates an upstream bug, not a
 // realistic state. Returning an error in that case forces the caller
 // to surface the problem instead of looping forever.
 func allocateCollisionFreeSkillDir(skillsParent, baseSlug string) (slug, dir string, err error) {
@@ -186,14 +198,53 @@ func allocateCollisionFreeSkillDir(skillsParent, baseSlug string) (slug, dir str
 			candidate = fmt.Sprintf("%s-multica-%d", baseSlug, i)
 		}
 		path := filepath.Join(skillsParent, candidate)
-		if _, statErr := os.Lstat(path); statErr != nil {
+		st, statErr := os.Lstat(path)
+		if statErr != nil {
 			if errors.Is(statErr, fs.ErrNotExist) {
 				return candidate, path, nil
 			}
 			return "", "", fmt.Errorf("stat candidate %s: %w", path, statErr)
 		}
+		if !st.IsDir() {
+			continue
+		}
+		if isManagedSkillDir(path) {
+			if err := os.RemoveAll(path); err != nil {
+				return "", "", fmt.Errorf("reclaim managed skill dir %s: %w", path, err)
+			}
+			return candidate, path, nil
+		}
+		// Unmarked directory — treat as user-owned and try the next slug.
 	}
 	return "", "", fmt.Errorf("allocate collision-free skill dir under %s: exhausted %d attempts for base %q", skillsParent, maxAttempts, baseSlug)
+}
+
+// reclaimManagedSkillCollisionSiblings removes Multica-owned collision
+// leftovers for baseSlug (baseSlug-multica, baseSlug-multica-N, …) after a
+// successful write to keepSlug. Unmarked user dirs are never touched.
+func reclaimManagedSkillCollisionSiblings(skillsParent, baseSlug, keepSlug string) {
+	entries, err := os.ReadDir(skillsParent)
+	if err != nil {
+		return
+	}
+	prefix := baseSlug + "-multica"
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == keepSlug {
+			continue
+		}
+		if name != prefix && !strings.HasPrefix(name, prefix+"-") {
+			continue
+		}
+		dir := filepath.Join(skillsParent, name)
+		if !isManagedSkillDir(dir) {
+			continue
+		}
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // writeSidecarManifest persists m to {envRoot}/{sidecarManifestFile}.

@@ -76,8 +76,6 @@
     "agents_idle": "{{agents}} agents",
     "agents_live": "{{agents}} agents · {{working}} working",
     "agents_attention": "{{agents}} agents · needs attention",
-    "dm_live": "Working",
-    "dm_attention": "Needs attention",
     "presence_counts": "{{members}} · {{agents}}",
     "presence_working": "{{working}} working",
     "presence_attention": "Needs attention",

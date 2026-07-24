@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { MemoizedMarkdown } from "../../../common/markdown";
@@ -33,6 +33,51 @@ const ACTIVITY_DETAIL_SCROLL_EPSILON = 1;
 
 /** Spine column width — dots sit on the 1.5px border line (LRM-560). */
 const SPINE_COL = "w-3";
+
+/** Command surface: muted + rounded + mono + optional clamp-2 + hover copy (LRM-560). */
+function CommandBlock({
+  content,
+  clamped,
+  copied,
+  copyLabel,
+  onCopy,
+}: {
+  content: string;
+  clamped: boolean;
+  copied: boolean;
+  copyLabel: string;
+  onCopy: () => void;
+}) {
+  return (
+    <div
+      className="group/cmd relative mt-1 rounded-md bg-muted"
+      data-testid="activity-command-block"
+    >
+      <pre
+        className={cn(
+          "overflow-x-auto px-2.5 py-1.5 pr-9 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground",
+          clamped && "line-clamp-2",
+        )}
+      >
+        <code>{content}</code>
+      </pre>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onCopy();
+        }}
+        aria-label={copyLabel}
+        className={cn(
+          "absolute right-1.5 top-1.5 rounded border border-border bg-background p-1 text-muted-foreground shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          copied ? "opacity-100" : "opacity-0 group-hover/cmd:opacity-100",
+        )}
+      >
+        <Copy className="size-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
 
 // A file tool's `tool_target` is now a source-backed path (absolute when the
 // runtime provides it, #484) which can be ~90 chars — long enough to blow out
@@ -193,127 +238,128 @@ function ActivityRow({
         data-testid="activity-row"
         data-activity-kind={event.activity_kind}
       >
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          aria-controls={expanded ? detailId : undefined}
-          className="group flex min-h-11 w-full items-start gap-2 rounded-md py-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
-        >
+        <div className="flex items-start gap-2">
           <span className={cn("flex shrink-0 justify-center", SPINE_COL)}>
             <ActivitySpineDot tone={presentation.tone} className="mt-2" />
           </span>
-          <span className="flex min-w-0 flex-1 items-start gap-2 pt-0.5">
-            <span className="min-w-0 flex-1">
-              {/* LRM-560 tier 1: action label weight 600 */}
-              <span className="block text-[13.5px] font-semibold leading-snug text-foreground">
-                {label}
-              </span>
-              {!expanded && subtext && (
-                <span
-                  className={cn(
-                    "mt-0.5 block text-muted-foreground",
-                    isCommand
-                      ? "line-clamp-2 break-all font-mono text-[12px]"
-                      : "line-clamp-1 text-[13px]",
-                  )}
-                >
-                  {subtext}
-                </span>
-              )}
-            </span>
-            <span className={cn(timestampClass, "pt-0.5")}>{time}</span>
-            <span
-              className="mt-0.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground"
-              aria-hidden
+          <div className="min-w-0 flex-1 pt-0.5">
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-controls={expanded ? detailId : undefined}
+              className="group flex min-h-11 w-full items-start gap-2 rounded-md text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
             >
-              {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-            </span>
-          </span>
-        </button>
-        {expanded && (
-          <div
-            id={detailId}
-            ref={detailRef}
-            data-testid="activity-expanded-detail"
-            className={cn(
-              "relative mt-1 text-xs text-foreground",
-              // Align under content column (past spine)
-              "ml-5",
-              ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
-              detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
-            )}
-            tabIndex={detailOverflowed ? 0 : undefined}
-            role={detailOverflowed ? "region" : undefined}
-            aria-label={detailOverflowed ? ACTIVITY_CHROME_EN.expanded_detail_scrollable : undefined}
-            onScroll={updateDetailOverflow}
-          >
-            {expansion?.kind === "freshness_hold" ? (
-              <div className="flex flex-col gap-1" data-testid="activity-freshness-hold">
-                {expansion.target ? (
-                  <div className="flex items-center gap-1">
-                    <span className="text-muted-foreground/70">
-                      {ACTIVITY_CHROME_EN.hold_target_label}
-                    </span>
-                    <ChannelChip name={expansion.target} />
-                  </div>
+              <span className="min-w-0 flex-1">
+                {/* LRM-560 tier 1: action label weight 600 */}
+                <span className="block text-[13.5px] font-semibold leading-snug text-foreground">
+                  {label}
+                </span>
+                {!expanded && !isCommand && subtext ? (
+                  <span className="mt-0.5 block line-clamp-1 text-[13px] text-muted-foreground">
+                    {subtext}
+                  </span>
                 ) : null}
-                {expansion.newCount != null ? (
-                  <div>
-                    <span className="text-muted-foreground/70">
-                      {ACTIVITY_CHROME_EN.hold_new_messages_label}
-                    </span>{" "}
-                    {expansion.newCount}{" "}
-                    {expansion.newCount === 1
-                      ? ACTIVITY_CHROME_EN.hold_newer_message
-                      : ACTIVITY_CHROME_EN.hold_newer_messages}
-                  </div>
-                ) : null}
-                <div>
-                  <span className="text-muted-foreground/70">
-                    {ACTIVITY_CHROME_EN.hold_decision_label}
-                  </span>{" "}
-                  {ACTIVITY_CHROME_EN.hold_decision_value}
-                </div>
-              </div>
-            ) : isCommand ? (
-              <div className="group/cmd relative">
-                {/* LRM-560 rule 5: muted rounded command surface + hover copy */}
-                <pre className="overflow-x-auto rounded-md bg-muted px-2.5 py-2 pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words text-foreground">
-                  <code>{normalizeActivityExpandedText(expansion.content)}</code>
-                </pre>
-                <button
-                  type="button"
-                  onClick={handleCopyCommand}
-                  aria-label={copyLabel}
-                  className="absolute right-1.5 top-1.5 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/cmd:opacity-100"
-                >
-                  {copyLabel}
-                </button>
-              </div>
-            ) : (
-              // LRM-560 rule 4: normalize + muted surface + 2px brand bar
-              <div
-                className="rounded-r-md border-l-2 border-brand bg-muted px-2.5 py-2 text-foreground"
-                data-testid="activity-expanded-surface"
+              </span>
+              <span className={cn(timestampClass, "pt-0.5")}>{time}</span>
+              <span
+                className="mt-0.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground"
+                aria-hidden
               >
-                <MemoizedMarkdown
-                  mode="minimal"
-                  enableStickerShortcodes={false}
-                  className="activity-expanded-markdown break-words text-xs leading-5 whitespace-pre-wrap text-foreground [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
-                >
-                  {normalizeActivityExpandedText(expansion.content)}
-                </MemoizedMarkdown>
-              </div>
-            )}
-            {showDetailFade && (
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
-                data-testid="activity-detail-scroll-fade"
+                {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+              </span>
+            </button>
+            {!expanded && isCommand && expansion.kind === "command" ? (
+              <CommandBlock
+                content={expansion.content}
+                clamped
+                copied={copied}
+                copyLabel={copyLabel}
+                onCopy={() => {
+                  void handleCopyCommand();
+                }}
               />
-            )}
+            ) : null}
+            {expanded ? (
+              <div
+                id={detailId}
+                ref={detailRef}
+                data-testid="activity-expanded-detail"
+                className={cn(
+                  "relative mt-1 text-xs text-foreground",
+                  ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
+                  detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
+                )}
+                tabIndex={detailOverflowed ? 0 : undefined}
+                role={detailOverflowed ? "region" : undefined}
+                aria-label={
+                  detailOverflowed ? ACTIVITY_CHROME_EN.expanded_detail_scrollable : undefined
+                }
+                onScroll={updateDetailOverflow}
+              >
+                {expansion?.kind === "freshness_hold" ? (
+                  <div className="flex flex-col gap-1" data-testid="activity-freshness-hold">
+                    {expansion.target ? (
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted-foreground/70">
+                          {ACTIVITY_CHROME_EN.hold_target_label}
+                        </span>
+                        <ChannelChip name={expansion.target} />
+                      </div>
+                    ) : null}
+                    {expansion.newCount != null ? (
+                      <div>
+                        <span className="text-muted-foreground/70">
+                          {ACTIVITY_CHROME_EN.hold_new_messages_label}
+                        </span>{" "}
+                        {expansion.newCount}{" "}
+                        {expansion.newCount === 1
+                          ? ACTIVITY_CHROME_EN.hold_newer_message
+                          : ACTIVITY_CHROME_EN.hold_newer_messages}
+                      </div>
+                    ) : null}
+                    <div>
+                      <span className="text-muted-foreground/70">
+                        {ACTIVITY_CHROME_EN.hold_decision_label}
+                      </span>{" "}
+                      {ACTIVITY_CHROME_EN.hold_decision_value}
+                    </div>
+                  </div>
+                ) : isCommand && expansion.kind === "command" ? (
+                  <CommandBlock
+                    content={normalizeActivityExpandedText(expansion.content)}
+                    clamped={false}
+                    copied={copied}
+                    copyLabel={copyLabel}
+                    onCopy={() => {
+                      void handleCopyCommand();
+                    }}
+                  />
+                ) : (
+                  // LRM-560 rule 4: normalize + muted surface + 2px brand bar
+                  <div
+                    className="rounded-r-md border-l-2 border-brand bg-muted px-2.5 py-2 text-foreground"
+                    data-testid="activity-expanded-surface"
+                  >
+                    <MemoizedMarkdown
+                      mode="minimal"
+                      enableStickerShortcodes={false}
+                      className="activity-expanded-markdown break-words text-xs leading-5 whitespace-pre-wrap text-foreground [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+                    >
+                      {normalizeActivityExpandedText(expansion.content)}
+                    </MemoizedMarkdown>
+                  </div>
+                )}
+                {showDetailFade && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                    data-testid="activity-detail-scroll-fade"
+                  />
+                )}
+              </div>
+            ) : null}
           </div>
-        )}
+        </div>
       </div>
     );
   }

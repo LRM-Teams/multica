@@ -283,7 +283,7 @@ describe("ActivityTimeline", () => {
     // Expanded content replaces the compact preview in the same text column;
     // it is not rendered as a second bordered card below the row.
     expect(header).not.toHaveTextContent(markdownOutput.text!);
-    expect(detail).toHaveClass("ml-5", "mt-1", "text-xs", "text-foreground");
+    expect(detail).toHaveClass("mt-1", "text-xs", "text-foreground");
     // LRM-560: expanded body sits in muted surface + brand bar (not old left-time indent).
     expect(screen.getByTestId("activity-expanded-surface")).toHaveClass(
       "border-l-2",
@@ -415,14 +415,14 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("Running command")).toBeInTheDocument();
     // Command is one plain node (never path head/tail); full entries[].command.
     expect(screen.getByText(full)).toBeInTheDocument();
-    // Collapsed: the header holds the two-line command preview.
+    // Collapsed: muted command surface under the header, clamp-2 + hover Copy.
     const toggle = screen.getByRole("button", { expanded: false });
-    const clamped = toggle.querySelector(".line-clamp-2");
-    expect(clamped).not.toBeNull();
     expect(toggle).toHaveTextContent("Running command");
-    expect(toggle).toHaveTextContent(full);
-    // Copy is expanded-only — not present while collapsed.
-    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    expect(toggle).not.toHaveTextContent(full);
+    const cmdBlock = screen.getByTestId("activity-command-block");
+    expect(cmdBlock).toHaveClass("bg-muted", "rounded-md");
+    expect(cmdBlock.querySelector(".line-clamp-2")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
     // No dot pulses — all static (#404).
     expect(container.querySelector(".animate-pulse")).toBeNull();
   });
@@ -443,7 +443,7 @@ describe("ActivityTimeline", () => {
     };
     render(<ActivityTimeline events={[CMD]} />);
     const toggle = screen.getByRole("button", { expanded: false });
-    expect(toggle.querySelector(".line-clamp-2")).not.toBeNull();
+    expect(screen.getByTestId("activity-command-block").querySelector(".line-clamp-2")).not.toBeNull();
     fireEvent.click(toggle);
 
     const open = screen.getByRole("button", { expanded: true });
@@ -453,9 +453,9 @@ describe("ActivityTimeline", () => {
     // while their pre keeps its independent horizontal handling.
     expect(detail).toHaveClass("max-h-[min(260px,55vh)]", "md:max-h-[360px]");
     expect(detail.querySelector("pre")).toHaveClass("overflow-x-auto");
+    expect(detail.querySelector("pre")).not.toHaveClass("line-clamp-2");
     expect(detail.querySelector("pre code")).toHaveTextContent(full);
     const copy = screen.getByRole("button", { name: "Copy" });
-    expect(copy).toHaveTextContent("Copy");
 
     Object.defineProperties(detail, {
       clientHeight: { configurable: true, value: 260 },
@@ -478,10 +478,10 @@ describe("ActivityTimeline", () => {
     fireEvent.scroll(detail);
     expect(screen.queryByTestId("activity-detail-scroll-fade")).toBeNull();
 
-    // Collapse again.
+    // Collapse again — clamp + hover Copy return on the command surface.
     fireEvent.click(open);
-    expect(screen.getByRole("button", { expanded: false }).querySelector(".line-clamp-2")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    expect(screen.getByTestId("activity-command-block").querySelector(".line-clamp-2")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Copy|Copied/ })).toBeInTheDocument();
   });
 
   it("compact mode drops the command expand/copy affordance (title-only, non-interactive) (#v0)", () => {

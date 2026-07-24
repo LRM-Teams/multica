@@ -19,6 +19,7 @@ import {
   Plus,
   Search,
   Smartphone,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -97,6 +98,7 @@ import type {
   ChannelTypingPayload,
 } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -197,6 +199,7 @@ import {
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
 import {
+  filterComposerStripTasks,
   isTerminalChannelActiveTask,
   listStoppableChannelTasks,
 } from "./conversation-activity-tasks";
@@ -242,6 +245,7 @@ export interface TypingActor {
 }
 
 const EMPTY_TYPING_ACTORS: TypingActor[] = [];
+const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
@@ -412,10 +416,19 @@ function MobileSidebarTrigger() {
 
 export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,
+  tasks = EMPTY_ACTIVE_TASKS,
+  stoppingTaskId = null,
+  onStopTask,
+  onStopAllTasks,
 }: {
   typingActors?: TypingActor[];
+  tasks?: ChannelActiveTask[];
+  stoppingTaskId?: string | null;
+  onStopTask?: (task: ChannelActiveTask) => void;
+  onStopAllTasks?: (tasks: ChannelActiveTask[]) => void;
 }) {
   const { t } = useT("channels");
+  const [expanded, setExpanded] = useState(false);
   const typingNames = useMemo(
     () => typingActors.flatMap((a) => {
       const name = a.actorName.trim();
@@ -423,9 +436,23 @@ export function ConversationActivityStrip({
     }),
     [typingActors],
   );
-  // The composer strip is typing-only. Working/failed/no_reply state belongs to
-  // the inbox-backed header live cue so this component cannot fall back to the
-  // old task/composer-strip path.
+  // The strip is the "in progress" control surface ONLY — who is running now +
+  // Stop. Terminal outcomes (#388 no_reply / failed) stay visible as Activity
+  // fact rows ("what happened"); the strip is not a history review surface. The
+  // Retry action is removed per product decision (Frank 2026-07-14) — not a
+  // pending follow-up: to have an agent try again you re-@ it, so a dedicated
+  // Retry button isn't needed; failure remains visible as an Activity fact.
+  // Terminal rows are excluded here — multiple agents used to stack the Stop
+  // buttons horizontally (`overflow-x-auto`, no wrap) and garble; now they
+  // collapse behind a single count + chevron.
+  const stoppableTasks = useMemo(() => {
+    const next: ChannelActiveTask[] = [];
+    for (const task of filterComposerStripTasks(tasks)) {
+      if (isTerminalChannelActiveTask(task)) continue;
+      next.push(task);
+    }
+    return next;
+  }, [tasks]);
   const typingLabel =
     typingNames.length === 0
       ? null
@@ -435,7 +462,7 @@ export function ConversationActivityStrip({
           ? t(($) => $.typing.pair, { a: typingNames[0]!, b: typingNames[1]! })
           : t(($) => $.typing.overflow, { a: typingNames[0]!, b: typingNames[1]!, count: typingNames.length });
 
-  if (!typingLabel) return null;
+  if (!typingLabel && stoppableTasks.length === 0) return null;
 
   return (
     <div
@@ -443,11 +470,113 @@ export function ConversationActivityStrip({
       aria-live="polite"
       data-testid="conversation-activity-strip"
     >
-      <span className="flex min-w-0 items-center gap-1 truncate">
-        <span className="truncate">{typingLabel}</span>
-        <TypingDots />
-      </span>
+      {typingLabel ? (
+        <span className="flex min-w-0 items-center gap-1 truncate">
+          <span className="truncate">{typingLabel}</span>
+          <TypingDots />
+        </span>
+      ) : null}
+      {stoppableTasks.length === 1 ? (
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5 truncate">
+            <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
+            <span className="truncate">
+              {t(($) => $.agent_status.processing_single, { name: stoppableTasks[0]!.agent_name })}
+            </span>
+          </span>
+          {onStopTask ? (
+            <StopTaskButton
+              task={stoppableTasks[0]!}
+              stoppingTaskId={stoppingTaskId}
+              onStopTask={onStopTask}
+              t={t}
+            />
+          ) : null}
+        </div>
+      ) : stoppableTasks.length > 1 ? (
+        <div className="flex flex-col gap-1">
+          {/* Multiple agents collapse to one running summary. Keep Stop all
+              outside the disclosure button so one click can cancel the whole group. */}
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left hover:text-foreground"
+            >
+              <span className="flex min-w-0 items-center gap-1.5 truncate">
+                <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
+                <span className="truncate">
+                  {t(($) => $.agent_status.processing_count, { count: stoppableTasks.length })}
+                </span>
+              </span>
+              <ChevronDown
+                className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")}
+                aria-hidden="true"
+              />
+            </button>
+            {onStopAllTasks ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
+                onClick={() => onStopAllTasks(stoppableTasks)}
+                aria-label={t(($) => $.agent_status.stop_all_aria, { count: stoppableTasks.length })}
+              >
+                <Square className="size-2.5 fill-current" />
+                {t(($) => $.agent_status.stop_all)}
+              </Button>
+            ) : null}
+          </div>
+          {expanded ? (
+            <div className="flex flex-col gap-1 pl-5">
+              {stoppableTasks.map((task) => (
+                <div key={task.task_id} className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate">{task.agent_name}</span>
+                  {onStopTask ? (
+                    <StopTaskButton
+                      task={task}
+                      stoppingTaskId={stoppingTaskId}
+                      onStopTask={onStopTask}
+                      t={t}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function StopTaskButton({
+  task,
+  stoppingTaskId,
+  onStopTask,
+  t,
+}: {
+  task: ChannelActiveTask;
+  stoppingTaskId: string | null;
+  onStopTask: (task: ChannelActiveTask) => void;
+  t: ReturnType<typeof useT<"channels">>["t"];
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+      disabled={stoppingTaskId === task.task_id || stoppingTaskId === STOPPING_ALL_TASKS_ID}
+      onClick={() => onStopTask(task)}
+      aria-label={t(($) => $.agent_status.stop_aria, { name: task.agent_name })}
+    >
+      <Square className="size-2.5 fill-current" />
+      {t(($) => $.agent_status.stop)}
+    </Button>
   );
 }
 

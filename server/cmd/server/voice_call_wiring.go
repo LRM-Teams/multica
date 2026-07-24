@@ -276,6 +276,5 @@ func configureVoiceCallService(
 	h.VoiceCallService = callService
 	h.VoiceCallCallbackProcessor = callbackService
 	h.VoiceCallCallbackSignature = config.CallbackSignature
-	h.VoiceCallLLMAPIKey = config.CustomLLMAPIKey
 	return nil
 }

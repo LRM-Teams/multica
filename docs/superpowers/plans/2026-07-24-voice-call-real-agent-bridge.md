@@ -35,13 +35,12 @@ memory, tools, permissions, and channel history.
 
 ## Delivery slices
 
-- [x] PR 1 (#1166): configure RTC `CustomLLM`, per-call identity, and deployment
+- [x] PR 1: configure RTC `CustomLLM`, per-call identity, and deployment
   settings.
 - [x] PR 1b (#1172): reject partial RTC secret configuration before deployment
   changes the running containers.
-- [x] PR 2 (#1168): authenticate and validate the OpenAI-compatible RTC
-  endpoint.
-- [x] PR 3 (#1169): persist an idempotent DM speech turn and dispatch the selected
+- [ ] PR 2: authenticate and validate the OpenAI-compatible RTC endpoint.
+- [ ] PR 3: persist an idempotent DM speech turn and dispatch the selected
   agent.
 - [ ] PR 4: wait for the exact durable completion and stream it as SSE.
 - [ ] PR 5: configure deployment secrets and verify a production call.
@@ -68,16 +67,6 @@ memory, tools, permissions, and channel history.
 - [x] `bash scripts/selfhost-config.test.sh`
 - [x] RTC deployment preflight tests cover disabled, complete, partial,
   optional-only opt-in, blank, and secret-value non-disclosure cases.
-- [x] RTC LLM endpoint tests against a fresh, fully migrated PostgreSQL
-  database: bearer authentication runs before transcript parsing, numeric and
-  string round IDs normalize, malformed/oversized requests fail, internal
-  errors stay out of HTTP responses, and successful replies use
-  OpenAI-compatible SSE content/final chunks plus `[DONE]`.
-- [x] Voice-call Agent bridge tests against a fresh, fully migrated PostgreSQL
-  database: the message and inbox event commit atomically, duplicate
-  `(call, round)` requests reuse both durable IDs, the live-call prompt keeps
-  the normal Multica runtime/tools boundary, and inactive/provider-mismatched/
-  DM-agent-mismatched calls write nothing.
 - [ ] Full `./cmd/server` currently fails in the pre-existing
   `TestAgentsThroughRouter`: the local integration database returns 500 while
   loading an agent detail. The focused voice-call tests pass, and the failing

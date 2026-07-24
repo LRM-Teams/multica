@@ -15,6 +15,11 @@ interface DashboardLayoutProps {
   children: ReactNode;
   /** Rendered inside SidebarInset (e.g. ChatWindow, ChatFab — absolute-positioned overlays) */
   extra?: ReactNode;
+  /**
+   * In-flow banner above the main dashboard surface (e.g. Slack-style soft-ask).
+   * Shrinks the content area instead of overlaying the channel header.
+   */
+  banner?: ReactNode;
   /** Loading indicator */
   loadingIndicator?: ReactNode;
 }
@@ -22,6 +27,7 @@ interface DashboardLayoutProps {
 export function DashboardLayout({
   children,
   extra,
+  banner,
   loadingIndicator,
 }: DashboardLayoutProps) {
   return (
@@ -38,7 +44,10 @@ export function DashboardLayout({
         <AppSidebar />
         <SidebarInset className="relative overflow-hidden">
           <NavigationProgress />
-          {children}
+          {banner}
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+            {children}
+          </div>
           <ModalRegistry />
           <SourceBackfillModal />
           <GlobalAgentPanel />

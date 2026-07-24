@@ -1,21 +1,34 @@
 "use client";
 
 /**
- * Soft-prompt dismissal for the WeChat-style browser notification dialog.
+ * Soft-prompt dismissal for the Slack-style browser notification banner.
  * Lives in core so tests can drive the same storage key the UI uses.
+ *
+ * - "以后再说" / Later → snooze (re-show after cooldown)
+ * - ✕ / repeated snoozes → dismiss (stop asking)
  */
 
 const STORAGE_KEY = "multica.browserNotificationPrompt";
 
+/** After this many "later" snoozes, treat as permanent dismiss (多次忽略). */
+export const BROWSER_NOTIFICATION_PROMPT_SNOOZE_DISMISS_AFTER = 3;
+
 export type BrowserNotificationPromptDecision =
   | { status: "undecided" }
   | { status: "dismissed"; at: number }
-  | { status: "snoozed"; until: number };
+  | { status: "snoozed"; until: number; count: number };
 
 type StorageLike = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem?(key: string): void;
+};
+
+type StoredPrompt = {
+  status?: string;
+  at?: number;
+  until?: number;
+  count?: number;
 };
 
 function getStorage(): StorageLike | null {
@@ -27,28 +40,34 @@ function getStorage(): StorageLike | null {
   }
 }
 
+function parseStored(storage: StorageLike): StoredPrompt | null {
+  try {
+    const raw = storage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredPrompt;
+  } catch {
+    return null;
+  }
+}
+
 export function readBrowserNotificationPromptDecision(
   now = Date.now(),
   storage: StorageLike | null = getStorage(),
 ): BrowserNotificationPromptDecision {
   if (!storage) return { status: "undecided" };
-  try {
-    const raw = storage.getItem(STORAGE_KEY);
-    if (!raw) return { status: "undecided" };
-    const parsed = JSON.parse(raw) as {
-      status?: string;
-      at?: number;
-      until?: number;
-    };
-    if (parsed.status === "dismissed" && typeof parsed.at === "number") {
-      return { status: "dismissed", at: parsed.at };
+  const parsed = parseStored(storage);
+  if (!parsed) return { status: "undecided" };
+  if (parsed.status === "dismissed" && typeof parsed.at === "number") {
+    return { status: "dismissed", at: parsed.at };
+  }
+  if (parsed.status === "snoozed" && typeof parsed.until === "number") {
+    const count = typeof parsed.count === "number" ? parsed.count : 1;
+    if (parsed.until > now) return { status: "snoozed", until: parsed.until, count };
+    // Expired: if already at dismiss threshold, keep quiet.
+    if (count >= BROWSER_NOTIFICATION_PROMPT_SNOOZE_DISMISS_AFTER) {
+      return { status: "dismissed", at: parsed.until };
     }
-    if (parsed.status === "snoozed" && typeof parsed.until === "number") {
-      if (parsed.until > now) return { status: "snoozed", until: parsed.until };
-      return { status: "undecided" };
-    }
-  } catch {
-    // Corrupt storage — treat as undecided.
+    return { status: "undecided" };
   }
   return { status: "undecided" };
 }
@@ -74,15 +93,32 @@ export function dismissBrowserNotificationPrompt(
   );
 }
 
-/** Snooze for 3 days — "稍后再说" / Later. */
+/**
+ * Snooze for 3 days — "以后再说" / Later.
+ * After {@link BROWSER_NOTIFICATION_PROMPT_SNOOZE_DISMISS_AFTER} snoozes,
+ * escalate to permanent dismiss (多次忽略 → 不再提示).
+ */
 export function snoozeBrowserNotificationPrompt(
   storage: StorageLike | null = getStorage(),
   now = Date.now(),
   snoozeMs = 3 * 24 * 60 * 60 * 1000,
 ): void {
-  storage?.setItem(
+  if (!storage) return;
+  const stored = parseStored(storage);
+  let prevCount = 0;
+  if (stored?.status === "snoozed" && typeof stored.count === "number") {
+    prevCount = stored.count;
+  } else if (stored?.status === "snoozed") {
+    prevCount = 1;
+  }
+  const count = prevCount + 1;
+  if (count >= BROWSER_NOTIFICATION_PROMPT_SNOOZE_DISMISS_AFTER) {
+    dismissBrowserNotificationPrompt(storage, now);
+    return;
+  }
+  storage.setItem(
     STORAGE_KEY,
-    JSON.stringify({ status: "snoozed", until: now + snoozeMs }),
+    JSON.stringify({ status: "snoozed", until: now + snoozeMs, count }),
   );
 }
 

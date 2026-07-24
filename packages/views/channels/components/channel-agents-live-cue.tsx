@@ -20,10 +20,7 @@ import type { ChannelActiveTask } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
 import { useT } from "../../i18n";
-import {
-  filterComposerStripTasks,
-  isTerminalChannelActiveTask,
-} from "./conversation-activity-tasks";
+import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 
 const STOPPING_ALL_TASKS_ID = "__all__";
 
@@ -86,9 +83,11 @@ export function ChannelAgentsLiveCue({
   // Prune dismiss keys against the live snapshot during render (no sync
   // effect — react-doctor/no-derived-state). Stale keys drop out when the
   // server no longer returns that inbox row, so a later failure can surface.
+  // LRM-581 / LRM-425 — use the full channel active-tasks snapshot (inbox
+  // wake authority). Do not re-filter through composer-strip helpers (that
+  // dual track is banned by AC).
   const presentKeys = useMemo(
-    () =>
-      new Set(filterComposerStripTasks(tasks).map((task) => taskRowKey(task))),
+    () => new Set(tasks.map((task) => taskRowKey(task))),
     [tasks],
   );
   const activeDismissed = useMemo(() => {
@@ -100,11 +99,10 @@ export function ChannelAgentsLiveCue({
   }, [dismissedKeys, presentKeys]);
 
   const { stoppable, terminal, listTasks, runningCount } = useMemo(() => {
-    const scoped = filterComposerStripTasks(tasks);
     const stop: ChannelActiveTask[] = [];
     const term: ChannelActiveTask[] = [];
     let running = 0;
-    for (const task of scoped) {
+    for (const task of tasks) {
       const key = taskRowKey(task);
       if (activeDismissed.has(key)) continue;
       if (isTerminalChannelActiveTask(task)) {

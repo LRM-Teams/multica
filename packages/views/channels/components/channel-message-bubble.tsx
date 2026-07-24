@@ -388,21 +388,24 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     editDraft,
   ]);
 
+  // #689: no per-row ResizeObserver here. It used to exist to catch an
+  // attachment image finishing its async download and growing the body past
+  // the collapse threshold after the useLayoutEffect above (which only
+  // depends on message.attachments — the metadata list, not the image
+  // bytes) already ran. That growth no longer happens: image attachments
+  // reserve their box via `aspect-ratio` from upload-time width/height
+  // metadata (attachment.tsx ImageAttachmentView) and stickers render into a
+  // fixed size-32/40 box (message-parts-renderer.tsx StickerImage, #689
+  // item 6) — both paint at final size before the image loads. Re-adding
+  // this observer re-introduces a live source of mid-scroll row-height
+  // churn (Virtuoso's own per-item ResizeObserver has to re-settle
+  // everything below on every fire) for a growth case that no longer occurs
+  // on the common path.
   useEffect(() => {
-    if (!collapseLongContent || message.deleted_at || message.type === "system") return;
-    const body = messageBodyRef.current;
-    if (!body) return;
-
     const handleOverflow = () => measureContentOverflowRef.current();
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(handleOverflow);
-    resizeObserver?.observe(body);
     window.addEventListener("resize", handleOverflow);
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", handleOverflow);
-    };
-  }, [collapseLongContent, message.id, message.deleted_at, message.type]);
+    return () => window.removeEventListener("resize", handleOverflow);
+  }, []);
 
   if (message.deleted_at) {
     return (

@@ -1105,6 +1105,36 @@ describe("ChannelMessageBubble", () => {
     expect(fade.className).not.toContain("from-background");
   });
 
+  it("#689: does not construct a per-row ResizeObserver — window resize alone drives re-measurement", () => {
+    // A per-row ResizeObserver used to exist to catch an attachment image
+    // finishing its async download and growing the body past the collapse
+    // threshold. It no longer can: image attachments reserve their box via
+    // aspect-ratio from upload-time width/height metadata, and stickers
+    // render into a fixed box (#689 item 6) — both paint at final size
+    // before the image loads. Re-adding a per-row observer re-introduces a
+    // live source of mid-scroll row-height churn for a growth case that no
+    // longer occurs on the common path — assert it stays gone.
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    const ctorSpy = vi.fn();
+    class SpyingResizeObserver extends OriginalResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super(callback);
+        ctorSpy();
+      }
+    }
+    vi.stubGlobal("ResizeObserver", SpyingResizeObserver);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n") })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(ctorSpy).not.toHaveBeenCalled();
+    vi.stubGlobal("ResizeObserver", OriginalResizeObserver);
+  });
+
   it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble

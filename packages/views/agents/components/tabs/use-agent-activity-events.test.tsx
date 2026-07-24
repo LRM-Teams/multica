@@ -16,6 +16,8 @@ const reconnect = vi.hoisted(() => ({ cb: null as null | (() => void) }));
 const queryState = vi.hoisted(() => ({
   pages: [[]] as ActivityEvent[][],
   isLoading: false,
+  isError: false,
+  refetch: vi.fn(),
   hasNextPage: false,
   isFetchingNextPage: false,
   fetchNextPage: vi.fn(),
@@ -49,6 +51,8 @@ vi.mock("@tanstack/react-query", async () => {
         pageParams: queryState.pages.map(() => null),
       },
       isLoading: queryState.isLoading,
+      isError: queryState.isError,
+      refetch: queryState.refetch,
       fetchNextPage: queryState.fetchNextPage,
       hasNextPage: queryState.hasNextPage,
       isFetchingNextPage: queryState.isFetchingNextPage,
@@ -96,9 +100,11 @@ describe("useAgentActivityEvents", () => {
     reconnect.cb = null;
     queryState.pages = [[]];
     queryState.isLoading = false;
+    queryState.isError = false;
     queryState.hasNextPage = false;
     queryState.isFetchingNextPage = false;
     queryState.fetchNextPage.mockClear();
+    queryState.refetch.mockClear();
     clientHandles.invalidateQueries.mockClear();
   });
 

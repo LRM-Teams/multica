@@ -7,13 +7,19 @@ const mockPaging = vi.hoisted(() => ({
   loadOlder: vi.fn(),
   hasOlder: false,
   isLoadingOlder: false,
+  isLoading: false,
+  isError: false,
+  refetch: vi.fn(),
+  latest: null as null | { id: string; occurred_at: string; activity_kind: string },
 }));
 
 vi.mock("./use-agent-activity-events", () => ({
   useAgentActivityEvents: () => ({
     events: mockEvents.current,
-    latest: null,
-    isLoading: false,
+    latest: mockPaging.latest,
+    isLoading: mockPaging.isLoading,
+    isError: mockPaging.isError,
+    refetch: mockPaging.refetch,
     loadOlder: mockPaging.loadOlder,
     hasOlder: mockPaging.hasOlder,
     isLoadingOlder: mockPaging.isLoadingOlder,
@@ -21,9 +27,32 @@ vi.mock("./use-agent-activity-events", () => ({
 }));
 
 vi.mock("./activity-timeline", () => ({
-  ActivityTimeline: ({ events }: { events: { id: string }[] }) => (
-    <div data-testid="timeline">{events.length} rows</div>
+  ActivityTimeline: ({
+    events,
+    isLoading,
+    isError,
+  }: {
+    events: { id: string }[];
+    isLoading?: boolean;
+    isError?: boolean;
+  }) => (
+    <div
+      data-testid="timeline"
+      data-loading={String(!!isLoading)}
+      data-error={String(!!isError)}
+    >
+      {events.length} rows
+    </div>
   ),
+}));
+
+vi.mock("../../../common/actor-avatar", () => ({
+  ActorAvatar: () => <div data-testid="agent-avatar" />,
+}));
+
+vi.mock("@multica/core/identity", () => ({
+  resolveActorDisplayName: (agent: { id: string; display_name?: string }) =>
+    agent.display_name ?? agent.id,
 }));
 
 vi.mock("../../../i18n", () => ({
@@ -56,15 +85,19 @@ class MockIntersectionObserver {
   takeRecords = vi.fn(() => []);
 }
 
-const agent = { id: "a1" } as never;
+const agent = { id: "a1", display_name: "Beckham", avatar_url: null } as never;
 
 beforeEach(() => {
   mockEvents.current = [];
   ioCallback = () => {};
   ioTopCallback = () => {};
   mockPaging.loadOlder.mockClear();
+  mockPaging.refetch.mockClear();
   mockPaging.hasOlder = false;
   mockPaging.isLoadingOlder = false;
+  mockPaging.isLoading = false;
+  mockPaging.isError = false;
+  mockPaging.latest = null;
   vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -169,5 +202,30 @@ describe("ActivityTab older-page loading (#620)", () => {
 
     act(() => ioTopCallback([{ isIntersecting: true }]));
     expect(mockPaging.loadOlder).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActivityTab header + four states (LRM-563)", () => {
+  it("renders the agent header with display name", () => {
+    mockEvents.current = [ev(1)];
+    render(<ActivityTab agent={agent} />);
+    expect(screen.getByTestId("activity-tab-header")).toBeInTheDocument();
+    expect(screen.getByText("Beckham")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-avatar")).toBeInTheDocument();
+  });
+
+  it("passes loading to the timeline on first paint with no rows", () => {
+    mockPaging.isLoading = true;
+    mockEvents.current = [];
+    render(<ActivityTab agent={agent} />);
+    expect(screen.getByTestId("timeline")).toHaveAttribute("data-loading", "true");
+  });
+
+  it("passes error (not empty) when the query failed with no rows", () => {
+    mockPaging.isError = true;
+    mockEvents.current = [];
+    render(<ActivityTab agent={agent} />);
+    expect(screen.getByTestId("timeline")).toHaveAttribute("data-error", "true");
+    expect(screen.getByTestId("timeline")).toHaveAttribute("data-loading", "false");
   });
 });

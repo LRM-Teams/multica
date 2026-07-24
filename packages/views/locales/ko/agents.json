@@ -372,6 +372,11 @@
     },
     "activity": {
       "timeline_empty": "아직 활동이 없습니다",
+      "timeline_empty_hint": "이 에이전트가 일을 시작하면 여기에 타임라인으로 표시됩니다.",
+      "timeline_load_failed": "활동을 불러오지 못했습니다",
+      "timeline_load_failed_hint": "연결이 끊겼거나 서비스에 문제가 있습니다.",
+      "retry": "다시 시도",
+      "loading": "로딩 중",
       "jump_to_latest": "최신으로 이동",
       "labels": {
         "thinking": "생각 중",

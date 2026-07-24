@@ -182,6 +182,13 @@ export const ACTIVITY_CHROME_EN = {
   command_copied: "Copied",
   expanded_detail_scrollable: "Expanded details, scrollable",
   timeline_empty: "No activity yet",
+  // LRM-563 / LRM-558 P2 — full-page empty / error / loading chrome (English-only).
+  timeline_empty_hint:
+    "Activity will show up here on a timeline once this agent starts working.",
+  timeline_load_failed: "Couldn't load activity",
+  timeline_load_failed_hint: "Connection interrupted or the service is unavailable.",
+  retry: "Retry",
+  loading: "Loading",
   jump_to_latest: "Jump to latest",
   view_diagnostics: "View diagnostic details",
   hide_diagnostics: "Hide diagnostic details",
@@ -694,4 +701,21 @@ export function formatActivityTime(iso: string, tz: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return "";
   return timeFormatter(tz).format(ms);
+}
+
+/**
+ * Compact English relative time for the Activity page header status line
+ * (LRM-563). Activity chrome is English-only — do not route through i18n.
+ */
+export function formatActivityRelativeTime(iso: string, nowMs = Date.now()): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return "";
+  const diff = Math.max(0, nowMs - ms);
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }

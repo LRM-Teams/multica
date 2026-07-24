@@ -63,7 +63,7 @@ catalog:
   "react-qr-code": "^2.0.18"
 
   # Virtualized timeline (issue detail comments). Pinned EXACT (not ^) —
-  # 4.18.8+ regressed initial cold-load positioning for our large
+  # 4.18.9+ regressed initial cold-load positioning for our large
   # firstItemIndex convention (CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX =
   # 1_000_000, channel-message-list.tsx): channels opened at the top
   # instead of the bottom (#1151 incident, 2026-07-24). Do not caret-range

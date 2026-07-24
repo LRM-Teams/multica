@@ -98,19 +98,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 multica skill import --url https://skills.sh/acme/repo/review-helper --on-conflict skip
 ```
 
-## Squads
-
-| Command | Purpose |
-|---|---|
-| `multica squad list` | List squads in the workspace |
-| `multica squad get <id>` | Show a single squad |
-| `multica squad create --name "..." --leader <agent>` | Create a squad (owner / admin) |
-| `multica squad update <id> ...` | Update name, description, instructions, leader, or avatar |
-| `multica squad delete <id>` | Archive (soft-delete) — transfers assigned issues to the leader |
-| `multica squad member list/add/remove/set-role <squad-id>` | Manage squad members and update roles in place |
-| `multica squad activity <issue-id> <action\|no_action\|failed> --reason "..."` | Used by squad leader agents to record an evaluation per turn |
-
-See [Squads](/squads) for the full model.
 
 ## Autopilots
 

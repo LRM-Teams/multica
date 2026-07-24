@@ -48,7 +48,9 @@ interface ResolvedActor {
 function SystemEventActorToken({ actor }: { actor: ResolvedActor }): ReactNode {
   const label = `@${actor.displayName}`;
   if (!actor.type) {
-    return <span className="font-medium text-foreground/70">{label}</span>;
+    // LRM-561: plain unresolved labels stay muted like the system row — never
+    // invent a louder ink than the surrounding ceremonial notice.
+    return <span className="font-medium">{label}</span>;
   }
   return <ActorMention type={actor.type} id={actor.id} label={label} />;
 }

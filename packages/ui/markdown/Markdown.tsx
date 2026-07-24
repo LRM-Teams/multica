@@ -380,11 +380,14 @@ function createComponents(
         }
       }
 
+      // LRM-555/561 reading-flow: links share one brand accent (not near-black
+      // primary that reads like bold prose). Soft underline keeps them distinct
+      // from @mentions without competing for weight.
       return (
         <a
           href={href}
           onClick={handleClick}
-          className="text-primary hover:underline cursor-pointer"
+          className="cursor-pointer text-brand font-medium underline decoration-brand/35 underline-offset-2 hover:decoration-brand"
         >
           {highlight(children)}
         </a>

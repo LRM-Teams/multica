@@ -162,58 +162,72 @@ function ChannelSystemMessageRow({
       // NEVER a full timestamp, so they opt out of the hover-full treatment.
       title={showIssueTime ? undefined : messageTime.full(message.created_at)}
       className={cn(
-        // Lightweight CENTERED service notice (#369, Iris §8): a top-left row
-        // reads like "a message that lost its avatar" against Multica's heavy
-        // avatar column + loose body — centering separates it as a system event.
-        // Quiet by design: small muted text, tight vertical rhythm so consecutive
-        // add/remove rows read as one cluster, NO capsule / avatar / bubble.
-        "group mx-auto flex max-w-[min(640px,100%)] flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 px-2 py-0.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
+        // LRM-561 / LRM-555 v1: centered ceremonial system row with thin side
+        // rules (Frank: 居中好看; keep v1 分隔节奏). NOT a chip/capsule (v3-A
+        // rejected). Nested @ / issue tokens inherit muted ink — no brand wash
+        // — so the row stays quiet against the reading flow.
+        "group mx-auto flex max-w-[min(720px,100%)] items-center gap-3 px-2 py-1 outline-none transition-colors duration-1000",
+        "text-[11.5px] leading-snug text-muted-foreground/85",
+        "[&_.mention]:bg-transparent [&_.mention]:px-0 [&_.mention]:font-medium [&_.mention]:text-inherit [&_.mention]:hover:bg-transparent [&_.mention]:focus-visible:bg-transparent",
+        "[&_a]:text-inherit [&_a]:font-medium [&_a]:no-underline hover:[&_a]:underline",
         highlighted && "rounded-md bg-primary/10 ring-1 ring-primary/25 duration-0",
       )}
     >
-      <span className="min-w-0 break-words">
-        {issueAggregateEvent ? (
-          <IssueAggregateSystemEventContent
-            event={issueAggregateEvent}
-            sourceMessageId={message.id}
-          />
-        ) : issueEvent ? (
-          <IssueSystemEventContent event={issueEvent} sourceMessageId={message.id} />
-        ) : memberEvent ? (
-          <MemberSystemEventContent event={memberEvent} />
-        ) : projectEvent ? (
-          <ProjectSystemEventContent event={projectEvent} />
-        ) : reminderEvent ? (
-          <ReminderSystemEventContent event={reminderEvent} />
-        ) : threadEvent ? (
-          <ThreadSystemEventContent event={threadEvent} />
-        ) : hasReferenceParts ? (
-          // Spans are anchored to the RAW `message.content`; feeding the trimmed
-          // `systemText` would shift every offset and misplace the tokens.
-          <InlineReferenceContent
-            content={message.content}
-            parts={message.parts}
-            sourceMessageId={message.id}
-          />
+      <div
+        aria-hidden
+        data-testid="system-message-rule"
+        className="h-px min-w-4 flex-1 bg-border/70"
+      />
+      <div className="flex min-w-0 max-w-[min(520px,85%)] flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 text-center">
+        <span className="min-w-0 break-words">
+          {issueAggregateEvent ? (
+            <IssueAggregateSystemEventContent
+              event={issueAggregateEvent}
+              sourceMessageId={message.id}
+            />
+          ) : issueEvent ? (
+            <IssueSystemEventContent event={issueEvent} sourceMessageId={message.id} />
+          ) : memberEvent ? (
+            <MemberSystemEventContent event={memberEvent} />
+          ) : projectEvent ? (
+            <ProjectSystemEventContent event={projectEvent} />
+          ) : reminderEvent ? (
+            <ReminderSystemEventContent event={reminderEvent} />
+          ) : threadEvent ? (
+            <ThreadSystemEventContent event={threadEvent} />
+          ) : hasReferenceParts ? (
+            // Spans are anchored to the RAW `message.content`; feeding the trimmed
+            // `systemText` would shift every offset and misplace the tokens.
+            <InlineReferenceContent
+              content={message.content}
+              parts={message.parts}
+              sourceMessageId={message.id}
+            />
+          ) : (
+            systemText
+          )}
+        </span>
+        {showIssueTime ? (
+          // Simple, always-visible time — "· 10:16" (item #7口径), the bucketed
+          // inline clock the rest of the list uses, never a full timestamp.
+          <span className="shrink-0 tabular-nums text-muted-foreground/60">
+            {"· "}
+            {messageTime.format(message.created_at)}
+          </span>
         ) : (
-          systemText
+          <span
+            aria-hidden
+            className="shrink-0 tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+          >
+            {messageTime.full(message.created_at)}
+          </span>
         )}
-      </span>
-      {showIssueTime ? (
-        // Simple, always-visible time — "· 10:16" (item #7口径), the bucketed
-        // inline clock the rest of the list uses, never a full timestamp.
-        <span className="shrink-0 tabular-nums text-muted-foreground/60">
-          {"· "}
-          {messageTime.format(message.created_at)}
-        </span>
-      ) : (
-        <span
-          aria-hidden
-          className="shrink-0 tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-        >
-          {messageTime.full(message.created_at)}
-        </span>
-      )}
+      </div>
+      <div
+        aria-hidden
+        data-testid="system-message-rule"
+        className="h-px min-w-4 flex-1 bg-border/70"
+      />
     </div>
   );
 }
@@ -476,7 +490,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
   ) : null;
   const nameLabel = (
-    <span className="truncate font-bold text-ink">{displayName}</span>
+    // LRM-555/561 reading-flow baseline: author sits one step above body
+    // (13.5px semibold foreground), not bold-ink competing with prose.
+    <span className="truncate text-[13.5px] font-semibold text-foreground">
+      {displayName}
+    </span>
   );
 
   const localSendStatus = message.local_send_status ?? null;
@@ -743,7 +761,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       )}
       <div className="min-w-0 max-w-[min(760px,100%)]">
         {showAuthor && (
-          <div className="mb-0.5 flex select-none items-baseline gap-2 md:pr-24 text-sm">
+          <div className="mb-0.5 flex select-none items-baseline gap-2 text-[13.5px] md:pr-24">
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
                 memberType={profileActorType}
@@ -758,17 +776,17 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               nameLabel
             )}
             {isRadarMessage && (
-              <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
+              <span className="shrink-0 rounded-full border border-border/60 bg-transparent px-2 py-0.5 text-[11px] font-normal leading-none text-muted-foreground">
                 {t(($) => $.message.radar_badge)}
               </span>
             )}
             {isExternal && (
-              <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
+              <span className="shrink-0 rounded-full border border-border/60 bg-transparent px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
                 {t(($) => $.message.feishu_badge)}
               </span>
             )}
             <span
-              className="shrink-0 text-[11px] text-ink-3"
+              className="shrink-0 text-[11px] text-muted-foreground/60"
               title={messageTime.full(message.created_at)}
             >
               {messageTime.format(message.created_at)}
@@ -776,7 +794,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             {isEdited && (
               <span
                 data-testid="message-edited"
-                className="shrink-0 text-[11px] text-ink-3/70"
+                className="shrink-0 text-[11px] text-muted-foreground/50"
               >
                 {t(($) => $.message.edited_label)}
               </span>
@@ -874,7 +892,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           <div
             ref={messageBodyRef}
             className={cn(
-              "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-sm leading-6 text-ink",
+              "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-[13.5px] leading-6 text-foreground",
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",

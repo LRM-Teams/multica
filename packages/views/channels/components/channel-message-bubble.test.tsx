@@ -1743,6 +1743,10 @@ describe("ChannelMessageBubble", () => {
     // server anchored it.
     const systemRow = screen.getByTestId("system-message-row");
     expect(within(systemRow).getByText("MUL-7").closest("a")).not.toBeNull();
+    // LRM-561 v1: side rules present; row itself is not a rounded-full chip.
+    expect(within(systemRow).getAllByTestId("system-message-rule")).toHaveLength(2);
+    expect(systemRow.className).toContain("text-[11.5px]");
+    expect(systemRow.className).not.toMatch(/rounded-full/);
   });
 
   it("projects an issue-lifecycle status change into the item #7 row with a simple inline time (#497)", () => {
@@ -1849,6 +1853,8 @@ describe("ChannelMessageBubble", () => {
     const fullTime = systemRow.getAttribute("title");
     expect(fullTime).toBeTruthy();
     expect(systemRow).toHaveTextContent(fullTime!);
+    expect(within(systemRow).getAllByTestId("system-message-rule")).toHaveLength(2);
+    expect(systemRow.className).toContain("text-muted-foreground/85");
     expect(screen.queryByTestId("message-bubble")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add reaction" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();

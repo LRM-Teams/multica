@@ -32,7 +32,8 @@ import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { buildMessageGroupCompactMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
-// day boundary.
+// day boundary. Pill is OK for *dates*; system event rows must not reuse this
+// chip language (LRM-555 Frank: 禁胶囊 on system rows).
 function DatePill({ label }: { label: string }) {
   return (
     <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
@@ -41,11 +42,18 @@ function DatePill({ label }: { label: string }) {
   );
 }
 
-// Inserted before the first message of each local day.
+// Inserted before the first message of each local day. Side rules keep the same
+// v1 separator rhythm as system event rows (LRM-561) without looking like a
+// system chip — the pill alone marks "calendar day".
 function DateDivider({ label }: { label: string }) {
   return (
-    <div className="flex justify-center px-5 py-2" data-testid="date-divider">
+    <div
+      className="flex items-center gap-3 px-5 py-2"
+      data-testid="date-divider"
+    >
+      <div aria-hidden className="h-px min-w-4 flex-1 bg-border/60" />
       <DatePill label={label} />
+      <div aria-hidden className="h-px min-w-4 flex-1 bg-border/60" />
     </div>
   );
 }

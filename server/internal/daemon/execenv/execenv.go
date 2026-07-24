@@ -256,6 +256,11 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	if err := writeSidecarManifest(envRoot, manifest); err != nil {
 		logger.Warn("execenv: write sidecar manifest failed (non-fatal)", "error", err)
 	}
+	// Durable agent-local mirror of bound skills (skills/enabled/). Best-effort:
+	// failures must not block task prep or change workdir hydration.
+	if err := mirrorBoundSkillsToAgentEnabled(params.Task.AgentRoot, params.Task.AgentSkills); err != nil {
+		logger.Warn("execenv: mirror bound skills to agent skills/enabled failed (non-fatal)", "error", err)
+	}
 
 	// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
 	if params.Provider == "codex" {
@@ -392,6 +397,9 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		if err := writeSidecarManifest(env.RootDir, manifest); err != nil {
 			logger.Warn("execenv: refresh sidecar manifest failed", "error", err)
 		}
+	}
+	if err := mirrorBoundSkillsToAgentEnabled(params.Task.AgentRoot, params.Task.AgentSkills); err != nil {
+		logger.Warn("execenv: refresh bound-skill mirror failed (non-fatal)", "error", err)
 	}
 
 	// Restore CodexHome for Codex provider — the per-task codex-home directory

@@ -34,7 +34,7 @@ It does not cover the global shared-skill scanner under `~/.pi/share/skills`, wh
 
 - **Skill promotion ≠ assignment.** A promoted skill is written to the workspace public `skill` table. Binding it to an agent is a separate, user-confirmed step.
 - **Memory auto-assigns to the submitting agent.** After deterministic hard gates pass, memory-like units are promoted and written to `agent_memory` for `source_agent_id` with no LLM or manual review.
-- **No per-agent delivery table.** `evolution_unit_delivery` was removed (migration 137). The server does not push generated bundles back to `skills/generated/` or `skills/enabled/`.
+- **No per-agent delivery table.** `evolution_unit_delivery` was removed (migration 137). Evolution does not push generated bundles back to `skills/generated/` or `skills/enabled/`. (A separate Prepare/Reuse step may mirror already-bound `agent_skill` rows into `skills/enabled/` for inspection only.)
 
 ## Local Pi Agent Root
 
@@ -67,7 +67,9 @@ feedback/
 sync_queue/
 ```
 
-`ensurePiAgentRoot` still creates `skills/generated/` and `skills/enabled/` for backward-compatible layout, but the evolution flow documented here does **not** populate them. Agent skills used at task time come from the database via `agent_skill`, not from those directories.
+`ensurePiAgentRoot` still creates `skills/generated/` and `skills/enabled/` for layout compatibility. Evolution does **not** populate them. Task-time skills still come from the database via `agent_skill` and hydrate into provider-native workdir paths (`.pi/skills/`, `.cursor/skills/`, …).
+
+Additionally, on Prepare/Reuse the daemon **mirrors** currently bound skills into `skills/enabled/<slug>/` (marked with `.multica-bound-mirror`) so the agent root shows what is bound. This mirror is one-way (DB → disk), best-effort, and does not change task hydration or write disk edits back to the DB.
 
 The daemon exposes paths to the Pi runtime through environment variables:
 

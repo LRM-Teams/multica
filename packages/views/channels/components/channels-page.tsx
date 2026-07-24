@@ -2877,6 +2877,8 @@ export function ChannelsPage({
             setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
         }
         onFollowChange={handleThreadFollowChange}
+        parentContext="channel"
+        parentChannelName={active.name}
         onViewParent={() => {
           if (embedded) {
             if (!onOpenInChannels) {
@@ -2889,9 +2891,9 @@ export function ChannelsPage({
             });
             return;
           }
-          // LRM-389 — close the side panel so the parent main column is
-          // actually opened (desktop used to only set highlight behind the
-          // still-open thread, which felt like a dead Maximize click).
+          // LRM-572 / LRM-389 — close the side panel so the parent main column
+          // is opened and the root is scrolled/highlighted (header「在 #频道 查看」
+          // and root「查看原消息」share this handler).
           setHighlightMessageId(threadSurfaceRoot.id);
           setOpenThreadRoot(null);
         }}

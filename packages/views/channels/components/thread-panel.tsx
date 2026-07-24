@@ -1,13 +1,8 @@
 "use client";
 
 import { useMemo, type ReactNode } from "react";
-import { ArrowLeft, Maximize2, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
@@ -33,8 +28,15 @@ export interface ThreadPanelProps {
   followed: boolean;
   followDisabled?: boolean;
   onFollowChange: (followed: boolean) => void;
-  /** Jump to the root in the main timeline. */
+  /** Jump to the root in the main timeline (closes the thread surface). */
   onViewParent?: () => void;
+  /**
+   * LRM-572 — parent surface for the header “View in …” link.
+   * `channel` →「在 #name 查看」; `dm` →「在对话中查看」.
+   */
+  parentContext?: "channel" | "dm";
+  /** Channel display name for `parentContext="channel"` (no `#` prefix). */
+  parentChannelName?: string | null;
   loading?: boolean;
   loadError?: boolean;
   onRetry?: () => void;
@@ -78,6 +80,10 @@ export interface ThreadPanelProps {
  * `<Composer surface="thread">`. A thread reply stays in that thread; the
  * header exposes the same minimal explicit follow control for group and DM
  * threads while reply/mention auto-follow remains a server responsibility.
+ *
+ * LRM-572 / LRM-568 — Slack-style header: no Maximize2; subtitle carries a
+ * clickable「在 #频道 查看」/「在对话中查看」that shares `onViewParent` with
+ * the root「查看原消息」link.
  */
 export function ThreadPanel({
   root,
@@ -90,6 +96,8 @@ export function ThreadPanel({
   followDisabled,
   onFollowChange,
   onViewParent,
+  parentContext = "channel",
+  parentChannelName,
   loading,
   loadError,
   onRetry,
@@ -118,6 +126,7 @@ export function ThreadPanel({
   // `leading` / `actions` on ConversationHeader and `leadingActions` on
   // Composer are non-allowlisted slot props, so their inline JSX is memoized to
   // keep a stable element identity across renders (react-doctor jsx-as-prop).
+  // LRM-572 — desktop AFTER drops the MessageSquare tile; mobile keeps ← back.
   const headerLeading = useMemo(
     () =>
       isMobile ? (
@@ -130,20 +139,63 @@ export function ThreadPanel({
         >
           <ArrowLeft className="size-5" />
         </Button>
-      ) : (
-        <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <MessageSquare className="size-4" />
-        </span>
-      ),
+      ) : null,
     [isMobile, onBack, t],
   );
 
-  // LRM-384 / scheme A — no dark floating Maximize+Download capsule on the
-  // thread surface. Desktop keeps a 28px ghost "open in main" control in the
-  // header; download stays out of the main UI (no ⋯ export entry yet).
-  // LRM-389 — Tooltip must spell “open parent / main column” (Maximize2 alone
-  // reads as expand); omit the control when onViewParent is absent.
-  const openInMainLabel = t(($) => $.thread.open_in_main_aria);
+  // LRM-572 — subtitle:「N 条回复 · 在 #频道 查看」(DM:「在对话中查看」).
+  // Same handler as root「查看原消息」; omit the link when onViewParent is absent.
+  const headerMeta = useMemo(() => {
+    if (loading) {
+      return t(($) => $.thread.meta_loading);
+    }
+    if (loadError) {
+      return t(($) => $.thread.meta_load_failed);
+    }
+
+    const countLabel =
+      replies.length > 0
+        ? t(($) => $.thread.meta_count, { count: replies.length })
+        : t(($) => $.thread.meta_empty);
+
+    if (!onViewParent) {
+      return countLabel;
+    }
+
+    const viewLabel =
+      parentContext === "dm"
+        ? t(($) => $.thread.view_in_conversation)
+        : t(($) => $.thread.view_in_channel, {
+            name: parentChannelName?.trim() || "…",
+          });
+
+    return (
+      <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1">
+        <span className="truncate">{countLabel}</span>
+        <span aria-hidden className="text-muted-foreground/50">
+          ·
+        </span>
+        <button
+          type="button"
+          className="min-h-8 shrink-0 rounded-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onViewParent}
+        >
+          {viewLabel}
+        </button>
+      </span>
+    );
+  }, [
+    loadError,
+    loading,
+    onViewParent,
+    parentChannelName,
+    parentContext,
+    replies.length,
+    t,
+  ]);
+
+  // LRM-384 / LRM-572 — no dark floating Maximize+Download capsule; no Maximize2
+  // icon. Desktop: Follow + ✕. Mobile: Follow only (← is in leading).
   const headerActions = useMemo(
     () => (
       <>
@@ -152,25 +204,6 @@ export function ThreadPanel({
           disabled={followDisabled}
           onFollowChange={onFollowChange}
         />
-        {!isMobile && onViewParent && (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label={openInMainLabel}
-                  onClick={onViewParent}
-                />
-              }
-            >
-              <Maximize2 className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{openInMainLabel}</TooltipContent>
-          </Tooltip>
-        )}
         {!isMobile && (
           <Button
             variant="ghost"
@@ -184,7 +217,7 @@ export function ThreadPanel({
         )}
       </>
     ),
-    [followDisabled, followed, isMobile, onBack, onFollowChange, onViewParent, openInMainLabel, t],
+    [followDisabled, followed, isMobile, onBack, onFollowChange, t],
   );
 
   const composerActions = useMemo(() => composerLeadingActions, [composerLeadingActions]);
@@ -195,9 +228,7 @@ export function ThreadPanel({
         isMobile={isMobile}
         leading={headerLeading}
         title={t(($) => $.thread.title)}
-        meta={
-          replies.length > 0 ? t(($) => $.thread.meta_count, { count: replies.length }) : undefined
-        }
+        meta={headerMeta}
         actions={headerActions}
       />
 

@@ -61,9 +61,11 @@ export function ConversationHeader({
         {status}
       </div>
       {meta && (
-        <p className="truncate text-[11px] leading-4 text-muted-foreground/75">
-          {meta}
-        </p>
+        // div (not p): Thread meta may include a clickable「在 #频道 查看」control
+        // (LRM-572); interactive children inside <p> are invalid HTML.
+        <div className="min-w-0 text-[11px] leading-4 text-muted-foreground/75">
+          {typeof meta === "string" ? <p className="truncate">{meta}</p> : meta}
+        </div>
       )}
     </div>
   );

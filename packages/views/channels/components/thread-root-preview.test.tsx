@@ -92,6 +92,8 @@ vi.mock("../../i18n/use-t", () => ({
           voice_transcript_label: string;
           voice_input: string;
           voice_input_duration: string;
+          expand_action: string;
+          collapse_action: string;
         };
         profile_popover: {
           role: { owner: string; admin: string; member: string; agent: string };
@@ -112,6 +114,8 @@ vi.mock("../../i18n/use-t", () => ({
           voice_transcript_label: "Voice transcript",
           voice_input: "Voice input",
           voice_input_duration: "Voice input duration",
+          expand_action: "See more",
+          collapse_action: "See less",
         },
         profile_popover: {
           role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
@@ -120,7 +124,7 @@ vi.mock("../../i18n/use-t", () => ({
         thread: {
           collapse_message: "Collapse message",
           show_full_message: "Show full message",
-          view_parent: "Back to main chat",
+          view_parent: "View original message →",
         },
       }),
   }),
@@ -156,10 +160,10 @@ describe("ThreadRootPreview", () => {
 
     expect(screen.getByText("Thread root content")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Back to main chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View original message →" })).not.toBeInTheDocument();
   });
 
-  it("uses a compact root preview with a local view-parent action", async () => {
+  it("uses a full root body with a local view-parent action (LRM-572)", async () => {
     const onViewParent = vi.fn();
     const { container } = render(
       <ThreadRootPreview
@@ -171,9 +175,20 @@ describe("ThreadRootPreview", () => {
       />,
     );
 
-    expect(container.querySelector(".line-clamp-3")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back to main chat" }));
+    // Full body (not compact line-clamp); long content may still get main-column See more.
+    expect(container.querySelector(".line-clamp-3")).toBeNull();
+    expect(screen.getByTestId("thread-root-body")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View original message →" }));
     expect(onViewParent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps border-b layering without brand spine/tint (LRM-572)", () => {
+    const { container } = render(
+      <ThreadRootPreview message={makeMessage()} currentUserId="user-1" />,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toMatch(/border-b/);
+    expect(root.className).not.toMatch(/border-l-|bg-primary\//);
   });
 
   it("opens the agent side panel when the root agent author's avatar/name is clicked (#488)", () => {
@@ -318,12 +333,10 @@ describe("ThreadRootPreview", () => {
   });
 
   // GAP 2 — load-bearing invariant. A structured-action envelope with no
-  // renderable text parts and no output must unwrap to the neutral "…"
-  // placeholder, which keeps `compactBody` truthy so the compact body NEVER
-  // falls through to rendering the raw envelope JSON as markdown. If a future
-  // change made the placeholder empty, `compactBody` would become falsy and the
-  // raw JSON would leak — this test would then fail.
-  it("shows the neutral placeholder, never raw envelope JSON, for a root with no renderable text", () => {
+  // renderable text parts and no output must NEVER leak raw envelope JSON into
+  // the thread root (full body path, LRM-572). Compact used to force "…"; full
+  // MessageBody may render empty — either is fine as long as JSON stays hidden.
+  it("never shows raw envelope JSON for a root with no renderable text", () => {
     const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
     const { container } = render(
       <ThreadRootPreview
@@ -332,9 +345,9 @@ describe("ThreadRootPreview", () => {
       />,
     );
 
-    expect(screen.getByText("…")).toBeInTheDocument();
     expect(container.textContent).not.toContain('"action"');
     expect(container.textContent).not.toContain("{");
     expect(container.textContent).not.toContain("image");
+    expect(container.textContent).not.toContain(raw);
   });
 });

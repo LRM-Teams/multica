@@ -61,8 +61,17 @@ vi.mock("./thread-root-preview", () => ({
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (r: Record<string, Record<string, string>>) => string) =>
-      selector(RESOURCES as never),
+    t: (
+      selector: (r: Record<string, Record<string, string>>) => string,
+      vars?: Record<string, string | number>,
+    ) => {
+      const raw = selector(RESOURCES as never);
+      if (!vars) return raw;
+      return Object.entries(vars).reduce(
+        (acc, [key, value]) => acc.replace(`{{${key}}}`, String(value)),
+        raw,
+      );
+    },
   }),
 }));
 
@@ -70,9 +79,14 @@ const RESOURCES = {
   thread: {
     title: "Thread",
     meta_count: "{{count}} replies",
-    empty_replies: "No replies yet.",
+    meta_empty: "No replies yet",
+    meta_loading: "Loading…",
+    meta_load_failed: "Failed to load",
+    empty_replies: "Be the first to reply",
     load_failed: "Failed to load thread.",
-    view_parent: "Back to main chat",
+    view_parent: "View original message →",
+    view_in_channel: "View in #{{name}}",
+    view_in_conversation: "View in conversation",
     close_aria: "Close thread",
     open_in_main_aria: "Open in main chat",
     back_to_conversation: "Back to conversation",
@@ -191,6 +205,7 @@ describe("ThreadPanel", () => {
     expect(desktopToggle).not.toHaveBeenCalled();
     expect(following).toHaveTextContent("Following");
     expect(following).toHaveAttribute("aria-pressed", "true");
+    expect(following.className).toMatch(/min-h-8|h-8/);
     fireEvent.click(following);
     expect(desktopToggle).toHaveBeenCalledWith(false);
 
@@ -208,35 +223,53 @@ describe("ThreadPanel", () => {
     expect(mobileToggle).toHaveBeenCalledWith(true);
   });
 
-  // LRM-384 scheme A — header 28px ghost open-in-main; no dark float Maximize/Download.
-  // LRM-389 — tooltip labels “open in main”; omitted when no handler.
-  it("exposes a desktop header open-in-main control and hides it on mobile", async () => {
+  // LRM-572 — Maximize2 gone; subtitle「View in #channel」shares onViewParent.
+  it("exposes a desktop header View-in-channel control and hides Maximize2", () => {
     const onViewParent = vi.fn();
     const { unmount } = renderPanel(
-      <ThreadPanel {...baseProps()} onViewParent={onViewParent} />,
+      <ThreadPanel
+        {...baseProps()}
+        parentChannelName="LRM2.0开发群"
+        onViewParent={onViewParent}
+      />,
     );
 
-    const openInMain = screen.getByRole("button", { name: "Open in main chat" });
-    expect(openInMain.className).toMatch(/size-7/);
-    expect(openInMain.className).toMatch(/text-muted-foreground/);
-    expect(openInMain.className).toMatch(/hover:bg-muted/);
-    // Focus opens the tooltip so Maximize2 is not misread as “expand”.
-    fireEvent.focus(openInMain);
-    expect(openInMain).toHaveAttribute("data-popup-open");
-    expect(await screen.findByText("Open in main chat", { selector: "[data-slot=tooltip-content]" })).toBeInTheDocument();
-    fireEvent.click(openInMain);
+    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+    const viewInChannel = screen.getByRole("button", { name: "View in #LRM2.0开发群" });
+    fireEvent.click(viewInChannel);
     expect(onViewParent).toHaveBeenCalledTimes(1);
-    // Download stays out of the thread header main path.
     expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
 
     unmount();
-    renderPanel(<ThreadPanel {...baseProps()} isMobile onViewParent={onViewParent} />);
-    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+    renderPanel(
+      <ThreadPanel
+        {...baseProps()}
+        isMobile
+        parentChannelName="LRM2.0开发群"
+        onViewParent={onViewParent}
+      />,
+    );
+    // Mobile keeps the subtitle link (no Maximize / ✕).
+    expect(screen.getByRole("button", { name: "View in #LRM2.0开发群" })).toBeInTheDocument();
   });
 
-  it("omits the open-in-main control when onViewParent is not provided", () => {
-    renderPanel(<ThreadPanel {...baseProps()} />);
-    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+  it("uses View-in-conversation copy for DM parent context", () => {
+    const onViewParent = vi.fn();
+    renderPanel(
+      <ThreadPanel
+        {...baseProps()}
+        parentContext="dm"
+        onViewParent={onViewParent}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "View in conversation" }));
+    expect(onViewParent).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the View-in-channel control when onViewParent is not provided", () => {
+    renderPanel(<ThreadPanel {...baseProps()} parentChannelName="dev" />);
+    expect(screen.queryByRole("button", { name: /View in/ })).toBeNull();
+    expect(screen.getByText("1 replies")).toBeInTheDocument();
   });
 });
 

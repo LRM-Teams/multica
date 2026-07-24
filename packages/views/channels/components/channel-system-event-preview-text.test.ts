@@ -51,6 +51,10 @@ const TEMPLATES = {
         fired: "提醒已触发：{title}",
         anchor_unavailable_suffix: " · 来源不可用",
       },
+      thread: {
+        unfollowed: "{actor} 取消关注了此话题",
+        followed: "{actor} 关注了此话题",
+      },
     },
   },
 };
@@ -235,5 +239,19 @@ describe("formatSystemEventPreviewText", () => {
       params: { issue_id: "issue-1", issue_identifier: "LRM-191", issue_status: "done" },
     });
     expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe("Multica 完成了 LRM-191");
+  });
+
+  it("localizes thread_unfollowed with a resolved @display_name (LRM-540)", () => {
+    const message = systemMessage({
+      event: "thread_unfollowed",
+      params: {
+        actor_id: "agent-fe",
+        actor_type: "agent",
+        actor_handle: "qian-duan",
+      },
+    });
+    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
+      "@前端工程师 取消关注了此话题",
+    );
   });
 });

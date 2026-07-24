@@ -3,11 +3,13 @@ import {
   MEMBER_EVENTS,
   ISSUE_EVENTS,
   PROJECT_EVENTS,
+  THREAD_EVENTS,
   parseMemberSystemEvent,
   parseIssueAggregateSystemEvent,
   parseIssueSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
+  parseThreadSystemEvent,
   type SystemEventSource,
 } from "./channel-system-event";
 import type { TFunction } from "i18next";
@@ -235,6 +237,24 @@ function formatReminderEventPreview(
     : `${body}${t(($) => $.message.system_event.reminder.anchor_unavailable_suffix)}`;
 }
 
+function formatThreadEventPreview(
+  event: NonNullable<ReturnType<typeof parseThreadSystemEvent>>,
+  t: T,
+  resolveMention: MentionPreviewResolver,
+): string {
+  const actor = resolveActorText(
+    event.actorId,
+    event.actorType,
+    resolveMention,
+    event.actorHandle ? `@${event.actorHandle.replace(/^@+/, "")}` : "…",
+  );
+  const template =
+    event.event === THREAD_EVENTS.followed
+      ? t(($) => $.message.system_event.thread.followed)
+      : t(($) => $.message.system_event.thread.unfollowed);
+  return fillSlots(template, { actor });
+}
+
 export function formatSystemEventPreviewText(
   message: SystemEventSource,
   t: T,
@@ -256,6 +276,9 @@ export function formatSystemEventPreviewText(
 
   const reminderEvent = parseReminderSystemEvent(message);
   if (reminderEvent) return formatReminderEventPreview(reminderEvent, t);
+
+  const threadEvent = parseThreadSystemEvent(message);
+  if (threadEvent) return formatThreadEventPreview(threadEvent, t, resolveMention);
 
   return null;
 }

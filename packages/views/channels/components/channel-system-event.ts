@@ -454,3 +454,59 @@ export function parseReminderSystemEvent(message: SystemEventSource): ReminderSy
   }
   return null;
 }
+
+/**
+ * Thread attention system events (LRM-540). Today the BE emits only
+ * `thread_unfollowed` when an agent explicitly unfollows (#329: re-follow is
+ * silent). The fallback `content` stamps `@handle unfollowed this thread` and
+ * the companion mention reference often lacks UTF-16 spans — so projecting
+ * from `content` paints the slug. FE owns the localized row + @display_name
+ * token from structured params (same contract as member/issue system rows).
+ */
+export const THREAD_EVENTS = {
+  unfollowed: "thread_unfollowed",
+  followed: "thread_followed",
+} as const;
+
+export type ThreadSystemEventKind = (typeof THREAD_EVENTS)[keyof typeof THREAD_EVENTS];
+
+const THREAD_EVENT_KINDS = new Set<string>(Object.values(THREAD_EVENTS));
+
+export interface ThreadSystemEvent {
+  event: ThreadSystemEventKind;
+  actorId: string;
+  /** Public actor type: "human" | "agent". Absent on sparse/legacy params. */
+  actorType?: string;
+  /** Canonical @handle — unresolved-ink fallback (LRM-515); never uuid. */
+  actorHandle?: string;
+  /** Emit-time name (diagnostics only — FE must not paint this; LRM-281). */
+  actorName?: string;
+}
+
+/**
+ * Extract a thread follow/unfollow system event. Requires a resolvable actor
+ * id (`actor_id`, or legacy `agent_id`). Returns null so the caller can fall
+ * back to canonical `content` when facts are missing — never invent an actor.
+ */
+export function parseThreadSystemEvent(message: SystemEventSource): ThreadSystemEvent | null {
+  if (message.type !== "system" || !Array.isArray(message.parts)) return null;
+  for (const part of message.parts) {
+    if (part.type !== "system_event" || !THREAD_EVENT_KINDS.has(part.event)) continue;
+    const params = part.event_params;
+    // Current emit stamps both; older/normalized fixtures may only carry actor_id
+    // or the agent-only agent_id key from early unfollow payloads.
+    const actorId = optString(params, "actor_id") ?? optString(params, "agent_id");
+    if (!actorId) continue;
+    // Prefer stamped actor_type; agent_id-only legacy payloads are agent rows.
+    const actorType =
+      optString(params, "actor_type") ?? (optString(params, "agent_id") ? "agent" : undefined);
+    return {
+      event: part.event as ThreadSystemEventKind,
+      actorId,
+      actorType,
+      actorHandle: optString(params, "actor_handle"),
+      actorName: optString(params, "actor_name") ?? optString(params, "agent_name"),
+    };
+  }
+  return null;
+}

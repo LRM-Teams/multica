@@ -8,10 +8,12 @@ import {
   parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
+  parseThreadSystemEvent,
   foldedIssueEventIds,
   type IssueSystemEvent,
   type ProjectSystemEvent,
   type ReminderSystemEvent,
+  type ThreadSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
@@ -19,6 +21,7 @@ import {
   IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
   ReminderSystemEventContent,
+  ThreadSystemEventContent,
 } from "./channel-system-event-content";
 
 const mockAgents = [
@@ -223,6 +226,10 @@ vi.mock("../../i18n/use-t", () => ({
             reminder: {
               fired: "提醒已触发：{title}",
               anchor_unavailable_suffix: " · 来源不可用",
+            },
+            thread: {
+              unfollowed: "{actor} 取消关注了此话题",
+              followed: "{actor} 关注了此话题",
             },
           },
         },
@@ -1285,5 +1292,104 @@ describe("ReminderSystemEventContent", () => {
   it("exposes zero mutation/thread/quote/reaction affordances — no button, link, or menu anywhere in the row", () => {
     render(<ReminderSystemEventContent event={availableEvent} />);
     expect(document.querySelectorAll("button, a, [role='menu']")).toHaveLength(0);
+  });
+});
+
+describe("parseThreadSystemEvent", () => {
+  it("parses thread_unfollowed with actor facts (LRM-540)", () => {
+    const event = parseThreadSystemEvent(
+      systemMessage({
+        event: "thread_unfollowed",
+        params: {
+          actor_id: "agent-beckham",
+          actor_type: "agent",
+          actor_handle: "bei-ke-han-mu-11",
+          actor_display_name: "贝克汉姆",
+          agent_id: "agent-beckham",
+        },
+      }),
+    );
+    expect(event).toEqual({
+      event: "thread_unfollowed",
+      actorId: "agent-beckham",
+      actorType: "agent",
+      actorHandle: "bei-ke-han-mu-11",
+      actorName: undefined,
+    });
+  });
+
+  it("accepts legacy agent_id-only params as an agent actor", () => {
+    const event = parseThreadSystemEvent(
+      systemMessage({
+        event: "thread_unfollowed",
+        params: { agent_id: "agent-fe", agent_name: "前端工程师" },
+      }),
+    );
+    expect(event).toMatchObject({
+      event: "thread_unfollowed",
+      actorId: "agent-fe",
+      actorType: "agent",
+      actorName: "前端工程师",
+    });
+  });
+
+  it("ignores rows without a resolvable actor id", () => {
+    expect(
+      parseThreadSystemEvent(systemMessage({ event: "thread_unfollowed", params: {} })),
+    ).toBeNull();
+  });
+
+  it("ignores non-thread system events", () => {
+    expect(
+      parseThreadSystemEvent(systemMessage({ event: "channel_member_left", params: { target_id: "u1" } })),
+    ).toBeNull();
+  });
+});
+
+describe("ThreadSystemEventContent (LRM-540)", () => {
+  const unfollowEvent: ThreadSystemEvent = {
+    event: "thread_unfollowed",
+    actorId: "agent-beckham",
+    actorType: "agent",
+    actorHandle: "bei-ke-han-mu-11",
+  };
+
+  it("renders @display_name primary ink, not the handle slug", () => {
+    render(<ThreadSystemEventContent event={unfollowEvent} />);
+    expect(document.body.textContent).toBe("@贝克汉姆 取消关注了此话题");
+    expect(document.body.textContent).not.toContain("bei-ke-han-mu-11");
+    const token = screen.getByTestId("actor-token");
+    expect(token).toHaveAttribute("data-member-type", "agent");
+    expect(token).toHaveAttribute("data-member-id", "agent-beckham");
+    expect(token).toHaveTextContent("@贝克汉姆");
+  });
+
+  it("falls back to @handle (never uuid) when the actor cannot be resolved", () => {
+    render(
+      <ThreadSystemEventContent
+        event={{
+          event: "thread_unfollowed",
+          actorId: "agent-missing",
+          actorType: "agent",
+          actorHandle: "some-handle",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@some-handle 取消关注了此话题");
+    expect(document.body.textContent).not.toContain("agent-missing");
+  });
+
+  it("renders the followed template when the event is thread_followed", () => {
+    render(
+      <ThreadSystemEventContent
+        event={{
+          event: "thread_followed",
+          actorId: "agent-fe",
+          actorType: "agent",
+          actorHandle: "qian-duan",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@前端工程师 关注了此话题");
   });
 });

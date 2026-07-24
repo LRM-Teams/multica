@@ -20,6 +20,8 @@ import {
   useDeleteChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
+  activeChannelTasksOptions,
+  activeChannelTasksKeys,
 } from "@multica/core/channels";
 import { dmKeys } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
@@ -33,7 +35,11 @@ import type {
   OpenAgentPanelFn,
 } from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelMessage, ChannelMessageSearchResult } from "@multica/core/types";
+import type {
+  ChannelActiveTask,
+  ChannelMessage,
+  ChannelMessageSearchResult,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Popover,
@@ -76,6 +82,8 @@ import { ThreadFollowButton } from "./thread-follow-button";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
+import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
+import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -257,6 +265,8 @@ function DmHeader({
   voiceCallAction?: React.ReactNode;
 }) {
   const { t } = useT("channels");
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
   const peerId = dm.peer.id;
@@ -265,8 +275,51 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-248 / LRM-537: agent peers use avatar badge only; composer activity
-  // verbs (Thinking / preparing) were removed — no substitute status line.
+  // LRM-581 — agent DM: live cue beside peer name (same language as channel
+  // roster). Human peers keep the static "Human" meta.
+  const channelIdForTasks = isAgentPeer ? (filesChannelId ?? dm.id) : "";
+  const { data: activeTasks = [] } = useQuery(
+    activeChannelTasksOptions(channelIdForTasks),
+  );
+  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+  const handleStopTask = useCallback(
+    async (task: ChannelActiveTask) => {
+      if (!channelIdForTasks || isTerminalChannelActiveTask(task)) return;
+      const inboxEventId = task.inbox_event_id?.trim();
+      if (!inboxEventId) {
+        toast.error(t(($) => $.agent_status.stop_failed));
+        return;
+      }
+      setStoppingTaskId(task.task_id);
+      try {
+        await api.cancelChannelInboxEvent(channelIdForTasks, inboxEventId);
+        toast.success(
+          t(($) => $.agent_status.stop_success, { name: task.agent_name }),
+        );
+        qc.invalidateQueries({
+          queryKey: activeChannelTasksKeys.all(channelIdForTasks),
+        });
+        qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      } catch {
+        toast.error(t(($) => $.agent_status.stop_failed));
+      } finally {
+        setStoppingTaskId((current) =>
+          current === task.task_id ? null : current,
+        );
+      }
+    },
+    [channelIdForTasks, qc, t, wsId],
+  );
+  const agentLiveStatus = isAgentPeer ? (
+    <ChannelAgentsLiveCue
+      variant="dm"
+      agentCount={1}
+      tasks={activeTasks}
+      stoppingTaskId={stoppingTaskId}
+      canStop
+      onStopTask={handleStopTask}
+    />
+  ) : undefined;
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -325,6 +378,7 @@ function DmHeader({
       }
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
+      status={agentLiveStatus}
       badges={mutedBadge}
       actions={
         <>

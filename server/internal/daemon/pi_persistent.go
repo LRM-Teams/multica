@@ -157,3 +157,8 @@ func (d *Daemon) acquirePiChatRPCBackend(identity piPersistentIdentity, cfg agen
 		lease.release(healthy, time.Now())
 	}, nil
 }
+
+func newCanonicalPiResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
+	backend := agent.NewPiRPCBackend(cfg)
+	return backend, backend.Close, nil
+}

@@ -4,8 +4,6 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ArrowLeft, ChevronDown, ChevronUp, FileText, Maximize2, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  activeChannelTasksKeys,
-  activeChannelTasksOptions,
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
@@ -35,7 +33,7 @@ import type {
   OpenAgentPanelFn,
 } from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
+import type { ChannelMessage, ChannelMessageSearchResult } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Tooltip,
@@ -57,7 +55,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
@@ -83,19 +80,17 @@ import { ThreadRootPreview } from "./thread-root-preview";
 import { ThreadFollowButton } from "./thread-follow-button";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
-import {
-  ConversationActivityStrip,
-  type TypingActor,
-} from "./channels-page";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
-import { isTypingActorVisible } from "./conversation-typing";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
  *  - `dm_channel` — the DM IS a kind='dm' channel, so we reuse the exact
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
- *    + ConversationActivityStrip + channel queries/mutations +
- *    channel:message / channel:typing WS).
+ *    + channel queries/mutations + channel:message WS).
+ *
+ * LRM-537: DM composer no longer renders ConversationActivityStrip /
+ * ConversationAgentActivityLine (preparing / Thinking / Stop). Status
+ * perception redesign is a separate issue.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -130,7 +125,6 @@ interface DmChannelState {
   threadParentHighlightId: string | null;
   /** Deep-link target from a Reminder anchor (?message=, routed to the main list or the open thread's reply list depending on whether ?thread= is also present). Distinct from threadParentHighlightId, which is always "jump back to the root in the main list", never a reply. */
   deepLinkHighlightId: string | null;
-  typingActors: Record<string, TypingActor>;
 }
 
 type DmChannelAction =
@@ -147,10 +141,7 @@ type DmChannelAction =
   | { type: "setSearchQuery"; query: string }
   | { type: "setSearchResults"; query: string; results: ChannelMessageSearchResult[]; total: number }
   | { type: "previousSearchResult" }
-  | { type: "nextSearchResult" }
-  | { type: "expireTypingActors"; now: number }
-  | { type: "removeTypingActor"; actorKey: string }
-  | { type: "upsertTypingActor"; actor: TypingActor };
+  | { type: "nextSearchResult" };
 
 const initialConversationSearchState: ConversationSearchState = {
   open: false,
@@ -168,7 +159,6 @@ const initialDmChannelState: DmChannelState = {
   convSearch: initialConversationSearchState,
   threadParentHighlightId: null,
   deepLinkHighlightId: null,
-  typingActors: {},
 };
 
 function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmChannelState {
@@ -229,28 +219,6 @@ function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmCha
             : Math.min(state.convSearch.total - 1, state.convSearch.index + 1),
         },
       };
-    case "expireTypingActors": {
-      const next = Object.fromEntries(
-        Object.entries(state.typingActors).filter(([, actor]) => actor.expiresAt > action.now),
-      );
-      return Object.keys(next).length === Object.keys(state.typingActors).length
-        ? state
-        : { ...state, typingActors: next };
-    }
-    case "removeTypingActor": {
-      if (!state.typingActors[action.actorKey]) return state;
-      const next = { ...state.typingActors };
-      delete next[action.actorKey];
-      return { ...state, typingActors: next };
-    }
-    case "upsertTypingActor":
-      return {
-        ...state,
-        typingActors: {
-          ...state.typingActors,
-          [action.actor.key]: action.actor,
-        },
-      };
   }
 }
 
@@ -299,8 +267,8 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-248: agent peers use avatar badge only; activity verbs live on
-  // ConversationAgentActivityLine above the composer.
+  // LRM-248 / LRM-537: agent peers use avatar badge only; composer activity
+  // verbs (Thinking / preparing) were removed — no substitute status line.
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -419,11 +387,9 @@ function DmChannelConversation({
     convSearch,
     threadParentHighlightId,
     deepLinkHighlightId,
-    typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const appliedDeepLinkMessageRef = useRef<string | null>(null);
   const appliedThreadDeepLinkRef = useRef<string | null>(null);
-  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
   // #349 agent side panel — same slot as the thread panel (mutually
   // exclusive), matching channels-page.tsx's inline-panel pattern per
   // Frank's direction (replace the slot, don't route away).
@@ -532,7 +498,6 @@ function DmChannelConversation({
     },
     [threadPage?.messages, threadRoot],
   );
-  const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(channelId));
 
   const handleThreadFollowChange = useCallback((followed: boolean) => {
     if (!threadSurfaceRoot) return;
@@ -579,13 +544,6 @@ function DmChannelConversation({
   // top-level and thread reply each own an independent intent.
   const dmSend = useComposerSend();
   const threadSend = useComposerSend();
-
-  // Agents surface lifecycle via the query-driven working indicator, so filter
-  // them out of the transient typing render (same rule as the group thread).
-  const activeTypingActors = useMemo(
-    () => Object.values(typingActors).filter((a) => isTypingActorVisible(a.actorType)),
-    [typingActors],
-  );
 
   // 1-on-1 DM: scope the composer's @-mention picker to the peer only. Without
   // an allowlist the picker defaults to the whole workspace, which is wrong for
@@ -710,15 +668,6 @@ function DmChannelConversation({
     });
   }, [threadRoot]);
 
-  // Expire stale typing pulses.
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      dispatch({ type: "expireTypingActors", now });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   useEffect(() => {
     typingStartedRef.current = false;
     if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
@@ -728,13 +677,11 @@ function DmChannelConversation({
   useWSEvent("channel:message", (payload) => {
     const e = payload as { channel_id?: string };
     if (e.channel_id !== channelId) return;
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     markChannelRead(channelId);
   });
 
   useWSEvent("task:cancelled", () => {
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
@@ -748,28 +695,6 @@ function DmChannelConversation({
     const event = payload as { chat_session_id?: string };
     if (!event.chat_session_id) return;
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-  });
-
-  useWSEvent("channel:typing", (payload) => {
-    const event = payload as ChannelTypingPayload;
-    if (!event.channel_id || event.channel_id !== channelId) return;
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
-    const actorKey = `${event.actor_type}:${event.actor_id ?? event.actor_name}`;
-    if (event.actor_type === "user" && event.actor_id && event.actor_id === currentUserId) return;
-    if (!event.is_typing) {
-      dispatch({ type: "removeTypingActor", actorKey });
-      return;
-    }
-    dispatch({
-      type: "upsertTypingActor",
-      actor: {
-        key: actorKey,
-        channelId: event.channel_id,
-        actorName: event.actor_name,
-        actorType: event.actor_type,
-        expiresAt: Date.now() + (event.expires_in_ms ?? 5000),
-      },
-    });
   });
 
   const publishTyping = (isTyping: boolean) => setTyping.mutate({ channelId, isTyping });
@@ -814,26 +739,6 @@ function DmChannelConversation({
   const handleThreadEditorUpdate = (value: string) => {
     dispatch({ type: "setThreadDraftEmpty", empty: !value.trim() });
   };
-
-  const handleStopTask = useCallback(async (task: ChannelActiveTask) => {
-    // LRM-425 / LRM-238 — channel/DM wakes cancel via inbox event id only.
-    const inboxEventId = task.inbox_event_id?.trim();
-    if (!inboxEventId) {
-      toast.error(t(($) => $.agent_status.stop_failed));
-      return;
-    }
-    setStoppingTaskId(task.task_id);
-    try {
-      await api.cancelChannelInboxEvent(channelId, inboxEventId);
-      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    } catch {
-      toast.error(t(($) => $.agent_status.stop_failed));
-    } finally {
-      setStoppingTaskId((current) => (current === task.task_id ? null : current));
-    }
-  }, [channelId, qc, t, wsId]);
 
   const handlePickFiles = (files: FileList | null) => {
     if (!files?.length) return;
@@ -1129,11 +1034,6 @@ function DmChannelConversation({
           onDeleteMessage={handleDeleteMessage}
           onRetrySend={handleRetrySend}
         />
-        <ConversationActivityStrip
-          tasks={activeTasks}
-          stoppingTaskId={stoppingTaskId}
-          onStopTask={handleStopTask}
-        />
         <Composer
           surface="thread"
           sendLabel={t(($) => $.composer.send)}
@@ -1319,20 +1219,6 @@ function DmChannelConversation({
         onDeleteMessage={handleDeleteMessage}
         onRetrySend={handleRetrySend}
       />
-      <ConversationActivityStrip
-        typingActors={activeTypingActors}
-        tasks={activeTasks}
-        stoppingTaskId={stoppingTaskId}
-        onStopTask={handleStopTask}
-      />
-      {/* Current conversation agent's live Activity verb (Reading / Writing /
-          Running command… / Thinking) as one quiet line — reuses the Activity
-          latest-row projection and hides itself when the agent is idle. Only a
-          DM whose peer is an agent has a well-defined single conversation
-          agent; human DMs and multi-agent channels render nothing. */}
-      {dm.peer.type === "agent" ? (
-        <ConversationAgentActivityLine agentId={dm.peer.id} />
-      ) : null}
       <Composer
         surface="dm_channel"
         sendLabel={t(($) => $.composer.send)}

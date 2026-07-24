@@ -14,12 +14,18 @@ WITH candidates AS (
     reminder.id,
     reminder.fire_at AS previous_fire_at,
     CASE
-      WHEN latest.reason_code = 'patrol_failure_fallback_rearmed'
+      WHEN latest.reason_code IN (
+        'patrol_failure_fallback_rearmed',
+        'patrol_failure_fallback_cap_migrated'
+      )
         THEN now() + interval '12 hours'
       ELSE now() + interval '8 hours'
     END AS capped_fire_at,
     CASE
-      WHEN latest.reason_code = 'patrol_failure_fallback_rearmed'
+      WHEN latest.reason_code IN (
+        'patrol_failure_fallback_rearmed',
+        'patrol_failure_fallback_cap_migrated'
+      )
         THEN 'patrol_failure_fallback_cap_migrated'
       ELSE 'patrol_adaptive_cap_migrated'
     END AS migration_reason

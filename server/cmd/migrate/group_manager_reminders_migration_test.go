@@ -280,6 +280,9 @@ func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *test
 	if _, err := conn.Exec(ctx, readManagedReminderMigrationSQL(t, "222_group_manager_patrol_intervals.up.sql")); err != nil {
 		t.Fatalf("apply migration 222 up: %v", err)
 	}
+	if _, err := conn.Exec(ctx, readManagedReminderMigrationSQL(t, "222_group_manager_patrol_intervals.up.sql")); err != nil {
+		t.Fatalf("reapply migration 222 up: %v", err)
+	}
 
 	var fallbackSeconds, adaptiveSeconds, ordinarySeconds int64
 	if err := conn.QueryRow(ctx, `

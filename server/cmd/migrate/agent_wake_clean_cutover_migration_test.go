@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,25 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			1,
 			'70000000-0000-4000-8000-000000000001'
 		);
+		INSERT INTO chat_session (
+			id, workspace_id, agent_id, creator_id, runtime_id
+		) VALUES (
+			'70000000-0000-4000-8000-000000000008',
+			'70000000-0000-4000-8000-000000000002',
+			'70000000-0000-4000-8000-000000000004',
+			'70000000-0000-4000-8000-000000000001',
+			'70000000-0000-4000-8000-000000000003'
+		);
+		INSERT INTO agent_session (
+			id, workspace_id, agent_id, runtime_id, chat_session_id, scope
+		) VALUES (
+			'70000000-0000-4000-8000-000000000010',
+			'70000000-0000-4000-8000-000000000002',
+			'70000000-0000-4000-8000-000000000004',
+			'70000000-0000-4000-8000-000000000003',
+			'70000000-0000-4000-8000-000000000008',
+			'dm'
+		);
 
 		INSERT INTO issue (
 			id, workspace_id, title, status, priority, creator_type, creator_id,
@@ -138,7 +158,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 		FROM generate_series(101, 107) AS value;
 
 		INSERT INTO agent_task_queue (
-			id, agent_id, runtime_id, issue_id, status, priority, created_at,
+			id, agent_id, runtime_id, issue_id, chat_session_id, status, priority, created_at,
 			dispatched_at, started_at, completed_at, result, error, context,
 			failure_reason, wait_reason
 		) VALUES
@@ -147,6 +167,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000003',
 			'70000000-0000-4000-8000-000000000101',
+			'70000000-0000-4000-8000-000000000008',
 			'queued', 1, '2026-07-24 00:01:00+00',
 			NULL, NULL, NULL, NULL, NULL, '{"type":"quick_create"}'::jsonb,
 			NULL, NULL
@@ -156,6 +177,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000009',
 			'70000000-0000-4000-8000-000000000102',
+			NULL,
 			'dispatched', 2, '2026-07-24 00:02:00+00',
 			'2026-07-24 00:02:30+00', NULL, NULL, NULL, NULL, '{}'::jsonb,
 			NULL, NULL
@@ -165,6 +187,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000003',
 			'70000000-0000-4000-8000-000000000103',
+			NULL,
 			'running', 3, '2026-07-24 00:03:00+00',
 			'2026-07-24 00:03:20+00', '2026-07-24 00:03:30+00', NULL,
 			NULL, NULL, '{}'::jsonb, NULL, NULL
@@ -174,6 +197,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000003',
 			'70000000-0000-4000-8000-000000000104',
+			NULL,
 			'waiting_local_directory', 4, '2026-07-24 00:04:00+00',
 			'2026-07-24 00:04:20+00', '2026-07-24 00:04:30+00', NULL,
 			NULL, NULL, '{}'::jsonb, NULL, 'waiting for worktree'
@@ -183,6 +207,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000003',
 			'70000000-0000-4000-8000-000000000105',
+			NULL,
 			'completed', 5, '2026-07-24 00:05:00+00',
 			'2026-07-24 00:05:20+00', '2026-07-24 00:05:30+00',
 			'2026-07-24 00:06:00+00', '{"ok":true}'::jsonb, NULL, '{}'::jsonb,
@@ -193,6 +218,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000003',
 			'70000000-0000-4000-8000-000000000106',
+			NULL,
 			'failed', 6, '2026-07-24 00:06:00+00',
 			'2026-07-24 00:06:20+00', '2026-07-24 00:06:30+00',
 			'2026-07-24 00:07:00+00', NULL, 'provider failed', '{}'::jsonb,
@@ -203,9 +229,26 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000003',
 			'70000000-0000-4000-8000-000000000107',
+			NULL,
 			'cancelled', 7, '2026-07-24 00:07:00+00',
 			NULL, NULL, '2026-07-24 00:08:00+00', NULL, NULL, '{}'::jsonb,
 			'user_cancelled', NULL
+		);
+		INSERT INTO chat_message (chat_session_id, role, content)
+		SELECT
+			'70000000-0000-4000-8000-000000000008',
+			'user',
+			'cutover decoy ' || value
+		FROM generate_series(1, 20000) AS value;
+		INSERT INTO chat_message (
+			id, chat_session_id, role, content, task_id, created_at
+		) VALUES (
+			'70000000-0000-4000-8000-000000000011',
+			'70000000-0000-4000-8000-000000000008',
+			'user',
+			'cutover source message',
+			'70000000-0000-4000-8000-000000000201',
+			'2026-07-24 00:00:30+00'
 		);
 
 		INSERT INTO task_message (task_id, seq, type, content)
@@ -288,14 +331,15 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 	}
 
 	var (
-		queueGone, allOriginalIDs bool
-		total, pendingWake        int
-		acked, suppressed         int
+		queueGone, allOriginalIDs, userMessageLookupIndexed bool
+		total, pendingWake                                  int
+		acked, suppressed                                   int
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT
 			to_regclass('agent_task_queue') IS NULL,
 			count(*) = 7,
+			to_regclass('idx_chat_message_task_user_created') IS NOT NULL,
 			count(*),
 			count(*) FILTER (WHERE status = 'pending' AND requires_wake),
 			count(*) FILTER (WHERE status = 'acked'),
@@ -304,14 +348,24 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 		WHERE id BETWEEN
 			'70000000-0000-4000-8000-000000000201'
 			AND '70000000-0000-4000-8000-000000000207'
-	`).Scan(&queueGone, &allOriginalIDs, &total, &pendingWake, &acked, &suppressed); err != nil {
+	`).Scan(
+		&queueGone,
+		&allOriginalIDs,
+		&userMessageLookupIndexed,
+		&total,
+		&pendingWake,
+		&acked,
+		&suppressed,
+	); err != nil {
 		t.Fatalf("read migrated wake states: %v", err)
 	}
-	if !queueGone || !allOriginalIDs || total != 7 || pendingWake != 4 || acked != 2 || suppressed != 1 {
+	if !queueGone || !allOriginalIDs || !userMessageLookupIndexed ||
+		total != 7 || pendingWake != 4 || acked != 2 || suppressed != 1 {
 		t.Fatalf(
-			"cutover states = queueGone:%t ids:%t total:%d pendingWake:%d acked:%d suppressed:%d",
+			"cutover states = queueGone:%t ids:%t userMessageIndex:%t total:%d pendingWake:%d acked:%d suppressed:%d",
 			queueGone,
 			allOriginalIDs,
+			userMessageLookupIndexed,
 			total,
 			pendingWake,
 			acked,
@@ -334,6 +388,59 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 	}
 	if terminalFacts != 3 {
 		t.Fatalf("terminal facts = %d, want 3 non-runnable facts", terminalFacts)
+	}
+
+	var sourceMessageID string
+	if err := pool.QueryRow(ctx, `
+		SELECT source_chat_message_id::text
+		FROM agent_inbox_event
+		WHERE id = '70000000-0000-4000-8000-000000000201'
+	`).Scan(&sourceMessageID); err != nil {
+		t.Fatalf("read migrated source message: %v", err)
+	}
+	if sourceMessageID != "70000000-0000-4000-8000-000000000011" {
+		t.Fatalf("source message = %s, want cutover source message", sourceMessageID)
+	}
+
+	if _, err := pool.Exec(ctx, `ANALYZE chat_message`); err != nil {
+		t.Fatalf("analyze chat messages for plan regression: %v", err)
+	}
+	planRows, err := pool.Query(ctx, `
+		EXPLAIN (FORMAT TEXT)
+		SELECT event.id, source_chat_message.id
+		FROM agent_inbox_event event
+		LEFT JOIN LATERAL (
+		  SELECT message.id
+		  FROM chat_message message
+		  WHERE message.task_id = event.id
+		    AND message.role = 'user'
+		  ORDER BY message.created_at, message.id
+		  LIMIT 1
+		) source_chat_message ON TRUE
+		WHERE event.id BETWEEN
+			'70000000-0000-4000-8000-000000000201'
+			AND '70000000-0000-4000-8000-000000000207'
+	`)
+	if err != nil {
+		t.Fatalf("explain source-message lookup: %v", err)
+	}
+	var planLines []string
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			planRows.Close()
+			t.Fatalf("scan source-message lookup plan: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	if err := planRows.Err(); err != nil {
+		planRows.Close()
+		t.Fatalf("read source-message lookup plan: %v", err)
+	}
+	planRows.Close()
+	plan := strings.Join(planLines, "\n")
+	if !strings.Contains(plan, "idx_chat_message_task_user_created") {
+		t.Fatalf("source-message lookup plan does not use the migration index:\n%s", plan)
 	}
 
 	var executionCount, usageCount, inputTokens, outputTokens int
@@ -480,9 +587,9 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 		t.Fatalf("roll back migration 223: %v", err)
 	}
 	var (
-		queueRestored, copiedInboxRemoved bool
-		queueRows, queueFKs               int
-		executionSource                   string
+		queueRestored, copiedInboxRemoved, userMessageLookupIndexRemoved bool
+		queueRows, queueFKs                                              int
+		executionSource                                                  string
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT
@@ -502,26 +609,30 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			 WHERE contype = 'f'
 			   AND confrelid = 'agent_task_queue'::regclass),
 			(SELECT source_kind FROM agent_execution
-			 WHERE id = '70000000-0000-4000-8000-000000000205')
+			 WHERE id = '70000000-0000-4000-8000-000000000205'),
+			to_regclass('idx_chat_message_task_user_created') IS NULL
 	`).Scan(
 		&queueRestored,
 		&copiedInboxRemoved,
 		&queueRows,
 		&queueFKs,
 		&executionSource,
+		&userMessageLookupIndexRemoved,
 	); err != nil {
 		t.Fatalf("read rollback state: %v", err)
 	}
 	if !queueRestored || !copiedInboxRemoved || queueRows != 7 ||
-		queueFKs != legacyFKCount || executionSource != "queue" {
+		queueFKs != legacyFKCount || executionSource != "queue" ||
+		!userMessageLookupIndexRemoved {
 		t.Fatalf(
-			"rollback = queue:%t inboxRemoved:%t rows:%d foreignKeys:%d/%d execution:%q",
+			"rollback = queue:%t inboxRemoved:%t rows:%d foreignKeys:%d/%d execution:%q userMessageIndexRemoved:%t",
 			queueRestored,
 			copiedInboxRemoved,
 			queueRows,
 			queueFKs,
 			legacyFKCount,
 			executionSource,
+			userMessageLookupIndexRemoved,
 		)
 	}
 

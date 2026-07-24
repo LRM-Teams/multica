@@ -149,6 +149,13 @@ ALTER TABLE agent_execution
   ADD COLUMN failure_reason TEXT,
   ADD COLUMN completed_at TIMESTAMPTZ;
 
+-- The queue backfill resolves the earliest user message for every historical
+-- task. Production has hundreds of thousands of tasks and messages, so the
+-- lateral lookup must not scan the entire chat_message table once per task.
+CREATE INDEX IF NOT EXISTS idx_chat_message_task_user_created
+  ON chat_message(task_id, created_at, id)
+  WHERE role = 'user';
+
 -- Copy every historical/active queue row into the canonical wake table. The
 -- source UUID is the idempotency key. If a previous interrupted/manual cutover
 -- already copied a row, the source fields are refreshed but an existing inbox

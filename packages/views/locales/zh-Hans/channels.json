@@ -231,8 +231,10 @@
   },
   "tasks": {
     "title": "Issues",
-    "empty": "本频道暂无 Issue",
+    "empty": "本范围暂无 Issue",
+    "empty_hint": "从此群消息创建的 Issue 会显示在这里。",
     "error": "加载失败",
+    "retry": "重试",
     "load_more": "加载更多（还剩 {{count}} 个）",
     "loading_more": "加载中…",
     "column_empty": "暂无 Issue",
@@ -240,7 +242,11 @@
     "scope_group": "本群创建",
     "scope_project": "项目全部",
     "scope_project_unavailable": "暂时无法加载该项目的 Issue",
-    "empty_project": "该项目暂无 Issue"
+    "empty_project": "该项目暂无 Issue",
+    "empty_project_hint": "在该项目中创建 Issue 后会显示在这里。",
+    "view_toggle_aria": "Issues 视图",
+    "view_list": "列表",
+    "view_board": "看板"
   },
   "share": {
     "copied": "已复制频道链接",

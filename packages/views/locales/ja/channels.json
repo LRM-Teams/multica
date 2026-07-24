@@ -231,8 +231,10 @@
   },
   "tasks": {
     "title": "イシュー",
-    "empty": "このチャンネルのイシューはありません",
+    "empty": "この範囲にイシューはありません",
+    "empty_hint": "このグループのメッセージから作成したイシューがここに表示されます。",
     "error": "読み込みに失敗しました",
+    "retry": "再試行",
     "load_more": "さらに読み込む（残り {{count}} 件）",
     "loading_more": "読み込み中…",
     "column_empty": "イシューなし",
@@ -240,7 +242,11 @@
     "scope_group": "このグループ",
     "scope_project": "プロジェクト全体",
     "scope_project_unavailable": "このプロジェクトのイシューを読み込めません",
-    "empty_project": "このプロジェクトにはイシューがありません"
+    "empty_project": "このプロジェクトにはイシューがありません",
+    "empty_project_hint": "このプロジェクトでイシューを作成するとここに表示されます。",
+    "view_toggle_aria": "イシューの表示",
+    "view_list": "リスト",
+    "view_board": "ボード"
   },
   "share": {
     "copied": "チャンネルリンクをコピーしました",

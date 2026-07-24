@@ -117,12 +117,31 @@ vi.mock("../../issues/components/board-status-dot", () => ({
   BOARD_STATUS_DOT: new Proxy({}, { get: () => "" }),
 }));
 vi.mock("../../navigation", () => ({
-  AppLink: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
+  AppLink: ({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
   ),
 }));
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({ issueDetail: (id: string) => `/acme/issues/${id}` }),
+}));
+vi.mock("../../issues/components/priority-icon", () => ({
+  PriorityIcon: () => <span data-testid="priority-icon" />,
+}));
+vi.mock("../../issues/components/status-heading", () => ({
+  StatusHeading: ({ status, count }: { status: string; count: number }) => (
+    <div>
+      <span>List-{status}</span>
+      <span>{count}</span>
+    </div>
+  ),
+}));
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: () => <span data-testid="actor-avatar" />,
+}));
+vi.mock("../../labels/label-chip", () => ({
+  LabelChip: ({ label }: { label: { name: string } }) => <span>{label.name}</span>,
 }));
 // The mobile layout is a JS-breakpoint branch (selector + single column) vs the
 // desktop horizontal columns, so the board-local `useIsNarrow` (≤768px, #685
@@ -305,7 +324,75 @@ describe("ChannelTasksBoard", () => {
     listSourceIssues.mockResolvedValue({ issues: [], total: 0 });
     renderBoard();
 
-    expect(await screen.findByText("No issues from this channel")).toBeInTheDocument();
+    expect(await screen.findByText("No issues in this scope")).toBeInTheDocument();
+    expect(screen.getByText(/Issues created from messages in this group/)).toBeInTheDocument();
+  });
+
+  it("toolbar always shows List/Board segment; default is Board", async () => {
+    listSourceIssues.mockResolvedValue({
+      issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+      total: 1,
+    });
+    renderBoard();
+
+    expect(await screen.findByText("Fix the login bug")).toBeInTheDocument();
+    const listBtn = screen.getByRole("button", { name: /^List$/ });
+    const boardBtn = screen.getByRole("button", { name: /^Board$/ });
+    expect(boardBtn).toHaveAttribute("aria-pressed", "true");
+    expect(listBtn).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+  });
+
+  it("switching to List shows compact rows for the same loaded issues (status groups + links); Board stays available", async () => {
+    listSourceIssues.mockResolvedValue({
+      issues: [
+        makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress", identifier: "LRM-1" }),
+        makeIssue({ id: "issue-2", title: "Add dark mode", status: "todo", identifier: "LRM-2" }),
+      ],
+      total: 2,
+    });
+    renderBoard();
+
+    await screen.findByText("Fix the login bug");
+    await userEvent.click(screen.getByRole("button", { name: /^List$/ }));
+
+    expect(screen.getByRole("button", { name: /^List$/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Board$/ })).toHaveAttribute("aria-pressed", "false");
+    // List rows: both issues visible (no mobile single-column gate), with identifiers.
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByText("Add dark mode")).toBeInTheDocument();
+    expect(screen.getByText("LRM-1")).toBeInTheDocument();
+    expect(screen.getByText("LRM-2")).toBeInTheDocument();
+    expect(screen.getByText("List-in_progress")).toBeInTheDocument();
+    expect(screen.getByText("List-todo")).toBeInTheDocument();
+    // Board column shells gone; list rows still link out.
+    expect(screen.queryByTestId("board-column-shell")).not.toBeInTheDocument();
+    expect(screen.getByText("Fix the login bug").closest("a")).toHaveAttribute("href", "/acme/issues/issue-1");
+
+    // Switch back — board columns return, same data.
+    await userEvent.click(screen.getByRole("button", { name: /^Board$/ }));
+    expect(await screen.findAllByTestId("board-column-shell")).not.toHaveLength(0);
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByText("Add dark mode")).toBeInTheDocument();
+  });
+
+  it("List view on narrow: no status pill selector — single full-width list", async () => {
+    mockIsNarrow = true;
+    listSourceIssues.mockResolvedValue({
+      issues: [
+        makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" }),
+        makeIssue({ id: "issue-2", title: "Add dark mode", status: "todo" }),
+      ],
+      total: 2,
+    });
+    renderBoard();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^List$/ }));
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByText("Add dark mode")).toBeInTheDocument();
+    // Board mobile pills must not appear in List.
+    expect(screen.queryByRole("button", { name: /Todo/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /In Progress/ })).not.toBeInTheDocument();
   });
 
   it("pages beyond the first 100 without truncating: load-more appends the next offset page", async () => {
@@ -458,7 +545,7 @@ describe("ChannelTasksBoard", () => {
       await userEvent.click(projectPill);
 
       expect(await screen.findByText("No issues in this project")).toBeInTheDocument();
-      expect(screen.queryByText("No issues from this channel")).not.toBeInTheDocument();
+      expect(screen.queryByText("No issues in this scope")).not.toBeInTheDocument();
       expect(screen.queryByText("Group-only task")).not.toBeInTheDocument();
     });
 

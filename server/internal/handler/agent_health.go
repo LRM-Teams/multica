@@ -140,14 +140,11 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent health")
 		return
 	}
-	if !agentRuntimeRunnableForAgent(agent, rt) {
-		resp := AgentHealthResponse{
-			Summary: agentHealthMissingRuntimeSummary(agent),
-			Events:  []AgentHealthEvent{},
-		}
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
+	// LRM-548: presence chrome follows the bound runtime's heartbeat, not the
+	// claim/capacity "runnable" predicate. A channel/workspace agent on the
+	// owner's private runtime (e.g. after switching to Grok) still shows
+	// Online when last_seen is fresh — Runtime Config already does.
+	// agentRuntimeRunnableForAgent remains for task dispatch elsewhere.
 
 	events, err := h.listAgentHealthEvents(r.Context(), agent, rt.ID, defaultAgentHealthEventLimit)
 	if err != nil {

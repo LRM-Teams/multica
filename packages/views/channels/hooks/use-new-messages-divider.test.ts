@@ -40,6 +40,20 @@ describe("computeNewMessagesDivider", () => {
     expect(computeNewMessagesDivider([], 0, null, null)).toBeNull();
   });
 
+  // #1189 P0: a real-device regression where every message in the loaded
+  // window rendered as "unread" and the anchor landed on the very first
+  // (oldest) loaded message — traced to `last_read_seq` arriving as 0
+  // instead of null/undefined for a never-read conversation. `0` must be
+  // treated the same as "no cursor", not as "read up through message 0"
+  // (a seq that can never legitimately exist — real seqs start at 1).
+  it("treats a lastReadSeq of 0 the same as no cursor — does not anchor at the first loaded message", () => {
+    expect(computeNewMessagesDivider(msgs(1, 2, 3), 0, null, null)).toBeNull();
+  });
+
+  it("treats a negative lastReadSeq the same as no cursor", () => {
+    expect(computeNewMessagesDivider(msgs(1, 2, 3), -1, null, null)).toBeNull();
+  });
+
   it("excludes the viewer's own messages — a message you send is not 'new'", () => {
     // Read up to seq 3; you (u1) then send m4. It must NOT raise a divider.
     const messages = authored([1, "o"], [2, "o"], [3, "o"], [4, "u1"]);
@@ -56,9 +70,12 @@ describe("computeNewMessagesDivider", () => {
   });
 
   it("counts all unread when there is no viewer id to exclude", () => {
-    const messages = authored([1, "a"], [2, "b"]);
-    expect(computeNewMessagesDivider(messages, 0, null, null)).toEqual({
-      anchorMessageId: "m1",
+    // #1189 P0: a lastReadSeq of exactly 0 must not be used here — see the
+    // dedicated 0-cursor tests above. A positive cursor below both messages
+    // exercises the same "no viewer id to exclude" behavior correctly.
+    const messages = authored([5, "a"], [6, "b"]);
+    expect(computeNewMessagesDivider(messages, 4, null, null)).toEqual({
+      anchorMessageId: "m5",
       count: 2,
     });
   });

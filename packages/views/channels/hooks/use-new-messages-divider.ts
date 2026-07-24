@@ -33,7 +33,19 @@ export function computeNewMessagesDivider(
   currentUserId: string | null,
   entryHighWaterSeq: number | null,
 ): NewMessagesDivider | null {
-  if (lastReadSeq == null) return null;
+  // #1189 P0: a real `last_read_seq` of 0 (as opposed to null/undefined) is
+  // indistinguishable at this layer from "no cursor at all" — real seq
+  // values start at 1, so treating 0 as a genuine read position makes
+  // `m.seq > lastReadSeq` true for every message in the conversation,
+  // anchoring the divider at the very first loaded message instead of
+  // degrading to no-divider like a missing cursor does. Caught in production
+  // via a real-device channel-opens-at-the-top regression traced to
+  // `last_read_seq` coming back as the backend's "never read" sentinel (0)
+  // instead of null from the list/mark-read APIs (task #713 fixes that at
+  // the API boundary too — this is the FE-side defense regardless of which
+  // side the value originates from). Treat <= 0 the same as null — a
+  // non-positive cursor can never legitimately mean "read".
+  if (lastReadSeq == null || lastReadSeq <= 0) return null;
   const isNewFromOther = (m: SeqMessage) =>
     m.seq > lastReadSeq &&
     (entryHighWaterSeq == null || m.seq <= entryHighWaterSeq) &&

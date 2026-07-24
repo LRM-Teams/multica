@@ -49,7 +49,7 @@ func TestRecoverStaleCompletedRadarRunReplaysPersistedResultWithoutNewTask(t *te
 	}
 	persisted := []byte(`{"output":"{\"actions\":[{\"type\":\"no_action\"}]}"}`)
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET status = 'completed', completed_at = now() - interval '6 minutes', result = $2
 		WHERE id = $1
 	`, task.ID, persisted); err != nil {
@@ -82,7 +82,7 @@ func TestRecoverStaleCompletedRadarRunReplaysPersistedResultWithoutNewTask(t *te
 		t.Fatalf("replayed task/run = result:%s status:%s, want persisted/executing", replayer.tasks[0].Result, replayer.runs[0].Status)
 	}
 	var taskCount int
-	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, agent.agentID).Scan(&taskCount); err != nil {
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM agent_inbox_event WHERE agent_id = $1`, agent.agentID).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
 	if taskCount != 1 {
@@ -126,7 +126,7 @@ func TestRecoverStaleCompletedRadarRunSkipsReboundSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET status = 'completed', completed_at = now() - interval '6 minutes', result = '{"output":"stale"}'::jsonb
 		WHERE id = $1
 	`, task.ID); err != nil {

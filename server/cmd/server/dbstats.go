@@ -22,7 +22,7 @@ const (
 	// defaults. They replace pgx's built-in default of max(4, NumCPU),
 	// which is far too small for our daemon-poll traffic pattern (~3800
 	// acquires/s observed in prod) and was the root cause of the 3s+
-	// /tasks/claim tail latency.
+	// inbox drain tail latency.
 	//
 	// The numbers follow the conventional "small pool, lots of waiters"
 	// guidance for Postgres (HikariCP / PG community formula
@@ -134,7 +134,7 @@ func logPoolConfig(pool *pgxpool.Pool) {
 // line so operators can see baseline pressure, and emits a WARN whenever the
 // EmptyAcquireCount delta is positive — that's the direct symptom of pool
 // exhaustion (a request had to wait because no idle conn was available) and
-// the smoking gun we're looking for to confirm the slow /tasks/claim
+// the smoking gun we're looking for to confirm a slow inbox drain
 // hypothesis.
 func runDBStatsLogger(ctx context.Context, pool *pgxpool.Pool) {
 	ticker := time.NewTicker(dbStatsInterval)

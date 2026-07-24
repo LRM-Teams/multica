@@ -30,7 +30,7 @@ func TestClaimedRadarCompletionExecutesOnlyPersistedFirstOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'dispatched' WHERE id = $1`, task.ID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET status = 'draining' WHERE id = $1`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testHandler.TaskService.StartTask(ctx, task.ID); err != nil {

@@ -149,14 +149,14 @@ func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 
 	parent, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{AgentID: agent.ID, RuntimeID: rtID, IssueID: issue.ID, Priority: 0})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status='running', context=$1 WHERE id=$2`, arealProxyContext("sess-parent", "key-parent"), parent.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status='draining', context=$1 WHERE id=$2`, arealProxyContext("sess-parent", "key-parent"), parent.ID)
 	require.NoError(t, err)
 	parent, err = q.GetAgentTask(ctx, parent.ID)
 	require.NoError(t, err)
 
 	child, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{AgentID: agent.ID, RuntimeID: rtID, IssueID: issue.ID, Priority: 0})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET context=$1 WHERE id=$2`, arealProxyContext("sess-child", "key-child"), child.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET context=$1 WHERE id=$2`, arealProxyContext("sess-child", "key-child"), child.ID)
 	require.NoError(t, err)
 
 	svc := &TaskService{Queries: q}

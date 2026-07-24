@@ -974,7 +974,7 @@ func (h *Handler) requireAgentTransportTask(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, "task token does not match this agent task")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
-	if task.Status != "running" && task.Status != "dispatched" && task.Status != "waiting_local_directory" {
+	if task.Status != "draining" {
 		writeError(w, http.StatusConflict, "agent task is not active")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}

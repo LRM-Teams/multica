@@ -1148,10 +1148,10 @@ SELECT
     $1, $2,
     $3,
     CASE
-      WHEN $2->>'type' = 'agent_radar' THEN 'agent_radar'
-      WHEN $2->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
-      WHEN $2->>'type' = 'memory_curation' THEN 'memory_curation'
-      WHEN $2->>'type' = 'reminder' THEN 'reminder'
+      WHEN ($2::jsonb)->>'type' = 'agent_radar' THEN 'agent_radar'
+      WHEN ($2::jsonb)->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
+      WHEN ($2::jsonb)->>'type' = 'memory_curation' THEN 'memory_curation'
+      WHEN ($2::jsonb)->>'type' = 'reminder' THEN 'reminder'
       ELSE 'issue'
     END,
     true, 'pending', $4, $5,
@@ -1772,8 +1772,15 @@ func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (A
 
 const failStaleTasks = `-- name: FailStaleTasks :many
 UPDATE agent_inbox_event
-SET status = 'pending', last_error = 'event delivery timed out',
-    failure_reason = 'timeout', claimed_at = NULL
+SET status = 'acked',
+    completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
+    error = 'event delivery timed out',
+    last_error = 'event delivery timed out',
+    failure_reason = 'timeout',
+    retryable = false
 WHERE status = 'draining'
   AND (
     (started_at IS NULL AND claimed_at < now() - make_interval(secs => $1::double precision))
@@ -3259,12 +3266,16 @@ func (q *Queries) MergeTaskArealProxyContext(ctx context.Context, arg MergeTaskA
 
 const recoverOrphanedTasksForRuntime = `-- name: RecoverOrphanedTasksForRuntime :many
 UPDATE agent_inbox_event
-SET status = 'pending',
+SET status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
+    error = 'daemon restarted while event was in flight',
     last_error = 'daemon restarted while event was in flight',
     failure_reason = 'runtime_recovery',
-    wait_reason = NULL,
-    claimed_at = NULL
+    retryable = false,
+    wait_reason = NULL
 WHERE runtime_id = $1 AND status = 'draining'
 RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `

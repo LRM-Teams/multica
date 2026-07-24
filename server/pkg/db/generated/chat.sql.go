@@ -456,7 +456,14 @@ func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionI
 }
 
 const getPendingChatTask = `-- name: GetPendingChatTask :one
-SELECT id, status, created_at, id AS inbox_event_id
+SELECT id,
+       CASE
+         WHEN status IN ('pending', 'failed') THEN 'queued'
+         WHEN status = 'draining' THEN 'running'
+         ELSE status
+       END AS status,
+       created_at,
+       id AS inbox_event_id
 FROM agent_inbox_event
 WHERE chat_session_id = $1
   AND status IN ('pending', 'draining', 'failed')

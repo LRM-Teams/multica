@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -58,6 +60,11 @@ func TestMain(m *testing.M) {
 	}
 	if err := ensureHandlerTestSchema(ctx, pool, dbURL); err != nil {
 		fmt.Printf("Failed to bootstrap handler test database: %v\n", err)
+		pool.Close()
+		os.Exit(1)
+	}
+	if err := ensureAgentInboxTestFixtureDefaults(ctx, pool); err != nil {
+		fmt.Printf("Failed to install agent inbox test fixture defaults: %v\n", err)
 		pool.Close()
 		os.Exit(1)
 	}
@@ -104,6 +111,85 @@ func TestMain(m *testing.M) {
 	}
 	pool.Close()
 	os.Exit(code)
+}
+
+// ensureAgentInboxTestFixtureDefaults keeps low-level SQL fixtures concise
+// without recreating the deleted queue contract. Production paths must supply
+// canonical inbox metadata themselves; direct test inserts may derive it from
+// the fixture agent and use the pre-cutover lifecycle words for readability.
+func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_agent_inbox_fixture_defaults()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		DECLARE
+		  fixture_status text := NEW.status;
+		BEGIN
+		  IF NEW.workspace_id IS NULL THEN
+		    SELECT workspace_id INTO NEW.workspace_id
+		    FROM agent
+		    WHERE id = NEW.agent_id;
+		  END IF;
+		  IF NEW.agent_session_id IS NULL THEN
+		    NEW.agent_session_id := ensure_agent_wake_session(NEW.agent_id);
+		  END IF;
+
+		  IF NEW.reason IS NULL OR NEW.reason NOT IN (
+		    'mention', 'dm', 'ambient', 'thread_reply', 'channel_message',
+		    'collaboration_turn', 'collaboration_manager_fallback',
+		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
+		    'agent_radar', 'training', 'environment_dispatch',
+		    'memory_curation', 'reminder'
+		  ) THEN
+		    NEW.reason := CASE
+		      WHEN NEW.chat_session_id IS NOT NULL THEN 'dm'
+		      WHEN NEW.autopilot_run_id IS NOT NULL THEN 'autopilot'
+		      WHEN NEW.context->>'type' = 'quick_create' THEN 'quick_create'
+		      WHEN NEW.context->>'type' = 'agent_radar' THEN 'agent_radar'
+		      ELSE 'issue'
+		    END;
+		  END IF;
+
+		  NEW.status := CASE NEW.status
+		    WHEN 'queued' THEN 'pending'
+		    WHEN 'dispatched' THEN 'draining'
+		    WHEN 'running' THEN 'draining'
+		    WHEN 'waiting_local_directory' THEN 'draining'
+		    WHEN 'completed' THEN 'acked'
+		    WHEN 'cancelled' THEN 'suppressed'
+		    ELSE NEW.status
+		  END;
+
+		  IF NEW.status IN ('pending', 'draining', 'failed')
+		     AND NEW.reason <> 'ambient' THEN
+		    NEW.requires_wake := true;
+		  ELSIF NEW.status = 'acked'
+		        AND NEW.terminal_outcome IS NULL
+		        AND (TG_OP = 'INSERT' OR fixture_status = 'completed' OR NEW.completed_at IS NOT NULL) THEN
+		    NEW.terminal_outcome := 'completed';
+		    NEW.terminal_at := COALESCE(NEW.completed_at, now());
+		    NEW.acked_at := COALESCE(NEW.acked_at, NEW.terminal_at);
+		  ELSIF NEW.status = 'suppressed'
+		        AND NEW.terminal_outcome IS NULL
+		        AND (TG_OP = 'INSERT' OR fixture_status = 'cancelled') THEN
+		    NEW.terminal_outcome := 'cancelled';
+		    NEW.terminal_at := COALESCE(NEW.completed_at, now());
+		    NEW.acked_at := COALESCE(NEW.acked_at, NEW.terminal_at);
+		  END IF;
+
+		  RETURN NEW;
+		END
+		$$;
+
+		DROP TRIGGER IF EXISTS test_agent_inbox_fixture_defaults
+		  ON agent_inbox_event;
+		CREATE TRIGGER test_agent_inbox_fixture_defaults
+		  BEFORE INSERT OR UPDATE ON agent_inbox_event
+		  FOR EACH ROW
+		  EXECUTE FUNCTION test_agent_inbox_fixture_defaults();
+	`)
+	return err
 }
 
 // ensureHandlerTestSchema keeps direct `go test ./internal/handler` runs on
@@ -293,7 +379,26 @@ func handlerTestRuntimeID(t *testing.T) string {
 	return runtimeID
 }
 
-// seedQueueExecution gives a legacy queue fixture the same immutable
+func claimInboxEventForRuntimeForTest(ctx context.Context, runtimeID string) (*db.AgentInboxEvent, error) {
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+	if err != nil {
+		return nil, err
+	}
+	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, delivery.InboxEventID)
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
+// seedQueueExecution gives an inbox fixture the same immutable
 // attribution snapshot that StartTask writes in production. Usage readers and
 // rollups intentionally join this ledger rather than mutable queue state.
 func seedQueueExecution(t *testing.T, taskID string) {
@@ -305,11 +410,11 @@ func seedQueueExecution(t *testing.T, taskID string) {
 			runtime_id, agent_id, chat_session_id, issue_id, project_id, started_at
 		)
 		SELECT
-			atq.id, 'queue', atq.id,
+			atq.id, 'inbox', atq.id,
 			CASE WHEN atq.chat_session_id IS NULL THEN 'issue' ELSE 'chat' END,
 			a.workspace_id, atq.runtime_id, atq.agent_id, atq.chat_session_id,
 			atq.issue_id, i.project_id, COALESCE(atq.started_at, atq.created_at)
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		JOIN agent a ON a.id = atq.agent_id
 		LEFT JOIN issue i ON i.id = atq.issue_id
 		WHERE atq.id = $1
@@ -343,7 +448,7 @@ func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) 
 	return agentID
 }
 
-// createHandlerTestTaskForAgent seeds a running agent_task_queue row for the
+// createHandlerTestTaskForAgent seeds a running agent_inbox_event row for the
 // given agent (with no associated issue) and returns the task UUID. Used by
 // tests that need to set X-Task-ID alongside X-Agent-ID — resolveActor now
 // requires the pair to be present and consistent before granting "agent"
@@ -352,7 +457,7 @@ func createHandlerTestTaskForAgent(t *testing.T, agentID string) string {
 	return createHandlerTestTaskForAgentOnIssue(t, agentID, "")
 }
 
-// createHandlerTestTaskForAgentOnIssue seeds a running agent_task_queue row
+// createHandlerTestTaskForAgentOnIssue seeds a running agent_inbox_event row
 // for the given agent, optionally bound to an issue (pass "" to leave
 // issue_id NULL). The bound-issue form is needed by the self-loop guard
 // test, which compares the calling task's issue_id against the promoted
@@ -376,14 +481,14 @@ func createHandlerTestTaskForAgentOnIssue(t *testing.T, agentID, issueID string)
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, started_at)
-		VALUES ($1, $2, 'running', 0, $3, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, started_at)
+		VALUES ($1, $2, 'draining', 0, $3, now())
 		RETURNING id
 	`, agentID, handlerTestRuntimeID(t), issueArg).Scan(&taskID); err != nil {
 		t.Fatalf("failed to create handler test task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 	})
 	return taskID
 }
@@ -2993,8 +3098,8 @@ func TestResolveActor(t *testing.T) {
 
 	var taskID string
 	err = testPool.QueryRow(ctx,
-		`INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
-		 VALUES ($1, $2, $3, 'queued', 0)
+		`INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		 VALUES ($1, $2, $3, 'pending', 0)
 		 RETURNING id`, agentID, runtimeID, issueID,
 	).Scan(&taskID)
 	if err != nil {
@@ -3002,7 +3107,7 @@ func TestResolveActor(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 
@@ -3106,7 +3211,7 @@ func TestBacklogNoTriggerOnCreate(t *testing.T) {
 
 	var taskCount int
 	err = testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`,
 		created.ID,
 	).Scan(&taskCount)
 	if err != nil {
@@ -3143,7 +3248,7 @@ func TestFollowupCommentInterruptsRunningIssueTask(t *testing.T) {
 		t.Fatalf("create issue: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
@@ -3163,18 +3268,18 @@ func TestFollowupCommentInterruptsRunningIssueTask(t *testing.T) {
 	var status, reason string
 	if err := testPool.QueryRow(ctx, `
 		SELECT status, COALESCE(failure_reason, '')
-		FROM agent_task_queue WHERE id = $1
+		FROM agent_inbox_event WHERE id = $1
 	`, runningTaskID).Scan(&status, &reason); err != nil {
 		t.Fatalf("load interrupted task: %v", err)
 	}
-	if status != "cancelled" || reason != "followup_interrupt" {
-		t.Fatalf("running task = (%q, %q), want (cancelled, followup_interrupt)", status, reason)
+	if status != "suppressed" || reason != "followup_interrupt" {
+		t.Fatalf("running task = (%q, %q), want (suppressed, followup_interrupt)", status, reason)
 	}
 
 	var queued int
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_task_queue
-		WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued' AND trigger_comment_id IS NOT NULL
+		SELECT count(*) FROM agent_inbox_event
+		WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending' AND trigger_comment_id IS NOT NULL
 	`, issueID, agentID).Scan(&queued); err != nil {
 		t.Fatalf("count queued followup task: %v", err)
 	}
@@ -3202,13 +3307,13 @@ func TestFollowupChatDoesNotCancelRunningChatTask(t *testing.T) {
 
 	var runningTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'running', 2, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'draining', 2, now())
 		RETURNING id
 	`, agentID, handlerTestRuntimeID(t), sessionID).Scan(&runningTaskID); err != nil {
 		t.Fatalf("create running chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, runningTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, runningTaskID) })
 
 	session, err := testHandler.Queries.GetChatSession(ctx, parseUUID(sessionID))
 	if err != nil {
@@ -3222,18 +3327,18 @@ func TestFollowupChatDoesNotCancelRunningChatTask(t *testing.T) {
 	var status, reason string
 	if err := testPool.QueryRow(ctx, `
 		SELECT status, COALESCE(failure_reason, '')
-		FROM agent_task_queue WHERE id = $1
+		FROM agent_inbox_event WHERE id = $1
 	`, runningTaskID).Scan(&status, &reason); err != nil {
 		t.Fatalf("load interrupted chat task: %v", err)
 	}
 	// #311: EnqueueChatTask no longer cancels an in-flight directed run. The
 	// running task stays running and the follow-up queues behind it (serialized
 	// globally per agent by ClaimNextAgentWake), so neither request is dropped.
-	if status != "running" || reason != "" {
-		t.Fatalf("running chat task = (%q, %q), want (running, \"\") — #311 abolished the followup cancel", status, reason)
+	if status != "draining" || reason != "" {
+		t.Fatalf("running chat task = (%q, %q), want (draining, \"\") — #311 abolished the followup cancel", status, reason)
 	}
-	if followup.Status != "queued" {
-		t.Fatalf("follow-up chat task status = %q, want queued", followup.Status)
+	if followup.Status != "pending" {
+		t.Fatalf("follow-up chat task status = %q, want pending", followup.Status)
 	}
 }
 
@@ -3261,7 +3366,7 @@ func TestHumanDoneCancelsActiveIssueTasks(t *testing.T) {
 	var created IssueResponse
 	json.NewDecoder(w.Body).Decode(&created)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, created.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
 	})
 
@@ -3274,7 +3379,7 @@ func TestHumanDoneCancelsActiveIssueTasks(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
+	if got := taskStatus(t, taskID); got != "suppressed" {
 		t.Fatalf("human done should cancel active issue task, got %q", got)
 	}
 }
@@ -3303,7 +3408,7 @@ func TestAgentDoneKeepsCurrentIssueTaskRunning(t *testing.T) {
 	var created IssueResponse
 	json.NewDecoder(w.Body).Decode(&created)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, created.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
 	})
 
@@ -3318,7 +3423,7 @@ func TestAgentDoneKeepsCurrentIssueTaskRunning(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "running" {
+	if got := taskStatus(t, taskID); got != "draining" {
 		t.Fatalf("agent done should not cancel its current task before completion, got %q", got)
 	}
 }
@@ -3368,7 +3473,7 @@ func TestBacklogToTodoTriggersAgent(t *testing.T) {
 	// Verify exactly one task was enqueued (from the status transition, not creation).
 	var taskCount int
 	err = testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 		created.ID, agentID,
 	).Scan(&taskCount)
 	if err != nil {
@@ -3379,7 +3484,7 @@ func TestBacklogToTodoTriggersAgent(t *testing.T) {
 	}
 
 	// Cleanup
-	testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+	testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, created.ID)
 	cleanupReq := newRequest("DELETE", "/api/issues/"+created.ID, nil)
 	cleanupReq = withURLParam(cleanupReq, "id", created.ID)
 	testHandler.DeleteIssue(httptest.NewRecorder(), cleanupReq)
@@ -3418,7 +3523,7 @@ func TestBacklogToTodoByAgentTriggersDifferentAssignee(t *testing.T) {
 	var created IssueResponse
 	json.NewDecoder(w.Body).Decode(&created)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, created.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
 	})
 
@@ -3436,7 +3541,7 @@ func TestBacklogToTodoByAgentTriggersDifferentAssignee(t *testing.T) {
 
 	var childTasks int
 	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 		created.ID, childAgent,
 	).Scan(&childTasks); err != nil {
 		t.Fatalf("failed to count child tasks: %v", err)
@@ -3479,7 +3584,7 @@ func TestBacklogToTodoByAgentSameIssueDoesNotSelfTrigger(t *testing.T) {
 	var created IssueResponse
 	json.NewDecoder(w.Body).Decode(&created)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, created.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
 	})
 
@@ -3498,7 +3603,7 @@ func TestBacklogToTodoByAgentSameIssueDoesNotSelfTrigger(t *testing.T) {
 
 	var tasks int
 	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 		created.ID, selfAgent,
 	).Scan(&tasks); err != nil {
 		t.Fatalf("failed to count tasks: %v", err)
@@ -3537,7 +3642,7 @@ func TestBacklogToTodoByAgentSameAgentDifferentIssue(t *testing.T) {
 	var step1 IssueResponse
 	json.NewDecoder(w.Body).Decode(&step1)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, step1.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, step1.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, step1.ID)
 	})
 
@@ -3556,7 +3661,7 @@ func TestBacklogToTodoByAgentSameAgentDifferentIssue(t *testing.T) {
 	var step2 IssueResponse
 	json.NewDecoder(w.Body).Decode(&step2)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, step2.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, step2.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, step2.ID)
 	})
 
@@ -3575,7 +3680,7 @@ func TestBacklogToTodoByAgentSameAgentDifferentIssue(t *testing.T) {
 
 	var step2Tasks int
 	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 		step2.ID, agentID,
 	).Scan(&step2Tasks); err != nil {
 		t.Fatalf("failed to count step2 tasks: %v", err)
@@ -3614,7 +3719,7 @@ func TestBatchBacklogToTodoByAgentTriggersAssignee(t *testing.T) {
 	var created IssueResponse
 	json.NewDecoder(w.Body).Decode(&created)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, created.ID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
 	})
 
@@ -3633,7 +3738,7 @@ func TestBatchBacklogToTodoByAgentTriggersAssignee(t *testing.T) {
 
 	var childTasks int
 	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 		created.ID, childAgent,
 	).Scan(&childTasks); err != nil {
 		t.Fatalf("failed to count child tasks: %v", err)
@@ -3698,7 +3803,7 @@ func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
 	issueID := issue.ID
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
@@ -3707,7 +3812,7 @@ func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
 	countTasks := func(agentID string) int {
 		var n int
 		err := testPool.QueryRow(ctx,
-			`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+			`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 			issueID, agentID,
 		).Scan(&n)
 		if err != nil {
@@ -3719,7 +3824,7 @@ func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
 	// Helper: cancel all tasks for an agent on this issue.
 	cancelTasks := func(agentID string) {
 		_, err := testPool.Exec(ctx,
-			`UPDATE agent_task_queue SET status = 'cancelled' WHERE issue_id = $1 AND agent_id = $2`,
+			`UPDATE agent_inbox_event SET status = 'suppressed' WHERE issue_id = $1 AND agent_id = $2`,
 			issueID, agentID,
 		)
 		if err != nil {
@@ -3818,7 +3923,7 @@ func TestMemberReplyToAgentRootDoesNotInheritParentMentions(t *testing.T) {
 	issueID := issue.ID
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
@@ -3826,7 +3931,7 @@ func TestMemberReplyToAgentRootDoesNotInheritParentMentions(t *testing.T) {
 	countTasks := func(agentID string) int {
 		var n int
 		err := testPool.QueryRow(ctx,
-			`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+			`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 			issueID, agentID,
 		).Scan(&n)
 		if err != nil {
@@ -3859,7 +3964,7 @@ func TestMemberReplyToAgentRootDoesNotInheritParentMentions(t *testing.T) {
 
 	// Cancel reviewer's task so it's free to be re-triggered if the bug returns.
 	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_task_queue SET status = 'cancelled' WHERE issue_id = $1 AND agent_id = $2`,
+		`UPDATE agent_inbox_event SET status = 'suppressed' WHERE issue_id = $1 AND agent_id = $2`,
 		issueID, reviewerAgent,
 	); err != nil {
 		t.Fatalf("cancel reviewer task: %v", err)
@@ -3916,7 +4021,7 @@ func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 		t.Fatalf("create issue: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
 	})
@@ -3925,8 +4030,8 @@ func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 		t.Helper()
 		var n int
 		if err := testPool.QueryRow(ctx, `
-			SELECT count(*) FROM agent_task_queue
-			WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'
+			SELECT count(*) FROM agent_inbox_event
+			WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'
 		`, issueID, agentID).Scan(&n); err != nil {
 			t.Fatalf("count queued tasks: %v", err)
 		}
@@ -3954,7 +4059,7 @@ func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 	if got := countQueued(mentionedAgent); got != 1 {
 		t.Fatalf("expected root mention to queue mentioned agent once, got %d", got)
 	}
-	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'cancelled' WHERE issue_id = $1`, issueID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET status = 'suppressed' WHERE issue_id = $1`, issueID); err != nil {
 		t.Fatalf("cancel root mention task: %v", err)
 	}
 
@@ -4008,7 +4113,7 @@ func TestNestedMemberReplyUsesDirectParentForAssigneeParticipation(t *testing.T)
 		t.Fatalf("create issue: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
 	})
@@ -4017,8 +4122,8 @@ func TestNestedMemberReplyUsesDirectParentForAssigneeParticipation(t *testing.T)
 		t.Helper()
 		var n int
 		if err := testPool.QueryRow(ctx, `
-			SELECT count(*) FROM agent_task_queue
-			WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'
+			SELECT count(*) FROM agent_inbox_event
+			WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'
 		`, issueID, assigneeAgent).Scan(&n); err != nil {
 			t.Fatalf("count queued tasks: %v", err)
 		}
@@ -4103,7 +4208,7 @@ func TestAgentExplicitMentionStillTriggers(t *testing.T) {
 	issueID := issue.ID
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
@@ -4111,7 +4216,7 @@ func TestAgentExplicitMentionStillTriggers(t *testing.T) {
 	countTasks := func(agentID string) int {
 		var n int
 		err := testPool.QueryRow(ctx,
-			`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+			`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2 AND status = 'pending'`,
 			issueID, agentID,
 		).Scan(&n)
 		if err != nil {

@@ -388,14 +388,12 @@ type EnvDispatchDeps interface {
 	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (ResolvedPerAgentSandboxPolicy, error)
 }
 
-// rootTaskTerminalStatuses is the terminal subset of agent_inbox_event.status
-// (migrations 001 + 109): completed/failed/cancelled are the transitions that
-// fire the terminal hook. The rest are in-progress. Used by GetDagReadiness to
-// decide 202 (still polling) vs proceeding to DAG assembly (200).
+// rootTaskTerminalStatuses is the terminal subset of the canonical inbox
+// lifecycle. Outcome details live in terminal_outcome; acked and suppressed
+// both mean the root can no longer make progress.
 var rootTaskTerminalStatuses = map[string]bool{
-	"completed": true,
-	"failed":    true,
-	"cancelled": true,
+	"acked":      true,
+	"suppressed": true,
 }
 
 // DagReadiness is the /dag readiness decision derived EXCLUSIVELY from the

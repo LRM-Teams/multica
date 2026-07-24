@@ -66,7 +66,7 @@ func TestGenerateDiagnosisPiExtension_CredentialsNotEmbedded(t *testing.T) {
 	assert.Contains(t, source, "MULTICA_DIAGNOSIS_API_URL")
 	assert.Contains(t, source, "MULTICA_DIAGNOSIS_CAPABILITY_TOKEN")
 	assert.NotContains(t, source, "http://127.0.0.1") // no hardcoded URL
-	assert.NotContains(t, source, "sk-")               // no embedded token pattern
+	assert.NotContains(t, source, "sk-")              // no embedded token pattern
 }
 
 func TestGenerateDiagnosisPiExtension_SchemasRejectUnknownProperties(t *testing.T) {

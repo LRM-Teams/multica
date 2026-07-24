@@ -108,7 +108,7 @@ func TestExecuteRadarCommentIssueCreatesVisibleCommentBeforeExactTargetTask(t *t
 	var taskCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE issue_id = $1 AND agent_id = $2
 	`, issueID, targetID).Scan(&taskCount); err != nil {
 		t.Fatalf("count exact target tasks: %v", err)
@@ -119,13 +119,13 @@ func TestExecuteRadarCommentIssueCreatesVisibleCommentBeforeExactTargetTask(t *t
 	var taskID, triggerCommentID, status string
 	if err := testPool.QueryRow(ctx, `
 		SELECT id, trigger_comment_id, status
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE issue_id = $1 AND agent_id = $2
 	`, issueID, targetID).Scan(&taskID, &triggerCommentID, &status); err != nil {
 		t.Fatalf("load exact target task: %v", err)
 	}
-	if triggerCommentID != commentID || status != "queued" {
-		t.Fatalf("target task trigger/status = %s/%s, want %s/queued", triggerCommentID, status, commentID)
+	if triggerCommentID != commentID || status != "pending" {
+		t.Fatalf("target task trigger/status = %s/%s, want %s/pending", triggerCommentID, status, commentID)
 	}
 	if got, _ := result["task_id"].(string); got != taskID {
 		t.Fatalf("result task_id = %q, want %s", got, taskID)
@@ -194,12 +194,12 @@ func TestExecuteRadarRequestReworkReopensDoneIssueWithSpecCommentAndTask(t *test
 	var taskID, triggerCommentID, taskStatus string
 	if err := testPool.QueryRow(ctx, `
 		SELECT id, trigger_comment_id, status
-		FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2
+		FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2
 	`, issueID, targetID).Scan(&taskID, &triggerCommentID, &taskStatus); err != nil {
 		t.Fatalf("load rework task: %v", err)
 	}
-	if triggerCommentID != commentID || taskStatus != "queued" {
-		t.Fatalf("rework task trigger/status = %s/%s, want %s/queued", triggerCommentID, taskStatus, commentID)
+	if triggerCommentID != commentID || taskStatus != "pending" {
+		t.Fatalf("rework task trigger/status = %s/%s, want %s/pending", triggerCommentID, taskStatus, commentID)
 	}
 	if result["comment_id"] != commentID || result["task_id"] != taskID {
 		t.Fatalf("rework result = %#v, want comment/task %s/%s", result, commentID, taskID)
@@ -232,7 +232,7 @@ func TestExecuteRadarRequestReworkRollsBackIssueWhenTaskCreationFails(t *testing
 		t.Fatal(err)
 	}
 	h := *testHandler
-	h.TxStarter = radarExecutorFailingTxStarter{base: testHandler.TxStarter, needle: "INSERT INTO agent_task_queue"}
+	h.TxStarter = radarExecutorFailingTxStarter{base: testHandler.TxStarter, needle: "INSERT INTO agent_inbox_event"}
 	_, _, err = h.executeApprovedRadarActionWithTarget(ctx, db.AgentRadarRun{
 		WorkspaceID: supervisor.WorkspaceID,
 		AgentID:     supervisor.ID,
@@ -249,7 +249,7 @@ func TestExecuteRadarRequestReworkRollsBackIssueWhenTaskCreationFails(t *testing
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, issueID).Scan(&commentCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
 	if status != "done" || string(criteria) != `["original"]` || commentCount != 0 || taskCount != 0 {
@@ -291,7 +291,7 @@ func TestExecuteRadarCommentIssueRejectsInjectedSecondMentionWithoutArtifacts(t 
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, issueID).Scan(&commentCount); err != nil {
 		t.Fatalf("count rejected radar comments: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
 		t.Fatalf("count rejected radar tasks: %v", err)
 	}
 	if commentCount != 0 || taskCount != 0 {
@@ -637,7 +637,7 @@ func TestExecuteRadarCommentIssueRollsBackVisibleCommentWhenTaskInsertFails(t *t
 	h := *testHandler
 	h.TxStarter = radarExecutorFailingTxStarter{
 		base:   testHandler.TxStarter,
-		needle: "INSERT INTO agent_task_queue",
+		needle: "INSERT INTO agent_inbox_event",
 	}
 
 	result, _, err := h.executeApprovedRadarActionWithTarget(ctx, db.AgentRadarRun{
@@ -655,7 +655,7 @@ func TestExecuteRadarCommentIssueRollsBackVisibleCommentWhenTaskInsertFails(t *t
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, issueID).Scan(&commentCount); err != nil {
 		t.Fatalf("count rolled-back comments: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
 		t.Fatalf("count rolled-back tasks: %v", err)
 	}
 	if commentCount != 0 || taskCount != 0 {
@@ -819,8 +819,8 @@ func TestExecuteScheduledRadarActionUsesRollingSixHourTargetCooldown(t *testing.
 		t.Fatalf("age first scheduled directive receipt: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now()
+		UPDATE agent_inbox_event
+		SET status = 'acked', completed_at = now()
 		WHERE issue_id = $1 AND agent_id = $2
 	`, fixture.issueID, fixture.target.ID); err != nil {
 		t.Fatalf("complete first scheduled directive task: %v", err)
@@ -867,7 +867,7 @@ func TestExecuteScheduledRadarActionUsesRollingSixHourTargetCooldown(t *testing.
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 		t.Fatalf("count scheduled comments: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&taskCount); err != nil {
 		t.Fatalf("count scheduled tasks: %v", err)
 	}
 	if commentCount != 2 || taskCount != 2 {
@@ -924,7 +924,7 @@ func TestExecuteScheduledRadarActionSerializesConcurrentRollingTargetChecks(t *t
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&comments); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&tasks); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&tasks); err != nil {
 		t.Fatal(err)
 	}
 	if executed != 1 || skipped != 1 || comments != 1 || tasks != 1 {
@@ -996,7 +996,7 @@ func TestExecuteScheduledRadarActionDedupeSurvivesWendyRebind(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
 	if commentCount != 1 || taskCount != 1 {
@@ -1015,9 +1015,9 @@ func TestExecuteScheduledRadarCommentPreservesDirectiveWithExistingTask(t *testi
 		wantTaskCount      int
 		wantExistingStatus string
 	}{
-		{status: "queued", wantReused: true, wantTaskCount: 1, wantExistingStatus: "queued"},
-		{status: "dispatched", wantReused: false, wantTaskCount: 2, wantExistingStatus: "cancelled"},
-		{status: "running", wantReused: false, wantTaskCount: 2, wantExistingStatus: "running"},
+		{status: "queued", wantReused: true, wantTaskCount: 1, wantExistingStatus: "pending"},
+		{status: "dispatched", wantReused: false, wantTaskCount: 2, wantExistingStatus: "suppressed"},
+		{status: "running", wantReused: false, wantTaskCount: 2, wantExistingStatus: "draining"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.status, func(t *testing.T) {
@@ -1034,7 +1034,7 @@ func TestExecuteScheduledRadarCommentPreservesDirectiveWithExistingTask(t *testi
 			}
 			if tt.status != "queued" {
 				if _, err := testPool.Exec(ctx, `
-					UPDATE agent_task_queue
+					UPDATE agent_inbox_event
 					SET status = $2,
 					    dispatched_at = now(),
 					    started_at = CASE WHEN $2 = 'running' THEN now() ELSE started_at END
@@ -1072,7 +1072,7 @@ func TestExecuteScheduledRadarCommentPreservesDirectiveWithExistingTask(t *testi
 			if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 				t.Fatalf("count visible comments: %v", err)
 			}
-			if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&taskCount); err != nil {
+			if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2`, fixture.issueID, fixture.target.ID).Scan(&taskCount); err != nil {
 				t.Fatalf("count target tasks: %v", err)
 			}
 			if commentCount != 1 || taskCount != tt.wantTaskCount {
@@ -1099,7 +1099,7 @@ func TestExecuteScheduledRadarCommentPreservesDirectiveWithExistingTask(t *testi
 				t.Fatalf("existing %s receipt = status:%s reused:%v, want executed/%v", tt.status, actionStatus, taskReused, tt.wantReused)
 			}
 			var existingStatus string
-			if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, existingTask.ID).Scan(&existingStatus); err != nil {
+			if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, existingTask.ID).Scan(&existingStatus); err != nil {
 				t.Fatalf("load existing %s task: %v", tt.status, err)
 			}
 			if existingStatus != tt.wantExistingStatus {
@@ -1113,7 +1113,7 @@ func TestExecuteScheduledRadarCommentPreservesDirectiveWithExistingTask(t *testi
 					t.Fatalf("%s follow-up task = %q, must differ from %s", tt.status, resultTaskID, uuidToString(existingTask.ID))
 				}
 				var triggerCommentID string
-				if err := testPool.QueryRow(ctx, `SELECT trigger_comment_id FROM agent_task_queue WHERE id = $1`, resultTaskID).Scan(&triggerCommentID); err != nil {
+				if err := testPool.QueryRow(ctx, `SELECT trigger_comment_id FROM agent_inbox_event WHERE id = $1`, resultTaskID).Scan(&triggerCommentID); err != nil {
 					t.Fatalf("load %s follow-up task: %v", tt.status, err)
 				}
 				if triggerCommentID != resultCommentID {
@@ -1123,7 +1123,7 @@ func TestExecuteScheduledRadarCommentPreservesDirectiveWithExistingTask(t *testi
 				var triggerCommentID, triggerSummary string
 				if err := testPool.QueryRow(ctx, `
 					SELECT trigger_comment_id, trigger_summary
-					FROM agent_task_queue
+					FROM agent_inbox_event
 					WHERE id = $1
 				`, existingTask.ID).Scan(&triggerCommentID, &triggerSummary); err != nil {
 					t.Fatalf("load refreshed queued task: %v", err)
@@ -1175,14 +1175,14 @@ func TestExecuteScheduledRadarCommentPersistsVisibleWorkForOfflineTarget(t *test
 	}
 	if err := testPool.QueryRow(ctx, `
 		SELECT status, runtime_id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE issue_id = $1 AND agent_id = $2
 		ORDER BY created_at DESC LIMIT 1
 	`, fixture.issueID, fixture.target.ID).Scan(&taskStatus, &taskRuntimeID); err != nil {
 		t.Fatal(err)
 	}
-	if actionStatus != "executed" || !strings.Contains(content, "离线期间先保留") || taskStatus != "queued" || taskRuntimeID != uuidToString(fixture.target.RuntimeID) {
-		t.Fatalf("offline issue directive = action:%q content:%q task:%q runtime:%q, want executed/visible/queued/%s", actionStatus, content, taskStatus, taskRuntimeID, uuidToString(fixture.target.RuntimeID))
+	if actionStatus != "executed" || !strings.Contains(content, "离线期间先保留") || taskStatus != "pending" || taskRuntimeID != uuidToString(fixture.target.RuntimeID) {
+		t.Fatalf("offline issue directive = action:%q content:%q task:%q runtime:%q, want executed/visible/pending/%s", actionStatus, content, taskStatus, taskRuntimeID, uuidToString(fixture.target.RuntimeID))
 	}
 }
 
@@ -1216,7 +1216,7 @@ func TestExecuteScheduledRadarVisibleActionRejectsLostExecutionLease(t *testing.
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
 	if actionCount != 0 || commentCount != 0 || taskCount != 0 {
@@ -1322,7 +1322,7 @@ func TestExecuteScheduledRadarNoActionCannotBlockVisibleActionDedupe(t *testing.
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 		t.Fatalf("count visible comments: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
 		t.Fatalf("count visible tasks: %v", err)
 	}
 	if commentCount != 1 || taskCount != 1 {
@@ -1361,7 +1361,7 @@ func TestExecuteScheduledRadarVisibleActionRollsBackReceiptWhenCommitFails(t *te
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 		t.Fatalf("count rolled-back comments: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
 		t.Fatalf("count rolled-back tasks: %v", err)
 	}
 	if actionCount != 0 || commentCount != 0 || taskCount != 0 {
@@ -1400,7 +1400,7 @@ func TestExecuteScheduledRadarVisibleActionFailureDoesNotBlockRetry(t *testing.T
 	}
 	action := radar.RadarAction{Type: radar.ActionCommentIssue, Payload: payload}
 	h := *testHandler
-	h.TxStarter = radarExecutorFailingTxStarter{base: testHandler.TxStarter, needle: "INSERT INTO agent_task_queue"}
+	h.TxStarter = radarExecutorFailingTxStarter{base: testHandler.TxStarter, needle: "INSERT INTO agent_inbox_event"}
 
 	activateScheduledRadarRunForExecutorTest(t, failedRun)
 	if err := h.executeAgentRadarAction(ctx, failedRun, fixture.supervisor, action); err == nil || !strings.Contains(err.Error(), "injected radar transaction failure") {
@@ -1417,7 +1417,7 @@ func TestExecuteScheduledRadarVisibleActionFailureDoesNotBlockRetry(t *testing.T
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, fixture.issueID).Scan(&commentCount); err != nil {
 		t.Fatalf("count failed comments: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount); err != nil {
 		t.Fatalf("count failed tasks: %v", err)
 	}
 	if commentCount != 0 || taskCount != 0 {

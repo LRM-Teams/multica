@@ -163,10 +163,10 @@ SELECT
     sqlc.arg(runtime_id), sqlc.narg(context),
     sqlc.arg(issue_id),
     CASE
-      WHEN sqlc.narg(context)->>'type' = 'agent_radar' THEN 'agent_radar'
-      WHEN sqlc.narg(context)->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
-      WHEN sqlc.narg(context)->>'type' = 'memory_curation' THEN 'memory_curation'
-      WHEN sqlc.narg(context)->>'type' = 'reminder' THEN 'reminder'
+      WHEN (sqlc.narg(context)::jsonb)->>'type' = 'agent_radar' THEN 'agent_radar'
+      WHEN (sqlc.narg(context)::jsonb)->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
+      WHEN (sqlc.narg(context)::jsonb)->>'type' = 'memory_curation' THEN 'memory_curation'
+      WHEN (sqlc.narg(context)::jsonb)->>'type' = 'reminder' THEN 'reminder'
       ELSE 'issue'
     END,
     true, 'pending', sqlc.arg(priority), sqlc.narg(trigger_comment_id),
@@ -528,12 +528,16 @@ WHERE id = $1;
 -- because the daemon holding the path lock is the same process that just
 -- died — without us, the row would sit waiting forever.
 UPDATE agent_inbox_event
-SET status = 'pending',
+SET status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
+    error = 'daemon restarted while event was in flight',
     last_error = 'daemon restarted while event was in flight',
     failure_reason = 'runtime_recovery',
-    wait_reason = NULL,
-    claimed_at = NULL
+    retryable = false,
+    wait_reason = NULL
 WHERE runtime_id = $1 AND status = 'draining'
 RETURNING *;
 
@@ -547,8 +551,15 @@ RETURNING *;
 -- "stuck". If the daemon dies, RecoverOrphanedTasksForRuntime reclaims
 -- those rows at restart.
 UPDATE agent_inbox_event
-SET status = 'pending', last_error = 'event delivery timed out',
-    failure_reason = 'timeout', claimed_at = NULL
+SET status = 'acked',
+    completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
+    error = 'event delivery timed out',
+    last_error = 'event delivery timed out',
+    failure_reason = 'timeout',
+    retryable = false
 WHERE status = 'draining'
   AND (
     (started_at IS NULL AND claimed_at < now() - make_interval(secs => @dispatch_timeout_secs::double precision))

@@ -96,23 +96,50 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	quickCreateContext := fmt.Sprintf(`{"type":"quick_create","workspace_id":%q,"prompt":"snapshot fixture"}`, testWorkspaceID)
 	for _, f := range fixtures {
 		var id string
-		var query string
-		if f.completedAt == "" {
-			query = `INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context)
-			         VALUES ($1, $2, $3, 0, $4::jsonb) RETURNING id`
-		} else {
-			query = `INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, completed_at, context)
-			         VALUES ($1, $2, $3, 0, ` + f.completedAt + `, $4::jsonb) RETURNING id`
+		status := f.status
+		terminalOutcome := ""
+		startedAt := "NULL"
+		switch f.status {
+		case "queued":
+			status = "pending"
+		case "dispatched":
+			status = "draining"
+		case "running":
+			status = "draining"
+			startedAt = "now()"
+		case "completed":
+			status = "acked"
+			terminalOutcome = "completed"
+		case "failed":
+			status = "acked"
+			terminalOutcome = "failed"
+		case "cancelled":
+			status = "suppressed"
+			terminalOutcome = "cancelled"
 		}
-		if err := testPool.QueryRow(ctx, query, f.agentID, testRuntimeID, f.status, quickCreateContext).Scan(&id); err != nil {
+		completedAt := "NULL"
+		if f.completedAt == "" {
+			completedAt = "NULL"
+		} else {
+			completedAt = f.completedAt
+		}
+		query := `INSERT INTO agent_inbox_event (
+			         agent_id, runtime_id, status, priority, completed_at,
+			         terminal_outcome, terminal_at, acked_at, started_at, context
+			       )
+			       VALUES ($1, $2, $3, 0, ` + completedAt + `,
+			         NULLIF($4, ''), ` + completedAt + `, ` + completedAt + `,
+			         ` + startedAt + `, $5::jsonb)
+			       RETURNING id`
+		if err := testPool.QueryRow(ctx, query, f.agentID, testRuntimeID, status, terminalOutcome, quickCreateContext).Scan(&id); err != nil {
 			t.Fatalf("insert %s: %v", f.label, err)
 		}
 		insertedIDs = append(insertedIDs, id)
 	}
 	var malformedID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-		VALUES ($1, $2, 'queued', 0)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'pending', 0)
 		RETURNING id
 	`, agentA, testRuntimeID).Scan(&malformedID); err != nil {
 		t.Fatalf("insert malformed no-source active task: %v", err)
@@ -120,7 +147,7 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	insertedIDs = append(insertedIDs, malformedID)
 	t.Cleanup(func() {
 		for _, id := range insertedIDs {
-			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, id)
+			testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, id)
 		}
 	})
 
@@ -140,6 +167,7 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 		UPDATE agent_inbox_event
 		SET status = 'draining',
 		    claimed_at = now(),
+		    started_at = now(),
 		    updated_at = now()
 		WHERE id = $1`, runningInboxEventID); err != nil {
 		t.Fatalf("mark inbox event draining: %v", err)
@@ -249,7 +277,7 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 }
 
-func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *testing.T) {
+func TestListAgentTasksUsesSingleInboxHistory(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -280,21 +308,21 @@ func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *test
 
 	var legacyChatTaskID, legacyRadarTaskID, activeRadarTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id, status, priority,
 			trigger_summary, created_at, started_at
 		)
-		VALUES ($1, $2, $3, 'running', 0, 'legacy chat row must be hidden',
+		VALUES ($1, $2, $3, 'draining', 0, 'legacy chat row must be hidden',
 		        now() - interval '5 minutes', now() - interval '4 minutes')
 		RETURNING id`, agentID, handlerTestRuntimeID(t), chatSessionID).Scan(&legacyChatTaskID); err != nil {
 		t.Fatalf("insert legacy chat task: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, context,
 			trigger_summary, created_at, dispatched_at
 		)
-		VALUES ($1, $2, 'dispatched', 0, '{"type":"agent_radar"}'::jsonb,
+		VALUES ($1, $2, 'draining', 0, '{"type":"agent_radar"}'::jsonb,
 		        'legacy radar row should read as historical',
 		        now() - interval '10 minutes', now() - interval '9 minutes')
 		RETURNING id`, agentID, handlerTestRuntimeID(t)).Scan(&legacyRadarTaskID); err != nil {
@@ -302,11 +330,11 @@ func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *test
 	}
 	activeRadarRunID := uuid.NewString()
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, context,
 			trigger_summary, created_at, dispatched_at
 		)
-		VALUES ($1, $2, 'dispatched', 0,
+		VALUES ($1, $2, 'draining', 0,
 		        jsonb_build_object('type', 'agent_radar', 'radar_run_id', $3::text),
 		        'current radar row should preserve its status',
 		        now() - interval '2 minutes', now() - interval '1 minute')
@@ -314,7 +342,7 @@ func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *test
 		t.Fatalf("insert current radar task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2, $3)`, legacyChatTaskID, legacyRadarTaskID, activeRadarTaskID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id IN ($1, $2, $3)`, legacyChatTaskID, legacyRadarTaskID, activeRadarTaskID)
 	})
 
 	w := httptest.NewRecorder()
@@ -332,8 +360,9 @@ func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *test
 	for _, task := range tasks {
 		byID[task.ID] = task
 	}
-	if _, ok := byID[legacyChatTaskID]; ok {
-		t.Fatalf("legacy chat task %s leaked into agent task history: %+v", legacyChatTaskID, byID[legacyChatTaskID])
+	chatTask, ok := byID[legacyChatTaskID]
+	if !ok || chatTask.Status != "running" || chatTask.Kind != "chat" {
+		t.Fatalf("canonical chat task %s missing from agent task history: %+v", legacyChatTaskID, chatTask)
 	}
 	inboxTask, ok := byID[inboxEventID]
 	if !ok {
@@ -349,8 +378,8 @@ func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *test
 	if !ok {
 		t.Fatalf("missing legacy radar task %s in response: %+v", legacyRadarTaskID, tasks)
 	}
-	if legacyRadarTask.Status != "cancelled" || legacyRadarTask.CompletedAt == nil {
-		t.Fatalf("legacy radar task = %+v, want cancelled historical row", legacyRadarTask)
+	if legacyRadarTask.Status != "dispatched" || legacyRadarTask.CompletedAt != nil {
+		t.Fatalf("canonical radar task = %+v, want dispatched row", legacyRadarTask)
 	}
 
 	radarTask, ok := byID[activeRadarTaskID]
@@ -373,12 +402,13 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 
 	var olderID, newerID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, trigger_summary,
-			created_at, started_at, completed_at, error
+			terminal_outcome, created_at, started_at, completed_at, terminal_at, error
 		)
-		VALUES ($1, $2, 'failed', 0, $3, now() - interval '3 minutes',
-		        now() - interval '2 minutes', now() - interval '1 minute', 'raw stacktrace should not leak')
+		VALUES ($1, $2, 'acked', 0, $3, 'failed', now() - interval '3 minutes',
+		        now() - interval '2 minutes', now() - interval '1 minute',
+		        now() - interval '1 minute', 'raw stacktrace should not leak')
 		RETURNING id
 	`, agentID, handlerTestRuntimeID(t), longSummary).Scan(&olderID); err != nil {
 		t.Fatalf("insert older task: %v", err)
@@ -392,11 +422,11 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 		t.Fatalf("insert command task message: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, trigger_summary,
 			created_at, started_at
 		)
-		VALUES ($1, $2, 'running', 0, 'newer work item', now() - interval '30 seconds',
+		VALUES ($1, $2, 'draining', 0, 'newer work item', now() - interval '30 seconds',
 		        now() - interval '10 seconds')
 		RETURNING id
 	`, agentID, handlerTestRuntimeID(t)).Scan(&newerID); err != nil {
@@ -414,11 +444,11 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		var id string
 		if err := testPool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (
+			INSERT INTO agent_inbox_event (
 				agent_id, runtime_id, status, priority, trigger_summary,
 				created_at, completed_at
 			)
-			VALUES ($1, $2, 'completed', 0, $3, now() - ($4::int * interval '10 minutes'),
+			VALUES ($1, $2, 'acked', 0, $3, now() - ($4::int * interval '10 minutes'),
 			        now() - ($4::int * interval '10 minutes'))
 			RETURNING id
 		`, agentID, handlerTestRuntimeID(t), fmt.Sprintf("fallback task %d", i+1), i+1).Scan(&id); err != nil {
@@ -427,9 +457,9 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 		extraIDs = append(extraIDs, id)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, olderID, newerID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id IN ($1, $2)`, olderID, newerID)
 		for _, id := range extraIDs {
-			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, id)
+			testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, id)
 		}
 	})
 
@@ -464,14 +494,14 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
 		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
 	}
-	if items[0].Label != "Editing file…" {
-		t.Fatalf("newest activity projection = %#v, want Editing file…", items[0])
+	if items[0].Label != "Editing file" {
+		t.Fatalf("newest activity projection = %#v, want Editing file", items[0])
 	}
 	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
 		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
 	}
-	if items[1].Label != "Running command" {
-		t.Fatalf("command activity label = %q, want Running command", items[1].Label)
+	if items[1].Label != "Running command…" {
+		t.Fatalf("command activity label = %q, want Running command…", items[1].Label)
 	}
 	body := w.Body.String()
 	for _, leak := range []string{
@@ -568,11 +598,11 @@ func TestGetMemberProfile_PrivateAgentReturnsIdentityOnlyForPlainMember(t *testi
 		t.Fatalf("update private agent description: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, trigger_summary,
 			created_at, started_at
 		)
-		VALUES ($1, $2, 'running', 0, 'protected work must not leak',
+		VALUES ($1, $2, 'draining', 0, 'protected work must not leak',
 		        now() - interval '30 seconds', now() - interval '10 seconds')
 	`, agentID, handlerTestRuntimeID(t)); err != nil {
 		t.Fatalf("insert protected task: %v", err)
@@ -1706,14 +1736,14 @@ func insertHandlerTestTask(t *testing.T, agentID string) string {
 	ctx := context.Background()
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-		VALUES ($1, $2, 'running', 0)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'draining', 0)
 		RETURNING id
 	`, agentID, handlerTestRuntimeID(t)).Scan(&taskID); err != nil {
 		t.Fatalf("insert test task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 	})
 	return taskID
 }
@@ -1864,12 +1894,12 @@ func TestBindWorkspaceRadarSupervisorReplacesArchivedPriorAndCancelsOnlyItsRadar
 		t.Fatalf("old Radar run = %+v, %v; want cancelled", storedRun, err)
 	}
 	storedRadarTask, err := q.GetAgentTask(ctx, radarTask.ID)
-	if err != nil || storedRadarTask.Status != "cancelled" {
-		t.Fatalf("old Radar task = %+v, %v; want cancelled", storedRadarTask, err)
+	if err != nil || storedRadarTask.Status != "suppressed" {
+		t.Fatalf("old Radar task = %+v, %v; want suppressed", storedRadarTask, err)
 	}
 	ordinaryTask, err = q.GetAgentTask(ctx, ordinaryTask.ID)
-	if err != nil || ordinaryTask.Status != "queued" {
-		t.Fatalf("ordinary task = %+v, %v; want queued", ordinaryTask, err)
+	if err != nil || ordinaryTask.Status != "pending" {
+		t.Fatalf("ordinary task = %+v, %v; want pending", ordinaryTask, err)
 	}
 }
 
@@ -1991,8 +2021,8 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 		t.Fatalf("first owner Radar run = %+v, %v; want queued", storedRun, err)
 	}
 	storedTask, err := q.GetAgentTask(ctx, task.ID)
-	if err != nil || storedTask.Status != "queued" {
-		t.Fatalf("first owner Radar task = %+v, %v; want queued", storedTask, err)
+	if err != nil || storedTask.Status != "pending" {
+		t.Fatalf("first owner Radar task = %+v, %v; want pending", storedTask, err)
 	}
 }
 

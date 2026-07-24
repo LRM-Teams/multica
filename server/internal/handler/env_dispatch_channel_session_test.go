@@ -145,7 +145,7 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 	}, 0)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 	})
 
 	var gotPrompt, gotAgentID, gotRuntimeID, gotSessionID string
@@ -154,7 +154,7 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 		SELECT message.content, task.agent_id::text, task.runtime_id::text,
 		       task.chat_session_id::text, task.context
 		FROM chat_message message
-		JOIN agent_task_queue task ON task.id = message.task_id
+		JOIN agent_inbox_event task ON task.id = message.task_id
 		WHERE task.id = $1 AND message.role = 'user'`, taskID).Scan(
 		&gotPrompt, &gotAgentID, &gotRuntimeID, &gotSessionID, &gotContext,
 	))

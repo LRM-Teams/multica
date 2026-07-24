@@ -163,7 +163,7 @@ func reminderFireCounts(t *testing.T, reminderID string) (occurrences, receipts,
 		     SELECT 'reminder_occurrence:' || id::text
 		     FROM agent_reminder_occurrence WHERE reminder_id = $1
 		  )),
-		  (SELECT count(*) FROM agent_task_queue WHERE id IN (
+		  (SELECT count(*) FROM agent_inbox_event WHERE id IN (
 		     SELECT fired_task_id FROM agent_reminder_occurrence WHERE reminder_id = $1
 		  )),
 		  (SELECT count(*) FROM agent_reminder_lifecycle_event WHERE reminder_id = $1 AND event_type = 'fired')`,
@@ -274,7 +274,7 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT
 		  (SELECT count(*) FROM channel_message WHERE channel_id = $1),
-		  (SELECT count(*) FROM agent_task_queue WHERE agent_id = $2)`,
+		  (SELECT count(*) FROM agent_inbox_event WHERE agent_id = $2)`,
 		fixture.channel.ID, fixture.agentIDs[1]).Scan(&channelMessagesAfter, &otherTasks); err != nil {
 		t.Fatal(err)
 	}
@@ -596,13 +596,13 @@ func TestFireReminderOccurrenceFailsClosedWhenExistingTaskIsNonTerminal(t *testi
 	ctx := context.Background()
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-		VALUES ($1, $2, 'queued', 0)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'pending', 0)
 		RETURNING id`, fixture.agentIDs[0], fixture.runtimeIDs[0]).Scan(&taskID); err != nil {
 		t.Fatalf("seed impossible reminder task: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 	})
 
 	var occurrenceID string
@@ -1558,7 +1558,7 @@ func TestReminderFireFallsBackToCurrentAgentOwnerWhenInitiatorIsGone(t *testing.
 			if err := testPool.QueryRow(context.Background(), `
 				SELECT task.initiator_user_id, session.creator_id
 				FROM agent_reminder_occurrence occurrence
-				JOIN agent_task_queue task ON task.id = occurrence.fired_task_id
+				JOIN agent_inbox_event task ON task.id = occurrence.fired_task_id
 				JOIN chat_session session ON session.id = task.chat_session_id
 				WHERE occurrence.reminder_id = $1`, reminderID).Scan(&taskInitiatorID, &sessionCreatorID); err != nil {
 				t.Fatal(err)
@@ -1592,7 +1592,7 @@ func TestArchivedReminderChannelTerminalizesWithoutWake(t *testing.T) {
 	var tasks int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT status, terminal_reason,
-		       (SELECT count(*) FROM agent_task_queue WHERE id IN (
+		       (SELECT count(*) FROM agent_inbox_event WHERE id IN (
 		          SELECT fired_task_id FROM agent_reminder_occurrence WHERE reminder_id = $1
 		       ))
 		FROM agent_reminder WHERE id = $1`, reminderID).Scan(&status, &reason, &tasks); err != nil {
@@ -1821,7 +1821,7 @@ func TestAgentReminderScheduleRequiresExplicitMessageIDWithoutPromptFallback(t *
 		t.Fatal(err)
 	}
 	var chatSessionID string
-	if err := testPool.QueryRow(context.Background(), `SELECT chat_session_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
+	if err := testPool.QueryRow(context.Background(), `SELECT chat_session_id FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(context.Background(), `
@@ -1900,6 +1900,23 @@ func seedReminderModernTransportFixture(t *testing.T, actorSource string) remind
 		t.Fatalf("insert reminder modern auth trigger: %v", err)
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(initiatorUserID))
+	var targetEventID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id
+		FROM agent_inbox_event
+		WHERE source_message_id = $1
+		  AND agent_id = $2
+		  AND status = 'pending'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`, trigger.ID, agentID).Scan(&targetEventID); err != nil {
+		t.Fatalf("load reminder modern auth inbox event: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET created_at = now() - interval '1 day'
+		WHERE id = $1`, targetEventID); err != nil {
+		t.Fatalf("prioritize reminder modern auth inbox event: %v", err)
+	}
 
 	runtimeID := handlerTestRuntimeID(t)
 	drainReq := newDaemonTokenRequest(http.MethodPost,
@@ -1919,6 +1936,9 @@ func seedReminderModernTransportFixture(t *testing.T, actorSource string) remind
 		t.Fatalf("reminder modern auth drain events=%d body=%s", len(drainResp.Events), drainRec.Body.String())
 	}
 	event := drainResp.Events[0]
+	if event.ID != targetEventID || event.AgentID != agentID {
+		t.Fatalf("drained event=%s agent=%s, want event=%s agent=%s", event.ID, event.AgentID, targetEventID, agentID)
+	}
 	bearerToken := event.Task.AuthToken
 	if actorSource == "agent_inbox_token" {
 		if bearerToken == "" {
@@ -2378,7 +2398,7 @@ func TestAgentReminderModernTransportFireFallsBackToOwnerWithoutTimezoneDrift(t 
 				       reminder.schedule_timezone, reminder.fire_at
 				FROM agent_reminder reminder
 				JOIN agent_reminder_occurrence occurrence ON occurrence.reminder_id = reminder.id
-				JOIN agent_task_queue task ON task.id = occurrence.fired_task_id
+				JOIN agent_inbox_event task ON task.id = occurrence.fired_task_id
 				WHERE reminder.id = $1`, scheduled.ID).Scan(
 				&taskInitiatorID, &status, &cadence, &timezone, &nextFireAt,
 			); err != nil {
@@ -2479,7 +2499,7 @@ func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 	})
 	agentID := agentIDForTask(t, taskID)
 	changed := captureReminderChangedEvents(t, testHandler, agentID)
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_inbox_event SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE "user" SET timezone = 'Asia/Shanghai' WHERE id = $1`, testUserID); err != nil {
@@ -2611,7 +2631,7 @@ func TestAgentReminderExplicitTimeUpdateConvertsRecurrenceToOneShotAndRetainsTim
 		protocol.DaemonCapabilityReminderVersionedCache,
 	})
 	agentID := agentIDForTask(t, taskID)
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_inbox_event SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE "user" SET timezone = 'Asia/Shanghai' WHERE id = $1`, testUserID); err != nil {
@@ -2707,7 +2727,7 @@ func TestAgentReminderUpdateRejectsMultipleMutations(t *testing.T) {
 		protocol.DaemonCapabilityReminderVersionedCache,
 	})
 	agentID := agentIDForTask(t, taskID)
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_inbox_event SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
 		t.Fatal(err)
 	}
 	message, err := testHandler.insertChannelMessage(context.Background(), parseUUID(channelID), parseUUID(testWorkspaceID),

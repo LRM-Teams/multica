@@ -2594,7 +2594,7 @@ func TestEnvDispatch_GetDagReadiness_Terminal_NonTrainingRoot(t *testing.T) {
 	if len(f.trainingSaves) != 0 {
 		t.Fatalf("non-training dispatch must not save training_dispatch, got %d", len(f.trainingSaves))
 	}
-	for _, status := range []string{"completed", "failed", "cancelled"} {
+	for _, status := range []string{"acked", "suppressed"} {
 		f.rootTaskStatusOverride = status
 		readiness, rerr := svc.GetDagReadiness(context.Background(), res.ProjectID, "ws")
 		if rerr != nil {

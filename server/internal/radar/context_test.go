@@ -121,7 +121,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 
 	var activeTaskID, completedTaskID, cancelledTaskID, failedTaskID, radarTaskID string
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary, wait_reason
 		)
 		VALUES ($1, $2, $3, 'waiting_local_directory', 1, '{"type":"issue"}'::jsonb, 'Implement issue', 'workspace lock busy')
@@ -136,7 +136,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
 			completed_at, result
 		)
@@ -147,7 +147,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
 			completed_at, error, failure_reason
 		)
@@ -158,7 +158,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
 			completed_at, error, failure_reason
 		)
@@ -169,7 +169,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context, trigger_summary)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, context, trigger_summary)
 		VALUES ($1, $2, 'queued', 1, '{"type":"agent_radar"}'::jsonb, 'Radar housekeeping')
 		RETURNING id
 	`, supervisorID, runtimeID).Scan(&radarTaskID); err != nil {
@@ -200,7 +200,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, chat_session_id, context,
 			trigger_summary, error
 		) VALUES ($1, $2, 'running', 1, $3, '{"type":"chat"}'::jsonb,
@@ -260,7 +260,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, context, trigger_summary, completed_at
 		)
 		SELECT $1, $2, 'cancelled', 1, '{"type":"issue"}'::jsonb,
@@ -441,7 +441,7 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 	for index := 1; index <= taskSectionPageSize+1; index++ {
 		var taskID string
 		if err := pool.QueryRow(t.Context(), `
-			INSERT INTO agent_task_queue (
+			INSERT INTO agent_inbox_event (
 				agent_id, runtime_id, issue_id, status, priority, context,
 				trigger_summary, created_at
 			) VALUES ($1, $2, $3, 'queued', 1, '{"type":"issue"}'::jsonb,

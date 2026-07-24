@@ -408,8 +408,8 @@ func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentInb
 	}
 	wsID := util.UUIDToString(autopilot.WorkspaceID)
 
-	switch task.Status {
-	case "completed":
+	switch {
+	case task.Status == "acked" && task.TerminalOutcome.Valid && task.TerminalOutcome.String == "completed":
 		updatedRun, err := s.Queries.UpdateAutopilotRunCompleted(ctx, db.UpdateAutopilotRunCompletedParams{
 			ID:     run.ID,
 			Result: task.Result,
@@ -420,8 +420,12 @@ func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentInb
 		}
 		s.captureAutopilotRunCompleted(autopilot, updatedRun)
 		s.publishRunDone(wsID, updatedRun, "completed")
-	case "failed", "cancelled":
-		reason := "task " + task.Status
+	case task.Status == "acked" && task.TerminalOutcome.Valid && task.TerminalOutcome.String == "failed",
+		task.Status == "suppressed":
+		reason := "task " + task.TerminalOutcome.String
+		if task.Status == "suppressed" && reason == "task " {
+			reason = "task cancelled"
+		}
 		if task.Error.Valid {
 			reason = task.Error.String
 		}
@@ -453,7 +457,8 @@ func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentInb
 // failing the run prematurely. Once retries are exhausted (or the failure was
 // never retryable in the first place), the run fails carrying the task's reason.
 func (s *AutopilotService) SyncRunFromLinkedIssueTask(ctx context.Context, task db.AgentInboxEvent) {
-	if task.AutopilotRunID.Valid || !task.IssueID.Valid || task.Status != "failed" {
+	if task.AutopilotRunID.Valid || !task.IssueID.Valid ||
+		task.Status != "acked" || !task.TerminalOutcome.Valid || task.TerminalOutcome.String != "failed" {
 		return
 	}
 	// Only create_issue runs link through issue_id (and their linked issue is

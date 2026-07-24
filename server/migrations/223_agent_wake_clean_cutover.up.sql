@@ -4,6 +4,8 @@
 -- re-enqueued: deployment restart is the cutover boundary and no old lease is
 -- allowed to survive it.
 
+BEGIN;
+
 ALTER TABLE agent_session
   DROP CONSTRAINT IF EXISTS agent_session_scope_check;
 ALTER TABLE agent_session
@@ -91,6 +93,11 @@ ALTER TABLE agent_inbox_event
   ADD COLUMN is_leader_task BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN wait_reason TEXT,
   ADD COLUMN initiator_user_id UUID REFERENCES "user"(id) ON DELETE SET NULL;
+
+-- Canonical work attempts are one-based. Deliveries now own their own retry
+-- counter; newly created work events retain the former task retry budget.
+ALTER TABLE agent_inbox_event
+  ALTER COLUMN attempt SET DEFAULT 1;
 
 ALTER TABLE agent_inbox_event
   DROP CONSTRAINT IF EXISTS agent_inbox_event_reason_check;
@@ -237,8 +244,9 @@ SELECT
   task.created_at,
   now(),
   CASE
+    WHEN task.status = 'completed' THEN 'completed'
     WHEN task.status = 'failed' THEN 'failed'
-    WHEN task.status = 'cancelled' THEN 'skipped'
+    WHEN task.status = 'cancelled' THEN 'cancelled'
     ELSE NULL
   END,
   FALSE,
@@ -302,6 +310,8 @@ ON CONFLICT (id) DO UPDATE SET
 ALTER TABLE agent_inbox_event
   ADD CONSTRAINT agent_inbox_event_parent_task_id_fkey
   FOREIGN KEY (parent_task_id) REFERENCES agent_inbox_event(id) ON DELETE SET NULL;
+COMMENT ON CONSTRAINT agent_inbox_event_parent_task_id_fkey ON agent_inbox_event
+  IS 'agent_wake_clean_cutover_223';
 
 -- Preserve every provider run, including executions that predate usage rows.
 -- Pending rows have not started a provider and intentionally do not manufacture
@@ -411,6 +421,12 @@ BEGIN
       fk.relation_name,
       fk.conname,
       replacement_definition
+    );
+    EXECUTE format(
+      'COMMENT ON CONSTRAINT %I ON %s IS %L',
+      fk.conname,
+      fk.relation_name,
+      'agent_wake_clean_cutover_223'
     );
   END LOOP;
 END $$;
@@ -578,6 +594,26 @@ WHEN (
 )
 EXECUTE FUNCTION guard_workspace_radar_task_dispatch();
 
+-- The stale-work Radar scanner is a PL/pgSQL function, so PostgreSQL stores
+-- the table name in its function body instead of maintaining a relation
+-- dependency. Rewrite that body explicitly; otherwise the table can be
+-- dropped while the next Radar scan still fails at runtime.
+DO $$
+DECLARE
+  definition TEXT;
+BEGIN
+  SELECT pg_get_functiondef(
+    'refresh_workspace_radar_time_signals(uuid,timestamp with time zone)'::regprocedure
+  ) INTO definition;
+  definition := replace(definition, 'agent_task_queue', 'agent_inbox_event');
+  definition := replace(
+    definition,
+    'task.status IN (''queued'', ''dispatched'', ''running'', ''waiting_local_directory'')',
+    'task.status IN (''pending'', ''draining'', ''failed'')'
+  );
+  EXECUTE definition;
+END $$;
+
 -- PR #1153 originally observes queue task progress. Rebind it when present;
 -- the conditional keeps this migration executable on databases where that
 -- feature was never installed.
@@ -606,3 +642,5 @@ CREATE INDEX idx_agent_inbox_event_issue_created
 CREATE INDEX idx_agent_inbox_event_runtime_ready
   ON agent_inbox_event(runtime_id, created_at, id)
   WHERE status IN ('pending', 'failed');
+
+COMMIT;

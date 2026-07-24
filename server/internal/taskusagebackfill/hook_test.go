@@ -337,7 +337,7 @@ func tryApplyMigration(ctx context.Context, pool *pgxpool.Pool, version string) 
 }
 
 // seedTaskUsageFixture inserts the minimal joined rows
-// (workspace, runtime, agent, agent_task_queue) needed for a task_usage
+// (workspace, runtime, agent, agent_inbox_event) needed for a task_usage
 // row to participate in the hourly rollup. Returns the IDs in
 // (workspace, runtime, agent, task) order.
 func seedTaskUsageFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string, string) {
@@ -373,22 +373,22 @@ func seedTaskUsageFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 		t.Fatalf("seed agent: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, payload
 		)
 		VALUES ($1, $2, 'queued', '{}'::jsonb)
 		RETURNING id
 	`, agentID, runtimeID).Scan(&taskID); err != nil {
-		// agent_task_queue schema may differ; fall back to inferring
+		// agent_inbox_event schema may differ; fall back to inferring
 		// the smallest column set.
 		var altErr error
 		altErr = pool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (agent_id, runtime_id)
+			INSERT INTO agent_inbox_event (agent_id, runtime_id)
 			VALUES ($1, $2)
 			RETURNING id
 		`, agentID, runtimeID).Scan(&taskID)
 		if altErr != nil {
-			t.Fatalf("seed agent_task_queue: %v / %v", err, altErr)
+			t.Fatalf("seed agent_inbox_event: %v / %v", err, altErr)
 		}
 	}
 	return wsID, runtimeID, agentID, taskID

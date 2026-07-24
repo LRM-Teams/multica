@@ -49,7 +49,7 @@ func ensureAgentTask(t *testing.T, agentID string) string {
 	ctx := context.Background()
 	var taskID string
 	if err := testPool.QueryRow(ctx,
-		`SELECT id::text FROM agent_task_queue WHERE agent_id = $1 LIMIT 1`,
+		`SELECT id::text FROM agent_inbox_event WHERE agent_id = $1 LIMIT 1`,
 		agentID,
 	).Scan(&taskID); err == nil && taskID != "" {
 		return taskID
@@ -62,8 +62,8 @@ func ensureAgentTask(t *testing.T, agentID string) string {
 		t.Fatalf("ensureAgentTask: load runtime_id for agent %s: %v", agentID, err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-		VALUES ($1, $2, 'queued', 0)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'pending', 0)
 		RETURNING id::text
 	`, agentID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("ensureAgentTask: insert task for agent %s: %v", agentID, err)
@@ -76,7 +76,7 @@ func countPendingTasks(t *testing.T, issueID string) int {
 	t.Helper()
 	var count int
 	err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND status IN ('queued', 'dispatched')`,
+		`SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND status IN ('pending', 'draining')`,
 		issueID).Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to count pending tasks: %v", err)
@@ -88,7 +88,7 @@ func countPendingTasks(t *testing.T, issueID string) int {
 func clearTasks(t *testing.T, issueID string) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		`DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 	if err != nil {
 		t.Fatalf("failed to clear tasks: %v", err)
 	}
@@ -101,8 +101,8 @@ func latestTriggerCommentID(t *testing.T, issueID string) string {
 	var triggerID *string
 	err := testPool.QueryRow(context.Background(),
 		`SELECT trigger_comment_id::text
-		   FROM agent_task_queue
-		  WHERE issue_id = $1 AND status IN ('queued', 'dispatched')
+		   FROM agent_inbox_event
+		  WHERE issue_id = $1 AND status IN ('pending', 'draining')
 		  ORDER BY created_at DESC
 		  LIMIT 1`,
 		issueID).Scan(&triggerID)
@@ -142,8 +142,8 @@ func createSecondAgent(t *testing.T) string {
 
 	resp = authRequest(t, "POST", "/api/agents?workspace_id="+testWorkspaceID, map[string]any{
 		"display_name": "Second Test Agent",
-		"runtime_id": runtimeID,
-		"visibility": "workspace",
+		"runtime_id":   runtimeID,
+		"visibility":   "workspace",
 	})
 	if resp.StatusCode != 201 {
 		body, _ := io.ReadAll(resp.Body)

@@ -1353,7 +1353,7 @@ func (h *Handler) executePreparedRadarIssueCommentInTx(ctx context.Context, qtx 
 		}
 		taskReused = true
 	} else {
-		if pendingTaskFound && existingTask.Status == "draining" {
+		if pendingTaskFound && existingTask.Status == "draining" && !existingTask.StartedAt.Valid {
 			tag, cancelErr := exec.Exec(ctx, `
 				UPDATE agent_inbox_event
 				SET status = 'suppressed',

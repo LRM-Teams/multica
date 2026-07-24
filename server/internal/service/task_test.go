@@ -161,7 +161,7 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 	})
 	require.NoError(t, err)
 	parentCtx := arealProxyContext("sess-parent", "pk-parent")
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status='failed', failure_reason=$1, context=$2, attempt=1, max_attempts=3 WHERE id=$3`,
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status='acked', terminal_outcome='failed', terminal_at=now(), acked_at=now(), completed_at=now(), failure_reason=$1, context=$2, attempt=1, max_attempts=3 WHERE id=$3`,
 		failureReason, parentCtx, parent.ID)
 	require.NoError(t, err)
 	parent, err = q.GetAgentTask(ctx, parent.ID)
@@ -528,7 +528,7 @@ func TestMaybeCleanupEphemeralSandbox(t *testing.T) {
 		Context:   marker,
 	})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, task.ID)
 	require.NoError(t, err)
 	task, err = q.GetAgentTask(ctx, task.ID)
 	require.NoError(t, err)
@@ -595,7 +595,7 @@ func TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker(t *testing.T) {
 		Context: []byte(`{"squad_id":"sq"}`),
 	})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, task.ID)
 	require.NoError(t, err)
 	task, err = q.GetAgentTask(ctx, task.ID)
 	require.NoError(t, err)
@@ -655,7 +655,7 @@ func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
 		AgentID: agentID, RuntimeID: rtID, IssueID: issue1ID, Priority: 0, Context: marker,
 	})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, parent.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, parent.ID)
 	require.NoError(t, err)
 	parent, err = q.GetAgentTask(ctx, parent.ID)
 	require.NoError(t, err)

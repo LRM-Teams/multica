@@ -482,8 +482,8 @@ func TestRuntimesAndReposSkillCoversClaimAndCheckoutChain(t *testing.T) {
 	}
 
 	mustContain := []string{
-		"agent_task_queue",
-		"daemon polls/claims the task",
+		"agent_inbox_event",
+		"daemon drains and leases the canonical inbox event",
 		"multica runtime list --output json",
 		"multica repo checkout <url>",
 		"MULTICA_DAEMON_PORT",

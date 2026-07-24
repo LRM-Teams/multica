@@ -486,9 +486,9 @@ func TestGetSegmentMessagePage_SystemMessagesOutsideRange(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeDiagnosisMessagePager(t)
 	// Messages outside [startSeq, endSeq] must not leak into the page.
-	store.addMessage(t, 1, "system", "outside-start")  // seq < 2
+	store.addMessage(t, 1, "system", "outside-start") // seq < 2
 	store.addMessage(t, 2, "assistant", "inside")
-	store.addMessage(t, 3, "system", "outside-end")     // seq > 2
+	store.addMessage(t, 3, "system", "outside-end") // seq > 2
 
 	page, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 2, 2, "")
 	require.NoError(t, err)

@@ -413,12 +413,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		Redis:        rdb,
 	})
 
-	// Empty-claim cache: lets the daemon poll path skip a Postgres
-	// scan when a recent check confirmed the runtime had no queued
-	// task. Returns nil when rdb is nil — TaskService treats that
-	// as "no cache, always hit DB" (existing behavior).
-	h.TaskService.EmptyClaim = service.NewEmptyClaimCache(rdb)
-
 	// Wire WS heartbeat after stores are finalized so the WS path uses the
 	// same (possibly Redis-backed) stores as the HTTP path.
 	daemonHub.SetHeartbeatHandler(h.HandleDaemonWSHeartbeat)

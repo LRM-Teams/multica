@@ -424,13 +424,13 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', now())
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', now())
 	`, targetAgentID, issueID, runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 

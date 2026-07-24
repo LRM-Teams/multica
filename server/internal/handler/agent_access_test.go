@@ -580,7 +580,7 @@ func TestMentionAgent_RejectsCrossWorkspaceAgentUUID(t *testing.T) {
 	// workspace-scoping check.
 	var beforeCount int
 	if err := testPool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1`,
+		`SELECT COUNT(*) FROM agent_inbox_event WHERE agent_id = $1`,
 		foreignAgentID,
 	).Scan(&beforeCount); err != nil {
 		t.Fatalf("count tasks before: %v", err)
@@ -590,7 +590,7 @@ func TestMentionAgent_RejectsCrossWorkspaceAgentUUID(t *testing.T) {
 
 	var afterCount int
 	if err := testPool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1`,
+		`SELECT COUNT(*) FROM agent_inbox_event WHERE agent_id = $1`,
 		foreignAgentID,
 	).Scan(&afterCount); err != nil {
 		t.Fatalf("count tasks after: %v", err)

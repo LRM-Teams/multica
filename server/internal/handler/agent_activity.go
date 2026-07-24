@@ -1408,7 +1408,7 @@ func (h *Handler) chatSessionCreatorUserID(ctx context.Context, workspaceID stri
 }
 
 func agentActivityRunSummary(row agentActivityRawRow) *AgentActivityRunSummary {
-	status := textOrDefault(row.Status, "queued")
+	status := agentActivityTaskStatus(textOrDefault(row.Status, "pending"))
 	resultState := agentActivityResultState(row.Result)
 	if resultState != nil && *resultState == "no_reply" && status == "completed" {
 		status = "no_reply"
@@ -1424,6 +1424,21 @@ func agentActivityRunSummary(row agentActivityRawRow) *AgentActivityRunSummary {
 		Tokens:      parseActivityTokenUse(row.UsageJSON),
 		StepCount:   row.StepCount,
 		ResultState: resultState,
+	}
+}
+
+func agentActivityTaskStatus(status string) string {
+	switch status {
+	case "pending", "failed":
+		return "queued"
+	case "draining":
+		return "running"
+	case "acked":
+		return "completed"
+	case "suppressed":
+		return "cancelled"
+	default:
+		return status
 	}
 }
 
@@ -1658,7 +1673,7 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		Message:       taskMessageActivityText(message),
 		Details:       detailsJSON,
 		Visibility:    pgtype.Text{String: message.Visibility, Valid: strings.TrimSpace(message.Visibility) != ""},
-		Status:        pgtype.Text{String: task.Status, Valid: strings.TrimSpace(task.Status) != ""},
+		Status:        pgtype.Text{String: agentActivityTaskStatus(task.Status), Valid: strings.TrimSpace(task.Status) != ""},
 		CreatedAt:     message.CreatedAt,
 		UsageJSON:     []byte("[]"),
 	}
@@ -1767,6 +1782,10 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
 	status := textToPtr(row.Status)
+	if status != nil {
+		mapped := agentActivityTaskStatus(*status)
+		status = &mapped
+	}
 	text := textToPtr(row.Message)
 	reasonCode := textOrDefault(row.ReasonCode, "")
 	entries := agentActivityTimelineEntries(row, details, tool)

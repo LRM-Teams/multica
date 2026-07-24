@@ -222,10 +222,10 @@ func TestAssembleAssembledDag_EmitsDualSourceFields(t *testing.T) {
 	})
 	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID: "areal-sess-1", ProjectID: "proj-dual", AgentRunID: "areal-run",
-		IssueID: ptrText("areal-issue"),
-		TrajectoryID:    pgtype.Int8{Int64: 1, Valid: true},
-		TensorRef:       []byte(`{"input_ids":{"shard_id":"sh-1"}}`),
-		ClosingEvent:    ptrText("delegation"),
+		IssueID:          ptrText("areal-issue"),
+		TrajectoryID:     pgtype.Int8{Int64: 1, Valid: true},
+		TensorRef:        []byte(`{"input_ids":{"shard_id":"sh-1"}}`),
+		ClosingEvent:     ptrText("delegation"),
 		TrajectorySource: "areal_tensor",
 		Trainable:        true,
 		Trajectory:       []byte("[]"),

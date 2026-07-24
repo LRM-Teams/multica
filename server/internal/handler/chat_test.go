@@ -585,23 +585,13 @@ func TestGetPendingChatTaskIncludesInboxEventID(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "pending-chat-inbox-"+uuid.NewString(), []byte(`{}`))
 	sessionID := createHandlerTestChatSession(t, agentID)
 
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2, now() - interval '5 seconds')
-		RETURNING id
-	`, agentID, sessionID).Scan(&taskID); err != nil {
-		t.Fatalf("insert pending chat task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
-
 	var eventID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_inbox_event (
 			workspace_id, agent_id, chat_session_id, reason, requires_wake, status,
-			priority, seq_from, seq_to
+			priority, seq_from, seq_to, started_at
 		)
-		VALUES ($1, $2, $3, 'dm', true, 'draining', 100, 1, 1)
+		VALUES ($1, $2, $3, 'dm', true, 'draining', 100, 1, 1, now())
 		RETURNING id
 	`, testWorkspaceID, agentID, sessionID).Scan(&eventID); err != nil {
 		t.Fatalf("insert inbox event: %v", err)
@@ -622,8 +612,8 @@ func TestGetPendingChatTaskIncludesInboxEventID(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.TaskID != taskID || resp.Status != "running" || resp.InboxEventID == nil || *resp.InboxEventID != eventID {
-		t.Fatalf("pending task response = %+v, want task %s inbox %s", resp, taskID, eventID)
+	if resp.TaskID != eventID || resp.Status != "running" || resp.InboxEventID == nil || *resp.InboxEventID != eventID {
+		t.Fatalf("pending task response = %+v, want canonical task/inbox %s", resp, eventID)
 	}
 }
 
@@ -638,13 +628,13 @@ func TestCancelChatAgentInboxEventCancelsPendingChatTask(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2, now() - interval '5 seconds')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL, $2, now() - interval '5 seconds')
 		RETURNING id
 	`, agentID, sessionID).Scan(&taskID); err != nil {
 		t.Fatalf("insert pending chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	var eventID string
 	if err := testPool.QueryRow(ctx, `

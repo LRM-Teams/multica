@@ -179,6 +179,28 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	pending, _ := h.countReadyAgentInboxEventsForRuntime(r.Context(), runtime)
 	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
+	if event.RequiresWake && respEvent.Task == nil {
+		_, _ = h.DB.Exec(r.Context(), `
+			UPDATE agent_event_delivery
+			SET status = 'failed',
+			    last_error = 'invalid inbox event execution context',
+			    updated_at = now()
+			WHERE id = $1
+			  AND status IN ('leased', 'processing')`, delivery.ID)
+		_, _ = h.DB.Exec(r.Context(), `
+			UPDATE agent_inbox_event
+			SET status = 'suppressed',
+			    terminal_outcome = 'cancelled',
+			    terminal_delivery_id = $2,
+			    terminal_at = now(),
+			    completed_at = COALESCE(completed_at, now()),
+			    last_error = 'invalid inbox event execution context',
+			    updated_at = now()
+			WHERE id = $1
+			  AND status = 'draining'`, event.ID, delivery.ID)
+		writeError(w, http.StatusInternalServerError, "inbox event has invalid execution context")
+		return
+	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
 		Events:      []AgentInboxEventResponse{respEvent},
@@ -487,10 +509,14 @@ func (h *Handler) ReportAgentInboxUsage(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to load inbox execution")
 		return
 	}
+	source := "issue"
+	if event.ChatSessionID.Valid {
+		source = "chat"
+	}
 	for _, u := range req.Usage {
 		if err := h.Queries.UpsertAgentUsage(r.Context(), db.UpsertAgentUsageParams{
 			ExecutionID:      executionID,
-			Source:           "chat",
+			Source:           source,
 			Provider:         u.Provider,
 			Model:            u.Model,
 			InputTokens:      u.InputTokens,
@@ -601,6 +627,26 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to complete inbox delivery")
 		return
 	}
+	result, err := json.Marshal(req.TaskCompleteRequest)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE agent_inbox_event
+		SET result = $2,
+		    session_id = NULLIF($3, ''),
+		    work_dir = NULLIF($4, ''),
+		    completed_at = COALESCE(completed_at, now()),
+		    updated_at = now()
+		WHERE id = $1`,
+		event.ID, result, req.SessionID, req.WorkDir); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist inbox completion")
+		return
+	}
+	event.Result = result
+	event.SessionID = strToText(req.SessionID)
+	event.WorkDir = strToText(req.WorkDir)
 	var chatDonePayload *protocol.ChatDonePayload
 	if event.ChatSessionID.Valid {
 		var sessionRuntimeID pgtype.UUID
@@ -1955,6 +2001,21 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 						resp.InitiatorEmail = user.Email
 					}
 				}
+				if startedAt, err := h.Queries.GetLastTaskStartedAtForIssueAndAgent(ctx, db.GetLastTaskStartedAtForIssueAndAgentParams{
+					AgentID: event.AgentID,
+					IssueID: comment.IssueID,
+				}); err == nil && startedAt.Valid {
+					if count, err := h.Queries.CountNewCommentsSince(ctx, db.CountNewCommentsSinceParams{
+						AnchorID:    event.TriggerCommentID,
+						IssueID:     comment.IssueID,
+						WorkspaceID: comment.WorkspaceID,
+						Since:       startedAt,
+						AuthorID:    event.AgentID,
+					}); err == nil && count > 0 {
+						resp.NewCommentCount = int(count)
+						resp.NewCommentsSince = startedAt.Time.UTC().Format(time.RFC3339)
+					}
+				}
 			}
 		}
 		if !event.ForceFreshSession {
@@ -2051,6 +2112,14 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 	resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 	resp.ChatSessionID = uuidToString(cs.ID)
 	resp.ThreadName = cs.Title
+	if event.InitiatorUserID.Valid {
+		resp.InitiatorType = "member"
+		resp.InitiatorID = uuidToString(event.InitiatorUserID)
+		if user, err := h.Queries.GetUser(ctx, event.InitiatorUserID); err == nil {
+			resp.InitiatorName = userDisplayName(user)
+			resp.InitiatorEmail = user.Email
+		}
+	}
 
 	var chatProjectID pgtype.UUID
 	_ = h.DB.QueryRow(ctx, `
@@ -2086,20 +2155,20 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 	runtimeMatches := func(runtimeID pgtype.UUID) bool {
 		return runtimeID.Valid && resp.RuntimeID != "" && uuidToString(runtimeID) == resp.RuntimeID
 	}
-	if runtimeMatches(cs.RuntimeID) {
-		if cs.SessionID.Valid {
-			resp.PriorSessionID = cs.SessionID.String
-		}
-		if cs.WorkDir.Valid {
+	if !event.ForceFreshSession {
+		if runtimeMatches(cs.RuntimeID) && cs.WorkDir.Valid {
 			resp.PriorWorkDir = cs.WorkDir.String
 		}
-	}
-	if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil && prior.SessionID.Valid && runtimeMatches(prior.RuntimeID) {
-		if resp.PriorSessionID == "" {
-			resp.PriorSessionID = prior.SessionID.String
+		if runtimeMatches(cs.RuntimeID) && cs.SessionID.Valid {
+			resp.PriorSessionID = cs.SessionID.String
 		}
-		if prior.WorkDir.Valid && resp.PriorWorkDir == "" {
-			resp.PriorWorkDir = prior.WorkDir.String
+		if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil {
+			if runtimeMatches(prior.RuntimeID) && prior.WorkDir.Valid && resp.PriorWorkDir == "" {
+				resp.PriorWorkDir = prior.WorkDir.String
+			}
+			if prior.SessionID.Valid && runtimeMatches(prior.RuntimeID) && resp.PriorSessionID == "" {
+				resp.PriorSessionID = prior.SessionID.String
+			}
 		}
 	}
 	seenAttachmentIDs := make(map[string]struct{}, len(resp.ChatMessageAttachments))

@@ -172,7 +172,14 @@ LIMIT 1;
 -- created_at is the anchor for the chat StatusPill timer (it computes
 -- elapsed = now - task.created_at), so the pill survives refresh / reopen
 -- without "resetting to 0s".
-SELECT id, status, created_at, id AS inbox_event_id
+SELECT id,
+       CASE
+         WHEN status IN ('pending', 'failed') THEN 'queued'
+         WHEN status = 'draining' THEN 'running'
+         ELSE status
+       END AS status,
+       created_at,
+       id AS inbox_event_id
 FROM agent_inbox_event
 WHERE chat_session_id = $1
   AND status IN ('pending', 'draining', 'failed')

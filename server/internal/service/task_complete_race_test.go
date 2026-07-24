@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,31 +25,25 @@ func (r *mockRow) Scan(dest ...any) error {
 	}
 	t := r.task
 	ptrs := []any{
-		&t.ID, &t.AgentID, &t.IssueID, &t.Status, &t.Priority,
+		&t.ID, &t.WorkspaceID, &t.AgentSessionID, &t.ConversationID,
+		&t.ChannelID, &t.ChatSessionID, &t.AgentID, &t.SourceMessageID,
+		&t.Reason, &t.RequiresWake, &t.Status, &t.Priority,
+		&t.SeqFrom, &t.SeqTo, &t.Attempt, &t.LastError,
+		&t.ClaimedAt, &t.AckedAt, &t.CreatedAt, &t.UpdatedAt,
+		&t.TerminalOutcome, &t.TerminalDeliveryID, &t.Retryable, &t.TerminalAt,
+		&t.RuntimeID, &t.ExecutionConfig, &t.DeliveryMode, &t.ResponseMode,
+		&t.ChannelOnboardingID, &t.IssueID, &t.SourceChatMessageID, &t.Context,
 		&t.DispatchedAt, &t.StartedAt, &t.CompletedAt, &t.Result,
-		&t.Error, &t.CreatedAt, &t.Context, &t.RuntimeID,
-		&t.SessionID, &t.WorkDir, &t.TriggerCommentID,
-		&t.ChatSessionID, &t.AutopilotRunID,
+		&t.Error, &t.SessionID, &t.WorkDir, &t.TriggerCommentID,
+		&t.AutopilotRunID, &t.MaxAttempts, &t.ParentTaskID, &t.FailureReason,
+		&t.TriggerSummary, &t.ForceFreshSession, &t.IsLeaderTask,
+		&t.WaitReason, &t.InitiatorUserID,
 	}
 	for i, p := range ptrs {
 		if i >= len(dest) {
 			break
 		}
-		// Copy value from source to dest by assigning through the pointer.
-		switch d := dest[i].(type) {
-		case *pgtype.UUID:
-			*d = *(p.(*pgtype.UUID))
-		case *string:
-			*d = *(p.(*string))
-		case *int32:
-			*d = *(p.(*int32))
-		case *pgtype.Timestamptz:
-			*d = *(p.(*pgtype.Timestamptz))
-		case *[]byte:
-			*d = *(p.(*[]byte))
-		case *pgtype.Text:
-			*d = *(p.(*pgtype.Text))
-		}
+		reflect.ValueOf(dest[i]).Elem().Set(reflect.ValueOf(p).Elem())
 	}
 	return nil
 }
@@ -125,9 +120,8 @@ func TestCompleteTask_AlreadyFinalized(t *testing.T) {
 		name   string
 		status string
 	}{
-		{"already completed", "completed"},
-		{"already cancelled", "cancelled"},
-		{"already failed", "failed"},
+		{"already acknowledged", "acked"},
+		{"already suppressed", "suppressed"},
 	}
 
 	for _, tt := range tests {
@@ -167,9 +161,8 @@ func TestFailTask_AlreadyFinalized(t *testing.T) {
 		name   string
 		status string
 	}{
-		{"already completed", "completed"},
-		{"already cancelled", "cancelled"},
-		{"already failed", "failed"},
+		{"already acknowledged", "acked"},
+		{"already suppressed", "suppressed"},
 	}
 
 	for _, tt := range tests {

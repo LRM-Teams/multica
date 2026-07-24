@@ -199,7 +199,7 @@ func TestJoinCloudWaitlistSecondCallOverwrites(t *testing.T) {
 
 func resetOnboardingRuntimeArtifacts(ctx context.Context) {
 	testPool.Exec(ctx, `
-		DELETE FROM agent_task_queue
+		DELETE FROM agent_inbox_event
 		 WHERE agent_id IN (
 		       SELECT id FROM agent
 		        WHERE workspace_id = $1
@@ -323,7 +323,7 @@ func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	var taskCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		  FROM agent_task_queue
+		  FROM agent_inbox_event
 		 WHERE issue_id = $1 AND agent_id = $2
 	`, resp.IssueID, resp.AgentID).Scan(&taskCount); err != nil {
 		t.Fatalf("count queued tasks: %v", err)
@@ -516,7 +516,7 @@ func TestBootstrapOnboardingNoRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	var taskCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		  FROM agent_task_queue
+		  FROM agent_inbox_event
 		 WHERE issue_id = $1
 	`, resp.IssueID).Scan(&taskCount); err != nil {
 		t.Fatalf("count queued tasks: %v", err)

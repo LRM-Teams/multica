@@ -26,10 +26,10 @@ const diagnosisToolServerMaxBody = 256 * 1024
 // loopback HTTP server. The caller starts it with ListenAndServe, receives the
 // allocated URL and bearer token, and tears it down via Shutdown.
 type DiagnosisToolServer struct {
-	httpServer   *http.Server
-	baseURL      string
-	bearerToken  string
-	cursorKey    []byte
+	httpServer  *http.Server
+	baseURL     string
+	bearerToken string
+	cursorKey   []byte
 
 	runCheckpoint DiagnosisRunCheckpoint
 	stateStore    *DiagnosisStateStore
@@ -264,9 +264,9 @@ type recordStepRewardsRequest struct {
 }
 
 type recordStepRewardsResponse struct {
-	PersistedSeqs []int               `json:"persisted_seqs"`
-	MissingSeqs   []int               `json:"missing_seqs,omitempty"`
-	Rejected      []rejectedReward    `json:"rejected,omitempty"`
+	PersistedSeqs []int            `json:"persisted_seqs"`
+	MissingSeqs   []int            `json:"missing_seqs,omitempty"`
+	Rejected      []rejectedReward `json:"rejected,omitempty"`
 }
 
 type rejectedReward struct {
@@ -478,7 +478,7 @@ func (s *DiagnosisToolServer) handleFinishSegment(w http.ResponseWriter, r *http
 // ── POST /v1/complete-diagnosis ──
 
 type completeDiagnosisResponse struct {
-	Status      string         `json:"status"`
+	Status      string          `json:"status"`
 	MissingSegs []missingSegRef `json:"missing_segments,omitempty"`
 }
 

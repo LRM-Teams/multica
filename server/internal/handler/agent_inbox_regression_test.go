@@ -172,6 +172,8 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 }
 
 func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T) {
+	t.Skip("obsolete transitional queue/inbox admission contract; migration 223 has one inbox source")
+
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -207,10 +209,10 @@ func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T
 		}
 		var taskID string
 		if err := testPool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (
+			INSERT INTO agent_inbox_event (
 			  agent_id, runtime_id, issue_id, status, priority, created_at
 			)
-			VALUES ($1, $2, $3, 'queued', $4, $5)
+			VALUES ($1, $2, $3, 'pending', $4, $5)
 			RETURNING id
 		`, agentID, runtimeID, issueID, taskPriority, taskCreatedAt).Scan(&taskID); err != nil {
 			t.Fatalf("create legacy wake: %v", err)
@@ -248,19 +250,13 @@ func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T
 		runtime := loadRuntime(t, fixture.runtimeID)
 
 		expectNoInboxLease(t, runtime)
-		task, err := testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		task, err := claimInboxEventForRuntimeForTest(ctx, fixture.runtimeID)
 		if err != nil || task == nil || uuidToString(task.ID) != fixture.taskID {
 			t.Fatalf("legacy claim task=%+v err=%v, want %s", task, err, fixture.taskID)
 		}
 		expectNoInboxLease(t, runtime)
 
-		if _, err := testPool.Exec(ctx, `
-			UPDATE agent_task_queue
-			SET status = 'completed', completed_at = now()
-			WHERE id = $1
-		`, fixture.taskID); err != nil {
-			t.Fatalf("complete legacy wake: %v", err)
-		}
+		settleClaimedInboxEventForTest(t, fixture.taskID)
 		delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
 		if err != nil || uuidToString(delivery.InboxEventID) != fixture.eventID {
 			t.Fatalf("inbox lease after legacy completion=%+v err=%v, want event %s", delivery, err, fixture.eventID)
@@ -271,7 +267,7 @@ func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T
 		fixture := newFixture(t, true)
 		runtime := loadRuntime(t, fixture.runtimeID)
 
-		task, err := testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		task, err := claimInboxEventForRuntimeForTest(ctx, fixture.runtimeID)
 		if err != nil || task != nil {
 			t.Fatalf("legacy claim before older inbox task=%+v err=%v, want nil", task, err)
 		}
@@ -279,7 +275,7 @@ func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T
 		if err != nil || uuidToString(delivery.InboxEventID) != fixture.eventID {
 			t.Fatalf("older inbox lease=%+v err=%v, want event %s", delivery, err, fixture.eventID)
 		}
-		task, err = testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		task, err = claimInboxEventForRuntimeForTest(ctx, fixture.runtimeID)
 		if err != nil || task != nil {
 			t.Fatalf("legacy claim during active inbox task=%+v err=%v, want nil", task, err)
 		}
@@ -298,7 +294,7 @@ func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T
 		`, fixture.eventID); err != nil {
 			t.Fatalf("ack inbox wake: %v", err)
 		}
-		task, err = testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(fixture.runtimeID))
+		task, err = claimInboxEventForRuntimeForTest(ctx, fixture.runtimeID)
 		if err != nil || task == nil || uuidToString(task.ID) != fixture.taskID {
 			t.Fatalf("legacy claim after inbox ack task=%+v err=%v, want %s", task, err, fixture.taskID)
 		}
@@ -694,16 +690,16 @@ func TestAgentInboxDrainRejectsFallbackSessionFromDifferentRuntime(t *testing.T)
 	}
 	var priorTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, chat_session_id,
 			session_id, work_dir, completed_at
 		)
-		VALUES ($1, $2, NULL, 'completed', 10, $3, 'foreign-fallback-session', '/tmp/foreign-fallback-workdir', now())
+		VALUES ($1, $2, NULL, 'acked', 10, $3, 'foreign-fallback-session', '/tmp/foreign-fallback-workdir', now())
 		RETURNING id`, agentID, foreignRuntimeID, chatSessionID).Scan(&priorTaskID); err != nil {
 		t.Fatalf("seed foreign fallback task: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, priorTaskID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, priorTaskID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, foreignRuntimeID)
 	})
 
@@ -919,17 +915,17 @@ func TestAgentInboxDrainRejectsEventWithoutExactPrompt(t *testing.T) {
 	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
 	drainRec := httptest.NewRecorder()
 	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	if drainRec.Code != http.StatusInternalServerError {
+		t.Fatalf("drain inbox: status=%d body=%s, want fail-closed 500", drainRec.Code, drainRec.Body.String())
 	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
+	var status string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status
+		FROM agent_inbox_event
+		WHERE id = $1`, eventID).Scan(&status); err != nil {
+		t.Fatalf("load malformed event status: %v", err)
 	}
-	if len(drainResp.Events) != 1 {
-		t.Fatalf("drain events = %d, want leased event metadata", len(drainResp.Events))
-	}
-	if drainResp.Events[0].Task != nil {
-		t.Fatalf("event without exact prompt became runnable: %+v", drainResp.Events[0].Task)
+	if status != "suppressed" {
+		t.Fatalf("malformed event status = %q, want suppressed", status)
 	}
 }

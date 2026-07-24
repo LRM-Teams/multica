@@ -207,6 +207,7 @@ INSERT INTO agent_inbox_event (
   runtime_id,
   execution_config,
   source_message_id,
+  trigger_summary,
   reason,
   requires_wake,
   status,
@@ -228,6 +229,7 @@ VALUES (
       'snapshotted', true
     ) FROM agent WHERE id = $4),
   $12,
+  (SELECT LEFT(content, 200) FROM channel_message WHERE id = $12),
   $5,
   $6,
   'pending',
@@ -931,6 +933,7 @@ SET terminal_outcome = $3,
     terminal_delivery_id = $4,
     retryable = $5,
     terminal_at = now(),
+    completed_at = COALESCE(completed_at, now()),
     updated_at = now()
 WHERE id = $1
   AND workspace_id = $2

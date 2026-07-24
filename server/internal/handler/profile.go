@@ -363,21 +363,18 @@ func isSearchTool(tool string) bool {
 }
 
 func isActiveTaskStatus(status string) bool {
-	return status == "queued" ||
-		status == "dispatched" ||
-		status == "running" ||
-		status == "waiting_local_directory"
+	return status == "pending" || status == "draining" || status == "failed"
 }
 
 func recentActivityFallbackKind(status string) string {
 	switch status {
-	case "queued":
+	case "pending":
 		return "queued"
-	case "dispatched", "running", "waiting_local_directory":
+	case "draining":
 		return "working"
 	case "failed":
 		return "failed"
-	case "cancelled":
+	case "suppressed":
 		return "cancelled"
 	default:
 		return "task"
@@ -386,13 +383,13 @@ func recentActivityFallbackKind(status string) string {
 
 func recentActivityFallbackLabel(status string) string {
 	switch status {
-	case "queued":
+	case "pending":
 		return "Thinking"
-	case "dispatched", "running", "waiting_local_directory":
+	case "draining":
 		return "Thinking"
 	case "failed":
 		return "Failed"
-	case "cancelled":
+	case "suppressed":
 		return "Cancelled"
 	default:
 		return "Output"

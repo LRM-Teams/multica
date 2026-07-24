@@ -161,7 +161,7 @@ func TestAgentTransportSendMessageEnforcesVoiceReplyForVoiceTrigger(t *testing.T
 	var chatSessionID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT chat_session_id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("load task chat session: %v", err)
 	}
@@ -373,18 +373,18 @@ func TestAgentTransportFreshnessDraftsAreScopedToTheirTask(t *testing.T) {
 	}
 
 	var runtimeID, chatSessionID string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id, chat_session_id FROM agent_task_queue WHERE id = $1`, firstTaskID).Scan(&runtimeID, &chatSessionID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id, chat_session_id FROM agent_inbox_event WHERE id = $1`, firstTaskID).Scan(&runtimeID, &chatSessionID); err != nil {
 		t.Fatalf("load first task source: %v", err)
 	}
 	var secondTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'running', 2, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'draining', 2, now())
 		RETURNING id`, agentID, runtimeID, chatSessionID).Scan(&secondTaskID); err != nil {
 		t.Fatalf("create second task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, secondTaskID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, secondTaskID)
 	})
 
 	producerFacts := make([]string, 0, 2)
@@ -745,7 +745,7 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 			}
 			defer tx.Rollback(ctx)
 			if _, err := tx.Exec(ctx, `
-				CREATE TEMP TABLE agent_task_queue (id UUID PRIMARY KEY) ON COMMIT DROP;
+				CREATE TEMP TABLE agent_inbox_event (id UUID PRIMARY KEY) ON COMMIT DROP;
 				CREATE TEMP TABLE agent_inbox_event (id UUID PRIMARY KEY) ON COMMIT DROP;
 				CREATE TEMP TABLE agent_transport_draft (
 					id UUID PRIMARY KEY, workspace_id UUID NOT NULL, agent_id UUID NOT NULL, target TEXT NOT NULL,
@@ -768,7 +768,7 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 				}
 			}
 			if tc.sourceKind == "task" || tc.sourceKind == "both" {
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_queue (id) VALUES ($1)`, sourceID); err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO agent_inbox_event (id) VALUES ($1)`, sourceID); err != nil {
 					t.Fatalf("insert legacy task: %v", err)
 				}
 			}
@@ -2203,7 +2203,7 @@ func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
 	var chatSessionID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT chat_session_id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("load chat session: %v", err)
 	}
@@ -2219,7 +2219,7 @@ func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
 		t.Fatalf("seed pending wake: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
 		WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("mark parent failed: %v", err)
@@ -2261,7 +2261,7 @@ func TestAgentTransportAutoRetryStripsArealProxyFromChildContext(t *testing.T) {
 	ctx := context.Background()
 	taskID, _ := createChannelCompletionTask(t, "group")
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3,
 		    context = '{"areal_proxy":{"session_id":"sess-parent","api_key":"key-parent"},"squad_id":"squad-9"}'::jsonb
 		WHERE id = $1`, taskID); err != nil {
@@ -2307,7 +2307,7 @@ func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
 	var chatSessionID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT chat_session_id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("load chat session: %v", err)
 	}
@@ -2323,7 +2323,7 @@ func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
 		t.Fatalf("seed settled pending wake: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
 		WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("mark parent failed: %v", err)
@@ -2344,7 +2344,7 @@ func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
 	var childCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE parent_task_id = $1`, taskID).Scan(&childCount); err != nil {
 		t.Fatalf("count retry children: %v", err)
 	}
@@ -2418,7 +2418,7 @@ func agentIDForTask(t *testing.T, taskID string) string {
 	var agentID string
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT agent_id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE id = $1`, taskID).Scan(&agentID); err != nil {
 		t.Fatalf("load task agent_id: %v", err)
 	}

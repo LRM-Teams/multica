@@ -88,7 +88,7 @@ func TestAutopilotRunOnlyTaskTerminalEventsUpdateRun(t *testing.T) {
 			}
 
 			if _, err := testPool.Exec(ctx,
-				`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now() WHERE id = $1`,
+				`UPDATE agent_inbox_event SET status = 'draining', dispatched_at = now() WHERE id = $1`,
 				run.TaskID,
 			); err != nil {
 				t.Fatalf("mark task dispatched: %v", err)
@@ -180,7 +180,7 @@ func dispatchCreateIssueAutopilot(t *testing.T, title string) linkedIssueAutopil
 		t.Fatal("create_issue dispatch did not link an issue")
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, run.IssueID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE issue_id = $1`, run.IssueID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, run.IssueID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, run.IssueID)
 	})
@@ -209,7 +209,7 @@ func dispatchCreateIssueAutopilot(t *testing.T, title string) linkedIssueAutopil
 func runTaskWithBudget(t *testing.T, queries *db.Queries, taskID pgtype.UUID, maxAttempts int) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now(), max_attempts = $2 WHERE id = $1`,
+		`UPDATE agent_inbox_event SET status = 'draining', dispatched_at = now(), max_attempts = $2 WHERE id = $1`,
 		taskID, maxAttempts,
 	); err != nil {
 		t.Fatalf("mark task dispatched: %v", err)
@@ -311,7 +311,7 @@ func TestAutopilotCreateIssueTaskRetryPendingKeepsRunOpen(t *testing.T) {
 // TestAutopilotDispatchSkipsWhenRuntimeOffline locks in the MUL-1899
 // admission gate: when the assignee agent's runtime is not online we must
 // record a `skipped` autopilot_run with a failure_reason and NOT enqueue an
-// agent_task_queue row. This is the fix for "活跃 schedule 持续给离线 local
+// agent_inbox_event row. This is the fix for "活跃 schedule 持续给离线 local
 // agent 入队".
 func TestAutopilotDispatchSkipsWhenRuntimeOffline(t *testing.T) {
 	ctx := context.Background()
@@ -389,7 +389,7 @@ func TestAutopilotDispatchSkipsWhenRuntimeOffline(t *testing.T) {
 	// Defensive: confirm at the DB layer that nothing landed on the queue.
 	var taskCount int
 	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`,
+		`SELECT count(*) FROM agent_inbox_event WHERE agent_id = $1`,
 		agentID,
 	).Scan(&taskCount); err != nil {
 		t.Fatalf("count tasks: %v", err)

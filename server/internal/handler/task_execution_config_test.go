@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -39,7 +38,7 @@ func TestClaimTaskUsesEnqueuedExecutionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, task.ID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID) })
 
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET model = 'edited-model', thinking_level = 'minimal' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("edit agent after enqueue: %v", err)
@@ -47,9 +46,8 @@ func TestClaimTaskUsesEnqueuedExecutionConfig(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "execution-config-claim")
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx)))
+	req = withURLParam(req, "runtimeId", runtimeID)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("claim task: expected 200, got %d: %s", w.Code, w.Body.String())
 	}

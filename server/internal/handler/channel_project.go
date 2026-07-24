@@ -19,7 +19,7 @@ import (
 
 // Channel ↔ project binding lives in its own file so it doesn't collide with
 // the actively-developed channel.go. The binding is read at task claim time via
-// COALESCE(channel.project_id, chat_session.project_id) (see ClaimTaskByRuntime),
+// COALESCE(channel.project_id, chat_session.project_id) (see inbox drain),
 // so setting it here makes every agent in the channel share the project's
 // directory without touching individual chat sessions.
 

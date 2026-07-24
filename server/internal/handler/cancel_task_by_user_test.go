@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -23,7 +22,7 @@ func taskStatus(t *testing.T, taskID string) string {
 	t.Helper()
 	var status string
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT status FROM agent_task_queue WHERE id = $1`, taskID,
+		`SELECT status FROM agent_inbox_event WHERE id = $1`, taskID,
 	).Scan(&status); err != nil {
 		t.Fatalf("read task status: %v", err)
 	}
@@ -67,13 +66,13 @@ func createAutopilotRunOnlyTask(t *testing.T, agentID string) string {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, autopilot_run_id)
-		VALUES ($1, $2, 'queued', 0, $3)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, autopilot_run_id)
+		VALUES ($1, $2, 'pending', 0, $3)
 		RETURNING id
 	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
 		t.Fatalf("create run_only task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 	return taskID
 }
 
@@ -143,7 +142,7 @@ func cancelTaskByUserRequest(t *testing.T, userID, taskID string) *http.Request 
 	return withChatTestWorkspaceCtx(t, req)
 }
 
-func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_ReturnsConflict(t *testing.T) {
+func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_Succeeds(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -161,11 +160,8 @@ func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_ReturnsConflict(t *testi
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, eventID))
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409 for channel inbox via tasks-cancel, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "agent-inbox/events") {
-		t.Fatalf("expected explicit new-contract error, got %s", w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for canonical channel inbox cancel, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var eventStatus, terminalOutcome string
@@ -175,8 +171,8 @@ func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_ReturnsConflict(t *testi
 		WHERE id = $1`, eventID).Scan(&eventStatus, &terminalOutcome); err != nil {
 		t.Fatalf("load inbox event: %v", err)
 	}
-	if eventStatus == "suppressed" || terminalOutcome != "" {
-		t.Fatalf("tasks-cancel must not cancel channel inbox: status=%q outcome=%q", eventStatus, terminalOutcome)
+	if eventStatus != "suppressed" || terminalOutcome != "cancelled" {
+		t.Fatalf("tasks-cancel canonical result: status=%q outcome=%q", eventStatus, terminalOutcome)
 	}
 }
 
@@ -196,7 +192,7 @@ func TestCancelTaskByUser_RunOnlyAutopilot_Succeeds(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
+	if got := taskStatus(t, taskID); got != "suppressed" {
 		t.Fatalf("task not cancelled: status = %q", got)
 	}
 }
@@ -217,7 +213,7 @@ func TestCancelTaskByUser_RunOnlyAutopilot_CrossWorkspace_Returns404(t *testing.
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "queued" {
+	if got := taskStatus(t, taskID); got != "pending" {
 		t.Fatalf("foreign task was mutated: status = %q", got)
 	}
 }
@@ -234,21 +230,21 @@ func TestCancelTaskByUser_QuickCreate_Succeeds(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, context)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL,
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, context)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL,
 		        '{"type":"quick_create","workspace_id":"ws","prompt":"do a thing"}'::jsonb)
 		RETURNING id
 	`, agentID).Scan(&taskID); err != nil {
 		t.Fatalf("create quick_create task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, taskID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
+	if got := taskStatus(t, taskID); got != "suppressed" {
 		t.Fatalf("task not cancelled: status = %q", got)
 	}
 }
@@ -266,21 +262,21 @@ func TestCancelTaskByUser_RetryClone_Autopilot_Succeeds(t *testing.T) {
 
 	var cloneID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, autopilot_run_id, parent_task_id, attempt)
-		SELECT agent_id, runtime_id, 'queued', priority, autopilot_run_id, id, 1
-		FROM agent_task_queue WHERE id = $1
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, autopilot_run_id, parent_task_id, attempt)
+		SELECT agent_id, runtime_id, 'pending', priority, autopilot_run_id, id, 1
+		FROM agent_inbox_event WHERE id = $1
 		RETURNING id
 	`, parentID).Scan(&cloneID); err != nil {
 		t.Fatalf("create retry clone: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, cloneID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, cloneID) })
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, cloneID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, cloneID); got != "cancelled" {
+	if got := taskStatus(t, cloneID); got != "suppressed" {
 		t.Fatalf("clone not cancelled: status = %q", got)
 	}
 }
@@ -305,20 +301,20 @@ func TestCancelTaskByUser_IssueTask_Succeeds(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
 
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'queued', 0, $2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'pending', 0, $2)
 		RETURNING id
 	`, agentID, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("create issue task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, taskID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
+	if got := taskStatus(t, taskID); got != "suppressed" {
 		t.Fatalf("task not cancelled: status = %q", got)
 	}
 }
@@ -336,20 +332,20 @@ func TestCancelTaskByUser_ChatTask_NonCreator_Returns403(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL, $2)
 		RETURNING id
 	`, agentID, sessionID).Scan(&taskID); err != nil {
 		t.Fatalf("create chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, otherUserID, taskID))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "running" {
+	if got := taskStatus(t, taskID); got != "draining" {
 		t.Fatalf("chat task was mutated: status = %q", got)
 	}
 }
@@ -364,13 +360,13 @@ func TestCancelTaskByUser_ChatTaskWithTranscript_PersistsAssistantSnapshot(t *te
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2, now() - interval '5 seconds')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL, $2, now() - interval '5 seconds')
 		RETURNING id
 	`, agentID, sessionID).Scan(&taskID); err != nil {
 		t.Fatalf("create chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO chat_message (chat_session_id, role, content, task_id)
@@ -397,7 +393,7 @@ func TestCancelTaskByUser_ChatTaskWithTranscript_PersistsAssistantSnapshot(t *te
 	if resp.CancelledChatMessage != nil {
 		t.Fatalf("expected no restore payload when transcript exists, got %#v", resp.CancelledChatMessage)
 	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
+	if got := taskStatus(t, taskID); got != "suppressed" {
 		t.Fatalf("task not cancelled: status = %q", got)
 	}
 
@@ -424,13 +420,13 @@ func TestCancelTaskByUser_ChatTaskWithoutTranscript_RestoresUserDraft(t *testing
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL, $2)
 		RETURNING id
 	`, agentID, sessionID).Scan(&taskID); err != nil {
 		t.Fatalf("create chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	var userMessageID string
 	const userContent = "keep this prompt"
@@ -515,20 +511,20 @@ func TestCancelTaskByUser_ChannelBoundChatTask_ChannelMemberSucceeds(t *testing.
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL, $2)
 		RETURNING id
 	`, agentID, sessionID).Scan(&taskID); err != nil {
 		t.Fatalf("create channel-bound chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, otherUserID, taskID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
+	if got := taskStatus(t, taskID); got != "suppressed" {
 		t.Fatalf("task not cancelled: status = %q", got)
 	}
 }
@@ -567,20 +563,20 @@ func TestCancelTaskByUser_ChannelBoundChatTask_NonMemberReturns403(t *testing.T)
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
-		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'draining', 0, NULL, $2)
 		RETURNING id
 	`, agentID, sessionID).Scan(&taskID); err != nil {
 		t.Fatalf("create channel-bound chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, outsiderID, taskID))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "running" {
+	if got := taskStatus(t, taskID); got != "draining" {
 		t.Fatalf("task was mutated: status = %q", got)
 	}
 }
@@ -601,7 +597,7 @@ func TestCancelTaskByUser_PrivateAgent_PlainMember_Returns403(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := taskStatus(t, taskID); got != "queued" {
+	if got := taskStatus(t, taskID); got != "pending" {
 		t.Fatalf("task was mutated: status = %q", got)
 	}
 }

@@ -62,12 +62,6 @@ type TaskService struct {
 	Analytics analytics.Client
 	Metrics   *obsmetrics.BusinessMetrics
 	Wakeup    TaskWakeupNotifier
-	// EmptyClaim caches "this runtime has no queued task" so the daemon
-	// poll path can skip a Postgres scan on the steady-state empty case.
-	// Optional — a nil cache disables the fast path and every claim
-	// goes through the DB. Wired in router.go from the shared Redis
-	// client.
-	EmptyClaim *EmptyClaimCache
 
 	// OnChildTaskCreated is an optional callback fired when a retry child
 	// task is created (subagent lifecycle). When set, it receives the parent
@@ -140,7 +134,7 @@ func truncateForSummary(s string, maxRunes int) string {
 const (
 	taskAnalyticsContextCacheMax = 4096
 	// claimResponseRecoveryWindow must exceed daemon client.Timeout for
-	// /tasks/claim (30s) plus /tasks/{id}/start (30s) plus scheduling slack, so
+	// inbox drain (30s) plus execution start (30s) plus scheduling slack, so
 	// an in-flight StartTask cannot be reclaimed and double-dispatched.
 	claimResponseRecoveryWindow = 90 * time.Second
 )
@@ -1192,7 +1186,7 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	// #311: the system never cancels a directed chat request. A new message that
 	// arrives while an earlier one is still running must NOT cancel the in-flight
 	// run (interruptFollowup=false). It queues behind the agent's current wake;
-	// ClaimNextAgentWake admits every source through one created_at/id FIFO. So a
+	// Canonical inbox admission orders every source by created_at/id. So a
 	// different requester's request and a same-requester follow-up both get
 	// answered in order rather than one silently cancelling the other (the
 	// Frank+海鹏 case).
@@ -1848,7 +1842,7 @@ func (s *TaskService) terminalTaskProjectID(ctx context.Context, task db.AgentIn
 
 func isTerminalAgentTaskStatus(status string) bool {
 	switch status {
-	case "completed", "failed", "cancelled":
+	case "acked", "suppressed":
 		return true
 	default:
 		return false
@@ -2061,7 +2055,7 @@ func resumeUnsafeFailureReason(reason string) bool {
 // Autopilot tasks are NOT auto-retried here; the autopilot scheduler owns
 // its own re-run cadence and we don't want to double-fire it.
 func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentInboxEvent) (*db.AgentInboxEvent, error) {
-	if parent.Status != "failed" {
+	if parent.Status != "acked" || !parent.TerminalOutcome.Valid || parent.TerminalOutcome.String != "failed" {
 		return nil, nil
 	}
 	reason := ""
@@ -2967,33 +2961,19 @@ func priorityToInt(p string) int32 {
 
 // NotifyTaskEnqueued is the cross-package shim for callers outside
 // TaskService (e.g. AutopilotService.dispatchRunOnly) that insert a
-// row into agent_inbox_event directly. Invalidates the empty-claim
-// cache and kicks the daemon WS so the new task is claimed without
-// waiting for the next poll.
+// row into agent_inbox_event directly and need to wake the daemon.
 func (s *TaskService) NotifyTaskEnqueued(ctx context.Context, task db.AgentInboxEvent) {
 	s.captureTaskQueued(ctx, task)
 	s.notifyTaskAvailable(task)
 }
 
-// notifyTaskAvailable runs after a task has been inserted: bumps the
-// runtime's invalidation version so any in-flight claim that is about
-// to write an "empty" verdict will have it rejected on read, then
-// kicks the daemon WS so the daemon claims without waiting for its
-// next poll. Order matters — Bump must happen before the wakeup,
-// otherwise the wakeup-driven claim could read the still-current
-// empty verdict and return null.
+// notifyTaskAvailable wakes the daemon after a canonical inbox event is
+// inserted so it does not have to wait for its next poll.
 func (s *TaskService) notifyTaskAvailable(task db.AgentInboxEvent) {
 	if !task.RuntimeID.Valid {
 		return
 	}
 	runtimeKey := util.UUIDToString(task.RuntimeID)
-	// Use a background context: the cache bump / wakeup must outlive
-	// the request that created the task, otherwise an early client
-	// disconnect could leave the empty verdict in place and stall the
-	// just-queued task until the TTL expires. The cache itself bounds
-	// every Redis call with a short timeout so a wedged Redis cannot
-	// block enqueue.
-	s.EmptyClaim.Bump(context.Background(), runtimeKey)
 	if s.Wakeup == nil {
 		return
 	}
@@ -3061,30 +3041,50 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 // the linked Radar run after verifying that the run points back to this task.
 // Returns "" when none of the links resolve — callers treat that as "not found".
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentInboxEvent) string {
+	canonicalWorkspaceID := util.UUIDToString(task.WorkspaceID)
 	if task.IssueID.Valid {
 		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
-			return util.UUIDToString(issue.WorkspaceID)
+			sourceWorkspaceID := util.UUIDToString(issue.WorkspaceID)
+			if canonicalWorkspaceID != "" && sourceWorkspaceID != canonicalWorkspaceID {
+				return ""
+			}
+			return sourceWorkspaceID
 		}
 	}
 	if task.ChatSessionID.Valid {
 		if cs, err := s.Queries.GetChatSession(ctx, task.ChatSessionID); err == nil {
-			return util.UUIDToString(cs.WorkspaceID)
+			sourceWorkspaceID := util.UUIDToString(cs.WorkspaceID)
+			if canonicalWorkspaceID != "" && sourceWorkspaceID != canonicalWorkspaceID {
+				return ""
+			}
+			return sourceWorkspaceID
 		}
 	}
 	if task.AutopilotRunID.Valid {
 		if run, err := s.Queries.GetAutopilotRun(ctx, task.AutopilotRunID); err == nil {
 			if ap, err := s.Queries.GetAutopilot(ctx, run.AutopilotID); err == nil {
-				return util.UUIDToString(ap.WorkspaceID)
+				sourceWorkspaceID := util.UUIDToString(ap.WorkspaceID)
+				if canonicalWorkspaceID != "" && sourceWorkspaceID != canonicalWorkspaceID {
+					return ""
+				}
+				return sourceWorkspaceID
 			}
 		}
 	}
 	if radarContext, ok := parseAgentRadarContext(task); ok {
 		runID, err := util.ParseUUID(radarContext.RadarRunID)
-		if err == nil {
-			if run, err := s.Queries.GetAgentRadarRun(ctx, runID); err == nil && run.TaskID.Valid && run.TaskID == task.ID {
-				return util.UUIDToString(run.WorkspaceID)
-			}
+		if err != nil {
+			return ""
 		}
+		run, err := s.Queries.GetAgentRadarRun(ctx, runID)
+		if err != nil || !run.TaskID.Valid || run.TaskID != task.ID {
+			return ""
+		}
+		sourceWorkspaceID := util.UUIDToString(run.WorkspaceID)
+		if canonicalWorkspaceID != "" && sourceWorkspaceID != canonicalWorkspaceID {
+			return ""
+		}
+		return sourceWorkspaceID
 	}
 	// Quick-create tasks have no issue / chat / autopilot link — workspace
 	// lives in the context JSONB. Returning "" here is what blocked
@@ -3092,9 +3092,12 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentI
 	// for the daemon) and silently dropped task:dispatch / task:completed
 	// broadcasts, which is why quick-create tasks appeared stuck queued.
 	if qc, ok := s.parseQuickCreateContext(task); ok {
+		if canonicalWorkspaceID != "" && qc.WorkspaceID != canonicalWorkspaceID {
+			return ""
+		}
 		return qc.WorkspaceID
 	}
-	return ""
+	return canonicalWorkspaceID
 }
 
 func parseAgentRadarContext(task db.AgentInboxEvent) (AgentRadarContext, bool) {

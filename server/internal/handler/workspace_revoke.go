@@ -82,7 +82,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 		// reassigned via UpdateAgent without rewriting the runtime_id on
 		// historical agent_inbox_event rows, so an archived agent may still
 		// have queued/running tasks pinned to a different runtime — and
-		// ClaimNextAgentWake does not gate on agent.archived_at, so those tasks
+		// Inbox admission does not gate on agent.archived_at, so those events
 		// would otherwise stay claimable after the agent is gone.
 		archivedAgentIDs := make([]pgtype.UUID, len(result.ArchivedAgents))
 		for i, a := range result.ArchivedAgents {

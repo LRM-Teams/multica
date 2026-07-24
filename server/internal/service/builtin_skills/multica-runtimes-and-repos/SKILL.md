@@ -21,14 +21,14 @@ Runtime and repo commands affect active agent execution. Do not restart daemons,
 
 ## Core model
 
-A runtime is the execution target behind an agent. A daemon owns local runtime processes and claims queued tasks from the server.
+A runtime is the execution target behind an agent. A daemon owns local runtime processes and leases pending inbox events from the server.
 
 The chain is:
 
 1. user action creates or updates an `agent_inbox_event` row;
 2. the task points at an agent and runtime;
 3. server wakes the runtime over daemon websocket when possible;
-4. daemon polls/claims the task;
+4. daemon drains and leases the canonical inbox event;
 5. server returns task context, repos, project resources, prior session/workdir hints, and task token;
 6. daemon prepares a workdir and launches the provider CLI;
 7. `multica repo checkout` talks to the local daemon, not directly to GitHub.

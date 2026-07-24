@@ -145,12 +145,11 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 		sourceMessageID, seqFrom, seqTo).Scan(&eventID)
 }
 
-// leaseAgentInboxEventForRuntime admits the oldest eligible inbox wake while
-// sharing the same per-agent row lock as legacy task claims. Candidate
-// discovery happens first; after locking the agent, a second statement
-// revalidates every cross-source predicate against a fresh READ COMMITTED
-// snapshot. That two-statement shape is what makes the exclusion exact across
-// agent_inbox_event and agent_inbox_event.
+// leaseAgentInboxEventForRuntime admits the oldest eligible canonical wake.
+// Candidate discovery happens first; after locking the agent, a second
+// statement revalidates the event and active-delivery predicates against a
+// fresh READ COMMITTED snapshot. That two-statement shape preserves exact
+// per-agent FIFO admission under concurrent drains.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")

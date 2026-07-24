@@ -1167,7 +1167,7 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 // so the prod tail can be attributed without flooding logs at normal rates.
 // auth_ms is further decomposed into decode_ms, runtime_lookup_ms, and
 // workspace_check_ms; auth_path labels which token kind authenticated the
-// request ("daemon_token", "pat", or "jwt"). Mirrors logClaimEndpointSlow.
+// request ("daemon_token", "pat", or "jwt").
 func logHeartbeatEndpointSlow(runtimeID, outcome, authPath string, start time.Time, decodeMs, runtimeLookupMs, workspaceCheckMs, authMs, updateMs, probeModelMs, popModelMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs int64, probeModelTimedOut, probeSkillsTimedOut, probeImportTimedOut bool) {
 	totalMs := time.Since(start).Milliseconds()
 	if totalMs < 500 && !probeModelTimedOut && !probeSkillsTimedOut && !probeImportTimedOut {
@@ -1192,24 +1192,6 @@ func logHeartbeatEndpointSlow(runtimeID, outcome, authPath string, start time.Ti
 		"probe_model_timed_out", probeModelTimedOut,
 		"probe_skills_timed_out", probeSkillsTimedOut,
 		"probe_import_timed_out", probeImportTimedOut,
-	)
-}
-
-// logClaimEndpointSlow emits one structured log when the /tasks/claim endpoint
-// exceeds 500ms, splitting auth / claim / response-build phases so the prod
-// tail can be diagnosed without flooding logs at normal poll rates.
-func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, claimMs, buildMs int64) {
-	totalMs := time.Since(start).Milliseconds()
-	if totalMs < 500 {
-		return
-	}
-	slog.Info("claim_endpoint slow",
-		"runtime_id", runtimeID,
-		"outcome", outcome,
-		"total_ms", totalMs,
-		"auth_ms", authMs,
-		"claim_ms", claimMs,
-		"build_ms", buildMs,
 	)
 }
 
@@ -1519,7 +1501,8 @@ func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.Age
 	if run.Status != "executing" {
 		return fmt.Errorf("radar run is not executing: %s", run.Status)
 	}
-	if task.Status != "completed" || !radarUUIDsMatch(task.ID, run.TaskID) || !radarUUIDsMatch(task.AgentID, run.AgentID) {
+	if task.Status != "acked" || !task.TerminalOutcome.Valid || task.TerminalOutcome.String != "completed" ||
+		!radarUUIDsMatch(task.ID, run.TaskID) || !radarUUIDsMatch(task.AgentID, run.AgentID) {
 		return errors.New("completed radar task does not match the executing run")
 	}
 	var radarCtx service.AgentRadarContext
@@ -2326,6 +2309,23 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 	wsID := h.TaskService.ResolveTaskWorkspaceID(r.Context(), task)
 	if wsID == "" || wsID != middleware.WorkspaceIDFromContext(r.Context()) {
 		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if projected, projectErr := h.projectInboxEventTaskMessages(
+		r.Context(),
+		taskUUID,
+		taskID,
+		parseUUID(wsID),
+		r.URL.Query().Get("since"),
+	); projectErr != nil {
+		if errors.Is(projectErr, errInvalidTaskMessageSince) {
+			writeError(w, http.StatusBadRequest, "invalid since parameter")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to list task messages")
+		return
+	} else if len(projected) > 0 {
+		writeJSON(w, http.StatusOK, projected)
 		return
 	}
 

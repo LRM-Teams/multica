@@ -37,7 +37,7 @@ func createCommentTriggerPreviewIssue(t *testing.T, title string, assigneeType, 
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
 	})

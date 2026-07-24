@@ -48,11 +48,11 @@ func TestQuickCreateCompletion_SubscribesRequester(t *testing.T) {
 		t.Fatalf("EnqueueQuickCreateTask: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID)
 	})
 
 	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now() WHERE id = $1`,
+		`UPDATE agent_inbox_event SET status = 'draining', dispatched_at = now() WHERE id = $1`,
 		task.ID,
 	); err != nil {
 		t.Fatalf("dispatch task: %v", err)
@@ -124,11 +124,11 @@ func TestQuickCreateFailure_DoesNotSubscribeRequester(t *testing.T) {
 		t.Fatalf("EnqueueQuickCreateTask: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID)
 	})
 
 	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now() WHERE id = $1`,
+		`UPDATE agent_inbox_event SET status = 'draining', dispatched_at = now() WHERE id = $1`,
 		task.ID,
 	); err != nil {
 		t.Fatalf("dispatch task: %v", err)
@@ -391,10 +391,10 @@ func enqueueStartedQuickCreateTask(t *testing.T, queries *db.Queries, taskSvc *s
 		t.Fatalf("EnqueueQuickCreateTask: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID)
 	})
 	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now() WHERE id = $1`,
+		`UPDATE agent_inbox_event SET status = 'draining', dispatched_at = now() WHERE id = $1`,
 		task.ID,
 	); err != nil {
 		t.Fatalf("dispatch task: %v", err)

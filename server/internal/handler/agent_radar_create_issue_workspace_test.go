@@ -194,7 +194,7 @@ func TestExecuteRadarCreateIssueUsesPersistedProjectWhenPayloadOmitsIt(t *testin
 	}
 	var managerTaskCount int
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2
+		SELECT count(*) FROM agent_inbox_event WHERE issue_id = $1 AND agent_id = $2
 	`, issue.ID, creator.ID).Scan(&managerTaskCount); err != nil {
 		t.Fatalf("count manager tasks: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestExecuteRadarCreateIssuePersistsSourceAndReferenceAttachment(t *testing.
 		t.Fatalf("load radar task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET context = jsonb_set(context, '{channel_id}', to_jsonb($2::text), true)
 		WHERE id = $1
 	`, task.ID, channelID); err != nil {

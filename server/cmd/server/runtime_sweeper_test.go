@@ -44,16 +44,16 @@ func setupSweeperTestFixture(t *testing.T, taskStatus string) (string, string, s
 	// Create a task in the desired status with old timestamps
 	var taskID string
 	switch taskStatus {
-	case "running":
+	case "started":
 		err = testPool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at)
-			VALUES ($1, $2, $3, 'running', 0, now() - interval '3 hours', now() - interval '3 hours')
+			INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, dispatched_at, claimed_at, started_at)
+			VALUES ($1, $2, $3, 'draining', 0, now() - interval '3 hours', now() - interval '3 hours', now() - interval '3 hours')
 			RETURNING id
 		`, agentID, runtimeID, issueID).Scan(&taskID)
-	case "dispatched":
+	case "leased":
 		err = testPool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, dispatched_at)
-			VALUES ($1, $2, $3, 'dispatched', 0, now() - interval '10 minutes')
+			INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, dispatched_at, claimed_at)
+			VALUES ($1, $2, $3, 'draining', 0, now() - interval '10 minutes', now() - interval '10 minutes')
 			RETURNING id
 		`, agentID, runtimeID, issueID).Scan(&taskID)
 	}
@@ -73,7 +73,7 @@ func setupSweeperTestFixture(t *testing.T, taskStatus string) (string, string, s
 func cleanupSweeperFixture(t *testing.T, issueID, agentID string) {
 	t.Helper()
 	ctx := context.Background()
-	testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+	testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 	testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	testPool.Exec(ctx, `UPDATE agent SET status = 'idle' WHERE id = $1`, agentID)
 }
@@ -84,7 +84,7 @@ func TestRefreshAgentStatusFromTasks(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	issueID, agentID, taskID := setupSweeperTestFixture(t, "dispatched")
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "leased")
 	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
 
 	queries := db.New(testPool)
@@ -102,8 +102,8 @@ func TestRefreshAgentStatusFromTasks(t *testing.T) {
 	}
 
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
-		SET status = 'cancelled', completed_at = now()
+		UPDATE agent_inbox_event
+		SET status = 'suppressed', completed_at = now()
 		WHERE id = $1
 	`, taskID); err != nil {
 		t.Fatalf("failed to cancel seeded task: %v", err)
@@ -130,7 +130,7 @@ func TestSweepStaleTasksBroadcastsWithWorkspaceID(t *testing.T) {
 		t.Skip("no database connection")
 	}
 
-	issueID, agentID, taskID := setupSweeperTestFixture(t, "running")
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "started")
 	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
 
 	queries := db.New(testPool)
@@ -195,12 +195,12 @@ func TestSweepStaleTasksBroadcastsWithWorkspaceID(t *testing.T) {
 
 	// Verify DB: task should be failed
 	var status string
-	err = testPool.QueryRow(context.Background(), `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status)
+	err = testPool.QueryRow(context.Background(), `SELECT status FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&status)
 	if err != nil {
 		t.Fatalf("failed to query task status: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("expected task status 'failed', got '%s'", status)
+	if status != "acked" {
+		t.Fatalf("expected task status 'acked', got '%s'", status)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestSweepStaleTasksReconcileAgentStatus(t *testing.T) {
 		t.Skip("no database connection")
 	}
 
-	issueID, agentID, _ := setupSweeperTestFixture(t, "running")
+	issueID, agentID, _ := setupSweeperTestFixture(t, "started")
 	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
 
 	queries := db.New(testPool)
@@ -272,7 +272,7 @@ func TestSweepDispatchedStaleTask(t *testing.T) {
 		t.Skip("no database connection")
 	}
 
-	issueID, agentID, taskID := setupSweeperTestFixture(t, "dispatched")
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "leased")
 	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
 
 	queries := db.New(testPool)
@@ -303,12 +303,12 @@ func TestSweepDispatchedStaleTask(t *testing.T) {
 
 	// Verify DB: task should be failed
 	var status string
-	err = testPool.QueryRow(context.Background(), `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status)
+	err = testPool.QueryRow(context.Background(), `SELECT status FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&status)
 	if err != nil {
 		t.Fatalf("failed to query task: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("expected task status 'failed', got '%s'", status)
+	if status != "acked" {
+		t.Fatalf("expected task status 'acked', got '%s'", status)
 	}
 
 	// Verify task:failed event was published WITH WorkspaceID
@@ -381,15 +381,15 @@ func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
 		t.Fatalf("failed to create test issue: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 
 	// Create a stale running task for the issue (3 hours old — beyond any timeout).
 	var taskID string
 	err = testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at)
-		VALUES ($1, $2, $3, 'running', 0, now() - interval '3 hours', now() - interval '3 hours')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at)
+		VALUES ($1, $2, $3, 'draining', 0, now() - interval '3 hours', now() - interval '3 hours')
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&taskID)
 	if err != nil {
@@ -467,14 +467,14 @@ func TestSweepDoesNotResetIssueAlreadyInReview(t *testing.T) {
 		t.Fatalf("failed to create test issue: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, issueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 
 	var taskID string
 	err = testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at)
-		VALUES ($1, $2, $3, 'running', 0, now() - interval '3 hours', now() - interval '3 hours')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at)
+		VALUES ($1, $2, $3, 'draining', 0, now() - interval '3 hours', now() - interval '3 hours')
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&taskID)
 	if err != nil {
@@ -506,7 +506,7 @@ func TestSweepDoesNotResetIssueAlreadyInReview(t *testing.T) {
 }
 
 // TestExpireStaleQueuedTasks verifies the MUL-1899 queued-TTL sweeper:
-// tasks that have been sitting in 'queued' beyond the TTL are transitioned
+// tasks that have been sitting in 'pending' beyond the TTL are transitioned
 // to 'failed' with failure_reason='queued_expired', while fresh queued tasks
 // are left alone and the per-tick batch limit is respected.
 func TestExpireStaleQueuedTasks(t *testing.T) {
@@ -549,21 +549,21 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	oldIssueID := mkIssue("Queued TTL test (old)")
 	freshIssueID := mkIssue("Queued TTL test (fresh)")
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id IN ($1, $2)`, oldIssueID, freshIssueID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id IN ($1, $2)`, oldIssueID, freshIssueID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2)`, oldIssueID, freshIssueID)
 	})
 
 	var oldTaskID, freshTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
-		VALUES ($1, $2, $3, 'queued', 0, now() - interval '5 hours')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now() - interval '5 hours')
 		RETURNING id
 	`, agentID, runtimeID, oldIssueID).Scan(&oldTaskID); err != nil {
 		t.Fatalf("failed to insert old queued task: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
-		VALUES ($1, $2, $3, 'queued', 0, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now())
 		RETURNING id
 	`, agentID, runtimeID, freshIssueID).Scan(&freshTaskID); err != nil {
 		t.Fatalf("failed to insert fresh queued task: %v", err)
@@ -584,16 +584,16 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 		t.Fatalf("expired the wrong task: got %x", failed[0].ID.Bytes)
 	}
 
-	// DB assertions: old → failed/queued_expired, fresh → still queued.
+	// DB assertions: old → terminal failure/queued_expired, fresh → still pending.
 	var oldStatus, oldReason, oldErr string
 	if err := testPool.QueryRow(ctx, `
 		SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
-		FROM agent_task_queue WHERE id = $1
+		FROM agent_inbox_event WHERE id = $1
 	`, oldTaskID).Scan(&oldStatus, &oldReason, &oldErr); err != nil {
 		t.Fatalf("failed to read old task: %v", err)
 	}
-	if oldStatus != "failed" {
-		t.Fatalf("old task: expected status=failed, got %q", oldStatus)
+	if oldStatus != "acked" {
+		t.Fatalf("old task: expected status=acked, got %q", oldStatus)
 	}
 	if oldReason != "queued_expired" {
 		t.Fatalf("old task: expected failure_reason=queued_expired, got %q", oldReason)
@@ -604,17 +604,17 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 
 	var freshStatus string
 	if err := testPool.QueryRow(ctx, `
-		SELECT status FROM agent_task_queue WHERE id = $1
+		SELECT status FROM agent_inbox_event WHERE id = $1
 	`, freshTaskID).Scan(&freshStatus); err != nil {
 		t.Fatalf("failed to read fresh task: %v", err)
 	}
-	if freshStatus != "queued" {
+	if freshStatus != "pending" {
 		t.Fatalf("fresh task: expected status=queued, got %q", freshStatus)
 	}
 }
 
 // TestExpireQueuedTasksOnOfflineRuntimes verifies the Phase 2b env-dispatch
-// liveness backstop: a 'queued' task whose runtime is still 'offline' past the
+// liveness backstop: a 'pending' task whose runtime is still 'offline' past the
 // TTL and carrying an ephemeral sandbox marker is failed with
 // failure_reason='runtime_offline', while an ordinary old queued task, a fresh
 // ephemeral task, and an old task on an ONLINE runtime are left alone.
@@ -677,7 +677,7 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 	freshOfflineIssue := mkIssue("Offline-runtime sweep test (fresh)")
 	oldOnlineIssue := mkIssue("Offline-runtime sweep test (online control)")
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE runtime_id IN ($1, $2)`, offlineRT, onlineRT)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE runtime_id IN ($1, $2)`, offlineRT, onlineRT)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2, $3, $4)`, oldOfflineIssue, ordinaryOfflineIssue, freshOfflineIssue, oldOnlineIssue)
 		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id IN ($1, $2)`, offlineRT, onlineRT)
 	})
@@ -687,30 +687,30 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 	// old-online: 10 min old, ONLINE runtime -> should stay (runtime not offline).
 	var oldOfflineTask, ordinaryOfflineTask, freshOfflineTask, oldOnlineTask string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at, context)
-		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes',
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at, context)
+		VALUES ($1, $2, $3, 'pending', 0, now() - interval '10 minutes',
 		        '{"ephemeral_sandbox":{"sandbox_instance_id":"sandbox-old"}}'::jsonb)
 		RETURNING id
 	`, agentID, offlineRT, oldOfflineIssue).Scan(&oldOfflineTask); err != nil {
 		t.Fatalf("failed to insert old offline queued task: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
-		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now() - interval '10 minutes')
 		RETURNING id
 	`, agentID, offlineRT, ordinaryOfflineIssue).Scan(&ordinaryOfflineTask); err != nil {
 		t.Fatalf("failed to insert ordinary old offline queued task: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
-		VALUES ($1, $2, $3, 'queued', 0, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now())
 		RETURNING id
 	`, agentID, offlineRT, freshOfflineIssue).Scan(&freshOfflineTask); err != nil {
 		t.Fatalf("failed to insert fresh offline queued task: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
-		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now() - interval '10 minutes')
 		RETURNING id
 	`, agentID, onlineRT, oldOnlineIssue).Scan(&oldOnlineTask); err != nil {
 		t.Fatalf("failed to insert old online queued task: %v", err)
@@ -731,16 +731,16 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 		t.Fatalf("expired the wrong task: got %x", failed[0].ID.Bytes)
 	}
 
-	// old-offline -> failed/runtime_offline.
+	// old-offline -> terminal failure/runtime_offline.
 	var status, reason, errMsg string
 	if err := testPool.QueryRow(ctx, `
 		SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
-		FROM agent_task_queue WHERE id = $1
+		FROM agent_inbox_event WHERE id = $1
 	`, oldOfflineTask).Scan(&status, &reason, &errMsg); err != nil {
 		t.Fatalf("failed to read old-offline task: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("old-offline task: expected status=failed, got %q", status)
+	if status != "acked" {
+		t.Fatalf("old-offline task: expected status=acked, got %q", status)
 	}
 	if reason != "runtime_offline" {
 		t.Fatalf("old-offline task: expected failure_reason=runtime_offline, got %q", reason)
@@ -750,26 +750,26 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 	}
 
 	// Ordinary tasks on offline runtimes are outside the sandbox liveness sweep.
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, ordinaryOfflineTask).Scan(&status); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, ordinaryOfflineTask).Scan(&status); err != nil {
 		t.Fatalf("failed to read ordinary offline task: %v", err)
 	}
-	if status != "queued" {
+	if status != "pending" {
 		t.Fatalf("ordinary offline task: expected status=queued, got %q", status)
 	}
 
 	// fresh-offline -> still queued (under TTL).
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, freshOfflineTask).Scan(&status); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, freshOfflineTask).Scan(&status); err != nil {
 		t.Fatalf("failed to read fresh-offline task: %v", err)
 	}
-	if status != "queued" {
+	if status != "pending" {
 		t.Fatalf("fresh-offline task: expected status=queued, got %q", status)
 	}
 
 	// old-online -> still queued (runtime is online, not a sweep target).
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, oldOnlineTask).Scan(&status); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, oldOnlineTask).Scan(&status); err != nil {
 		t.Fatalf("failed to read old-online task: %v", err)
 	}
-	if status != "queued" {
+	if status != "pending" {
 		t.Fatalf("old-online task: expected status=queued, got %q", status)
 	}
 }
@@ -799,7 +799,7 @@ func TestExpireStaleQueuedTasksRespectsBatchLimit(t *testing.T) {
 	var issueIDs []string
 	t.Cleanup(func() {
 		for _, id := range issueIDs {
-			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, id)
+			testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, id)
 			testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, id)
 		}
 	})
@@ -819,8 +819,8 @@ func TestExpireStaleQueuedTasksRespectsBatchLimit(t *testing.T) {
 		}
 		issueIDs = append(issueIDs, issueID)
 		if _, err := testPool.Exec(ctx, `
-			INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
-			VALUES ($1, $2, $3, 'queued', 0, now() - interval '5 hours')
+			INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+			VALUES ($1, $2, $3, 'pending', 0, now() - interval '5 hours')
 		`, agentID, runtimeID, issueID); err != nil {
 			t.Fatalf("failed to insert backlog task %d: %v", i, err)
 		}
@@ -840,8 +840,8 @@ func TestExpireStaleQueuedTasksRespectsBatchLimit(t *testing.T) {
 
 	var remaining int
 	if err := testPool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM agent_task_queue
-		WHERE issue_id = ANY($1::uuid[]) AND status = 'queued'
+		SELECT COUNT(*) FROM agent_inbox_event
+		WHERE issue_id = ANY($1::uuid[]) AND status = 'pending'
 	`, issueIDs).Scan(&remaining); err != nil {
 		t.Fatalf("failed to count remaining queued: %v", err)
 	}

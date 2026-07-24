@@ -129,6 +129,21 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	activeInboxEventCount, err := countActiveInboxEventsByRuntimeIDs(r.Context(), h.DB, runtimeIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check runtime inbox dependencies")
+		return
+	}
+	if activeInboxEventCount > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":                    "cannot delete computer: one or more runtimes still have active inbox events. Wait for them to finish or cancel them first.",
+			"code":                     "computer_has_active_inbox_events",
+			"daemon_id":                daemonID,
+			"active_inbox_event_count": activeInboxEventCount,
+		})
+		return
+	}
+
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtimes")
@@ -249,5 +264,28 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 		return err
 	}
 
+	// agent_inbox_event.runtime_id snapshots the runtime chosen when a chat turn
+	// was enqueued. Terminal rows are history, not live work, so detach them
+	// before deleting the runtime; retryable/claimed rows are refused by callers.
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_inbox_event
+		   SET runtime_id = NULL, updated_at = now()
+		 WHERE runtime_id = $1
+		   AND status NOT IN ('pending', 'draining', 'failed')
+	`, runtimeID); err != nil {
+		return err
+	}
+
 	return qtx.DeleteAgentRuntime(ctx, runtimeID)
+}
+
+func countActiveInboxEventsByRuntimeIDs(ctx context.Context, exec dbExecutor, runtimeIDs []pgtype.UUID) (int64, error) {
+	var count int64
+	err := exec.QueryRow(ctx, `
+		SELECT count(*)::bigint
+		  FROM agent_inbox_event
+		 WHERE runtime_id = ANY($1::uuid[])
+		   AND status IN ('pending', 'draining', 'failed')
+	`, runtimeIDs).Scan(&count)
+	return count, err
 }

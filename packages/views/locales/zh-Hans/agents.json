@@ -623,6 +623,7 @@
     "status_scheduled": "已排程",
     "status_firing": "触发中",
     "status_overdue": "已过期",
+    "status_dormant": "休眠",
     "status_cancelled": "已取消",
     "status_fired": "已触发"
   },

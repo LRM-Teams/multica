@@ -72,10 +72,11 @@ export function agentActivityEventsOptions(agentId: string) {
 }
 
 // #656 Agent Card Reminders tab (V2 spec:
-// docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). Two sections,
-// two query shapes: Upcoming is a small, non-paginated "scheduled" list
-// (definitions ordered by next_fire_at — there's no unbounded history to
-// page through); History is cursor-paginated "fired" occurrences,
+// docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). The visible
+// definition list is a small, non-paginated "scheduled" query: active rows are
+// ordered by next_fire_at and the same response may include one dormant
+// managed patrol without a next fire. Fired human history remains
+// cursor-paginated occurrences,
 // newest-first, same infinite-query shape as `agentActivityEventsOptions`
 // above. Both invalidate on the `agent_reminder:changed` WS event (see
 // `use-agent-reminders-realtime.ts`) — the 30s staleTime below is just a

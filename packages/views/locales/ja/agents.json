@@ -615,6 +615,7 @@
     "status_scheduled": "予定",
     "status_firing": "発火中",
     "status_overdue": "期限切れ",
+    "status_dormant": "休止中",
     "status_cancelled": "キャンセル",
     "status_fired": "発火済み"
   },

@@ -11,7 +11,7 @@ import {
 } from "@multica/core/agents/queries";
 import {
   adaptUpcomingRow,
-  type UpcomingReminderRow,
+  type ReminderDefinitionRow,
   type ReminderCadence,
 } from "@multica/core/agents/reminder-view-model";
 import { useT } from "../../../i18n";
@@ -30,11 +30,13 @@ interface RemindersTabProps {
  * inline form anywhere in this file. A human who wants a change asks the
  * Agent; only the owning Agent may act, via its own CLI.
  *
- * One flat list of active reminder definitions ordered by next fire. There is
- * no Upcoming/History partition: once a one-shot fires it disappears and the
- * agent's resulting action is the user-visible record. Adaptive group patrols
- * stay in place and add one "last patrol" line because they replan the same
- * definition instead of creating a stream of visible history rows.
+ * One flat list of visible reminder definitions. Active rows are ordered by
+ * next fire; the server-owned dormant patrol stays visible with no invented
+ * countdown. There is no Upcoming/History partition: once an ordinary
+ * one-shot fires it disappears and the agent's resulting action is the
+ * user-visible record. Adaptive group patrols stay in place and add one "last
+ * patrol" line because they replan the same definition instead of creating a
+ * stream of visible history rows.
  *
  * LRM-505 field/IA alignment (not neo-brutal skin): title; clock + relative
  * + absolute time; recurring cadence chip (one-shot: no chip); readable
@@ -51,11 +53,11 @@ export function RemindersTab({ agent }: RemindersTabProps) {
     isError: upcomingIsError,
     error: upcomingError,
   } = useQuery(agentRemindersUpcomingOptions(agent.id));
-  const upcomingRows = useMemo<UpcomingReminderRow[]>(
+  const upcomingRows = useMemo<ReminderDefinitionRow[]>(
     () =>
       (upcomingData?.definitions ?? [])
         .map(adaptUpcomingRow)
-        .filter((row): row is UpcomingReminderRow => row !== null),
+        .filter((row): row is ReminderDefinitionRow => row !== null),
     [upcomingData],
   );
 
@@ -150,7 +152,7 @@ function RecurrenceChip({ cadence }: { cadence: ReminderCadence }) {
   );
 }
 
-function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
+function AnchorLink({ anchor }: { anchor: ReminderDefinitionRow["anchor"] }) {
   const { t } = useT("agents");
   const navigation = useOptionalNavigation();
   if (!anchor.available) {
@@ -234,9 +236,10 @@ function TimeRow({ iso, label }: { iso: string; label?: string }) {
   );
 }
 
-type DisplayStatus = "scheduled" | "firing" | "overdue";
+type DisplayStatus = "scheduled" | "firing" | "overdue" | "dormant";
 
-function resolveUpcomingStatus(row: UpcomingReminderRow, nowMs = Date.now()): DisplayStatus {
+function resolveUpcomingStatus(row: ReminderDefinitionRow, nowMs = Date.now()): DisplayStatus {
+  if (row.status === "fired") return "dormant";
   if (row.status === "firing") return "firing";
   const fireAt = new Date(row.nextFireAt).getTime();
   if (!Number.isNaN(fireAt) && fireAt < nowMs) return "overdue";
@@ -250,7 +253,9 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
       ? t(($) => $.reminders.status_scheduled)
       : status === "firing"
         ? t(($) => $.reminders.status_firing)
-        : t(($) => $.reminders.status_overdue);
+        : status === "overdue"
+          ? t(($) => $.reminders.status_overdue)
+          : t(($) => $.reminders.status_dormant);
   return (
     <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
       {label}
@@ -273,7 +278,7 @@ function ManagedSourceBadge() {
   );
 }
 
-function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
+function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
   const { t } = useT("agents");
   const displayStatus = resolveUpcomingStatus(row);
   const managedPatrol =
@@ -289,7 +294,9 @@ function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
         </div>
         <StatusBadge status={displayStatus} />
       </div>
-      <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
+      {row.status !== "fired" ? (
+        <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
+      ) : null}
       {managedPatrol ? (
         row.lastFireAt ? (
           <TimeRow iso={row.lastFireAt} label={t(($) => $.reminders.last_patrol_label)} />

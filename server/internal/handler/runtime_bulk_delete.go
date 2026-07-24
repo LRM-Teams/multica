@@ -114,7 +114,7 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 	for i, rt := range runtimes {
 		runtimeIDs[i] = rt.ID
 	}
-	activeTaskCount, err := h.Queries.CountActiveTasksByRuntimeIDs(r.Context(), runtimeIDs)
+	activeTaskCount, err := h.countActiveRuntimeWork(r.Context(), runtimeIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check runtime task dependencies")
 		return
@@ -125,21 +125,6 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 			"code":              "computer_has_active_tasks",
 			"daemon_id":         daemonID,
 			"active_task_count": activeTaskCount,
-		})
-		return
-	}
-
-	activeInboxEventCount, err := countActiveInboxEventsByRuntimeIDs(r.Context(), h.DB, runtimeIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check runtime inbox dependencies")
-		return
-	}
-	if activeInboxEventCount > 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":                    "cannot delete computer: one or more runtimes still have active inbox events. Wait for them to finish or cancel them first.",
-			"code":                     "computer_has_active_inbox_events",
-			"daemon_id":                daemonID,
-			"active_inbox_event_count": activeInboxEventCount,
 		})
 		return
 	}
@@ -288,4 +273,18 @@ func countActiveInboxEventsByRuntimeIDs(ctx context.Context, exec dbExecutor, ru
 		   AND status IN ('pending', 'draining', 'failed')
 	`, runtimeIDs).Scan(&count)
 	return count, err
+}
+
+func (h *Handler) countActiveRuntimeWork(ctx context.Context, runtimeIDs []pgtype.UUID) (int64, error) {
+	queuedTasks, err := h.Queries.CountActiveTasksByRuntimeIDs(ctx, runtimeIDs)
+	if err != nil {
+		return 0, err
+	}
+
+	inboxEvents, err := countActiveInboxEventsByRuntimeIDs(ctx, h.DB, runtimeIDs)
+	if err != nil {
+		return 0, err
+	}
+
+	return queuedTasks + inboxEvents, nil
 }

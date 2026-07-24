@@ -424,10 +424,7 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 		return ar, err
 	}
 	ar.CuratorOutput = out.Content
-	if strings.TrimSpace(out.Content) != "" {
-		ar.SharedCandidatesAdded = strings.Count(out.Content, "team")
-		ar.ConflictsFound = strings.Count(out.Content, "conflict")
-	}
+	ar.SharedCandidatesAdded, ar.ConflictsFound = CountTeamCurationOutput(out.Content)
 	return ar, nil
 }
 

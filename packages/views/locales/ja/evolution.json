@@ -161,7 +161,7 @@
   "noPerAgentDetails": "No per-agent details were reported by this daemon.",
   "artifacts": "Artifacts",
   "evolutionOutputTrend": "Evolution output trend",
-  "evolutionOutputTrendHint": "Daily memory/skill candidates, promotions, and lifecycle changes.",
+  "evolutionOutputTrendHint": "Daily self-review memory/skill candidates, shared evolution promotions, and team_knowledge items from curator runs.",
   "noTrendData": "No trend data yet.",
   "taskEfficiency": "Task efficiency",
   "taskEfficiencyHint": "Issue-level duration and token averages with evolved-memory usage attribution.",

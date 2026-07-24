@@ -161,7 +161,7 @@
   "noPerAgentDetails": "该 daemon 未上报逐智能体详情。",
   "artifacts": "产物",
   "evolutionOutputTrend": "自进化产出趋势",
-  "evolutionOutputTrendHint": "每日记忆/技能候选、晋升和生命周期变化。",
+  "evolutionOutputTrendHint": "每日自审记忆/技能候选、共享进化晋升，以及策展写入的团队知识。",
   "noTrendData": "暂无趋势数据。",
   "taskEfficiency": "任务效率",
   "taskEfficiencyHint": "Issue 级耗时和 token 均值，并关联 evolved-memory 使用情况。",

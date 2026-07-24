@@ -35,6 +35,7 @@ type EvolutionDailyMetricResponse struct {
 	SkillCandidates        int64  `json:"skill_candidates"`
 	PromotedMemory         int64  `json:"promoted_memory"`
 	PromotedSkill          int64  `json:"promoted_skill"`
+	TeamKnowledgeItems     int64  `json:"team_knowledge_items"`
 	ArchivedOrDeprecated   int64  `json:"archived_or_deprecated"`
 	FeedbackInjected       int64  `json:"feedback_injected"`
 	FeedbackUsed           int64  `json:"feedback_used"`
@@ -203,6 +204,12 @@ func (h *Handler) loadEvolutionDailyMetrics(r *http.Request, workspaceID string,
 		    FROM shared_evolution_unit
 		   WHERE workspace_id = $1 AND created_at >= current_date - (($2::int - 1) * interval '1 day')
 		   GROUP BY created_at::date
+		), team_knowledge AS (
+		  SELECT created_at::date AS day,
+		         count(*) AS team_knowledge_items
+		    FROM team_knowledge_item
+		   WHERE workspace_id = $1 AND created_at >= current_date - (($2::int - 1) * interval '1 day')
+		   GROUP BY created_at::date
 		), lifecycle AS (
 		  SELECT updated_at::date AS day,
 		         count(*) FILTER (WHERE status IN ('archived','deprecated')) AS archived_or_deprecated
@@ -228,12 +235,14 @@ func (h *Handler) loadEvolutionDailyMetrics(r *http.Request, workspaceID string,
 		)
 		SELECT d.day::text,
 		       COALESCE(s.memory_candidates, 0), COALESCE(s.skill_candidates, 0),
-		       COALESCE(p.promoted_memory, 0), COALESCE(p.promoted_skill, 0), COALESCE(l.archived_or_deprecated, 0),
+		       COALESCE(p.promoted_memory, 0), COALESCE(p.promoted_skill, 0), COALESCE(tk.team_knowledge_items, 0),
+		       COALESCE(l.archived_or_deprecated, 0),
 		       COALESCE(f.injected, 0), COALESCE(f.used, 0), COALESCE(f.success, 0), COALESCE(f.failure, 0),
 		       COALESCE(c.run_count, 0), COALESCE(c.failed_count, 0)
 		  FROM days d
 		  LEFT JOIN submissions s ON s.day = d.day
 		  LEFT JOIN promoted p ON p.day = d.day
+		  LEFT JOIN team_knowledge tk ON tk.day = d.day
 		  LEFT JOIN lifecycle l ON l.day = d.day
 		  LEFT JOIN feedback f ON f.day = d.day
 		  LEFT JOIN curation c ON c.day = d.day
@@ -245,7 +254,7 @@ func (h *Handler) loadEvolutionDailyMetrics(r *http.Request, workspaceID string,
 	defer rows.Close()
 	for rows.Next() {
 		var item EvolutionDailyMetricResponse
-		if err := rows.Scan(&item.Date, &item.MemoryCandidates, &item.SkillCandidates, &item.PromotedMemory, &item.PromotedSkill, &item.ArchivedOrDeprecated, &item.FeedbackInjected, &item.FeedbackUsed, &item.FeedbackSuccess, &item.FeedbackFailure, &item.MemoryCurationRunCount, &item.MemoryCurationFailed); err != nil {
+		if err := rows.Scan(&item.Date, &item.MemoryCandidates, &item.SkillCandidates, &item.PromotedMemory, &item.PromotedSkill, &item.TeamKnowledgeItems, &item.ArchivedOrDeprecated, &item.FeedbackInjected, &item.FeedbackUsed, &item.FeedbackSuccess, &item.FeedbackFailure, &item.MemoryCurationRunCount, &item.MemoryCurationFailed); err != nil {
 			return err
 		}
 		resp.DailyMetrics = append(resp.DailyMetrics, item)

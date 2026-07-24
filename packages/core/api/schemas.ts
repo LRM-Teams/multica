@@ -388,6 +388,7 @@ const EvolutionDailyMetricSchema = z.object({
   skill_candidates: z.number().default(0),
   promoted_memory: z.number().default(0),
   promoted_skill: z.number().default(0),
+  team_knowledge_items: z.number().default(0),
   archived_or_deprecated: z.number().default(0),
   feedback_injected: z.number().default(0),
   feedback_used: z.number().default(0),

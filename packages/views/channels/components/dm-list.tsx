@@ -62,6 +62,7 @@ import {
   resolveChannelAuthorDisplayName,
   type MentionPreviewResolver,
 } from "./message-preview";
+import { formatSystemEventPreviewText } from "./channel-system-event-preview-text";
 import {
   ConversationUnreadAffordance,
   isConversationMuted,
@@ -444,20 +445,27 @@ export function DmConversationRow({
 }) {
   const { t } = useT("channels");
   const last = dm.last_message;
-  const preview = last
-    ? formatChannelMessagePreview(
-        resolveChannelAuthorDisplayName(last, { members, agents }),
-        last.content,
-        resolveMentionPreview,
-        last.parts,
-        {
-          formatVoice: (seconds) =>
-            seconds === null
-              ? t(($) => $.message.voice_preview)
-              : t(($) => $.message.voice_preview_duration, { seconds }),
-        },
-      )
-    : "";
+  // System rows (issue/member/project/reminder events) carry their own
+  // localized narrative from the same structured facts the full in-channel
+  // row renders (#634) — try that first so the preview never disagrees with
+  // the message by falling back to the BE's raw English fallback `content`.
+  const systemPreview = last ? formatSystemEventPreviewText(last, t, resolveMentionPreview) : null;
+  const preview =
+    systemPreview ??
+    (last
+      ? formatChannelMessagePreview(
+          resolveChannelAuthorDisplayName(last, { members, agents }),
+          last.content,
+          resolveMentionPreview,
+          last.parts,
+          {
+            formatVoice: (seconds) =>
+              seconds === null
+                ? t(($) => $.message.voice_preview)
+                : t(($) => $.message.voice_preview_duration, { seconds }),
+          },
+        )
+      : "");
   // Surface mentions of the viewer at full foreground weight (no bold) so an
   // @-mention reads as more salient than ordinary preview text.
   const mentionsUser =

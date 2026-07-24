@@ -155,6 +155,17 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	summary := agentHealthSummary(agent, rt, events, now)
+	if operation, err := getActiveAgentLifecycleOperation(r.Context(), h.DB, agent.ID); err != nil {
+		slog.Warn("agent health: load lifecycle overlay failed", "agent_id", agentID, "error", err)
+	} else if operation != nil {
+		summary.State = "restarting"
+		summary.ReasonCode = "agent_lifecycle_" + string(operation.ActionKind)
+		if operation.StartedAt != nil {
+			summary.StateSince = operation.StartedAt
+		} else {
+			summary.StateSince = &operation.CreatedAt
+		}
+	}
 	events = prependCurrentAgentHealthEvent(agent, rt, summary, events)
 	writeJSON(w, http.StatusOK, AgentHealthResponse{
 		Summary: summary,

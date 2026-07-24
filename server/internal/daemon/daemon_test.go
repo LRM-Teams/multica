@@ -40,6 +40,9 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
 	}
+	if containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
+		t.Fatalf("D6-dormant daemon must not advertise %q: %#v", protocol.DaemonCapabilityAgentLifecycleActions, capable)
+	}
 }
 
 func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T) {

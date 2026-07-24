@@ -91,7 +91,6 @@ import type {
   Channel,
   ChannelActiveTask,
   ChannelMember,
-  ChannelMemberBrief,
   ChannelMessage,
   ChannelMessageSearchResult,
   ChannelTypingPayload,

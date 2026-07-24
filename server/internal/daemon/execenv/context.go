@@ -440,6 +440,11 @@ func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *si
 		if err := recordMkdirAll(dir, 0o755, manifest); err != nil {
 			return err
 		}
+		// Marker lets a later Prepare reclaim this directory instead of
+		// bumping to -multica-N (local_directory tasks skip Reuse).
+		if err := recordWriteFile(filepath.Join(dir, managedSkillMarker), []byte(skill.Name+"\n"), 0o644, manifest); err != nil {
+			return err
+		}
 
 		// ensureSkillFrontmatter synthesises a `name:` value when the
 		// upstream skill is missing one. Use the chosen slug (which
@@ -476,6 +481,7 @@ func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *si
 				return err
 			}
 		}
+		reclaimManagedSkillCollisionSiblings(skillsDir, baseSlug, slug)
 	}
 
 	return nil

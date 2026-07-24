@@ -171,6 +171,84 @@ func TestDeleteRuntimesByDaemon_RefusesActiveTasks(t *testing.T) {
 	assertRuntimeExists(t, ctx, rtID)
 }
 
+func TestDeleteRuntimesByDaemon_DeletesRuntimeWithTerminalInboxHistory(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-inbox-history-" + uuid.NewString()
+
+	rtID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+	agentID := createCascadeFixtureAgent(t, ctx, rtID, "Bulk Inbox History Agent")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET archived_at = now(), archived_by = $2 WHERE id = $1
+	`, agentID, testUserID); err != nil {
+		t.Fatalf("archive agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, reason, status, priority,
+			terminal_outcome, retryable, terminal_at, acked_at
+		)
+		VALUES ($1, $2, $3, 'mention', 'acked', 0, 'replied', false, now(), now())
+	`, testWorkspaceID, agentID, rtID); err != nil {
+		t.Fatalf("insert terminal inbox event: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertRuntimeGone(t, ctx, rtID)
+}
+
+func TestDeleteRuntimesByDaemon_RefusesActiveInboxWork(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-inbox-active-" + uuid.NewString()
+
+	rtID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+	agentID := createCascadeFixtureAgent(t, ctx, rtID, "Bulk Inbox Active Agent")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET archived_at = now(), archived_by = $2 WHERE id = $1
+	`, agentID, testUserID); err != nil {
+		t.Fatalf("archive agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (workspace_id, agent_id, runtime_id, reason, status, priority)
+		VALUES ($1, $2, $3, 'mention', 'pending', 0)
+	`, testWorkspaceID, agentID, rtID); err != nil {
+		t.Fatalf("insert active inbox event: %v", err)
+	}
+	defer testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE runtime_id = $1`, rtID)
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Code            string `json:"code"`
+		ActiveTaskCount int64  `json:"active_task_count"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Code != "computer_has_active_tasks" || body.ActiveTaskCount < 1 {
+		t.Fatalf("expected computer_has_active_tasks with count>=1, got %+v", body)
+	}
+	assertRuntimeExists(t, ctx, rtID)
+}
+
 func TestDeleteRuntimesByDaemon_RuntimeModeFilter(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

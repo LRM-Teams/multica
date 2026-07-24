@@ -114,7 +114,7 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 	for i, rt := range runtimes {
 		runtimeIDs[i] = rt.ID
 	}
-	activeTaskCount, err := h.Queries.CountActiveTasksByRuntimeIDs(r.Context(), runtimeIDs)
+	activeTaskCount, err := h.countActiveRuntimeWork(r.Context(), runtimeIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check runtime task dependencies")
 		return
@@ -249,5 +249,33 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 		return err
 	}
 
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_inbox_event
+		   SET runtime_id = NULL, updated_at = now()
+		 WHERE runtime_id = $1
+		   AND status NOT IN ('pending', 'draining', 'failed')
+	`, runtimeID); err != nil {
+		return err
+	}
+
 	return qtx.DeleteAgentRuntime(ctx, runtimeID)
+}
+
+func (h *Handler) countActiveRuntimeWork(ctx context.Context, runtimeIDs []pgtype.UUID) (int64, error) {
+	queuedTasks, err := h.Queries.CountActiveTasksByRuntimeIDs(ctx, runtimeIDs)
+	if err != nil {
+		return 0, err
+	}
+
+	var inboxEvents int64
+	if err := h.DB.QueryRow(ctx, `
+		SELECT count(*)::bigint
+		  FROM agent_inbox_event
+		 WHERE runtime_id = ANY($1::uuid[])
+		   AND status IN ('pending', 'draining', 'failed')
+	`, runtimeIDs).Scan(&inboxEvents); err != nil {
+		return 0, err
+	}
+
+	return queuedTasks + inboxEvents, nil
 }

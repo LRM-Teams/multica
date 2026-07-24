@@ -375,11 +375,7 @@ export function ManualCreatePanel({
       parentIssue?.identifier ?? (data?.parent_issue_identifier as string | undefined);
     onSwitchMode?.({
       prompt,
-      ...(assigneeId && assigneeType === "agent"
-        ? { agent_id: assigneeId }
-        : assigneeId && assigneeType === "squad"
-          ? { squad_id: assigneeId }
-          : {}),
+      ...(assigneeId && assigneeType === "agent" ? { agent_id: assigneeId } : {}),
       ...(projectId ? { project_id: projectId } : {}),
       ...(parentIssueId ? { parent_issue_id: parentIssueId } : {}),
       ...(carryParentIdentifier ? { parent_issue_identifier: carryParentIdentifier } : {}),

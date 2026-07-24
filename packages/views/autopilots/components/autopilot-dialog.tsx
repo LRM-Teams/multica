@@ -39,7 +39,7 @@ import { TimeInput } from "@multica/ui/components/ui/time-input";
 import { TimezonePicker } from "./pickers/timezone-picker";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
   useCreateAutopilot,
@@ -266,7 +266,6 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   const workspaceName = useCurrentWorkspace()?.name;
   const wsId = useWorkspaceId();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -335,13 +334,9 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
 
   const selectedAssignee = useMemo(() => {
     if (!assigneeId) return null;
-    if (assigneeType === "squad") {
-      const squad = squads.find((s) => s.id === assigneeId);
-      return squad ? { name: squad.name, description: squad.description } : null;
-    }
     const agent = agents.find((a) => a.id === assigneeId);
     return agent ? { name: agent.name, description: agent.description } : null;
-  }, [agents, squads, assigneeId, assigneeType]);
+  }, [agents, assigneeId, assigneeType]);
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projects, projectId],

@@ -343,8 +343,7 @@
     "filter_placeholder": "Filter agents or squads...",
     "select_agent": "Select agent",
     "select_assignee": "Select agent or squad",
-    "agents_group": "Agents",
-    "squads_group": "Squads"
+    "agents_group": "Agents"
   },
   "timezone_picker": {
     "search_placeholder": "Search timezone..."

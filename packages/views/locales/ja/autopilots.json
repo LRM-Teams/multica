@@ -342,8 +342,7 @@
     "filter_placeholder": "エージェントまたはスクワッドを絞り込み...",
     "select_agent": "エージェントを選択",
     "select_assignee": "エージェントまたはスクワッドを選択",
-    "agents_group": "エージェント",
-    "squads_group": "スクワッド"
+    "agents_group": "エージェント"
   },
   "timezone_picker": {
     "search_placeholder": "タイムゾーンを検索..."

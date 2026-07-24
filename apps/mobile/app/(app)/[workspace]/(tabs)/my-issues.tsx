@@ -50,7 +50,7 @@ import { THEME } from "@/lib/theme";
 // full "Agents and Squads" label (~135pt) blows past safe limits and breaks
 // under Dynamic Type. Semantics unchanged: same backend predicate
 // (`involves_user_id`, MUL-2397) covers owned agents + related squads; the
-// empty state copy still says "agents or squads".
+// empty state copy still says "agents".
 const SCOPES: { value: MyIssuesScope; label: string }[] = [
   { value: "assigned", label: "Assigned" },
   { value: "created", label: "Created" },
@@ -365,7 +365,7 @@ function emptyMessageForScope(scope: MyIssuesScope): string {
     case "created":
       return "You haven't created any issues.";
     case "agents":
-      return "No issues assigned to your agents or squads yet.";
+      return "No issues assigned to your agents yet.";
   }
 }
 

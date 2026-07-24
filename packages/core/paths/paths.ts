@@ -39,8 +39,6 @@ function workspaceScoped(slug: string) {
     // Recent activity can scroll instead of being capped by an 80dvh drawer.
     actorProfile: (memberType: "agent" | "user", memberId: string) =>
       `${ws}/profile/${encode(memberType)}/${encode(memberId)}`,
-    squads: () => `${ws}/squads`,
-    squadDetail: (id: string) => `${ws}/squads/${encode(id)}`,
     inbox: () => `${ws}/inbox`,
     myIssues: () => `${ws}/my-issues`,
     runtimes: () => `${ws}/runtimes`,

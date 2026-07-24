@@ -4,26 +4,39 @@
 # Cube's default cube-proxy-iptables-init.sh only matches iif cube-dev, but
 # microVM sandboxes egress via per-sandbox tap devices.
 #
-# For db_bridge (:9100), tap TPROXY alone is not enough: the from_cube BPF
-# program on each tap SNATs allowOut traffic to the host LAN IP and hairpins
+# For db_bridge (:9100/:9101/:9102), tap TPROXY alone is not enough: the from_cube
+# BPF program on each tap SNATs allowOut traffic to the host LAN IP and hairpins
 # it out the node uplink (eno1np0) before iptables PREROUTING on the tap runs.
 # Docker's DOCKER DNAT then forwards to the published container IP and the
-# kernel RSTs the SYN-ACK. We DNAT hairpinned :9100 on the uplink directly to
-# 127.0.0.1:9100 (before the DOCKER chain) so the stub answers correctly.
+# kernel RSTs the SYN-ACK. We DNAT hairpinned bridge ports on the uplink
+# directly to 127.0.0.1:<port> (before the DOCKER chain) so the stub answers.
 #
 # Use the host LAN IP in allowOut (e.g. 10.110.158.143/32), not 192.168.0.1 —
-# hairpin to cube-dev is still broken for :9100.
+# hairpin to cube-dev is still broken for these bridge ports.
 #
 # Usage:
 #   sudo scripts/cube-tap-tproxy-init.sh up
 #   sudo scripts/cube-tap-tproxy-init.sh down
 #   sudo scripts/cube-tap-tproxy-init.sh status
+#
+# Override bridge ports (space- or comma-separated):
+#   CUBE_TPROXY_BRIDGE_PORTS="9100 9101 9102" sudo scripts/cube-tap-tproxy-init.sh up
 set -euo pipefail
 
 TPROXY_ON_IP="${CUBE_TPROXY_ON_IP:-192.168.0.1}"
 TPROXY_PORT_HTTP=8080
 TPROXY_PORT_HTTPS=8443
-TPROXY_PORT_BRIDGE="${CUBE_TPROXY_BRIDGE_PORT:-9100}"
+# Keep CUBE_TPROXY_BRIDGE_PORT as a single-port override for older callers.
+if [[ -n "${CUBE_TPROXY_BRIDGE_PORTS:-}" ]]; then
+  TPROXY_BRIDGE_PORTS_RAW="${CUBE_TPROXY_BRIDGE_PORTS}"
+elif [[ -n "${CUBE_TPROXY_BRIDGE_PORT:-}" ]]; then
+  TPROXY_BRIDGE_PORTS_RAW="${CUBE_TPROXY_BRIDGE_PORT}"
+else
+  TPROXY_BRIDGE_PORTS_RAW="9100 9101 9102"
+fi
+TPROXY_BRIDGE_PORTS_RAW="${TPROXY_BRIDGE_PORTS_RAW//,/ }"
+# shellcheck disable=SC2206
+TPROXY_BRIDGE_PORTS=(${TPROXY_BRIDGE_PORTS_RAW})
 BRIDGE_ON_IP="${CUBE_TPROXY_BRIDGE_ON_IP:-127.0.0.1}"
 EGRESS_IFACE="${CUBE_EGRESS_IFACE:-eno1np0}"
 HAIRPIN_CHAIN="CUBE_TAP_BRIDGE_HAIRPIN"
@@ -55,17 +68,20 @@ host_lan_ips() {
 }
 
 add_hairpin_bridge_rules() {
-  local ip
+  local ip port
   while IFS= read -r ip; do
     [[ -n "${ip}" ]] || continue
-    if ! iptables -t nat -C "${HAIRPIN_CHAIN}" -i "${EGRESS_IFACE}" -p tcp \
-         -d "${ip}" --dport "${TPROXY_PORT_BRIDGE}" \
-         -j DNAT --to-destination "${BRIDGE_ON_IP}:${TPROXY_PORT_BRIDGE}" 2>/dev/null; then
-      iptables -t nat -A "${HAIRPIN_CHAIN}" -i "${EGRESS_IFACE}" -p tcp \
-        -d "${ip}" --dport "${TPROXY_PORT_BRIDGE}" \
-        -j DNAT --to-destination "${BRIDGE_ON_IP}:${TPROXY_PORT_BRIDGE}"
-      log "hairpin DNAT ${EGRESS_IFACE} ${ip}:${TPROXY_PORT_BRIDGE} -> ${BRIDGE_ON_IP}:${TPROXY_PORT_BRIDGE}"
-    fi
+    for port in "${TPROXY_BRIDGE_PORTS[@]}"; do
+      [[ -n "${port}" ]] || continue
+      if ! iptables -t nat -C "${HAIRPIN_CHAIN}" -i "${EGRESS_IFACE}" -p tcp \
+           -d "${ip}" --dport "${port}" \
+           -j DNAT --to-destination "${BRIDGE_ON_IP}:${port}" 2>/dev/null; then
+        iptables -t nat -A "${HAIRPIN_CHAIN}" -i "${EGRESS_IFACE}" -p tcp \
+          -d "${ip}" --dport "${port}" \
+          -j DNAT --to-destination "${BRIDGE_ON_IP}:${port}"
+        log "hairpin DNAT ${EGRESS_IFACE} ${ip}:${port} -> ${BRIDGE_ON_IP}:${port}"
+      fi
+    done
   done < <(host_lan_ips)
 }
 
@@ -132,6 +148,7 @@ rule_exists() {
 
 add_tap_rules() {
   local iface="$1"
+  local port
   ensure_base_chain
 
   if ! iptables -t mangle -C "${CHAIN}" -i "${iface}" -p tcp --dport 80 \
@@ -144,13 +161,17 @@ add_tap_rules() {
     iptables -t mangle -A "${CHAIN}" -i "${iface}" -p tcp --dport 443 \
       -j TPROXY --on-ip "${TPROXY_ON_IP}" --on-port "${TPROXY_PORT_HTTPS}"
   fi
-  if ! iptables -t mangle -C "${CHAIN}" -i "${iface}" -p tcp --dport "${TPROXY_PORT_BRIDGE}" \
-       -j TPROXY --on-ip "${BRIDGE_ON_IP}" --on-port "${TPROXY_PORT_BRIDGE}" 2>/dev/null; then
-    iptables -t mangle -A "${CHAIN}" -i "${iface}" -p tcp --dport "${TPROXY_PORT_BRIDGE}" \
-      -j TPROXY --on-ip "${BRIDGE_ON_IP}" --on-port "${TPROXY_PORT_BRIDGE}"
-  fi
+  for port in "${TPROXY_BRIDGE_PORTS[@]}"; do
+    [[ -n "${port}" ]] || continue
+    if ! iptables -t mangle -C "${CHAIN}" -i "${iface}" -p tcp --dport "${port}" \
+         -j TPROXY --on-ip "${BRIDGE_ON_IP}" --on-port "${port}" 2>/dev/null; then
+      iptables -t mangle -A "${CHAIN}" -i "${iface}" -p tcp --dport "${port}" \
+        -j TPROXY --on-ip "${BRIDGE_ON_IP}" --on-port "${port}"
+    fi
+  done
 
-  for port in 80 443 "${TPROXY_PORT_BRIDGE}"; do
+  for port in 80 443 "${TPROXY_BRIDGE_PORTS[@]}"; do
+    [[ -n "${port}" ]] || continue
     if ! rule_exists "${iface}" "${port}"; then
       ip rule add iif "${iface}" ipproto tcp dport "${port}" table "${ROUTE_TABLE}" 2>/dev/null \
         || rule_exists "${iface}" "${port}" \
@@ -161,24 +182,38 @@ add_tap_rules() {
 
 remove_tap_rules() {
   local iface="$1"
-  for port in 80 443 "${TPROXY_PORT_BRIDGE}"; do
+  local port
+  for port in 80 443 "${TPROXY_BRIDGE_PORTS[@]}"; do
+    [[ -n "${port}" ]] || continue
     while rule_exists "${iface}" "${port}"; do
       ip rule del iif "${iface}" ipproto tcp dport "${port}" table "${ROUTE_TABLE}" || break
     done
   done
-  for spec in \
-    "-i ${iface} -p tcp --dport 80 -j TPROXY --on-ip ${TPROXY_ON_IP} --on-port ${TPROXY_PORT_HTTP}" \
-    "-i ${iface} -p tcp --dport 443 -j TPROXY --on-ip ${TPROXY_ON_IP} --on-port ${TPROXY_PORT_HTTPS}" \
-    "-i ${iface} -p tcp --dport ${TPROXY_PORT_BRIDGE} -j TPROXY --on-ip ${BRIDGE_ON_IP} --on-port ${TPROXY_PORT_BRIDGE}"
-  do
-    while iptables -t mangle -C "${CHAIN}" ${spec} 2>/dev/null; do
-      iptables -t mangle -D "${CHAIN}" ${spec} || break
+  for port in 80 443; do
+    local on_ip on_port
+    if [[ "${port}" == "80" ]]; then
+      on_ip="${TPROXY_ON_IP}"; on_port="${TPROXY_PORT_HTTP}"
+    else
+      on_ip="${TPROXY_ON_IP}"; on_port="${TPROXY_PORT_HTTPS}"
+    fi
+    while iptables -t mangle -C "${CHAIN}" -i "${iface}" -p tcp --dport "${port}" \
+          -j TPROXY --on-ip "${on_ip}" --on-port "${on_port}" 2>/dev/null; do
+      iptables -t mangle -D "${CHAIN}" -i "${iface}" -p tcp --dport "${port}" \
+        -j TPROXY --on-ip "${on_ip}" --on-port "${on_port}" || break
+    done
+  done
+  for port in "${TPROXY_BRIDGE_PORTS[@]}"; do
+    [[ -n "${port}" ]] || continue
+    while iptables -t mangle -C "${CHAIN}" -i "${iface}" -p tcp --dport "${port}" \
+          -j TPROXY --on-ip "${BRIDGE_ON_IP}" --on-port "${port}" 2>/dev/null; do
+      iptables -t mangle -D "${CHAIN}" -i "${iface}" -p tcp --dport "${port}" \
+        -j TPROXY --on-ip "${BRIDGE_ON_IP}" --on-port "${port}" || break
     done
   done
 }
 
 apply_sysctls() {
-  # Hairpin DNAT rewrites allowOut :9100 to 127.0.0.1:9100 on the uplink.
+  # Hairpin DNAT rewrites allowOut bridge ports to 127.0.0.1:<port> on the uplink.
   # Interface-scoped route_localnet must be 1 on the egress NIC; all.* alone
   # does not enable local delivery for packets arriving on eno1np0.
   sysctl -wq net.ipv4.conf.all.rp_filter=0 \
@@ -198,6 +233,8 @@ apply_sysctls() {
 show_status() {
   log "=== host LAN IPs (hairpin bridge) ==="
   host_lan_ips | sed 's/^/  /' || log "  (none)"
+  log "=== bridge ports ==="
+  printf '  %s\n' "${TPROXY_BRIDGE_PORTS[*]}"
   log "=== route_localnet (needed for hairpin -> 127.0.0.1) ==="
   sysctl -n net.ipv4.conf.all.route_localnet \
             "net.ipv4.conf.${EGRESS_IFACE//.//}.route_localnet" 2>/dev/null \
@@ -228,7 +265,7 @@ main() {
         log "installing tap TPROXY rules on ${iface}"
         add_tap_rules "${iface}"
       done
-      log "tap TPROXY + hairpin bridge rules installed"
+      log "tap TPROXY + hairpin bridge rules installed for ports: ${TPROXY_BRIDGE_PORTS[*]}"
       show_status
       ;;
     down)

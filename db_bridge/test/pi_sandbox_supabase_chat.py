@@ -22,12 +22,17 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import textwrap
+import threading
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 # ---------------------------------------------------------------------------
@@ -37,7 +42,7 @@ from urllib.parse import quote
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 # Cube 沙箱 ID（留空则自动选最后一个 running 沙箱）
-SANDBOX_ID = "abdc892fd65e467ca7afc745abebf709"
+SANDBOX_ID = ""
 
 # 发给 Pi 的用户消息
 USER_MESSAGE = "你好，请用一句话介绍你自己。"
@@ -54,10 +59,19 @@ BRIDGE_USER_ID = "ae36de93-5969-4629-866d-7a5ffe82f152"
 # 是否验证 Supabase 落库，并额外做 areal bridge HTTP 探测
 VERIFY_SUPABASE_BRIDGE = True
 
-# areal bridge 配置
-AREAL_BASE_URL = "http://10.110.158.143:9100/v1"
+# areal bridge 配置。当前 loopback stub 服务 /chat/completions（不带 /v1）。
+AREAL_BASE_URL = "http://10.110.158.143:9100"
 # HTTP 探测用的完整 model 名（需 areal/ 前缀）
 AREAL_MODEL = "areal/qwen/qwen3_5-9b"
+
+# Pi CLI 会固定发 stream=true；loopback stub 为了保持 buffered path 明确会拒绝
+# streaming。默认启动一个本机轻量 shim：沙箱中的 Pi 访问 shim 的 /v1/chat/completions，
+# shim 将请求转成非 streaming 调 loopback stub，再把结果包装回 SSE 给 Pi。
+USE_PI_STREAM_SHIM = True
+PI_STREAM_SHIM_HOST = "0.0.0.0"
+PI_STREAM_SHIM_PORT = 9210
+PI_AREAL_BASE_URL = ""  # 留空则使用 http://<HOST_LAN_IP>:<PI_STREAM_SHIM_PORT>/v1
+BRIDGE_STUB_BASE_URL = "http://127.0.0.1:9100"
 
 # Cube 代理
 CUBE_PROXY_HTTP = "http://127.0.0.1"
@@ -111,6 +125,157 @@ TEAM_MODEL = _DOTENV.get("TEAM_MODEL", "gpt-5.5")
 CUBELET_STATE_DIR = Path("/data/cubelet/network-agent/state")
 
 
+class _ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+class _PiStreamShim:
+    """Wrap the non-streaming loopback stub as an OpenAI-compatible SSE endpoint."""
+
+    def __init__(self, *, host: str, port: int, upstream_base: str) -> None:
+        self.host = host
+        self.port = port
+        self.upstream_base = upstream_base.rstrip("/")
+        self._server: _ReusableThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> _PiStreamShim:
+        upstream_base = self.upstream_base
+
+        class Handler(BaseHTTPRequestHandler):
+            server_version = "pi-stream-shim/0.1"
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                return
+
+            def _send_json(self, status: int, payload: Any) -> None:
+                raw = json.dumps(payload, ensure_ascii=False).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def _send_sse(self, payload: dict[str, Any]) -> None:
+                choice = (payload.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
+                content = message.get("content") or ""
+                model = payload.get("model") or AREAL_MODEL
+                chunks = [
+                    {
+                        "id": payload.get("id", "chatcmpl-shim"),
+                        "object": "chat.completion.chunk",
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": ""},
+                                "finish_reason": None,
+                            }
+                        ],
+                    },
+                    {
+                        "id": payload.get("id", "chatcmpl-shim"),
+                        "object": "chat.completion.chunk",
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": content},
+                                "finish_reason": None,
+                            }
+                        ],
+                    },
+                    {
+                        "id": payload.get("id", "chatcmpl-shim"),
+                        "object": "chat.completion.chunk",
+                        "model": model,
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": "stop"}
+                        ],
+                    },
+                ]
+                body = b"".join(
+                    f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+                    for chunk in chunks
+                ) + b"data: [DONE]\n\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:
+                if self.path in {"/healthz", "/health"}:
+                    self._send_json(200, {"status": "ok", "service": "pi-stream-shim"})
+                    return
+                self._send_json(404, {"detail": "not found"})
+
+            def do_POST(self) -> None:
+                path = self.path.split("?", 1)[0]
+                if path not in {"/v1/chat/completions", "/chat/completions"}:
+                    self._send_json(404, {"detail": f"unknown path {path}"})
+                    return
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    payload = json.loads(raw.decode() or "{}")
+                except json.JSONDecodeError:
+                    self._send_json(400, {"detail": "invalid JSON body"})
+                    return
+                want_stream = bool(payload.get("stream"))
+                payload["stream"] = False
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": self.headers.get("Authorization", "Bearer bridge"),
+                    "X-Bridge-User-Id": self.headers.get(
+                        "X-Bridge-User-Id", BRIDGE_USER_ID
+                    ),
+                }
+                req = urllib.request.Request(
+                    upstream_base + "/chat/completions",
+                    data=json.dumps(payload).encode(),
+                    headers=headers,
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=180) as resp:
+                        upstream = json.loads(resp.read().decode())
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode(errors="replace")
+                    self._send_json(exc.code, {"detail": body or exc.reason})
+                    return
+                except Exception as exc:  # noqa: BLE001 - keep probe error visible.
+                    self._send_json(502, {"detail": f"bridge shim upstream failed: {exc}"})
+                    return
+                if want_stream:
+                    self._send_sse(upstream)
+                else:
+                    self._send_json(200, upstream)
+
+        self._server = _ReusableThreadingHTTPServer((self.host, self.port), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+
+def _resolve_pi_areal_base_url() -> str:
+    if PI_AREAL_BASE_URL.strip():
+        return PI_AREAL_BASE_URL.strip().rstrip("/")
+    if USE_PI_STREAM_SHIM:
+        return f"http://{HOST_LAN_IP}:{PI_STREAM_SHIM_PORT}/v1"
+    return AREAL_BASE_URL.rstrip("/")
+
+
 def _list_sandboxes() -> list[dict]:
     req = urllib.request.Request(f"{CUBE_API_URL.rstrip('/')}/sandboxes", method="GET")
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -124,6 +289,8 @@ def _pick_sandbox_id() -> str:
     running = [s for s in sandboxes if s.get("state") == "running"]
     if not running:
         raise SystemExit("没有 running 状态的 Cube 沙箱，请填写 SANDBOX_ID")
+    # Cube does not guarantee list order; pick the newest runnable sandbox.
+    running.sort(key=lambda s: s.get("startedAt") or "")
     return running[-1]["sandboxID"]
 
 
@@ -171,7 +338,7 @@ def _sandbox_pi_chat_code(
     pi_home: str,
     pi_user: str,
 ) -> str:
-    return textwrap.dedent(
+    code = textwrap.dedent(
         f'''
         import json
         import os
@@ -211,29 +378,40 @@ def _sandbox_pi_chat_code(
             areal_model_ids = ["areal-distill", "areal-default"]
             if PI_AREAL_MODEL not in areal_model_ids:
                 areal_model_ids.append(PI_AREAL_MODEL)
-            models = {{
-                "providers": {{
-                    "openai": {{
-                        "baseUrl": TEAM_BASE_URL,
-                        "apiKey": TEAM_API_KEY,
+            providers = {{
+                "areal": {{
+                    "baseUrl": AREAL_BASE_URL,
+                    "api": "openai-completions",
+                    "apiKey": "bridge",
+                    "headers": {{
+                        "X-Bridge-User-Id": BRIDGE_USER_ID,
                     }},
-                    "areal": {{
-                        "baseUrl": AREAL_BASE_URL,
-                        "api": "openai-completions",
-                        "apiKey": "bridge",
-                        "headers": {{
-                            "X-Bridge-User-Id": BRIDGE_USER_ID,
-                        }},
-                        "compat": {{
-                            "supportsDeveloperRole": False,
-                            "supportsReasoningEffort": False,
-                        }},
-                        "models": [{{"id": mid}} for mid in areal_model_ids],
+                    "compat": {{
+                        "supportsDeveloperRole": False,
+                        "supportsReasoningEffort": False,
+                        "supportsUsageInStreaming": False,
                     }},
+                    "models": [{{"id": mid}} for mid in areal_model_ids],
                 }},
             }}
+            auth = {{
+                "areal": {{
+                    "type": "api_key",
+                    "key": "bridge",
+                }},
+            }}
+            if TEAM_API_KEY:
+                providers["openai"] = {{
+                    "baseUrl": TEAM_BASE_URL,
+                    "apiKey": TEAM_API_KEY,
+                }}
+                auth["openai"] = {{
+                    "type": "api_key",
+                    "key": TEAM_API_KEY,
+                }}
+            models = {{"providers": providers}}
             MODELS_FILE.write_text(json.dumps(models, indent=2) + "\\n", encoding="utf-8")
-            default_provider = PI_PROVIDER if PI_PROVIDER in ("openai", "areal") else "openai"
+            default_provider = PI_PROVIDER if PI_PROVIDER in ("openai", "areal") else "areal"
             default_model = PI_AREAL_MODEL if default_provider == "areal" else TEAM_MODEL
             settings = {{
                 "defaultProvider": default_provider,
@@ -241,16 +419,6 @@ def _sandbox_pi_chat_code(
                 "theme": "light",
             }}
             SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
-            auth = {{
-                "openai": {{
-                    "type": "api_key",
-                    "key": TEAM_API_KEY,
-                }},
-                "areal": {{
-                    "type": "api_key",
-                    "key": "bridge",
-                }},
-            }}
             AUTH_FILE.write_text(json.dumps(auth, indent=2) + "\\n", encoding="utf-8")
             os.chmod(AUTH_FILE, 0o600)
             for path in (AGENT_DIR, MODELS_FILE, SETTINGS_FILE, AUTH_FILE):
@@ -261,6 +429,17 @@ def _sandbox_pi_chat_code(
             env["HOME"] = PI_HOME
             env["PATH"] = "/usr/local/bin:/home/user/.npm-global/bin:" + env.get("PATH", "")
             return env
+
+        def _extract_text(content) -> str:
+            if isinstance(content, str):
+                return content
+            if not isinstance(content, list):
+                return ""
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+            return "".join(parts)
 
         def pi_chat() -> dict:
             if PI_PROVIDER == "areal":
@@ -274,6 +453,7 @@ def _sandbox_pi_chat_code(
                         "pi",
                         "--provider", provider,
                         "--model", model,
+                        "--mode", "json",
                         "-p", "--no-session",
                         USER_MESSAGE,
                     ],
@@ -287,19 +467,52 @@ def _sandbox_pi_chat_code(
             if proc.returncode != 0:
                 return {{
                     "ok": False,
-                    "error": (proc.stderr or proc.stdout or "pi failed")[:800],
+                    "error": (proc.stderr or proc.stdout or "pi failed")[:1200],
                     "rc": proc.returncode,
                     "provider": provider,
                     "model": model,
                 }}
-            reply = proc.stdout.strip()
+            reply = ""
+            error = ""
+            events = []
+            for line in proc.stdout.splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                events.append(event.get("type"))
+                msg = event.get("message") or {{}}
+                if msg.get("stopReason") == "error":
+                    error = msg.get("errorMessage") or "pi returned an error turn"
+                if event.get("type") in ("turn_end", "message_end") and msg.get("role") == "assistant":
+                    text = _extract_text(msg.get("content"))
+                    if text:
+                        reply = text
+                if event.get("type") == "agent_end":
+                    for msg in event.get("messages") or []:
+                        if msg.get("role") == "assistant":
+                            text = _extract_text(msg.get("content"))
+                            if text:
+                                reply = text
+                            if msg.get("stopReason") == "error":
+                                error = msg.get("errorMessage") or error
+            if error:
+                return {{
+                    "ok": False,
+                    "error": error,
+                    "provider": provider,
+                    "model": model,
+                    "events": events[-8:],
+                }}
             return {{
                 "ok": bool(reply),
                 "via": via,
                 "provider": provider,
                 "model": model,
                 "reply": reply,
+                "events": events[-8:],
             }}
+
 
         def areal_bridge_probe() -> dict | None:
             if not VERIFY_BRIDGE:
@@ -368,6 +581,7 @@ def _sandbox_pi_chat_code(
         }}, ensure_ascii=False))
         '''
     ).strip()
+    return code
 
 
 def _execute_in_sandbox(sandbox_id: str, code: str) -> tuple[str, dict | None]:
@@ -409,7 +623,6 @@ def _execute_in_sandbox(sandbox_id: str, code: str) -> tuple[str, dict | None]:
     if errors and not stdout:
         stdout = "\n".join(errors)
 
-    stdout = "".join(stdout_parts)
     result: dict | None = None
     for line in stdout.splitlines():
         if line.startswith("__RESULT__"):
@@ -448,6 +661,7 @@ def main() -> int:
     sandbox_id = _pick_sandbox_id()
     gateway_ip = _sandbox_gateway_ip(sandbox_id)
     bridge_bases = _bridge_base_candidates(AREAL_BASE_URL, gateway_ip)
+    pi_areal_base_url = _resolve_pi_areal_base_url()
     chat_model = PI_AREAL_MODEL if provider == "areal" else TEAM_MODEL
 
     print("=== Pi 沙箱对话测试 ===")
@@ -458,8 +672,14 @@ def main() -> int:
         print(f"TEAM_BASE_URL: {TEAM_BASE_URL}")
         print(f"TEAM_MODEL:    {TEAM_MODEL}")
     else:
-        print(f"AREAL_BASE_URL: {AREAL_BASE_URL}")
-        print(f"PI_AREAL_MODEL: {PI_AREAL_MODEL}")
+        print(f"AREAL_BASE_URL:    {AREAL_BASE_URL}")
+        print(f"PI_AREAL_BASE_URL: {pi_areal_base_url}")
+        print(f"PI_AREAL_MODEL:    {PI_AREAL_MODEL}")
+        if USE_PI_STREAM_SHIM:
+            print(
+                f"Pi stream shim:  {PI_STREAM_SHIM_HOST}:{PI_STREAM_SHIM_PORT} "
+                f"-> {BRIDGE_STUB_BASE_URL}"
+            )
     print(f"用户消息:       {USER_MESSAGE}")
     print(f"验证 Supabase:  {VERIFY_SUPABASE_BRIDGE}")
     if VERIFY_SUPABASE_BRIDGE:
@@ -476,9 +696,9 @@ def main() -> int:
         pi_areal_model=PI_AREAL_MODEL,
         user_message=USER_MESSAGE,
         bridge_user_id=BRIDGE_USER_ID,
-        areal_base_url=AREAL_BASE_URL.replace("db_bridge_stub", HOST_LAN_IP)
-        if "db_bridge_stub" in AREAL_BASE_URL
-        else AREAL_BASE_URL,
+        areal_base_url=pi_areal_base_url.replace("db_bridge_stub", HOST_LAN_IP)
+        if "db_bridge_stub" in pi_areal_base_url
+        else pi_areal_base_url,
         verify_bridge=VERIFY_SUPABASE_BRIDGE,
         bridge_bases=bridge_bases,
         areal_model=AREAL_MODEL,
@@ -487,7 +707,16 @@ def main() -> int:
     )
 
     print("[1/2] 写入 models.json 并发起 Pi 对话...")
-    stdout, chat_result = _execute_in_sandbox(sandbox_id, code)
+    if provider == "areal" and USE_PI_STREAM_SHIM:
+        print(f"  启动 Pi stream shim: http://{HOST_LAN_IP}:{PI_STREAM_SHIM_PORT}/v1")
+        with _PiStreamShim(
+            host=PI_STREAM_SHIM_HOST,
+            port=PI_STREAM_SHIM_PORT,
+            upstream_base=BRIDGE_STUB_BASE_URL,
+        ):
+            stdout, chat_result = _execute_in_sandbox(sandbox_id, code)
+    else:
+        stdout, chat_result = _execute_in_sandbox(sandbox_id, code)
     print(stdout.replace("__RESULT__", "").strip())
     print()
 

@@ -78,12 +78,10 @@ export function ChatInput({
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
-  const storeActiveSessionId = useChatStore((s) => s.activeSessionId);
-  const storeSelectedAgentId = useChatStore((s) => s.selectedAgentId);
-  // Prefer explicit props from ChatWindow so DM-bubble mode (agent-scoped
-  // session state) does not bleed drafts into the global desktop chat store.
-  const activeSessionId = sessionId !== undefined ? sessionId : storeActiveSessionId;
-  const selectedAgentId = agentId !== undefined ? agentId : storeSelectedAgentId;
+  // ChatWindow always passes sessionId/agentId. Prefer those for draft
+  // scoping so DM-bubble mode never bleeds into the global desktop chat store.
+  const activeSessionId = sessionId ?? null;
+  const selectedAgentId = agentId ?? null;
   // Two keys with deliberately different concerns:
   //
   // `draftKey` — zustand storage key. Scopes the in-progress draft per

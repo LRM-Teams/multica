@@ -164,6 +164,7 @@ function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}
         onSend={onSend}
         onUploadFile={onUploadFile}
         agentName={props.agentName ?? "Multica"}
+        agentId={props.agentId ?? "agent-1"}
         wsId={props.wsId ?? "ws-1"}
       />
     </I18nProvider>,

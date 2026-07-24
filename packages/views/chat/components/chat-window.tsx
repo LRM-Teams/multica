@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { Minus, Maximize2, Minimize2, ChevronDown, Plus, Check, Trash2, Pencil, Loader2, Square, Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
@@ -194,13 +193,11 @@ function replaceOptimisticChatMessageId(
   );
 }
 
-export function ChatWindow({ lockedAgentId, layout }: ChatWindowProps = {}) {
+export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowProps = {}) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
-  const isMobile = useIsMobile();
-  const isDmBubble = !!lockedAgentId;
-  const effectiveLayout: "floating" | "fullscreen" =
-    layout ?? (isDmBubble && isMobile ? "fullscreen" : "floating");
+  const isDmBubble = Boolean(lockedAgentId);
+  const effectiveLayout: "floating" | "fullscreen" = layout;
 
   const globalIsOpen = useChatStore((s) => s.isOpen);
   const globalActiveSessionId = useChatStore((s) => s.activeSessionId);
@@ -315,14 +312,14 @@ export function ChatWindow({ lockedAgentId, layout }: ChatWindowProps = {}) {
     (a) => !a.archived_at && canAssignAgent(a, user?.id, memberRole),
   );
 
-  // Resolve selected agent: locked bubble agent → stored preference → first available
-  const activeAgent =
-    (lockedAgentId
-      ? agents.find((a) => a.id === lockedAgentId) ?? null
-      : null) ??
-    availableAgents.find((a) => a.id === selectedAgentId) ??
-    availableAgents[0] ??
-    null;
+  // Resolve selected agent:
+  // - DM bubble: locked to peer only (never fall back to another agent)
+  // - global: stored preference → first available
+  const activeAgent = lockedAgentId
+    ? (agents.find((a) => a.id === lockedAgentId) ?? null)
+    : (availableAgents.find((a) => a.id === selectedAgentId) ??
+      availableAgents[0] ??
+      null);
 
   // Three-state availability — "loading" stays neutral (no banner, no
   // disable) so the input doesn't flash a fake "no agent" state in the
@@ -874,7 +871,7 @@ export function ChatWindow({ lockedAgentId, layout }: ChatWindowProps = {}) {
       {/* Messages / skeleton / empty state */}
       {showSkeleton ? (
         <ChatMessageSkeleton />
-      ) : hasMessages ? (
+        ) : hasMessages ? (
         <ChatMessageList
           key={activeSessionId}
           sessionId={activeSessionId ?? ""}
@@ -890,7 +887,10 @@ export function ChatWindow({ lockedAgentId, layout }: ChatWindowProps = {}) {
         <EmptyState
           hasSessions={sessions.length > 0}
           agentName={activeAgent?.name}
-          onPickPrompt={(text) => handleSend(text)}
+          onPickPrompt={(text) => {
+            if (isSessionArchived || noAgent) return;
+            void handleSend(text);
+          }}
         />
       )}
 
@@ -1612,20 +1612,20 @@ function SessionDropdown({
           ) : (
             <>
               {activeSessions.length > 0 && (
-                <div role="group" aria-label={t(($) => $.window.history_group_active)}>
+                <section aria-label={t(($) => $.window.history_group_active)}>
                   <div className="px-1.5 py-1 text-xs font-medium text-muted-foreground">
                     {t(($) => $.window.history_group_active)}
                   </div>
                   {activeSessions.map(renderRow)}
-                </div>
+                </section>
               )}
               {archivedSessions.length > 0 && (
-                <div role="group" aria-label={t(($) => $.window.history_group_archived)}>
+                <section aria-label={t(($) => $.window.history_group_archived)}>
                   <div className="px-1.5 py-1 text-xs font-medium text-muted-foreground">
                     {t(($) => $.window.history_group_archived)}
                   </div>
                   {archivedSessions.map(renderRow)}
-                </div>
+                </section>
               )}
             </>
           )}

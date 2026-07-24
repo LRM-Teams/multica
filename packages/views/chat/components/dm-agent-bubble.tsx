@@ -7,6 +7,7 @@ import { useChatStore } from "@multica/core/chat";
 import { chatSessionsOptions, pendingChatTasksOptions } from "@multica/core/chat/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { createLogger } from "@multica/core/logger";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import {
   Tooltip,
   TooltipTrigger,
@@ -33,6 +34,7 @@ export function DmAgentBubble({
 }) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
+  const isMobile = useIsMobile();
   const openAgentId = useChatStore((s) => s.dmBubbleOpenAgentId);
   const toggleDmBubble = useChatStore((s) => s.toggleDmBubble);
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
@@ -63,13 +65,18 @@ export function DmAgentBubble({
 
   return (
     <>
-      <ChatWindow lockedAgentId={agentId} />
+      <ChatWindow
+        lockedAgentId={agentId}
+        layout={isMobile ? "fullscreen" : "floating"}
+      />
       {!isOpen && (
         <Tooltip>
           <TooltipTrigger
             onClick={handleClick}
             className={cn(
-              "absolute bottom-20 right-3 z-40 flex size-10 cursor-pointer items-center justify-center rounded-full ring-1 ring-foreground/10 bg-card text-muted-foreground shadow-sm transition-transform hover:scale-110 hover:text-accent-foreground active:scale-95 md:bottom-3",
+              // Sit above the DM composer send/attach cluster on both mobile
+              // and desktop (composer is ~56–72px tall at the bottom).
+              "absolute bottom-20 right-3 z-40 flex size-10 cursor-pointer items-center justify-center rounded-full ring-1 ring-foreground/10 bg-card text-muted-foreground shadow-sm transition-transform hover:scale-110 hover:text-accent-foreground active:scale-95",
               isRunning && "animate-chat-impulse",
             )}
             aria-label={tooltip}

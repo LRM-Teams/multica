@@ -439,6 +439,45 @@ func TestLegacyDMSessionIsNotVisibleInDMList(t *testing.T) {
 	}
 }
 
+func TestListDMChannelsTreatsZeroReadSeqAsNoCursor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Zero Read Cursor Bot", []byte("[]"))
+	channelID := seedAgentDMChannel(t, agentID)
+	message, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Zero Read Cursor Bot", "unread", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("dm-zero-read-cursor"), 0)
+	if err != nil {
+		t.Fatalf("insert unread DM message: %v", err)
+	}
+
+	beforeRead := listedDMItemForTest(t, channelID)
+	if beforeRead == nil {
+		t.Fatal("DM missing from list before mark read")
+	}
+	if beforeRead.LastReadSeq != nil {
+		t.Fatalf("last_read_seq before first read = %d, want nil", *beforeRead.LastReadSeq)
+	}
+	if beforeRead.RealUnread != 1 || beforeRead.Unread != 1 {
+		t.Fatalf("unread before first read = real:%d total:%d, want 1/1", beforeRead.RealUnread, beforeRead.Unread)
+	}
+
+	markChannelReadForTest(t, channelID, testUserID)
+
+	afterRead := listedDMItemForTest(t, channelID)
+	if afterRead == nil {
+		t.Fatal("DM missing from list after mark read")
+	}
+	if afterRead.LastReadSeq == nil || *afterRead.LastReadSeq != message.Seq {
+		t.Fatalf("last_read_seq after mark read = %v, want %d", afterRead.LastReadSeq, message.Seq)
+	}
+	if afterRead.RealUnread != 0 || afterRead.Unread != 0 {
+		t.Fatalf("unread after mark read = real:%d total:%d, want 0/0", afterRead.RealUnread, afterRead.Unread)
+	}
+}
+
 func listDMItemsForTest(t *testing.T) []DMItem {
 	t.Helper()
 	req := newRequest(http.MethodGet, "/api/dm", nil)
@@ -453,6 +492,17 @@ func listDMItemsForTest(t *testing.T) []DMItem {
 		t.Fatalf("decode DMs: %v body=%s", err, rec.Body.String())
 	}
 	return items
+}
+
+func listedDMItemForTest(t *testing.T, channelID string) *DMItem {
+	t.Helper()
+	items := listDMItemsForTest(t)
+	for i := range items {
+		if items[i].ID == channelID {
+			return &items[i]
+		}
+	}
+	return nil
 }
 
 // TestSendChannelMessageDM_DispatchesAgent: a user message in an agent DM

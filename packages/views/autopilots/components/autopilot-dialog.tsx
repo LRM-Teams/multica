@@ -336,7 +336,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     if (!assigneeId) return null;
     const agent = agents.find((a) => a.id === assigneeId);
     return agent ? { name: agent.name, description: agent.description } : null;
-  }, [agents, assigneeId, assigneeType]);
+  }, [agents, assigneeId]);
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projects, projectId],

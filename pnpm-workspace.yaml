@@ -62,8 +62,14 @@ catalog:
   # phone instead of typing the URL.
   "react-qr-code": "^2.0.18"
 
-  # Virtualized timeline (issue detail comments)
-  react-virtuoso: "^4.18.11"
+  # Virtualized timeline (issue detail comments). Pinned EXACT (not ^) —
+  # 4.18.8+ regressed initial cold-load positioning for our large
+  # firstItemIndex convention (CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX =
+  # 1_000_000, channel-message-list.tsx): channels opened at the top
+  # instead of the bottom (#1151 incident, 2026-07-24). Do not caret-range
+  # this until a real device/browser can verify a newer version against
+  # that specific pattern — this env has no browser automation.
+  react-virtuoso: "4.18.7"
 
   # Product analytics
   posthog-js: "^1.176.1"

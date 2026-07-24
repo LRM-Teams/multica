@@ -80,7 +80,7 @@ func newSelfMentionFixture(t *testing.T) selfMentionFixture {
 			t.Fatalf("create issue %q: %v", title, err)
 		}
 		t.Cleanup(func() {
-			testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, id)
+			testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE issue_id = $1`, id)
 			testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, id)
 			testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, id)
 		})
@@ -143,8 +143,13 @@ func countQueuedOrDispatched(t *testing.T, agentID, issueID string) int {
 	t.Helper()
 	var n int
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_task_queue
-		WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched')
+		SELECT count(*) FROM agent_inbox_event
+		WHERE issue_id = $1
+		  AND agent_id = $2
+		  AND (
+		    status = 'pending'
+		    OR (status = 'draining' AND started_at IS NULL)
+		  )
 	`, issueID, agentID).Scan(&n); err != nil {
 		t.Fatalf("count queued/dispatched tasks: %v", err)
 	}
@@ -189,8 +194,8 @@ func TestEnqueueMentionedAgentTasks_SelfMentionWhileRunningQueuesFollowup(t *tes
 
 	// Seed a running task for J on issue A — this is the agent's current run.
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status)
-		VALUES ($1, $2, $3, 'running')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, started_at)
+		VALUES ($1, $2, $3, 'draining', now())
 	`, fx.JID, fx.RuntimeID, fx.IssueAID); err != nil {
 		t.Fatalf("seed running task: %v", err)
 	}
@@ -227,11 +232,11 @@ func TestEnqueueMentionedAgentTasks_SelfMentionDedupesAgainstPendingTask(t *test
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, fx.IssueAID); err != nil {
+			if _, err := testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE issue_id = $1`, fx.IssueAID); err != nil {
 				t.Fatalf("reset tasks: %v", err)
 			}
 			if _, err := testPool.Exec(ctx, `
-				INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status)
+				INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status)
 				VALUES ($1, $2, $3, $4)
 			`, fx.JID, fx.RuntimeID, fx.IssueAID, tc.status); err != nil {
 				t.Fatalf("seed %s task: %v", tc.status, err)

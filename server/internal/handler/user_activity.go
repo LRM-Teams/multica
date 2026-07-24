@@ -30,14 +30,14 @@ type ActivityItemResponse struct {
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspace_id"`
 
-	ChannelID   *string `json:"channel_id,omitempty"`
-	ChannelName *string `json:"channel_name,omitempty"`
-	ChannelKind *string `json:"channel_kind,omitempty"`
-	UpdatedAt   string  `json:"updated_at"`
-	UnreadCount int     `json:"unread_count"`
-	PreviewText string  `json:"preview_text"`
-	Title       string  `json:"title"`
-	AccessDenied bool   `json:"access_denied"`
+	ChannelID    *string `json:"channel_id,omitempty"`
+	ChannelName  *string `json:"channel_name,omitempty"`
+	ChannelKind  *string `json:"channel_kind,omitempty"`
+	UpdatedAt    string  `json:"updated_at"`
+	UnreadCount  int     `json:"unread_count"`
+	PreviewText  string  `json:"preview_text"`
+	Title        string  `json:"title"`
+	AccessDenied bool    `json:"access_denied"`
 
 	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
 	ReplyCount          *int    `json:"reply_count,omitempty"`

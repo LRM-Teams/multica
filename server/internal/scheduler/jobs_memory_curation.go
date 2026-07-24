@@ -202,7 +202,7 @@ func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, works
 		     )))
 		), active AS (
 		  SELECT DISTINCT agent_id
-		    FROM agent_task_queue
+		    FROM agent_inbox_event
 		   WHERE COALESCE(completed_at, started_at, dispatched_at, created_at) >= $3::date
 		     AND COALESCE(completed_at, started_at, dispatched_at, created_at) < ($3::date + interval '1 day')
 		  UNION

@@ -176,7 +176,7 @@ type agentTransportTarget struct {
 }
 
 type agentTransportSource struct {
-	task         db.AgentTaskQueue
+	task         db.AgentInboxEvent
 	origin       chatOutputOrigin
 	inboxEventID pgtype.UUID
 }
@@ -951,63 +951,63 @@ func (h *Handler) requireAgentTransportSource(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func (h *Handler) requireAgentTransportTask(w http.ResponseWriter, r *http.Request) (db.AgentTaskQueue, chatOutputOrigin, bool) {
+func (h *Handler) requireAgentTransportTask(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, bool) {
 	if r.Header.Get("X-Actor-Source") != "task_token" {
 		writeError(w, http.StatusForbidden, "agent transport requires a task token")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
 	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
 	taskID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Task-ID"), "task id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
 	task, err := h.Queries.GetAgentTask(r.Context(), taskID)
 	if err != nil || task.AgentID != agentID {
 		writeError(w, http.StatusForbidden, "task token does not match this agent task")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
-	if task.Status != "running" && task.Status != "dispatched" && task.Status != "waiting_local_directory" {
+	if task.Status != "draining" {
 		writeError(w, http.StatusConflict, "agent task is not active")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
 	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
 	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
 		writeError(w, http.StatusForbidden, "agent task is not a channel task")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
 	}
 	return task, origin, true
 }
 
-func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentTaskQueue, chatOutputOrigin, pgtype.UUID, bool) {
+func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, pgtype.UUID, bool) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	eventID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Event-ID"), "inbox event id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	deliveryID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Delivery-ID"), "delivery id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
 	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
 		writeError(w, http.StatusForbidden, "inbox token does not match this agent event")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	var deliveryActive bool
 	if err := h.DB.QueryRow(r.Context(), `
@@ -1020,51 +1020,51 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 			  AND d.lease_expires_at > now()
 		)`, deliveryID, event.ID).Scan(&deliveryActive); err != nil || !deliveryActive {
 		writeError(w, http.StatusConflict, "agent inbox delivery is not active")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	task := agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
 	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
 	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
 		writeError(w, http.StatusForbidden, "agent inbox event is not a channel task")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	return task, origin, event.ID, true
 }
 
-func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentTaskQueue, chatOutputOrigin, pgtype.UUID, bool) {
+func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, pgtype.UUID, bool) {
 	if strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Event-ID")) == "" ||
 		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Delivery-ID")) == "" ||
 		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Lease-Token")) == "" {
 		writeError(w, http.StatusForbidden, "agent credential transport requires active inbox delivery")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 
 	workspaceID := ctxWorkspaceID(r.Context())
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	eventID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Event-ID"), "inbox event id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	deliveryID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Delivery-ID"), "delivery id")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	leaseToken, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Lease-Token"), "lease token")
 	if !ok {
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
 	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
 		writeError(w, http.StatusForbidden, "agent credential does not match this agent event")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	var runtimeID pgtype.UUID
 	if err := h.DB.QueryRow(r.Context(), `
@@ -1090,18 +1090,18 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 		      AND newer.created_at >= d.created_at
 		  )`, deliveryID, event.ID, leaseToken).Scan(&runtimeID); err != nil {
 		writeError(w, http.StatusConflict, "agent inbox delivery is not active")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	task := agentInboxSyntheticTask(event, runtimeID)
 	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
 	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
 		writeError(w, http.StatusForbidden, "agent inbox event is not a channel task")
-		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	return task, origin, event.ID, true
 }
 
-func (h *Handler) resolveAgentTransportTarget(ctx context.Context, _ db.AgentTaskQueue, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
+func (h *Handler) resolveAgentTransportTarget(ctx context.Context, _ db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
 	rawTarget = strings.TrimSpace(rawTarget)
 	if rawTarget == "" {
 		return agentTransportTarget{}, errChatOutputInvalidTarget
@@ -2092,7 +2092,7 @@ func (h *Handler) taskHasAgentTransportVisibleOutput(ctx context.Context, taskID
 // for both ordinary daemon tasks and inbox-backed synthetic tasks. The latter
 // intentionally store their audit under inbox_event_id (rather than task_id),
 // even though their synthetic task ID is the inbox event ID.
-func (h *Handler) chatTaskHasAgentTransportVisibleOutput(ctx context.Context, task db.AgentTaskQueue) bool {
+func (h *Handler) chatTaskHasAgentTransportVisibleOutput(ctx context.Context, task db.AgentInboxEvent) bool {
 	return h.taskHasAgentTransportVisibleOutput(ctx, task.ID) || h.inboxEventHasAgentTransportVisibleOutput(ctx, task.ID)
 }
 

@@ -240,11 +240,11 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 		  1,
 		  CEIL((SELECT count(*) FROM agent WHERE workspace_id = $1::uuid AND archived_at IS NULL)::numeric / $2)::bigint,
 		  CEIL((SELECT count(*) FROM issue WHERE workspace_id = $1::uuid AND status NOT IN ('done', 'cancelled'))::numeric / $3)::bigint,
-		  CEIL((SELECT count(*) FROM agent_task_queue task JOIN agent a ON a.id = task.agent_id
+		  CEIL((SELECT count(*) FROM agent_inbox_event task JOIN agent a ON a.id = task.agent_id
 		        WHERE a.workspace_id = $1::uuid AND task.chat_session_id IS NULL
 		          AND COALESCE(task.context->>'type', '') <> 'agent_radar'
-		          AND (task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-		               OR (task.status IN ('completed', 'cancelled', 'failed') AND task.completed_at > now() - interval '24 hours')))::numeric / $4)::bigint,
+		          AND (task.status IN ('pending', 'draining', 'failed')
+		               OR (task.status IN ('acked', 'suppressed') AND task.completed_at > now() - interval '24 hours')))::numeric / $4)::bigint,
 		  CEIL((SELECT count(*) FROM channel WHERE workspace_id = $1::uuid AND kind = 'group' AND archived_at IS NULL)::numeric / $5)::bigint,
 		  CEIL((SELECT count(*)
 		        FROM channel ch
@@ -282,10 +282,10 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 			  || ' capabilities=' || left(regexp_replace(COALESCE(NULLIF(a.description, ''), 'not described'), E'[\\n\\r]+', ' ', 'g'), 100)
 			  || ' active_tasks=' || (
 			    SELECT count(*)::text
-		    FROM agent_task_queue task
+		    FROM agent_inbox_event task
 			    WHERE task.agent_id = a.id
 		      AND task.chat_session_id IS NULL
-		      AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+		      AND task.status IN ('pending', 'draining', 'failed')
 		      AND COALESCE(task.context->>'type', '') <> 'agent_radar'
 		  )
 		FROM agent a
@@ -355,15 +355,15 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 		entryMaxBytes: taskSectionEntryMaxBytes,
 		countQuery: `
 			SELECT count(*)::bigint
-			FROM agent_task_queue task
+			FROM agent_inbox_event task
 			JOIN agent task_agent ON task_agent.id = task.agent_id
 			WHERE task_agent.workspace_id = $1::uuid
 			  AND task.chat_session_id IS NULL
 			  AND COALESCE(task.context->>'type', '') <> 'agent_radar'
 			  AND (
-			    task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+			    task.status IN ('pending', 'draining', 'failed')
 			    OR (
-			      task.status IN ('completed', 'cancelled', 'failed')
+			      task.status IN ('acked', 'suppressed')
 			      AND task.completed_at > now() - interval '24 hours'
 			    )
 			  )
@@ -387,24 +387,23 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 			  || ' progress_summary=' || left(regexp_replace(COALESCE(progress.summary, ''), E'[\\n\\r]+', ' ', 'g'), 40)
 		  || ' progress_step=' || COALESCE(progress.step::text, 'none')
 		  || ' progress_total=' || COALESCE(progress.total::text, 'none')
-		FROM agent_task_queue task
+		FROM agent_inbox_event task
 		JOIN agent task_agent ON task_agent.id = task.agent_id
 		LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id = task.id
 		WHERE task_agent.workspace_id = $1::uuid
 		  AND task.chat_session_id IS NULL
 		  AND COALESCE(task.context->>'type', '') <> 'agent_radar'
 		  AND (
-		    task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+		    task.status IN ('pending', 'draining', 'failed')
 		    OR (
-		      task.status IN ('completed', 'cancelled', 'failed')
+		      task.status IN ('acked', 'suppressed')
 		      AND task.completed_at > now() - interval '24 hours'
 		    )
 		  )
 		ORDER BY
 		  CASE task.status
-		    WHEN 'waiting_local_directory' THEN 0 WHEN 'failed' THEN 1
-		    WHEN 'running' THEN 2 WHEN 'dispatched' THEN 3 WHEN 'queued' THEN 4
-		    WHEN 'completed' THEN 5 ELSE 6
+		    WHEN 'draining' THEN 0 WHEN 'failed' THEN 1
+		    WHEN 'pending' THEN 2 WHEN 'acked' THEN 3 ELSE 4
 			  END,
 			  task.created_at ASC,
 			  task.id ASC

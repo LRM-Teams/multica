@@ -416,18 +416,16 @@ type AgentTaskResponse struct {
 	InitiatorEmail string `json:"initiator_email,omitempty"` // member email; empty for agent initiators
 	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "agent_radar" | "direct" — used by the activity row to label tasks that have no linked issue
 	// AuthToken is the `mat_` bearer the daemon writes into the per-run
-	// MULTICA_TOKEN_FILE wrapper. Legacy task-queue runs bind it to
-	// (agent_id, task_id); legacy inbox runs bind it to a single delivery.
-	// Credential-transport-capable inbox runs leave this empty so the daemon
+	// MULTICA_TOKEN_FILE wrapper. Canonical inbox runs bind it to a single
+	// delivery. Credential-transport-capable runs leave this empty so the daemon
 	// provisions/reuses a durable agent credential locally. In all cases,
 	// auth middleware treats requests authenticated with an agent bearer as
 	// actor=agent and owner-only endpoints reject it.
 	// Empty when the runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
 
-	// InboxEvent is present for raft-like agent inbox deliveries. The daemon
-	// executes the payload like a normal chat task, but reports terminal state
-	// through the inbox lease endpoints instead of legacy agent_task_queue.
+	// InboxEvent carries the canonical delivery lease. The daemon executes the
+	// projected task payload and reports lifecycle state through inbox endpoints.
 	InboxEvent *AgentInboxLeaseResponse `json:"inbox_event,omitempty"`
 }
 
@@ -505,7 +503,7 @@ func parseArealProxy(raw []byte) *ArealProxyData {
 // down. It populates WorkspaceID and powers the privacy-safe RelativeWorkDir
 // derivation; pass "" only on daemon-facing paths that genuinely don't have
 // it, in which case RelativeWorkDir falls back to the existing WorkDir.
-func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
+func taskToResponse(t db.AgentInboxEvent, workspaceID string) AgentTaskResponse {
 	var result any
 	if t.Result != nil {
 		json.Unmarshal(t.Result, &result)
@@ -518,13 +516,33 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 	if t.WorkDir.Valid {
 		workDir = t.WorkDir.String
 	}
+	status := t.Status
+	switch t.Status {
+	case "pending", "failed":
+		status = "queued"
+	case "draining":
+		if t.StartedAt.Valid {
+			status = "running"
+		} else {
+			status = "dispatched"
+		}
+	case "suppressed":
+		status = "cancelled"
+	case "acked":
+		if t.TerminalOutcome.Valid {
+			status = t.TerminalOutcome.String
+		}
+		if status != "failed" && status != "cancelled" {
+			status = "completed"
+		}
+	}
 	resp := AgentTaskResponse{
 		ID:               uuidToString(t.ID),
 		AgentID:          uuidToString(t.AgentID),
 		RuntimeID:        uuidToString(t.RuntimeID),
 		IssueID:          uuidToString(t.IssueID),
 		WorkspaceID:      workspaceID,
-		Status:           t.Status,
+		Status:           status,
 		Priority:         t.Priority,
 		DispatchedAt:     timestampToPtr(t.DispatchedAt),
 		StartedAt:        timestampToPtr(t.StartedAt),
@@ -662,7 +680,7 @@ func basename(p string) string {
 // and trigger_comment_id) / quick_create (no linked source — the agent is
 // creating the issue itself) / direct (assignee-driven task on an existing
 // issue).
-func computeTaskKind(t db.AgentTaskQueue) string {
+func computeTaskKind(t db.AgentInboxEvent) string {
 	var source struct {
 		Type string `json:"type"`
 	}
@@ -858,25 +876,25 @@ type CreateAgentRequest struct {
 	// Username is an explicit, stable handle chosen by the caller. When it is
 	// omitted, the server generates the username from display_name and applies
 	// numeric collision suffixes.
-	Username           *string               `json:"username"`
-	DisplayName        string                `json:"display_name"`
-	Description        string                `json:"description"`
-	Instructions       string                `json:"instructions"`
-	AvatarSelection    *AgentAvatarSelection `json:"avatar_selection"`
-	RuntimeID          string                `json:"runtime_id"`
-	RuntimeConfig      any                   `json:"runtime_config"`
-	CustomEnv          map[string]string     `json:"custom_env"`
-	CustomArgs         []string              `json:"custom_args"`
-	McpConfig          json.RawMessage       `json:"mcp_config"`
-	Visibility         string                `json:"visibility"`
+	Username        *string               `json:"username"`
+	DisplayName     string                `json:"display_name"`
+	Description     string                `json:"description"`
+	Instructions    string                `json:"instructions"`
+	AvatarSelection *AgentAvatarSelection `json:"avatar_selection"`
+	RuntimeID       string                `json:"runtime_id"`
+	RuntimeConfig   any                   `json:"runtime_config"`
+	CustomEnv       map[string]string     `json:"custom_env"`
+	CustomArgs      []string              `json:"custom_args"`
+	McpConfig       json.RawMessage       `json:"mcp_config"`
+	Visibility      string                `json:"visibility"`
 	// HomeChannelID binds a channel-visibility agent to exactly one group
 	// (LRM-370). Required when visibility=channel; forbidden otherwise.
-	HomeChannelID      *string               `json:"home_channel_id"`
-	MaxConcurrentTasks int32                 `json:"max_concurrent_tasks"`
-	Model              string                `json:"model"`
-	ThinkingLevel      string                `json:"thinking_level"`
-	InitialNotes       map[string]string     `json:"initial_notes"`
-	InitialMemory      map[string]string     `json:"initial_memory"`
+	HomeChannelID      *string           `json:"home_channel_id"`
+	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
+	Model              string            `json:"model"`
+	ThinkingLevel      string            `json:"thinking_level"`
+	InitialNotes       map[string]string `json:"initial_notes"`
+	InitialMemory      map[string]string `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -1058,12 +1076,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createParams := db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Description:        req.Description,
-		Instructions:       req.Instructions,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
+		WorkspaceID:   wsUUID,
+		Description:   req.Description,
+		Instructions:  req.Instructions,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: rc,
+		RuntimeID:     runtime.ID,
 		// Insert-safe visibility: channel requires home_channel_id which is
 		// applied immediately after insert (CHECK forbids channel without home).
 		Visibility:         insertSafeAgentVisibility(binding),
@@ -1198,16 +1216,16 @@ type UpdateAgentRequest struct {
 	// actually unchanged, and so a client that round-tripped a
 	// previously-returned masked map cannot silently overwrite real
 	// secret values with literal `****`. See MUL-2600.
-	CustomArgs         *[]string        `json:"custom_args"`
-	McpConfig          *json.RawMessage `json:"mcp_config"`
-	Visibility         *string          `json:"visibility"`
+	CustomArgs *[]string        `json:"custom_args"`
+	McpConfig  *json.RawMessage `json:"mcp_config"`
+	Visibility *string          `json:"visibility"`
 	// HomeChannelID follows the same pointer semantics as Visibility: omitted
 	// means no change; when Visibility becomes channel it is required; when
 	// Visibility becomes workspace/private it must be omitted/empty.
-	HomeChannelID      *string          `json:"home_channel_id"`
-	Status             *string          `json:"status"`
-	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
-	Model              *string          `json:"model"`
+	HomeChannelID      *string `json:"home_channel_id"`
+	Status             *string `json:"status"`
+	MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
+	Model              *string `json:"model"`
 	// ThinkingLevel is treated as a tri-state per-MUL-2339:
 	//   - field omitted → no change (leave existing value alone)
 	//   - field present with "" → explicit clear (use runtime default)
@@ -1999,31 +2017,9 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]agentTaskSortItem, 0, len(tasks))
 	for _, t := range tasks {
-		if t.ChatSessionID.Valid {
-			continue
-		}
 		resp := taskToResponse(t, workspaceID)
-		if legacyAgentTaskShouldReadAsHistorical(t) {
-			resp.Status = "cancelled"
-			if resp.CompletedAt == nil {
-				resp.CompletedAt = resp.DispatchedAt
-				if resp.CompletedAt == nil {
-					resp.CompletedAt = resp.StartedAt
-				}
-				if resp.CompletedAt == nil {
-					created := resp.CreatedAt
-					resp.CompletedAt = &created
-				}
-			}
-		}
 		items = append(items, agentTaskSortItem{Task: resp, SortAt: timestampToTime(t.CreatedAt)})
 	}
-	inboxTasks, err := h.listAgentInboxTaskResponses(r.Context(), agent.ID, agent.WorkspaceID, workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list agent inbox tasks")
-		return
-	}
-	items = append(items, inboxTasks...)
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].SortAt.After(items[j].SortAt)
 	})
@@ -2033,145 +2029,6 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) listAgentInboxTaskResponses(ctx context.Context, agentID, workspaceUUID pgtype.UUID, workspaceID string) ([]agentTaskSortItem, error) {
-	rows, err := h.DB.Query(ctx, `
-		SELECT e.id,
-		       e.agent_id,
-		       COALESCE(latest_delivery.runtime_id, e.runtime_id, s.runtime_id) AS runtime_id,
-		       e.execution_config,
-		       e.status,
-		       COALESCE(e.terminal_outcome, '') AS terminal_outcome,
-		       e.priority,
-		       e.last_error,
-		       e.claimed_at,
-		       e.terminal_at,
-		       e.created_at,
-		       e.chat_session_id,
-		       e.reason,
-		       COALESCE(cm.content, '') AS source_content,
-		       COALESCE(latest_delivery.status, '') AS delivery_status,
-		       latest_delivery.leased_at
-		FROM agent_inbox_event e
-		LEFT JOIN agent_session s ON s.id = e.agent_session_id
-		LEFT JOIN channel_message cm ON cm.id = e.source_message_id
-		LEFT JOIN LATERAL (
-			SELECT d.id, d.runtime_id, d.status, d.leased_at
-			FROM agent_event_delivery d
-			WHERE d.inbox_event_id = e.id
-			ORDER BY d.created_at DESC, d.id DESC
-			LIMIT 1
-		) latest_delivery ON true
-		WHERE e.agent_id = $1
-		  AND e.workspace_id = $2
-		  AND e.requires_wake
-		  AND e.status <> 'suppressed'
-		ORDER BY e.created_at DESC, e.id DESC`, agentID, workspaceUUID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var items []agentTaskSortItem
-	for rows.Next() {
-		var id, rowAgentID, runtimeID, chatSessionID pgtype.UUID
-		var status, terminalOutcome, reason, sourceContent, deliveryStatus string
-		var executionConfig []byte
-		var priority int32
-		var lastError pgtype.Text
-		var claimedAt, terminalAt, createdAt, leasedAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &executionConfig, &status, &terminalOutcome, &priority, &lastError, &claimedAt, &terminalAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
-			return nil, err
-		}
-		resp := AgentTaskResponse{
-			ID:            uuidToString(id),
-			AgentID:       uuidToString(rowAgentID),
-			RuntimeID:     uuidToString(runtimeID),
-			WorkspaceID:   workspaceID,
-			Status:        inboxEventTaskStatus(status, terminalOutcome, deliveryStatus),
-			Priority:      priority,
-			StartedAt:     timestampToPtr(firstValidTimestamp(claimedAt, leasedAt)),
-			CompletedAt:   timestampToPtr(terminalAt),
-			Error:         textToPtr(lastError),
-			Attempt:       1,
-			MaxAttempts:   1,
-			CreatedAt:     timestampToString(createdAt),
-			ChatSessionID: uuidToString(chatSessionID),
-			Kind:          "chat",
-		}
-		if summary := inboxEventTaskSummary(reason, sourceContent); summary != "" {
-			resp.TriggerSummary = &summary
-		}
-		if config, ok := service.TaskExecutionConfigFromContext(executionConfig); ok {
-			resp.ExecutionConfig = &config
-		}
-		items = append(items, agentTaskSortItem{Task: resp, SortAt: timestampToTime(createdAt)})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-func inboxEventTaskStatus(status, terminalOutcome, deliveryStatus string) string {
-	switch terminalOutcome {
-	case "replied", "no_reply":
-		return "completed"
-	case "held":
-		return "held"
-	case "failed":
-		return "failed"
-	}
-	if deliveryStatus == "leased" || deliveryStatus == "processing" || status == "draining" {
-		return "running"
-	}
-	return "queued"
-}
-
-func inboxEventTaskSummary(reason, sourceContent string) string {
-	if sourceContent = strings.TrimSpace(sourceContent); sourceContent != "" {
-		return truncateForActivity(sourceContent, 80)
-	}
-	switch reason {
-	case "mention":
-		return "Mention reply"
-	case "dm":
-		return "Direct message reply"
-	default:
-		return "Chat reply"
-	}
-}
-
-func legacyAgentTaskShouldReadAsHistorical(t db.AgentTaskQueue) bool {
-	if !legacyAgentTaskIsActive(t.Status) {
-		return false
-	}
-	if uuidToString(t.IssueID) != "" || uuidToString(t.ChatSessionID) != "" {
-		return false
-	}
-	if strings.TrimSpace(jsonStringField(t.Context, "radar_run_id")) != "" {
-		return false
-	}
-	return strings.EqualFold(jsonStringField(t.Context, "type"), "agent_radar")
-}
-
-func legacyAgentTaskIsActive(status string) bool {
-	switch status {
-	case "queued", "dispatched", "running", "waiting_local_directory":
-		return true
-	default:
-		return false
-	}
-}
-
-func firstValidTimestamp(values ...pgtype.Timestamptz) pgtype.Timestamptz {
-	for _, value := range values {
-		if value.Valid {
-			return value
-		}
-	}
-	return pgtype.Timestamptz{}
 }
 
 func timestampToTime(value pgtype.Timestamptz) time.Time {
@@ -2300,7 +2157,7 @@ func (h *Handler) GetWorkspaceAgentActivity30d(w http.ResponseWriter, r *http.Re
 // ListWorkspaceAgentTaskSnapshot returns the task data the front-end needs to
 // derive each agent's presence: every active task plus each agent's most recent
 // OUTCOME task (completed/failed only). Legacy issue/autopilot/quick-create
-// tasks still come from agent_task_queue; chat/channel work now runs through
+// tasks still come from agent_inbox_event; chat/channel work now runs through
 // agent_inbox_event, so active inbox rows are folded into the same workspace
 // snapshot. Cancelled tasks are excluded from the outcome half by design —
 // cancel is a procedural signal ("attempt aborted"), not an outcome, so it must
@@ -2328,103 +2185,14 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		return
 	}
 
-	inboxTasks, err := h.listWorkspaceActiveAgentInboxTaskResponses(r.Context(), parseUUID(workspaceID), workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list agent inbox task snapshot")
-		return
-	}
-
-	resp := make([]AgentTaskResponse, 0, len(tasks)+len(inboxTasks))
+	resp := make([]AgentTaskResponse, 0, len(tasks))
 	for _, t := range tasks {
 		if _, ok := allowed[uuidToString(t.AgentID)]; !ok {
 			continue
 		}
 		resp = append(resp, taskToResponse(t, workspaceID))
 	}
-	for _, item := range inboxTasks {
-		if _, ok := allowed[item.Task.AgentID]; !ok {
-			continue
-		}
-		resp = append(resp, item.Task)
-	}
-
 	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) listWorkspaceActiveAgentInboxTaskResponses(ctx context.Context, workspaceUUID pgtype.UUID, workspaceID string) ([]agentTaskSortItem, error) {
-	rows, err := h.DB.Query(ctx, `
-		SELECT e.id,
-		       e.agent_id,
-		       COALESCE(latest_delivery.runtime_id, e.runtime_id, s.runtime_id) AS runtime_id,
-		       e.execution_config,
-		       e.status,
-		       e.priority,
-		       e.last_error,
-		       e.claimed_at,
-		       e.created_at,
-		       e.chat_session_id,
-		       e.reason,
-		       COALESCE(cm.content, '') AS source_content,
-		       COALESCE(latest_delivery.status, '') AS delivery_status,
-		       latest_delivery.leased_at
-		FROM agent_inbox_event e
-		LEFT JOIN agent_session s ON s.id = e.agent_session_id
-		LEFT JOIN channel_message cm ON cm.id = e.source_message_id
-		LEFT JOIN LATERAL (
-			SELECT d.id, d.runtime_id, d.status, d.leased_at
-			FROM agent_event_delivery d
-			WHERE d.inbox_event_id = e.id
-			ORDER BY d.created_at DESC, d.id DESC
-			LIMIT 1
-		) latest_delivery ON true
-		WHERE e.workspace_id = $1
-		  AND e.requires_wake
-		  AND e.terminal_outcome IS NULL
-		  AND e.status IN ('pending', 'draining', 'failed')
-		ORDER BY e.created_at DESC, e.id DESC`, workspaceUUID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var items []agentTaskSortItem
-	for rows.Next() {
-		var id, rowAgentID, runtimeID, chatSessionID pgtype.UUID
-		var status, reason, sourceContent, deliveryStatus string
-		var executionConfig []byte
-		var priority int32
-		var lastError pgtype.Text
-		var claimedAt, createdAt, leasedAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &executionConfig, &status, &priority, &lastError, &claimedAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
-			return nil, err
-		}
-		resp := AgentTaskResponse{
-			ID:            uuidToString(id),
-			AgentID:       uuidToString(rowAgentID),
-			RuntimeID:     uuidToString(runtimeID),
-			WorkspaceID:   workspaceID,
-			Status:        inboxEventTaskStatus(status, "", deliveryStatus),
-			Priority:      priority,
-			StartedAt:     timestampToPtr(firstValidTimestamp(claimedAt, leasedAt)),
-			Error:         textToPtr(lastError),
-			Attempt:       1,
-			MaxAttempts:   1,
-			CreatedAt:     timestampToString(createdAt),
-			ChatSessionID: uuidToString(chatSessionID),
-			Kind:          "chat",
-		}
-		if summary := inboxEventTaskSummary(reason, sourceContent); summary != "" {
-			resp.TriggerSummary = &summary
-		}
-		if config, ok := service.TaskExecutionConfigFromContext(executionConfig); ok {
-			resp.ExecutionConfig = &config
-		}
-		items = append(items, agentTaskSortItem{Task: resp, SortAt: timestampToTime(createdAt)})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 // AgentTaskFeedItem is one terminal task in the workspace activity feed,
@@ -2503,16 +2271,21 @@ func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.completed_at, atq.trigger_summary,
+		SELECT atq.id, atq.agent_id, atq.issue_id,
+		       CASE
+		         WHEN atq.status = 'suppressed' THEN 'cancelled'
+		         ELSE COALESCE(atq.terminal_outcome, 'completed')
+		       END AS status,
+		       atq.completed_at, atq.trigger_summary,
 		       i.title, (w.issue_prefix || '-' || i.number::text) AS issue_identifier,
 		       NULLIF(cs.title, '') AS chat_title
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		JOIN agent a ON a.id = atq.agent_id
 		JOIN workspace w ON w.id = a.workspace_id
 		LEFT JOIN issue i ON i.id = atq.issue_id
 		LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id
 		WHERE a.workspace_id = $1
-		  AND atq.status IN ('completed', 'failed', 'cancelled')
+		  AND atq.status IN ('acked', 'suppressed')
 		  AND atq.completed_at IS NOT NULL
 		  AND ($3::timestamptz IS NULL OR (atq.completed_at, atq.id) < ($3::timestamptz, $4::uuid))
 		ORDER BY atq.completed_at DESC, atq.id DESC
@@ -2592,10 +2365,10 @@ func (h *Handler) GetAgentTaskStats(w http.ResponseWriter, r *http.Request) {
 	var resp AgentTaskStatsResponse
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT
-			COUNT(*) FILTER (WHERE atq.status = 'completed'),
-			COUNT(*) FILTER (WHERE atq.status = 'failed'),
+			COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'completed'),
+			COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed'),
 			COUNT(*)
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		JOIN agent a ON a.id = atq.agent_id
 		WHERE a.workspace_id = $1`,
 		parseUUID(workspaceID),

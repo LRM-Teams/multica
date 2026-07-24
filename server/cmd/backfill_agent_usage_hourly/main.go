@@ -14,7 +14,7 @@
 // partially completed backfill can be resumed without TRUNCATEing
 // agent_usage_hourly first.
 //
-// Read pressure: each slice scans agent_usage / agent_task_queue / agent
+// Read pressure: each slice scans agent_usage / agent_inbox_event / agent
 // / issue. On a database with years of history that is sustained heavy
 // load. Use --sleep-between-slices to throttle on a busy production DB,
 // and coordinate a maintenance window with the DB team before a

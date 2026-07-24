@@ -437,7 +437,7 @@ func (d *Daemon) gcDecisionQuickCreate(ctx context.Context, taskDir string, meta
 	return gcActionSkip
 }
 
-// isAgentTaskTerminal reports whether a value of agent_task_queue.status
+// isAgentTaskTerminal reports whether a value of agent_inbox_event.status
 // represents a final state. Mirrors the status enum used across the
 // task service — see service/task.go for the canonical list.
 func isAgentTaskTerminal(status string) bool {

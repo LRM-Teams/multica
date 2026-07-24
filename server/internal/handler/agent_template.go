@@ -118,11 +118,11 @@ func (h *Handler) GetAgentTemplate(w http.ResponseWriter, r *http.Request) {
 // --- Create-from-template handler ---
 
 type CreateAgentFromTemplateRequest struct {
-	TemplateSlug       string `json:"template_slug"`
-	Name               string `json:"name"`
-	DisplayName        string `json:"display_name"`
-	RuntimeID          string `json:"runtime_id"`
-	Model              string `json:"model,omitempty"`
+	TemplateSlug       string  `json:"template_slug"`
+	Name               string  `json:"name"`
+	DisplayName        string  `json:"display_name"`
+	RuntimeID          string  `json:"runtime_id"`
+	Model              string  `json:"model,omitempty"`
 	Visibility         string  `json:"visibility,omitempty"`
 	HomeChannelID      *string `json:"home_channel_id,omitempty"`
 	MaxConcurrentTasks int32   `json:"max_concurrent_tasks,omitempty"`

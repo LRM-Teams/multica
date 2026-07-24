@@ -101,7 +101,7 @@ func TestAutopilotRunOnlyDeliversReportToCreatorInbox(t *testing.T) {
 		t.Fatal("run_only dispatch did not link a task")
 	}
 	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now() WHERE id = $1`,
+		`UPDATE agent_inbox_event SET status = 'draining', dispatched_at = now() WHERE id = $1`,
 		run.TaskID,
 	); err != nil {
 		t.Fatalf("mark task dispatched: %v", err)

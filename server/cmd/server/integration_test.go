@@ -66,6 +66,11 @@ func TestMain(m *testing.M) {
 		pool.Close()
 		os.Exit(1)
 	}
+	if err := ensureServerAgentInboxFixtureDefaults(ctx, pool); err != nil {
+		fmt.Printf("Failed to set up canonical inbox fixture defaults: %v\n", err)
+		pool.Close()
+		os.Exit(1)
+	}
 
 	hub := realtime.NewHub()
 	go hub.Run()
@@ -95,6 +100,46 @@ func TestMain(m *testing.M) {
 	testServer.Close()
 	pool.Close()
 	os.Exit(code)
+}
+
+func ensureServerAgentInboxFixtureDefaults(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_server_agent_inbox_fixture_defaults()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+		  IF NEW.workspace_id IS NULL THEN
+		    SELECT workspace_id INTO NEW.workspace_id
+		    FROM agent
+		    WHERE id = NEW.agent_id;
+		  END IF;
+		  IF NEW.agent_session_id IS NULL THEN
+		    NEW.agent_session_id := ensure_agent_wake_session(NEW.agent_id);
+		  END IF;
+		  IF NEW.reason IS NULL THEN
+		    NEW.reason := CASE
+		      WHEN NEW.chat_session_id IS NOT NULL THEN 'dm'
+		      WHEN NEW.autopilot_run_id IS NOT NULL THEN 'autopilot'
+		      ELSE 'issue'
+		    END;
+		  END IF;
+		  IF NEW.status IN ('pending', 'draining', 'failed')
+		     AND NEW.reason <> 'ambient' THEN
+		    NEW.requires_wake := true;
+		  END IF;
+		  RETURN NEW;
+		END
+		$$;
+
+		DROP TRIGGER IF EXISTS test_server_agent_inbox_fixture_defaults
+		  ON agent_inbox_event;
+		CREATE TRIGGER test_server_agent_inbox_fixture_defaults
+		  BEFORE INSERT ON agent_inbox_event
+		  FOR EACH ROW
+		  EXECUTE FUNCTION test_server_agent_inbox_fixture_defaults();
+	`)
+	return err
 }
 
 func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, string, error) {

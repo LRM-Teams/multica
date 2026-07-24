@@ -623,8 +623,8 @@ RETURNING id
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-VALUES ($1, $2, 'queued', 0)
+INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority)
+VALUES ($1, $2, 'pending', 0)
 RETURNING id
 `, agentID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
@@ -683,10 +683,10 @@ func assertRevoked(t *testing.T, fx revocationFixture) {
 	}
 
 	var taskStatus string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, fx.TaskID).Scan(&taskStatus); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, fx.TaskID).Scan(&taskStatus); err != nil {
 		t.Fatalf("query task: %v", err)
 	}
-	if taskStatus != "cancelled" {
+	if taskStatus != "suppressed" {
 		t.Fatalf("expected task cancelled, got %q", taskStatus)
 	}
 
@@ -744,12 +744,12 @@ func TestLeaveWorkspace_RevokesOwnRuntimes(t *testing.T) {
 
 // TestDeleteMember_CancelsTasksFromAgentReassignment covers a subtle
 // case: an agent's runtime_id can be changed via UpdateAgent, but
-// agent_task_queue.runtime_id keeps the value from when the task was
+// agent_inbox_event.runtime_id keeps the value from when the task was
 // queued. So after a leaving member is removed, an agent currently bound
 // to their runtime gets archived — but tasks that agent queued under a
 // PRIOR runtime (still owned by another active member) keep their old
 // runtime_id and would not be caught by a runtime-only sweep. Because
-// ClaimAgentTask does not gate on agent.archived_at, those orphaned
+// ClaimNextAgentWake does not gate on agent.archived_at, those orphaned
 // queued tasks would remain claimable.
 func TestDeleteMember_CancelsTasksFromAgentReassignment(t *testing.T) {
 	fx := setupRevocationFixture(t, "handler-tests-revoke-reassign", "daemon-revoke-reassign")
@@ -774,8 +774,8 @@ RETURNING id
 	// to the leaving member's runtime).
 	var orphanTaskID string
 	if err := testPool.QueryRow(ctx, `
-INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-VALUES ($1, $2, 'queued', 0)
+INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority)
+VALUES ($1, $2, 'pending', 0)
 RETURNING id
 `, fx.AgentID, otherRuntimeID).Scan(&orphanTaskID); err != nil {
 		t.Fatalf("insert orphan task: %v", err)
@@ -797,10 +797,10 @@ RETURNING id
 	// cancelled. Without the by-agent leg in CancelAgentTasksByRuntimeOrAgent
 	// this stays 'queued' and would be picked up by the other runtime.
 	var orphanStatus string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, orphanTaskID).Scan(&orphanStatus); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, orphanTaskID).Scan(&orphanStatus); err != nil {
 		t.Fatalf("query orphan task: %v", err)
 	}
-	if orphanStatus != "cancelled" {
+	if orphanStatus != "suppressed" {
 		t.Fatalf("expected orphan task cancelled (archived agent leftover on other runtime), got %q", orphanStatus)
 	}
 

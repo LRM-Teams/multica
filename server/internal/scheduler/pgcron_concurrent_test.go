@@ -16,7 +16,7 @@ import (
 //	 advisory lock 4246 下不双写。"
 //
 // The test seeds historical `agent_usage` rows under a freshly created
-// agent / runtime / agent_task_queue fixture, advances the rollup
+// agent / runtime / agent_inbox_event fixture, advances the rollup
 // watermark backwards so a single tick has real work to do, then
 // invokes `rollup_agent_usage_hourly()` directly from N concurrent
 // goroutines. This is the same SQL entrypoint the in-process
@@ -209,18 +209,18 @@ func seedRollupFixture(t *testing.T, pool *pgxpool.Pool) (string, string, string
 		t.Fatalf("seed agent: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id)
 		VALUES ($1, $2)
 		RETURNING id
 	`, agentID, runtimeID).Scan(&queueID); err != nil {
-		t.Fatalf("seed agent_task_queue: %v", err)
+		t.Fatalf("seed agent_inbox_event: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_execution (
 			id, source_kind, source_event_id, source, workspace_id, runtime_id,
 			agent_id, started_at, created_at
 		)
-		VALUES ($1, 'queue', $1, 'issue', $2, $3, $4, now(), now())
+		VALUES ($1, 'inbox', $1, 'issue', $2, $3, $4, now(), now())
 		RETURNING id
 	`, queueID, wsID, runtimeID, agentID).Scan(&executionID); err != nil {
 		t.Fatalf("seed agent_execution: %v", err)

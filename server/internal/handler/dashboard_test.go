@@ -81,7 +81,7 @@ func TestDashboardEndpoints(t *testing.T) {
 	mkTaskWithUsage := func(issueID string, status string, tokens int64) {
 		var taskID string
 		if err := testPool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, started_at, completed_at, created_at)
+			INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, started_at, completed_at, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, now())
 			RETURNING id
 		`, agentID, issueID, runtimeID, status, started, completed).Scan(&taskID); err != nil {
@@ -94,7 +94,7 @@ func TestDashboardEndpoints(t *testing.T) {
 		`, taskID, tokens); err != nil {
 			t.Fatalf("insert agent_usage: %v", err)
 		}
-		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 	}
 
 	mkTaskWithUsage(projectIssueID, "completed", 1000)
@@ -332,7 +332,7 @@ func TestDashboardUsageDailyBucketsByViewerTimezone(t *testing.T) {
 // TestDashboardRunTimeDailyBucketsByViewerTimezone proves the `?tz=` query
 // param drives the calendar-day boundary of the Time / Tasks dashboard tab:
 // GetDashboardRunTimeDaily applies `@tz` to `completed_at AT TIME ZONE @tz`
-// on agent_task_queue. A task completed at 04:00 UTC is still the previous
+// on agent_inbox_event. A task completed at 04:00 UTC is still the previous
 // evening in America/Los_Angeles (UTC-7/-8), so the LA viewer must see the
 // row under the prior calendar date relative to a UTC viewer.
 func TestDashboardRunTimeDailyBucketsByViewerTimezone(t *testing.T) {
@@ -366,9 +366,9 @@ func TestDashboardRunTimeDailyBucketsByViewerTimezone(t *testing.T) {
 	var completedAt time.Time
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, started_at, completed_at, created_at)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, started_at, completed_at, created_at)
 		VALUES (
-			$1, $2, $3, 'completed',
+			$1, $2, $3, 'acked',
 			((CURRENT_DATE - 2)::timestamp + interval '3 hours 50 minutes') AT TIME ZONE 'UTC',
 			((CURRENT_DATE - 2)::timestamp + interval '4 hours') AT TIME ZONE 'UTC',
 			now()
@@ -377,7 +377,7 @@ func TestDashboardRunTimeDailyBucketsByViewerTimezone(t *testing.T) {
 	`, agentID, issueID, runtimeID).Scan(&taskID, &completedAt); err != nil {
 		t.Fatalf("insert completed task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	utcDate := completedAt.UTC().Format("2006-01-02")
 	laLoc, err := time.LoadLocation("America/Los_Angeles")
@@ -455,13 +455,13 @@ func TestRollupAgentUsageHourlyIdempotentAndWatermark(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', now() - interval '20 minutes') RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', now() - interval '20 minutes') RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	seedQueueExecution(t, taskID)
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at)
@@ -565,13 +565,13 @@ func TestRollupAgentUsageHourlyPreservesRuntimeAfterQueueReassign(t *testing.T) 
 	usageAt := time.Date(2021, 3, 14, 1, 0, 0, 0, time.UTC)
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', $4) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', $4) RETURNING id
 	`, agentID, issueID, oldRuntimeID, usageAt).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	seedQueueExecution(t, taskID)
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at, updated_at)
 		VALUES ($1, 'claude', 'm-reassign-hourly', 700, 70, $2, $2)
@@ -605,7 +605,7 @@ func TestRollupAgentUsageHourlyPreservesRuntimeAfterQueueReassign(t *testing.T) 
 	}
 
 	// Queue reassignment must not enqueue or rewrite a completed execution.
-	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET runtime_id = $1 WHERE id = $2`, newRuntimeID, taskID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET runtime_id = $1 WHERE id = $2`, newRuntimeID, taskID); err != nil {
 		t.Fatalf("reassign task: %v", err)
 	}
 	var dirtyCount int
@@ -687,8 +687,8 @@ func TestRollupAgentUsageHourlyWorkspaceMismatch(t *testing.T) {
 	usageAt := time.Date(2021, 9, 9, 1, 0, 0, 0, time.UTC)
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', $4) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', $4) RETURNING id
 	`, foreignAgentID, issueID, foreignRuntimeID, usageAt).Scan(&taskID); err != nil {
 		t.Fatalf("insert atq: %v", err)
 	}
@@ -768,13 +768,13 @@ func TestDashboardRollupPreservesProjectAfterIssueChange(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', now()) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', now()) RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	seedQueueExecution(t, taskID)
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at)
@@ -870,8 +870,8 @@ func TestDashboardRollupPreservesUsageAfterIssueDelete(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', now()) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', now()) RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
@@ -943,13 +943,13 @@ func TestDashboardRollupPreservesNoProjectAfterTaskLink(t *testing.T) {
 	// Quick-create task: issue_id is NULL at creation time.
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, context, created_at)
-		VALUES ($1, NULL, $2, 'completed', '{}'::jsonb, now()) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, context, created_at)
+		VALUES ($1, NULL, $2, 'acked', '{}'::jsonb, now()) RETURNING id
 	`, agentID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert quick-create task: %v", err)
 	}
 	seedQueueExecution(t, taskID)
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at)
@@ -998,7 +998,7 @@ func TestDashboardRollupPreservesNoProjectAfterTaskLink(t *testing.T) {
 
 	// Mirror LinkTaskToIssue's UPDATE shape.
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue SET issue_id = $1 WHERE id = $2 AND issue_id IS NULL
+		UPDATE agent_inbox_event SET issue_id = $1 WHERE id = $2 AND issue_id IS NULL
 	`, issueID, taskID); err != nil {
 		t.Fatalf("link task to issue: %v", err)
 	}
@@ -1213,13 +1213,13 @@ func TestDashboardUsageDailyCrossMidnightFullPipeline(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', now()) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', now()) RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	seedQueueExecution(t, taskID)
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	// Raw agent_usage at 00:30 UTC two days ago — genuinely near UTC
 	// midnight. 00:30 UTC is still the PRIOR evening (~16:30/17:30) in
@@ -1325,13 +1325,13 @@ func TestRollupAgentUsageHourlyConvergesOnAgentUsageDelete(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-		VALUES ($1, $2, $3, 'completed', now() - interval '30 minutes') RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', now() - interval '30 minutes') RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	seedQueueExecution(t, taskID)
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	var usageID string
 	if err := testPool.QueryRow(ctx, `

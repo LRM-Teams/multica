@@ -35,7 +35,7 @@ func (s *EvolutionService) MaterializePromotedSkill(ctx context.Context, submiss
 	}
 
 	config, _ := json.Marshal(map[string]any{
-		"origin": "evolution",
+		"origin":            "evolution",
 		"evolution_unit_id": uuidString(unit.ID),
 	})
 

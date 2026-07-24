@@ -31,8 +31,8 @@ type fakePatcherQueries struct {
 	statusUpdates   []db.UpdateLarkOutboundCardStatusParams
 }
 
-func (f *fakePatcherQueries) GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error) {
-	return db.AgentTaskQueue{}, nil
+func (f *fakePatcherQueries) GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentInboxEvent, error) {
+	return db.AgentInboxEvent{}, nil
 }
 func (f *fakePatcherQueries) GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error) {
 	return db.ChatSession{}, nil

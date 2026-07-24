@@ -12,10 +12,10 @@ import (
 // (排队中 / 启动中 / 思考中 / 等待本地目录释放) per agent — instead of relying solely
 // on a transient typing broadcast that vanishes if the client missed it.
 type ChannelActiveTask struct {
-	AgentID             string  `json:"agent_id"`
-	AgentName           string  `json:"agent_name"`
-	TaskID              string  `json:"task_id"`
-	Status              string  `json:"status"`
+	AgentID   string `json:"agent_id"`
+	AgentName string `json:"agent_name"`
+	TaskID    string `json:"task_id"`
+	Status    string `json:"status"`
 	// Kind discriminates composer-strip rows (LRM-287). Only `reply` rows are
 	// meant to render above the composer; quick_create / issue_create are
 	// filtered client-side (and omitted server-side when sourced here).
@@ -38,8 +38,8 @@ type ChannelActiveTasksResponse struct {
 }
 
 var channelComposerStripExcludedInboxReasons = map[string]struct{}{
-	"ambient":             {},
-	"channel_onboarding":  {},
+	"ambient":            {},
+	"channel_onboarding": {},
 }
 
 func channelComposerStripExcludedKind(kind string) bool {
@@ -58,7 +58,7 @@ func channelComposerStripExcludedInboxReason(reason string) bool {
 
 // ListChannelActiveTasks returns the latest inbox read-model row per agent in
 // the channel. Chat/channel agent work now runs through agent_inbox_event, so
-// this endpoint must not use legacy agent_task_queue rows as the current-state
+// this endpoint must not use legacy agent_inbox_event rows as the current-state
 // source for the conversation strip.
 func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)

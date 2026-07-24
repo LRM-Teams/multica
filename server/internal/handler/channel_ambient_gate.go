@@ -176,38 +176,38 @@ func (h *Handler) dispatchSingleChannelAmbientObservation(ctx context.Context, c
 	}
 }
 
-func (h *Handler) createChannelAmbientPromptTaskTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, bool) {
+func (h *Handler) createChannelAmbientPromptTaskTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, bool) {
 	task, queued, ok := h.createOrCoalesceChannelAmbientWakeTx(ctx, tx, ch, agent, trigger, initiatorUserID)
 	if !ok || !queued {
-		return db.AgentTaskQueue{}, false
+		return db.AgentInboxEvent{}, false
 	}
 	return task, true
 }
 
-func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt string) (db.ChatSession, db.AgentTaskQueue, bool) {
+func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt string) (db.ChatSession, db.AgentInboxEvent, bool) {
 	if h.TaskService == nil {
 		slog.Warn("channel ambient observation: task service missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
-		return db.ChatSession{}, db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
 	txQueries := h.Queries.WithTx(tx)
 	session, err := h.ensureChannelAgentSessionWithDB(ctx, txQueries, tx, ch, agent.ID, initiatorUserID)
 	if err != nil {
 		slog.Warn("channel ambient observation: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.ChatSession{}, db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
 	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
 	if err != nil {
 		slog.Warn("channel ambient observation: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.ChatSession{}, db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
 	task, err := h.TaskService.CreateAmbientChatTaskRow(ctx, txQueries, session, initiatorUserID)
 	if err != nil {
 		slog.Warn("channel ambient observation: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.ChatSession{}, db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
 	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
 		slog.Warn("channel ambient observation: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-		return db.ChatSession{}, db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
 	return session, task, true
 }
@@ -249,17 +249,17 @@ func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBT
 		SELECT
 			COALESCE((
 				SELECT count(*)
-				FROM agent_task_queue atq
+				FROM agent_inbox_event atq
 				JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
 				WHERE cas.channel_id = $1
 				  AND cas.agent_id = $2
 				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
-				  AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+				  AND atq.status IN ('pending', 'draining', 'failed')
 			), 0) AS active_for_agent,
 			COALESCE((
 				SELECT count(*)
-				FROM agent_task_queue atq
+				FROM agent_inbox_event atq
 				JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
 				WHERE cas.channel_id = $1
 				  AND cas.agent_id = $2
@@ -269,7 +269,7 @@ func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBT
 			), 0) AS recent_for_agent,
 			COALESCE((
 				SELECT count(*)
-				FROM agent_task_queue atq
+				FROM agent_inbox_event atq
 				JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
 				WHERE cas.channel_id = $1
 				  AND atq.priority = 1
@@ -278,7 +278,7 @@ func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBT
 			), 0) AS recent_for_channel,
 			COALESCE((
 				SELECT count(*)
-				FROM agent_task_queue atq
+				FROM agent_inbox_event atq
 				WHERE atq.runtime_id = $3
 				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true

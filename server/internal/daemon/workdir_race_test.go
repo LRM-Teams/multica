@@ -61,13 +61,13 @@ func TestHandleTask_DoesNotCallStartTaskItself(t *testing.T) {
 		return TaskResult{Status: "completed"}, nil
 	})
 
-	task := Task{
+	task := canonicalInboxTaskForTest(Task{
 		ID:          "task-no-start",
 		WorkspaceID: "ws-no-start",
 		RuntimeID:   "rt-1",
 		IssueID:     "issue-no-start",
 		Agent:       &AgentData{Name: "test-agent"},
-	}
+	})
 
 	d.handleTask(context.Background(), task, 0)
 
@@ -76,83 +76,6 @@ func TestHandleTask_DoesNotCallStartTaskItself(t *testing.T) {
 	}
 	if got := startCalls.Load(); got != 0 {
 		t.Fatalf("handleTask called /start %d time(s); StartTask must be runTask's responsibility now (issue #3999 race A)", got)
-	}
-}
-
-// TestRunTask_StartTaskCalledAfterWorkdirOnDisk is the behavioral regression
-// guard for issue #3999 race A. Calls runTask directly with a missing agent
-// binary so the run aborts at exec time — but only AFTER reaching the
-// post-Prepare StartTask call. The fake server records whether the per-task
-// workdir already exists on disk at the moment /start is hit; before the
-// fix it did not.
-func TestRunTask_StartTaskCalledAfterWorkdirOnDisk(t *testing.T) {
-	t.Parallel()
-
-	workspacesRoot := t.TempDir()
-	workspaceID := "ws-runtask"
-	taskID := "task-runtask-after-mkdir"
-	expectedEnvRoot := execenv.PredictRootDir(workspacesRoot, workspaceID, taskID)
-	expectedWorkDir := filepath.Join(expectedEnvRoot, "workdir")
-
-	var (
-		startCalled   atomic.Bool
-		workdirOnDisk atomic.Bool
-		envRootOnDisk atomic.Bool
-	)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/start") {
-			startCalled.Store(true)
-			if info, err := os.Stat(expectedWorkDir); err == nil && info.IsDir() {
-				workdirOnDisk.Store(true)
-			}
-			if info, err := os.Stat(expectedEnvRoot); err == nil && info.IsDir() {
-				envRootOnDisk.Store(true)
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-
-	// Provider entry intentionally points at a non-existent binary: runTask
-	// reaches Prepare → StartTask → ReportProgress before agent.Backend.Run
-	// fails at exec time. We don't care about the eventual error; the
-	// regression guard is the order of /start vs. os.MkdirAll(envRoot).
-	missingBin := filepath.Join(t.TempDir(), "definitely-not-claude")
-	d := &Daemon{
-		client:         NewClient(srv.URL),
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:     make(map[string]*workspaceState),
-		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots: make(map[string]int),
-		cfg: Config{
-			WorkspacesRoot: workspacesRoot,
-			Agents: map[string]AgentEntry{
-				"claude": {Path: missingBin, Model: ""},
-			},
-		},
-	}
-
-	task := Task{
-		ID:          taskID,
-		WorkspaceID: workspaceID,
-		RuntimeID:   "rt-1",
-		IssueID:     "issue-runtask",
-		Agent:       &AgentData{Name: "test-agent"},
-	}
-
-	taskLog := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// The Run() failure is expected; we only assert the pre-Run ordering.
-	_, _ = d.runTask(context.Background(), task, "claude", 0, taskLog)
-
-	if !startCalled.Load() {
-		t.Fatal("runTask did not call /start — Fix A's StartTask placement is missing")
-	}
-	if !envRootOnDisk.Load() {
-		t.Fatal("envRoot did not exist on disk when /start was called — Prepare must run before StartTask (issue #3999 race A)")
-	}
-	if !workdirOnDisk.Load() {
-		t.Fatal("envRoot/workdir did not exist on disk when /start was called — os.MkdirAll must complete before StartTask (issue #3999 race A)")
 	}
 }
 
@@ -182,22 +105,23 @@ func TestRunTask_ChatWithoutRunTokenFailsBeforeAgentExecution(t *testing.T) {
 		},
 	}
 
-	result, err := d.runTask(context.Background(), Task{
+	result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
 		ID:            "task-chat-no-token",
 		WorkspaceID:   "ws-chat-no-token",
 		RuntimeID:     "rt-1",
 		IssueID:       "issue-chat-no-token",
 		ChatSessionID: "chat-1",
-		Agent:         &AgentData{Name: "test-agent"},
-	}, "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		AgentID:       "agent-1",
+		Agent:         &AgentData{ID: "agent-1", Name: "test-agent"},
+	}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)
 	}
-	if result.Status != "failed" || result.FailureReason != "transport_unavailable" || !strings.Contains(result.Comment, "missing_run_bearer_token") {
-		t.Fatalf("chat task result = %+v, want transport_unavailable missing_run_bearer_token", result)
+	if result.Status != "failed" || result.FailureReason != "credential_unavailable" {
+		t.Fatalf("chat task result = %+v, want credential_unavailable", result)
 	}
-	if startCalls.Load() != 1 {
-		t.Fatalf("StartTask calls = %d, want one task-state transition before fail-fast transport check", startCalls.Load())
+	if startCalls.Load() != 0 {
+		t.Fatalf("legacy StartTask calls = %d, want zero", startCalls.Load())
 	}
 }
 
@@ -251,7 +175,7 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 				},
 			}
 
-			result, err := d.runTask(context.Background(), Task{
+			result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
 				ID:            "task-chat-transport-setup",
 				WorkspaceID:   "ws-chat-transport-setup",
 				RuntimeID:     "rt-1",
@@ -259,15 +183,15 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 				ChatSessionID: "chat-1",
 				AuthToken:     "task-token",
 				Agent:         &AgentData{Name: "test-agent"},
-			}, "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err != nil {
 				t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)
 			}
 			if result.Status != "failed" || result.FailureReason != "transport_unavailable" || !strings.Contains(result.Comment, tc.wantStage) {
 				t.Fatalf("chat task result = %+v, want transport_unavailable %s", result, tc.wantStage)
 			}
-			if startCalls.Load() != 1 {
-				t.Fatalf("StartTask calls = %d, want one task-state transition before fail-fast transport check", startCalls.Load())
+			if startCalls.Load() != 0 {
+				t.Fatalf("legacy StartTask calls = %d, want zero", startCalls.Load())
 			}
 		})
 	}
@@ -337,13 +261,13 @@ func TestHandleTask_KeepsEnvRootActiveAcrossCompletion(t *testing.T) {
 		}, nil
 	})
 
-	task := Task{
+	task := canonicalInboxTaskForTest(Task{
 		ID:          taskID,
 		WorkspaceID: workspaceID,
 		RuntimeID:   "rt-1",
 		IssueID:     "issue-active-during-complete",
 		Agent:       &AgentData{Name: "test-agent"},
-	}
+	})
 
 	d.handleTask(context.Background(), task, 0)
 

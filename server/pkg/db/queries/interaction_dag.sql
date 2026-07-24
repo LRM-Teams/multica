@@ -1,7 +1,7 @@
 -- name: UpsertInteractionDAGSessionRun :exec
 -- Idempotent on session_id: a retry that re-opens a session re-binds it to the
 -- latest agent_run_id (= task.ID, D8) + issue_id. agent_run_id is the multica
--- agent_task_queue PK (attempt-level), NOT the agent UUID.
+-- agent_inbox_event PK (attempt-level), NOT the agent UUID.
 INSERT INTO interaction_dag_session_run (session_id, project_id, agent_run_id, issue_id)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (session_id) DO UPDATE SET

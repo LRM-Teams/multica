@@ -29,12 +29,12 @@ func TestAutopilotErrorType(t *testing.T) {
 func TestTaskFailureReasonForAutopilotRun(t *testing.T) {
 	cases := []struct {
 		name string
-		task db.AgentTaskQueue
+		task db.AgentInboxEvent
 		want string
 	}{
 		{
 			name: "prefers raw error text",
-			task: db.AgentTaskQueue{
+			task: db.AgentInboxEvent{
 				Error:         pgtype.Text{String: "tests failed", Valid: true},
 				FailureReason: pgtype.Text{String: "agent_error", Valid: true},
 			},
@@ -42,7 +42,7 @@ func TestTaskFailureReasonForAutopilotRun(t *testing.T) {
 		},
 		{
 			name: "falls back to classified reason when error is blank",
-			task: db.AgentTaskQueue{
+			task: db.AgentInboxEvent{
 				Error:         pgtype.Text{String: "   ", Valid: true},
 				FailureReason: pgtype.Text{String: "codex_semantic_inactivity", Valid: true},
 			},
@@ -50,7 +50,7 @@ func TestTaskFailureReasonForAutopilotRun(t *testing.T) {
 		},
 		{
 			name: "generic default when nothing is set",
-			task: db.AgentTaskQueue{},
+			task: db.AgentInboxEvent{},
 			want: "task failed",
 		},
 	}

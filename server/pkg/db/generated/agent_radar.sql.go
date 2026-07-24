@@ -41,12 +41,13 @@ SET
     status = 'executing',
     started_at = COALESCE(run.started_at, now()),
     updated_at = now()
-FROM agent_task_queue task
+FROM agent_inbox_event task
 WHERE run.id = $1
   AND run.task_id = $2
   AND task.id = $2
   AND task.agent_id = run.agent_id
-  AND task.status = 'completed'
+  AND task.status = 'acked'
+  AND task.terminal_outcome = 'completed'
   AND task.context->>'type' = 'agent_radar'
   AND task.context->>'radar_run_id' = run.id::text
   AND run.status IN ('queued', 'running')
@@ -127,7 +128,7 @@ func (q *Queries) ClaimAgentRadarRunForExecution(ctx context.Context, id pgtype.
 const countRecentWorkspaceScheduledRadarRuns = `-- name: CountRecentWorkspaceScheduledRadarRuns :one
 SELECT count(*)::bigint
 FROM agent_radar_run rr
-LEFT JOIN agent_task_queue atq ON atq.id = rr.task_id
+LEFT JOIN agent_inbox_event atq ON atq.id = rr.task_id
 WHERE rr.workspace_id = $1
   AND rr.trigger_kind = 'scheduled'
   AND rr.cooldown_key = 'workspace_supervisor_radar'
@@ -319,11 +320,11 @@ const failStaleDispatchedAgentRadarTasks = `-- name: FailStaleDispatchedAgentRad
 WITH victims AS MATERIALIZED (
     SELECT rr.id AS radar_run_id, atq.id AS task_id
     FROM agent_radar_run rr
-    JOIN agent_task_queue atq ON atq.id = rr.task_id
+    JOIN agent_inbox_event atq ON atq.id = rr.task_id
     WHERE rr.status = 'queued'
       AND rr.started_at IS NULL
       AND rr.created_at < now() - make_interval(secs => $1::double precision)
-      AND atq.status = 'dispatched'
+      AND atq.status = 'draining'
       AND atq.started_at IS NULL
       AND atq.created_at < now() - make_interval(secs => $1::double precision)
       AND atq.agent_id = rr.agent_id
@@ -338,18 +339,21 @@ WITH victims AS MATERIALIZED (
     -- only that row and let HandleFailedTasks terminalize the run afterwards.
     FOR UPDATE OF atq SKIP LOCKED
 )
-UPDATE agent_task_queue atq
+UPDATE agent_inbox_event atq
 SET
-    status = 'failed',
+    status = 'acked',
     completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    terminal_outcome = 'failed',
     error = 'Radar task remained dispatched without starting',
     failure_reason = 'radar_stale_dispatch_repair'
 FROM victims v
 WHERE atq.id = v.task_id
-  AND atq.status = 'dispatched'
+  AND atq.status = 'draining'
   AND atq.started_at IS NULL
   AND atq.created_at < now() - make_interval(secs => $1::double precision)
-RETURNING atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.created_at, atq.context, atq.runtime_id, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.chat_session_id, atq.autopilot_run_id, atq.attempt, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
+RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
 `
 
 type FailStaleDispatchedAgentRadarTasksParams struct {
@@ -362,35 +366,57 @@ type FailStaleDispatchedAgentRadarTasksParams struct {
 // so repeated re-delivery cannot keep a Radar task active forever. The one-hour
 // threshold is deliberately much larger than the normal 90-second claim
 // recovery and five-minute dispatch timeout windows.
-func (q *Queries) FailStaleDispatchedAgentRadarTasks(ctx context.Context, arg FailStaleDispatchedAgentRadarTasksParams) ([]AgentTaskQueue, error) {
+func (q *Queries) FailStaleDispatchedAgentRadarTasks(ctx context.Context, arg FailStaleDispatchedAgentRadarTasksParams) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, failStaleDispatchedAgentRadarTasks, arg.StaleAgeSecs, arg.MaxPerTick)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentTaskQueue{}
+	items := []AgentInboxEvent{}
 	for rows.Next() {
-		var i AgentTaskQueue
+		var i AgentInboxEvent
 		if err := rows.Scan(
 			&i.ID,
+			&i.WorkspaceID,
+			&i.AgentSessionID,
+			&i.ConversationID,
+			&i.ChannelID,
+			&i.ChatSessionID,
 			&i.AgentID,
-			&i.IssueID,
+			&i.SourceMessageID,
+			&i.Reason,
+			&i.RequiresWake,
 			&i.Status,
 			&i.Priority,
+			&i.SeqFrom,
+			&i.SeqTo,
+			&i.Attempt,
+			&i.LastError,
+			&i.ClaimedAt,
+			&i.AckedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TerminalOutcome,
+			&i.TerminalDeliveryID,
+			&i.Retryable,
+			&i.TerminalAt,
+			&i.RuntimeID,
+			&i.ExecutionConfig,
+			&i.DeliveryMode,
+			&i.ResponseMode,
+			&i.ChannelOnboardingID,
+			&i.IssueID,
+			&i.SourceChatMessageID,
+			&i.Context,
 			&i.DispatchedAt,
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.Result,
 			&i.Error,
-			&i.CreatedAt,
-			&i.Context,
-			&i.RuntimeID,
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
-			&i.ChatSessionID,
 			&i.AutopilotRunID,
-			&i.Attempt,
 			&i.MaxAttempts,
 			&i.ParentTaskID,
 			&i.FailureReason,
@@ -905,23 +931,25 @@ func (q *Queries) MarkWorkspaceRadarSucceeded(ctx context.Context, id pgtype.UUI
 const reconcileTerminalWorkspaceRadarRuns = `-- name: ReconcileTerminalWorkspaceRadarRuns :one
 WITH terminalized AS MATERIALIZED (
     UPDATE agent_radar_run run
-    SET status = CASE WHEN task.status = 'cancelled' THEN 'cancelled' ELSE 'failed' END,
+    SET status = CASE WHEN task.terminal_outcome = 'cancelled' THEN 'cancelled' ELSE 'failed' END,
         error = CASE
           WHEN run.error <> '' THEN run.error
-          WHEN task.status = 'completed' THEN 'Radar completion processing was interrupted'
+          WHEN task.terminal_outcome = 'completed' THEN 'Radar completion processing was interrupted'
           ELSE COALESCE(task.error, task.failure_reason, 'Radar task terminated')
         END,
         finished_at = COALESCE(run.finished_at, now()),
         updated_at = now()
-    FROM agent_task_queue task
+    FROM agent_inbox_event task
     WHERE run.task_id = task.id
       AND (
         (
-          task.status IN ('failed', 'cancelled')
+          task.status IN ('acked', 'suppressed')
+          AND task.terminal_outcome IN ('failed', 'cancelled')
           AND run.status IN ('planned', 'queued', 'running', 'executing')
         )
         OR (
-          task.status = 'completed'
+          task.status = 'acked'
+          AND task.terminal_outcome = 'completed'
           AND (
             (
               run.status IN ('planned', 'queued', 'running')

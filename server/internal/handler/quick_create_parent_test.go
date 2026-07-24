@@ -114,7 +114,7 @@ func TestQuickCreateIssueParentTrustBoundary(t *testing.T) {
 		t.Helper()
 		var count int
 		if err := testPool.QueryRow(context.Background(),
-			`SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1 AND context->>'type' = 'quick_create'`,
+			`SELECT COUNT(*) FROM agent_inbox_event WHERE agent_id = $1 AND context->>'type' = 'quick_create'`,
 			agentID,
 		).Scan(&count); err != nil {
 			t.Fatalf("count quick-create tasks: %v", err)
@@ -140,7 +140,7 @@ func TestQuickCreateIssueParentTrustBoundary(t *testing.T) {
 			t.Fatalf("decode response: %v", err)
 		}
 		t.Cleanup(func() {
-			testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, resp.TaskID)
+			testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, resp.TaskID)
 		})
 
 		// QuickCreateContext.ParentIssueID must contain the resolved UUID —
@@ -148,7 +148,7 @@ func TestQuickCreateIssueParentTrustBoundary(t *testing.T) {
 		// identifier and to inject `--parent <uuid>` into the prompt.
 		var contextJSON []byte
 		if err := testPool.QueryRow(context.Background(),
-			`SELECT context FROM agent_task_queue WHERE id = $1`, resp.TaskID,
+			`SELECT context FROM agent_inbox_event WHERE id = $1`, resp.TaskID,
 		).Scan(&contextJSON); err != nil {
 			t.Fatalf("load task context: %v", err)
 		}

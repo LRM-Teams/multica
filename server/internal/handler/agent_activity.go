@@ -783,7 +783,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 			NULL::uuid AS result_message_id,
 			NULL::text AS result_message_kind
 		FROM task_message tm
-		JOIN agent_task_queue atq ON atq.id = tm.task_id
+		JOIN agent_inbox_event atq ON atq.id = tm.task_id
 		LEFT JOIN issue i ON i.id = atq.issue_id
 		LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id
 		WHERE atq.agent_id = $2
@@ -871,7 +871,7 @@ func (h *Handler) queryAgentActivityRow(ctx context.Context, reqCtx agentActivit
 const agentActivityListSQL = `
 	WITH run_candidates AS (
 		SELECT atq.*
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		WHERE atq.agent_id = $2
 		  AND ($3::timestamptz IS NULL OR (atq.created_at, 'run'::text, atq.id) < ($3::timestamptz, $4::text, $5::uuid))
 		ORDER BY atq.created_at DESC, 'run'::text DESC, atq.id DESC
@@ -1018,7 +1018,7 @@ const agentActivityUnionSQL = `
 			COALESCE(usage.usage_json, '[]'::jsonb) AS usage_json,
 			result_message.id AS result_message_id,
 			result_message.kind AS result_message_kind
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		LEFT JOIN (
 			SELECT task_id, count(*)::bigint AS step_count
 			FROM task_message
@@ -1408,7 +1408,7 @@ func (h *Handler) chatSessionCreatorUserID(ctx context.Context, workspaceID stri
 }
 
 func agentActivityRunSummary(row agentActivityRawRow) *AgentActivityRunSummary {
-	status := textOrDefault(row.Status, "queued")
+	status := agentActivityTaskStatus(textOrDefault(row.Status, "pending"))
 	resultState := agentActivityResultState(row.Result)
 	if resultState != nil && *resultState == "no_reply" && status == "completed" {
 		status = "no_reply"
@@ -1424,6 +1424,21 @@ func agentActivityRunSummary(row agentActivityRawRow) *AgentActivityRunSummary {
 		Tokens:      parseActivityTokenUse(row.UsageJSON),
 		StepCount:   row.StepCount,
 		ResultState: resultState,
+	}
+}
+
+func agentActivityTaskStatus(status string) string {
+	switch status {
+	case "pending", "failed":
+		return "queued"
+	case "draining":
+		return "running"
+	case "acked":
+		return "completed"
+	case "suppressed":
+		return "cancelled"
+	default:
+		return status
 	}
 }
 
@@ -1612,7 +1627,7 @@ func agentActivityEventSummary(row agentActivityRawRow) *AgentActivityEventSumma
 	}
 }
 
-func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspaceID string, task db.AgentTaskQueue, message db.TaskMessage) *AgentActivityTimelineEvent {
+func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspaceID string, task db.AgentInboxEvent, message db.TaskMessage) *AgentActivityTimelineEvent {
 	details := map[string]any{
 		"task_message_id": uuidToString(message.ID),
 		"task_id":         uuidToString(message.TaskID),
@@ -1658,7 +1673,7 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		Message:       taskMessageActivityText(message),
 		Details:       detailsJSON,
 		Visibility:    pgtype.Text{String: message.Visibility, Valid: strings.TrimSpace(message.Visibility) != ""},
-		Status:        pgtype.Text{String: task.Status, Valid: strings.TrimSpace(task.Status) != ""},
+		Status:        pgtype.Text{String: agentActivityTaskStatus(task.Status), Valid: strings.TrimSpace(task.Status) != ""},
 		CreatedAt:     message.CreatedAt,
 		UsageJSON:     []byte("[]"),
 	}
@@ -1767,6 +1782,10 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
 	status := textToPtr(row.Status)
+	if status != nil {
+		mapped := agentActivityTaskStatus(*status)
+		status = &mapped
+	}
 	text := textToPtr(row.Message)
 	reasonCode := textOrDefault(row.ReasonCode, "")
 	entries := agentActivityTimelineEntries(row, details, tool)

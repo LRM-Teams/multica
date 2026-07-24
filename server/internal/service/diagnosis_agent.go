@@ -311,21 +311,21 @@ func (r *DiagnosisAgentRunner) resolveTaskContext(ctx context.Context, segments 
 // DiagnosisReport is the result of an on-demand diagnosis run. Rewards are
 // already persisted in the DAG store; the report carries status only.
 type DiagnosisReport struct {
-	RunID              string
-	CompletedSegments  int
-	TotalSegments      int
-	Status             DiagnosisRunStatus
+	RunID             string
+	CompletedSegments int
+	TotalSegments     int
+	Status            DiagnosisRunStatus
 }
 
 // DiagnosisOnDemandConfig holds the dependencies for the on-demand diagnosis
 // flow (Tasks 1-6). When set, Diagnose routes through the persistent-session
 // path; when nil, it falls back to the legacy one-shot prompt path.
 type DiagnosisOnDemandConfig struct {
-	StateStore      *DiagnosisStateStore
-	DAGWriter       DiagnosisDAGWriter
-	MessagePager    DiagnosisMessagePager
-	PiRPC           agentpkg.PiRPCBackend
-	ExtensionRoot   string
+	StateStore    *DiagnosisStateStore
+	DAGWriter     DiagnosisDAGWriter
+	MessagePager  DiagnosisMessagePager
+	PiRPC         agentpkg.PiRPCBackend
+	ExtensionRoot string
 }
 
 // DiagnoseOnDemand runs the persistent per-segment diagnosis flow. It creates or
@@ -393,7 +393,7 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 		// Query expected reward count from DAG.
 		totalRewards, _ := cfg.DAGWriter.CountDiagnosisStepRewards(ctx, projectID, seg.SegmentID)
 		segInfos = append(segInfos, segmentDiagnosisInfo{
-			SegmentID:       seg.SegmentID,
+			SegmentID:        seg.SegmentID,
 			ExpectedMessages: seg.ExpectedMessageCount,
 			ExpectedRewards:  seg.ExpectedRewardCount,
 			RecordedRewards:  totalRewards,

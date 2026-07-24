@@ -45,6 +45,7 @@ INSERT INTO agent_inbox_event (
   runtime_id,
   execution_config,
   source_message_id,
+  trigger_summary,
   reason,
   requires_wake,
   status,
@@ -66,6 +67,7 @@ VALUES (
       'snapshotted', true
     ) FROM agent WHERE id = $4),
   sqlc.narg('source_message_id'),
+  (SELECT LEFT(content, 200) FROM channel_message WHERE id = sqlc.narg('source_message_id')),
   $5,
   $6,
   'pending',
@@ -175,58 +177,6 @@ WHERE e.id IN (SELECT inbox_event_id FROM expired_delivery)
       AND d.lease_expires_at > now()
   );
 
--- name: LeaseAgentInboxEventForRuntime :one
-WITH next_event AS (
-  SELECT e.id
-  FROM agent_inbox_event e
-  JOIN agent_session s ON s.id = e.agent_session_id
-  JOIN agent a ON a.id = e.agent_id
-  WHERE COALESCE(e.runtime_id, s.runtime_id) = $1
-    AND s.status = 'active'
-    AND e.status IN ('pending', 'failed')
-    -- Chat inbox execution is globally serial per agent. This is deliberately
-    -- independent of agent.max_concurrent_tasks, which only controls the
-    -- issue/task scheduler. Locking the agent row makes the exclusion safe
-    -- when multiple drain requests race on different inbox-event rows.
-    AND NOT EXISTS (
-      SELECT 1
-      FROM agent_event_delivery active_delivery
-      JOIN agent_session active_session
-        ON active_session.id = active_delivery.agent_session_id
-      WHERE active_session.agent_id = e.agent_id
-        AND active_delivery.status IN ('leased', 'processing')
-        AND active_delivery.lease_expires_at > now()
-    )
-  ORDER BY e.priority DESC, e.requires_wake DESC, e.created_at ASC, e.id ASC
-  LIMIT 1
-  FOR UPDATE OF a, e SKIP LOCKED
-),
-leased_event AS (
-  UPDATE agent_inbox_event e
-  SET status = 'draining',
-      claimed_at = now(),
-      attempt = attempt + 1,
-      updated_at = now()
-  FROM next_event
-  WHERE e.id = next_event.id
-  RETURNING e.*
-)
-INSERT INTO agent_event_delivery (
-  workspace_id,
-  agent_session_id,
-  inbox_event_id,
-  runtime_id,
-  status
-)
-SELECT
-  e.workspace_id,
-  e.agent_session_id,
-  e.id,
-  $1,
-  'leased'
-FROM leased_event e
-RETURNING *;
-
 -- name: RenewAgentInboxDelivery :one
 UPDATE agent_event_delivery d
 SET lease_expires_at = now() + interval '2 minutes',
@@ -250,6 +200,52 @@ WHERE d.id = $1
       AND newer.created_at >= d.created_at
   )
 RETURNING *;
+
+-- name: LockActiveAgentInboxDelivery :one
+-- Provider start and non-chat terminal writes take this fence inside the same
+-- transaction as the event mutation. Reclaim cannot slip between a read-only
+-- lease check and the canonical write boundary.
+SELECT d.runtime_id
+FROM agent_event_delivery d
+JOIN agent_inbox_event e
+  ON e.id = d.inbox_event_id
+ AND e.agent_session_id = d.agent_session_id
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND d.lease_expires_at > now()
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+FOR UPDATE OF d, e;
+
+-- name: LockCurrentAgentInboxDelivery :one
+-- Terminal reports may arrive after their lease timestamp, matching the ACK
+-- contract below, but only while no newer delivery has reclaimed the event.
+SELECT d.runtime_id
+FROM agent_event_delivery d
+JOIN agent_inbox_event e
+  ON e.id = d.inbox_event_id
+ AND e.agent_session_id = d.agent_session_id
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+FOR UPDATE OF d, e;
 
 -- name: AckAgentInboxDelivery :one
 WITH active_delivery AS (
@@ -276,7 +272,7 @@ WITH active_delivery AS (
       FROM agent_inbox_event e
       WHERE e.id = d.inbox_event_id
         AND e.agent_session_id = d.agent_session_id
-        AND e.status IN ('pending', 'draining', 'failed')
+        AND e.status IN ('pending', 'draining', 'failed', 'acked')
     )
   RETURNING d.*
 ),
@@ -288,7 +284,7 @@ acked_event AS (
   FROM active_delivery d
   WHERE e.id = d.inbox_event_id
     AND e.agent_session_id = d.agent_session_id
-    AND e.status IN ('pending', 'draining', 'failed')
+    AND e.status IN ('pending', 'draining', 'failed', 'acked')
   RETURNING e.*
 ),
 acked_session AS (
@@ -310,6 +306,7 @@ SET terminal_outcome = $3,
     terminal_delivery_id = $4,
     retryable = $5,
     terminal_at = now(),
+    completed_at = COALESCE(completed_at, now()),
     updated_at = now()
 WHERE id = $1
   AND workspace_id = $2

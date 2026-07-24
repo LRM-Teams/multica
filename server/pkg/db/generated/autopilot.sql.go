@@ -189,7 +189,7 @@ type CreateAutopilotRunParams struct {
 // =====================
 // squad_id is an attribution hook: set to the assignee squad when the
 // parent autopilot has assignee_type='squad', NULL otherwise. The executing
-// agent_id on agent_task_queue still records who actually ran the work
+// agent_id on agent_inbox_event still records who actually ran the work
 // (the squad leader); squad_id lets reports group by squad without a join.
 func (q *Queries) CreateAutopilotRun(ctx context.Context, arg CreateAutopilotRunParams) (AutopilotRun, error) {
 	row := q.db.QueryRow(ctx, createAutopilotRun,
@@ -222,51 +222,81 @@ func (q *Queries) CreateAutopilotRun(ctx context.Context, arg CreateAutopilotRun
 
 const createAutopilotTask = `-- name: CreateAutopilotTask :one
 
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, autopilot_run_id, trigger_summary)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+INSERT INTO agent_inbox_event (
+  workspace_id, agent_session_id, agent_id, runtime_id, issue_id,
+  reason, requires_wake, status, priority, autopilot_run_id, trigger_summary
+)
+SELECT
+  a.workspace_id, ensure_agent_wake_session(a.id), a.id, $1, NULL,
+  'autopilot', true, 'pending', $2,
+  $3, $4
+FROM agent a
+WHERE a.id = $5
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type CreateAutopilotTaskParams struct {
-	AgentID        pgtype.UUID `json:"agent_id"`
 	RuntimeID      pgtype.UUID `json:"runtime_id"`
 	Priority       int32       `json:"priority"`
 	AutopilotRunID pgtype.UUID `json:"autopilot_run_id"`
 	TriggerSummary pgtype.Text `json:"trigger_summary"`
+	AgentID        pgtype.UUID `json:"agent_id"`
 }
 
 // =====================
 // Task Queue (run_only mode)
 // =====================
-func (q *Queries) CreateAutopilotTask(ctx context.Context, arg CreateAutopilotTaskParams) (AgentTaskQueue, error) {
+func (q *Queries) CreateAutopilotTask(ctx context.Context, arg CreateAutopilotTaskParams) (AgentInboxEvent, error) {
 	row := q.db.QueryRow(ctx, createAutopilotTask,
-		arg.AgentID,
 		arg.RuntimeID,
 		arg.Priority,
 		arg.AutopilotRunID,
 		arg.TriggerSummary,
+		arg.AgentID,
 	)
-	var i AgentTaskQueue
+	var i AgentInboxEvent
 	err := row.Scan(
 		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentSessionID,
+		&i.ConversationID,
+		&i.ChannelID,
+		&i.ChatSessionID,
 		&i.AgentID,
-		&i.IssueID,
+		&i.SourceMessageID,
+		&i.Reason,
+		&i.RequiresWake,
 		&i.Status,
 		&i.Priority,
+		&i.SeqFrom,
+		&i.SeqTo,
+		&i.Attempt,
+		&i.LastError,
+		&i.ClaimedAt,
+		&i.AckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TerminalOutcome,
+		&i.TerminalDeliveryID,
+		&i.Retryable,
+		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
 		&i.DispatchedAt,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.Result,
 		&i.Error,
-		&i.CreatedAt,
-		&i.Context,
-		&i.RuntimeID,
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
-		&i.ChatSessionID,
 		&i.AutopilotRunID,
-		&i.Attempt,
 		&i.MaxAttempts,
 		&i.ParentTaskID,
 		&i.FailureReason,
@@ -1270,7 +1300,7 @@ type UpdateAutopilotRunSkippedParams struct {
 // Marks an autopilot_run as skipped without enqueueing any task. Used by the
 // pre-flight admission check when the assignee agent's runtime is offline:
 // creating an issue / task in that state would just pile a doomed job onto
-// agent_task_queue (the canonical "持续给离线 local agent 入队" symptom from
+// agent_inbox_event (the canonical "持续给离线 local agent 入队" symptom from
 // MUL-1899). Recording the skip + reason gives the UI / failure monitor / ops
 // a paper trail without polluting the failure ratio.
 func (q *Queries) UpdateAutopilotRunSkipped(ctx context.Context, arg UpdateAutopilotRunSkippedParams) (AutopilotRun, error) {

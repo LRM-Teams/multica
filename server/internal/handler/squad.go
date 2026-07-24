@@ -575,7 +575,7 @@ func (h *Handler) ListSquadMemberStatus(w http.ResponseWriter, r *http.Request) 
 
 		// A dispatched/running task occupies an agent slot even when it
 		// has no associated issue (chat / quick-create tasks set
-		// agent_task_queue.issue_id = NULL). The `working` bucket is
+		// agent_inbox_event.issue_id = NULL). The `working` bucket is
 		// defined by task presence, not by whether we can render an
 		// issue link, so flag the agent here regardless of issue_id.
 		if row.TaskID.Valid {

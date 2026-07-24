@@ -27,7 +27,7 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-role-agent")
 	taskID := createActivityRunTask(t, agentID, "", "completed", "safe summary")
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
+		UPDATE agent_inbox_event
 		SET result = '{"action":"no_reply","trigger_kind":"time_trigger","output_suppressed_reason":"legacy_protocol_output"}'::jsonb,
 		    error = 'raw stack /Users/frank/secret sk_agent_should_not_leak',
 		    started_at = now() - interval '2 minutes',
@@ -141,7 +141,7 @@ func TestAgentActivity_TargetVisibilityForDMAndChannelRuns(t *testing.T) {
 	dmTaskID := createActivityRunTask(t, agentID, dmSessionID, "running", "dm work")
 	dmMessageID := createActivityChatMessage(t, dmSessionID, dmTaskID, "dm answer")
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_task_queue SET result = '{"action":"message_send"}'::jsonb WHERE id = $1
+		UPDATE agent_inbox_event SET result = '{"action":"message_send"}'::jsonb WHERE id = $1
 	`, dmTaskID); err != nil {
 		t.Fatalf("update dm task result: %v", err)
 	}
@@ -222,12 +222,12 @@ func TestAgentActivity_ListKeepsRecentEventsVisibleWithLegacyRunHistory(t *testi
 	ctx := context.Background()
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-feed-history-agent")
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, trigger_summary,
 			created_at, started_at, completed_at
 		)
 		SELECT
-			$1, $2, 'completed', 0, 'legacy run ' || g,
+			$1, $2, 'acked', 0, 'legacy run ' || g,
 			now() - interval '2 hours' - (g || ' seconds')::interval,
 			now() - interval '2 hours' - (g || ' seconds')::interval,
 			now() - interval '2 hours' - (g || ' seconds')::interval
@@ -235,7 +235,7 @@ func TestAgentActivity_ListKeepsRecentEventsVisibleWithLegacyRunHistory(t *testi
 	`, agentID, handlerTestRuntimeID(t)); err != nil {
 		t.Fatalf("seed legacy activity runs: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE agent_id = $1`, agentID) })
 
 	eventID := createActivityEvent(t, agentID, "agent", agentID, "agent_inbox_failed")
 	list := listAgentActivityForUser(t, testUserID, agentID, "?limit=1")
@@ -941,7 +941,7 @@ func TestTaskMessageActivityTimelineEvent_UnmappedRealtimeToolUsesOnlyGenericNar
 	h := &Handler{}
 	taskID := parseUUID("11111111-1111-1111-1111-111111111111")
 	agentID := parseUUID("22222222-2222-2222-2222-222222222222")
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      taskID,
 		AgentID: agentID,
 		Status:  "running",
@@ -988,7 +988,7 @@ func TestTaskMessageActivityTimelineEvent_UnmappedRealtimeToolUsesOnlyGenericNar
 func TestTaskMessageActivityTimelineEvent_MappedRealtimeCommandKeepsSemanticEntry(t *testing.T) {
 	h := &Handler{}
 	taskID := parseUUID("44444444-4444-4444-4444-444444444444")
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      taskID,
 		AgentID: parseUUID("55555555-5555-5555-5555-555555555555"),
 		Status:  "running",
@@ -1016,7 +1016,7 @@ func TestTaskMessageActivityTimelineEvent_MappedRealtimeCommandKeepsSemanticEntr
 func TestTaskMessageActivityTimelineEvent_CheckMessagesHidesOnlyTransportCommand(t *testing.T) {
 	h := &Handler{}
 	taskID := parseUUID("77777777-7777-7777-7777-777777777777")
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      taskID,
 		AgentID: parseUUID("88888888-8888-8888-8888-888888888888"),
 		Status:  "running",
@@ -1613,7 +1613,7 @@ func createActivityRunTask(t *testing.T, agentID, chatSessionID, status, summary
 	}
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id, status, priority, trigger_summary,
 			created_at, started_at
 		)
@@ -1622,7 +1622,7 @@ func createActivityRunTask(t *testing.T, agentID, chatSessionID, status, summary
 	`, agentID, handlerTestRuntimeID(t), chatArg, status, summary).Scan(&taskID); err != nil {
 		t.Fatalf("create activity task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 	return taskID
 }
 

@@ -24,7 +24,7 @@ func newEphemeralSandboxManager(h *Handler, lifecycle service.SandboxInstanceCre
 	return &ephemeralSandboxManager{h: h, lifecycle: lifecycle}
 }
 
-func (m *ephemeralSandboxManager) PrepareRetry(ctx context.Context, task db.AgentTaskQueue) (*service.EphemeralRetryResources, error) {
+func (m *ephemeralSandboxManager) PrepareRetry(ctx context.Context, task db.AgentInboxEvent) (*service.EphemeralRetryResources, error) {
 	marker, ok := service.ExtractEphemeralSandbox(task.Context)
 	if !ok {
 		return nil, fmt.Errorf("prepare retry: ephemeral sandbox marker missing")
@@ -107,7 +107,7 @@ func (m *ephemeralSandboxManager) Reclaim(ctx context.Context, resources *servic
 	return result
 }
 
-func (m *ephemeralSandboxManager) Cleanup(ctx context.Context, task db.AgentTaskQueue) error {
+func (m *ephemeralSandboxManager) Cleanup(ctx context.Context, task db.AgentInboxEvent) error {
 	marker, ok := service.ExtractEphemeralSandbox(task.Context)
 	if !ok {
 		return nil

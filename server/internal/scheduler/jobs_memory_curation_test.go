@@ -132,7 +132,7 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
 		VALUES ($1, $2, $3, 'completed', '2026-07-09 12:00:00+00')
 	`, targetAgentID, issueID, runtimeID); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestMemoryCurationSchedulerSkipsInactiveTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
 		VALUES ($1, $2, $3, 'completed', '2026-07-09 12:00:00+00')
 	`, activeAgentID, issueID, runtimeID); err != nil {
 		t.Fatal(err)

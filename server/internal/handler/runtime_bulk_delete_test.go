@@ -193,13 +193,13 @@ func TestDeleteRuntimesByDaemon_RefusesActiveTasks(t *testing.T) {
 	}
 	issueID := createBulkFixtureIssue(t, ctx)
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 0)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, rtID, issueID); err != nil {
 		t.Fatalf("insert active task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE runtime_id = $1`, rtID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE runtime_id = $1`, rtID)
 	})
 
 	w := httptest.NewRecorder()

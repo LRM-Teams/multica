@@ -52,7 +52,7 @@ type quickCreateReturnMessage struct {
 	deletedAt           pgtype.Timestamptz
 }
 
-func (s *TaskService) handleQuickCreateSourceReturn(ctx context.Context, task db.AgentTaskQueue, qc QuickCreateContext, issue db.Issue, identifier string) {
+func (s *TaskService) handleQuickCreateSourceReturn(ctx context.Context, task db.AgentInboxEvent, qc QuickCreateContext, issue db.Issue, identifier string) {
 	if qc.Source == nil {
 		return
 	}
@@ -106,7 +106,7 @@ func (s *TaskService) handleQuickCreateSourceReturn(ctx context.Context, task db
 	s.publishQuickCreateChannelMessage(ctx, workspaceID, task.AgentID, target.channelID, quickCreateReturnMessagePayload(msg))
 }
 
-func (s *TaskService) recordQuickCreateReturn(ctx context.Context, task db.AgentTaskQueue, workspaceID, issueID, agentID pgtype.UUID, value map[string]any) {
+func (s *TaskService) recordQuickCreateReturn(ctx context.Context, task db.AgentInboxEvent, workspaceID, issueID, agentID pgtype.UUID, value map[string]any) {
 	raw, _ := json.Marshal(value)
 	s.setIssueMetadataAndPublish(ctx, workspaceID, issueID, agentID, quickCreateReturnMetadataKey, raw)
 }

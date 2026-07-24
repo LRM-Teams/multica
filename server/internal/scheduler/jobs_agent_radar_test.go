@@ -509,12 +509,12 @@ func TestAgentRadarScheduleReplacesInvalidSupervisorAfterCancellingOldWork(t *te
 		t.Fatalf("old supervisor run = %+v, %v; want cancelled", storedRun, err)
 	}
 	storedTask, err := q.GetAgentTask(t.Context(), task.ID)
-	if err != nil || storedTask.Status != "cancelled" {
+	if err != nil || storedTask.Status != "suppressed" {
 		t.Fatalf("old supervisor task = %+v, %v; want cancelled", storedTask, err)
 	}
 	command, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now()
-		WHERE id = $1 AND status = 'queued'
+		UPDATE agent_inbox_event SET status = 'draining', claimed_at = now(), dispatched_at = now()
+		WHERE id = $1 AND status = 'pending'
 	`, task.ID)
 	if err != nil {
 		t.Fatalf("probe old supervisor redispatch: %v", err)
@@ -833,9 +833,9 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 
 		var taskID pgtype.UUID
 		err := pool.QueryRow(t.Context(), `
-			UPDATE agent_task_queue
-			SET status = 'dispatched', dispatched_at = now()
-			WHERE id = $1 AND status = 'queued'
+			UPDATE agent_inbox_event
+			SET status = 'draining', claimed_at = now(), dispatched_at = now()
+			WHERE id = $1 AND status = 'pending'
 			RETURNING id
 		`, task.ID).Scan(&taskID)
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -847,8 +847,9 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 		agent, _, task := seedQueuedWorkspaceRadar(t)
 		pool := integrationPool(t)
 		if _, err := pool.Exec(t.Context(), `
-			UPDATE agent_task_queue
-			SET status = 'dispatched', dispatched_at = now() - interval '5 minutes'
+			UPDATE agent_inbox_event
+			SET status = 'draining', claimed_at = now() - interval '5 minutes',
+			    dispatched_at = now() - interval '5 minutes'
 			WHERE id = $1
 		`, task.ID); err != nil {
 			t.Fatalf("dispatch authorized Radar task: %v", err)
@@ -857,9 +858,9 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 
 		var taskID pgtype.UUID
 		err := pool.QueryRow(t.Context(), `
-			UPDATE agent_task_queue
-			SET dispatched_at = now()
-			WHERE id = $1 AND status = 'dispatched'
+			UPDATE agent_inbox_event
+			SET claimed_at = now(), dispatched_at = now()
+			WHERE id = $1 AND status = 'draining'
 			RETURNING id
 		`, task.ID).Scan(&taskID)
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -872,8 +873,8 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 		pool := integrationPool(t)
 		q := db.New(pool)
 		if _, err := pool.Exec(t.Context(), `
-			UPDATE agent_task_queue
-			SET status = 'dispatched', dispatched_at = now()
+			UPDATE agent_inbox_event
+			SET status = 'draining', claimed_at = now(), dispatched_at = now()
 			WHERE id = $1
 		`, task.ID); err != nil {
 			t.Fatalf("dispatch authorized Radar task: %v", err)
@@ -887,18 +888,12 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 		}
 		downgradeRadarOwner(t, agent)
 
-		var taskID pgtype.UUID
-		err = pool.QueryRow(t.Context(), `
-			UPDATE agent_task_queue
-			SET status = 'running', started_at = now()
-			WHERE id = $1 AND status = 'dispatched'
-			RETURNING id
-		`, task.ID).Scan(&taskID)
+		taskSvc := service.NewTaskService(q, pool, nil, events.New())
+		_, err = taskSvc.StartTask(t.Context(), task.ID)
 		if !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatalf("legacy start error = %v, want no rows from DB authorization trigger", err)
+			t.Fatalf("canonical start error = %v, want no rows from Radar authorization gate", err)
 		}
 
-		taskSvc := service.NewTaskService(q, pool, nil, events.New())
 		result, err := makeAgentRadarScheduleHandler(pool, taskSvc)(t.Context(), HandlerInput{PlanTime: time.Now().UTC()})
 		if err != nil {
 			t.Fatalf("run unauthorized Radar cleanup: %v", err)
@@ -907,7 +902,7 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 			t.Fatalf("repaired_unauthorized = %#v, want 1", got)
 		}
 		storedTask, err := q.GetAgentTask(t.Context(), task.ID)
-		if err != nil || storedTask.Status != "cancelled" {
+		if err != nil || storedTask.Status != "suppressed" {
 			t.Fatalf("Radar task after cleanup = %+v, %v; want cancelled", storedTask, err)
 		}
 		storedRun, err := q.GetAgentRadarRun(t.Context(), run.ID)
@@ -915,13 +910,13 @@ func TestWorkspaceRadarDispatchGateAndUnauthorizedCleanup(t *testing.T) {
 			t.Fatalf("Radar run after cleanup = %+v, %v; want cancelled", storedRun, err)
 		}
 		ordinary, err = q.GetAgentTask(t.Context(), ordinary.ID)
-		if err != nil || ordinary.Status != "queued" {
+		if err != nil || ordinary.Status != "pending" {
 			t.Fatalf("ordinary task after Radar cleanup = %+v, %v; want queued", ordinary, err)
 		}
 	})
 }
 
-func seedQueuedWorkspaceRadar(t *testing.T) (radarTestAgent, db.AgentRadarRun, db.AgentTaskQueue) {
+func seedQueuedWorkspaceRadar(t *testing.T) (radarTestAgent, db.AgentRadarRun, db.AgentInboxEvent) {
 	t.Helper()
 	agent := seedRadarTestAgent(t, "online")
 	bindRadarSupervisor(t, agent)
@@ -1327,9 +1322,9 @@ func TestWorkspaceRadarDetectsActiveTaskCrossingStaleThreshold(t *testing.T) {
 	watermark := time.Now().UTC()
 	var taskID pgtype.UUID
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, context, trigger_summary, created_at
-		) VALUES ($1, $2, 'queued', 1, '{"type":"issue"}'::jsonb, 'long-running work', $3)
+		) VALUES ($1, $2, 'pending', 1, '{"type":"issue"}'::jsonb, 'long-running work', $3)
 		RETURNING id
 	`, peerAgentID, agent.runtimeID, watermark.Add(-59*time.Minute)).Scan(&taskID); err != nil {
 		t.Fatalf("create nearly stale task: %v", err)
@@ -1355,7 +1350,7 @@ func TestWorkspaceRadarDetectsActiveTaskCrossingStaleThreshold(t *testing.T) {
 			       GREATEST(task.created_at, COALESCE(task.started_at, task.created_at), COALESCE(progress.updated_at, task.created_at)) + interval '60 minutes',
 			       GREATEST(task.created_at, COALESCE(task.started_at, task.created_at), COALESCE(progress.updated_at, task.created_at)) + interval '60 minutes' > $2
 			         AND GREATEST(task.created_at, COALESCE(task.started_at, task.created_at), COALESCE(progress.updated_at, task.created_at)) + interval '60 minutes' <= $3
-			FROM agent_task_queue task
+			FROM agent_inbox_event task
 			LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id = task.id
 			WHERE task.id = $1
 		`, taskID, watermark, watermark.Add(2*time.Minute)).Scan(&createdAt, &threshold, &progressAt, &effectiveThreshold, &crossed); err != nil {
@@ -1364,12 +1359,12 @@ func TestWorkspaceRadarDetectsActiveTaskCrossingStaleThreshold(t *testing.T) {
 		if err := pool.QueryRow(t.Context(), `
 			SELECT EXISTS (
 			  SELECT 1
-			  FROM agent_task_queue task
+			  FROM agent_inbox_event task
 			  JOIN agent task_agent ON task_agent.id = task.agent_id
 			  LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id = task.id
 			  WHERE task_agent.workspace_id = $1
 			    AND COALESCE(task.context->>'type', '') <> 'agent_radar'
-			    AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+			    AND task.status IN ('pending', 'draining')
 			    AND GREATEST(task.created_at, COALESCE(task.started_at, task.created_at), COALESCE(progress.updated_at, task.created_at)) + interval '60 minutes' > $2
 			    AND GREATEST(task.created_at, COALESCE(task.started_at, task.created_at), COALESCE(progress.updated_at, task.created_at)) + interval '60 minutes' <= $3
 			)
@@ -1401,7 +1396,7 @@ func TestWorkspaceRadarProviderFailureStartsSchedulerBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue workspace Radar: %v", err)
 	}
-	if _, err := pool.Exec(t.Context(), `UPDATE agent_task_queue SET status = 'dispatched' WHERE id = $1`, task.ID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'draining', claimed_at = now() WHERE id = $1`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := taskSvc.StartTask(t.Context(), task.ID); err != nil {
@@ -1460,7 +1455,7 @@ func TestEnqueueAgentRadarRunRejectsOfflineRuntimeWithoutRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM agent_task_queue
+		SELECT count(*) FROM agent_inbox_event
 		WHERE agent_id = $1 AND context->>'type' = 'agent_radar'
 	`, offline.agentID).Scan(&tasks); err != nil {
 		t.Fatal(err)
@@ -1579,8 +1574,11 @@ func TestCountRecentWorkspaceScheduledRadarRunsUsesWorkspaceBudgetAndExcludesRep
 		t.Fatalf("create repair task: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'cancelled',
+		UPDATE agent_inbox_event
+		SET status = 'suppressed',
+		    terminal_outcome = 'cancelled',
+		    terminal_at = $2,
+		    acked_at = $2,
 		    completed_at = $2,
 		    error = 'Radar run invalidated during active-run repair',
 		    failure_reason = 'radar_active_run_repair'
@@ -1622,8 +1620,11 @@ func TestCountRecentWorkspaceScheduledRadarRunsUsesWorkspaceBudgetAndExcludesRep
 		t.Fatalf("create stale-dispatch repair task: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'failed',
+		UPDATE agent_inbox_event
+		SET status = 'acked',
+		    terminal_outcome = 'failed',
+		    terminal_at = $2,
+		    acked_at = $2,
 		    completed_at = $2,
 		    error = 'Radar task remained dispatched without starting',
 		    failure_reason = 'radar_stale_dispatch_repair'
@@ -1655,8 +1656,11 @@ func TestCountRecentWorkspaceScheduledRadarRunsUsesWorkspaceBudgetAndExcludesRep
 		t.Fatalf("create genuine failed task: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'failed',
+		UPDATE agent_inbox_event
+		SET status = 'acked',
+		    terminal_outcome = 'failed',
+		    terminal_at = $3,
+		    acked_at = $3,
 		    started_at = $2,
 		    completed_at = $3,
 		    error = 'agent execution failed',
@@ -1743,7 +1747,7 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 	taskSvc := service.NewTaskService(q, pool, nil, events.New())
 	now := time.Now().UTC()
 
-	enqueue := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentTaskQueue) {
+	enqueue := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentInboxEvent) {
 		t.Helper()
 		run, task, err := taskSvc.EnqueueAgentRadarRun(t.Context(), service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    agent.workspaceID,
@@ -1763,8 +1767,8 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 
 	staleRun, staleTask := enqueue(staleAgent, "stale-dispatched")
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'dispatched', created_at = $2, dispatched_at = $3
+		UPDATE agent_inbox_event
+		SET status = 'draining', created_at = $2, claimed_at = $3, dispatched_at = $3
 		WHERE id = $1
 	`, staleTask.ID, now.Add(-2*time.Hour), now); err != nil {
 		t.Fatalf("age stale task: %v", err)
@@ -1777,8 +1781,8 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 
 	freshRun, freshTask := enqueue(freshAgent, "fresh-dispatched")
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'dispatched', created_at = $2, dispatched_at = $3
+		UPDATE agent_inbox_event
+		SET status = 'draining', created_at = $2, claimed_at = $3, dispatched_at = $3
 		WHERE id = $1
 	`, freshTask.ID, now.Add(-5*time.Minute), now); err != nil {
 		t.Fatalf("mark fresh task dispatched: %v", err)
@@ -1791,8 +1795,9 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 
 	runningRun, runningTask := enqueue(runningAgent, "old-running")
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'running', created_at = $2, dispatched_at = $2, started_at = $2
+		UPDATE agent_inbox_event
+		SET status = 'draining', created_at = $2, claimed_at = $2,
+		    dispatched_at = $2, started_at = $2
 		WHERE id = $1
 	`, runningTask.ID, now.Add(-2*time.Hour)); err != nil {
 		t.Fatalf("mark old task running: %v", err)
@@ -1819,7 +1824,7 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if staleTask.Status != "failed" || !staleTask.FailureReason.Valid || staleTask.FailureReason.String != "radar_stale_dispatch_repair" {
+	if staleTask.Status != "acked" || !staleTask.FailureReason.Valid || staleTask.FailureReason.String != "radar_stale_dispatch_repair" {
 		t.Fatalf("stale task = status %q reason %#v, want failed repair", staleTask.Status, staleTask.FailureReason)
 	}
 	if staleRun.Status != "failed" || staleRun.Error != "Radar task remained dispatched without starting" {
@@ -1834,7 +1839,7 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if freshTask.Status != "dispatched" || freshRun.Status != "queued" {
+	if freshTask.Status != "draining" || freshRun.Status != "queued" {
 		t.Fatalf("fresh pair changed: task=%q run=%q", freshTask.Status, freshRun.Status)
 	}
 
@@ -1846,7 +1851,7 @@ func TestRepairStaleDispatchedRadarTasksPreservesFreshAndRunningTasks(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runningTask.Status != "running" || runningRun.Status != "running" {
+	if runningTask.Status != "draining" || runningRun.Status != "running" {
 		t.Fatalf("running pair changed: task=%q run=%q", runningTask.Status, runningRun.Status)
 	}
 }
@@ -1861,7 +1866,7 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 	taskSvc := service.NewTaskService(q, pool, nil, events.New())
 	now := time.Now().UTC()
 
-	enqueueStaleDispatched := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentTaskQueue) {
+	enqueueStaleDispatched := func(agent radarTestAgent, ref string) (db.AgentRadarRun, db.AgentInboxEvent) {
 		t.Helper()
 		run, task, err := taskSvc.EnqueueAgentRadarRun(t.Context(), service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    agent.workspaceID,
@@ -1877,8 +1882,8 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 			t.Fatalf("enqueue %s: %v", ref, err)
 		}
 		if _, err := pool.Exec(t.Context(), `
-			UPDATE agent_task_queue
-			SET status = 'dispatched', created_at = $2, dispatched_at = $3
+			UPDATE agent_inbox_event
+			SET status = 'draining', created_at = $2, claimed_at = $3, dispatched_at = $3
 			WHERE id = $1
 		`, task.ID, now.Add(-2*time.Hour), now); err != nil {
 			t.Fatalf("age %s task: %v", ref, err)
@@ -1904,7 +1909,7 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 		t.Fatalf("create replacement runtime: %v", err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue SET runtime_id = $2 WHERE id = $1
+		UPDATE agent_inbox_event SET runtime_id = $2 WHERE id = $1
 	`, mismatchTask.ID, replacementRuntimeID); err != nil {
 		t.Fatalf("reassign stale task runtime: %v", err)
 	}
@@ -1926,7 +1931,7 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 
 	for name, pair := range map[string]struct {
 		run  db.AgentRadarRun
-		task db.AgentTaskQueue
+		task db.AgentInboxEvent
 	}{
 		"mismatched runtime": {run: mismatchRun, task: mismatchTask},
 		"null run runtime":   {run: nullRuntimeRun, task: nullRuntimeTask},
@@ -1939,7 +1944,7 @@ func TestRepairStaleDispatchedRadarTasksSurvivesRuntimeMetadataDrift(t *testing.
 		if err != nil {
 			t.Fatalf("load %s run: %v", name, err)
 		}
-		if task.Status != "failed" || run.Status != "failed" {
+		if task.Status != "acked" || run.Status != "failed" {
 			t.Fatalf("%s pair = task:%q run:%q, want failed/failed", name, task.Status, run.Status)
 		}
 	}
@@ -1951,7 +1956,7 @@ func TestAgentRadarRunFollowsTaskRunningFailureAndCancellation(t *testing.T) {
 	pool := integrationPool(t)
 	taskSvc := service.NewTaskService(db.New(pool), pool, nil, events.New())
 
-	enqueue := func(ref string) (db.AgentRadarRun, db.AgentTaskQueue) {
+	enqueue := func(ref string) (db.AgentRadarRun, db.AgentInboxEvent) {
 		t.Helper()
 		run, task, err := taskSvc.EnqueueAgentRadarRun(t.Context(), service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    agent.workspaceID,
@@ -1978,7 +1983,7 @@ func TestAgentRadarRunFollowsTaskRunningFailureAndCancellation(t *testing.T) {
 	}
 
 	failedRun, failedTask := enqueue("failure")
-	if _, err := pool.Exec(t.Context(), `UPDATE agent_task_queue SET status = 'dispatched' WHERE id = $1`, failedTask.ID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'draining', claimed_at = now() WHERE id = $1`, failedTask.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := taskSvc.StartTask(t.Context(), failedTask.ID); err != nil {
@@ -2004,8 +2009,10 @@ func TestAgentRadarRunFollowsTaskRunningFailureAndCancellation(t *testing.T) {
 
 	sweptRun, sweptTask := enqueue("sweeper")
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'failed', completed_at = now(), error = 'queued expired', failure_reason = 'queued_expired'
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'failed',
+		    completed_at = now(), terminal_at = now(), acked_at = now(),
+		    error = 'queued expired', failure_reason = 'queued_expired'
 		WHERE id = $1
 	`, sweptTask.ID); err != nil {
 		t.Fatal(err)
@@ -2014,14 +2021,17 @@ func TestAgentRadarRunFollowsTaskRunningFailureAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc.HandleFailedTasks(t.Context(), []db.AgentTaskQueue{sweptTask})
+	taskSvc.HandleFailedTasks(t.Context(), []db.AgentInboxEvent{sweptTask})
 	if got := loadStatus(sweptRun.ID); got != "failed" {
 		t.Fatalf("run after sweeper failure = %q, want failed", got)
 	}
 
 	interruptedRun, interruptedTask := enqueue("interrupted-completion")
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now(), terminal_at = now(), acked_at = now()
+		WHERE id = $1
 	`, interruptedTask.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -2120,7 +2130,10 @@ func TestAgentTaskMetricsExcludeRadarHousekeepingRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now(), terminal_at = now(), acked_at = now()
+		WHERE id = $1
 	`, normalTask.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -2140,7 +2153,10 @@ func TestAgentTaskMetricsExcludeRadarHousekeepingRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now(), terminal_at = now(), acked_at = now()
+		WHERE id = $1
 	`, radarTask.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -337,7 +337,7 @@ func tryApplyMigration(ctx context.Context, pool *pgxpool.Pool, version string) 
 }
 
 // seedTaskUsageFixture inserts the minimal joined rows
-// (workspace, runtime, agent, agent_task_queue) needed for a task_usage
+// (workspace, runtime, agent, historical agent_task_queue) needed for a task_usage
 // row to participate in the hourly rollup. Returns the IDs in
 // (workspace, runtime, agent, task) order.
 func seedTaskUsageFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string, string) {
@@ -379,7 +379,7 @@ func seedTaskUsageFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 		VALUES ($1, $2, 'queued', '{}'::jsonb)
 		RETURNING id
 	`, agentID, runtimeID).Scan(&taskID); err != nil {
-		// agent_task_queue schema may differ; fall back to inferring
+		// Historical agent_task_queue schema may differ; fall back to inferring
 		// the smallest column set.
 		var altErr error
 		altErr = pool.QueryRow(ctx, `

@@ -73,7 +73,7 @@ func TestCompleteDaemonTaskDoesNotTreatRadarClaimMissAsIdempotent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(t.Context(), `UPDATE agent_task_queue SET status = 'dispatched' WHERE id = $1`, task.ID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'draining', claimed_at = now() WHERE id = $1`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := taskSvc.StartTask(t.Context(), task.ID); err != nil {
@@ -90,7 +90,7 @@ func TestCompleteDaemonTaskDoesNotTreatRadarClaimMissAsIdempotent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "running" {
-		t.Fatalf("claim-miss task status = %q, want rolled-back running", stored.Status)
+	if stored.Status != "draining" {
+		t.Fatalf("claim-miss task status = %q, want rolled-back draining", stored.Status)
 	}
 }

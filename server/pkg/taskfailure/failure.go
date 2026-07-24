@@ -1,5 +1,5 @@
 // Package taskfailure is the canonical, refined taxonomy of values written
-// into agent_task_queue.failure_reason and chat_message.failure_reason.
+// into agent_inbox_event.failure_reason and chat_message.failure_reason.
 //
 // History: until MUL-1949, server/daemon code wrote one of a small handful
 // of coarse failure_reason values ("agent_error", "timeout",
@@ -40,7 +40,7 @@ package taskfailure
 import "strings"
 
 // Reason is a string-backed enum of the canonical failure_reason values
-// stored in agent_task_queue.failure_reason. Use the Reason* constants
+// stored in agent_inbox_event.failure_reason. Use the Reason* constants
 // rather than string literals so the compiler catches typos and a future
 // taxonomy change can be made package-wide.
 type Reason string

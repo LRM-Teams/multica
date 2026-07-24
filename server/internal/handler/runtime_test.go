@@ -127,8 +127,8 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 	insertTaskWithUsage := func(enqueueAt, usageAt time.Time, inputTokens int64) string {
 		var taskID string
 		if err := testPool.QueryRow(ctx, `
-			INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
-			VALUES ($1, $2, $3, 'completed', $4)
+			INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+			VALUES ($1, $2, $3, 'acked', $4)
 			RETURNING id
 		`, agentID, issueID, runtimeID, enqueueAt).Scan(&taskID); err != nil {
 			t.Fatalf("insert task: %v", err)
@@ -138,7 +138,7 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 				id, source_kind, source_event_id, source, workspace_id,
 				runtime_id, agent_id, issue_id, started_at
 			)
-			VALUES ($1, 'queue', $1, 'issue', $2, $3, $4, $5, $6)
+			VALUES ($1, 'inbox', $1, 'issue', $2, $3, $4, $5, $6)
 		`, taskID, testWorkspaceID, runtimeID, agentID, issueID, enqueueAt); err != nil {
 			t.Fatalf("insert task execution: %v", err)
 		}
@@ -150,7 +150,7 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 		}
 		t.Cleanup(func() {
 			testPool.Exec(ctx, `DELETE FROM agent_execution WHERE id = $1`, taskID)
-			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+			testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 		})
 		return taskID
 	}

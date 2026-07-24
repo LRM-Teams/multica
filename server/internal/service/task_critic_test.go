@@ -24,26 +24,26 @@ const testCriticAgentID = "55555555-5555-5555-5555-555555555555"
 // and resulting task shape. FindCriticTaskForTrained returns either the
 // pre-configured existing row (idempotency simulation) or pgx.ErrNoRows.
 type fakeCriticCreator struct {
-	existing      db.AgentTaskQueue
+	existing      db.AgentInboxEvent
 	findErr       error
 	createErr     error
-	createdTasks  []db.AgentTaskQueue
+	createdTasks  []db.AgentInboxEvent
 	createdParams []db.CreateCriticTaskParams
 }
 
-func (f *fakeCriticCreator) FindCriticTaskForTrained(_ context.Context, _ string) (db.AgentTaskQueue, error) {
+func (f *fakeCriticCreator) FindCriticTaskForTrained(_ context.Context, _ string) (db.AgentInboxEvent, error) {
 	if f.findErr != nil {
-		return db.AgentTaskQueue{}, f.findErr
+		return db.AgentInboxEvent{}, f.findErr
 	}
 	if f.existing.ID.Valid {
 		return f.existing, nil
 	}
-	return db.AgentTaskQueue{}, pgx.ErrNoRows
+	return db.AgentInboxEvent{}, pgx.ErrNoRows
 }
 
-func (f *fakeCriticCreator) CreateCriticTask(_ context.Context, arg db.CreateCriticTaskParams) (db.AgentTaskQueue, error) {
+func (f *fakeCriticCreator) CreateCriticTask(_ context.Context, arg db.CreateCriticTaskParams) (db.AgentInboxEvent, error) {
 	f.createdParams = append(f.createdParams, arg)
-	task := db.AgentTaskQueue{
+	task := db.AgentInboxEvent{
 		ID:      util.MustParseUUID("66666666-6666-6666-6666-666666666666"),
 		AgentID: arg.AgentID,
 		IssueID: arg.IssueID,
@@ -67,8 +67,8 @@ func trainingDispatchRowWithCritic(trainAgentID, criticAgentID string) db.Traini
 // trainedTaskForCriticTest builds a representative trained task row carrying
 // an areal_proxy context and a TaskCompletedPayload result. Tests mutate it
 // locally when they need a different shape (e.g., no proxy, no result).
-func trainedTaskForCriticTest() db.AgentTaskQueue {
-	return db.AgentTaskQueue{
+func trainedTaskForCriticTest() db.AgentInboxEvent {
+	return db.AgentInboxEvent{
 		ID:      util.MustParseUUID(testTrainingTaskID),
 		AgentID: util.MustParseUUID(testTrainAgentID),
 		Context: []byte(`{"areal_proxy":{"session_id":"s1","api_key":"pk1","provider":"areal","model":"areal-default","base_url":"http://stub:9100/v1"}}`),
@@ -146,7 +146,7 @@ func TestMaybeSpawnCriticTask_NoCritic_NoSpawn(t *testing.T) {
 // (3) Existing critic task already linked → idempotent skip, no duplicate spawn.
 func TestMaybeSpawnCriticTask_Idempotent(t *testing.T) {
 	creator := &fakeCriticCreator{
-		existing: db.AgentTaskQueue{ID: util.MustParseUUID("66666666-6666-6666-6666-666666666666")},
+		existing: db.AgentInboxEvent{ID: util.MustParseUUID("66666666-6666-6666-6666-666666666666")},
 	}
 	rl := &fakeRLClient{}
 	deps := &TrainingSessionDeps{
@@ -191,8 +191,8 @@ func TestMaybeSpawnCriticTask_SpawnFails_FallsBackToD(t *testing.T) {
 // and a TaskCompletedPayload result whose Output ends in {"reward": <float>}.
 // Tests mutate it locally when they need a different shape (e.g., no critic_of,
 // unparseable output, out-of-range reward).
-func criticTaskForCloseTest(reward float64) db.AgentTaskQueue {
-	return db.AgentTaskQueue{
+func criticTaskForCloseTest(reward float64) db.AgentInboxEvent {
+	return db.AgentInboxEvent{
 		ID:      util.MustParseUUID("66666666-6666-6666-6666-666666666666"),
 		AgentID: util.MustParseUUID(testCriticAgentID),
 		Context: []byte(`{"critic_of":{"trained_task_id":"` + testTrainingTaskID + `","proxy_key":"pk1","session_id":"s1","project_id":"` + testTrainingProjectID + `"},"trained_output":"trained agent's final output text"}`),
@@ -237,7 +237,7 @@ func TestMaybeCloseTrainingSessionFromCritic_Unparseable_FallbackDefault(t *test
 		Closer:        rl,
 		DefaultReward: 1.0,
 	}
-	criticTask := db.AgentTaskQueue{
+	criticTask := db.AgentInboxEvent{
 		Context: []byte(`{"critic_of":{"proxy_key":"pk1","session_id":"s1","project_id":"` + testTrainingProjectID + `"}}`),
 		Result:  []byte(`{"output":"I couldn't decide on a score"}`),
 	}
@@ -273,7 +273,7 @@ func TestMaybeCloseTrainingSessionFromCritic_NonCriticTask_NoOp(t *testing.T) {
 		Closer:        rl,
 		DefaultReward: 1.0,
 	}
-	regularTask := db.AgentTaskQueue{
+	regularTask := db.AgentInboxEvent{
 		Context: []byte(`{}`), // no critic_of
 	}
 
@@ -285,7 +285,7 @@ func TestMaybeCloseTrainingSessionFromCritic_NonCriticTask_NoOp(t *testing.T) {
 
 // (T8-5) Nil deps (training not configured) → no-op, returns false.
 func TestMaybeCloseTrainingSessionFromCritic_NilDeps_NoOp(t *testing.T) {
-	regularTask := db.AgentTaskQueue{
+	regularTask := db.AgentInboxEvent{
 		Context: []byte(`{"critic_of":{"proxy_key":"pk1","session_id":"s1","project_id":"` + testTrainingProjectID + `"}}`),
 	}
 	closed := maybeCloseTrainingSessionFromCritic(context.Background(), nil, regularTask)
@@ -300,7 +300,7 @@ func TestMaybeCloseTrainingSessionFromCritic_MalformedCriticOf_NoOp(t *testing.T
 		Closer:        rl,
 		DefaultReward: 1.0,
 	}
-	criticTask := db.AgentTaskQueue{
+	criticTask := db.AgentInboxEvent{
 		Context: []byte(`{"critic_of":not-valid-json}`),
 	}
 

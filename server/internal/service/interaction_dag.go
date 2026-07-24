@@ -116,7 +116,7 @@ func NewInteractionDAGServiceWithMessages(store InteractionDAGStore, msgs Messag
 func (s *InteractionDAGService) Enabled() bool { return s.enabled }
 
 // RecordSessionAgentRun upserts the {session_id -> agent_run_id, issue_id}
-// mapping (D8: agent_run_id = task.ID, the multica agent_task_queue PK). Called
+// mapping (D8: agent_run_id = task.ID, the multica agent_inbox_event PK). Called
 // once at session-open (maybeOpenTrainingSession, U7.2 wiring). Idempotent on
 // session_id: a retry that re-opens a session re-binds it to the latest run.
 //
@@ -240,21 +240,21 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	}
 
 	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID:       segmentID,
-		ProjectID:       projectID,
-		AgentRunID:      run.AgentRunID,
-		IssueID:         run.IssueID, // carry the looked-up issue_id (do not re-derive)
-		TrajectoryID:    pgtype.Int8{Int64: int64(trajectoryID), Valid: true},
-		TensorRef:       tensorRef,
-			TrajectorySource: "areal_tensor",
-			Trainable:        true,
-			Trajectory:       []byte("[]"),
-		ClosingEvent:    pgText(closingEvent),
-		StartSeq:        startSeq,
-		EndSeq:          endSeq,
-		SandboxIDs:      sandboxIDs,
-		IssueSnapshotID: issueSnapshotID,
-		EnvState:        envState,
+		SegmentID:        segmentID,
+		ProjectID:        projectID,
+		AgentRunID:       run.AgentRunID,
+		IssueID:          run.IssueID, // carry the looked-up issue_id (do not re-derive)
+		TrajectoryID:     pgtype.Int8{Int64: int64(trajectoryID), Valid: true},
+		TensorRef:        tensorRef,
+		TrajectorySource: "areal_tensor",
+		Trainable:        true,
+		Trajectory:       []byte("[]"),
+		ClosingEvent:     pgText(closingEvent),
+		StartSeq:         startSeq,
+		EndSeq:           endSeq,
+		SandboxIDs:       sandboxIDs,
+		IssueSnapshotID:  issueSnapshotID,
+		EnvState:         envState,
 	}); err != nil {
 		return "", fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
 	}
@@ -557,8 +557,8 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 			SegmentID:        sg.SegmentID,
 			AgentRunID:       sg.AgentRunID,
 			IssueID:          issueID,
-						TrajectoryID:     int8Ptr(sg.TrajectoryID),
-						TensorRef:        tensorRefOrEmpty(sg.TensorRef),
+			TrajectoryID:     int8Ptr(sg.TrajectoryID),
+			TensorRef:        tensorRefOrEmpty(sg.TensorRef),
 			ClosingEvent:     closingEvent,
 			TrajectorySource: sg.TrajectorySource,
 			Trainable:        sg.Trainable,
@@ -751,7 +751,6 @@ func pgText(s string) pgtype.Text {
 	}
 	return pgtype.Text{String: s, Valid: true}
 }
-
 
 // int8Ptr converts a pgtype.Int8 to *int64, returning nil when the value is not
 // present (NULL in the DB). Used to emit nullable trajectory_id in AssembledSegment.

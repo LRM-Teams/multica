@@ -5975,7 +5975,7 @@ func TestChannelThreadReadModelSurfacesInboxTerminalOutcomesAndRetry(t *testing.
 	if noReplyWake.Retryable == nil || *noReplyWake.Retryable || noReplyWake.InboxEventID == nil || *noReplyWake.InboxEventID != noReplyEventID || noReplyWake.DeliveryID == nil || *noReplyWake.DeliveryID != noReplyDeliveryID || noReplyWake.TerminalAt == nil {
 		t.Fatalf("no-reply terminal metadata = %+v, want non-retryable ids + terminal_at", noReplyWake)
 	}
-	for _, forbidden := range []string{"reason_code", "failure_reason", "agent_task_queue", "run_id"} {
+	for _, forbidden := range []string{"reason_code", "failure_reason", "agent_inbox_event", "run_id"} {
 		if strings.Contains(noReplyRaw, forbidden) {
 			t.Fatalf("no-reply read-model leaked %q: %s", forbidden, noReplyRaw)
 		}
@@ -6635,7 +6635,7 @@ func TestChannelOfflineRuntimeQueuesButDoesNotShowActiveTask(t *testing.T) {
 
 	var queuedCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_task_queue WHERE chat_session_id = $1
+		SELECT count(*) FROM agent_inbox_event WHERE chat_session_id = $1
 	`, chatSessionID).Scan(&queuedCount); err != nil {
 		t.Fatalf("count queued tasks: %v", err)
 	}
@@ -6644,8 +6644,8 @@ func TestChannelOfflineRuntimeQueuesButDoesNotShowActiveTask(t *testing.T) {
 	}
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
-		VALUES ($1, $2, $3, 'queued', 2, $4)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
+		VALUES ($1, $2, $3, 'pending', 2, $4)
 	`, agentID, runtimeID, chatSessionID, testUserID); err != nil {
 		t.Fatalf("seed historical offline queued task: %v", err)
 	}
@@ -7682,7 +7682,7 @@ func channelAgentRunCountsForTest(t *testing.T, channelID string) (int, int) {
 	var tasks int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM agent_task_queue atq
+		FROM agent_inbox_event atq
 		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
 		WHERE cas.channel_id = $1`, channelID).Scan(&tasks); err != nil {
 		t.Fatalf("count channel agent tasks: %v", err)
@@ -7991,6 +7991,7 @@ func setAgentInboxTerminalOutcomeForTest(t *testing.T, eventID, outcome string, 
 		    terminal_delivery_id = $3,
 		    retryable = $4,
 		    terminal_at = now(),
+		    completed_at = now(),
 		    updated_at = now()
 		WHERE id = $1`, eventID, outcome, deliveryID, retryable); err != nil {
 		t.Fatalf("set terminal outcome: %v", err)

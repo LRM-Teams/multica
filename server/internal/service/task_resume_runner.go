@@ -20,7 +20,7 @@ var ErrTriggerTaskNotResumable = errors.New("trigger_task_not_resumable")
 // Implemented by *db.Queries (ResetInFlightTaskForResume); faked in tests so the
 // primitive is unit-testable without a database.
 type InFlightTaskResetter interface {
-	ResetInFlightTaskForResume(ctx context.Context, arg db.ResetInFlightTaskForResumeParams) (db.AgentTaskQueue, error)
+	ResetInFlightTaskForResume(ctx context.Context, arg db.ResetInFlightTaskForResumeParams) (db.AgentInboxEvent, error)
 }
 
 // taskResumeRunner implements ResumeAgentRunner by resetting the existing

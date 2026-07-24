@@ -1126,9 +1126,9 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 
 	// 2. Cancel queued/dispatched/running tasks. Match by runtime_id AND
 	//    by archived agent ids: agent.runtime_id can be reassigned without
-	//    rewriting historical agent_task_queue rows, so an agent we just
+	//    rewriting historical agent_inbox_event rows, so an agent we just
 	//    archived may still own tasks pinned to a different runtime — and
-	//    ClaimAgentTask does not gate on agent.archived_at.
+	//    Inbox admission does not gate on agent.archived_at.
 	archivedIDs := make([]pgtype.UUID, len(archivedAgents))
 	for i, a := range archivedAgents {
 		archivedIDs[i] = a.ID

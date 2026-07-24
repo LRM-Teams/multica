@@ -141,10 +141,10 @@ LEFT JOIN agent a
        ON sm.member_type = 'agent' AND a.id = sm.member_id
 LEFT JOIN agent_runtime ar
        ON ar.id = a.runtime_id
-LEFT JOIN agent_task_queue atq
+LEFT JOIN agent_inbox_event atq
        ON sm.member_type = 'agent'
       AND atq.agent_id = sm.member_id
-      AND atq.status IN ('dispatched', 'running', 'waiting_local_directory')
+      AND atq.status = 'draining'
 LEFT JOIN issue i
        ON i.id = atq.issue_id
 WHERE sm.squad_id = $1

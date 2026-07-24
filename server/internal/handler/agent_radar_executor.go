@@ -36,7 +36,7 @@ type radarActivityTarget struct {
 type radarTransactionalExecution struct {
 	Result         map[string]any
 	Activity       radarActivityTarget
-	CancelledTasks []db.AgentTaskQueue
+	CancelledTasks []db.AgentInboxEvent
 	AfterCommit    func()
 }
 
@@ -1330,16 +1330,16 @@ func (h *Handler) executePreparedRadarIssueCommentInTx(ctx context.Context, qtx 
 	if err != nil {
 		return execution, fmt.Errorf("create visible radar comment: %w", err)
 	}
-	var task db.AgentTaskQueue
+	var task db.AgentInboxEvent
 	taskReused := false
-	if pendingTaskFound && existingTask.Status == "queued" {
+	if pendingTaskFound && (existingTask.Status == "pending" || existingTask.Status == "failed") {
 		summary := h.TaskService.BuildCommentTriggerSummaryForTask(ctx, qtx, comment.ID)
 		tag, updateErr := exec.Exec(ctx, `
-			UPDATE agent_task_queue
+			UPDATE agent_inbox_event
 			SET trigger_comment_id = $2,
 			    trigger_summary = $3
 			WHERE id = $1
-			  AND status = 'queued'
+			  AND status IN ('pending', 'failed')
 		`, existingTask.ID, comment.ID, summary)
 		if updateErr != nil {
 			return execution, fmt.Errorf("retarget queued radar directive task: %w", updateErr)
@@ -1353,15 +1353,18 @@ func (h *Handler) executePreparedRadarIssueCommentInTx(ctx context.Context, qtx 
 		}
 		taskReused = true
 	} else {
-		if pendingTaskFound && existingTask.Status == "dispatched" {
+		if pendingTaskFound && existingTask.Status == "draining" && !existingTask.StartedAt.Valid {
 			tag, cancelErr := exec.Exec(ctx, `
-				UPDATE agent_task_queue
-				SET status = 'cancelled',
+				UPDATE agent_inbox_event
+				SET status = 'suppressed',
+				    terminal_outcome = 'cancelled',
+				    terminal_at = COALESCE(terminal_at, now()),
+				    acked_at = COALESCE(acked_at, now()),
 				    completed_at = COALESCE(completed_at, now()),
 				    error = COALESCE(NULLIF(error, ''), 'Superseded by a visible Wendy follow-up'),
 				    failure_reason = 'radar_followup_interrupt'
 				WHERE id = $1
-				  AND status = 'dispatched'
+				  AND status = 'draining'
 			`, existingTask.ID)
 			if cancelErr != nil {
 				return execution, fmt.Errorf("cancel dispatched radar directive task: %w", cancelErr)
@@ -1412,27 +1415,27 @@ func (h *Handler) executePreparedRadarIssueCommentInTx(ctx context.Context, qtx 
 	return execution, nil
 }
 
-func loadLockedPendingRadarTask(ctx context.Context, qtx *db.Queries, exec db.DBTX, issueID, agentID pgtype.UUID) (db.AgentTaskQueue, bool, error) {
+func loadLockedPendingRadarTask(ctx context.Context, qtx *db.Queries, exec db.DBTX, issueID, agentID pgtype.UUID) (db.AgentInboxEvent, bool, error) {
 	var taskID pgtype.UUID
 	err := exec.QueryRow(ctx, `
 		SELECT id
-		FROM agent_task_queue
+		FROM agent_inbox_event
 		WHERE issue_id = $1
 		  AND agent_id = $2
-		  AND status IN ('queued', 'dispatched')
+		  AND status IN ('pending', 'draining', 'failed')
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
 		FOR UPDATE
 	`, issueID, agentID).Scan(&taskID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return db.AgentTaskQueue{}, false, nil
+		return db.AgentInboxEvent{}, false, nil
 	}
 	if err != nil {
-		return db.AgentTaskQueue{}, false, fmt.Errorf("lock target pending task: %w", err)
+		return db.AgentInboxEvent{}, false, fmt.Errorf("lock target pending task: %w", err)
 	}
 	task, err := qtx.GetAgentTask(ctx, taskID)
 	if err != nil {
-		return db.AgentTaskQueue{}, false, fmt.Errorf("load locked target pending task: %w", err)
+		return db.AgentInboxEvent{}, false, fmt.Errorf("load locked target pending task: %w", err)
 	}
 	return task, true, nil
 }

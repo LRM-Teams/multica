@@ -152,7 +152,7 @@ type IssueCreator interface {
 // the Dispatcher is small enough that depending on the whole
 // TaskService struct is gratuitous.
 type ChatTaskEnqueuer interface {
-	EnqueueChatTask(ctx context.Context, session db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error)
+	EnqueueChatTask(ctx context.Context, session db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error)
 }
 
 // DispatcherQueries is the narrow subset of *db.Queries the Dispatcher

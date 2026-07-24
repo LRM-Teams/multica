@@ -184,11 +184,11 @@ RETURNING id, workspace_id, owner_id, daemon_id, provider;
 -- Marks dispatched/running/waiting_local_directory tasks as failed when
 -- their runtime is offline. This cleans up orphaned tasks after a daemon
 -- crash or network partition.
-UPDATE agent_task_queue
-SET status = 'failed', completed_at = now(), error = 'runtime went offline',
-    failure_reason = 'runtime_offline',
+UPDATE agent_inbox_event
+SET status = 'pending', last_error = 'runtime went offline',
+    failure_reason = 'runtime_offline', claimed_at = NULL,
     wait_reason = NULL
-WHERE status IN ('dispatched', 'running', 'waiting_local_directory')
+WHERE status = 'draining'
   AND runtime_id IN (
     SELECT id FROM agent_runtime WHERE status = 'offline'
   )
@@ -217,19 +217,20 @@ RETURNING id, workspace_id, owner_id, daemon_id, provider;
 -- the runtime-side covers tasks queued against the leaving member's runtimes;
 -- the agent-side covers tasks pinned to a different runtime that those agents
 -- left behind from a prior UpdateAgent (agent.runtime_id can change, but
--- agent_task_queue.runtime_id does not get rewritten when it does, so a task
+-- agent_inbox_event.runtime_id does not get rewritten when it does, so a task
 -- queued on runtime A by agent X — later moved to runtime B — survives the
--- runtime-only revoke and could still be claimed because ClaimAgentTask does
+-- runtime-only revoke and could still be drained because inbox admission does
 -- not gate on agent.archived_at).
 --
 -- We use 'cancelled' rather than 'failed' so the daemon's per-task status
 -- poller (watchTaskCancellation) interrupts the running agent gracefully.
 -- Returns the affected rows so the caller can broadcast task:cancelled and
 -- reconcile per-agent status.
-UPDATE agent_task_queue
-SET status = 'cancelled', completed_at = now()
+UPDATE agent_inbox_event
+SET status = 'suppressed', terminal_outcome = 'cancelled',
+    completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE (runtime_id = ANY(@runtime_ids::uuid[]) OR agent_id = ANY(@agent_ids::uuid[]))
-  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  AND status IN ('pending', 'draining', 'failed')
 RETURNING *;
 
 -- name: DeleteAgentRuntime :exec
@@ -297,9 +298,9 @@ WHERE runtime_id = @old_runtime_id;
 
 -- name: ReassignTasksToRuntime :execrows
 -- Re-points every queued/running/completed task referencing old_runtime_id.
--- Required before deleting the old runtime row because agent_task_queue has
+-- Required before deleting the old runtime row because agent_inbox_event has
 -- an ON DELETE CASCADE FK that would otherwise drop historical tasks.
-UPDATE agent_task_queue
+UPDATE agent_inbox_event
 SET runtime_id = @new_runtime_id
 WHERE runtime_id = @old_runtime_id;
 
@@ -359,6 +360,6 @@ ORDER BY created_at ASC;
 -- with a structured 4xx when the machine still has live work (LRM-238 /
 -- LRM-438) instead of silently leaving orphaned tasks.
 SELECT count(*)::bigint
-FROM agent_task_queue
+FROM agent_inbox_event
 WHERE runtime_id = ANY(@runtime_ids::uuid[])
-  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');
+  AND status IN ('pending', 'draining', 'failed');

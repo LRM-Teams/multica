@@ -351,7 +351,7 @@ func TestMapRollouts_OmitsEmptySandboxRefs(t *testing.T) {
 //
 // The tests use the shared real-Postgres fixtures (testPool/testHandler) like
 // cancel_task_by_user_test.go, seeding project + issue + training_dispatch +
-// agent_task_queue rows directly.
+// agent_inbox_event rows directly.
 
 // getDagStatusBody decodes the JSON status field from a GetDag response.
 func getDagStatusBody(t *testing.T, w *httptest.ResponseRecorder) string {
@@ -386,7 +386,7 @@ func getDagRequest(t *testing.T, projectID string) *http.Request {
 
 // seedTrainingRollout seeds a training rollout project in the test workspace:
 // a project, an issue bound to it, a training_dispatch row, and the root
-// training task (agent_task_queue) with the given status. It returns the
+// training task (agent_inbox_event) with the given status. It returns the
 // project ID (string) and the root task ID. The agent is created in the given
 // workspace (test workspace for in-workspace tests; a foreign workspace for the
 // cross-workspace test). All rows are cleaned up via t.Cleanup in reverse
@@ -423,13 +423,13 @@ func seedTrainingRollout(t *testing.T, workspaceID, agentID, taskStatus string) 
 	// training_dispatch cascades with project (project_id PK -> ON DELETE CASCADE).
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, issue_id)
 		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), $2, 5, $3)
 		RETURNING id
 	`, agentID, taskStatus, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("create root training task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO env_dispatch_run (project_id, workspace_id, training_mode, root_task_id)
@@ -734,7 +734,7 @@ func TestGetDag_NonTrainingCompletedRoot_ReturnsNot202(t *testing.T) {
 	})
 
 	// Override the root task status to completed after fixture creation.
-	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed' WHERE id = $1`, rootTaskID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked' WHERE id = $1`, rootTaskID); err != nil {
 		t.Fatalf("set root task completed: %v", err)
 	}
 
@@ -763,13 +763,13 @@ func seedHandlerDagProject(t *testing.T, ctx context.Context, workspaceID string
 }
 
 // seedHandlerDagNonTrainingCompletedRoot creates a project, an agent, an issue,
-// an agent_task_queue row (the root task), and an env_dispatch_run row with
+// an agent_inbox_event row (the root task), and an env_dispatch_run row with
 // training_mode=false and the root task bound. No training_dispatch row is
 // created. Returns (projectID, rootTaskID).
 func seedHandlerDagNonTrainingCompletedRoot(t *testing.T, ctx context.Context, workspaceID string) (string, string) {
 	t.Helper()
 	projectID := seedHandlerDagProject(t, ctx, workspaceID)
-	// Agent (required FK for agent_task_queue).
+	// Agent (required FK for agent_inbox_event).
 	runtimeID := handlerTestRuntimeID(t)
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
@@ -780,7 +780,7 @@ func seedHandlerDagNonTrainingCompletedRoot(t *testing.T, ctx context.Context, w
 		t.Fatalf("create test agent: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
-	// Issue (required FK for agent_task_queue).
+	// Issue (required FK for agent_inbox_event).
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO issue (workspace_id, project_id, title, status, priority, creator_type, creator_id)
@@ -790,17 +790,17 @@ func seedHandlerDagNonTrainingCompletedRoot(t *testing.T, ctx context.Context, w
 		t.Fatalf("create test issue: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
-	// Root task (agent_task_queue with status=queued initially; the test sets it
+	// Root task (agent_inbox_event with status=queued initially; the test sets it
 	// to completed before the /dag call).
 	var rootTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 0)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 0)
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&rootTaskID); err != nil {
 		t.Fatalf("create test root task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, rootTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, rootTaskID) })
 	// env_dispatch_run: training_mode=false, root_task_id bound. No
 	// training_dispatch row is created.
 	if _, err := testPool.Exec(ctx, `

@@ -11,18 +11,102 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type TrainingDispatch struct {
-	ProjectID     pgtype.UUID        `json:"project_id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	TrainAgentID  pgtype.UUID        `json:"train_agent_id"`
-	CriticAgentID pgtype.UUID        `json:"critic_agent_id"`
-	DefaultReward float64            `json:"default_reward"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+const createCriticTask = `-- name: CreateCriticTask :one
+INSERT INTO agent_inbox_event (
+  workspace_id, agent_session_id, agent_id, runtime_id, execution_config,
+  issue_id, reason, requires_wake, status, priority, context
+)
+SELECT
+  a.workspace_id, ensure_agent_wake_session(a.id), a.id, a.runtime_id,
+  $1, $2, 'training', true, 'pending',
+  $3, $1
+FROM agent a
+WHERE a.id = $4
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+`
+
+type CreateCriticTaskParams struct {
+	Context  []byte      `json:"context"`
+	IssueID  pgtype.UUID `json:"issue_id"`
+	Priority int32       `json:"priority"`
+	AgentID  pgtype.UUID `json:"agent_id"`
+}
+
+// Inserts a critic task peer (parent_task_id NOT set) carrying the
+// critic_of linkage + trained_output in context JSONB. status is hardcoded
+// 'queued' so the daemon's normal claim path picks it up. issue_id is
+// inherited from the trained task so the critic shows up on the same issue.
+func (q *Queries) CreateCriticTask(ctx context.Context, arg CreateCriticTaskParams) (AgentInboxEvent, error) {
+	row := q.db.QueryRow(ctx, createCriticTask,
+		arg.Context,
+		arg.IssueID,
+		arg.Priority,
+		arg.AgentID,
+	)
+	var i AgentInboxEvent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentSessionID,
+		&i.ConversationID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.AgentID,
+		&i.SourceMessageID,
+		&i.Reason,
+		&i.RequiresWake,
+		&i.Status,
+		&i.Priority,
+		&i.SeqFrom,
+		&i.SeqTo,
+		&i.Attempt,
+		&i.LastError,
+		&i.ClaimedAt,
+		&i.AckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TerminalOutcome,
+		&i.TerminalDeliveryID,
+		&i.Retryable,
+		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+	)
+	return i, err
 }
 
 const createTrainingDispatch = `-- name: CreateTrainingDispatch :exec
 INSERT INTO training_dispatch (project_id, workspace_id, train_agent_id, critic_agent_id, default_reward)
-VALUES ($1, $2, $3, $4, COALESCE($5, 1.0))
+VALUES (
+  $1,
+  $2,
+  $3,
+  $4,
+  $5::double precision
+)
 ON CONFLICT (project_id) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   train_agent_id = EXCLUDED.train_agent_id,
@@ -49,121 +133,61 @@ func (q *Queries) CreateTrainingDispatch(ctx context.Context, arg CreateTraining
 	return err
 }
 
-const getTrainingDispatchByProject = `-- name: GetTrainingDispatchByProject :one
-SELECT project_id, workspace_id, train_agent_id, critic_agent_id, default_reward, created_at FROM training_dispatch
-WHERE project_id = $1
-`
-
-func (q *Queries) GetTrainingDispatchByProject(ctx context.Context, projectID pgtype.UUID) (TrainingDispatch, error) {
-	row := q.db.QueryRow(ctx, getTrainingDispatchByProject, projectID)
-	var i TrainingDispatch
-	err := row.Scan(
-		&i.ProjectID,
-		&i.WorkspaceID,
-		&i.TrainAgentID,
-		&i.CriticAgentID,
-		&i.DefaultReward,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const findCriticTaskForTrained = `-- name: FindCriticTaskForTrained :one
--- Finds a critic task already spawned for a trained task. Used by the
--- critic-spawn hook's idempotency guard: if a row exists, the spawn is
--- skipped. Matches on context.critic_of.trained_task_id. Returns the
--- critic task's row (LIMIT 1) or no rows.
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_task_queue
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
 WHERE context->'critic_of'->>'trained_task_id' = $1::text
 LIMIT 1
 `
 
-// FindCriticTaskForTrained resolves a previously-spawned critic task for the
-// given trained task ID. Used by the critic-spawn hook's idempotency guard.
-// Returns pgx.ErrNoRows when no critic exists yet.
-func (q *Queries) FindCriticTaskForTrained(ctx context.Context, trainedTaskID string) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, findCriticTaskForTrained, trainedTaskID)
-	var i AgentTaskQueue
+// Finds a critic task already spawned for a trained task. Used by the
+// critic-spawn hook's idempotency guard: if a row exists, the spawn is
+// skipped. Matches on context.critic_of.trained_task_id. Returns the
+// critic task's row (LIMIT 1) or no rows.
+func (q *Queries) FindCriticTaskForTrained(ctx context.Context, dollar_1 string) (AgentInboxEvent, error) {
+	row := q.db.QueryRow(ctx, findCriticTaskForTrained, dollar_1)
+	var i AgentInboxEvent
 	err := row.Scan(
 		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentSessionID,
+		&i.ConversationID,
+		&i.ChannelID,
+		&i.ChatSessionID,
 		&i.AgentID,
-		&i.IssueID,
+		&i.SourceMessageID,
+		&i.Reason,
+		&i.RequiresWake,
 		&i.Status,
 		&i.Priority,
+		&i.SeqFrom,
+		&i.SeqTo,
+		&i.Attempt,
+		&i.LastError,
+		&i.ClaimedAt,
+		&i.AckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TerminalOutcome,
+		&i.TerminalDeliveryID,
+		&i.Retryable,
+		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
 		&i.DispatchedAt,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.Result,
 		&i.Error,
-		&i.CreatedAt,
-		&i.Context,
-		&i.RuntimeID,
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
-		&i.ChatSessionID,
 		&i.AutopilotRunID,
-		&i.Attempt,
-		&i.MaxAttempts,
-		&i.ParentTaskID,
-		&i.FailureReason,
-		&i.TriggerSummary,
-		&i.ForceFreshSession,
-		&i.IsLeaderTask,
-		&i.WaitReason,
-		&i.InitiatorUserID,
-	)
-	return i, err
-}
-
-const createCriticTask = `-- name: CreateCriticTask :one
--- Inserts a critic task peer (parent_task_id NOT set) carrying the
--- critic_of linkage + trained_output in context JSONB. status is hardcoded
--- 'queued' so the daemon's normal claim path picks it up. issue_id is
--- inherited from the trained task so the critic shows up on the same issue.
-INSERT INTO agent_task_queue (agent_id, issue_id, status, priority, context)
-VALUES ($1, $2, 'queued', $3, $4)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
-`
-
-type CreateCriticTaskParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	IssueID  pgtype.UUID `json:"issue_id"`
-	Priority int32       `json:"priority"`
-	Context  []byte      `json:"context"`
-}
-
-// CreateCriticTask inserts a critic task peer (no parent_task_id) carrying
-// the critic_of linkage + trained_output in context JSONB. status is hardcoded
-// 'queued' so the daemon's claim path picks it up.
-func (q *Queries) CreateCriticTask(ctx context.Context, arg CreateCriticTaskParams) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, createCriticTask,
-		arg.AgentID,
-		arg.IssueID,
-		arg.Priority,
-		arg.Context,
-	)
-	var i AgentTaskQueue
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.IssueID,
-		&i.Status,
-		&i.Priority,
-		&i.DispatchedAt,
-		&i.StartedAt,
-		&i.CompletedAt,
-		&i.Result,
-		&i.Error,
-		&i.CreatedAt,
-		&i.Context,
-		&i.RuntimeID,
-		&i.SessionID,
-		&i.WorkDir,
-		&i.TriggerCommentID,
-		&i.ChatSessionID,
-		&i.AutopilotRunID,
-		&i.Attempt,
 		&i.MaxAttempts,
 		&i.ParentTaskID,
 		&i.FailureReason,
@@ -177,34 +201,48 @@ func (q *Queries) CreateCriticTask(ctx context.Context, arg CreateCriticTaskPara
 }
 
 const getRootTrainingTaskStatusForProject = `-- name: GetRootTrainingTaskStatusForProject :one
--- Resolves the status of the project's ROOT training task for the GET /dag
--- endpoint's 202-vs-200 decision (Task 9, U8). The root training task is the
--- agent_task_queue row created by the dispatch's EnqueueAgentRun: it shares
--- the dispatch's issue (issue.project_id = training_dispatch.project_id) and
--- its agent_id equals training_dispatch.train_agent_id (excluding any critic
--- task, which is spawned with critic_agent_id). One training target per
--- rollout project (training_dispatch.project_id is the PK), so the issue +
--- agent_id scope yields exactly the root task; ORDER BY created_at DESC
--- LIMIT 1 keeps this stable under a future re-dispatch. Returns pgx.ErrNoRows
--- when the project has no training_dispatch or no root task has been enqueued
--- yet (caller treats both as "in_progress": the rollout is not done).
 SELECT atq.status
 FROM training_dispatch td
 JOIN issue i ON i.project_id = td.project_id
-JOIN agent_task_queue atq ON atq.issue_id = i.id AND atq.agent_id = td.train_agent_id
+JOIN agent_inbox_event atq ON atq.issue_id = i.id AND atq.agent_id = td.train_agent_id
 WHERE td.project_id = $1
 ORDER BY atq.created_at DESC
 LIMIT 1
 `
 
-// GetRootTrainingTaskStatusForProject resolves the status of the project's
-// root training task for the GET /dag endpoint's 202-vs-200 decision (Task 9).
-// Returns pgx.ErrNoRows when the project has no training_dispatch or no root
-// task has been enqueued yet. Hand-written (sqlc generate is broken in this
-// repo) mirroring the :one GetTrainingDispatchByProject scan.
+// Resolves the status of the project's ROOT training task for the GET /dag
+// endpoint's 202-vs-200 decision (Task 9, U8). The root training task is the
+// agent_inbox_event row created by the dispatch's EnqueueAgentRun: it shares
+// the dispatch's issue (issue.project_id = training_dispatch.project_id) and
+// its agent_id equals training_dispatch.train_agent_id (excluding any critic
+// task, which is spawned with critic_agent_id). One training target per
+// rollout project (training_dispatch.project_id is the PK), so the issue +
+// agent_id scope yields exactly the root task; ORDER BY created_at DESC
+// LIMIT 1 keeps this stable under a future re-dispatch. Returns pgx.ErrNoRows
+// when the project has no training_dispatch or no root task has been enqueued
+// yet (caller treats both as "in_progress": the rollout is not done).
 func (q *Queries) GetRootTrainingTaskStatusForProject(ctx context.Context, projectID pgtype.UUID) (string, error) {
 	row := q.db.QueryRow(ctx, getRootTrainingTaskStatusForProject, projectID)
 	var status string
 	err := row.Scan(&status)
 	return status, err
+}
+
+const getTrainingDispatchByProject = `-- name: GetTrainingDispatchByProject :one
+SELECT project_id, workspace_id, train_agent_id, default_reward, created_at, critic_agent_id FROM training_dispatch
+WHERE project_id = $1
+`
+
+func (q *Queries) GetTrainingDispatchByProject(ctx context.Context, projectID pgtype.UUID) (TrainingDispatch, error) {
+	row := q.db.QueryRow(ctx, getTrainingDispatchByProject, projectID)
+	var i TrainingDispatch
+	err := row.Scan(
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.TrainAgentID,
+		&i.DefaultReward,
+		&i.CreatedAt,
+		&i.CriticAgentID,
+	)
+	return i, err
 }

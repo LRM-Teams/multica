@@ -26,13 +26,13 @@ SELECT
     @execution_id,
     'inbox',
     e.id,
-    'chat',
+    CASE WHEN e.issue_id IS NULL THEN 'chat' ELSE 'issue' END,
     e.workspace_id,
     e.runtime_id,
     e.agent_id,
     e.chat_session_id,
-    NULL,
-    NULL,
+    e.issue_id,
+    i.project_id,
     COALESCE(e.execution_config, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
         'inbox_reason', e.reason,
         'channel_id', e.channel_id,
@@ -41,33 +41,8 @@ SELECT
         'response_mode', e.response_mode
     ))
 FROM agent_inbox_event e
+LEFT JOIN issue i ON i.id = e.issue_id
 WHERE e.id = @inbox_event_id
-ON CONFLICT (id) DO NOTHING;
-
--- name: CreateAgentQueueExecution :exec
--- Queue executions retain their historical queue ID as execution ID. This is
--- called at the queue start boundary; the immutable dimensions are copied once
--- so later queue/issue reassignment cannot rewrite ledger reports.
-INSERT INTO agent_execution (
-    id, source_kind, source_event_id, source, workspace_id, runtime_id,
-    agent_id, chat_session_id, issue_id, project_id, started_at
-)
-SELECT
-    atq.id,
-    'queue',
-    atq.id,
-    CASE WHEN atq.chat_session_id IS NULL THEN 'issue' ELSE 'chat' END,
-    a.workspace_id,
-    atq.runtime_id,
-    atq.agent_id,
-    atq.chat_session_id,
-    atq.issue_id,
-    i.project_id,
-    COALESCE(atq.started_at, now())
-FROM agent_task_queue atq
-JOIN agent a ON a.id = atq.agent_id
-LEFT JOIN issue i ON i.id = atq.issue_id
-WHERE atq.id = @task_id
 ON CONFLICT (id) DO NOTHING;
 
 -- name: GetAgentInboxExecution :one
@@ -170,12 +145,13 @@ SELECT
         0
     )::bigint AS total_seconds,
     COUNT(*)::int AS task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count
-FROM agent_task_queue atq
+    COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed')::int AS failed_count
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE a.workspace_id = $1
-  AND atq.status IN ('completed', 'failed')
+  AND atq.status = 'acked'
+  AND atq.terminal_outcome IN ('completed', 'failed')
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= sqlc.arg('since')::timestamptz
@@ -200,12 +176,13 @@ SELECT
         0
     )::bigint AS total_seconds,
     COUNT(*)::int AS task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count
-FROM agent_task_queue atq
+    COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed')::int AS failed_count
+FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE a.workspace_id = $1
-  AND atq.status IN ('completed', 'failed')
+  AND atq.status = 'acked'
+  AND atq.terminal_outcome IN ('completed', 'failed')
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= @since::timestamptz

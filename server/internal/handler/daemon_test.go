@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,6 +99,134 @@ func newDaemonTokenRequest(method, path string, body any, workspaceID, daemonID 
 	return req.WithContext(ctx)
 }
 
+func claimTaskThroughInboxForTest(w *httptest.ResponseRecorder, req *http.Request) {
+	runtimeID := chi.URLParam(req, "runtimeId")
+	if runtimeID != "" {
+		if _, err := testPool.Exec(req.Context(), `
+			UPDATE chat_message message
+			SET task_id = (
+				SELECT event.id
+				FROM agent_inbox_event event
+				JOIN agent_session session ON session.id = event.agent_session_id
+				WHERE event.chat_session_id = message.chat_session_id
+				  AND COALESCE(event.runtime_id, session.runtime_id) = $1
+				  AND event.status IN ('pending', 'failed')
+				ORDER BY event.created_at DESC, event.id DESC
+				LIMIT 1
+			)
+			WHERE message.role = 'user'
+			  AND message.task_id IS NULL
+			  AND EXISTS (
+				SELECT 1
+				FROM agent_inbox_event event
+				JOIN agent_session session ON session.id = event.agent_session_id
+				WHERE event.chat_session_id = message.chat_session_id
+				  AND COALESCE(event.runtime_id, session.runtime_id) = $1
+				  AND event.status IN ('pending', 'failed')
+			  )`, runtimeID); err != nil {
+			writeError(w, http.StatusInternalServerError, "link canonical inbox prompt fixture")
+			return
+		}
+	}
+	drainRecorder := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRecorder, req)
+	if drainRecorder.Code != http.StatusOK {
+		w.Code = drainRecorder.Code
+		_, _ = w.Body.Write(drainRecorder.Body.Bytes())
+		return
+	}
+	var drained DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRecorder.Body.Bytes(), &drained); err != nil {
+		writeError(w, http.StatusInternalServerError, "decode inbox drain response")
+		return
+	}
+	var task *AgentTaskResponse
+	if len(drained.Events) != 0 {
+		task = drained.Events[0].Task
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": task})
+}
+
+func startTaskThroughInboxForTest(w *httptest.ResponseRecorder, req *http.Request) {
+	forwardTaskRequestThroughInboxForTest(w, req, func(forwarded *http.Request) {
+		testHandler.StartAgentInboxExecution(w, forwarded)
+	}, true)
+}
+
+func completeTaskThroughInboxForTest(w *httptest.ResponseRecorder, req *http.Request) {
+	forwardTaskRequestThroughInboxForTest(w, req, func(forwarded *http.Request) {
+		testHandler.CompleteAgentInboxEvent(w, forwarded)
+	}, false)
+}
+
+func failTaskThroughInboxForTest(w *httptest.ResponseRecorder, req *http.Request) {
+	forwardTaskRequestThroughInboxForTest(w, req, func(forwarded *http.Request) {
+		testHandler.FailAgentInboxEvent(w, forwarded)
+	}, false)
+}
+
+func forwardTaskRequestThroughInboxForTest(
+	w *httptest.ResponseRecorder,
+	req *http.Request,
+	handle func(*http.Request),
+	withExecutionID bool,
+) {
+	taskID := chi.URLParam(req, "taskId")
+	var deliveryID, leaseToken string
+	if err := testPool.QueryRow(req.Context(), `
+		SELECT id::text, lease_token::text
+		FROM agent_event_delivery
+		WHERE inbox_event_id = $1
+		  AND status IN ('leased', 'processing')
+		  AND lease_expires_at > now()
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskID).Scan(&deliveryID, &leaseToken); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "load active inbox delivery")
+			return
+		}
+		if err := testPool.QueryRow(req.Context(), `
+			INSERT INTO agent_event_delivery (
+				workspace_id, agent_session_id, inbox_event_id, runtime_id,
+				status, lease_expires_at
+			)
+			SELECT workspace_id, agent_session_id, id, runtime_id,
+			       'processing', now() + interval '10 minutes'
+			FROM agent_inbox_event
+			WHERE id = $1
+			RETURNING id::text, lease_token::text
+		`, taskID).Scan(&deliveryID, &leaseToken); err != nil {
+			writeError(w, http.StatusConflict, "test fixture has no canonical inbox delivery")
+			return
+		}
+	}
+
+	payload := map[string]any{}
+	if req.Body != nil {
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	payload["delivery_id"] = deliveryID
+	payload["lease_token"] = leaseToken
+	if withExecutionID {
+		payload["execution_id"] = uuid.NewString()
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encode inbox request")
+		return
+	}
+	forwarded := httptest.NewRequest(req.Method, req.URL.String(), bytes.NewReader(body))
+	forwarded.Header = req.Header.Clone()
+	forwarded = forwarded.WithContext(req.Context())
+	forwarded = withURLParam(forwarded, "eventId", taskID)
+	handle(forwarded)
+}
+
 func createChannelCompletionTask(t *testing.T, channelKind string) (taskID, channelID string) {
 	t.Helper()
 	return createChannelCompletionTaskWithCapabilities(t, channelKind, []string{protocol.DaemonCapabilityChannelOutputActions})
@@ -175,13 +304,13 @@ func createChannelCompletionTaskWithCapabilities(t *testing.T, channelKind strin
 	}
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'running', 2, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'draining', 2, now())
 		RETURNING id
 	`, agentID, runtimeID, chatSessionID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create running chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	return taskID, channelID
 }
@@ -197,14 +326,14 @@ func completeTaskForTest(t *testing.T, taskID string, body any) *httptest.Respon
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", body, testWorkspaceID, "legit-daemon")
 	req = withURLParams(req, "taskId", taskID)
-	testHandler.CompleteTask(w, req)
+	completeTaskThroughInboxForTest(w, req)
 	return w
 }
 
 func assertTaskOutputSuppressedReason(t *testing.T, taskID, want string) {
 	t.Helper()
 	var raw []byte
-	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
+	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&raw); err != nil {
 		t.Fatalf("load task result: %v", err)
 	}
 	var payload protocol.TaskCompletedPayload
@@ -218,7 +347,7 @@ func assertTaskOutputSuppressedReason(t *testing.T, taskID, want string) {
 
 func setTaskPriority(t *testing.T, taskID string, priority int) {
 	t.Helper()
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET priority = $2 WHERE id = $1`, taskID, priority); err != nil {
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_inbox_event SET priority = $2 WHERE id = $1`, taskID, priority); err != nil {
 		t.Fatalf("set task priority: %v", err)
 	}
 }
@@ -275,24 +404,6 @@ func createClaimReclaimAgentAndIssue(t *testing.T, ctx context.Context, runtimeI
 	return agentID, issueID
 }
 
-func createDispatchedClaimFixtureTask(t *testing.T, ctx context.Context, agentID, runtimeID, issueID, dispatchedAge string, started bool) string {
-	t.Helper()
-
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
-			agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at
-		)
-		VALUES ($1, $2, $3, 'dispatched', 0, now() - ($4::interval), CASE WHEN $5::boolean THEN now() ELSE NULL END)
-		RETURNING id
-	`, agentID, runtimeID, issueID, dispatchedAge, started).Scan(&taskID); err != nil {
-		t.Fatalf("setup: create dispatched task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
-
-	return taskID
-}
-
 func claimTaskByRuntimeForTest(t *testing.T, runtimeID string) (*struct {
 	ID string `json:"id"`
 }, string) {
@@ -303,7 +414,7 @@ func claimTaskByRuntimeForTest(t *testing.T, runtimeID string) (*struct {
 		testWorkspaceID, "claim-reclaim-review")
 	req = withURLParam(req, "runtimeId", runtimeID)
 
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -319,123 +430,39 @@ func claimTaskByRuntimeForTest(t *testing.T, runtimeID string) (*struct {
 	return resp.Task, w.Body.String()
 }
 
-func TestClaimTaskByRuntime_ReclaimsStaleDispatchedTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
+func settleClaimedInboxEventForTest(t *testing.T, eventID string) {
+	t.Helper()
 
 	ctx := context.Background()
-	runtimeID := createClaimReclaimRuntime(t, ctx, "Stale dispatch reclaim runtime")
-	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Stale dispatch reclaim agent")
-	taskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, issueID, "120 seconds", false)
-
-	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task == nil {
-		t.Fatalf("expected stale dispatched task %s to be reclaimed, got nil response: %s", taskID, body)
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin inbox settlement: %v", err)
 	}
-	if task.ID != taskID {
-		t.Fatalf("reclaimed task id = %s, want %s", task.ID, taskID)
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_event_delivery
+		SET status = 'acked',
+		    acked_at = COALESCE(acked_at, now()),
+		    updated_at = now()
+		WHERE inbox_event_id = $1
+		  AND status IN ('leased', 'processing')
+	`, eventID); err != nil {
+		t.Fatalf("settle inbox delivery: %v", err)
 	}
-
-	var refreshed bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT dispatched_at > now() - interval '15 seconds'
-		FROM agent_task_queue
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked',
+		    completed_at = COALESCE(completed_at, now())
 		WHERE id = $1
-	`, taskID).Scan(&refreshed); err != nil {
-		t.Fatalf("load refreshed dispatched_at: %v", err)
+	`, eventID); err != nil {
+		t.Fatalf("settle inbox event: %v", err)
 	}
-	if !refreshed {
-		t.Fatal("expected reclaimed task to refresh dispatched_at")
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit inbox settlement: %v", err)
 	}
 }
 
-func TestClaimTaskByRuntime_DoesNotReclaimFreshDispatchedTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := createClaimReclaimRuntime(t, ctx, "Fresh dispatch reclaim runtime")
-	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Fresh dispatch reclaim agent")
-	taskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, issueID, "75 seconds", false)
-
-	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task != nil {
-		t.Fatalf("expected fresh dispatched task %s not to be reclaimed, got %s in %s", taskID, task.ID, body)
-	}
-
-	var stillFresh bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT dispatched_at < now() - interval '70 seconds'
-		FROM agent_task_queue
-		WHERE id = $1
-	`, taskID).Scan(&stillFresh); err != nil {
-		t.Fatalf("load fresh dispatched task: %v", err)
-	}
-	if !stillFresh {
-		t.Fatal("expected fresh dispatched task to keep its original dispatched_at")
-	}
-}
-
-func TestClaimTaskByRuntime_DoesNotReclaimAlreadyStartedTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := createClaimReclaimRuntime(t, ctx, "Started dispatch reclaim runtime")
-	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Started dispatch reclaim agent")
-	taskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, issueID, "120 seconds", true)
-
-	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task != nil {
-		t.Fatalf("expected started dispatched task %s not to be reclaimed, got %s in %s", taskID, task.ID, body)
-	}
-
-	var startedAtValid bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT started_at IS NOT NULL
-		FROM agent_task_queue
-		WHERE id = $1
-	`, taskID).Scan(&startedAtValid); err != nil {
-		t.Fatalf("load started dispatched task: %v", err)
-	}
-	if !startedAtValid {
-		t.Fatal("expected started dispatched task to keep started_at")
-	}
-}
-
-func TestClaimTaskByRuntime_DoesNotReclaimDifferentRuntimeTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	claimingRuntimeID := createClaimReclaimRuntime(t, ctx, "Claiming dispatch reclaim runtime")
-	owningRuntimeID := createClaimReclaimRuntime(t, ctx, "Owning dispatch reclaim runtime")
-	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, owningRuntimeID, "Different runtime reclaim agent")
-	taskID := createDispatchedClaimFixtureTask(t, ctx, agentID, owningRuntimeID, issueID, "120 seconds", false)
-
-	task, body := claimTaskByRuntimeForTest(t, claimingRuntimeID)
-	if task != nil {
-		t.Fatalf("expected other-runtime task %s not to be reclaimed, got %s in %s", taskID, task.ID, body)
-	}
-
-	var runtimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT runtime_id::text
-		FROM agent_task_queue
-		WHERE id = $1
-	`, taskID).Scan(&runtimeID); err != nil {
-		t.Fatalf("load other-runtime dispatched task: %v", err)
-	}
-	if runtimeID != owningRuntimeID {
-		t.Fatalf("task runtime_id = %s, want %s", runtimeID, owningRuntimeID)
-	}
-}
-
-func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T) {
+func TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -446,13 +473,23 @@ func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T
 
 	var runningIssueTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'running', 0, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'draining', 0, now())
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&runningIssueTaskID); err != nil {
 		t.Fatalf("setup: create running issue task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, runningIssueTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, runningIssueTaskID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id, agent_session_id, inbox_event_id, runtime_id, status
+		)
+		SELECT workspace_id, agent_session_id, id, $2, 'processing'
+		FROM agent_inbox_event
+		WHERE id = $1
+	`, runningIssueTaskID, runtimeID); err != nil {
+		t.Fatalf("setup: create active issue delivery: %v", err)
+	}
 
 	var chatSessionID string
 	if err := testPool.QueryRow(ctx, `
@@ -466,13 +503,13 @@ func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T
 
 	var chatTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 2)
 		RETURNING id
 	`, agentID, runtimeID, chatSessionID).Scan(&chatTaskID); err != nil {
 		t.Fatalf("setup: create queued chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, chatTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, chatTaskID) })
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content)
 		VALUES ($1, 'user', 'please answer from the group channel')
@@ -481,21 +518,24 @@ func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T
 	}
 
 	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task == nil {
-		t.Fatalf("expected queued chat task to bypass issue capacity, got nil response: %s", body)
+	if task != nil {
+		t.Fatalf("chat wake %s bypassed active issue wake as %s: %s", chatTaskID, task.ID, body)
 	}
-	if task.ID != chatTaskID {
-		t.Fatalf("claimed task id = %s, want chat task %s", task.ID, chatTaskID)
+	if got := taskStatus(t, runningIssueTaskID); got != "draining" {
+		t.Fatalf("running issue task status = %q, want draining", got)
 	}
-	if got := taskStatus(t, runningIssueTaskID); got != "running" {
-		t.Fatalf("running issue task status = %q, want running", got)
+	if got := taskStatus(t, chatTaskID); got != "pending" {
+		t.Fatalf("chat task status = %q, want pending behind active issue wake", got)
 	}
-	if got := taskStatus(t, chatTaskID); got != "dispatched" {
-		t.Fatalf("chat task status = %q, want dispatched", got)
+
+	settleClaimedInboxEventForTest(t, runningIssueTaskID)
+	task, body = claimTaskByRuntimeForTest(t, runtimeID)
+	if task == nil || task.ID != chatTaskID {
+		t.Fatalf("claim after issue completion = %+v, want chat task %s: %s", task, chatTaskID, body)
 	}
 }
 
-func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
+func TestClaimTaskByRuntime_SerializesAcrossChatSessions(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -503,9 +543,6 @@ func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
 	ctx := context.Background()
 	runtimeID := createClaimReclaimRuntime(t, ctx, "Chat single slot runtime")
 	agentID, _ := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Chat single slot agent")
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET max_concurrent_tasks = 3 WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("setup: widen max_concurrent_tasks: %v", err)
-	}
 
 	var runningChatSessionID, queuedChatSessionID string
 	for i, dest := range []*string{&runningChatSessionID, &queuedChatSessionID} {
@@ -525,27 +562,142 @@ func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
 
 	var runningChatTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'running', 2, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'draining', 2, now())
 		RETURNING id
 	`, agentID, runtimeID, runningChatSessionID).Scan(&runningChatTaskID); err != nil {
 		t.Fatalf("setup: create running chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, runningChatTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, runningChatTaskID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id, agent_session_id, inbox_event_id, runtime_id, status
+		)
+		SELECT workspace_id, agent_session_id, id, $2, 'processing'
+		FROM agent_inbox_event
+		WHERE id = $1
+	`, runningChatTaskID, runtimeID); err != nil {
+		t.Fatalf("setup: create active chat delivery: %v", err)
+	}
 
 	var queuedChatTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 2)
 		RETURNING id
 	`, agentID, runtimeID, queuedChatSessionID).Scan(&queuedChatTaskID); err != nil {
 		t.Fatalf("setup: create queued chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, queuedChatTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, queuedChatTaskID) })
 
 	task, body := claimTaskByRuntimeForTest(t, runtimeID)
 	if task != nil {
-		t.Fatalf("expected second chat task %s to wait for the single chat interrupt slot, got %s in %s", queuedChatTaskID, task.ID, body)
+		t.Fatalf("expected second chat wake %s to wait behind the active agent wake, got %s in %s", queuedChatTaskID, task.ID, body)
+	}
+}
+
+func TestClaimTaskByRuntime_ConcurrentClaimsKeepPerAgentFIFOWithoutDuplicates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Concurrent unified wake runtime")
+	agentID, firstIssueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Concurrent unified wake agent")
+	var secondIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+		  workspace_id, title, status, priority, creator_id, creator_type, number, position
+		)
+		VALUES (
+		  $1, 'Concurrent unified wake second issue', 'in_progress', 'none', $2, 'member',
+		  (SELECT COALESCE(MAX(number), 82649) + 1 FROM issue WHERE workspace_id = $1),
+		  0
+		)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&secondIssueID); err != nil {
+		t.Fatalf("create second issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, secondIssueID) })
+
+	base := time.Now().Add(-5 * time.Minute)
+	var firstTaskID, secondTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+		  agent_id, runtime_id, issue_id, status, priority, created_at
+		)
+		VALUES ($1, $2, $3, 'pending', 0, $4)
+		RETURNING id
+	`, agentID, runtimeID, firstIssueID, base).Scan(&firstTaskID); err != nil {
+		t.Fatalf("create oldest wake: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+		  agent_id, runtime_id, issue_id, status, priority, created_at
+		)
+		VALUES ($1, $2, $3, 'pending', 100, $4)
+		RETURNING id
+	`, agentID, runtimeID, secondIssueID, base.Add(time.Second)).Scan(&secondTaskID); err != nil {
+		t.Fatalf("create newer high-priority wake: %v", err)
+	}
+
+	claimRound := func() []string {
+		t.Helper()
+		const claimers = 8
+		start := make(chan struct{})
+		results := make(chan string, claimers)
+		errs := make(chan error, claimers)
+		for i := 0; i < claimers; i++ {
+			go func() {
+				<-start
+				task, err := claimInboxEventForRuntimeForTest(ctx, runtimeID)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if task == nil {
+					results <- ""
+					return
+				}
+				results <- uuidToString(task.ID)
+			}()
+		}
+		close(start)
+
+		var claimed []string
+		for i := 0; i < claimers; i++ {
+			select {
+			case err := <-errs:
+				t.Fatalf("concurrent claim failed: %v", err)
+			case id := <-results:
+				if id != "" {
+					claimed = append(claimed, id)
+				}
+			}
+		}
+		return claimed
+	}
+
+	if claimed := claimRound(); len(claimed) != 1 || claimed[0] != firstTaskID {
+		t.Fatalf("first concurrent round claimed=%v, want oldest task %s exactly once", claimed, firstTaskID)
+	}
+	var dispatched, queued int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE status = 'draining'),
+		  count(*) FILTER (WHERE status = 'pending')
+		FROM agent_inbox_event
+		WHERE id IN ($1, $2)
+	`, firstTaskID, secondTaskID).Scan(&dispatched, &queued); err != nil {
+		t.Fatalf("load wake states: %v", err)
+	}
+	if dispatched != 1 || queued != 1 {
+		t.Fatalf("wake states dispatched/queued=%d/%d, want 1/1", dispatched, queued)
+	}
+
+	settleClaimedInboxEventForTest(t, firstTaskID)
+	if claimed := claimRound(); len(claimed) != 1 || claimed[0] != secondTaskID {
+		t.Fatalf("second concurrent round claimed=%v, want next task %s exactly once", claimed, secondTaskID)
 	}
 }
 
@@ -578,13 +730,20 @@ func TestClaimTaskByRuntime_PopulatesWorkspaceContext(t *testing.T) {
 
 	runtimeID := createClaimReclaimRuntime(t, ctx, "Workspace context claim runtime")
 	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Workspace context claim agent")
-	taskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, issueID, "120 seconds", false)
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 0)
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("create pending workspace-context task: %v", err)
+	}
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil,
 		testWorkspaceID, "workspace-context-claim")
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -637,13 +796,20 @@ func TestClaimTaskByRuntime_WorkspaceContextEmptyWhenUnset(t *testing.T) {
 
 	runtimeID := createClaimReclaimRuntime(t, ctx, "Workspace context empty claim runtime")
 	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Workspace context empty claim agent")
-	taskID := createDispatchedClaimFixtureTask(t, ctx, agentID, runtimeID, issueID, "120 seconds", false)
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 0)
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("create pending workspace-context task: %v", err)
+	}
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil,
 		testWorkspaceID, "workspace-context-empty-claim")
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -1126,14 +1292,14 @@ func TestGetTaskStatus_WithDaemonToken_CrossWorkspace(t *testing.T) {
 	}
 
 	err = testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id)
-		VALUES ($1, $2, 'queued', $3)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, status, runtime_id)
+		VALUES ($1, $2, 'pending', $3)
 		RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID)
 	if err != nil {
 		t.Fatalf("setup: create task: %v", err)
 	}
-	defer testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	defer testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 
 	// Try GetTaskStatus with a daemon token from a DIFFERENT workspace — should fail.
 	w := httptest.NewRecorder()
@@ -1601,8 +1767,8 @@ func setupForeignWorkspaceFixture(t *testing.T) (string, string) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id)
-		VALUES ($1, $2, 'queued', $3)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, status, runtime_id)
+		VALUES ($1, $2, 'pending', $3)
 		RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create foreign task: %v", err)
@@ -1653,12 +1819,12 @@ func TestCancelTask_CrossWorkspace_Returns404(t *testing.T) {
 	// The foreign task must not have been cancelled.
 	var status string
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT status FROM agent_task_queue WHERE id = $1`, foreignTaskID,
+		`SELECT status FROM agent_inbox_event WHERE id = $1`, foreignTaskID,
 	).Scan(&status); err != nil {
 		t.Fatalf("read foreign task status: %v", err)
 	}
-	if status != "queued" {
-		t.Fatalf("foreign task status was mutated: expected 'queued', got %q", status)
+	if status != "pending" {
+		t.Fatalf("foreign task status was mutated: expected 'pending', got %q", status)
 	}
 }
 
@@ -1693,13 +1859,13 @@ func TestCancelTask_TaskBelongsToDifferentIssue_Returns404(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueXID) })
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id)
-		VALUES ($1, $2, 'queued', $3)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, status, runtime_id)
+		VALUES ($1, $2, 'pending', $3)
 		RETURNING id
 	`, agentID, issueXID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	// Issue Y — a sibling in the same workspace, used only as the URL cover.
 	var issueYID string
@@ -1723,12 +1889,12 @@ func TestCancelTask_TaskBelongsToDifferentIssue_Returns404(t *testing.T) {
 
 	var status string
 	if err := testPool.QueryRow(ctx,
-		`SELECT status FROM agent_task_queue WHERE id = $1`, taskID,
+		`SELECT status FROM agent_inbox_event WHERE id = $1`, taskID,
 	).Scan(&status); err != nil {
 		t.Fatalf("read task status: %v", err)
 	}
-	if status != "queued" {
-		t.Fatalf("task status was mutated: expected 'queued', got %q", status)
+	if status != "pending" {
+		t.Fatalf("task status was mutated: expected 'pending', got %q", status)
 	}
 }
 
@@ -1760,13 +1926,13 @@ func TestCancelTask_SameIssue_Succeeds(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id)
-		VALUES ($1, $2, 'queued', $3)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, status, runtime_id)
+		VALUES ($1, $2, 'pending', $3)
 		RETURNING id
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/issues/"+issueID+"/tasks/"+taskID+"/cancel", nil)
@@ -1927,7 +2093,7 @@ func TestGetDaemonWorkspaceRepos_VersionIgnoresOrderAndDescription(t *testing.T)
 // The server must:
 //
 //   - reassign every agent pointing at the old runtime row to the new row,
-//   - reassign every task (agent_task_queue.runtime_id) onto the new row,
+//   - reassign every task (agent_inbox_event.runtime_id) onto the new row,
 //   - delete the stale old row so there's exactly one runtime per machine,
 //   - record the legacy daemon_id on the new row for traceability.
 //
@@ -1982,14 +2148,14 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, legacyIssueID) })
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id)
-		VALUES ($1, $2, 'completed', $3)
+		INSERT INTO agent_inbox_event (agent_id, issue_id, status, runtime_id)
+		VALUES ($1, $2, 'acked', $3)
 		RETURNING id
 	`, legacyAgentID, legacyIssueID, legacyRuntimeID).Scan(&legacyTaskID); err != nil {
 		t.Fatalf("seed legacy task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, legacyTaskID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, legacyTaskID)
 	})
 
 	// Register under the new stable UUID, declaring the prior hostname-derived
@@ -2034,7 +2200,7 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime(t *testing.T) {
 
 	// Task should be reassigned (not dropped).
 	var taskRuntimeID string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id FROM agent_task_queue WHERE id = $1`, legacyTaskID).Scan(&taskRuntimeID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id FROM agent_inbox_event WHERE id = $1`, legacyTaskID).Scan(&taskRuntimeID); err != nil {
 		t.Fatalf("read task runtime_id: %v", err)
 	}
 	if taskRuntimeID != newRuntimeID {
@@ -2372,15 +2538,15 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	// issue_id is explicitly NULL — the condition that used to trigger 404.
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
 		)
-		VALUES ($1, $2, NULL, 'dispatched', 0, $3)
+		VALUES ($1, $2, NULL, 'draining', 0, $3)
 		RETURNING id
 	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create autopilot task: %v", err)
 	}
-	defer testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	defer testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 
 	// Cross-workspace daemon token must still 404.
 	w := httptest.NewRecorder()
@@ -2390,7 +2556,7 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	rctx.URLParams.Add("taskId", taskID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.StartTask(w, req)
+	startTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("StartTask with cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2401,17 +2567,17 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 		testWorkspaceID, "legit-daemon")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.StartTask(w, req)
+	startTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("StartTask for run_only autopilot task: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&status); err != nil {
 		t.Fatalf("post-check: read task status: %v", err)
 	}
-	if status != "running" {
-		t.Fatalf("expected task status 'running' after StartTask, got %q", status)
+	if status != "draining" {
+		t.Fatalf("expected task status 'draining' after StartTask, got %q", status)
 	}
 }
 
@@ -2460,7 +2626,7 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, task.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID)
 	})
 	borrower := task
 	borrower.ID = parseUUID(uuid.NewString())
@@ -2486,7 +2652,7 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, uuid.NewString(), "cross-workspace-daemon"),
 		"taskId", taskID,
 	)
-	testHandler.StartTask(w, req)
+	startTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("StartTask with cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2496,7 +2662,7 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, daemonID),
 		"taskId", taskID,
 	)
-	testHandler.StartTask(w, req)
+	startTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("StartTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2504,25 +2670,25 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 	var taskStatus, runStatus string
 	if err := testPool.QueryRow(ctx, `
 		SELECT task.status, radar.status
-		FROM agent_task_queue task
+		FROM agent_inbox_event task
 		JOIN agent_radar_run radar ON radar.task_id = task.id
 		WHERE task.id = $1
 	`, task.ID).Scan(&taskStatus, &runStatus); err != nil {
 		t.Fatalf("read started Radar lifecycle: %v", err)
 	}
-	if taskStatus != "running" || runStatus != "running" {
-		t.Fatalf("started Radar lifecycle = task:%q run:%q, want running/running", taskStatus, runStatus)
+	if taskStatus != "draining" || runStatus != "running" {
+		t.Fatalf("started Radar lifecycle = task:%q run:%q, want draining/running", taskStatus, runStatus)
 	}
 
 	w = httptest.NewRecorder()
 	req = withURLParam(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", TaskFailRequest{
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", FailAgentInboxEventRequest{
 			Error:         "Radar regression failure",
 			FailureReason: "agent_error",
 		}, testWorkspaceID, daemonID),
 		"taskId", taskID,
 	)
-	testHandler.FailTask(w, req)
+	failTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("FailTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2592,19 +2758,19 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority
-		) VALUES ($1, $2, $3, 'queued', 0)
+		) VALUES ($1, $2, $3, 'pending', 0)
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-project-repos")
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: %d %s", w.Code, w.Body.String())
 	}
@@ -2673,19 +2839,19 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority
-		) VALUES ($1, $2, $3, 'queued', 0)
+		) VALUES ($1, $2, $3, 'pending', 0)
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-fallback")
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: %d %s", w.Code, w.Body.String())
 	}
@@ -2750,15 +2916,15 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 	// Create a queued task with only AutopilotRunID (no IssueID, no ChatSessionID).
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
 		)
-		VALUES ($1, $2, NULL, 'queued', 0, $3)
+		VALUES ($1, $2, NULL, 'pending', 0, $3)
 		RETURNING id
 	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create autopilot task: %v", err)
 	}
-	defer testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	defer testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
@@ -2767,7 +2933,7 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 	rctx.URLParams.Add("runtimeId", runtimeID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2844,13 +3010,13 @@ func TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects(t *testing.T
 	// bug would produce.
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 2)
 		RETURNING id
 	`, localAgentID, localRuntimeID, foreignIssueID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create mismatched task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+localRuntimeID+"/claim", nil,
@@ -2859,7 +3025,7 @@ func TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects(t *testing.T
 	rctx.URLParams.Add("runtimeId", localRuntimeID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("ClaimTaskByRuntime (mismatch): expected 500, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2868,12 +3034,12 @@ func TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects(t *testing.T
 	// is released immediately rather than stuck until the sweeper fires.
 	var status string
 	if err := testPool.QueryRow(ctx,
-		`SELECT status FROM agent_task_queue WHERE id = $1`, taskID,
+		`SELECT status FROM agent_inbox_event WHERE id = $1`, taskID,
 	).Scan(&status); err != nil {
 		t.Fatalf("read task status: %v", err)
 	}
-	if status != "cancelled" {
-		t.Fatalf("ClaimTaskByRuntime (mismatch): expected task status=cancelled, got %q", status)
+	if status != "suppressed" {
+		t.Fatalf("ClaimTaskByRuntime (mismatch): expected task status=suppressed, got %q", status)
 	}
 }
 
@@ -3065,7 +3231,7 @@ func TestCompleteTask_GroupChannelSendTargetDMWithoutDaemonCapabilityIsSuppresse
 	if err := testPool.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, testUserID).Scan(&recipientName); err != nil {
 		t.Fatalf("load recipient name: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&agentID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&agentID); err != nil {
 		t.Fatalf("load task agent: %v", err)
 	}
 	canonical := dmCanonicalName("user", testUserID, "agent", agentID)
@@ -3119,7 +3285,7 @@ func TestCompleteTask_GroupChannelSendAliasTargetHumanDMCreatesMessage(t *testin
 	if err := testPool.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, recipientID).Scan(&recipientName); err != nil {
 		t.Fatalf("load recipient name: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&agentID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&agentID); err != nil {
 		t.Fatalf("load task agent: %v", err)
 	}
 	canonical := dmCanonicalName("user", recipientID, "agent", agentID)
@@ -3187,7 +3353,7 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 				var agentName string
 				if err := testPool.QueryRow(context.Background(), `
 					SELECT a.name
-					FROM agent_task_queue q
+					FROM agent_inbox_event q
 					JOIN agent a ON a.id = q.agent_id
 					WHERE q.id = $1`, taskID).Scan(&agentName); err != nil {
 					t.Fatalf("load task agent name: %v", err)
@@ -3394,29 +3560,16 @@ func TestCompleteTask_DirectedCLICapableRunSuppressesFinalTextFallback(t *testin
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 
 	var taskStatus string
-	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
 		t.Fatalf("load completed task status: %v", err)
 	}
-	if taskStatus != "completed" {
-		t.Fatalf("task status = %q, want completed", taskStatus)
+	if taskStatus != "acked" {
+		t.Fatalf("task status = %q, want acked", taskStatus)
 	}
-	var completionActivityCount int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT COUNT(*)
-		FROM agent_activity_event
-		WHERE task_id = $1
-		  AND event_type = 'task_completed'
-		  AND details->>'output_suppressed_reason' = $2`, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput).Scan(&completionActivityCount); err != nil {
-		t.Fatalf("count task completion activity: %v", err)
-	}
-	if completionActivityCount != 1 {
-		t.Fatalf("task_completed activity count = %d, want 1", completionActivityCount)
-	}
-
 	// Unsent directed output remains observable as a must-reply failure rather
 	// than becoming a fallback channel message.
 	var raw []byte
-	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
+	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&raw); err != nil {
 		t.Fatalf("load task result: %v", err)
 	}
 	var result map[string]any
@@ -3460,7 +3613,7 @@ func TestCompleteTask_DirectedNoReplyRunFlagsMustReplyFailure(t *testing.T) {
 
 	// Verify must_reply_failure flag is set in the task result.
 	var raw []byte
-	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
+	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&raw); err != nil {
 		t.Fatalf("load task result: %v", err)
 	}
 	var result map[string]any
@@ -3508,7 +3661,7 @@ func TestCompleteTask_GroupChannelMessageReactActionRequiresAgentTransport(t *te
 	ctx := context.Background()
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&agentID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&agentID); err != nil {
 		t.Fatalf("load task agent: %v", err)
 	}
 	var triggerID string
@@ -3553,7 +3706,7 @@ func TestCompleteTask_GroupChannelMessageReactWithoutDaemonCapabilityIsSuppresse
 	ctx := context.Background()
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
 	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&agentID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&agentID); err != nil {
 		t.Fatalf("load task agent: %v", err)
 	}
 	var triggerID string
@@ -3708,13 +3861,13 @@ func TestTaskServiceCompleteTask_UnwrapsStructuredMessageSendBeforePersist(t *te
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID) })
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'running', 2, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'draining', 2, now())
 		RETURNING id
 	`, agentID, runtimeID, chatSessionID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create running chat task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	const dmReply = "Structured service reply"
 	rawOutput := `Assistant reply: {"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`
@@ -3792,16 +3945,16 @@ func TestCompleteTask_CommentTriggered_SynthesizesCommentWhenAgentSilent(t *test
 	// Comment-triggered, already running (as CompleteAgentTask requires).
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, trigger_comment_id,
 			status, priority, started_at
 		)
-		VALUES ($1, $2, $3, $4, 'running', 0, now())
+		VALUES ($1, $2, $3, $4, 'draining', 0, now())
 		RETURNING id
 	`, agentID, runtimeID, issueID, triggerCommentID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create comment-triggered task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	const agentFinalOutput = "sure, will look into it shortly"
 
@@ -3813,7 +3966,7 @@ func TestCompleteTask_CommentTriggered_SynthesizesCommentWhenAgentSilent(t *test
 	rctx.URLParams.Add("taskId", taskID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.CompleteTask(w, req)
+	completeTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -3894,16 +4047,16 @@ func TestCompleteTask_CommentTriggered_SkipsSynthesisWhenAgentAlreadyCommented(t
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, trigger_comment_id,
 			status, priority, started_at
 		)
-		VALUES ($1, $2, $3, $4, 'running', 0, now())
+		VALUES ($1, $2, $3, $4, 'draining', 0, now())
 		RETURNING id
 	`, agentID, runtimeID, issueID, triggerCommentID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create comment-triggered task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	// Agent posts its own reply during the run — exactly the compliant path.
 	if _, err := testPool.Exec(ctx, `
@@ -3921,7 +4074,7 @@ func TestCompleteTask_CommentTriggered_SkipsSynthesisWhenAgentAlreadyCommented(t
 	rctx.URLParams.Add("taskId", taskID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.CompleteTask(w, req)
+	completeTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -3973,16 +4126,16 @@ func TestCompleteTask_CommentTriggered_SuppressesTrivialDoneOutput(t *testing.T)
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, trigger_comment_id,
 			status, priority, started_at
 		)
-		VALUES ($1, $2, $3, $4, 'running', 0, now())
+		VALUES ($1, $2, $3, $4, 'draining', 0, now())
 		RETURNING id
 	`, agentID, runtimeID, issueID, triggerCommentID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create comment-triggered task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete",
@@ -3992,7 +4145,7 @@ func TestCompleteTask_CommentTriggered_SuppressesTrivialDoneOutput(t *testing.T)
 	rctx.URLParams.Add("taskId", taskID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.CompleteTask(w, req)
+	completeTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -4035,16 +4188,16 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority, started_at
 		)
-		VALUES ($1, $2, $3, 'running', 0, now())
+		VALUES ($1, $2, $3, 'draining', 0, now())
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create assignment-triggered task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete",
@@ -4054,7 +4207,7 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 	rctx.URLParams.Add("taskId", taskID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.CompleteTask(w, req)
+	completeTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -4096,7 +4249,7 @@ func claimTaskForRuntimeGuard(t *testing.T, runtimeID, daemonID string) *claimRu
 	rctx.URLParams.Add("runtimeId", runtimeID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -4198,7 +4351,7 @@ func TestChatSessionRuntimeBackfillRequiresMatchingSessionID(t *testing.T) {
 		t.Fatalf("setup temp chat_session table: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		CREATE TEMP TABLE agent_task_queue (
+		CREATE TEMP TABLE agent_inbox_event (
 			chat_session_id uuid,
 			runtime_id uuid,
 			session_id text,
@@ -4209,7 +4362,7 @@ func TestChatSessionRuntimeBackfillRequiresMatchingSessionID(t *testing.T) {
 			created_at timestamptz
 		) ON COMMIT DROP;
 	`); err != nil {
-		t.Fatalf("setup temp agent_task_queue table: %v", err)
+		t.Fatalf("setup temp agent_inbox_event table: %v", err)
 	}
 
 	const (
@@ -4228,16 +4381,16 @@ func TestChatSessionRuntimeBackfillRequiresMatchingSessionID(t *testing.T) {
 		t.Fatalf("seed temp chat sessions: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			chat_session_id, runtime_id, session_id, status,
 			completed_at, started_at, dispatched_at, created_at
 		)
 		VALUES
-			($1, $3, 'old-runtime-session', 'completed',
+			($1, $3, 'old-runtime-session', 'acked',
 			 now() - interval '2 hours', now() - interval '2 hours', now() - interval '2 hours', now() - interval '2 hours'),
-			($1, $4, 'new-runtime-session', 'completed',
+			($1, $4, 'new-runtime-session', 'acked',
 			 now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour'),
-			($2, $4, 'matched-runtime-session', 'completed',
+			($2, $4, 'matched-runtime-session', 'acked',
 			 now() - interval '30 minutes', now() - interval '30 minutes', now() - interval '30 minutes', now() - interval '30 minutes');
 	`, poisonedChatID, matchedChatID, oldRuntimeID, newRuntimeID); err != nil {
 		t.Fatalf("seed temp task sessions: %v", err)
@@ -4251,10 +4404,10 @@ func TestChatSessionRuntimeBackfillRequiresMatchingSessionID(t *testing.T) {
 				chat_session_id,
 				runtime_id,
 				session_id
-			FROM agent_task_queue
+			FROM agent_inbox_event
 			WHERE chat_session_id IS NOT NULL
 			  AND session_id IS NOT NULL
-			  AND status IN ('completed', 'failed')
+			  AND status IN ('acked', 'failed')
 			ORDER BY chat_session_id, COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
 		) latest
 		WHERE latest.chat_session_id = cs.id
@@ -4305,21 +4458,21 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, skipIssueID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'old-runtime-session', '/tmp/old-runtime-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'old-runtime-session', '/tmp/old-runtime-workdir')
 	`, agentID, oldRuntimeID, skipIssueID); err != nil {
 		t.Fatalf("setup: create old-runtime prior task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, 'queued', 0)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, runtimeID, skipIssueID); err != nil {
 		t.Fatalf("setup: create current-runtime task: %v", err)
 	}
@@ -4334,13 +4487,7 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	if task.ThreadName != "runtime-session-skip fixture" {
 		t.Fatalf("issue task thread_name = %q, want issue title", task.ThreadName)
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now()
-		WHERE issue_id = $1 AND status IN ('dispatched', 'running')
-	`, skipIssueID); err != nil {
-		t.Fatalf("setup: complete claimed skip task: %v", err)
-	}
+	settleClaimedInboxEventForTest(t, task.ID)
 
 	var resumeIssueID string
 	if err := testPool.QueryRow(ctx, `
@@ -4353,21 +4500,21 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, resumeIssueID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'same-runtime-session', '/tmp/same-runtime-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'same-runtime-session', '/tmp/same-runtime-workdir')
 	`, agentID, runtimeID, resumeIssueID); err != nil {
 		t.Fatalf("setup: create same-runtime prior task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, 'queued', 0)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, runtimeID, resumeIssueID); err != nil {
 		t.Fatalf("setup: create same-runtime task: %v", err)
 	}
@@ -4379,6 +4526,7 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorWorkDir != "/tmp/same-runtime-workdir" {
 		t.Fatalf("runtime match: expected PriorWorkDir='/tmp/same-runtime-workdir', got %q", task.PriorWorkDir)
 	}
+	settleClaimedInboxEventForTest(t, task.ID)
 
 	var commentIssueID string
 	if err := testPool.QueryRow(ctx, `
@@ -4399,21 +4547,21 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 		t.Fatalf("setup: create trigger comment: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'comment-prior-session', '/tmp/comment-prior-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'comment-prior-session', '/tmp/comment-prior-workdir')
 	`, agentID, runtimeID, commentIssueID); err != nil {
 		t.Fatalf("setup: create comment-trigger prior task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id, trigger_comment_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, $4, 'queued', 0)
+		VALUES ($1, $2, $3, $4, 'pending', 0)
 	`, agentID, runtimeID, commentIssueID, triggerCommentID); err != nil {
 		t.Fatalf("setup: create comment-triggered task: %v", err)
 	}
@@ -4427,13 +4575,7 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorWorkDir != "/tmp/comment-prior-workdir" {
 		t.Fatalf("comment trigger: expected PriorWorkDir='/tmp/comment-prior-workdir', got %q", task.PriorWorkDir)
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now()
-		WHERE issue_id = $1 AND status IN ('dispatched', 'running')
-	`, commentIssueID); err != nil {
-		t.Fatalf("setup: complete claimed comment-trigger task: %v", err)
-	}
+	settleClaimedInboxEventForTest(t, task.ID)
 
 	var freshIssueID string
 	if err := testPool.QueryRow(ctx, `
@@ -4445,21 +4587,21 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, freshIssueID) })
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'force-fresh-prior-session', '/tmp/force-fresh-prior-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'force-fresh-prior-session', '/tmp/force-fresh-prior-workdir')
 	`, agentID, runtimeID, freshIssueID); err != nil {
 		t.Fatalf("setup: create force-fresh prior task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, issue_id,
 			status, priority, force_fresh_session
 		)
-		VALUES ($1, $2, $3, 'queued', 0, TRUE)
+		VALUES ($1, $2, $3, 'pending', 0, TRUE)
 	`, agentID, runtimeID, freshIssueID); err != nil {
 		t.Fatalf("setup: create force-fresh task: %v", err)
 	}
@@ -4497,21 +4639,21 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, skipSessionID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'old-chat-session', '/tmp/old-chat-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'old-chat-session', '/tmp/old-chat-workdir')
 	`, agentID, oldRuntimeID, skipSessionID); err != nil {
 		t.Fatalf("setup: create old-runtime chat task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, 'queued', 0)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, runtimeID, skipSessionID); err != nil {
 		t.Fatalf("setup: create current-runtime chat task: %v", err)
 	}
@@ -4526,16 +4668,10 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorSessionID != "" {
 		t.Fatalf("chat runtime mismatch: expected empty PriorSessionID, got %q", task.PriorSessionID)
 	}
-	if task.PriorWorkDir != "/tmp/old-chat-workdir" {
-		t.Fatalf("chat runtime mismatch: expected PriorWorkDir='/tmp/old-chat-workdir', got %q", task.PriorWorkDir)
+	if task.PriorWorkDir != "" {
+		t.Fatalf("chat runtime mismatch: expected empty PriorWorkDir, got %q", task.PriorWorkDir)
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now()
-		WHERE chat_session_id = $1 AND status IN ('dispatched', 'running')
-	`, skipSessionID); err != nil {
-		t.Fatalf("setup: complete claimed skip chat task: %v", err)
-	}
+	settleClaimedInboxEventForTest(t, task.ID)
 
 	var resumeSessionID string
 	if err := testPool.QueryRow(ctx, `
@@ -4551,11 +4687,11 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, resumeSessionID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, 'queued', 0)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, runtimeID, resumeSessionID); err != nil {
 		t.Fatalf("setup: create same-runtime chat task: %v", err)
 	}
@@ -4573,13 +4709,7 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorWorkDir != "/tmp/same-chat-workdir" {
 		t.Fatalf("chat runtime match: expected PriorWorkDir='/tmp/same-chat-workdir', got %q", task.PriorWorkDir)
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now()
-		WHERE chat_session_id = $1 AND status IN ('dispatched', 'running')
-	`, resumeSessionID); err != nil {
-		t.Fatalf("setup: complete claimed resume chat task: %v", err)
-	}
+	settleClaimedInboxEventForTest(t, task.ID)
 
 	var highUsageSessionID string
 	if err := testPool.QueryRow(ctx, `
@@ -4596,12 +4726,12 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 
 	var priorHighUsageTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'high-usage-native-session', '/tmp/high-usage-chat-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'high-usage-native-session', '/tmp/high-usage-chat-workdir')
 		RETURNING id
 	`, agentID, runtimeID, highUsageSessionID).Scan(&priorHighUsageTaskID); err != nil {
 		t.Fatalf("setup: create high usage prior chat task: %v", err)
@@ -4614,19 +4744,19 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 		t.Fatalf("setup: create high usage ledger row: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO chat_message (chat_session_id, role, content, created_at) VALUES
-			($1, 'user', 'old long-running context', now()),
-			($1, 'assistant', 'previous answer', now() + interval '1 second'),
-			($1, 'user', 'fresh follow-up', now() + interval '2 second')
-	`, highUsageSessionID); err != nil {
+		INSERT INTO chat_message (chat_session_id, role, content, task_id, created_at) VALUES
+			($1, 'user', 'old long-running context', $2, now()),
+			($1, 'assistant', 'previous answer', $2, now() + interval '1 second'),
+			($1, 'user', 'fresh follow-up', NULL, now() + interval '2 second')
+	`, highUsageSessionID, priorHighUsageTaskID); err != nil {
 		t.Fatalf("setup: insert high usage messages: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, 'queued', 0)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, runtimeID, highUsageSessionID); err != nil {
 		t.Fatalf("setup: create high usage chat task: %v", err)
 	}
@@ -4679,8 +4809,8 @@ func TestClaimTask_ChatDeliversAllUnansweredUserMessages(t *testing.T) {
 		t.Fatalf("setup: insert user messages: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 2)
 	`, agentID, runtimeID, sessionID); err != nil {
 		t.Fatalf("setup: create chat task: %v", err)
 	}
@@ -4695,12 +4825,7 @@ func TestClaimTask_ChatDeliversAllUnansweredUserMessages(t *testing.T) {
 
 	// Complete the run and record the agent's assistant reply, then send a
 	// fresh user message — only the new one should be delivered next.
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_task_queue SET status = 'completed', completed_at = now()
-		WHERE chat_session_id = $1 AND status IN ('dispatched', 'running')
-	`, sessionID); err != nil {
-		t.Fatalf("setup: complete first chat task: %v", err)
-	}
+	settleClaimedInboxEventForTest(t, task.ID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, created_at)
 		VALUES ($1, 'assistant', '上海与青岛天气如下…', now() + interval '2 second')
@@ -4714,8 +4839,8 @@ func TestClaimTask_ChatDeliversAllUnansweredUserMessages(t *testing.T) {
 		t.Fatalf("setup: insert follow-up user message: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 2)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 2)
 	`, agentID, runtimeID, sessionID); err != nil {
 		t.Fatalf("setup: create follow-up chat task: %v", err)
 	}
@@ -4767,8 +4892,8 @@ func TestClaimTask_ChatPopulatesInitiator(t *testing.T) {
 	}
 	// initiator_user_id = the real sender (testUserID), distinct from creator.
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
-		VALUES ($1, $2, $3, 'queued', 2, $4)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
+		VALUES ($1, $2, $3, 'pending', 2, $4)
 	`, agentID, runtimeID, sessionID, testUserID); err != nil {
 		t.Fatalf("setup: create chat task: %v", err)
 	}
@@ -4776,7 +4901,7 @@ func TestClaimTask_ChatPopulatesInitiator(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -4843,8 +4968,8 @@ func TestClaimTask_ChatBoundProjectSurfacesResources(t *testing.T) {
 		t.Fatalf("setup: insert user message: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
-		VALUES ($1, $2, $3, 'queued', 2, $4)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
+		VALUES ($1, $2, $3, 'pending', 2, $4)
 	`, agentID, runtimeID, sessionID, testUserID); err != nil {
 		t.Fatalf("setup: create chat task: %v", err)
 	}
@@ -4852,7 +4977,7 @@ func TestClaimTask_ChatBoundProjectSurfacesResources(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -4917,17 +5042,17 @@ func TestClaimTask_IssueProjectProvisionsManagedWorkdir(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
-		VALUES ($1, $2, $3, 'queued', 0) RETURNING id
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'pending', 0) RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -4973,8 +5098,8 @@ func TestClaimTask_QuickCreatePopulatesThreadName(t *testing.T) {
 	})
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context)
-		VALUES ($1, $2, 'queued', 2, $3)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, context)
+		VALUES ($1, $2, 'pending', 2, $3)
 	`, agentID, runtimeID, quickContext); err != nil {
 		t.Fatalf("setup: create quick-create task: %v", err)
 	}
@@ -5011,21 +5136,21 @@ func TestClaimTask_ChatForceFreshSessionSkipsPriorSession(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, chatSessionID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'task-row-session', '/tmp/task-row-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'task-row-session', '/tmp/task-row-workdir')
 	`, agentID, runtimeID, chatSessionID); err != nil {
 		t.Fatalf("setup: create prior chat task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority, force_fresh_session
 		)
-		VALUES ($1, $2, $3, 'queued', 0, TRUE)
+		VALUES ($1, $2, $3, 'pending', 0, TRUE)
 	`, agentID, runtimeID, chatSessionID); err != nil {
 		t.Fatalf("setup: create force-fresh chat task: %v", err)
 	}
@@ -5072,21 +5197,21 @@ func TestClaimTask_ChatLegacyNullRuntimeFallsBackToTaskRow(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, legacySessionID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'legacy-fallback-session', '/tmp/legacy-fallback-workdir')
+		VALUES ($1, $2, $3, 'acked', 0, now(), now(), 'legacy-fallback-session', '/tmp/legacy-fallback-workdir')
 	`, agentID, runtimeID, legacySessionID); err != nil {
 		t.Fatalf("setup: create matching-runtime prior task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, chat_session_id,
 			status, priority
 		)
-		VALUES ($1, $2, $3, 'queued', 0)
+		VALUES ($1, $2, $3, 'pending', 0)
 	`, agentID, runtimeID, legacySessionID); err != nil {
 		t.Fatalf("setup: create current chat task: %v", err)
 	}
@@ -5276,15 +5401,15 @@ func TestGetTaskGCCheck(t *testing.T) {
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
+		INSERT INTO agent_inbox_event (
 			agent_id, runtime_id, status, priority, context, completed_at
 		)
-		VALUES ($1, $2, 'completed', 0, $3, NOW())
+		VALUES ($1, $2, 'acked', 0, $3, NOW())
 		RETURNING id
 	`, agentID, runtimeID, quickContext).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create quick-create task: %v", err)
 	}
-	defer testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	defer testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
 
 	// Cross-workspace probe.
 	w := httptest.NewRecorder()
@@ -5312,8 +5437,8 @@ func TestGetTaskGCCheck(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Status != "completed" {
-		t.Fatalf("expected status %q, got %q", "completed", resp.Status)
+	if resp.Status != "acked" {
+		t.Fatalf("expected status %q, got %q", "acked", resp.Status)
 	}
 	if resp.CompletedAt == "" {
 		t.Fatal("expected completed_at to be set for completed task")
@@ -5596,13 +5721,13 @@ func createCommentTriggeredClaimTask(t *testing.T, ctx context.Context, agentID,
 
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id)
-		VALUES ($1, $2, $3, 'queued', 0, $4)
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id)
+		VALUES ($1, $2, $3, 'pending', 0, $4)
 		RETURNING id
 	`, agentID, runtimeID, issueID, commentID).Scan(&taskID); err != nil {
 		t.Fatalf("insert comment-triggered task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
 	return taskID, commentID
 }
 
@@ -5621,7 +5746,7 @@ func claimCommentTask(t *testing.T, runtimeID, daemonID string) claimCommentTask
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -5652,13 +5777,13 @@ func TestClaimTaskByRuntime_CommentTaskPopulatesNewCommentCount(t *testing.T) {
 	// A prior run establishes the "since" anchor (its started_at, in the past).
 	var priorTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, started_at, completed_at)
-		VALUES ($1, $2, $3, 'completed', 0, now() - interval '1 hour', now() - interval '50 minutes')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, started_at, completed_at)
+		VALUES ($1, $2, $3, 'acked', 0, now() - interval '1 hour', now() - interval '50 minutes')
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&priorTaskID); err != nil {
 		t.Fatalf("insert prior task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, priorTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, priorTaskID) })
 
 	var threadRootID string
 	if err := testPool.QueryRow(ctx, `
@@ -5725,7 +5850,7 @@ func TestClaimTaskByRuntime_CommentTaskPopulatesInitiator(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "comment-initiator-claim")
 	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
+	claimTaskThroughInboxForTest(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -5768,13 +5893,13 @@ func TestClaimTaskByRuntime_CommentTaskOmitsDeltaWhenOnlyTriggerIsNew(t *testing
 
 	var priorTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, started_at, completed_at)
-		VALUES ($1, $2, $3, 'completed', 0, now() - interval '1 hour', now() - interval '50 minutes')
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, started_at, completed_at)
+		VALUES ($1, $2, $3, 'acked', 0, now() - interval '1 hour', now() - interval '50 minutes')
 		RETURNING id
 	`, agentID, runtimeID, issueID).Scan(&priorTaskID); err != nil {
 		t.Fatalf("insert prior task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, priorTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, priorTaskID) })
 
 	_, triggerID := createCommentTriggeredClaimTask(t, ctx, agentID, runtimeID, issueID, nil)
 
@@ -5805,13 +5930,13 @@ func TestClaimTaskByRuntime_CommentResumeDefaultOn(t *testing.T) {
 	const priorSession = "sess-prior-123"
 	var priorTaskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, session_id, completed_at)
-		VALUES ($1, $2, $3, 'completed', 0, $4, now())
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, session_id, completed_at)
+		VALUES ($1, $2, $3, 'acked', 0, $4, now())
 		RETURNING id
 	`, agentID, runtimeID, issueID, priorSession).Scan(&priorTaskID); err != nil {
 		t.Fatalf("insert prior completed task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, priorTaskID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, priorTaskID) })
 
 	createCommentTriggeredClaimTask(t, ctx, agentID, runtimeID, issueID, nil)
 

@@ -169,15 +169,15 @@ func NewBusinessSamplerCollector(opts *BusinessSamplerOptions) *BusinessSamplerC
 			[]string{"window"}, nil),
 		descTaskQueued: prometheus.NewDesc(
 			"multica_agent_task_queued",
-			"Current agent_task_queue rows in `queued` status by inferred source. Sampled from the database.",
+			"Current agent_inbox_event rows in `queued` status by inferred source. Sampled from the database.",
 			[]string{"source"}, nil),
 		descTaskRunning: prometheus.NewDesc(
 			"multica_agent_task_running",
-			"Current agent_task_queue rows in `dispatched` or `running` status by inferred source and runtime mode. Sampled from the database.",
+			"Current agent_inbox_event rows in `dispatched` or `running` status by inferred source and runtime mode. Sampled from the database.",
 			[]string{"source", "runtime_mode"}, nil),
 		descTaskStuck: prometheus.NewDesc(
 			"multica_agent_task_stuck_total",
-			"Current `running` agent_task_queue rows whose started_at is older than the stuck threshold. Sampled from the database.",
+			"Current `running` agent_inbox_event rows whose started_at is older than the stuck threshold. Sampled from the database.",
 			[]string{"source"}, nil),
 		descRuntimeOnline: prometheus.NewDesc(
 			"multica_runtime_online",

@@ -234,7 +234,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, WindyResponse{Agent: resp, DMID: dmID})
 }
 
-func (h *Handler) bindWorkspaceRadarSupervisor(ctx context.Context, workspaceID, agentID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+func (h *Handler) bindWorkspaceRadarSupervisor(ctx context.Context, workspaceID, agentID pgtype.UUID) ([]db.AgentInboxEvent, error) {
 	if h.TxStarter == nil {
 		return nil, errors.New("workspace Radar transaction starter unavailable")
 	}
@@ -310,15 +310,18 @@ func (h *Handler) bindWorkspaceRadarSupervisor(ctx context.Context, workspaceID,
 	}
 
 	qtx := h.Queries.WithTx(tx)
-	cancelled := make([]db.AgentTaskQueue, 0)
+	cancelled := make([]db.AgentInboxEvent, 0)
 	if hasPrevious && !radarUUIDsMatch(previousAgentID, agentID) {
 		rows, err := tx.Query(ctx, `
-			UPDATE agent_task_queue task
-			SET status = 'cancelled',
+			UPDATE agent_inbox_event task
+			SET status = 'suppressed',
+			    terminal_outcome = 'cancelled',
+			    terminal_at = COALESCE(task.terminal_at, now()),
+			    acked_at = COALESCE(task.acked_at, now()),
 			    completed_at = COALESCE(task.completed_at, now()),
 			    error = COALESCE(NULLIF(task.error, ''), 'Workspace Radar supervisor was rebound'),
 			    failure_reason = 'radar_supervisor_rebound'
-			WHERE task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+			WHERE task.status IN ('pending', 'draining', 'failed')
 			  AND task.agent_id = $2
 			  AND task.context->>'type' = 'agent_radar'
 			  AND EXISTS (
@@ -933,7 +936,7 @@ func (h *Handler) agentTaskInitiatorUserID(r *http.Request, workspaceID pgtype.U
 	err = h.DB.QueryRow(r.Context(), `
 		WITH task AS (
 			SELECT t.initiator_user_id, c.author_type AS comment_author_type, c.author_id AS comment_author_id
-			FROM agent_task_queue t
+			FROM agent_inbox_event t
 			JOIN agent a ON a.id = t.agent_id AND a.workspace_id = $2
 			LEFT JOIN comment c ON c.id = t.trigger_comment_id AND c.workspace_id = $2
 			WHERE t.id = $1

@@ -136,7 +136,7 @@ type Task struct {
 	ExecutionConfig *TaskExecutionConfig `json:"execution_config,omitempty"`
 
 	// InboxEvent is present when this work item came from the raft-like
-	// agent inbox instead of legacy agent_task_queue. Terminal callbacks must
+	// agent inbox instead of legacy agent_inbox_event. Terminal callbacks must
 	// use the inbox lease endpoints and must not call task start/complete/fail.
 	InboxEvent *AgentInboxLease `json:"inbox_event,omitempty"`
 }

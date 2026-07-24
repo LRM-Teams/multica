@@ -44,7 +44,7 @@ type radarCandidate struct {
 }
 
 type AgentRadarCompletionReplayer interface {
-	ReplayCompletedAgentRadarTask(context.Context, db.AgentTaskQueue, db.AgentRadarRun) error
+	ReplayCompletedAgentRadarTask(context.Context, db.AgentInboxEvent, db.AgentRadarRun) error
 }
 
 func AgentRadarScheduleJob(pool *pgxpool.Pool, taskSvc *service.TaskService, replayers ...AgentRadarCompletionReplayer) JobSpec {
@@ -135,7 +135,7 @@ func workspaceRadarBudget(ctx context.Context, pool *pgxpool.Pool, workspaceID p
 		WITH attempts AS MATERIALIZED (
 		  SELECT run.created_at
 		  FROM agent_radar_run run
-		  LEFT JOIN agent_task_queue task ON task.id = run.task_id
+		  LEFT JOIN agent_inbox_event task ON task.id = run.task_id
 		  WHERE run.workspace_id = $1
 		    AND run.trigger_kind = 'scheduled'
 		    AND run.cooldown_key = 'workspace_supervisor_radar'
@@ -314,7 +314,7 @@ func repairWorkspaceRadarSupervisorBindings(ctx context.Context, pool *pgxpool.P
 // gate.  The trigger prevents old replicas from handing an unauthorized prompt
 // to a daemon; this pass terminalizes the stranded pair and returns committed
 // task rows so the normal cancellation event/status path remains visible.
-func cancelUnauthorizedWorkspaceRadar(ctx context.Context, pool *pgxpool.Pool) ([]db.AgentTaskQueue, int64, error) {
+func cancelUnauthorizedWorkspaceRadar(ctx context.Context, pool *pgxpool.Pool) ([]db.AgentInboxEvent, int64, error) {
 	var taskIDs []pgtype.UUID
 	var cancelledRuns int64
 	err := pool.QueryRow(ctx, `
@@ -342,8 +342,11 @@ func cancelUnauthorizedWorkspaceRadar(ctx context.Context, pool *pgxpool.Pool) (
 		  ORDER BY run.created_at ASC, run.id ASC
 		  LIMIT $1
 		), cancelled_tasks AS MATERIALIZED (
-		  UPDATE agent_task_queue task
-		  SET status = 'cancelled',
+		  UPDATE agent_inbox_event task
+		  SET status = 'suppressed',
+		      terminal_outcome = 'cancelled',
+		      terminal_at = COALESCE(task.terminal_at, now()),
+		      acked_at = COALESCE(task.acked_at, now()),
 		      completed_at = COALESCE(task.completed_at, now()),
 		      error = COALESCE(NULLIF(task.error, ''), 'Workspace Radar supervisor is no longer authorized'),
 		      failure_reason = 'radar_supervisor_unauthorized'
@@ -352,7 +355,7 @@ func cancelUnauthorizedWorkspaceRadar(ctx context.Context, pool *pgxpool.Pool) (
 		    AND task.agent_id = victims.agent_id
 		    AND task.context->>'type' = 'agent_radar'
 		    AND task.context->>'radar_run_id' = victims.id::text
-		    AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+		    AND task.status IN ('pending', 'draining')
 		  RETURNING task.id
 		), cancelled_runs AS MATERIALIZED (
 		  UPDATE agent_radar_run run
@@ -384,7 +387,7 @@ func cancelUnauthorizedWorkspaceRadar(ctx context.Context, pool *pgxpool.Pool) (
 	}
 
 	q := db.New(pool)
-	cancelledTasks := make([]db.AgentTaskQueue, 0, len(taskIDs))
+	cancelledTasks := make([]db.AgentInboxEvent, 0, len(taskIDs))
 	for _, taskID := range taskIDs {
 		task, err := q.GetAgentTask(ctx, taskID)
 		if err != nil {
@@ -428,7 +431,7 @@ func recoverStaleCompletedRadarRunsWithStats(ctx context.Context, pool *pgxpool.
 		WITH candidates AS MATERIALIZED (
 		  SELECT run.id
 		  FROM agent_radar_run run
-		  JOIN agent_task_queue task
+		  JOIN agent_inbox_event task
 		    ON task.id = run.task_id
 		   AND task.agent_id = run.agent_id
 		   AND task.context->>'type' = 'agent_radar'
@@ -447,7 +450,8 @@ func recoverStaleCompletedRadarRunsWithStats(ctx context.Context, pool *pgxpool.
 		   AND owner_member.role = 'owner'
 		  WHERE run.trigger_kind = 'scheduled'
 		    AND run.cooldown_key = 'workspace_supervisor_radar'
-		    AND task.status = 'completed'
+		    AND task.status = 'acked'
+		    AND task.terminal_outcome = 'completed'
 		    AND (
 		      (run.status = 'executing' AND run.updated_at < now() - ($2 * interval '1 second'))
 		      OR

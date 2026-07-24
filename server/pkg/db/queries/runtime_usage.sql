@@ -27,7 +27,7 @@ ORDER BY DATE(bucket_hour AT TIME ZONE sqlc.arg('tz')::text) DESC, provider, mod
 -- the operator's afternoon, not UTC's.
 SELECT EXTRACT(HOUR FROM started_at AT TIME ZONE @tz::text)::int AS hour,
        COUNT(*)::int AS count
-FROM agent_task_queue
+FROM agent_inbox_event
 WHERE runtime_id = $1 AND started_at IS NOT NULL
 GROUP BY hour
 ORDER BY hour;

@@ -47,7 +47,7 @@ func TestCreateAgentDraft_TaskTokenTargetsTaskInitiator(t *testing.T) {
 	wendyID := createHandlerTestAgent(t, "wendy_draft_target_"+strings.ReplaceAll(uuid.NewString(), "-", "_"), nil)
 	taskID := createHandlerTestTaskForAgent(t, wendyID)
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_task_queue SET initiator_user_id = $2 WHERE id = $1
+		UPDATE agent_inbox_event SET initiator_user_id = $2 WHERE id = $1
 	`, taskID, initiatorID); err != nil {
 		t.Fatalf("stamp task initiator: %v", err)
 	}

@@ -159,7 +159,7 @@ RETURNING *;
 -- name: CreateAutopilotRun :one
 -- squad_id is an attribution hook: set to the assignee squad when the
 -- parent autopilot has assignee_type='squad', NULL otherwise. The executing
--- agent_id on agent_task_queue still records who actually ran the work
+-- agent_id on agent_inbox_event still records who actually ran the work
 -- (the squad leader); squad_id lets reports group by squad without a join.
 INSERT INTO autopilot_run (
     autopilot_id, trigger_id, source, status, trigger_payload, squad_id
@@ -206,7 +206,7 @@ RETURNING *;
 -- Marks an autopilot_run as skipped without enqueueing any task. Used by the
 -- pre-flight admission check when the assignee agent's runtime is offline:
 -- creating an issue / task in that state would just pile a doomed job onto
--- agent_task_queue (the canonical "持续给离线 local agent 入队" symptom from
+-- agent_inbox_event (the canonical "持续给离线 local agent 入队" symptom from
 -- MUL-1899). Recording the skip + reason gives the UI / failure monitor / ops
 -- a paper trail without polluting the failure ratio.
 UPDATE autopilot_run
@@ -246,8 +246,16 @@ RETURNING t.*, a.workspace_id AS autopilot_workspace_id;
 -- =====================
 
 -- name: CreateAutopilotTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, autopilot_run_id, trigger_summary)
-VALUES ($1, $2, NULL, 'queued', $3, $4, sqlc.narg(trigger_summary))
+INSERT INTO agent_inbox_event (
+  workspace_id, agent_session_id, agent_id, runtime_id, issue_id,
+  reason, requires_wake, status, priority, autopilot_run_id, trigger_summary
+)
+SELECT
+  a.workspace_id, ensure_agent_wake_session(a.id), a.id, sqlc.arg(runtime_id), NULL,
+  'autopilot', true, 'pending', sqlc.arg(priority),
+  sqlc.arg(autopilot_run_id), sqlc.narg(trigger_summary)
+FROM agent a
+WHERE a.id = sqlc.arg(agent_id)
 RETURNING *;
 
 -- =====================

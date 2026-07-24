@@ -98,17 +98,6 @@ func isRuntimeNotFoundError(err error) bool {
 	return strings.Contains(strings.ToLower(reqErr.Body), "runtime not found")
 }
 
-func isAgentInboxDrainUnsupportedError(err error) bool {
-	var reqErr *requestError
-	if !errors.As(err, &reqErr) {
-		return false
-	}
-	if reqErr.StatusCode != http.StatusNotFound {
-		return false
-	}
-	return strings.Contains(reqErr.Path, "/agent-inbox/drain") && !isRuntimeNotFoundError(err)
-}
-
 // Client handles HTTP communication with the Multica server daemon API.
 type Client struct {
 	baseURL string
@@ -280,16 +269,6 @@ func (c *Client) tokenForRuntime(runtimeID string) string {
 	return c.token
 }
 
-func (c *Client) ClaimTask(ctx context.Context, runtimeID string) (*Task, error) {
-	var resp struct {
-		Task *Task `json:"task"`
-	}
-	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/tasks/claim", runtimeID), map[string]any{}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
-		return nil, err
-	}
-	return resp.Task, nil
-}
-
 type AgentInboxEvent struct {
 	ID               string `json:"id"`
 	DeliveryID       string `json:"delivery_id"`
@@ -333,10 +312,6 @@ func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID s
 		return nil, err
 	}
 	return &resp, nil
-}
-
-func (c *Client) StartTask(ctx context.Context, taskID string) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/start", taskID), map[string]any{}, nil)
 }
 
 // MarkTaskWaitingLocalDirectory parks a freshly-dispatched task in the
@@ -400,41 +375,6 @@ func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxL
 	}, nil, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target, outputType, sessionID, workDir, outputSuppressedReason string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, runtimeStats *protocol.RuntimeTokenStats) error {
-	body := map[string]any{"output": output}
-	if branchName != "" {
-		body["branch_name"] = branchName
-	}
-	if action != "" {
-		body["action"] = action
-	}
-	if target != "" {
-		body["target"] = target
-	}
-	if outputType != "" {
-		body["type"] = outputType
-	}
-	if len(parts) > 0 {
-		body["parts"] = parts
-	}
-	if reaction != nil {
-		body["reaction"] = reaction
-	}
-	if sessionID != "" {
-		body["session_id"] = sessionID
-	}
-	if workDir != "" {
-		body["work_dir"] = workDir
-	}
-	if outputSuppressedReason != "" {
-		body["output_suppressed_reason"] = outputSuppressedReason
-	}
-	if runtimeStats != nil {
-		body["runtime_stats"] = runtimeStats
-	}
-	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/complete", taskID), body, nil, defaultTerminalRetrySchedule)
-}
-
 func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLease, result TaskResult) error {
 	body := map[string]any{
 		"delivery_id": lease.DeliveryID,
@@ -483,15 +423,6 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []TaskUsageEntry) error {
-	if len(usage) == 0 {
-		return nil
-	}
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/usage", taskID), map[string]any{
-		"usage": usage,
-	}, nil)
-}
-
 // StartAgentInboxExecution persists the daemon-minted provider-run UUID before
 // calling the provider. delivery_id remains only the active transport lease.
 func (c *Client) StartAgentInboxExecution(ctx context.Context, lease AgentInboxLease, executionID string) error {
@@ -512,31 +443,6 @@ func (c *Client) ReportAgentInboxUsage(ctx context.Context, lease AgentInboxLeas
 		"execution_id": executionID,
 		"usage":        usage,
 	}, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
-}
-
-func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
-	return c.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false)
-}
-
-func (c *Client) FailTaskWithoutPublicOutput(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
-	return c.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true)
-}
-
-func (c *Client) failTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool) error {
-	body := map[string]any{"error": errMsg}
-	if sessionID != "" {
-		body["session_id"] = sessionID
-	}
-	if workDir != "" {
-		body["work_dir"] = workDir
-	}
-	if failureReason != "" {
-		body["failure_reason"] = failureReason
-	}
-	if suppressPublicOutput {
-		body["suppress_public_output"] = true
-	}
-	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/fail", taskID), body, nil, defaultTerminalRetrySchedule)
 }
 
 func (c *Client) FailAgentInboxEvent(ctx context.Context, lease AgentInboxLease, errMsg, sessionID, workDir, failureReason, reasonCode string) error {
@@ -765,7 +671,7 @@ func (c *Client) GetAutopilotRunGCCheck(ctx context.Context, runID string) (*Aut
 	return &resp, nil
 }
 
-// TaskGCStatus carries the agent_task_queue status for quick-create cleanup.
+// TaskGCStatus carries the agent_inbox_event status for quick-create cleanup.
 // Quick-create tasks have no separate parent record, so GC keys directly on
 // the task itself.
 type TaskGCStatus struct {

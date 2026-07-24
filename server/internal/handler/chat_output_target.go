@@ -36,7 +36,7 @@ type resolvedChatOutputTarget struct {
 	threadRoot  ChannelMessageResponse
 }
 
-func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentTaskQueue, rawTarget string) error {
+func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentInboxEvent, rawTarget string) error {
 	origin, ok := h.chatOutputOriginForTask(ctx, task)
 	if !ok {
 		return errChatOutputInvalidTarget
@@ -45,7 +45,7 @@ func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentTas
 	return err
 }
 
-func (h *Handler) chatOutputOriginForTask(ctx context.Context, task db.AgentTaskQueue) (chatOutputOrigin, bool) {
+func (h *Handler) chatOutputOriginForTask(ctx context.Context, task db.AgentInboxEvent) (chatOutputOrigin, bool) {
 	if !task.ChatSessionID.Valid {
 		return chatOutputOrigin{}, false
 	}

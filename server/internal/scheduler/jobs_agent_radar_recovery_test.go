@@ -14,12 +14,12 @@ import (
 
 type radarReplayRecorder struct {
 	mu    sync.Mutex
-	tasks []db.AgentTaskQueue
+	tasks []db.AgentInboxEvent
 	runs  []db.AgentRadarRun
 	err   error
 }
 
-func (r *radarReplayRecorder) ReplayCompletedAgentRadarTask(_ context.Context, task db.AgentTaskQueue, run db.AgentRadarRun) error {
+func (r *radarReplayRecorder) ReplayCompletedAgentRadarTask(_ context.Context, task db.AgentInboxEvent, run db.AgentRadarRun) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tasks = append(r.tasks, task)
@@ -49,8 +49,12 @@ func TestRecoverStaleCompletedRadarRunReplaysPersistedResultWithoutNewTask(t *te
 	}
 	persisted := []byte(`{"output":"{\"actions\":[{\"type\":\"no_action\"}]}"}`)
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now() - interval '6 minutes', result = $2
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now() - interval '6 minutes',
+		    terminal_at = now() - interval '6 minutes',
+		    acked_at = now() - interval '6 minutes',
+		    result = $2
 		WHERE id = $1
 	`, task.ID, persisted); err != nil {
 		t.Fatal(err)
@@ -82,7 +86,7 @@ func TestRecoverStaleCompletedRadarRunReplaysPersistedResultWithoutNewTask(t *te
 		t.Fatalf("replayed task/run = result:%s status:%s, want persisted/executing", replayer.tasks[0].Result, replayer.runs[0].Status)
 	}
 	var taskCount int
-	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, agent.agentID).Scan(&taskCount); err != nil {
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM agent_inbox_event WHERE agent_id = $1`, agent.agentID).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
 	if taskCount != 1 {
@@ -126,8 +130,12 @@ func TestRecoverStaleCompletedRadarRunSkipsReboundSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_task_queue
-		SET status = 'completed', completed_at = now() - interval '6 minutes', result = '{"output":"stale"}'::jsonb
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now() - interval '6 minutes',
+		    terminal_at = now() - interval '6 minutes',
+		    acked_at = now() - interval '6 minutes',
+		    result = '{"output":"stale"}'::jsonb
 		WHERE id = $1
 	`, task.ID); err != nil {
 		t.Fatal(err)

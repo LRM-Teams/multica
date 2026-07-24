@@ -41,7 +41,7 @@ type retryTestEnv struct {
 	svc      *TaskService
 	rl       *fakeRLClient
 	dagStore *fakeInteractionDAGStore
-	parent   db.AgentTaskQueue
+	parent   db.AgentInboxEvent
 	project  db.Project
 	issue    db.Issue
 	agent    db.Agent
@@ -54,7 +54,7 @@ type fakeEphemeralSandboxManager struct {
 	cleanups   int
 }
 
-func (f *fakeEphemeralSandboxManager) PrepareRetry(context.Context, db.AgentTaskQueue) (*EphemeralRetryResources, error) {
+func (f *fakeEphemeralSandboxManager) PrepareRetry(context.Context, db.AgentInboxEvent) (*EphemeralRetryResources, error) {
 	return f.prepared, f.prepareErr
 }
 
@@ -63,7 +63,7 @@ func (f *fakeEphemeralSandboxManager) Reclaim(context.Context, *EphemeralRetryRe
 	return nil
 }
 
-func (f *fakeEphemeralSandboxManager) Cleanup(context.Context, db.AgentTaskQueue) error {
+func (f *fakeEphemeralSandboxManager) Cleanup(context.Context, db.AgentInboxEvent) error {
 	f.cleanups++
 	return nil
 }
@@ -161,7 +161,7 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 	})
 	require.NoError(t, err)
 	parentCtx := arealProxyContext("sess-parent", "pk-parent")
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status='failed', failure_reason=$1, context=$2, attempt=1, max_attempts=3 WHERE id=$3`,
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status='acked', terminal_outcome='failed', terminal_at=now(), acked_at=now(), completed_at=now(), failure_reason=$1, context=$2, attempt=1, max_attempts=3 WHERE id=$3`,
 		failureReason, parentCtx, parent.ID)
 	require.NoError(t, err)
 	parent, err = q.GetAgentTask(ctx, parent.ID)
@@ -175,7 +175,7 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 	// The store returns a task with NO areal_proxy so the child's idempotency
 	// guard passes and a fresh session opens (Task 6 stripped areal_proxy from
 	// the child's DB row; the fake mirrors that post-strip state).
-	store := &fakeTaskStore{task: db.AgentTaskQueue{IssueID: issue.ID}}
+	store := &fakeTaskStore{task: db.AgentInboxEvent{IssueID: issue.ID}}
 	dagStore := newFakeInteractionDAGStore()
 	dag := NewInteractionDAGService(dagStore, &fakeArealSegmentClient{}, true)
 
@@ -247,7 +247,7 @@ func TestCleanupCancelledTaskUsesEphemeralManager(t *testing.T) {
 func TestMaybeCleanupEphemeralSandbox_PersistentMarkerSkipsManager(t *testing.T) {
 	manager := &fakeEphemeralSandboxManager{}
 	svc := &TaskService{EphemeralSandboxManager: manager}
-	task := db.AgentTaskQueue{Context: json.RawMessage(`{
+	task := db.AgentInboxEvent{Context: json.RawMessage(`{
 		"ephemeral_sandbox": {
 			"sandbox_instance_id": "sandbox-env-dispatch",
 			"cleanup_on_terminal": false
@@ -528,7 +528,7 @@ func TestMaybeCleanupEphemeralSandbox(t *testing.T) {
 		Context:   marker,
 	})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, task.ID)
 	require.NoError(t, err)
 	task, err = q.GetAgentTask(ctx, task.ID)
 	require.NoError(t, err)
@@ -595,7 +595,7 @@ func TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker(t *testing.T) {
 		Context: []byte(`{"squad_id":"sq"}`),
 	})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, task.ID)
 	require.NoError(t, err)
 	task, err = q.GetAgentTask(ctx, task.ID)
 	require.NoError(t, err)
@@ -655,7 +655,7 @@ func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
 		AgentID: agentID, RuntimeID: rtID, IssueID: issue1ID, Priority: 0, Context: marker,
 	})
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, parent.ID)
+	_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, parent.ID)
 	require.NoError(t, err)
 	parent, err = q.GetAgentTask(ctx, parent.ID)
 	require.NoError(t, err)

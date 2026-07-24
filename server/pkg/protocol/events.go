@@ -27,7 +27,7 @@ const (
 	EventAgentReminderChanged = "agent_reminder:changed"
 
 	// Task events (server <-> daemon).
-	// Each event maps to a status transition on agent_task_queue. Front-end
+	// Each event maps to a status transition on agent_inbox_event. Front-end
 	// subscribes by `task:` prefix and invalidates the workspace task
 	// snapshot, so the granularity here is "what does the user want to see
 	// change" — not "every internal status flip".

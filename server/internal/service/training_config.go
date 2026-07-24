@@ -47,28 +47,28 @@ type TrainingConfig struct {
 }
 
 const (
-	arealBridgeStubURLEnv         = "AREAL_BRIDGE_STUB_URL"
-	arealAdminAPIKeyEnv           = "AREAL_ADMIN_API_KEY"
-	trainingDefaultRewardEnv      = "TRAINING_DEFAULT_REWARD"
-	arealProxyURLEnv              = "AREAL_PROXY_URL"
-	interactionDAGEnabledEnv      = "INTERACTION_DAG_ENABLED"
-	diagnosisAgentEnabledEnv      = "DIAGNOSIS_AGENT_ENABLED"
-	diagnosisAgentPathEnv         = "DIAGNOSIS_AGENT_PATH"
-	diagnosisAgentModelEnv        = "DIAGNOSIS_AGENT_MODEL"
-	diagnosisAgentTimeoutSecsEnv  = "DIAGNOSIS_AGENT_TIMEOUT_SECONDS"
-	diagnosisAgentScoreMaxEnv              = "DIAGNOSIS_AGENT_SCORE_MAX"
-	diagnosisAgentOnDemandEnabledEnv       = "DIAGNOSIS_AGENT_ON_DEMAND_ENABLED"
-	diagnosisAgentPageTurnLimitEnv         = "DIAGNOSIS_AGENT_PAGE_TURN_LIMIT"
-	diagnosisAgentPageByteLimitEnv         = "DIAGNOSIS_AGENT_PAGE_BYTE_LIMIT"
-	diagnosisAgentEmergencyContextPctEnv   = "DIAGNOSIS_AGENT_HARD_CONTEXT_PERCENT"
-	diagnosisAgentMaxRefetchesPerSegEnv    = "DIAGNOSIS_AGENT_MAX_REFETCHES_PER_SEGMENT"
-	diagnosisAgentMaxRunTimeoutSecsEnv     = "DIAGNOSIS_AGENT_MAX_RUN_TIMEOUT_SECONDS"
-	defaultProxyURL                        = "http://db_bridge_stub:9100/v1"
-	defaultDiagnosisAgentTimeout  = 60 * time.Second
-	defaultDiagnosisAgentScoreMax          = 10
-	defaultDiagnosisAgentPageTurnLimit     = 20
-	defaultDiagnosisAgentPageByteLimit     = 24576
-	defaultDiagnosisAgentEmergencyCtxPct   = 80
+	arealBridgeStubURLEnv                   = "AREAL_BRIDGE_STUB_URL"
+	arealAdminAPIKeyEnv                     = "AREAL_ADMIN_API_KEY"
+	trainingDefaultRewardEnv                = "TRAINING_DEFAULT_REWARD"
+	arealProxyURLEnv                        = "AREAL_PROXY_URL"
+	interactionDAGEnabledEnv                = "INTERACTION_DAG_ENABLED"
+	diagnosisAgentEnabledEnv                = "DIAGNOSIS_AGENT_ENABLED"
+	diagnosisAgentPathEnv                   = "DIAGNOSIS_AGENT_PATH"
+	diagnosisAgentModelEnv                  = "DIAGNOSIS_AGENT_MODEL"
+	diagnosisAgentTimeoutSecsEnv            = "DIAGNOSIS_AGENT_TIMEOUT_SECONDS"
+	diagnosisAgentScoreMaxEnv               = "DIAGNOSIS_AGENT_SCORE_MAX"
+	diagnosisAgentOnDemandEnabledEnv        = "DIAGNOSIS_AGENT_ON_DEMAND_ENABLED"
+	diagnosisAgentPageTurnLimitEnv          = "DIAGNOSIS_AGENT_PAGE_TURN_LIMIT"
+	diagnosisAgentPageByteLimitEnv          = "DIAGNOSIS_AGENT_PAGE_BYTE_LIMIT"
+	diagnosisAgentEmergencyContextPctEnv    = "DIAGNOSIS_AGENT_HARD_CONTEXT_PERCENT"
+	diagnosisAgentMaxRefetchesPerSegEnv     = "DIAGNOSIS_AGENT_MAX_REFETCHES_PER_SEGMENT"
+	diagnosisAgentMaxRunTimeoutSecsEnv      = "DIAGNOSIS_AGENT_MAX_RUN_TIMEOUT_SECONDS"
+	defaultProxyURL                         = "http://db_bridge_stub:9100/v1"
+	defaultDiagnosisAgentTimeout            = 60 * time.Second
+	defaultDiagnosisAgentScoreMax           = 10
+	defaultDiagnosisAgentPageTurnLimit      = 20
+	defaultDiagnosisAgentPageByteLimit      = 24576
+	defaultDiagnosisAgentEmergencyCtxPct    = 80
 	defaultDiagnosisAgentMaxRefetchesPerSeg = 2
 )
 

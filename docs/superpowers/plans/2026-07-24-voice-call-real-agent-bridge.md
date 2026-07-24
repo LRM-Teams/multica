@@ -41,7 +41,7 @@ memory, tools, permissions, and channel history.
   changes the running containers.
 - [x] PR 2 (#1168): authenticate and validate the OpenAI-compatible RTC
   endpoint.
-- [ ] PR 3: persist an idempotent DM speech turn and dispatch the selected
+- [x] PR 3 (#1169): persist an idempotent DM speech turn and dispatch the selected
   agent.
 - [ ] PR 4: wait for the exact durable completion and stream it as SSE.
 - [ ] PR 5: configure deployment secrets and verify a production call.
@@ -73,6 +73,11 @@ memory, tools, permissions, and channel history.
   string round IDs normalize, malformed/oversized requests fail, internal
   errors stay out of HTTP responses, and successful replies use
   OpenAI-compatible SSE content/final chunks plus `[DONE]`.
+- [x] Voice-call Agent bridge tests against a fresh, fully migrated PostgreSQL
+  database: the message and inbox event commit atomically, duplicate
+  `(call, round)` requests reuse both durable IDs, the live-call prompt keeps
+  the normal Multica runtime/tools boundary, and inactive/provider-mismatched/
+  DM-agent-mismatched calls write nothing.
 - [ ] Full `./cmd/server` currently fails in the pre-existing
   `TestAgentsThroughRouter`: the local integration database returns 500 while
   loading an agent detail. The focused voice-call tests pass, and the failing

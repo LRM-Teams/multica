@@ -61,11 +61,17 @@ func TestQuickCreateIssueSourceTrustBoundary(t *testing.T) {
 	}
 	var attachmentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO attachment (workspace_id, channel_id, channel_message_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
-		VALUES ($1, $2, $3, 'member', $4, 'source.txt', 'https://example.invalid/source.txt', 'text/plain', 12)
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'source.txt', 'https://example.invalid/source.txt', 'text/plain', 12)
 		RETURNING id
-	`, testWorkspaceID, channelID, replyID, testUserID).Scan(&attachmentID); err != nil {
+	`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
 		t.Fatalf("seed source attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)
+	`, testWorkspaceID, replyID, attachmentID); err != nil {
+		t.Fatalf("seed source attachment reference: %v", err)
 	}
 
 	countQuickCreateTasks := func(t *testing.T) int {

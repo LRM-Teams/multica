@@ -84,8 +84,20 @@ func (h *Handler) resolveAgentAvatarSelection(
 			writeError(w, http.StatusConflict, "avatar attachment has no stored URL")
 			return resolvedAgentAvatar{}, false
 		}
+		var hasChannelMessageReference bool
+		if err := h.DB.QueryRow(r.Context(), `
+			SELECT EXISTS (
+				SELECT 1
+				FROM channel_message_attachment
+				WHERE attachment_id = $1
+				  AND workspace_id = $2
+			)
+		`, attachment.ID, attachment.WorkspaceID).Scan(&hasChannelMessageReference); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate avatar attachment")
+			return resolvedAgentAvatar{}, false
+		}
 		if attachment.IssueID.Valid || attachment.CommentID.Valid || attachment.ChatSessionID.Valid ||
-			attachment.ChatMessageID.Valid || attachment.ChannelID.Valid || attachment.ChannelMessageID.Valid {
+			attachment.ChatMessageID.Valid || attachment.ChannelID.Valid || hasChannelMessageReference {
 			writeError(w, http.StatusConflict, "avatar attachment is already bound")
 			return resolvedAgentAvatar{}, false
 		}

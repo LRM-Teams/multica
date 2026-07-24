@@ -308,12 +308,17 @@ func TestRetryAgentInboxEventReplaysOriginalPromptAfterNewerCompletion(t *testin
 	var promptAAttachmentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO attachment (
-			workspace_id, channel_id, channel_message_id, uploader_type, uploader_id,
+			workspace_id, channel_id, uploader_type, uploader_id,
 			filename, url, content_type, size_bytes
 		)
-		VALUES ($1, $2, $3, 'member', $4, 'prompt-a.txt', 's3://prompt-a.txt', 'text/plain', 8)
-		RETURNING id`, testWorkspaceID, channelID, triggerA.ID, testUserID).Scan(&promptAAttachmentID); err != nil {
+		VALUES ($1, $2, 'member', $3, 'prompt-a.txt', 's3://prompt-a.txt', 'text/plain', 8)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&promptAAttachmentID); err != nil {
 		t.Fatalf("seed prompt A attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, triggerA.ID, promptAAttachmentID); err != nil {
+		t.Fatalf("seed prompt A attachment reference: %v", err)
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, channel, triggerA, parseUUID(testUserID))
 

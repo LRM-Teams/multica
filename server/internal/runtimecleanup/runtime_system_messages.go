@@ -304,8 +304,8 @@ const candidateSelectSQL = `
 		) AS quote_count,
 		(
 			SELECT count(*)
-			FROM attachment a
-			WHERE a.channel_message_id = m.id
+			FROM channel_message_attachment reference
+			WHERE reference.channel_message_id = m.id
 		) AS attachment_count
 	FROM channel_message m
 	JOIN channel c ON c.id = m.channel_id

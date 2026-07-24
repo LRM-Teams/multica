@@ -24,7 +24,7 @@ Multica’s agent surface is inconsistent and harder for coding agents:
 | Link on send | Local path flags mixed with id flags | `--attachment-id` only on send |
 | Teaching | `prompt.go` / `runtime_config.go` teach `download` | Prompts teach `view` / `upload` / `--attachment-id` |
 
-Agents need a **stable path after download** and a **reusable attachment id after upload**. Multica already has the product model (channel_id on attachments, `LinkOwnedAttachmentsToChannelMessage`, `/api/upload-file` + `channel_id`, durable `/api/attachments/{id}/download` for markdown). The gap is the **agent CLI shape**, not the data model.
+Agents need a **stable path after download** and a **reusable attachment id after upload**. The reusable-id promise requires two product layers: `attachment` is the workspace file resource, while `channel_message_attachment` records every message reference to it. `channel_id` on the resource is upload provenance only. The same owned id may be sent to group, DM, thread, and multiple messages without re-uploading bytes. The CLI gap remains the id-first shape; the earlier singular `attachment.channel_message_id` model did not satisfy this promise and was removed by migration 224.
 
 ## Design principles
 
@@ -171,6 +171,8 @@ No deprecation window. CI and unit tests that invoke old flags must be rewritten
 4. `message send` / `issue create` / `issue comment add` reject or simply do not define `--attachment` path flags.
 5. Daemon prompt + runtime_config + docs contain **zero** occurrences of `attachment download` and agent-taught `--attachment <path>` for local files.
 6. Historical markdown images using `/api/attachments/<id>/download` still load in web/desktop/mobile (no HTTP path rename).
+7. One uploaded attachment id can be sent to a group and then a DM (and reused in later messages); every response hydrates the same metadata and storage object, with one association per message and no re-upload.
+8. Historical message parts that name an existing same-workspace resource are backfilled into associations; illegal or missing ids remain unavailable and never produce invented rows.
 
 ## Test plan
 

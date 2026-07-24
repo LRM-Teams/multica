@@ -1641,20 +1641,21 @@ func (h *Handler) resolveRadarIssueCreateAttachments(ctx context.Context, run db
 		if err != nil {
 			return nil, errors.New("attachment does not belong to the radar workspace")
 		}
-		if !channelID.Valid || !attachment.ChannelID.Valid || !radarUUIDsMatch(attachment.ChannelID, channelID) || !attachment.ChannelMessageID.Valid {
+		if !channelID.Valid {
 			return nil, errors.New("attachment is not visible in the radar channel")
 		}
 		var messageVisible bool
 		if err := h.DB.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1
-				FROM channel_message
-				WHERE id = $1
-				  AND workspace_id = $2
-				  AND channel_id = $3
-				  AND deleted_at IS NULL
+				FROM channel_message_attachment reference
+				JOIN channel_message message ON message.id = reference.channel_message_id
+				WHERE reference.attachment_id = $1
+				  AND reference.workspace_id = $2
+				  AND message.channel_id = $3
+				  AND message.deleted_at IS NULL
 			)
-		`, attachment.ChannelMessageID, run.WorkspaceID, channelID).Scan(&messageVisible); err != nil {
+		`, attachment.ID, run.WorkspaceID, channelID).Scan(&messageVisible); err != nil {
 			return nil, fmt.Errorf("verify radar attachment message: %w", err)
 		}
 		if !messageVisible {

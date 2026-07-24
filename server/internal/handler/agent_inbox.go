@@ -940,8 +940,8 @@ type ChannelCancelAgentInboxEventResponse struct {
 }
 
 type ChannelCancelActiveAgentInboxResponse struct {
-	OK             bool                                  `json:"ok"`
-	CancelledCount int                                   `json:"cancelled_count"`
+	OK             bool                                   `json:"ok"`
+	CancelledCount int                                    `json:"cancelled_count"`
 	Cancelled      []ChannelCancelAgentInboxEventResponse `json:"cancelled"`
 }
 
@@ -1896,7 +1896,9 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 			Column1:     []pgtype.UUID{event.SourceMessageID},
 			WorkspaceID: cs.WorkspaceID,
 		}); attErr == nil {
-			appendAttachments(atts)
+			for _, row := range atts {
+				appendAttachments([]db.Attachment{row.Attachment})
+			}
 		}
 	}
 	if msgs, err := h.Queries.ListChatMessages(ctx, cs.ID); err == nil && len(msgs) > 0 {

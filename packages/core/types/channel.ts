@@ -136,8 +136,8 @@ export interface ChannelMessage {
   trigger_depth?: number;
   reactions?: ChannelReaction[];
   /**
-   * Attachments linked to this message via the attachment table's
-   * channel_message_id FK. Populated by ListChannelMessages. The bubble
+   * File resources referenced by this message through the canonical
+   * many-to-many association. Populated by ListChannelMessages. The bubble
    * renders these as file/image cards; the markdown URL inline in `content`
    * may carry an expiring signature, while this metadata is stable.
    */

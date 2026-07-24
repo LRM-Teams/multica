@@ -202,11 +202,16 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO attachment (
 			workspace_id, uploader_type, uploader_id, filename, url, content_type,
-			size_bytes, channel_id, channel_message_id
-		) VALUES ($1, 'member', $2, 'reference-board.png', '/reference-board.png', 'image/png', 128, $3, $4)
+			size_bytes, channel_id
+		) VALUES ($1, 'member', $2, 'reference-board.png', '/reference-board.png', 'image/png', 128, $3)
 		RETURNING id
-	`, testWorkspaceID, testUserID, channelID, messageID).Scan(&messageAttachmentID); err != nil {
+	`, testWorkspaceID, testUserID, channelID).Scan(&messageAttachmentID); err != nil {
 		t.Fatalf("create reference message attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, messageID, messageAttachmentID); err != nil {
+		t.Fatalf("create reference message attachment reference: %v", err)
 	}
 	var deletedMessageID, deletedAttachmentID string
 	if err := testPool.QueryRow(ctx, `
@@ -219,11 +224,16 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO attachment (
 			workspace_id, uploader_type, uploader_id, filename, url, content_type,
-			size_bytes, channel_id, channel_message_id
-		) VALUES ($1, 'member', $2, 'deleted-reference.png', '/deleted-reference.png', 'image/png', 64, $3, $4)
+			size_bytes, channel_id
+		) VALUES ($1, 'member', $2, 'deleted-reference.png', '/deleted-reference.png', 'image/png', 64, $3)
 		RETURNING id
-	`, testWorkspaceID, testUserID, channelID, deletedMessageID).Scan(&deletedAttachmentID); err != nil {
+	`, testWorkspaceID, testUserID, channelID).Scan(&deletedAttachmentID); err != nil {
 		t.Fatalf("create deleted reference attachment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
+		VALUES ($1, $2, $3)`, testWorkspaceID, deletedMessageID, deletedAttachmentID); err != nil {
+		t.Fatalf("create deleted reference attachment reference: %v", err)
 	}
 
 	unrelatedTitle := "Unrelated Workspace Issue " + uuid.NewString()

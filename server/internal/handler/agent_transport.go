@@ -321,8 +321,8 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	// Bind from attachment parts only (same contract as channel/DM/thread user
-	// send). CLI --attachment-id sugar is converted to parts before POST; do not
+	// Reference attachment resources from parts only (same contract as
+	// channel/DM/thread user send). CLI --attachment-id sugar becomes parts; do not
 	// dual-merge a sidecar attachment_ids field.
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
 	if !ok {
@@ -407,6 +407,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		}
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		if errors.Is(err, errChannelAttachmentUnavailable) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if errors.Is(err, errChannelOnboardingExpired) {
@@ -685,6 +689,10 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		}
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		if errors.Is(err, errChannelAttachmentUnavailable) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if errors.Is(err, errAgentTransportDraftNotFound) {
@@ -1323,14 +1331,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	}
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
-		if err := qtx.LinkOwnedAttachmentsToChannelMessage(ctx, db.LinkOwnedAttachmentsToChannelMessageParams{
-			ChannelID:        input.ChannelID,
-			ChannelMessageID: parseUUID(msg.ID),
-			WorkspaceID:      source.origin.workspaceID,
-			UploaderType:     "agent",
-			UploaderID:       source.origin.agentID,
-			AttachmentIds:    attachmentIDs,
-		}); err != nil {
+		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), source.origin.workspaceID, "agent", source.origin.agentID, attachmentIDs); err != nil {
 			_ = tx.Rollback(ctx)
 			return agentTransportMessageResult{}, err
 		}

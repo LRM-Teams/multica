@@ -84,6 +84,9 @@
     "settings_aria": "그룹 설정",
     "dm_live": "{{working}} 처리 중",
     "dm_attention": "확인 필요",
+    "presence_counts": "{{members}} · {{agents}}",
+    "presence_working": "{{working}} 처리 중",
+    "presence_attention": "확인 필요",
     "working_verb_with_duration": "{{verb}} · {{duration}}"
   },
   "members": {

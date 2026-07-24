@@ -2,12 +2,20 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import type { ChannelActiveTask } from "@multica/core/types";
-import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
+import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
+import { ChannelPresenceCluster } from "./channel-agents-live-cue";
 
 const mobileState = { isMobile: false };
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mobileState.isMobile,
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("../../agents/use-agent-live-status", () => ({
+  useAgentActivityProjection: () => null,
 }));
 
 vi.mock("@multica/core/workspace/hooks", () => ({
@@ -23,19 +31,16 @@ vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (picker: (ns: Record<string, unknown>) => unknown, vars?: Record<string, unknown>) => {
       const header = {
-        members_prefix: `{{members}} members ·`,
-        members_only: `{{members}} members`,
-        agents_idle: `{{agents}} agents`,
-        agents_live: `{{agents}} agents · {{working}} working`,
-        agents_attention: `{{agents}} agents · needs attention`,
-        dm_live: `{{working}} working`,
-        dm_attention: `Needs attention`,
+        presence_counts: `{{members}} · {{agents}}`,
+        presence_working: `{{working}} working`,
+        presence_attention: `Needs attention`,
         working_list_title: `Working · {{count}}`,
         working_verb_with_duration: `{{verb}} · {{duration}}`,
         working_failed: `Couldn't reply · try @ again`,
         working_no_reply: `No reply · try @ again`,
         working_dismiss: `Dismiss`,
         working_dismiss_aria: `Dismiss {{name}}'s status`,
+        view_members_aria: `View members`,
       };
       const agent_status = {
         running: "Thinking",
@@ -55,6 +60,12 @@ vi.mock("../../i18n", () => ({
   }),
 }));
 
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid={`face-${actorId}`}>{actorId}</span>
+  ),
+}));
+
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
   ActorAvatar: ({ name }: { name: string }) => <span data-testid="avatar">{name}</span>,
 }));
@@ -72,134 +83,68 @@ function task(over: Partial<ChannelActiveTask>): ChannelActiveTask {
   };
 }
 
-describe("ChannelAgentsLiveCue (LRM-581)", () => {
+function members(ids: string[]): ChannelMemberBrief[] {
+  return ids.map((id) => ({
+    member_type: id.startsWith("u") ? ("user" as const) : ("agent" as const),
+    member_id: id,
+    name: id,
+    display_name: id,
+    avatar_url: null,
+  }));
+}
+
+describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mobileState.isMobile = false;
   });
 
-  it("idle channel roster is plain agents text with no live chrome", () => {
+  it("idle K≥2 shows faces · N · M with no working chrome or outer Stop", () => {
+    const onOpen = vi.fn();
     render(
-      <ChannelAgentsLiveCue memberCount={4} agentCount={8} tasks={[]} />,
-    );
-    const cue = screen.getByTestId("channel-agents-live-cue");
-    expect(cue).toHaveTextContent("8 agents");
-    expect(cue.tagName).toBe("SPAN");
-    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
-    expect(screen.getByTestId("channel-roster-summary")).toHaveTextContent(
-      "4 members ·",
-    );
-  });
-
-  it("running tasks change the cue and expose Stop next to it", () => {
-    const onStop = vi.fn();
-    render(
-      <ChannelAgentsLiveCue
+      <ChannelPresenceCluster
+        members={members(["u1", "a1", "a2"])}
         memberCount={4}
         agentCount={8}
-        tasks={[task({ status: "running" })]}
-        onStopTask={onStop}
+        tasks={[]}
+        onOpenMembers={onOpen}
       />,
     );
-    const cue = screen.getByTestId("channel-agents-live-cue");
-    expect(cue).toHaveTextContent("8 agents · 1 working");
-    expect(cue.querySelector(".animate-chat-text-shimmer")).not.toBeNull();
-    fireEvent.click(screen.getByTestId("channel-agents-cue-stop"));
-    expect(onStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows danger attention cue for failed/no_reply without silent blank", () => {
-    render(
-      <ChannelAgentsLiveCue
-        memberCount={4}
-        agentCount={8}
-        tasks={[
-          task({
-            agent_id: "a2",
-            agent_name: "Wendy",
-            task_id: "t2",
-            inbox_event_id: "inbox-2",
-            status: "failed",
-            outcome: "no_reply",
-          }),
-        ]}
-      />,
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "false");
+    expect(screen.getByTestId("channel-presence-counts")).toHaveTextContent(
+      "4 · 8",
     );
-    const cue = screen.getByTestId("channel-agents-live-cue");
-    expect(cue).toHaveTextContent("8 agents · needs attention");
-    expect(cue.querySelector(".text-destructive")).not.toBeNull();
-  });
-
-  it("dismisses terminal rows from the mobile working list", () => {
-    mobileState.isMobile = true;
-    render(
-      <ChannelAgentsLiveCue
-        memberCount={4}
-        agentCount={8}
-        tasks={[
-          task({
-            agent_id: "a2",
-            agent_name: "Wendy",
-            task_id: "t2",
-            inbox_event_id: "inbox-2",
-            status: "failed",
-            outcome: "failed",
-          }),
-        ]}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("channel-agents-live-cue"));
-    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("channel-agents-working-dismiss"));
-    expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
-    // Idle again — no live chrome.
-    expect(screen.getByTestId("channel-agents-live-cue").tagName).toBe("SPAN");
-    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "8 agents",
-    );
-  });
-
-  it("dm variant is idle-null and live-compact", () => {
-    const { rerender } = render(
-      <ChannelAgentsLiveCue variant="dm" agentCount={1} tasks={[]} />,
-    );
-    expect(screen.queryByTestId("channel-roster-summary")).toBeNull();
-
-    rerender(
-      <ChannelAgentsLiveCue
-        variant="dm"
-        agentCount={1}
-        tasks={[task({ status: "running" })]}
-        onStopTask={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "1 working",
-    );
-  });
-
-  it("dm variant with canStop=false keeps status and hides outer Stop (LRM-589)", () => {
-    render(
-      <ChannelAgentsLiveCue
-        variant="dm"
-        agentCount={1}
-        tasks={[task({ status: "running" })]}
-        canStop={false}
-      />,
-    );
-    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
-      "1 working",
-    );
+    expect(screen.queryByTestId("channel-presence-working")).toBeNull();
     expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
     expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
+    fireEvent.click(chip);
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("Stop all appears for multiple stoppable tasks", () => {
-    const onStopAll = vi.fn();
+  it("K=1 never shows Working chrome even with running tasks", () => {
     render(
-      <ChannelAgentsLiveCue
+      <ChannelPresenceCluster
+        members={members(["u1", "a1"])}
         memberCount={2}
-        agentCount={3}
+        agentCount={1}
+        tasks={[task({ status: "running" })]}
+      />,
+    );
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "false");
+    expect(screen.queryByTestId("channel-presence-working")).toBeNull();
+    expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
+  });
+
+  it("K≥2 working shows shimmer and no outer Stop; Stop all only in card", () => {
+    const onStopAll = vi.fn();
+    mobileState.isMobile = true;
+    render(
+      <ChannelPresenceCluster
+        members={members(["u1", "a1", "a2"])}
+        memberCount={4}
+        agentCount={8}
         tasks={[
           task({ task_id: "t1", inbox_event_id: "i1", status: "running" }),
           task({
@@ -214,7 +159,45 @@ describe("ChannelAgentsLiveCue (LRM-581)", () => {
         onStopAll={onStopAll}
       />,
     );
-    fireEvent.click(screen.getByTestId("channel-agents-cue-stop-all"));
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "true");
+    const working = screen.getByTestId("channel-presence-working");
+    expect(working).toHaveTextContent("2 working");
+    expect(working.className).toContain("animate-chat-text-shimmer");
+    expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
+
+    fireEvent.click(chip);
+    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("channel-agents-working-stop-all"));
     expect(onStopAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses terminal rows from the mobile working list", () => {
+    mobileState.isMobile = true;
+    render(
+      <ChannelPresenceCluster
+        members={members(["u1", "a1", "a2"])}
+        memberCount={4}
+        agentCount={8}
+        tasks={[
+          task({
+            agent_id: "a2",
+            agent_name: "Wendy",
+            task_id: "t2",
+            inbox_event_id: "inbox-2",
+            status: "failed",
+            outcome: "failed",
+          }),
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("channel-agents-working-dismiss"));
+    expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
+    expect(screen.getByTestId("channel-header-members-chip")).toHaveAttribute(
+      "data-presence-working",
+      "false",
+    );
   });
 });

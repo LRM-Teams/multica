@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Square } from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
+import { ActorAvatar } from "../../common/actor-avatar";
 import {
   HoverCard,
   HoverCardContent,
@@ -15,77 +16,250 @@ import {
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
-import type { ChannelActiveTask } from "@multica/core/types";
+import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
+import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { useT } from "../../i18n";
 import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 
 const STOPPING_ALL_TASKS_ID = "__all__";
+const FACE_MAX = 3;
+const FACE_SIZE = 22;
 
-export interface ChannelAgentsLiveCueProps {
+export interface ChannelPresenceClusterProps {
+  members: readonly ChannelMemberBrief[];
+  memberCount: number;
+  /** Channel agent count (K). Working chrome only when K ≥ 2. */
   agentCount: number;
   tasks: readonly ChannelActiveTask[];
   stoppingTaskId?: string | null;
   canStop?: boolean;
   onStopTask?: (task: ChannelActiveTask) => void;
-  /** Opens the existing Stop-all confirm dialog (LRM-405). */
+  /** Opens the existing Stop-all confirm dialog (LRM-405); only from card footer. */
   onStopAll?: () => void;
-  /**
-   * `channel` — roster meta under the title (`N members · N agents · …`).
-   * `dm` — compact cue beside the peer name (idle → nothing).
-   */
-  variant?: "channel" | "dm";
-  memberCount?: number;
+  /** Click opens Members (idle always; desktop also when working). */
+  onOpenMembers?: () => void;
   className?: string;
 }
+
+/** @deprecated Use ChannelPresenceCluster — lock A v3 renamed the surface. */
+export type ChannelAgentsLiveCueProps = ChannelPresenceClusterProps;
 
 function taskRowKey(task: ChannelActiveTask): string {
   return task.inbox_event_id?.trim() || task.task_id;
 }
 
 /**
- * LRM-581 / lock E — channel header `N agents` live cue + Working list.
- *
- * Idle: plain "N agents" (no chrome). With active/terminal tasks: cue changes
- * ("N agents · K processing" + shimmer when running); Stop / Stop all stay
- * visible next to the cue (not hover-only). Desktop hover / mobile tap opens
- * the Working list (avatar + dot + verb(+duration) + per-row Stop / dismiss).
- * failed/no_reply are danger rows with client dismiss (no silent blank).
+ * Working-list verb + dot from Agent Activity projection (LRM-581 A v3).
+ * Falls back to channel Thinking/Queued only when projection has nothing yet
+ * (same Activity opener language — not a second pending semantic).
  */
-export function ChannelAgentsLiveCue({
+function useWorkingRowActivityVerb(
+  agentId: string,
+  task: ChannelActiveTask,
+  now: number,
+  firstSeen: number | undefined,
+) {
+  const { t } = useT("channels");
+  const wsId = useWorkspaceId();
+  const projection = useAgentActivityProjection(wsId, agentId);
+  const isTerminal = isTerminalChannelActiveTask(task);
+  const outcome = task.outcome?.trim();
+
+  if (outcome === "failed") {
+    return {
+      verb: t(($) => $.header.working_failed),
+      verbClass: "text-destructive",
+      dotClass: "bg-destructive",
+      ping: false,
+    };
+  }
+  if (outcome === "no_reply") {
+    return {
+      verb: t(($) => $.header.working_no_reply),
+      verbClass: "text-destructive",
+      dotClass: "bg-destructive",
+      ping: false,
+    };
+  }
+
+  const duration =
+    !isTerminal && firstSeen
+      ? formatDuration(new Date(firstSeen).toISOString(), now)
+      : "";
+
+  if (projection) {
+    const verb = duration
+      ? t(($) => $.header.working_verb_with_duration, {
+          verb: projection.label,
+          duration,
+        })
+      : projection.label;
+    return {
+      verb,
+      verbClass: "text-muted-foreground",
+      dotClass: projection.dotClass || "bg-brand",
+      ping: task.status === "running",
+    };
+  }
+
+  const base =
+    task.status === "running"
+      ? t(($) => $.agent_status.running)
+      : t(($) => $.agent_status.queued);
+  const verb = duration
+    ? t(($) => $.header.working_verb_with_duration, { verb: base, duration })
+    : base;
+  return {
+    verb,
+    verbClass: "text-muted-foreground",
+    dotClass: task.status === "running" ? "bg-brand" : "bg-muted-foreground/40",
+    ping: task.status === "running",
+  };
+}
+
+function WorkingListRow({
+  task,
+  now,
+  firstSeen,
+  canStop,
+  stoppingTaskId,
+  onStopTask,
+  onDismiss,
+}: {
+  task: ChannelActiveTask;
+  now: number;
+  firstSeen: number | undefined;
+  canStop: boolean;
+  stoppingTaskId: string | null;
+  onStopTask?: (task: ChannelActiveTask) => void;
+  onDismiss: (task: ChannelActiveTask) => void;
+}) {
+  const { t } = useT("channels");
+  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+  const isTerminal = isTerminalChannelActiveTask(task);
+  const { verb, verbClass, dotClass, ping } = useWorkingRowActivityVerb(
+    task.agent_id,
+    task,
+    now,
+    firstSeen,
+  );
+  const actionLabel = isTerminal
+    ? t(($) => $.header.working_dismiss)
+    : t(($) => $.agent_status.stop);
+
+  return (
+    <div
+      className="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs hover:bg-muted/60"
+      data-testid="channel-agents-working-row"
+      data-terminal={isTerminal ? "true" : "false"}
+    >
+      <ActorAvatarBase
+        name={getActorName("agent", task.agent_id) || task.agent_name}
+        initials={getActorInitials("agent", task.agent_id)}
+        avatarUrl={getActorAvatarUrl("agent", task.agent_id)}
+        isAgent
+        size={22}
+      />
+      <span className="relative inline-flex h-1.5 w-1.5 shrink-0">
+        {ping ? (
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 motion-reduce:hidden",
+              dotClass,
+            )}
+          />
+        ) : null}
+        <span className={cn("relative h-1.5 w-1.5 rounded-full", dotClass)} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-semibold text-foreground">
+          {getActorName("agent", task.agent_id) || task.agent_name}
+        </div>
+        <div className={cn("truncate", verbClass)}>{verb}</div>
+      </div>
+      {isTerminal ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDismiss(task);
+          }}
+          aria-label={t(($) => $.header.working_dismiss_aria, {
+            name: task.agent_name,
+          })}
+          data-testid="channel-agents-working-dismiss"
+        >
+          {actionLabel}
+        </Button>
+      ) : canStop && onStopTask ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={
+            stoppingTaskId === task.task_id ||
+            stoppingTaskId === STOPPING_ALL_TASKS_ID
+          }
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onStopTask(task);
+          }}
+          aria-label={t(($) => $.agent_status.stop_aria, {
+            name: task.agent_name,
+          })}
+          data-testid="channel-agents-working-stop"
+        >
+          <Square className="size-2.5 fill-current" />
+          {actionLabel}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * LRM-581 lock A v3 — right-rail Presence Cluster.
+ *
+ * - K=1: faces · N · M only; no Working chrome / list / outer Stop (Activity owns work).
+ * - K≥2 idle: faces · N · M; click → Members.
+ * - K≥2 working: working faces first + brand breathing ring + · K working shimmer;
+ *   desktop HoverCard / mobile Popover (≥32px) → Working list; Stop only inside card.
+ */
+export function ChannelPresenceCluster({
+  members,
+  memberCount,
   agentCount,
   tasks,
   stoppingTaskId = null,
   canStop = true,
   onStopTask,
   onStopAll,
-  variant = "channel",
-  memberCount = 0,
+  onOpenMembers,
   className,
-}: ChannelAgentsLiveCueProps) {
+}: ChannelPresenceClusterProps) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  // Lazy Map init — avoid `useRef(new Map())` allocating every render
-  // (react-doctor/rerender-lazy-ref-init).
   const firstSeenRef = useRef<Map<string, number> | null>(null);
   if (firstSeenRef.current === null) {
     firstSeenRef.current = new Map();
   }
   const [now, setNow] = useState(() => Date.now());
-  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
 
-  // Prune dismiss keys against the live snapshot during render (no sync
-  // effect — react-doctor/no-derived-state). Stale keys drop out when the
-  // server no longer returns that inbox row, so a later failure can surface.
-  // LRM-581 / LRM-425 — use the full channel active-tasks snapshot (inbox
-  // wake authority). Do not re-filter through composer-strip helpers (that
-  // dual track is banned by AC).
   const presentKeys = useMemo(
     () => new Set(tasks.map((task) => taskRowKey(task))),
     [tasks],
@@ -98,33 +272,35 @@ export function ChannelAgentsLiveCue({
     return next;
   }, [dismissedKeys, presentKeys]);
 
-  const { stoppable, terminal, listTasks, runningCount } = useMemo(() => {
-    const stop: ChannelActiveTask[] = [];
-    const term: ChannelActiveTask[] = [];
-    let running = 0;
-    for (const task of tasks) {
-      const key = taskRowKey(task);
-      if (activeDismissed.has(key)) continue;
-      if (isTerminalChannelActiveTask(task)) {
-        const outcome = task.outcome?.trim();
-        if (outcome === "failed" || outcome === "no_reply") {
-          term.push(task);
+  const { stoppable, terminal, listTasks, runningCount, workingAgentIds } =
+    useMemo(() => {
+      const stop: ChannelActiveTask[] = [];
+      const term: ChannelActiveTask[] = [];
+      const workingIds = new Set<string>();
+      let running = 0;
+      for (const task of tasks) {
+        const key = taskRowKey(task);
+        if (activeDismissed.has(key)) continue;
+        if (isTerminalChannelActiveTask(task)) {
+          const outcome = task.outcome?.trim();
+          if (outcome === "failed" || outcome === "no_reply") {
+            term.push(task);
+          }
+          continue;
         }
-        continue;
+        stop.push(task);
+        workingIds.add(task.agent_id);
+        if (task.status === "running") running += 1;
       }
-      stop.push(task);
-      if (task.status === "running") running += 1;
-    }
-    return {
-      stoppable: stop,
-      terminal: term,
-      listTasks: [...stop, ...term],
-      runningCount: running,
-    };
-  }, [tasks, activeDismissed]);
+      return {
+        stoppable: stop,
+        terminal: term,
+        listTasks: [...stop, ...term],
+        runningCount: running,
+        workingAgentIds: workingIds,
+      };
+    }, [tasks, activeDismissed]);
 
-  // Track first-seen wall time so running rows can show a live duration
-  // without a server-side started_at on ChannelActiveTask.
   useEffect(() => {
     const seen = firstSeenRef.current!;
     const liveKeys = new Set<string>();
@@ -145,59 +321,42 @@ export function ChannelAgentsLiveCue({
     return () => clearInterval(id);
   }, [runningCount]);
 
-  const agentsOnly = variant === "dm";
-
-  if (agentCount <= 0 && listTasks.length === 0) {
-    if (agentsOnly) return null;
-    if (memberCount <= 0) return null;
-    return (
-      <span className={cn("truncate", className)} data-testid="channel-roster-summary">
-        {t(($) => $.header.members_only, { members: memberCount })}
-      </span>
-    );
-  }
-
-  const isLive = listTasks.length > 0;
+  // K=1: never invent Working chrome — Activity owns single-agent work.
+  const allowWorkingChrome = agentCount >= 2;
+  const isLive = allowWorkingChrome && listTasks.length > 0;
   const hasStoppable = stoppable.length > 0;
+  const workingCount = stoppable.length;
 
-  // DM idle: no cue chrome. Channel idle: plain agents count.
-  if (agentsOnly && !isLive) return null;
+  const stackedMembers = useMemo(() => {
+    if (!isLive || workingAgentIds.size === 0) {
+      return members.slice(0, FACE_MAX);
+    }
+    const working: ChannelMemberBrief[] = [];
+    const rest: ChannelMemberBrief[] = [];
+    for (const m of members) {
+      if (m.member_type === "agent" && workingAgentIds.has(m.member_id)) {
+        working.push(m);
+      } else {
+        rest.push(m);
+      }
+    }
+    return [...working, ...rest].slice(0, FACE_MAX);
+  }, [members, isLive, workingAgentIds]);
 
-  const agentsLabel = isLive
-    ? stoppable.length > 0
-      ? agentsOnly
-        ? t(($) => $.header.dm_live, { working: stoppable.length })
-        : t(($) => $.header.agents_live, {
-            agents: agentCount,
-            working: stoppable.length,
-          })
-      : agentsOnly
-        ? t(($) => $.header.dm_attention)
-        : t(($) => $.header.agents_attention, { agents: agentCount })
-    : t(($) => $.header.agents_idle, { agents: agentCount });
+  const countsIdle = t(($) => $.header.presence_counts, {
+    members: memberCount,
+    agents: agentCount,
+  });
+  const workingLabel =
+    isLive && workingCount > 0
+      ? t(($) => $.header.presence_working, { working: workingCount })
+      : isLive && terminal.length > 0
+        ? t(($) => $.header.presence_attention)
+        : null;
 
-  const membersPrefix =
-    !agentsOnly && memberCount > 0
-      ? t(($) => $.header.members_prefix, { members: memberCount })
-      : null;
-
-  const cueTextClass = cn(
-    "truncate",
-    isLive && runningCount > 0 && "animate-chat-text-shimmer font-semibold",
-    isLive &&
-      runningCount === 0 &&
-      terminal.length > 0 &&
-      "font-semibold text-destructive",
-    isLive &&
-      runningCount === 0 &&
-      terminal.length === 0 &&
-      "font-semibold text-foreground",
-  );
-
-  const cueButtonClass = cn(
-    // ≥32px touch target (mobile + desktop tap).
-    "inline-flex min-h-8 min-w-0 items-center rounded-sm px-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
-  );
+  const ariaLabel = workingLabel
+    ? `${countsIdle} · ${workingLabel}`
+    : countsIdle;
 
   const dismissTerminal = (task: ChannelActiveTask) => {
     const key = taskRowKey(task);
@@ -215,203 +374,200 @@ export function ChannelAgentsLiveCue({
         {t(($) => $.header.working_list_title, { count: listTasks.length })}
       </div>
       <div className="flex flex-col gap-1">
-        {listTasks.map((task) => {
-          const isTerminal = isTerminalChannelActiveTask(task);
-          const outcome = task.outcome?.trim();
-          const isFailed = outcome === "failed";
-          const isNoReply = outcome === "no_reply";
-          const isRunning = task.status === "running";
-          const firstSeen = firstSeenRef.current!.get(taskRowKey(task));
-          const duration =
-            !isTerminal && firstSeen
-              ? formatDuration(new Date(firstSeen).toISOString(), now)
-              : "";
-          const verb = isFailed
-            ? t(($) => $.header.working_failed)
-            : isNoReply
-              ? t(($) => $.header.working_no_reply)
-              : isRunning
-                ? t(($) => $.agent_status.running)
-                : t(($) => $.agent_status.queued);
-          const verbLine =
-            duration && !isTerminal
-              ? t(($) => $.header.working_verb_with_duration, {
-                  verb,
-                  duration,
-                })
-              : verb;
-          const dotClass = isFailed || isNoReply
-            ? "bg-destructive"
-            : isRunning
-              ? "bg-brand"
-              : "bg-muted-foreground/40";
-          const verbClass =
-            isFailed || isNoReply ? "text-destructive" : "text-muted-foreground";
-          const actionLabel = isTerminal
-            ? t(($) => $.header.working_dismiss)
-            : t(($) => $.agent_status.stop);
-          const rowKey = taskRowKey(task);
-
-          return (
-            <div
-              key={rowKey}
-              className="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs hover:bg-muted/60"
-              data-testid="channel-agents-working-row"
-              data-terminal={isTerminal ? "true" : "false"}
-            >
-              <ActorAvatarBase
-                name={getActorName("agent", task.agent_id) || task.agent_name}
-                initials={getActorInitials("agent", task.agent_id)}
-                avatarUrl={getActorAvatarUrl("agent", task.agent_id)}
-                isAgent
-                size={22}
-              />
-              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotClass)} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-semibold text-foreground">
-                  {getActorName("agent", task.agent_id) || task.agent_name}
-                </div>
-                <div className={cn("truncate", verbClass)}>{verbLine}</div>
-              </div>
-              {isTerminal ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    dismissTerminal(task);
-                  }}
-                  aria-label={t(($) => $.header.working_dismiss_aria, {
-                    name: task.agent_name,
-                  })}
-                  data-testid="channel-agents-working-dismiss"
-                >
-                  {actionLabel}
-                </Button>
-              ) : canStop && onStopTask ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                  disabled={
-                    stoppingTaskId === task.task_id ||
-                    stoppingTaskId === STOPPING_ALL_TASKS_ID
-                  }
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onStopTask(task);
-                  }}
-                  aria-label={t(($) => $.agent_status.stop_aria, {
-                    name: task.agent_name,
-                  })}
-                  data-testid="channel-agents-working-stop"
-                >
-                  <Square className="size-2.5 fill-current" />
-                  {actionLabel}
-                </Button>
-              ) : null}
-            </div>
-          );
-        })}
+        {listTasks.map((task) => (
+          <WorkingListRow
+            key={taskRowKey(task)}
+            task={task}
+            now={now}
+            firstSeen={firstSeenRef.current!.get(taskRowKey(task))}
+            canStop={canStop}
+            stoppingTaskId={stoppingTaskId}
+            onStopTask={onStopTask}
+            onDismiss={dismissTerminal}
+          />
+        ))}
       </div>
+      {hasStoppable && canStop && onStopAll && stoppable.length > 1 ? (
+        <div className="flex items-center justify-end border-t border-border/60 pt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+            disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onStopAll();
+            }}
+            aria-label={t(($) => $.agent_status.stop_all_aria, {
+              count: stoppable.length,
+            })}
+            data-testid="channel-agents-working-stop-all"
+          >
+            <Square className="size-2.5 fill-current" />
+            {t(($) => $.agent_status.stop_all)}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 
-  const cueWithHover = !isLive ? (
-    <span className={cueTextClass} data-testid="channel-agents-live-cue">
-      {agentsLabel}
-    </span>
-  ) : isMobile ? (
-    <Popover open={mobileOpen} onOpenChange={setMobileOpen}>
-      <PopoverTrigger
-        render={
-          <button
-            type="button"
-            className={cueButtonClass}
-            data-testid="channel-agents-live-cue"
-            aria-expanded={mobileOpen}
-            aria-label={agentsLabel}
+  const overlap = Math.round(FACE_SIZE * 0.28);
+  const faceStack = (
+    <span className="relative inline-flex items-center" data-testid="channel-presence-faces">
+      {stackedMembers.map((m, i) => {
+        const isWorkingFace =
+          isLive &&
+          m.member_type === "agent" &&
+          workingAgentIds.has(m.member_id);
+        return (
+          <span
+            key={`${m.member_type}:${m.member_id}`}
+            style={{
+              marginLeft: i === 0 ? 0 : -overlap,
+              animationDelay: isWorkingFace ? `${i * 60}ms` : undefined,
+            }}
+            className={cn(
+              "relative inline-flex rounded-full ring-2 ring-background",
+              isWorkingFace &&
+                "animate-[presence-face-enter_0.42s_cubic-bezier(0.2,0.8,0.2,1)_both]",
+            )}
           >
-            <span className={cueTextClass}>{agentsLabel}</span>
-          </button>
-        }
-      />
-      <PopoverContent align="start" className="w-72 p-3">
-        {listBody}
-      </PopoverContent>
-    </Popover>
-  ) : (
+            <ActorAvatar
+              actorType={m.member_type === "agent" ? "agent" : "member"}
+              actorId={m.member_id}
+              size={FACE_SIZE}
+              avatarUrlHint={m.avatar_url}
+              showStatusDot
+              profileLink={false}
+            />
+            {isWorkingFace ? (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-[-3px] rounded-full border-[1.5px] border-brand motion-reduce:animate-none animate-[presence-ring-pulse_1.6s_ease-in-out_infinite]"
+              />
+            ) : null}
+          </span>
+        );
+      })}
+    </span>
+  );
+
+  const countText = (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground",
+        isLive &&
+          runningCount === 0 &&
+          terminal.length > 0 &&
+          "text-destructive",
+      )}
+      data-testid="channel-presence-counts"
+    >
+      <span>{countsIdle}</span>
+      {workingLabel ? (
+        <>
+          <span aria-hidden>·</span>
+          <span
+            className={cn(
+              runningCount > 0 && "animate-chat-text-shimmer font-semibold",
+              runningCount === 0 &&
+                terminal.length > 0 &&
+                "font-semibold text-destructive",
+              runningCount === 0 &&
+                terminal.length === 0 &&
+                "font-semibold text-foreground",
+            )}
+            data-testid="channel-presence-working"
+          >
+            {workingLabel}
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
+
+  const triggerClass = cn(
+    // ≥32px touch; no chip chrome (border/bg/pill) per LRM-587.
+    "inline-flex min-h-8 min-w-8 items-center gap-1.5 rounded-md py-0.5 pl-1 pr-1.5 text-foreground outline-none transition-colors",
+    "hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
+  );
+
+  const openMembers = () => {
+    onOpenMembers?.();
+  };
+
+  // Idle (or K=1): plain button → Members. No Working list.
+  if (!isLive) {
+    return (
+      <button
+        type="button"
+        onClick={openMembers}
+        className={cn(triggerClass, className)}
+        aria-label={t(($) => $.header.view_members_aria)}
+        data-testid="channel-header-members-chip"
+        data-presence-working="false"
+      >
+        {faceStack}
+        {countText}
+      </button>
+    );
+  }
+
+  // Mobile working: tap → Working list (≥32px). Members stays via More / details.
+  if (isMobile) {
+    return (
+      <Popover open={mobileOpen} onOpenChange={setMobileOpen}>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              className={cn(triggerClass, className)}
+              aria-expanded={mobileOpen}
+              aria-label={ariaLabel}
+              data-testid="channel-header-members-chip"
+              data-presence-working="true"
+            >
+              {faceStack}
+              {countText}
+            </button>
+          }
+        />
+        <PopoverContent align="end" className="w-72 p-3">
+          {listBody}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  // Desktop working: hover → list; click → Members.
+  return (
     <HoverCard>
       <HoverCardTrigger
         render={
           <button
             type="button"
-            className={cueButtonClass}
-            data-testid="channel-agents-live-cue"
-            aria-label={agentsLabel}
+            className={cn(triggerClass, className)}
+            aria-label={ariaLabel}
+            data-testid="channel-header-members-chip"
+            data-presence-working="true"
+            onClick={(e) => {
+              e.preventDefault();
+              openMembers();
+            }}
           >
-            <span className={cueTextClass}>{agentsLabel}</span>
+            {faceStack}
+            {countText}
           </button>
         }
       />
-      <HoverCardContent align="start" className="w-72 p-3">
+      <HoverCardContent align="end" className="w-72 p-3">
         {listBody}
       </HoverCardContent>
     </HoverCard>
   );
-
-  return (
-    <span
-      className={cn(
-        "inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-1",
-        className,
-      )}
-      data-testid="channel-roster-summary"
-    >
-      {membersPrefix ? <span className="shrink-0">{membersPrefix}</span> : null}
-      {cueWithHover}
-      {isLive && hasStoppable && canStop && onStopTask && stoppable.length === 1 ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={
-            stoppingTaskId === stoppable[0]!.task_id ||
-            stoppingTaskId === STOPPING_ALL_TASKS_ID
-          }
-          onClick={() => onStopTask(stoppable[0]!)}
-          aria-label={t(($) => $.agent_status.stop_aria, {
-            name: stoppable[0]!.agent_name,
-          })}
-          data-testid="channel-agents-cue-stop"
-        >
-          <Square className="size-2.5 fill-current" />
-          {t(($) => $.agent_status.stop)}
-        </Button>
-      ) : null}
-      {isLive && hasStoppable && canStop && onStopAll && stoppable.length > 1 ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
-          onClick={onStopAll}
-          aria-label={t(($) => $.agent_status.stop_all_aria, {
-            count: stoppable.length,
-          })}
-          data-testid="channel-agents-cue-stop-all"
-        >
-          <Square className="size-2.5 fill-current" />
-          {t(($) => $.agent_status.stop_all)}
-        </Button>
-      ) : null}
-    </span>
-  );
 }
+
+/** @deprecated Prefer ChannelPresenceCluster (lock A v3). */
+export const ChannelAgentsLiveCue = ChannelPresenceCluster;

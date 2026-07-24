@@ -644,9 +644,11 @@ describe("ChannelsPage header — members chip ghost chrome (LRM-452)", () => {
     expect(members.className).not.toMatch(/\bborder\b/);
     expect(members.className).not.toMatch(/\bbg-background\b/);
     expect(members.className).toMatch(/hover:bg-muted/);
-    // Avatars + count remain present and clickable.
+    // Avatars + presence counts remain present and clickable (LRM-581 A v3).
     expect(members).toHaveAttribute("aria-label", "View members");
-    expect(within(members).getByLabelText("1 members")).toBeInTheDocument();
+    expect(within(members).getByTestId("channel-presence-counts")).toHaveTextContent(
+      "1 · 0",
+    );
 
     const search = screen.getByRole("button", { name: "Search in conversation" });
     expect(search.className).not.toMatch(/\bborder-border\b/);

@@ -20,7 +20,6 @@ import {
   useDeleteChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
-  activeChannelTasksOptions,
 } from "@multica/core/channels";
 import { dmKeys, type DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
@@ -79,7 +78,6 @@ import { ThreadFollowButton } from "./thread-follow-button";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
-import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 
 /**
@@ -274,21 +272,8 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-581 / LRM-589 — agent DM: live cue beside peer name (status only).
-  // Stop is in AgentProfileActions, not outer header chrome. Human peers keep
-  // the static "Human" meta.
-  const channelIdForTasks = isAgentPeer ? (filesChannelId ?? dm.id) : "";
-  const { data: activeTasks = [] } = useQuery(
-    activeChannelTasksOptions(channelIdForTasks),
-  );
-  const agentLiveStatus = isAgentPeer ? (
-    <ChannelAgentsLiveCue
-      variant="dm"
-      agentCount={1}
-      tasks={activeTasks}
-      canStop={false}
-    />
-  ) : undefined;
+  // LRM-248 / LRM-537 / LRM-581 A v3: agent peers use avatar badge only.
+  // DM Working/Stop → profile card is LRM-589 (out of this issue).
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -347,8 +332,6 @@ function DmHeader({
       }
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
-      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
-      status={agentLiveStatus}
       badges={mutedBadge}
       actions={
         <>

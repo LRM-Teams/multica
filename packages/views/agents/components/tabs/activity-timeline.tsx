@@ -17,13 +17,11 @@ import {
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
+  normalizeActivityExpandedText,
 } from "./activity-event";
 
-// All dots are STATIC — no `animate-pulse` (#404 follow-up). A perpetually
-// pulsing dot made settled/historical rows look like they were still loading
-// live; real "is it live" now comes from the header/hover latest-state (#521)
-// and the avatar pulse, not a blinking or colored dot. Tone → color lives in
-// ONE shared table (ACTIVITY_TONE_DOT_CLASS) so the header can't drift from it.
+// All dots are STATIC — no `animate-pulse` (#404 follow-up). Tone → color lives
+// in ONE shared table (ACTIVITY_TONE_DOT_CLASS) so the header can't drift from it.
 const TONE_DOT = ACTIVITY_TONE_DOT_CLASS;
 
 // Keep long Activity details on the exact existing history-message baseline.
@@ -33,15 +31,15 @@ const ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS =
   "max-h-[min(260px,55vh)] md:max-h-[360px]";
 const ACTIVITY_DETAIL_SCROLL_EPSILON = 1;
 
+/** Spine column width — dots sit on the 1.5px border line (LRM-560). */
+const SPINE_COL = "w-3";
+
 // A file tool's `tool_target` is now a source-backed path (absolute when the
 // runtime provides it, #484) which can be ~90 chars — long enough to blow out
 // the row. Keep the basename fully visible, middle-ellipsis the leading
 // directories (never right-truncate, which would eat the basename), and expose
 // the full path on hover (`title`). Display-only: the value is the BE
 // source-backed target verbatim; we never reconstruct or leak raw input.
-// (Click-to-copy is the tracked #385-FE follow-up — deferred to keep the
-// overflow hotfix non-interactive.) Used by both the Activity tab and the
-// compact Profile Recent surface (the same shared row).
 function ToolTargetPath({ value }: { value: string }) {
   const idx = value.lastIndexOf("/");
   // Keep the leading "/" on the tail so the ellipsis reads "…/basename".
@@ -50,11 +48,30 @@ function ToolTargetPath({ value }: { value: string }) {
   return (
     <span
       title={value}
-      className="flex min-w-0 items-baseline text-xs text-muted-foreground"
+      className="flex min-w-0 items-baseline text-[13px] text-muted-foreground"
     >
       {head ? <span className="min-w-0 truncate">{head}</span> : null}
       <span className="shrink-0">{tail}</span>
     </span>
+  );
+}
+
+function ActivitySpineDot({
+  tone,
+  className,
+}: {
+  tone: keyof typeof TONE_DOT;
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "relative z-[1] mt-1.5 size-1.5 shrink-0 rounded-full",
+        TONE_DOT[tone],
+        className,
+      )}
+      aria-hidden
+    />
   );
 }
 
@@ -102,13 +119,16 @@ function ActivityRow({
 
   // Route the non-command tool subtext by its kind (#v0 照实显示): a file tool's
   // target is a PATH (basename-preserving middle-ellipsis, #484/#385); everything
-  // else is a plain truncate. COMMAND kind is handled inline below (ActivityRow
-  // expand state — no separate component).
+  // else is a plain truncate. COMMAND kind is handled inline below.
   const subtextNode = subtext ? (
     presentation.subtextKind === "path" ? (
       <ToolTargetPath value={subtext} />
+    ) : presentation.subtextKind === "command" ? (
+      <span className="line-clamp-2 min-w-0 break-all font-mono text-[12px] text-muted-foreground">
+        {subtext}
+      </span>
     ) : (
-      <span className="truncate text-xs text-muted-foreground">{subtext}</span>
+      <span className="truncate text-[13px] text-muted-foreground">{subtext}</span>
     )
   ) : null;
 
@@ -133,9 +153,6 @@ function ActivityRow({
   }, []);
   updateDetailOverflowRef.current = updateDetailOverflow;
 
-  // Measure after the sibling detail mounts, then keep the boundary truthful as
-  // Markdown reflows or the viewport changes. The initial layout effect avoids
-  // a visible unbounded frame for long detail on expand.
   useLayoutEffect(() => {
     if (!expanded) {
       setDetailOverflowed(false);
@@ -152,9 +169,6 @@ function ActivityRow({
     const detail = detailRef.current;
     if (!detail) return;
 
-    // Keep browser subscriptions stable for this mounted sibling. The current
-    // measurement function lives in a ref so a future handler change cannot
-    // cause listener churn (React Doctor's event-handler-ref contract).
     const handleDetailOverflow = () => updateDetailOverflowRef.current();
     const resizeObserver =
       typeof ResizeObserver === "undefined"
@@ -169,6 +183,9 @@ function ActivityRow({
     };
   }, [expanded]);
 
+  const timestampClass =
+    "ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/55";
+
   if (expansion) {
     return (
       <div
@@ -181,30 +198,37 @@ function ActivityRow({
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
           aria-controls={expanded ? detailId : undefined}
-          className="group flex min-h-11 w-full items-start gap-3 rounded-md py-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
+          className="group flex min-h-11 w-full items-start gap-2 rounded-md py-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
         >
-          <span className="w-12 shrink-0 pt-1 font-mono text-[11px] tabular-nums text-muted-foreground/70">
-            {time}
+          <span className={cn("flex shrink-0 justify-center", SPINE_COL)}>
+            <ActivitySpineDot tone={presentation.tone} className="mt-2" />
           </span>
-          <span
-            className={cn("mt-2.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
-            aria-hidden
-          />
-          <span className="min-w-0 flex-1 pt-0.5">
-            <span className="block text-sm text-foreground">{label}</span>
-            {!expanded && subtext && (
-              <span
-                className={cn(
-                  "mt-0.5 block text-xs text-muted-foreground",
-                  isCommand ? "line-clamp-2 break-words font-mono" : "line-clamp-1",
-                )}
-              >
-                {subtext}
+          <span className="flex min-w-0 flex-1 items-start gap-2 pt-0.5">
+            <span className="min-w-0 flex-1">
+              {/* LRM-560 tier 1: action label weight 600 */}
+              <span className="block text-[13.5px] font-semibold leading-snug text-foreground">
+                {label}
               </span>
-            )}
-          </span>
-          <span className="mt-1 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground" aria-hidden>
-            {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+              {!expanded && subtext && (
+                <span
+                  className={cn(
+                    "mt-0.5 block text-muted-foreground",
+                    isCommand
+                      ? "line-clamp-2 break-all font-mono text-[12px]"
+                      : "line-clamp-1 text-[13px]",
+                  )}
+                >
+                  {subtext}
+                </span>
+              )}
+            </span>
+            <span className={cn(timestampClass, "pt-0.5")}>{time}</span>
+            <span
+              className="mt-0.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground"
+              aria-hidden
+            >
+              {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+            </span>
           </span>
         </button>
         {expanded && (
@@ -213,7 +237,9 @@ function ActivityRow({
             ref={detailRef}
             data-testid="activity-expanded-detail"
             className={cn(
-              "relative ml-[4.875rem] mt-1 text-xs text-muted-foreground sm:ml-[5.25rem]",
+              "relative mt-1 text-xs text-foreground",
+              // Align under content column (past spine)
+              "ml-5",
               ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
               detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
             )}
@@ -251,27 +277,34 @@ function ActivityRow({
                 </div>
               </div>
             ) : isCommand ? (
-              <div className="relative">
-                <pre className="overflow-x-auto bg-muted/30 px-2 py-1.5 pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
-                  <code>{expansion.content}</code>
+              <div className="group/cmd relative">
+                {/* LRM-560 rule 5: muted rounded command surface + hover copy */}
+                <pre className="overflow-x-auto rounded-md bg-muted px-2.5 py-2 pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words text-foreground">
+                  <code>{normalizeActivityExpandedText(expansion.content)}</code>
                 </pre>
                 <button
                   type="button"
                   onClick={handleCopyCommand}
                   aria-label={copyLabel}
-                  className="absolute right-0 top-0 rounded border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="absolute right-1.5 top-1.5 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/cmd:opacity-100"
                 >
                   {copyLabel}
                 </button>
               </div>
             ) : (
-              <MemoizedMarkdown
-                mode="minimal"
-                enableStickerShortcodes={false}
-                className="activity-expanded-markdown break-words text-xs leading-5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+              // LRM-560 rule 4: normalize + muted surface + 2px brand bar
+              <div
+                className="rounded-r-md border-l-2 border-brand bg-muted px-2.5 py-2 text-foreground"
+                data-testid="activity-expanded-surface"
               >
-                {expansion.content}
-              </MemoizedMarkdown>
+                <MemoizedMarkdown
+                  mode="minimal"
+                  enableStickerShortcodes={false}
+                  className="activity-expanded-markdown break-words text-xs leading-5 whitespace-pre-wrap text-foreground [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+                >
+                  {normalizeActivityExpandedText(expansion.content)}
+                </MemoizedMarkdown>
+              </div>
             )}
             {showDetailFade && (
               <div
@@ -287,29 +320,27 @@ function ActivityRow({
 
   return (
     <div
-      className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
+      className={cn("flex items-baseline gap-2", compact ? "py-0.5" : "py-1")}
       data-testid="activity-row"
       data-activity-kind={event.activity_kind}
     >
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
-        {time}
+      <span className={cn("flex shrink-0 justify-center self-start", SPINE_COL)}>
+        <ActivitySpineDot tone={presentation.tone} />
       </span>
-      <span
-        className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
-        aria-hidden
-      />
       {presentation.subtextKind === "command" && compact ? (
         // Compact Profile Recent: clamp + no expand / copy (title-only).
-        <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words text-sm leading-[1.45] text-foreground">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          <div className="min-w-0 flex-1 line-clamp-2 break-words text-[13.5px] font-semibold leading-[1.45] text-foreground">
             <span>{label} </span>
-            <span className="font-mono text-xs text-muted-foreground">{subtext}</span>
+            <span className="font-mono text-[12px] font-normal text-muted-foreground">{subtext}</span>
           </div>
+          <span className={timestampClass}>{time}</span>
         </div>
       ) : (
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="shrink-0 text-sm text-foreground">{label}</span>
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="shrink-0 text-[13.5px] font-semibold text-foreground">{label}</span>
           {subtextNode}
+          <span className={timestampClass}>{time}</span>
         </div>
       )}
     </div>
@@ -321,17 +352,9 @@ function ActivityRow({
 const COMPACT_RECENT_LIMIT = 5;
 
 /**
- * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
- * each row = `time · source dot · human label · optional subtext`. Shows only
- * mainline narrative events (kept by `isNarrativeActivityEvent`, driven by raft
- * `activity_kind` semantics #389); diagnostic kinds (transport / telemetry /
- * internal_progress / runtime_diagnostic / …) stay out. Never renders raw
- * command/output for tool rows.
- *
- * Rendered by the Activity tab (agent overview page + channel side panel) and,
- * in `compact` mode, the profile "Recent activity" hover surface (#383) — the
- * SAME `activityPresentation` (labels/tone/folding/active-…), the only delta is
- * layout: last N rows, dense, single-line truncated subtext, no click-to-expand.
+ * Read-only agent-activity narrative timeline (#267 / LRM-560).
+ * Spine + token nodes + three-tier weight; expandable thinking/output normalize
+ * blank lines (LRM-554). Compact mode keeps the same projection, denser layout.
  */
 export function ActivityTimeline({
   events,
@@ -365,7 +388,15 @@ export function ActivityTimeline({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="relative flex flex-col" data-testid="activity-timeline">
+      {/* LRM-560 rule 1: continuous 1.5px spine behind hang-off nodes */}
+      {!compact ? (
+        <div
+          className="pointer-events-none absolute bottom-2 left-[5px] top-2 w-[1.5px] bg-border"
+          aria-hidden
+          data-testid="activity-timeline-spine"
+        />
+      ) : null}
       {shown.map((event) => (
         <ActivityRow
           key={event.id}

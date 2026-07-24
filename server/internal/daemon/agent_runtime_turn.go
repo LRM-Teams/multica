@@ -209,6 +209,19 @@ func (c *agentRuntimeTurnCoordinator) release(key agentRuntimeTurnSlotKey, turnI
 	}
 }
 
+func (c *agentRuntimeTurnCoordinator) hasActiveTurn(agentID, runtimeID string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.active[agentRuntimeTurnSlotKey{
+		AgentID:   strings.TrimSpace(agentID),
+		RuntimeID: strings.TrimSpace(runtimeID),
+	}]
+	return ok
+}
+
 func validateAgentRuntimeTurnRequest(request agentRuntimeTurnRequest) error {
 	for name, value := range map[string]string{
 		"workspace_id": request.WorkspaceID,

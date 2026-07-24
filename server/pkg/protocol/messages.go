@@ -245,6 +245,9 @@ const (
 	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
+	// DaemonCapabilityAgentLifecycleActions is deliberately not advertised
+	// until D6 routes live wakes through the canonical agent runtime turn.
+	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by

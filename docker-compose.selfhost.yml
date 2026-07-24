@@ -122,6 +122,16 @@ services:
       # DB to the AReaL gateway. Only read by RL training/interaction flows;
       # override in /data/multica/.env if the stub runs elsewhere.
       AREAL_BRIDGE_STUB_URL: ${AREAL_BRIDGE_STUB_URL:-http://db-bridge-stub-multica:${BRIDGE_GATEWAY_STUB_PORT:-9100}}
+      # Admin key the backend's arealrl client sends to the AReaL gateway when it
+      # opens/close/reward RL sessions and exports trajectories
+      # (service/training_config.go: AREAL_ADMIN_API_KEY authenticates
+      # start_session). LoadTrainingConfig treats training as UNCONFIGURED when
+      # this is empty — even if AREAL_BRIDGE_STUB_URL is set — so env-dispatch
+      # training returns "bridge not configured" (500). Must MATCH the real
+      # AReaL gateway's admin key in production; the simulation gateway ignores
+      # it, so any non-empty value works for a sim bring-up. Override in
+      # /data/multica/.env.
+      AREAL_ADMIN_API_KEY: ${AREAL_ADMIN_API_KEY:-areal-training-admin-key}
       # AReaL LLM proxy base_url injected into env-dispatch training sandboxes
       # (service/training_config.go: AREAL_PROXY_URL). Must be reachable from
       # inside the sandbox: typically the db_bridge chat_completions stub

@@ -36,11 +36,6 @@ import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelMessage, ChannelMessageSearchResult } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@multica/ui/components/ui/resizable";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -52,6 +47,10 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
+import {
+  CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
+  useProfilePanelWidth,
+} from "../../layout/use-profile-panel-width";
 import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
@@ -371,6 +370,11 @@ function DmChannelConversation({
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
+  // LRM-400 — same flex + pixel dock as ChannelsPage (no lone ResizablePanelGroup).
+  const {
+    width: detailSideWidth,
+    onResizePointerDown: onDetailSideResizePointerDown,
+  } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   const channelId = dm.id;
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
@@ -1311,26 +1315,30 @@ function DmChannelConversation({
 
   if (!isMobile) {
     return withProvider(
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel id="dm-conversation" minSize="50%" className="flex min-h-0 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1" data-testid="dm-detail-row">
+        <div
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          data-testid="dm-conversation-column"
+        >
           {conversationPane}
-        </ResizablePanel>
+        </div>
         {detailPanel ? (
-          <>
-            <ResizableHandle />
-            <ResizablePanel
-              id="dm-thread"
-              defaultSize={440}
-              minSize={360}
-              maxSize={640}
-              groupResizeBehavior="preserve-pixel-size"
-              className="border-l border-border/30 bg-background"
-            >
-              {detailPanel}
-            </ResizablePanel>
-          </>
+          <div
+            data-testid="dm-thread-side-slot"
+            className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
+            style={{ width: detailSideWidth }}
+          >
+            <button
+              type="button"
+              data-testid="dm-detail-side-resize"
+              aria-label={t(($) => $.details.resize_side_aria)}
+              className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
+              onPointerDown={onDetailSideResizePointerDown}
+            />
+            {detailPanel}
+          </div>
         ) : null}
-      </ResizablePanelGroup>,
+      </div>,
     );
   }
 

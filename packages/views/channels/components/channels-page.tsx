@@ -225,6 +225,10 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
+import {
+  CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
+  useProfilePanelWidth,
+} from "../../layout/use-profile-panel-width";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
@@ -661,13 +665,14 @@ export function ChannelsPage({
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_channels_layout",
   });
-  // LRM-481 — Profile / thread / channel-details dock width persists across refresh.
+  // LRM-481 / LRM-400 — pixel side-dock width (not a lone ResizablePanelGroup).
+  // Percentage PanelGroup + persisted 2-pane layout left a blank right half when
+  // the dock was closed (Frank red-box). Flex row keeps the conversation mounted
+  // full-width; drag still works when a dock is open.
   const {
-    defaultLayout: detailSideDefaultLayout,
-    onLayoutChanged: onDetailSideLayoutChanged,
-  } = useDefaultLayout({
-    id: "multica_channel_detail_side_layout",
-  });
+    width: detailSideWidth,
+    onResizePointerDown: onDetailSideResizePointerDown,
+  } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   // Embedded Activity pane never auto-picks a neighbor channel (LRM-238).
   const listFirstSelection = isMobile || embedded;
   // #568 — see `HEADER_ACTIONS_COMPACT_BREAKPOINT` above for the derivation.
@@ -3528,52 +3533,44 @@ export function ChannelsPage({
           )}
         </main>
   );
-  // Desktop detail (LRM-400 + LRM-481): always keep ResizablePanelGroup so
-  // opening/closing the side dock does not remount the conversation tree
-  // (scroll/composer + title-button refs). A lone conversation panel fills
-  // full width — no blank half-pane. When a dock is open, drag the handle
-  // (min 360 / default 440 / max 640 px; layout id persists across refresh).
+  // Desktop detail (LRM-400 + LRM-481): flex row — conversation always
+  // flex-1 full width (no lone ResizablePanel / persisted %-layout blank
+  // half). Side dock is an optional pixel-width column with left-edge drag
+  // (360–640, default 440; persists separately from the global overlay).
+  // Opening/closing the dock does not remount the conversation tree.
   // Mobile: no drag — full-screen profile/page route instead.
   const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
-    <ResizablePanelGroup
-      orientation="horizontal"
-      className="min-h-0 flex-1"
-      defaultLayout={detailSideDefaultLayout}
-      onLayoutChanged={onDetailSideLayoutChanged}
-    >
-      <ResizablePanel
-        id="conversation"
-        minSize={desktopSidePanel ? "50%" : undefined}
-        className="flex min-h-0 min-w-0 flex-col"
+    <div className="flex min-h-0 min-w-0 flex-1" data-testid="channel-detail-row">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        data-testid="channel-conversation-column"
       >
         {channelConversationPane}
-      </ResizablePanel>
+      </div>
       {desktopSidePanel ? (
-        <>
-          <ResizableHandle />
-          <ResizablePanel
-            id={
-              threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"
-            }
-            defaultSize={440}
-            minSize={360}
-            maxSize={640}
-            groupResizeBehavior="preserve-pixel-size"
-            data-testid={
-              threadPanel
-                ? "thread-side-slot"
-                : agentPanel
-                  ? "agent-side-slot"
-                  : "channel-details-side-slot"
-            }
-            className="border-l border-border/30 bg-background"
-          >
-            {desktopSidePanel}
-          </ResizablePanel>
-        </>
+        <div
+          data-testid={
+            threadPanel
+              ? "thread-side-slot"
+              : agentPanel
+                ? "agent-side-slot"
+                : "channel-details-side-slot"
+          }
+          className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
+          style={{ width: detailSideWidth }}
+        >
+          <button
+            type="button"
+            data-testid="channel-detail-side-resize"
+            aria-label={t(($) => $.details.resize_side_aria)}
+            className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
+            onPointerDown={onDetailSideResizePointerDown}
+          />
+          {desktopSidePanel}
+        </div>
       ) : null}
-    </ResizablePanelGroup>
+    </div>
   ) : (
     threadPanel ?? channelConversationPane
   );

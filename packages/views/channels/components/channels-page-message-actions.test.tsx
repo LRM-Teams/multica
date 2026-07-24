@@ -467,4 +467,20 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
     },
     12000,
   );
+
+  it("keeps conversation full-width when no side dock is open (LRM-400)", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+    expect(screen.getByTestId("channel-conversation-column")).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-details-side-slot")).toBeNull();
+    expect(screen.queryByTestId("thread-side-slot")).toBeNull();
+    expect(screen.queryByTestId("agent-side-slot")).toBeNull();
+    expect(screen.queryByTestId("channel-detail-side-resize")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    expect(await screen.findByTestId("channel-details-side-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("channel-detail-side-resize")).toBeInTheDocument();
+    // Conversation column stays mounted beside the dock (no remount blank shell).
+    expect(screen.getByTestId("channel-conversation-column")).toBeInTheDocument();
+  });
 });

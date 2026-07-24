@@ -33,6 +33,17 @@ import { TaskStatusPill } from "./task-status-pill";
 import { StickerMessage } from "./sticker-message";
 import { formatElapsedMs } from "../lib/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
+import {
+  activeBubbleStepSummary,
+  bubbleToolSummary,
+  deriveBubbleCursorPanels,
+  friendlyBubbleToolLabel,
+} from "../lib/bubble-cursor-activity";
+import {
+  BubblePlanPanel,
+  BubbleSubagentPanel,
+  BubbleTodoPanel,
+} from "./bubble-cursor-panels";
 import { useT } from "../../i18n";
 
 // ─── Public component ────────────────────────────────────────────────────
@@ -52,6 +63,11 @@ interface ChatMessageListProps {
   hasOlderMessages?: boolean;
   isFetchingOlderMessages?: boolean;
   onLoadOlderMessages?: () => void;
+  /**
+   * DM agent bubble only: Cursor-like Plan / Todo / Subagent cards + richer
+   * tool steps. Global FAB / non-bubble chat keeps the compact fold.
+   */
+  isDmBubble?: boolean;
 }
 
 export function ChatMessageList({
@@ -63,6 +79,7 @@ export function ChatMessageList({
   hasOlderMessages = false,
   isFetchingOlderMessages = false,
   onLoadOlderMessages,
+  isDmBubble = false,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
@@ -166,7 +183,7 @@ export function ChatMessageList({
                 <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
                   {hasLive && (
                     <div className="w-full space-y-1.5">
-                      <TimelineView items={liveTimeline} isStreaming />
+                      <TimelineView items={liveTimeline} isStreaming enhanced={isDmBubble} />
                     </div>
                   )}
                   {showStatusPill && pendingTask && (
@@ -185,6 +202,7 @@ export function ChatMessageList({
                   sessionId={sessionId}
                   message={msg}
                   isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
+                  enhanced={isDmBubble}
                 />
               </div>
             )}
@@ -264,10 +282,12 @@ function MessageBubble({
   sessionId,
   message,
   isPending,
+  enhanced,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
+  enhanced?: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -295,17 +315,26 @@ function MessageBubble({
     );
   }
 
-  return <AssistantMessage sessionId={sessionId} message={message} isPending={isPending} />;
+  return (
+    <AssistantMessage
+      sessionId={sessionId}
+      message={message}
+      isPending={isPending}
+      enhanced={enhanced}
+    />
+  );
 }
 
 function AssistantMessage({
   sessionId,
   message,
   isPending,
+  enhanced,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
+  enhanced?: boolean;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
@@ -331,6 +360,7 @@ function AssistantMessage({
         rawError={message.content}
         timeline={timeline}
         elapsedMs={message.elapsed_ms}
+        enhanced={enhanced}
       />
     );
   }
@@ -338,7 +368,7 @@ function AssistantMessage({
   return (
     <div className="w-full space-y-1.5">
       {timeline.length > 0 ? (
-        <TimelineView items={timeline} attachments={message.attachments} />
+        <TimelineView items={timeline} attachments={message.attachments} enhanced={enhanced} />
       ) : (
         <MessageProse content={message.content} attachments={message.attachments} />
       )}
@@ -449,11 +479,13 @@ function FailureBubble({
   rawError,
   timeline,
   elapsedMs,
+  enhanced,
 }: {
   reason: string;
   rawError: string;
   timeline: ChatTimelineItem[];
   elapsedMs?: number | null;
+  enhanced?: boolean;
 }) {
   const { t } = useT("chat");
   const [open, setOpen] = useState(false);
@@ -494,7 +526,7 @@ function FailureBubble({
           )}
         </div>
       </div>
-      {timeline.length > 0 && <TimelineView items={timeline} />}
+      {timeline.length > 0 && <TimelineView items={timeline} enhanced={enhanced} />}
       {elapsedMs != null && (
         <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
       )}
@@ -552,12 +584,16 @@ function TimelineView({
   items,
   isStreaming,
   attachments,
+  enhanced,
 }: {
   items: ChatTimelineItem[];
   isStreaming?: boolean;
   attachments?: import("@multica/core/types").Attachment[];
+  /** DM bubble Cursor-like panels + richer tool labels. */
+  enhanced?: boolean;
 }) {
   const { preface, middle, final } = splitTimeline(items);
+  const panels = enhanced ? deriveBubbleCursorPanels(middle) : null;
 
   return (
     <>
@@ -568,11 +604,22 @@ function TimelineView({
           </Markdown>
         </div>
       )}
+      {panels && (panels.plan || panels.todos.length > 0 || panels.subagents.length > 0) && (
+        <div className="space-y-1.5">
+          {panels.plan ? <BubblePlanPanel plan={panels.plan} /> : null}
+          {panels.todos.length > 0 ? <BubbleTodoPanel todos={panels.todos} /> : null}
+          {panels.subagents.length > 0 ? (
+            <BubbleSubagentPanel items={panels.subagents} />
+          ) : null}
+        </div>
+      )}
       {middle.length > 0 && (
         <OuterProcessFold
           items={middle}
           defaultOpen={!!isStreaming}
           attachments={attachments}
+          enhanced={enhanced}
+          isStreaming={isStreaming}
         />
       )}
       {final.length > 0 && (
@@ -589,10 +636,14 @@ function OuterProcessFold({
   items,
   defaultOpen,
   attachments,
+  enhanced,
+  isStreaming,
 }: {
   items: ChatTimelineItem[];
   defaultOpen?: boolean;
   attachments?: import("@multica/core/types").Attachment[];
+  enhanced?: boolean;
+  isStreaming?: boolean;
 }) {
   const { t } = useT("chat");
   // useState seeds once at mount — subsequent renders never overwrite the
@@ -602,20 +653,43 @@ function OuterProcessFold({
   // even if the live one was open. That's the desired collapsed-default.
   const [open, setOpen] = useState(defaultOpen ?? false);
   const stepCount = items.length;
+  const activeSummary = enhanced ? activeBubbleStepSummary(items) : null;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-        {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        <span>{t(($) => $.message_list.process_steps, { count: stepCount })}</span>
+      <CollapsibleTrigger className="flex max-w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+        {open ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
+        <span className="shrink-0">
+          {t(($) => $.message_list.process_steps, { count: stepCount })}
+        </span>
+        {enhanced && !open && activeSummary ? (
+          <span
+            className={cn(
+              "min-w-0 truncate text-muted-foreground/80",
+              isStreaming && "animate-chat-text-shimmer text-foreground/80",
+            )}
+          >
+            · {activeSummary}
+          </span>
+        ) : null}
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-1 rounded-lg border bg-muted/20 p-2 space-y-0.5">
-          {items.map((item) =>
+        <div
+          className={cn(
+            "mt-1 rounded-lg border bg-muted/20 p-2 space-y-0.5",
+            enhanced && "border-border/70",
+          )}
+        >
+          {items.map((item, index) =>
             item.type === "text" ? (
               <MiddleTextRow key={item.seq} item={item} attachments={attachments} />
             ) : (
-              <ItemRow key={item.seq} item={item} />
+              <ItemRow
+                key={item.seq}
+                item={item}
+                enhanced={enhanced}
+                active={!!isStreaming && index === items.length - 1}
+              />
             ),
           )}
         </div>
@@ -644,10 +718,18 @@ function MiddleTextRow({
 
 // ─── Individual item rows ────────────────────────────────────────────────
 
-function ItemRow({ item }: { item: ChatTimelineItem }) {
+function ItemRow({
+  item,
+  enhanced,
+  active,
+}: {
+  item: ChatTimelineItem;
+  enhanced?: boolean;
+  active?: boolean;
+}) {
   switch (item.type) {
     case "tool_use":
-      return <ToolCallRow item={item} />;
+      return <ToolCallRow item={item} enhanced={enhanced} active={active} />;
     case "tool_result":
       return <ToolResultRow item={item} />;
     case "thinking":
@@ -688,14 +770,28 @@ function getToolSummary(item: ChatTimelineItem): string {
   return "";
 }
 
-function ToolCallRow({ item }: { item: ChatTimelineItem }) {
+function ToolCallRow({
+  item,
+  enhanced,
+  active,
+}: {
+  item: ChatTimelineItem;
+  enhanced?: boolean;
+  active?: boolean;
+}) {
   const [open, setOpen] = useState(false);
-  const summary = getToolSummary(item);
+  const summary = enhanced ? bubbleToolSummary(item) : getToolSummary(item);
   const hasInput = item.input && Object.keys(item.input).length > 0;
+  const label = enhanced ? friendlyBubbleToolLabel(item.tool) : item.tool;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors">
+      <CollapsibleTrigger
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors",
+          enhanced && active && "bg-accent/40",
+        )}
+      >
         <ChevronRight
           className={cn(
             "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
@@ -703,7 +799,15 @@ function ToolCallRow({ item }: { item: ChatTimelineItem }) {
             !hasInput && "invisible",
           )}
         />
-        <span className="font-medium text-foreground shrink-0">{item.tool}</span>
+        <span
+          className={cn(
+            "font-medium shrink-0",
+            enhanced ? "text-foreground/90" : "text-foreground",
+            enhanced && active && "animate-chat-text-shimmer",
+          )}
+        >
+          {label}
+        </span>
         {summary && <span className="truncate text-muted-foreground">{summary}</span>}
       </CollapsibleTrigger>
       {hasInput && (

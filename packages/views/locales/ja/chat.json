@@ -126,7 +126,18 @@
       "searching_code": "コードを検索中…",
       "making_edits": "ファイルを編集中…",
       "searching_web": "ウェブを検索中…",
+      "updating_todos": "ToDo を更新中…",
+      "running_subagent": "サブエージェント実行中…",
+      "planning": "計画中…",
       "fallback": "作業中"
     }
+  },
+  "bubble_cursor": {
+    "plan_title": "プラン",
+    "todo_title": "ToDo",
+    "todo_progress": "{{done}}/{{total}}",
+    "subagent_title": "サブエージェント",
+    "subagent_running": "実行中",
+    "subagent_done": "完了"
   }
 }

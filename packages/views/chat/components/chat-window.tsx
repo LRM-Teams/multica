@@ -53,6 +53,7 @@ import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
 import { ChatResizeHandles } from "./chat-resize-handles";
 import { useChatResize } from "./use-chat-resize";
+import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
 import { createLogger } from "@multica/core/logger";
 import type { Agent, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
 import { useT } from "../../i18n";
@@ -883,6 +884,13 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
             hideAgentAvatar={isDmBubble}
             onClearActiveSession={() => setActiveSession(null)}
           />
+          {isDmBubble ? (
+            <RuntimeTokenStatsBadge
+              stats={currentSession?.runtime_stats}
+              compact
+              className="ml-1 shrink-0"
+            />
+          ) : null}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
           {!isFullscreen && (
@@ -938,6 +946,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
           hasOlderMessages={!!hasOlderMessages}
           isFetchingOlderMessages={isFetchingOlderMessages}
           onLoadOlderMessages={() => void fetchOlderMessages()}
+          isDmBubble={isDmBubble}
         />
       ) : (
         <EmptyState

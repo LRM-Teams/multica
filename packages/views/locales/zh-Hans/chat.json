@@ -126,7 +126,18 @@
       "searching_code": "搜索代码…",
       "making_edits": "编辑文件…",
       "searching_web": "搜索网页…",
+      "updating_todos": "更新待办…",
+      "running_subagent": "运行子代理…",
+      "planning": "规划中…",
       "fallback": "处理中"
     }
+  },
+  "bubble_cursor": {
+    "plan_title": "计划",
+    "todo_title": "待办",
+    "todo_progress": "{{done}}/{{total}}",
+    "subagent_title": "子代理",
+    "subagent_running": "进行中",
+    "subagent_done": "完成"
   }
 }

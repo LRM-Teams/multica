@@ -37,21 +37,36 @@ type ToolKey =
   | "searching_code"
   | "making_edits"
   | "searching_web"
+  | "updating_todos"
+  | "running_subagent"
+  | "planning"
   | "fallback";
 
 // Tool slug → translation key. Unknown tools fall back to "Working".
 const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
   bash: "running_command",
   exec: "running_command",
+  shell: "running_command",
+  run_terminal_cmd: "running_command",
   read: "reading_files",
+  read_file: "reading_files",
   glob: "reading_files",
+  glob_file_search: "reading_files",
   grep: "searching_code",
   write: "making_edits",
+  write_file: "making_edits",
   edit: "making_edits",
+  edit_file: "making_edits",
   multi_edit: "making_edits",
   multiedit: "making_edits",
   web_search: "searching_web",
   websearch: "searching_web",
+  todo_write: "updating_todos",
+  todowrite: "updating_todos",
+  set_todo_list: "updating_todos",
+  task: "running_subagent",
+  create_plan: "planning",
+  update_plan: "planning",
 };
 
 // Pure stage decision returning translation keys. The hook below maps these

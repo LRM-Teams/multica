@@ -129,7 +129,18 @@
       "searching_code": "코드 검색 중…",
       "making_edits": "파일 편집 중…",
       "searching_web": "웹 검색 중…",
+      "updating_todos": "할 일 업데이트 중…",
+      "running_subagent": "서브에이전트 실행 중…",
+      "planning": "계획 중…",
       "fallback": "작업 중"
     }
+  },
+  "bubble_cursor": {
+    "plan_title": "계획",
+    "todo_title": "할 일",
+    "todo_progress": "{{done}}/{{total}}",
+    "subagent_title": "서브에이전트",
+    "subagent_running": "실행 중",
+    "subagent_done": "완료"
   }
 }

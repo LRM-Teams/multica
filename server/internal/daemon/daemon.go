@@ -4116,6 +4116,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	runtimeStats := runtimeStatsFromAgent(result.RuntimeStats)
+	// Cursor / Codex / Claude etc. often only fill Result.Usage (not Pi-style
+	// RuntimeStats). Map usage into session runtime_stats so chat bubbles can
+	// show a token bar without a provider-specific UI path.
+	if runtimeStats == nil {
+		runtimeStats = runtimeStatsFromUsage(provider, result.Usage)
+	}
 
 	output := result.Output
 	var internalOutput json.RawMessage
@@ -4368,6 +4374,46 @@ func runtimeStatsFromAgent(stats *agent.RuntimeTokenStats) *protocol.RuntimeToke
 		ContextWindow:         stats.ContextWindow,
 		ContextPercent:        stats.ContextPercent,
 		AutoCompactionEnabled: stats.AutoCompactionEnabled,
+	}
+}
+
+// runtimeStatsFromUsage builds session telemetry from per-model TokenUsage when
+// the backend did not supply native RuntimeStats (common for Cursor stream-json).
+func runtimeStatsFromUsage(provider string, usage map[string]agent.TokenUsage) *protocol.RuntimeTokenStats {
+	if len(usage) == 0 {
+		return nil
+	}
+	var (
+		model                          string
+		in, out, cacheRead, cacheWrite int64
+		bestTotal                      int64
+	)
+	for m, u := range usage {
+		total := u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+		if total == 0 {
+			continue
+		}
+		in += u.InputTokens
+		out += u.OutputTokens
+		cacheRead += u.CacheReadTokens
+		cacheWrite += u.CacheWriteTokens
+		if total > bestTotal {
+			bestTotal = total
+			model = m
+		}
+	}
+	total := in + out + cacheRead + cacheWrite
+	if total == 0 {
+		return nil
+	}
+	return &protocol.RuntimeTokenStats{
+		Provider:         provider,
+		Model:            model,
+		InputTokens:      in,
+		OutputTokens:     out,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		TotalTokens:      total,
 	}
 }
 

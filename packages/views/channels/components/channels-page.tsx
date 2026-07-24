@@ -242,7 +242,6 @@ export interface TypingActor {
 }
 
 const EMPTY_TYPING_ACTORS: TypingActor[] = [];
-const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 

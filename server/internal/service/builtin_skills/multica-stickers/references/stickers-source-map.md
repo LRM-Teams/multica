@@ -32,6 +32,7 @@ pointer.
 | Agent transport send accepts structured `parts[]` including stickers and attachments | `server/internal/handler/agent_transport.go` (`AgentTransportSendMessage`), `server/cmd/multica/cmd_message.go` (`runAgentMessageSend`, `buildAgentSendParts`, `--sticker`, `--attachment-id`) |
 | CLI `--attachment-id` becomes `{type:attachment, attachment_id}` parts before POST; chat send does not use sidecar `attachment_ids` or markdown image embeds | `server/cmd/multica/cmd_message.go` (`buildAgentSendParts`, `runAgentMessageSend`); server binds from attachment parts only in `agent_transport.go` / `channel.go` (`attachmentIDsFromParts`) |
 | Formal P0 messages reference stickers through the `send` action body with structured `parts[]` and `sticker_id`; legacy `message_send` remains accepted at the server boundary | `server/pkg/protocol/messages.go` (`ChatOutputActionMessageSend`, `MessagePart`), `server/internal/messageparts/messageparts.go`, `server/internal/handler/daemon.go` (`normalizeTaskCompleteOutput`) |
+| Standalone chat sessions deliver final assistant output automatically; a structured sticker envelope is unwrapped into durable message parts, while channel-bound sessions retain the explicit CLI transport path | `server/internal/daemon/prompt.go` (`buildChatPrompt`), `server/internal/daemon/execenv/runtime_config.go` (`renderChatRuntimeBrief`), `server/internal/service/task.go` (`CompleteTask` chat persistence), `server/internal/messageparts/messageparts.go` (`UnwrapStructuredMessageSend`) |
 | Legacy markdown still contains token parsing until the FE renderer sweep removes it | `packages/views/common/markdown.tsx` (legacy sticker token handling) |
 
 ## Tests
@@ -41,4 +42,5 @@ pointer.
 | Catalog parses and is 1:1 with the embedded assets | `server/internal/stickers/stickers_test.go` |
 | `Read` returns bytes for a known file and rejects unknown / traversal names | `server/internal/stickerimg/stickerimg_test.go` |
 | `Search` matches by mood and keyword in zh + en | `server/internal/stickers/stickers_test.go` |
+| Standalone sticker envelopes unwrap to accessible structured parts and the runtime brief/skill select delivery by channel binding | `server/internal/messageparts/messageparts_test.go`, `server/internal/daemon/prompt_test.go`, `server/internal/daemon/execenv/runtime_config_test.go`, `server/internal/service/builtin_skills_test.go` |
 | Legacy token parser remains covered until FE migration removes it | `packages/views/common/markdown.test.tsx` |

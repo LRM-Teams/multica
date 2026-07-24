@@ -75,6 +75,13 @@
 - **物**：migration `207_channel_agent_onboarding` 的 generation/trigger/check constraints；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、三段 revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；daemon/protocol typed decision；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
 - **已见红**：首轮 crash retry 回归暴露 duplicate transport audit（2，修成复用原 audit 后为 1）；publication gate 在 system row 尚未发布时拒绝 lease；旧 handler tests 因把 channel 当成“只有业务消息”而被新增 canonical membership row 打红，消费者改为按目标消息/语义断言；draft freshness 回归也证明 joined row 会进入真实 recent context，不能继续沿用旧消息数量假设。
 
+### 1.5 Standalone chat 与 channel transport 不得混路由 — `可执行`（⑤，owner: @AIhpJ ✅ 已签）
+- **判据**：`chat_session` 有 `channel_agent_session` / claim `channel_id` → 可见回复只走 task-scoped `multica message send|react`；没有 `channel_id` → final assistant output 自动写回当前 standalone session。DM 页面上的 isolated agent bubble 仍属于后者，页面位置不构成 DM transport target。
+- **禁止**：standalone reply 不得枚举 workspace members、猜 DM handle、找 channel 或试 transport token；需要贴纸时以结构化 final sticker envelope 落 `parts[]`。只有用户明确要求联系另一个 destination，才允许显式 target 的主动发送。
+- **为什么**：#1167 为隔离 group wake 刻意不建 `channel_agent_session`；若 runtime brief 仍统一宣称“final output 不可见，只能 CLI send”，简单 greeting 会进入无解 target 探测循环。
+- **物**：`buildChatPrompt` + `renderChatRuntimeBrief` 按 `channel_id` 分流；`multica-stickers` 同步两种路径；`TestBuildChatPromptStandaloneDeliveryContract`、`TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery`、`TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery` 与 sticker unwrap 回归。
+- **已见红**：修复前 standalone prompt/runtime brief 均缺自动回传合同且继续注入 CLI-only 规则，sticker skill 只教无 target 的 `message send`；四个回归分别按这些缺口失败，channel-bound 对照仍保留 transport 合同。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）

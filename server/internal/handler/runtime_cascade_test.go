@@ -209,6 +209,43 @@ func TestArchiveAgentsAndDeleteRuntime_HappyPath(t *testing.T) {
 	}
 }
 
+// TestArchiveAgentsAndDeleteRuntime_RemovesSquadsLedByArchivedAgents covers
+// Computer bulk delete: agents archived by the cascade can lead legacy squads,
+// and those squad rows must not block runtime teardown.
+func TestArchiveAgentsAndDeleteRuntime_RemovesSquadsLedByArchivedAgents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	runtimeID := createCascadeFixtureRuntime(t, ctx, "Cascade Squad Cleanup Runtime")
+	agentID := createCascadeFixtureAgent(t, ctx, runtimeID, "Cascade Squad Cleanup Agent")
+	activeSquad := seedSquad(t, agentID, "Cascade Active Squad Cleanup", false)
+	archivedSquad := seedSquad(t, agentID, "Cascade Archived Squad Cleanup", true)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/runtimes/"+runtimeID+"/archive-agents-and-delete",
+		map[string]any{"expected_active_agent_ids": []string{agentID}})
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ArchiveAgentsAndDeleteRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if squadExists(t, activeSquad) {
+		t.Errorf("active squad led by archived cascade agent should have been deleted")
+	}
+	if squadExists(t, archivedSquad) {
+		t.Errorf("archived squad led by archived cascade agent should have been deleted")
+	}
+	if agentExists(t, agentID) {
+		t.Errorf("cascade agent should have been archived then hard-deleted")
+	}
+	if runtimeExists(t, runtimeID) {
+		t.Errorf("runtime should have been deleted")
+	}
+}
+
 // TestArchiveAgentsAndDeleteRuntime_PlanChanged proves the dialog-confirm
 // race guard: if the user's snapshot of active agents drifts from the live
 // set (somebody added or archived an agent while the dialog was open), the

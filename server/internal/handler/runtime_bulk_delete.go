@@ -94,22 +94,6 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	for _, rt := range runtimes {
-		activeSquadCount, err := h.Queries.CountActiveSquadsWithArchivedLeadersByRuntime(r.Context(), rt.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to check runtime squad dependencies")
-			return
-		}
-		if activeSquadCount > 0 {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":     "cannot delete computer: it has active squads led by archived agents. Archive those squads or assign them a new leader first.",
-				"code":      "computer_has_active_squads",
-				"daemon_id": daemonID,
-			})
-			return
-		}
-	}
-
 	runtimeIDs := make([]pgtype.UUID, len(runtimes))
 	for i, rt := range runtimes {
 		runtimeIDs[i] = rt.ID
@@ -220,9 +204,8 @@ func runtimeSummaries(runtimes []db.AgentRuntime) []map[string]string {
 }
 
 // teardownRuntimeWithoutActiveAgents runs the shared delete path for a
-// runtime that has already been verified to have zero active agents and
-// zero blocking archived-leader squads. Caller owns the transaction and
-// any row locks.
+// runtime that has already been verified to have zero active agents. Caller
+// owns the transaction and any row locks.
 func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx pgx.Tx, runtimeID pgtype.UUID) error {
 	archivedAgentIDs, err := qtx.ListArchivedAgentIDsByRuntime(ctx, runtimeID)
 	if err != nil {

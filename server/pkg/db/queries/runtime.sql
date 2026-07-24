@@ -246,14 +246,6 @@ DELETE FROM agent_runtime WHERE id = $1 AND workspace_id = $2;
 -- name: CountActiveAgentsByRuntime :one
 SELECT count(*) FROM agent WHERE runtime_id = $1 AND archived_at IS NULL;
 
--- name: CountActiveSquadsWithArchivedLeadersByRuntime :one
-SELECT count(*)
-FROM squad
-WHERE archived_at IS NULL
-  AND leader_id IN (
-    SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
-  );
-
 -- name: DeleteArchivedAgentsByRuntime :exec
 DELETE FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL;
 
@@ -277,16 +269,15 @@ WHERE status = 'active'
 SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL;
 
 -- name: DeleteSquadsByArchivedAgentsOnRuntime :exec
--- Removes archived squads whose leader_id references an archived agent on the
--- given runtime. Must run before DeleteArchivedAgentsByRuntime so the RESTRICT
--- FK on squad.leader_id does not block the agent deletion. Active squads are
--- handled separately by CountActiveSquadsWithArchivedLeadersByRuntime, which
--- returns a 409 until the caller archives them or assigns a new leader.
+-- Removes squads whose leader_id references an archived agent on the given
+-- runtime. Must run before DeleteArchivedAgentsByRuntime so the RESTRICT FK on
+-- squad.leader_id does not block the agent deletion. Squad is legacy surface;
+-- active and archived squads led by agents already archived on this runtime are
+-- teardown-owned references.
 DELETE FROM squad
 WHERE leader_id IN (
     SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
-)
-  AND archived_at IS NOT NULL;
+);
 
 -- name: FindLegacyRuntimesByDaemonID :many
 -- Looks up runtime rows keyed on a prior (hostname-derived) daemon_id. Used

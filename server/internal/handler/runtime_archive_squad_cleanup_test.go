@@ -4,19 +4,17 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
-// These tests cover the squad-cleanup step added to DeleteAgentRuntime:
-// archived agents on a torn-down runtime can still be referenced
-// as leaders of squads (including archived ones), and the squad.leader_id
-// FK is ON DELETE RESTRICT, so the subsequent DELETE FROM agent would fail.
-// The fix runs DeleteSquadsByArchivedAgentsOnRuntime first to drop archived
-// squads referencing archived leaders, unblocking the agent delete in the
-// originally reported case.
+// These tests cover the squad-cleanup step added to runtime teardown:
+// archived agents on a torn-down runtime can still be referenced as squad
+// leaders, and squad.leader_id is ON DELETE RESTRICT, so the subsequent
+// DELETE FROM agent would fail. Runtime teardown now drops squads led by
+// archived agents first, regardless of whether the squad row is active or
+// archived, because Squad is legacy surface.
 
 // seedIsolatedRuntime creates a fresh runtime in the shared test workspace
 // (so the seeded test user is owner/admin and passes canEditRuntime), and
@@ -142,10 +140,9 @@ func runtimeExists(t *testing.T, runtimeID string) bool {
 }
 
 // TestDeleteSquadsByArchivedAgentsOnRuntime_Query exercises the new query in
-// isolation. It has to delete archived squads whose leader is an archived
-// agent on the target runtime, AND only those — active squads, squads led by
-// active agents, or squads led by archived agents on a different runtime,
-// must be left alone.
+// isolation. It has to delete squads whose leader is an archived agent on
+// the target runtime, AND only those — squads led by active agents, or squads
+// led by archived agents on a different runtime, must be left alone.
 func TestDeleteSquadsByArchivedAgentsOnRuntime_Query(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -165,8 +162,8 @@ func TestDeleteSquadsByArchivedAgentsOnRuntime_Query(t *testing.T) {
 	archivedOnB := seedAgentOnRuntime(t, runtimeB, "ArchivedOnB", true)
 
 	// Squads:
-	//  - activeSquadA: archived leader on A, squad itself active     -> keep
-	//  - archivedSquadA: archived leader on A, squad itself archived -> delete (the bug)
+	//  - activeSquadA: archived leader on A, squad itself active     -> delete
+	//  - archivedSquadA: archived leader on A, squad itself archived -> delete
 	//  - keptActiveLeader: active leader on A                        -> keep
 	//  - keptDifferentRuntime: archived leader but on B              -> keep
 	activeSquadOnA := seedSquad(t, archivedOnA, "Active Squad On Runtime A", false)
@@ -181,8 +178,8 @@ func TestDeleteSquadsByArchivedAgentsOnRuntime_Query(t *testing.T) {
 		t.Fatalf("DeleteSquadsByArchivedAgentsOnRuntime: %v", err)
 	}
 
-	if !squadExists(t, activeSquadOnA) {
-		t.Errorf("active squad with archived leader on target runtime must NOT be deleted")
+	if squadExists(t, activeSquadOnA) {
+		t.Errorf("active squad with archived leader on target runtime should be deleted")
 	}
 	if squadExists(t, archivedSquadOnA) {
 		t.Errorf("archived squad with archived leader on target runtime should be deleted (this is the bug case)")
@@ -220,16 +217,15 @@ func TestDeleteSquadsByArchivedAgentsOnRuntime_Query(t *testing.T) {
 // agents" because squad.leader_id REFERENCES agent(id) ON DELETE RESTRICT
 // blocked the DELETE FROM agent step. With the squad-cleanup step in front
 // of the agent-cleanup, the delete succeeds.
-func TestDeleteAgentRuntime_RemovesArchivedSquadsLedByArchivedAgents(t *testing.T) {
+func TestDeleteAgentRuntime_RemovesSquadsLedByArchivedAgents(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	runtimeID := seedIsolatedRuntime(t, "Runtime With Archived Squad Leader")
 	archivedLeader := seedAgentOnRuntime(t, runtimeID, "Archived Squad Leader Agent", true)
-	// Use an *archived* squad — that's the case the user originally hit, and
-	// it's the one that's invisible from `multica squad list`.
 	archivedSquad := seedSquad(t, archivedLeader, "Archived Squad For Runtime Delete", true)
+	activeSquad := seedSquad(t, archivedLeader, "Active Squad For Runtime Delete", false)
 
 	w := httptest.NewRecorder()
 	req := newRequest("DELETE", "/api/runtimes/"+runtimeID, nil)
@@ -240,7 +236,10 @@ func TestDeleteAgentRuntime_RemovesArchivedSquadsLedByArchivedAgents(t *testing.
 	}
 
 	if squadExists(t, archivedSquad) {
-		t.Errorf("squad led by archived agent on the runtime should have been deleted")
+		t.Errorf("archived squad led by archived agent on the runtime should have been deleted")
+	}
+	if squadExists(t, activeSquad) {
+		t.Errorf("active squad led by archived agent on the runtime should have been deleted")
 	}
 	if agentExists(t, archivedLeader) {
 		t.Errorf("archived agent on the runtime should have been deleted")
@@ -250,11 +249,10 @@ func TestDeleteAgentRuntime_RemovesArchivedSquadsLedByArchivedAgents(t *testing.
 	}
 }
 
-// TestDeleteAgentRuntime_ActiveSquadWithArchivedLeaderReturnsConflict covers
-// the remaining reachable state from the public API: an active squad led by
-// an archived agent. Runtime delete must fail cleanly with a 409 before the
-// later archived-agent delete trips the RESTRICT FK and leaks a 500.
-func TestDeleteAgentRuntime_ActiveSquadWithArchivedLeaderReturnsConflict(t *testing.T) {
+// TestDeleteAgentRuntime_ActiveSquadWithArchivedLeaderIsCleaned covers the
+// reachable legacy state: an active squad led by an already archived agent is
+// now treated as teardown-owned cleanup, not a 409 blocker.
+func TestDeleteAgentRuntime_ActiveSquadWithArchivedLeaderIsCleaned(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -267,29 +265,26 @@ func TestDeleteAgentRuntime_ActiveSquadWithArchivedLeaderReturnsConflict(t *test
 	req := newRequest("DELETE", "/api/runtimes/"+runtimeID, nil)
 	req = withURLParam(req, "runtimeId", runtimeID)
 	testHandler.DeleteAgentRuntime(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("DeleteAgentRuntime: expected 409 archived-leader squad guard, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "active squads led by archived agents") {
-		t.Fatalf("DeleteAgentRuntime: expected actionable archived-leader squad message, got body %s", w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteAgentRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	if !squadExists(t, activeSquad) {
-		t.Errorf("active squad must NOT have been deleted by a refused runtime delete")
+	if squadExists(t, activeSquad) {
+		t.Errorf("active squad led by archived agent should have been deleted")
 	}
-	if !agentExists(t, archivedLeader) {
-		t.Errorf("archived leader must NOT have been deleted by a refused runtime delete")
+	if agentExists(t, archivedLeader) {
+		t.Errorf("archived leader should have been deleted")
 	}
-	if !runtimeExists(t, runtimeID) {
-		t.Errorf("runtime must NOT have been deleted by a refused delete")
+	if runtimeExists(t, runtimeID) {
+		t.Errorf("runtime should have been deleted")
 	}
 }
 
-// TestDeleteAgentRuntime_ArchivedAndActiveSquadsReturnConflictWithoutDeletes
-// pins the combination case from review: if the same archived leader is
-// referenced by both an archived squad and an active squad on the runtime, the
-// handler must return 409 before deleting either squad.
-func TestDeleteAgentRuntime_ArchivedAndActiveSquadsReturnConflictWithoutDeletes(t *testing.T) {
+// TestDeleteAgentRuntime_ArchivedAndActiveSquadsAreCleaned pins the
+// combination case: if the same archived leader is referenced by both an
+// archived squad and an active squad on the runtime, both squad rows are
+// cleaned during runtime teardown.
+func TestDeleteAgentRuntime_ArchivedAndActiveSquadsAreCleaned(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -303,24 +298,21 @@ func TestDeleteAgentRuntime_ArchivedAndActiveSquadsReturnConflictWithoutDeletes(
 	req := newRequest("DELETE", "/api/runtimes/"+runtimeID, nil)
 	req = withURLParam(req, "runtimeId", runtimeID)
 	testHandler.DeleteAgentRuntime(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("DeleteAgentRuntime: expected 409 archived-leader squad guard, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "active squads led by archived agents") {
-		t.Fatalf("DeleteAgentRuntime: expected actionable archived-leader squad message, got body %s", w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteAgentRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	if !squadExists(t, archivedSquad) {
-		t.Errorf("archived squad must NOT have been deleted by a refused runtime delete")
+	if squadExists(t, archivedSquad) {
+		t.Errorf("archived squad should have been deleted")
 	}
-	if !squadExists(t, activeSquad) {
-		t.Errorf("active squad must NOT have been deleted by a refused runtime delete")
+	if squadExists(t, activeSquad) {
+		t.Errorf("active squad should have been deleted")
 	}
-	if !agentExists(t, archivedLeader) {
-		t.Errorf("archived leader must NOT have been deleted by a refused runtime delete")
+	if agentExists(t, archivedLeader) {
+		t.Errorf("archived leader should have been deleted")
 	}
-	if !runtimeExists(t, runtimeID) {
-		t.Errorf("runtime must NOT have been deleted by a refused delete")
+	if runtimeExists(t, runtimeID) {
+		t.Errorf("runtime should have been deleted")
 	}
 }
 

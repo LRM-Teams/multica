@@ -127,12 +127,39 @@ func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.Agent
 }
 
 // closeTrainedSegmentForTerminal handles the AReaL bridge path for a training task.
+//
+// T9: a trained task's segment is closed at the handoff point — when the agent
+// finishes and its channel message @-mentions other agents (child tasks exist).
+// When the agent finishes without @-mentions (no child tasks), the segment is
+// left open and closed later by the all-agents-idle end-session sweep.
 func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task db.AgentInboxEvent, projectID string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	runID := util.UUIDToString(task.ID)
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
 		return // already closed via an earlier delegation
 	}
-	closingEvent := "" // leaf (no parent)
+
+	// T9: only close the segment when this task delegated to other agents
+	// (its channel message had @-mentions — child tasks exist).  If it
+	// finished without handoff, leave the segment open for the end-session
+	// sweep (all-agents-idle → close remaining segments → end session).
+	// When Queries is nil (test harness), fall back to the legacy behaviour:
+	// always close the segment — tests can inject their own DAG assertions.
+	leaf := false
+	if s.Queries != nil {
+		childCount, err := s.Queries.CountChildTasks(ctx, task.ID)
+		if err != nil {
+			slog.Warn("interaction_dag: count child tasks failed", "task_id", runID, "err", err)
+			return
+		}
+		if childCount == 0 {
+			leaf = true
+		}
+	}
+	if leaf {
+		return // leaf task, no @-mentions — segment stays open
+	}
+
+	closingEvent := "" // leaf (root completion) by default
 	if task.ParentTaskID.Valid {
 		closingEvent = closingEventCompletion
 	}

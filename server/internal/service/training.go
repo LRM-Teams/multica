@@ -497,6 +497,69 @@ func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.Age
 	maybeCloseTrainingSession(ctx, s.Training, task, projectID)
 }
 
+// maybeSweepIdleTrainingSessions checks whether all training agents in the
+// project are idle (no non-terminal inbox events remain).  When idle, it sweeps
+// any remaining open segments (close_segment) and ends the RL session.
+//
+// T10: triggered when a leaf task completes without @-mentions.  If all agents
+// are now idle (conversation naturally ended), close remaining segments and end
+// sessions — the training episode is complete.
+func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDeps, q *db.Queries, task db.AgentInboxEvent, projectID pgtype.UUID) error {
+	if deps == nil {
+		return nil
+	}
+	if !projectID.Valid {
+		return nil
+	}
+	activeCount, err := q.CountActiveTrainingTasks(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("training: count active tasks: %w", err)
+	}
+	if activeCount > 0 {
+		return nil // other agents still working — not idle yet
+	}
+	// All trainable agents are idle.  Close the triggering task's session
+	// (the sweep target) as the final bookend.
+	cfg, ok := extractArealProxyConfig(task.Context)
+	if !ok {
+		return nil
+	}
+	// Close any still-open segment (one that wasn't closed by a delegation
+	// handoff).  Best-effort: errors are logged but don't block session close.
+	if deps.DAG != nil && deps.DAG.Enabled() {
+		runID := util.UUIDToString(task.ID)
+		if existing, segErr := deps.DAG.SegmentIDForAgentRun(ctx, runID); segErr != nil || existing == "" {
+			if _, clsErr := deps.DAG.CloseSegmentForEvent(ctx, util.UUIDToString(projectID), cfg.SessionID, cfg.APIKey, "", nil); clsErr != nil {
+				slog.Warn("training: idle-sweep segment close failed",
+					"task_id", runID,
+					"session_id", cfg.SessionID,
+					"error", clsErr,
+				)
+			}
+		}
+	}
+	reward := 0.0
+	if task.Status == "completed" {
+		reward = 1.0
+	}
+	if rErr := deps.Closer.SetReward(ctx, cfg.APIKey, reward); rErr != nil {
+		slog.Warn("training: idle-sweep set_reward failed",
+			"task_id", util.UUIDToString(task.ID),
+			"error", rErr,
+		)
+	}
+	if eErr := deps.Closer.EndSession(ctx, cfg.APIKey); eErr != nil {
+		return fmt.Errorf("training: idle-sweep end_session: %w", eErr)
+	}
+	slog.Info("training session swept (all agents idle)",
+		"task_id", util.UUIDToString(task.ID),
+		"project_id", util.UUIDToString(projectID),
+		"session_id", cfg.SessionID,
+	)
+	return nil
+}
+
+
 // RouteTerminalTrainingTask is the terminal-transition routing hook invoked at
 // complete/fail/cancel. When the terminating task is itself a critic task
 // (carries context.critic_of), T8 closes the trained session using the critic's
@@ -642,8 +705,27 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 	// for the root training task (agent_id == train_agent_id).
 	maybeDiagnoseProject(ctx, s.Training, task, projectID, dispatch)
 	if !dispatch.CriticAgentID.Valid {
-		// No critic configured → D's close fires.
-		maybeCloseTrainingSession(ctx, s.Training, task, projectID)
+		// T10: when the terminal task has children (delegated via @-mentions),
+		// close the session immediately (handoff point).  When it has no
+		// children (leaf — finished without @-mentions), defer the close and
+		// check whether all training agents are now idle; if so, sweep
+		// remaining segments and end sessions for all.
+		childCount, cErr := s.Queries.CountChildTasks(ctx, task.ID)
+		if cErr != nil {
+			slog.Warn("training: count child tasks failed", "task_id", util.UUIDToString(task.ID), "err", cErr)
+		}
+		if cErr != nil || childCount > 0 {
+			// Delegated: close immediately (handoff point).
+			maybeCloseTrainingSession(ctx, s.Training, task, projectID)
+			return
+		}
+		// Leaf: check all-idle → sweep remaining segments + end sessions.
+		if sweepErr := maybeSweepIdleTrainingSessions(ctx, s.Training, s.Queries, task, projectID); sweepErr != nil {
+			slog.Warn("training: idle sweep failed",
+				"task_id", util.UUIDToString(task.ID),
+				"project_id", util.UUIDToString(projectID),
+				"error", sweepErr)
+		}
 		return
 	}
 	// Critic configured → spawn (or skip if already exists). Spawn failure

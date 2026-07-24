@@ -1,0 +1,2 @@
+-- Data-only policy migration. Restoring longer patrol times would recreate
+-- stale schedules and is intentionally not reversible.

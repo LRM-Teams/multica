@@ -1960,9 +1960,9 @@ func TestBuildMetaSkillContentUsesStructuralManagedRole(t *testing.T) {
 		!strings.Contains(withRole, "Prefer private coordination for one recipient") ||
 		!strings.Contains(withRole, "system events plus their directed wakes already own work delivery") ||
 		!strings.Contains(withRole, "never duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands") ||
-		!strings.Contains(withRole, "--delay-seconds <900..86400>") ||
+		!strings.Contains(withRole, "within the bounds supplied by that patrol wake") ||
 		!strings.Contains(withRole, "never create a second patrol") ||
-		!strings.Contains(withRole, "24-hour fallback") {
+		!strings.Contains(withRole, "failure fallback") {
 		t.Fatalf("managed group manager brief missing structural role contract: %q", withRole)
 	}
 	withoutRole := buildMetaSkillContent("codex", TaskContextForEnv{

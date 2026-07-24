@@ -178,6 +178,149 @@ func TestGroupManagerRemindersMigration221DownRestoresEmptyLegacyTable(t *testin
 	}
 }
 
+func TestGroupManagerPatrolIntervalsMigration222CapsManagedSchedulesOnly(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, _ := createPre221ManagedReminderSchema(t, ctx, pool)
+	defer conn.Release()
+	seedPre221ManagedReminderRows(t, ctx, conn, "pending")
+
+	if _, err := conn.Exec(ctx, readManagedReminderMigrationSQL(t, "221_group_manager_reminders.up.sql")); err != nil {
+		t.Fatalf("apply migration 221 up: %v", err)
+	}
+
+	var fallbackReminderID string
+	if err := conn.QueryRow(ctx, `
+		UPDATE agent_reminder
+		SET fire_at = now() + interval '24 hours'
+		WHERE origin_kind = 'group_manager_auto'
+		RETURNING id
+	`).Scan(&fallbackReminderID); err != nil {
+		t.Fatalf("prepare fallback schedule: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO agent_reminder_lifecycle_event (
+		  reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
+		  next_fire_at, title_snapshot, resulting_state, reason_code
+		)
+		SELECT
+		  id, workspace_id, agent_id, 'fired', 'system', agent_id,
+		  fire_at, title, 'scheduled', 'patrol_failure_fallback_rearmed'
+		FROM agent_reminder
+		WHERE id = $1
+	`, fallbackReminderID); err != nil {
+		t.Fatalf("seed fallback lifecycle: %v", err)
+	}
+
+	const adaptiveReminderID = "91000000-0000-4000-8000-000000000222"
+	const ordinaryReminderID = "92000000-0000-4000-8000-000000000222"
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO agent (
+		  id, workspace_id, runtime_id, managed_role
+		) VALUES (
+		  '31000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219',
+		  '60000000-0000-4000-8000-000000000219',
+		  'group_manager'
+		);
+		INSERT INTO channel (
+		  id, workspace_id, kind, created_by, group_manager_agent_id
+		) VALUES (
+		  '51000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219',
+		  'group',
+		  '20000000-0000-4000-8000-000000000219',
+		  '31000000-0000-4000-8000-000000000222'
+		);
+		INSERT INTO agent_reminder (
+		  id, workspace_id, agent_id, initiator_user_id, title,
+		  anchor_channel_id, fire_at, origin_kind, managed_kind, origin_key
+		) VALUES (
+		  '91000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219',
+		  '31000000-0000-4000-8000-000000000222',
+		  '20000000-0000-4000-8000-000000000219',
+		  'adaptive patrol',
+		  '51000000-0000-4000-8000-000000000222',
+		  now() + interval '24 hours',
+		  'group_manager_auto', 'patrol',
+		  'patrol:51000000-0000-4000-8000-000000000222'
+		);
+		INSERT INTO agent_reminder_lifecycle_event (
+		  reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
+		  next_fire_at, title_snapshot, resulting_state, reason_code
+		) VALUES (
+		  '91000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219',
+		  '31000000-0000-4000-8000-000000000222',
+		  'snoozed', 'agent',
+		  '31000000-0000-4000-8000-000000000222',
+		  now() + interval '24 hours',
+		  'adaptive patrol', 'scheduled',
+		  'patrol_replanned_by_natural_language'
+		);
+
+		INSERT INTO agent_reminder (
+		  id, workspace_id, agent_id, initiator_user_id, title,
+		  anchor_channel_id, fire_at
+		) VALUES (
+		  '92000000-0000-4000-8000-000000000222',
+		  '10000000-0000-4000-8000-000000000219',
+		  '31000000-0000-4000-8000-000000000222',
+		  '20000000-0000-4000-8000-000000000219',
+		  'ordinary reminder',
+		  '51000000-0000-4000-8000-000000000222',
+		  now() + interval '24 hours'
+		)
+	`); err != nil {
+		t.Fatalf("seed pre-222 schedules: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, readManagedReminderMigrationSQL(t, "222_group_manager_patrol_intervals.up.sql")); err != nil {
+		t.Fatalf("apply migration 222 up: %v", err)
+	}
+
+	var fallbackSeconds, adaptiveSeconds, ordinarySeconds int64
+	if err := conn.QueryRow(ctx, `
+		SELECT
+		  extract(epoch FROM ((SELECT fire_at FROM agent_reminder WHERE id = $1) - now()))::bigint,
+		  extract(epoch FROM ((SELECT fire_at FROM agent_reminder WHERE id = $2) - now()))::bigint,
+		  extract(epoch FROM ((SELECT fire_at FROM agent_reminder WHERE id = $3) - now()))::bigint
+	`, fallbackReminderID, adaptiveReminderID, ordinaryReminderID).Scan(
+		&fallbackSeconds, &adaptiveSeconds, &ordinarySeconds,
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertDelayNear := func(name string, got int64, want time.Duration) {
+		t.Helper()
+		wantSeconds := int64(want / time.Second)
+		if got < wantSeconds-60 || got > wantSeconds+60 {
+			t.Fatalf("%s delay=%ds, want near %s", name, got, want)
+		}
+	}
+	assertDelayNear("fallback", fallbackSeconds, 12*time.Hour)
+	assertDelayNear("adaptive", adaptiveSeconds, 8*time.Hour)
+	assertDelayNear("ordinary", ordinarySeconds, 24*time.Hour)
+
+	var fallbackEvents, adaptiveEvents, ordinaryEvents int
+	if err := conn.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE reminder_id = $1 AND reason_code = 'patrol_failure_fallback_cap_migrated'),
+		  count(*) FILTER (WHERE reminder_id = $2 AND reason_code = 'patrol_adaptive_cap_migrated'),
+		  count(*) FILTER (WHERE reminder_id = $3)
+		FROM agent_reminder_lifecycle_event
+	`, fallbackReminderID, adaptiveReminderID, ordinaryReminderID).Scan(
+		&fallbackEvents, &adaptiveEvents, &ordinaryEvents,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if fallbackEvents != 1 || adaptiveEvents != 1 || ordinaryEvents != 0 {
+		t.Fatalf("migration lifecycle fallback/adaptive/ordinary=%d/%d/%d, want 1/1/0",
+			fallbackEvents, adaptiveEvents, ordinaryEvents)
+	}
+}
+
 func createPre221ManagedReminderSchema(
 	t *testing.T,
 	ctx context.Context,

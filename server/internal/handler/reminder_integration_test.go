@@ -409,7 +409,8 @@ func TestManagedPatrolWakePromptRequiresAdaptiveReplanAndJudgmentWithoutMechanic
 	for _, want := range []string{
 		"managed adaptive group patrol reminder",
 		"replan this same reminder",
-		"900 to 86400 seconds",
+		"900 to 28800 seconds",
+		"12-hour failure fallback",
 		"Never create a second patrol reminder",
 		"Act as a normal group member",
 		"Prefer private coordination for one recipient",
@@ -1986,11 +1987,11 @@ func TestReminderNaturalLanguageMutationAuthorizationAndManagedPatrolReEnable(t 
 		}
 
 		setReminderModernTransportInitiator(t, fixture, testUserID)
-		for _, delay := range []int{899, 86401} {
+		for _, delay := range []int{899, 28801} {
 			rec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/update", map[string]any{
 				"id": reminderID, "delay_seconds": delay,
 			})
-			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "between 15 minutes and 24 hours") {
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "between 15 minutes and 8 hours") {
 				t.Fatalf("managed patrol guardrail delay=%d status=%d body=%s", delay, rec.Code, rec.Body.String())
 			}
 		}

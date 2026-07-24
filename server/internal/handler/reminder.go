@@ -23,7 +23,8 @@ const (
 	reminderMaxDelay           = 90 * 24 * time.Hour
 	reminderActiveCap          = 25
 	managedPatrolMinDelay      = 15 * time.Minute
-	managedPatrolFallbackDelay = 24 * time.Hour
+	managedPatrolMaxDelay      = 8 * time.Hour
+	managedPatrolFallbackDelay = 12 * time.Hour
 )
 
 var errReminderDaemonOutdated = fmt.Errorf("daemon_outdated")
@@ -98,8 +99,8 @@ func (h *Handler) authorizeNaturalLanguageReminderMutation(
 
 func validateManagedPatrolNextFireAt(now, fireAt time.Time) error {
 	delay := fireAt.Sub(now)
-	if delay < managedPatrolMinDelay || delay > managedPatrolFallbackDelay {
-		return fmt.Errorf("managed group patrol must be scheduled between 15 minutes and 24 hours in the future")
+	if delay < managedPatrolMinDelay || delay > managedPatrolMaxDelay {
+		return fmt.Errorf("managed group patrol must be scheduled between 15 minutes and 8 hours in the future")
 	}
 	return nil
 }
@@ -1944,7 +1945,7 @@ func buildManagedPatrolPrompt(ch ChannelResponse, reminder agentReminder, occurr
 	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
 	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
 	fmt.Fprintf(&b, "Group: #%s\n", ch.Name)
-	b.WriteString("Inspect the group's current messages, issues, tasks, ownership, commitments, and recent progress now. Decide whether coordination is needed and when this exact patrol should wake next. Before finishing, replan this same reminder with `multica reminder snooze --id <reminder-id> --delay-seconds <seconds>` using 900 to 86400 seconds: choose about 15 minutes after a fresh assignment or near-term promise, longer while work is progressing, and up to 24 hours only when no near-term follow-up exists. Never create a second patrol reminder; the server has already installed a 24-hour failure fallback for this definition.\n")
+	b.WriteString("Inspect the group's current messages, issues, tasks, ownership, commitments, and recent progress now. Decide whether coordination is needed and when this exact patrol should wake next. Before finishing, replan this same reminder with `multica reminder snooze --id <reminder-id> --delay-seconds <seconds>` using 900 to 28800 seconds: choose about 15 minutes after a fresh assignment or near-term promise, longer while work is progressing, and up to 8 hours only when no near-term follow-up exists. Never create a second patrol reminder; the server has already installed a 12-hour failure fallback for this definition.\n")
 	b.WriteString("Act as a normal group member and speak only when the current context genuinely merits coordination. Prefer private coordination for one recipient and minimize group noise; use the related group or thread only when shared visibility or multiple participants are necessary. Issue creation, assignment, and status system events plus their directed wakes already own work delivery. Do not duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands. If no action is needed, send no visible message and only replan the patrol.\n")
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")

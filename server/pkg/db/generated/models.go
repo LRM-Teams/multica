@@ -1362,22 +1362,3 @@ type WorkEdge struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
-
-type PendingHandoff struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	Urgency         string             `json:"urgency"`
-	ReasonCode      string             `json:"reason_code"`
-	TargetActorType string             `json:"target_actor_type"`
-	TargetActorID   pgtype.UUID        `json:"target_actor_id"`
-	RelatedNodeIds  []pgtype.UUID      `json:"related_node_ids"`
-	ChannelID       pgtype.UUID        `json:"channel_id"`
-	IssueID         pgtype.UUID        `json:"issue_id"`
-	DedupeKey       string             `json:"dedupe_key"`
-	NotBefore       pgtype.Timestamptz `json:"not_before"`
-	Status          string             `json:"status"`
-	ClaimToken      pgtype.UUID        `json:"claim_token"`
-	ClaimedAt       pgtype.Timestamptz `json:"claimed_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-}

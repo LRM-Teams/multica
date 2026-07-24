@@ -240,6 +240,9 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: existingID, WorkspaceID: workspaceID}); err == nil && !agent.ArchivedAt.Valid {
 			agent = h.refreshGroupManagerIfStale(ctx, agent)
 			h.ensureChannelAgentMember(ctx, workspaceID, channelID, agent.ID)
+			if err := h.ensureGroupManagerPatrolIfNeverCreated(ctx, workspaceID, channelID, agent.ID, creatorUserID); err != nil {
+				return db.Agent{}, false, err
+			}
 			return agent, false, nil
 		}
 	}
@@ -302,6 +305,9 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		_, _ = h.DB.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agent.ID)
 		if existing, rerr := h.currentGroupManagerAgent(ctx, workspaceID, channelID); rerr == nil {
 			h.ensureChannelAgentMember(ctx, workspaceID, channelID, existing.ID)
+			if err := h.ensureGroupManagerPatrolIfNeverCreated(ctx, workspaceID, channelID, existing.ID, creatorUserID); err != nil {
+				return db.Agent{}, false, err
+			}
 			return existing, false, nil
 		}
 		return db.Agent{}, false, errors.New("group manager binding lost and no live manager present")
@@ -310,6 +316,9 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		return db.Agent{}, false, err
 	}
 	h.ensureChannelAgentMember(ctx, workspaceID, channelID, agent.ID)
+	if err := h.ensureGroupManagerPatrolIfNeverCreated(ctx, workspaceID, channelID, agent.ID, creatorUserID); err != nil {
+		return db.Agent{}, false, err
+	}
 	return agent, true, nil
 }
 

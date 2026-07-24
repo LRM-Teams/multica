@@ -99,8 +99,8 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 	}
 
 	// Syncing a prerequisite only sees edges that mention that issue. Expand
-	// each discovered waiter to its full dependency set so DetectUnlock never
-	// treats a partial graph as fully unlocked.
+	// each discovered waiter to its full dependency set so the stored graph
+	// never treats a partial dependency set as complete.
 	for _, waiter := range mapsValues(waiters) {
 		if !waiter.node.LinkedIssueID.Valid || waiter.node.LinkedIssueID == issueID {
 			continue

@@ -24,7 +24,7 @@ func TestEnsureGroupManagerForChannelProvisionsOne(t *testing.T) {
 	var rtID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{"capabilities":["reminder_versioned_cache_v1"]}'::jsonb, now())
 		RETURNING id
 	`, testWorkspaceID, testUserID, "beckham-rt-"+uuid.NewString()).Scan(&rtID); err != nil {
 		t.Fatalf("seed runtime: %v", err)
@@ -132,7 +132,7 @@ func TestEnsureGroupManagerAcrossTwoChannelsSucceeds(t *testing.T) {
 	var rtID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{"capabilities":["reminder_versioned_cache_v1"]}'::jsonb, now())
 		RETURNING id
 	`, testWorkspaceID, testUserID, "beckham-rt2-"+uuid.NewString()).Scan(&rtID); err != nil {
 		t.Fatalf("seed runtime: %v", err)
@@ -169,7 +169,7 @@ func TestEnsureGroupManagerRefreshesStalePersona(t *testing.T) {
 	var rtID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{"capabilities":["reminder_versioned_cache_v1"]}'::jsonb, now())
 		RETURNING id
 	`, testWorkspaceID, testUserID, "beckham-rt3-"+uuid.NewString()).Scan(&rtID); err != nil {
 		t.Fatalf("seed runtime: %v", err)
@@ -215,7 +215,7 @@ func TestAddChannelMemberRejectsGroupManager(t *testing.T) {
 	var rtID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{"capabilities":["reminder_versioned_cache_v1"]}'::jsonb, now())
 		RETURNING id
 	`, testWorkspaceID, testUserID, "beckham-rt4-"+uuid.NewString()).Scan(&rtID); err != nil {
 		t.Fatalf("seed runtime: %v", err)
@@ -280,7 +280,7 @@ func TestCreateChannelDoesNotAutoProvisionGroupManager(t *testing.T) {
 	var rtID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{"capabilities":["reminder_versioned_cache_v1"]}'::jsonb, now())
 		RETURNING id
 	`, testWorkspaceID, testUserID, "beckham-rt-noauto-"+uuid.NewString()).Scan(&rtID); err != nil {
 		t.Fatalf("seed runtime: %v", err)

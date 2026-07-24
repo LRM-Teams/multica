@@ -74,6 +74,7 @@ type TaskContextForEnv struct {
 
 	AgentID             string // unique ID of the dispatched agent
 	AgentName           string
+	ManagedRole         string // structural platform-managed role; never inferred from display name
 	AgentInstructions   string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentRoot           string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
 	AgentMemoryDir      string // Multica-scoped memory root (PI_MEMORY_DIR), when available

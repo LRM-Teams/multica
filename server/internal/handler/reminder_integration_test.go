@@ -66,6 +66,53 @@ func seedDueReminder(t *testing.T, agentID, channelID, messageID, cadence, timez
 	return reminderID
 }
 
+func seedDueManagedPatrol(t *testing.T, fixture channelAgentRuntimeFixture) string {
+	t.Helper()
+	if len(fixture.agentIDs) < 1 {
+		t.Fatal("managed reminder fixture requires a manager")
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`,
+		fixture.agentIDs[0]); err != nil {
+		t.Fatalf("mark managed group manager: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE channel SET group_manager_agent_id = $1 WHERE id = $2`,
+		fixture.agentIDs[0], fixture.channel.ID); err != nil {
+		t.Fatalf("bind group manager channel: %v", err)
+	}
+	due := time.Now().UTC().Add(-time.Minute)
+	var reminderID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_reminder (
+		  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
+		  fire_at, cadence, cadence_next_at, origin_kind, managed_kind,
+		  origin_key
+		) VALUES (
+		  $1, $2, $3, 'managed patrol', $4, $5, NULL, NULL,
+		  'group_manager_auto', 'patrol',
+		  'patrol:' || gen_random_uuid()::text
+		)
+		RETURNING id`, testWorkspaceID, fixture.agentIDs[0], testUserID,
+		fixture.channel.ID, due).Scan(&reminderID); err != nil {
+		t.Fatalf("seed managed reminder: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_reminder_lifecycle_event (
+		  reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
+		  next_fire_at, title_snapshot, cadence_snapshot, resulting_state
+		)
+		SELECT id, workspace_id, agent_id, 'scheduled', 'system', agent_id,
+		       fire_at, title, cadence, 'scheduled'
+		FROM agent_reminder WHERE id = $1`, reminderID); err != nil {
+		t.Fatalf("seed managed reminder lifecycle: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, reminderID)
+	})
+	return reminderID
+}
+
 func fireReminderAttempt(h *Handler, reminderID string) error {
 	var agentID, workspaceID, runtimeID string
 	var version, placementGeneration int64
@@ -279,6 +326,108 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	if len(history.Occurrences) != 1 || history.Occurrences[0].ReminderID != reminderID ||
 		history.Occurrences[0].Status != "fired" {
 		t.Fatalf("fired reminder history = %+v, want one fired occurrence", history.Occurrences)
+	}
+}
+
+func TestManagedPatrolAlwaysWakesAndInstallsFailureFallbackWithoutHistory(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	reminderID := seedDueManagedPatrol(t, fixture)
+	var before time.Time
+	if err := testPool.QueryRow(context.Background(), `SELECT fire_at FROM agent_reminder WHERE id = $1`, reminderID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+		t.Fatalf("fire managed patrol: %v", err)
+	}
+	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("managed patrol counts = %d/%d/%d/%d, want 1/0/1/1",
+			occurrences, receipts, tasks, firedEvents)
+	}
+	var status, occurrenceReason string
+	var next, last time.Time
+	var cadence *string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT reminder.status, reminder.fire_at, reminder.fired_at,
+		       reminder.cadence, lifecycle.reason_code
+		FROM agent_reminder reminder
+		JOIN agent_reminder_occurrence occurrence
+		  ON occurrence.reminder_id = reminder.id
+		JOIN agent_reminder_lifecycle_event lifecycle
+		  ON lifecycle.occurrence_id = occurrence.id
+		 AND lifecycle.event_type = 'fired'
+		WHERE reminder.id = $1`, reminderID).Scan(&status, &next, &last, &cadence, &occurrenceReason); err != nil {
+		t.Fatal(err)
+	}
+	delay := time.Until(next)
+	if status != "scheduled" || !next.After(before) || last.IsZero() || cadence != nil ||
+		delay < managedPatrolFallbackDelay-time.Minute || delay > managedPatrolFallbackDelay+time.Minute ||
+		occurrenceReason != "patrol_failure_fallback_rearmed" {
+		t.Fatalf("managed patrol state status=%s before=%s next=%s delay=%s last=%s cadence=%v reason=%s",
+			status, before, next, delay, last, cadence, occurrenceReason)
+	}
+
+	historyReq := withChannelTestWorkspaceCtx(t,
+		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil),
+		testUserID)
+	historyReq = withURLParam(historyReq, "id", fixture.agentIDs[0])
+	historyRec := httptest.NewRecorder()
+	fixture.handler.ListAgentReminders(historyRec, historyReq)
+	if historyRec.Code != http.StatusOK {
+		t.Fatalf("list managed reminder history: status=%d body=%s", historyRec.Code, historyRec.Body.String())
+	}
+	var history humanReminderPage
+	if err := json.NewDecoder(historyRec.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	for _, occurrence := range history.Occurrences {
+		if occurrence.ReminderID == reminderID {
+			t.Fatalf("managed patrol leaked into human history: %+v", occurrence)
+		}
+	}
+}
+
+func TestManagedPatrolWakePromptRequiresAdaptiveReplanAndJudgmentWithoutMechanicalHandoff(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	reminderID := seedDueManagedPatrol(t, fixture)
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+		t.Fatalf("fire managed patrol: %v", err)
+	}
+	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("managed patrol counts = %d/%d/%d/%d, want 1/0/1/1",
+			occurrences, receipts, tasks, firedEvents)
+	}
+	var prompt string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT prompt.content
+		FROM agent_reminder_occurrence occurrence
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
+		WHERE occurrence.reminder_id = $1`, reminderID).Scan(&prompt); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"managed adaptive group patrol reminder",
+		"replan this same reminder",
+		"900 to 86400 seconds",
+		"Never create a second patrol reminder",
+		"Act as a normal group member",
+		"Prefer private coordination for one recipient",
+		"system events plus their directed wakes already own work delivery",
+		"Do not duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("managed patrol prompt missing %q: %q", want, prompt)
+		}
+	}
+	for _, obsolete := range []string{
+		"DM a human/member target",
+		"two unanswered private/thread attempts",
+		"Routing policy:",
+	} {
+		if strings.Contains(prompt, obsolete) {
+			t.Fatalf("managed patrol prompt retained obsolete mechanical route %q: %q", obsolete, prompt)
+		}
 	}
 }
 
@@ -1414,6 +1563,94 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	}
 }
 
+func TestListAgentRemindersReturnsManagedPatrolInActiveListWithoutHistory(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		SET managed_role = 'group_manager'
+		WHERE id = $1
+	`, fixture.agentIDs[0]); err != nil {
+		t.Fatalf("mark managed group manager: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE channel
+		SET group_manager_agent_id = $1
+		WHERE id = $2
+	`, fixture.agentIDs[0], fixture.channel.ID); err != nil {
+		t.Fatalf("bind managed group manager: %v", err)
+	}
+	var reminderID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_reminder (
+		  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
+		  fire_at, fired_at, origin_kind, managed_kind, origin_key
+		) VALUES (
+		  $1, $2, $3, '群巡检', $4::uuid, now() + interval '1 hour',
+		  now() - interval '20 minutes', 'group_manager_auto', 'patrol',
+		  'patrol:' || ($4::uuid)::text
+		)
+		RETURNING id
+	`, testWorkspaceID, fixture.agentIDs[0], testUserID, fixture.channel.ID).Scan(&reminderID); err != nil {
+		t.Fatalf("seed active managed patrol: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, reminderID)
+	})
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_reminder_occurrence (
+		  reminder_id, workspace_id, agent_id, cadence_scheduled_for, due_at,
+		  status, title_snapshot, fired_at
+		)
+		SELECT id, workspace_id, agent_id, fired_at, fired_at,
+		       'fired', title, fired_at
+		FROM agent_reminder
+		WHERE id = $1
+	`, reminderID); err != nil {
+		t.Fatalf("seed managed patrol occurrence: %v", err)
+	}
+
+	scheduledRequest := newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=scheduled", nil)
+	scheduledRequest = withURLParam(scheduledRequest, "id", fixture.agentIDs[0])
+	scheduledRecorder := httptest.NewRecorder()
+	fixture.handler.ListAgentReminders(scheduledRecorder, scheduledRequest)
+	if scheduledRecorder.Code != http.StatusOK {
+		t.Fatalf("list active managed patrol status=%d body=%s", scheduledRecorder.Code, scheduledRecorder.Body.String())
+	}
+	var scheduled humanReminderPage
+	if err := json.NewDecoder(scheduledRecorder.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	if len(scheduled.Definitions) != 1 || len(scheduled.Occurrences) != 0 {
+		t.Fatalf("managed active projection=%+v, want one definition and no history", scheduled)
+	}
+	definition := scheduled.Definitions[0]
+	if definition.ID != reminderID || definition.OriginKind != "group_manager_auto" ||
+		definition.ManagedKind == nil || *definition.ManagedKind != "patrol" ||
+		definition.LastFireAt == nil || definition.ScheduleKind != "one_shot" {
+		t.Fatalf("managed patrol definition=%+v", definition)
+	}
+	if !definition.Anchor.Available || definition.Anchor.Kind == nil ||
+		*definition.Anchor.Kind != "channel" || definition.Anchor.Href == nil ||
+		strings.Contains(*definition.Anchor.Href, "?message=") {
+		t.Fatalf("channel-only managed patrol anchor=%+v", definition.Anchor)
+	}
+
+	historyRequest := newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil)
+	historyRequest = withURLParam(historyRequest, "id", fixture.agentIDs[0])
+	historyRecorder := httptest.NewRecorder()
+	fixture.handler.ListAgentReminders(historyRecorder, historyRequest)
+	if historyRecorder.Code != http.StatusOK {
+		t.Fatalf("list managed patrol history status=%d body=%s", historyRecorder.Code, historyRecorder.Body.String())
+	}
+	var history humanReminderPage
+	if err := json.NewDecoder(historyRecorder.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Occurrences) != 0 {
+		t.Fatalf("managed patrol leaked into human history: %+v", history.Occurrences)
+	}
+}
+
 func TestAgentReminderScheduleRequiresExplicitMessageIDWithoutPromptFallback(t *testing.T) {
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
 		protocol.DaemonCapabilityChannelOutputActions,
@@ -1591,6 +1828,57 @@ func serveReminderModernTransport(t *testing.T, router http.Handler, fixture rem
 	return rec
 }
 
+func seedManagedPatrolForModernTransport(t *testing.T, fixture reminderModernTransportFixture) string {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`, fixture.agentID); err != nil {
+		t.Fatalf("mark modern fixture group manager: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET group_manager_agent_id = $1 WHERE id = $2`, fixture.agentID, fixture.channelID); err != nil {
+		t.Fatalf("bind modern fixture group manager: %v", err)
+	}
+	var reminderID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_reminder (
+		  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
+		  anchor_message_id, fire_at, fired_at, origin_kind, managed_kind,
+		  origin_key
+		) VALUES (
+		  $1, $2, $3, '群巡检', $4, $5, now() + interval '1 hour',
+		  now() - interval '1 hour', 'group_manager_auto', 'patrol',
+		  'patrol:' || ($4::uuid)::text
+		)
+		RETURNING id`, testWorkspaceID, fixture.agentID, fixture.initiatorUserID,
+		fixture.channelID, fixture.anchorMessageID).Scan(&reminderID); err != nil {
+		t.Fatalf("seed modern managed patrol: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_reminder_lifecycle_event (
+		  reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
+		  next_fire_at, title_snapshot, resulting_state, reason_code
+		)
+		SELECT id, workspace_id, agent_id, 'scheduled', 'system', agent_id,
+		       fire_at, title, 'scheduled', 'test_patrol_seeded'
+		FROM agent_reminder
+		WHERE id = $1`, reminderID); err != nil {
+		t.Fatalf("seed modern managed patrol lifecycle: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE origin_key = 'patrol:' || $1::text`, fixture.channelID)
+	})
+	return reminderID
+}
+
+func setReminderModernTransportInitiator(t *testing.T, fixture reminderModernTransportFixture, userID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE channel_message
+		SET author_id = $2
+		WHERE id = $1`, fixture.anchorMessageID, userID); err != nil {
+		t.Fatalf("change modern transport initiator: %v", err)
+	}
+}
+
 func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1628,6 +1916,137 @@ func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testi
 		projection.AgentID != fixture.agentID || projection.ReminderID != scheduled.ID || projection.Terminal {
 		t.Fatalf("owner/projection mismatch start=%+v projection=%+v", start, projection)
 	}
+}
+
+func TestReminderNaturalLanguageMutationAuthorizationAndManagedPatrolReEnable(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedReminderModernTransportFixture(t, "agent_credential")
+	router := reminderModernTransportRouter()
+	outsiderID := seedWorkspaceUserForTransportTargetTest(t, "reminder-outsider-"+uuid.NewString())
+
+	t.Run("ordinary reminder belongs to its initiating member", func(t *testing.T) {
+		scheduleRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/schedule", map[string]any{
+			"title": "initiator only reminder", "delay_seconds": 1800, "message_id": fixture.anchorMessageID,
+		})
+		if scheduleRec.Code != http.StatusCreated {
+			t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
+		}
+		var scheduled agentReminderResponse
+		if err := json.NewDecoder(scheduleRec.Body).Decode(&scheduled); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+		})
+
+		setReminderModernTransportInitiator(t, fixture, outsiderID)
+		for _, path := range []string{
+			"/api/agent/reminders/update",
+			"/api/agent/reminders/snooze",
+			"/api/agent/reminders/cancel",
+		} {
+			rec := serveReminderModernTransport(t, router, fixture, path, map[string]any{
+				"id": scheduled.ID, "delay_seconds": 1800,
+			})
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "only the reminder initiator") {
+				t.Fatalf("ordinary outsider mutation path=%s status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		}
+
+		setReminderModernTransportInitiator(t, fixture, fixture.initiatorUserID)
+		cancelRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/cancel", map[string]any{"id": scheduled.ID})
+		if cancelRec.Code != http.StatusOK {
+			t.Fatalf("ordinary initiator cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+		}
+	})
+
+	t.Run("managed patrol requires group authority and re-enables as one new definition", func(t *testing.T) {
+		setReminderModernTransportInitiator(t, fixture, fixture.initiatorUserID)
+		reminderID := seedManagedPatrolForModernTransport(t, fixture)
+		var originalLastFire time.Time
+		if err := testPool.QueryRow(context.Background(), `SELECT fired_at FROM agent_reminder WHERE id = $1`, reminderID).Scan(&originalLastFire); err != nil {
+			t.Fatal(err)
+		}
+
+		setReminderModernTransportInitiator(t, fixture, outsiderID)
+		for _, mutation := range []struct {
+			path string
+			body map[string]any
+		}{
+			{path: "/api/agent/reminders/update", body: map[string]any{"id": reminderID, "delay_seconds": 1800}},
+			{path: "/api/agent/reminders/snooze", body: map[string]any{"id": reminderID, "delay_seconds": 1800}},
+			{path: "/api/agent/reminders/cancel", body: map[string]any{"id": reminderID}},
+		} {
+			rec := serveReminderModernTransport(t, router, fixture, mutation.path, mutation.body)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "channel creator or workspace owner/admin") {
+				t.Fatalf("managed outsider mutation path=%s status=%d body=%s", mutation.path, rec.Code, rec.Body.String())
+			}
+		}
+
+		setReminderModernTransportInitiator(t, fixture, testUserID)
+		for _, delay := range []int{899, 86401} {
+			rec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/update", map[string]any{
+				"id": reminderID, "delay_seconds": delay,
+			})
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "between 15 minutes and 24 hours") {
+				t.Fatalf("managed patrol guardrail delay=%d status=%d body=%s", delay, rec.Code, rec.Body.String())
+			}
+		}
+		updateRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/update", map[string]any{
+			"id": reminderID, "delay_seconds": 1800,
+		})
+		if updateRec.Code != http.StatusOK {
+			t.Fatalf("managed creator update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+		}
+		cancelRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/cancel", map[string]any{"id": reminderID})
+		if cancelRec.Code != http.StatusOK {
+			t.Fatalf("managed creator cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+		}
+		reEnableRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/snooze", map[string]any{
+			"id": reminderID, "delay_seconds": 1800,
+		})
+		if reEnableRec.Code != http.StatusOK {
+			t.Fatalf("managed creator re-enable status=%d body=%s", reEnableRec.Code, reEnableRec.Body.String())
+		}
+		var reEnabled agentReminderResponse
+		if err := json.NewDecoder(reEnableRec.Body).Decode(&reEnabled); err != nil {
+			t.Fatal(err)
+		}
+		if reEnabled.ID == reminderID || reEnabled.Status != "scheduled" {
+			t.Fatalf("re-enabled patrol=%+v, want new scheduled definition", reEnabled)
+		}
+		var oldStatus string
+		var activeCount, reEnableEvents int
+		var reEnabledLastFire time.Time
+		if err := testPool.QueryRow(context.Background(), `
+			SELECT
+			  (SELECT status FROM agent_reminder WHERE id = $1),
+			  (
+			    SELECT count(*)
+			    FROM agent_reminder
+			    WHERE origin_key = 'patrol:' || $3::text
+			      AND status IN ('scheduled', 'firing')
+			  ),
+			  (SELECT fired_at FROM agent_reminder WHERE id = $2),
+			  (
+			    SELECT count(*)
+			    FROM agent_reminder_lifecycle_event
+			    WHERE reminder_id = $2
+			      AND reason_code = 're_enabled_by_natural_language'
+			  )
+			`, reminderID, reEnabled.ID, fixture.channelID).Scan(
+			&oldStatus, &activeCount, &reEnabledLastFire, &reEnableEvents,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if oldStatus != "cancelled" || activeCount != 1 || reEnableEvents != 1 ||
+			!reEnabledLastFire.Equal(originalLastFire) {
+			t.Fatalf("re-enable old=%s active=%d last=%s events=%d",
+				oldStatus, activeCount, reEnabledLastFire, reEnableEvents)
+		}
+	})
 }
 
 func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {

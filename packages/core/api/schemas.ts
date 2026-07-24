@@ -2100,6 +2100,8 @@ const RawReminderDefinitionSchema = z.object({
   cadence: z.string().optional(),
   schedule_timezone: z.string().optional(),
   snooze_count: z.number().default(0),
+  origin_kind: z.string(),
+  managed_kind: z.string().optional(),
   anchor: RawReminderAnchorSchema,
 }).loose();
 

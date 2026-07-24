@@ -1379,6 +1379,7 @@ describe("ApiClient", () => {
                 cadence: "daily@09:00",
                 schedule_timezone: "America/Los_Angeles",
                 snooze_count: 0,
+                origin_kind: "agent",
                 anchor: { available: false },
               },
               {
@@ -1388,6 +1389,7 @@ describe("ApiClient", () => {
                 schedule_kind: "some_future_kind",
                 next_fire_at: "2026-07-25T09:00:00Z",
                 snooze_count: 0,
+                origin_kind: "agent",
                 anchor: { available: false },
               },
             ],

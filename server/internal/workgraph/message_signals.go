@@ -4,22 +4,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// HandleHumanRework marks explicitly targeted active work as needing rework,
-// stops active downstream work, and asks the owner to fix it.
+// HandleHumanRework marks explicitly targeted active work as needing rework.
+// The human's directed message already owns delivery; the workgraph must not
+// synthesize a second manager nudge or alter the assignee's priority queue.
 func (s *Store) HandleHumanRework(ctx context.Context, workspaceID, channelID pgtype.UUID, agentIDs []pgtype.UUID) error {
 	for _, agentID := range agentIDs {
 		rows, err := s.pool.Query(ctx, `
-			SELECT id, owner_id, linked_issue_id
+			SELECT id
 			FROM work_node
 			WHERE workspace_id = $1 AND primary_channel_id = $2
 			  AND owner_type = 'agent' AND owner_id = $3
@@ -29,8 +26,8 @@ func (s *Store) HandleHumanRework(ctx context.Context, workspaceID, channelID pg
 			return fmt.Errorf("list rework targets: %w", err)
 		}
 		for rows.Next() {
-			var nodeID, ownerID, issueID pgtype.UUID
-			if err := rows.Scan(&nodeID, &ownerID, &issueID); err != nil {
+			var nodeID pgtype.UUID
+			if err := rows.Scan(&nodeID); err != nil {
 				rows.Close()
 				return err
 			}
@@ -38,61 +35,12 @@ func (s *Store) HandleHumanRework(ctx context.Context, workspaceID, channelID pg
 				rows.Close()
 				return fmt.Errorf("mark node needs rework: %w", err)
 			}
-			if err := s.insertHandoff(ctx, workspaceID, "fast", "progress_nudge", ownerTypeAgent, ownerID, []pgtype.UUID{nodeID}, channelID, issueID, "rework_nudge:"+nodeID.String()+":"+ownerID.String()); err != nil {
-				rows.Close()
-				return err
-			}
-			if err := s.enqueueDownstreamInterrupts(ctx, workspaceID, channelID, nodeID); err != nil {
-				rows.Close()
-				return err
-			}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
 			return err
 		}
 		rows.Close()
-	}
-	return nil
-}
-
-func (s *Store) enqueueDownstreamInterrupts(ctx context.Context, workspaceID, channelID, reworkNodeID pgtype.UUID) error {
-	rows, err := s.pool.Query(ctx, `
-		SELECT downstream.id, downstream.owner_type, downstream.owner_id, downstream.linked_issue_id
-		FROM work_edge edge
-		JOIN work_node downstream ON downstream.id = edge.from_node_id
-		WHERE edge.workspace_id = $1 AND edge.to_node_id = $2
-		  AND edge.kind = 'waits_on' AND edge.status = 'open'
-		  AND downstream.status = 'active'
-		  AND downstream.owner_id IS NOT NULL
-		  AND downstream.owner_type IN ('agent', 'member')
-	`, workspaceID, reworkNodeID)
-	if err != nil {
-		return fmt.Errorf("list active downstream work: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var nodeID, ownerID, issueID pgtype.UUID
-		var ownerType string
-		if err := rows.Scan(&nodeID, &ownerType, &ownerID, &issueID); err != nil {
-			return err
-		}
-		if err := s.insertHandoff(ctx, workspaceID, "fast", "interrupt_stop", ownerType, ownerID, []pgtype.UUID{nodeID, reworkNodeID}, channelID, issueID, "interrupt_stop:"+nodeID.String()+":"+ownerID.String()); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
-}
-
-func (s *Store) insertHandoff(ctx context.Context, workspaceID pgtype.UUID, urgency, reason, ownerType string, ownerID pgtype.UUID, related []pgtype.UUID, channelID, issueID pgtype.UUID, dedupe string) error {
-	_, err := s.queries.InsertPendingHandoff(ctx, db.InsertPendingHandoffParams{
-		WorkspaceID: workspaceID, Urgency: urgency, ReasonCode: reason,
-		TargetActorType: ownerType, TargetActorID: ownerID, RelatedNodeIds: related,
-		ChannelID: channelID, IssueID: issueID, DedupeKey: dedupe,
-		NotBefore: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("insert %s handoff: %w", reason, err)
 	}
 	return nil
 }

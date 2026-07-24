@@ -1947,3 +1947,29 @@ func TestWriteRuntimeConfigFileAlwaysInsertsFixedManagedSeparator(t *testing.T) 
 		})
 	}
 }
+
+func TestBuildMetaSkillContentUsesStructuralManagedRole(t *testing.T) {
+	withRole := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentName:     "ordinary-looking-name",
+		ManagedRole:   "group_manager",
+	})
+	if !strings.Contains(withRole, "### Managed Group Manager Role") ||
+		!strings.Contains(withRole, "server structurally assigned") ||
+		!strings.Contains(withRole, "Speak only when coordination is genuinely useful") ||
+		!strings.Contains(withRole, "Prefer private coordination for one recipient") ||
+		!strings.Contains(withRole, "system events plus their directed wakes already own work delivery") ||
+		!strings.Contains(withRole, "never duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands") ||
+		!strings.Contains(withRole, "--delay-seconds <900..86400>") ||
+		!strings.Contains(withRole, "never create a second patrol") ||
+		!strings.Contains(withRole, "24-hour fallback") {
+		t.Fatalf("managed group manager brief missing structural role contract: %q", withRole)
+	}
+	withoutRole := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentName:     "Beckham",
+	})
+	if strings.Contains(withoutRole, "### Managed Group Manager Role") {
+		t.Fatalf("display name inferred managed role: %q", withoutRole)
+	}
+}

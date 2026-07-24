@@ -3446,8 +3446,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	agentID := resolvedTaskAgentID(task)
 	var skills []SkillData
 	var instructions string
+	var managedRole string
 	if task.Agent != nil {
 		agentName = task.Agent.Name
+		managedRole = task.Agent.ManagedRole
 		skills = append([]SkillData(nil), task.Agent.Skills...)
 		instructions = task.Agent.Instructions
 	}
@@ -3488,6 +3490,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		FreshSessionNoticeReason:         task.FreshSessionNoticeReason,
 		AgentID:                          agentID,
 		AgentName:                        agentName,
+		ManagedRole:                      managedRole,
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentMemoryDir:                   agentMemoryDir,

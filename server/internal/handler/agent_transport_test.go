@@ -745,7 +745,7 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 			}
 			defer tx.Rollback(ctx)
 			if _, err := tx.Exec(ctx, `
-				CREATE TEMP TABLE agent_inbox_event (id UUID PRIMARY KEY) ON COMMIT DROP;
+				CREATE TEMP TABLE agent_task_queue (id UUID PRIMARY KEY) ON COMMIT DROP;
 				CREATE TEMP TABLE agent_inbox_event (id UUID PRIMARY KEY) ON COMMIT DROP;
 				CREATE TEMP TABLE agent_transport_draft (
 					id UUID PRIMARY KEY, workspace_id UUID NOT NULL, agent_id UUID NOT NULL, target TEXT NOT NULL,
@@ -768,7 +768,7 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 				}
 			}
 			if tc.sourceKind == "task" || tc.sourceKind == "both" {
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_inbox_event (id) VALUES ($1)`, sourceID); err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_queue (id) VALUES ($1)`, sourceID); err != nil {
 					t.Fatalf("insert legacy task: %v", err)
 				}
 			}
@@ -2220,7 +2220,8 @@ func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
 	}
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_inbox_event
-		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
+		SET status = 'acked', terminal_outcome = 'failed', terminal_at = now(),
+		    acked_at = now(), failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
 		WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("mark parent failed: %v", err)
 	}
@@ -2262,7 +2263,8 @@ func TestAgentTransportAutoRetryStripsArealProxyFromChildContext(t *testing.T) {
 	taskID, _ := createChannelCompletionTask(t, "group")
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_inbox_event
-		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3,
+		SET status = 'acked', terminal_outcome = 'failed', terminal_at = now(),
+		    acked_at = now(), failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3,
 		    context = '{"areal_proxy":{"session_id":"sess-parent","api_key":"key-parent"},"squad_id":"squad-9"}'::jsonb
 		WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("seed failed parent with areal_proxy context: %v", err)
@@ -2324,7 +2326,8 @@ func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
 	}
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_inbox_event
-		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
+		SET status = 'acked', terminal_outcome = 'failed', terminal_at = now(),
+		    acked_at = now(), failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
 		WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("mark parent failed: %v", err)
 	}

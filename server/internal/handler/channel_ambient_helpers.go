@@ -145,11 +145,10 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 		sourceMessageID, seqFrom, seqTo).Scan(&eventID)
 }
 
-// leaseAgentInboxEventForRuntime admits the oldest eligible canonical wake.
-// Candidate discovery happens first; after locking the agent, a second
-// statement revalidates the event and active-delivery predicates against a
-// fresh READ COMMITTED snapshot. That two-statement shape preserves exact
-// per-agent FIFO admission under concurrent drains.
+// leaseAgentInboxEventForRuntime admits one eligible per-agent FIFO head.
+// Candidate discovery may prioritize across different agents; after locking
+// the chosen agent, a second statement revalidates that agent's oldest event
+// and active-delivery predicates against a fresh READ COMMITTED snapshot.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
@@ -173,13 +172,24 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		  AND event.status IN ('pending', 'failed')
 		  AND NOT EXISTS (
 		    SELECT 1
+		    FROM agent_inbox_event older_event
+		    JOIN agent_session older_session
+		      ON older_session.id = older_event.agent_session_id
+		    WHERE older_event.agent_id = event.agent_id
+		      AND COALESCE(older_event.runtime_id, older_session.runtime_id) = $1
+		      AND older_session.status = 'active'
+		      AND older_event.status IN ('pending', 'failed')
+		      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
 		    FROM agent_event_delivery active_delivery
 		    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
 		    WHERE active_session.agent_id = event.agent_id
 		      AND active_delivery.status IN ('leased', 'processing')
 		      AND active_delivery.lease_expires_at > now()
 		  )
-		ORDER BY event.created_at, event.id
+		ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
 		LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
 	if err != nil {
 		return db.AgentEventDelivery{}, err
@@ -200,6 +210,17 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		  AND COALESCE(event.runtime_id, session.runtime_id) = $3
 		  AND session.status = 'active'
 		  AND event.status IN ('pending', 'failed')
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_inbox_event older_event
+		    JOIN agent_session older_session
+		      ON older_session.id = older_event.agent_session_id
+		    WHERE older_event.agent_id = event.agent_id
+		      AND COALESCE(older_event.runtime_id, older_session.runtime_id) = $3
+		      AND older_session.status = 'active'
+		      AND older_event.status IN ('pending', 'failed')
+		      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
+		  )
 		  AND NOT EXISTS (
 		    SELECT 1
 		    FROM agent_event_delivery active_delivery

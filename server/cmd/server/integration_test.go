@@ -124,7 +124,8 @@ func ensureServerAgentInboxFixtureDefaults(ctx context.Context, pool *pgxpool.Po
 		      ELSE 'issue'
 		    END;
 		  END IF;
-		  IF NEW.status IN ('pending', 'draining', 'failed') THEN
+		  IF NEW.status IN ('pending', 'draining', 'failed')
+		     AND NEW.reason <> 'ambient' THEN
 		    NEW.requires_wake := true;
 		  END IF;
 		  RETURN NEW;

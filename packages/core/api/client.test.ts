@@ -1450,4 +1450,96 @@ describe("ApiClient", () => {
       expect(page.definitions[0]?.next_fire_at).toBeUndefined();
     });
   });
+
+  describe("agent lifecycle (#633)", () => {
+    it("starts a lifecycle action with the Idempotency-Key header and action_kind only", async () => {
+      const op = {
+        id: "op-1",
+        agent_id: "a-1",
+        runtime_id: "rt-1",
+        action_kind: "full_reset_restart",
+        status: "scheduled",
+        execution_mode: "after_current_run",
+        created_at: "2026-07-24T00:00:00Z",
+      };
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(op), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const client = new ApiClient("https://api.example.test");
+
+      const result = await client.startAgentLifecycleAction(
+        "a-1",
+        "full_reset_restart",
+        "idem-uuid-1",
+      );
+
+      expect(result.id).toBe("op-1");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.example.test/api/agents/a-1/lifecycle",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ action_kind: "full_reset_restart" }),
+          headers: expect.objectContaining({ "Idempotency-Key": "idem-uuid-1" }),
+        }),
+      );
+    });
+
+    it("reads the per-action preflight", async () => {
+      const preflight = {
+        actions: {
+          restart: { supported: true, execution_mode: "immediate" },
+          reset_session_restart: { supported: true, execution_mode: "immediate" },
+          full_reset_restart: {
+            supported: false,
+            disabled_reason: "agent_active",
+            execution_mode: "immediate",
+          },
+        },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(preflight), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+      const client = new ApiClient("https://api.example.test");
+
+      const result = await client.getAgentLifecyclePreflight("a-1");
+      expect(result.actions.restart.supported).toBe(true);
+      expect(result.actions.full_reset_restart.supported).toBe(false);
+      expect(result.actions.full_reset_restart.disabled_reason).toBe("agent_active");
+    });
+
+    it("polls a single operation by id", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: "op-1",
+            agent_id: "a-1",
+            runtime_id: "rt-1",
+            action_kind: "restart",
+            status: "succeeded",
+            execution_mode: "immediate",
+            created_at: "2026-07-24T00:00:00Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const client = new ApiClient("https://api.example.test");
+
+      const op = await client.getAgentLifecycleOperation("a-1", "op-1");
+      expect(op.status).toBe("succeeded");
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://api.example.test/api/agents/a-1/lifecycle/op-1",
+      );
+    });
+  });
 });

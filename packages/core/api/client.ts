@@ -99,6 +99,9 @@ import type {
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
   RuntimeUpdate,
+  AgentLifecycleActionKind,
+  AgentLifecyclePreflight,
+  AgentLifecycleOperation,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
@@ -1146,6 +1149,35 @@ export class ApiClient {
 
   async restoreAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
+  }
+
+  // Agent lifecycle actions (#632/#633). Preflight is the server-authoritative
+  // source for per-action enable/disable + immediate-vs-scheduled — the FE never
+  // derives active/idle from `agent.status`.
+  async getAgentLifecyclePreflight(id: string): Promise<AgentLifecyclePreflight> {
+    return this.fetch(`/api/agents/${id}/lifecycle`);
+  }
+
+  // Client sends only `action_kind` (never a path/force/runtime_id). The UUID
+  // Idempotency-Key makes a resend return the same operation; a full_reset that
+  // is not executable-now is rejected here (never scheduled).
+  async startAgentLifecycleAction(
+    id: string,
+    actionKind: AgentLifecycleActionKind,
+    idempotencyKey: string,
+  ): Promise<AgentLifecycleOperation> {
+    return this.fetch(`/api/agents/${id}/lifecycle`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ action_kind: actionKind }),
+    });
+  }
+
+  async getAgentLifecycleOperation(
+    id: string,
+    operationId: string,
+  ): Promise<AgentLifecycleOperation> {
+    return this.fetch(`/api/agents/${id}/lifecycle/${operationId}`);
   }
 
   // Bulk-cancel every active task (queued/dispatched/running) for the agent.

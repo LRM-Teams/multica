@@ -38,6 +38,7 @@ var voiceCallOptInEnvironmentNames = []string{
 }
 
 var voiceCallEnvironmentNames = append([]string{
+	"VOLCENGINE_RTC_API_VERSION",
 	"VOLCENGINE_RTC_TOKEN_TTL",
 	"VOLCENGINE_RTC_COMPENSATION_TIMEOUT",
 	"VOLCENGINE_RTC_CLEANUP_TIMEOUT",
@@ -52,6 +53,7 @@ type voiceCallRuntimeConfig struct {
 	SessionToken        string
 	Endpoint            string
 	Region              string
+	APIVersion          string
 	CustomLLMURL        string
 	CustomLLMAPIKey     string
 	TTSVoiceID          string
@@ -88,6 +90,7 @@ func loadVoiceCallRuntimeConfig(
 		SessionToken:      strings.TrimSpace(getenv("VOLCENGINE_RTC_SESSION_TOKEN")),
 		Endpoint:          strings.TrimSpace(getenv("VOLCENGINE_RTC_ENDPOINT")),
 		Region:            strings.TrimSpace(getenv("VOLCENGINE_RTC_REGION")),
+		APIVersion:        strings.TrimSpace(getenv("VOLCENGINE_RTC_API_VERSION")),
 		CustomLLMURL:      strings.TrimSpace(getenv("VOLCENGINE_RTC_LLM_URL")),
 		CustomLLMAPIKey:   strings.TrimSpace(getenv("VOLCENGINE_RTC_LLM_API_KEY")),
 		TTSVoiceID:        strings.TrimSpace(getenv("VOLCENGINE_RTC_TTS_VOICE_ID")),
@@ -117,6 +120,9 @@ func loadVoiceCallRuntimeConfig(
 	}
 	if config.TTSVoiceID == "" {
 		config.TTSVoiceID = defaultVoiceCallTTSVoiceID
+	}
+	if config.APIVersion == "" {
+		config.APIVersion = volcenginertc.DefaultAPIVersion
 	}
 	if config.CallbackURL == "" {
 		publicURL := strings.TrimRight(
@@ -227,6 +233,7 @@ func configureVoiceCallService(
 		SessionToken:    config.SessionToken,
 		Endpoint:        config.Endpoint,
 		Region:          config.Region,
+		APIVersion:      config.APIVersion,
 	})
 	if err != nil {
 		return fmt.Errorf("initialize Volcengine RTC client: %w", err)

@@ -74,6 +74,9 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 	if config.TTSVoiceID != "shared-tts-voice" {
 		t.Fatalf("TTS voice = %q, want shared speech voice", config.TTSVoiceID)
 	}
+	if config.APIVersion != "2025-06-01" {
+		t.Fatalf("API version = %q, want current default", config.APIVersion)
+	}
 	if config.TokenTTL != 45*time.Minute ||
 		config.CompensationTimeout != 12*time.Second ||
 		config.CleanupTimeout != 14*time.Second ||
@@ -85,6 +88,24 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 			config.CleanupTimeout,
 			config.AgentTimeout,
 		)
+	}
+}
+
+func TestLoadVoiceCallRuntimeConfigPreservesExplicitAPIVersion(t *testing.T) {
+	values := completeVoiceCallEnvironment()
+	values["VOLCENGINE_RTC_API_VERSION"] = "2024-12-01"
+
+	config, enabled, err := loadVoiceCallRuntimeConfig(func(name string) string {
+		return values[name]
+	})
+	if err != nil {
+		t.Fatalf("load voice call config: %v", err)
+	}
+	if !enabled {
+		t.Fatal("complete voice call config was disabled")
+	}
+	if config.APIVersion != "2024-12-01" {
+		t.Fatalf("API version = %q", config.APIVersion)
 	}
 }
 

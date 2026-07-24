@@ -188,3 +188,8 @@ func (d *Daemon) acquireGrokChatACPBackend(identity persistentRuntimeIdentity, c
 		lease.release(healthy, time.Now())
 	}, nil
 }
+
+func newCanonicalGrokResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
+	backend := agent.NewGrokACPBackend(cfg)
+	return backend, backend.Close, nil
+}

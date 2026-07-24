@@ -2581,6 +2581,20 @@ export class ApiClient {
     return this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
   }
 
+  /**
+   * LRM-581: cancel one chat wake by inbox_event_id (pending-task authority).
+   * Do not use cancelTaskById for chat-window Stop — that path is the old dual track.
+   */
+  async cancelChatInboxEvent(
+    sessionId: string,
+    inboxEventId: string,
+  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
+    return this.fetch(
+      `/api/chat/sessions/${sessionId}/agent-inbox/events/${inboxEventId}/cancel`,
+      { method: "POST" },
+    );
+  }
+
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {
     return this.fetch(`/api/chat/pending-tasks`);
   }

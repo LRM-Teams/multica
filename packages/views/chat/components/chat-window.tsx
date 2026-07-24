@@ -471,40 +471,29 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
 
   const cancelChatTask = useCallback(
     async (
-      taskId: string,
+      inboxEventId: string,
       sessionId: string,
-      options: { restoreDraftToInput: boolean; source: string },
+      options: { source: string },
     ) => {
       apiLogger.info("cancelTask.start", {
-        taskId,
+        inboxEventId,
         sessionId,
         source: options.source,
       });
       qc.setQueryData(chatKeys.pendingTask(sessionId), {});
 
       try {
-        const result = await api.cancelTaskById(taskId);
-        const restored = result.cancelled_chat_message;
-        if (restored?.restore_to_input) {
-          removeChatMessageFromCaches(qc, restored.chat_session_id, restored.message_id);
-          if (options.restoreDraftToInput && restored.chat_session_id === sessionId) {
-            setRestoreDraftRequest({
-              id: restored.message_id,
-              content: restored.content,
-            });
-          }
-        }
+        const result = await api.cancelChatInboxEvent(sessionId, inboxEventId);
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
         apiLogger.info("cancelTask.success", {
-          taskId,
+          inboxEventId,
           sessionId,
-          restoredToInput: !!restored?.restore_to_input && options.restoreDraftToInput,
         });
         return result;
       } catch (err) {
         apiLogger.warn("cancelTask.error (task may have already finished)", {
-          taskId,
+          inboxEventId,
           sessionId,
           err,
         });
@@ -608,15 +597,38 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       // Replace the temporary task_id with the server's real one (so the WS
       // task: handlers can match against it) and snap the anchor to the
       // server's created_at — keeping the elapsed-seconds reading stable.
-      qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
+      // Also pull inbox_event_id from pending-task (authoritative Stop id).
+      let pendingAfterSend: ChatPendingTask = {
         task_id: result.task_id,
         status: "queued",
         created_at: result.created_at,
-      });
+      };
+      try {
+        const serverPending = await api.getPendingChatTask(sessionId);
+        if (serverPending.task_id || serverPending.inbox_event_id) {
+          pendingAfterSend = {
+            ...pendingAfterSend,
+            ...serverPending,
+            task_id: serverPending.task_id ?? result.task_id,
+            status: serverPending.status ?? "queued",
+            created_at: serverPending.created_at ?? result.created_at,
+          };
+        }
+      } catch (err) {
+        apiLogger.warn("sendChatMessage.pendingTask.refresh.error", { sessionId, err });
+      }
+      qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), pendingAfterSend);
       if (stopRequestedBeforeTaskRef.current) {
         stopRequestedBeforeTaskRef.current = false;
-        await cancelChatTask(result.task_id, sessionId, {
-          restoreDraftToInput: true,
+        const inboxEventId = pendingAfterSend.inbox_event_id?.trim();
+        if (!inboxEventId) {
+          apiLogger.warn("cancelTask.deferred skipped: pending-task missing inbox_event_id", {
+            sessionId,
+            taskId: result.task_id,
+          });
+          return false;
+        }
+        await cancelChatTask(inboxEventId, sessionId, {
           source: "deferred-send",
         });
         return false;
@@ -637,23 +649,29 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   );
 
   const handleStop = useCallback(() => {
-    if (!pendingTaskId || !activeSessionId) {
-      apiLogger.debug("cancelTask skipped: no pending task");
+    const inboxEventId = pendingTask?.inbox_event_id?.trim();
+    if (!activeSessionId) {
+      apiLogger.debug("cancelTask skipped: no active session");
       return;
     }
-    if (!isTaskMessageTaskId(pendingTaskId)) {
-      stopRequestedBeforeTaskRef.current = true;
-      apiLogger.info("cancelTask.deferred until server task id", {
-        taskId: pendingTaskId,
-        sessionId: activeSessionId,
-      });
+    // Optimistic send has no inbox_event_id yet — defer until send resolves
+    // and pending-task returns the authoritative Stop id.
+    if (!inboxEventId) {
+      if (pendingTaskId && !isTaskMessageTaskId(pendingTaskId)) {
+        stopRequestedBeforeTaskRef.current = true;
+        apiLogger.info("cancelTask.deferred until inbox_event_id", {
+          taskId: pendingTaskId,
+          sessionId: activeSessionId,
+        });
+        return;
+      }
+      apiLogger.debug("cancelTask skipped: no inbox_event_id on pending-task");
       return;
     }
-    void cancelChatTask(pendingTaskId, activeSessionId, {
-      restoreDraftToInput: true,
+    void cancelChatTask(inboxEventId, activeSessionId, {
       source: "active-input",
     });
-  }, [pendingTaskId, activeSessionId, cancelChatTask]);
+  }, [pendingTask, pendingTaskId, activeSessionId, cancelChatTask]);
 
   const handleSelectAgent = useCallback(
     (agent: Agent) => {
@@ -1271,26 +1289,38 @@ function SessionDropdown({
     queryClient.invalidateQueries({ queryKey: chatKeys.messages(session.id) });
     queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(session.id) });
 
-    api.cancelTaskById(task.task_id).then(
-      (result) => {
-        const restored = result.cancelled_chat_message;
-        if (restored?.restore_to_input) {
-          removeChatMessageFromCaches(queryClient, restored.chat_session_id, restored.message_id);
+    // List pending-tasks has no inbox_event_id yet — resolve via pending-task
+    // (LRM-581 contract), never cancelTaskById.
+    void (async () => {
+      try {
+        const pending = await api.getPendingChatTask(session.id);
+        const inboxEventId = pending.inbox_event_id?.trim();
+        if (!inboxEventId) {
+          apiLogger.warn("cancelTask.error (history row): pending-task missing inbox_event_id", {
+            taskId: task.task_id,
+            sessionId: session.id,
+          });
+          return;
         }
-        apiLogger.info("cancelTask.success (history row)", { taskId: task.task_id, sessionId: session.id });
-      },
-      (err) =>
+        await api.cancelChatInboxEvent(session.id, inboxEventId);
+        apiLogger.info("cancelTask.success (history row)", {
+          inboxEventId,
+          taskId: task.task_id,
+          sessionId: session.id,
+        });
+      } catch (err) {
         apiLogger.warn("cancelTask.error (history row; task may have already finished)", {
           taskId: task.task_id,
           sessionId: session.id,
           err,
-        }),
-    ).finally(() => {
-      queryClient.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
-      queryClient.invalidateQueries({ queryKey: chatKeys.pendingTask(session.id) });
-      setStoppingTaskId(null);
-      setConfirmingStopId(null);
-    });
+        });
+      } finally {
+        queryClient.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+        queryClient.invalidateQueries({ queryKey: chatKeys.pendingTask(session.id) });
+        setStoppingTaskId(null);
+        setConfirmingStopId(null);
+      }
+    })();
   };
 
   const renderRow = (session: ChatSession) => {

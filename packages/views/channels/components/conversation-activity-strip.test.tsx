@@ -23,7 +23,7 @@ describe("ConversationActivityStrip", () => {
             channelId: "ch-1",
             actorType: "user",
             actorName: "Lee",
-            expiresAt: Date.now() + 60_000,
+            expiresAt: 1_900_000_000_000,
           },
         ]}
       />,

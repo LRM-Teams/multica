@@ -421,7 +421,8 @@
       "reminder": {
         "fired": "リマインダーが発火しました：{title}",
         "anchor_unavailable_suffix": " · アンカー利用不可"
-      }
+      },
+      "thread_unfollowed": "{actor} がこのスレッドのフォローを解除しました"
     }
   },
   "dm": {

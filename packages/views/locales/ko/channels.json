@@ -421,7 +421,8 @@
       "reminder": {
         "fired": "리마인더가 발생했습니다: {title}",
         "anchor_unavailable_suffix": " · 앵커 사용 불가"
-      }
+      },
+      "thread_unfollowed": "{actor} 님이 이 스레드 팔로우를 해제했습니다"
     }
   },
   "dm": {

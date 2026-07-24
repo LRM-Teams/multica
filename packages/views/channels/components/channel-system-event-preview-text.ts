@@ -8,6 +8,7 @@ import {
   parseIssueSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
+  parseThreadUnfollowedSystemEvent,
   type SystemEventSource,
 } from "./channel-system-event";
 import type { TFunction } from "i18next";
@@ -235,6 +236,22 @@ function formatReminderEventPreview(
     : `${body}${t(($) => $.message.system_event.reminder.anchor_unavailable_suffix)}`;
 }
 
+function formatThreadUnfollowedEventPreview(
+  event: NonNullable<ReturnType<typeof parseThreadUnfollowedSystemEvent>>,
+  t: T,
+  resolveMention: MentionPreviewResolver,
+): string {
+  const mentionType = toMentionType(event.actorType) ?? "agent";
+  const resolved = resolveMention(mentionType, event.actorId, event.actorId).replace(/^@+/, "");
+  // Directory miss returns the id itself — prefer muted handle over bare uuid.
+  const looksLikeId = resolved === event.actorId;
+  const handle = event.actorHandle?.trim().replace(/^@+/, "") || null;
+  const actor = looksLikeId
+    ? `@${handle ?? "agent"}`
+    : `@${resolved}`;
+  return fillSlots(t(($) => $.message.system_event.thread_unfollowed), { actor });
+}
+
 export function formatSystemEventPreviewText(
   message: SystemEventSource,
   t: T,
@@ -256,6 +273,11 @@ export function formatSystemEventPreviewText(
 
   const reminderEvent = parseReminderSystemEvent(message);
   if (reminderEvent) return formatReminderEventPreview(reminderEvent, t);
+
+  const threadUnfollowedEvent = parseThreadUnfollowedSystemEvent(message);
+  if (threadUnfollowedEvent) {
+    return formatThreadUnfollowedEventPreview(threadUnfollowedEvent, t, resolveMention);
+  }
 
   return null;
 }

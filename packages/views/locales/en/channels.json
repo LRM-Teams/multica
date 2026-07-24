@@ -421,7 +421,8 @@
       "reminder": {
         "fired": "Reminder fired: {title}",
         "anchor_unavailable_suffix": " · Anchor unavailable"
-      }
+      },
+      "thread_unfollowed": "{actor} unfollowed this thread"
     }
   },
   "dm": {

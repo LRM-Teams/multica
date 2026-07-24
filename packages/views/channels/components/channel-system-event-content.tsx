@@ -18,6 +18,7 @@ import {
   PROJECT_EVENTS,
   type ProjectSystemEvent,
   type ReminderSystemEvent,
+  type ThreadUnfollowedSystemEvent,
 } from "./channel-system-event";
 
 /**
@@ -604,4 +605,39 @@ export function ReminderSystemEventContent({ event }: { event: ReminderSystemEve
       {!event.anchorAvailable && t(($) => $.message.system_event.reminder.anchor_unavailable_suffix)}
     </>
   );
+}
+
+/**
+ * LRM-540 — thread unfollow system row. Main ink is live display_name via the
+ * LRM-515 resolver; handle/slug only as muted fallback when the directory
+ * misses (never emit-time name, never bare uuid — LRM-238 / LRM-281).
+ */
+export function ThreadUnfollowedSystemEventContent({
+  event,
+}: {
+  event: ThreadUnfollowedSystemEvent;
+}): ReactNode {
+  const { t } = useT("channels");
+  const actorType = toActorMentionType(event.actorType) ?? "agent";
+  const resolvedName = useResolvedActorDisplayName(event.actorId, actorType);
+  const handle = event.actorHandle?.trim().replace(/^@+/, "") || null;
+
+  const actor: ReactNode = resolvedName ? (
+    <SystemEventActorToken
+      actor={{
+        type: actorType,
+        id: event.actorId,
+        displayName: resolvedName,
+      }}
+    />
+  ) : handle ? (
+    <span className="font-medium text-muted-foreground">{`@${handle}`}</span>
+  ) : (
+    <span className="font-medium text-muted-foreground">@agent</span>
+  );
+
+  return interpolateSlots(t(($) => $.message.system_event.thread_unfollowed), {
+    target: actor,
+    actor,
+  });
 }

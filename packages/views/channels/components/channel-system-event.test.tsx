@@ -8,10 +8,12 @@ import {
   parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
+  parseThreadUnfollowedSystemEvent,
   foldedIssueEventIds,
   type IssueSystemEvent,
   type ProjectSystemEvent,
   type ReminderSystemEvent,
+  type ThreadUnfollowedSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
@@ -19,6 +21,7 @@ import {
   IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
   ReminderSystemEventContent,
+  ThreadUnfollowedSystemEventContent,
 } from "./channel-system-event-content";
 
 const mockAgents = [
@@ -224,6 +227,7 @@ vi.mock("../../i18n/use-t", () => ({
               fired: "提醒已触发：{title}",
               anchor_unavailable_suffix: " · 来源不可用",
             },
+            thread_unfollowed: "{actor} 取消关注了该话题",
           },
         },
       });
@@ -1285,5 +1289,72 @@ describe("ReminderSystemEventContent", () => {
   it("exposes zero mutation/thread/quote/reaction affordances — no button, link, or menu anywhere in the row", () => {
     render(<ReminderSystemEventContent event={availableEvent} />);
     expect(document.querySelectorAll("button, a, [role='menu']")).toHaveLength(0);
+  });
+});
+
+describe("parseThreadUnfollowedSystemEvent (LRM-540)", () => {
+  it("parses actor_id + handle from thread_unfollowed params", () => {
+    const event = parseThreadUnfollowedSystemEvent(
+      issueMsg("m1", "thread_unfollowed", {
+        actor_id: "agent-beckham",
+        actor_type: "agent",
+        actor_handle: "bei-ke-han-mu-11",
+        actor_display_name: "贝克汉姆",
+      }),
+    );
+    expect(event).toEqual({
+      event: "thread_unfollowed",
+      actorId: "agent-beckham",
+      actorType: "agent",
+      actorHandle: "bei-ke-han-mu-11",
+    });
+  });
+
+  it("accepts legacy agent_id when actor_id is absent", () => {
+    const event = parseThreadUnfollowedSystemEvent(
+      issueMsg("m1", "thread_unfollowed", {
+        agent_id: "agent-9",
+        actor_type: "agent",
+      }),
+    );
+    expect(event?.actorId).toBe("agent-9");
+  });
+
+  it("returns null without an actor id", () => {
+    expect(
+      parseThreadUnfollowedSystemEvent(
+        issueMsg("m1", "thread_unfollowed", { actor_handle: "bei-ke-han-mu-11" }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("ThreadUnfollowedSystemEventContent (LRM-540)", () => {
+  const baseEvent: ThreadUnfollowedSystemEvent = {
+    event: "thread_unfollowed",
+    actorId: "agent-beckham",
+    actorType: "agent",
+    actorHandle: "bei-ke-han-mu-11",
+  };
+
+  it("renders display_name + localized verb, not the slug handle", () => {
+    render(<ThreadUnfollowedSystemEventContent event={baseEvent} />);
+    expect(document.body.textContent).toBe("@贝克汉姆 取消关注了该话题");
+    expect(document.body.textContent).not.toContain("bei-ke-han-mu-11");
+  });
+
+  it("falls back to muted @handle when directory misses (never bare uuid)", () => {
+    render(
+      <ThreadUnfollowedSystemEventContent
+        event={{
+          event: "thread_unfollowed",
+          actorId: "ghost-agent",
+          actorType: "agent",
+          actorHandle: "bei-ke-han-mu-11",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@bei-ke-han-mu-11 取消关注了该话题");
+    expect(document.body.textContent).not.toContain("ghost-agent");
   });
 });

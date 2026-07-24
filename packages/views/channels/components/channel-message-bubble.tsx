@@ -53,6 +53,7 @@ import {
   parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
+  parseThreadUnfollowedSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
@@ -60,6 +61,7 @@ import {
   IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
   ReminderSystemEventContent,
+  ThreadUnfollowedSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
@@ -141,6 +143,7 @@ function ChannelSystemMessageRow({
   // (+ "Anchor unavailable" when the anchored message/thread no longer
   // exists), read-only — never the backend's hard-coded English fallback.
   const reminderEvent = parseReminderSystemEvent(message);
+  const threadUnfollowedEvent = parseThreadUnfollowedSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -180,6 +183,8 @@ function ChannelSystemMessageRow({
           <ProjectSystemEventContent event={projectEvent} />
         ) : reminderEvent ? (
           <ReminderSystemEventContent event={reminderEvent} />
+        ) : threadUnfollowedEvent ? (
+          <ThreadUnfollowedSystemEventContent event={threadUnfollowedEvent} />
         ) : hasReferenceParts ? (
           // Spans are anchored to the RAW `message.content`; feeding the trimmed
           // `systemText` would shift every offset and misplace the tokens.

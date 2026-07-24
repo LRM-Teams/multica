@@ -51,6 +51,7 @@ const TEMPLATES = {
         fired: "提醒已触发：{title}",
         anchor_unavailable_suffix: " · 来源不可用",
       },
+      thread_unfollowed: "{actor} 取消关注了该话题",
     },
   },
 };
@@ -209,6 +210,34 @@ describe("formatSystemEventPreviewText", () => {
     });
     expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
       "提醒已触发：Standup · 来源不可用",
+    );
+  });
+
+  it("localizes thread_unfollowed with display_name, not the slug handle (LRM-540)", () => {
+    const message = systemMessage({
+      event: "thread_unfollowed",
+      params: {
+        actor_id: "agent-fe",
+        actor_type: "agent",
+        actor_handle: "bei-ke-han-mu-11",
+      },
+    });
+    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
+      "@前端工程师 取消关注了该话题",
+    );
+  });
+
+  it("falls back to @handle for thread_unfollowed when the directory misses (LRM-540)", () => {
+    const message = systemMessage({
+      event: "thread_unfollowed",
+      params: {
+        actor_id: "ghost-agent",
+        actor_type: "agent",
+        actor_handle: "bei-ke-han-mu-11",
+      },
+    });
+    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
+      "@bei-ke-han-mu-11 取消关注了该话题",
     );
   });
 

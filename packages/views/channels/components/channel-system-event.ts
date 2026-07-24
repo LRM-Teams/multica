@@ -454,3 +454,52 @@ export function parseReminderSystemEvent(message: SystemEventSource): ReminderSy
   }
   return null;
 }
+
+/**
+ * LRM-540 — agent explicit thread unfollow (#329). BE writes English
+ * `@handle unfollowed this thread` as fallback content plus a structured
+ * `thread_unfollowed` part; FE must project display_name + localized verb and
+ * never leave the slug as main-line ink.
+ */
+export const THREAD_EVENTS = {
+  unfollowed: "thread_unfollowed",
+} as const;
+
+export type ThreadSystemEventKind = (typeof THREAD_EVENTS)[keyof typeof THREAD_EVENTS];
+
+const THREAD_EVENT_KINDS = new Set<string>(Object.values(THREAD_EVENTS));
+
+export interface ThreadUnfollowedSystemEvent {
+  event: typeof THREAD_EVENTS.unfollowed;
+  actorId: string;
+  /** Public actor type: "human" | "agent". */
+  actorType?: string;
+  /** Canonical handle for honest gray fallback when directory misses (LRM-238). */
+  actorHandle?: string;
+}
+
+/**
+ * Extract the structured thread-unfollow event. Requires `actor_id` — without
+ * it the row cannot project a subject and must fall back to raw content.
+ * Emit-time `actor_name` / `actor_display_name` are intentionally ignored
+ * (LRM-281 / LRM-238): resolve live via the actor directory.
+ */
+export function parseThreadUnfollowedSystemEvent(
+  message: SystemEventSource,
+): ThreadUnfollowedSystemEvent | null {
+  if (message.type !== "system" || !Array.isArray(message.parts)) return null;
+  for (const part of message.parts) {
+    if (part.type !== "system_event" || !THREAD_EVENT_KINDS.has(part.event)) continue;
+    const params = part.event_params;
+    const actorId =
+      optString(params, "actor_id") ?? optString(params, "agent_id");
+    if (!actorId) continue;
+    return {
+      event: THREAD_EVENTS.unfollowed,
+      actorId,
+      actorType: optString(params, "actor_type") ?? "agent",
+      actorHandle: optString(params, "actor_handle"),
+    };
+  }
+  return null;
+}

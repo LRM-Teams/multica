@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { UserActivityItem } from "@multica/core/types";
 import {
+  activityItemMatchesSelection,
   activitySelectionKey,
   activitySessionParams,
   activitySessionUrl,
@@ -136,5 +137,14 @@ describe("activitySessionUrl + selection key", () => {
 
   it("uses thread root id as selection key", () => {
     expect(activitySelectionKey(thread())).toBe("root-1");
+  });
+
+  it("matches thread selection by id or thread_root_message_id", () => {
+    const item = thread({
+      id: "root-1",
+      thread_root_message_id: "root-1",
+    });
+    expect(activityItemMatchesSelection(item, "root-1")).toBe(true);
+    expect(activityItemMatchesSelection(item, "other")).toBe(false);
   });
 });

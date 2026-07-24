@@ -85,3 +85,31 @@ export function activitySelectionKey(item: UserActivityItem): string {
   }
   return item.id;
 }
+
+/**
+ * Match a feed row to the Activity deep-link selection key (`issue` /
+ * `thread` / `message` query value). Thread rows may deep-link via
+ * `thread_root_message_id` while `id` is the same root (or equal) — accept
+ * either so URL ↔ row resolution stays stable after unread mark-read.
+ */
+export function activityItemMatchesSelection(
+  item: UserActivityItem,
+  selectedKey: string,
+): boolean {
+  if (!selectedKey) return false;
+  if (activitySelectionKey(item) === selectedKey) return true;
+  if (item.kind === "thread") {
+    return (
+      item.id === selectedKey || item.thread_root_message_id === selectedKey
+    );
+  }
+  if (item.kind === "inbox") {
+    const inbox = item.inbox;
+    return (
+      item.id === selectedKey ||
+      inbox?.id === selectedKey ||
+      inbox?.issue_id === selectedKey
+    );
+  }
+  return false;
+}

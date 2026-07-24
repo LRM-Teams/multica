@@ -10,6 +10,58 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestDeleteRuntimesByDaemon_SucceedsWithHistoricalInboxRuntimeSnapshot(t *testing.T) {
+	// LRM-437/438: migration 183 left agent_inbox_event.runtime_id without
+	// ON DELETE, so a historical inbox snapshot blocked Computer bulk delete
+	// with generic "failed to delete runtimes" (Frank IMG_3127).
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-inbox-fk-" + uuid.NewString()
+
+	victim := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+	// Agent lives on a different machine so the active-agent gate does not fire;
+	// only the inbox row's immutable runtime_id snapshot points at victim.
+	otherDaemon := "other-inbox-fk-" + uuid.NewString()
+	otherRT := createBulkDaemonRuntime(t, ctx, otherDaemon, "claude", "offline")
+	agentID := createCascadeFixtureAgent(t, ctx, otherRT, "Inbox Snapshot Agent")
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, reason, requires_wake, status, priority, runtime_id
+		)
+		VALUES ($1, $2, 'ambient', false, 'acked', 0, $3)
+		RETURNING id
+	`, testWorkspaceID, agentID, victim).Scan(&eventID); err != nil {
+		t.Fatalf("insert inbox event with runtime snapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with inbox runtime snapshot, got %d: %s", w.Code, w.Body.String())
+	}
+	assertRuntimeGone(t, ctx, victim)
+	assertRuntimeExists(t, ctx, otherRT)
+
+	var stillPinned int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event WHERE id = $1 AND runtime_id IS NOT NULL
+	`, eventID).Scan(&stillPinned); err != nil {
+		t.Fatalf("count inbox runtime snapshot: %v", err)
+	}
+	if stillPinned != 0 {
+		t.Fatalf("expected inbox runtime_id nulled on runtime delete, still pinned=%d", stillPinned)
+	}
+}
+
 func TestDeleteRuntimesByDaemon_HappyPathDeletesAllOfflineProviders(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -93,6 +93,17 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			'Migration fixture',
 			'{}'::jsonb,
 			now()
+		), (
+			'70000000-0000-4000-8000-000000000009',
+			'70000000-0000-4000-8000-000000000002',
+			NULL,
+			'Historical Cutover Runtime',
+			'cloud',
+			'cutover_test',
+			'offline',
+			'Historical migration fixture',
+			'{}'::jsonb,
+			now()
 		);
 		INSERT INTO agent (
 			id, workspace_id, name, description, runtime_mode, runtime_config,
@@ -143,7 +154,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 		(
 			'70000000-0000-4000-8000-000000000202',
 			'70000000-0000-4000-8000-000000000004',
-			'70000000-0000-4000-8000-000000000003',
+			'70000000-0000-4000-8000-000000000009',
 			'70000000-0000-4000-8000-000000000102',
 			'dispatched', 2, '2026-07-24 00:02:00+00',
 			'2026-07-24 00:02:30+00', NULL, NULL, NULL, NULL, '{}'::jsonb,
@@ -385,6 +396,23 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			agentSessions,
 			deliveries,
 		)
+	}
+	var wakeSessionRuntime, historicalEventRuntime string
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT runtime_id::text
+			 FROM agent_session
+			 WHERE agent_id = '70000000-0000-4000-8000-000000000004'
+			   AND scope = 'agent'),
+			(SELECT runtime_id::text
+			 FROM agent_inbox_event
+			 WHERE id = '70000000-0000-4000-8000-000000000202')
+	`).Scan(&wakeSessionRuntime, &historicalEventRuntime); err != nil {
+		t.Fatalf("read canonical and historical runtimes after cutover: %v", err)
+	}
+	if wakeSessionRuntime != "70000000-0000-4000-8000-000000000003" ||
+		historicalEventRuntime != "70000000-0000-4000-8000-000000000009" {
+		t.Fatalf("cutover runtimes = session:%s historical-event:%s", wakeSessionRuntime, historicalEventRuntime)
 	}
 
 	var legacyCatalogRefs int

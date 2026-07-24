@@ -414,6 +414,269 @@ func TestAgentInboxUsageExecutionIdentitySurvivesRenewAndReclaim(t *testing.T) {
 	}
 }
 
+func TestIssueInboxReclaimPreservesLogicalAttemptAndFencesTerminalWrites(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "issue inbox fence runtime "+uuid.NewString())
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "issue inbox fence "+uuid.NewString())
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, $2)
+		RETURNING id`, testWorkspaceID, "issue inbox attribution "+uuid.NewString()).Scan(&projectID); err != nil {
+		t.Fatalf("create attribution project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET project_id = $2 WHERE id = $1`, issueID, projectID); err != nil {
+		t.Fatalf("bind issue project: %v", err)
+	}
+	task, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: parseUUID(runtimeID),
+		IssueID:   parseUUID(issueID),
+		Priority:  0,
+	})
+	if err != nil {
+		t.Fatalf("create issue inbox event: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1 OR parent_task_id = $1`, task.ID)
+	})
+
+	drain := func() AgentInboxEventResponse {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "issue-inbox-fence-daemon")
+		req = withURLParam(req, "runtimeId", runtimeID)
+		rec := httptest.NewRecorder()
+		testHandler.DrainAgentInboxByRuntime(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("drain issue inbox: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var response DrainAgentInboxResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || len(response.Events) != 1 {
+			t.Fatalf("decode issue drain=%v events=%+v", err, response.Events)
+		}
+		return response.Events[0]
+	}
+	start := func(event AgentInboxEventResponse, executionID string, wantStatus int) {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/execution", AgentInboxExecutionRequest{
+			DeliveryID: event.DeliveryID, LeaseToken: event.LeaseToken, ExecutionID: executionID,
+		}, testWorkspaceID, "issue-inbox-fence-daemon")
+		req = withURLParam(req, "eventId", event.ID)
+		rec := httptest.NewRecorder()
+		testHandler.StartAgentInboxExecution(rec, req)
+		if rec.Code != wantStatus {
+			t.Fatalf("start issue execution: status=%d body=%s, want %d", rec.Code, rec.Body.String(), wantStatus)
+		}
+	}
+
+	first := drain()
+	firstExecutionID := uuid.NewString()
+	start(first, firstExecutionID, http.StatusOK)
+	var source, executionIssueID, executionProjectID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT source, issue_id::text, project_id::text
+		FROM agent_execution
+		WHERE id = $1`, firstExecutionID).Scan(&source, &executionIssueID, &executionProjectID); err != nil {
+		t.Fatalf("load issue execution attribution: %v", err)
+	}
+	if source != "issue" || executionIssueID != issueID || executionProjectID != projectID {
+		t.Fatalf("issue execution attribution = source:%q issue:%s project:%s", source, executionIssueID, executionProjectID)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_event_delivery
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1`, first.DeliveryID); err != nil {
+		t.Fatalf("expire first issue delivery: %v", err)
+	}
+	second := drain()
+	if second.ID != first.ID || second.DeliveryID == first.DeliveryID {
+		t.Fatalf("reclaim got event=%s delivery=%s, want same event/new delivery", second.ID, second.DeliveryID)
+	}
+	var attempt int32
+	if err := testPool.QueryRow(ctx, `SELECT attempt FROM agent_inbox_event WHERE id = $1`, task.ID).Scan(&attempt); err != nil {
+		t.Fatalf("load logical attempt after reclaim: %v", err)
+	}
+	if attempt != 1 {
+		t.Fatalf("logical attempt after transport reclaim = %d, want 1", attempt)
+	}
+
+	staleExecutionID := uuid.NewString()
+	start(first, staleExecutionID, http.StatusConflict)
+	var staleExecutionCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_execution WHERE id = $1`, staleExecutionID).Scan(&staleExecutionCount); err != nil {
+		t.Fatalf("count stale execution: %v", err)
+	}
+	if staleExecutionCount != 0 {
+		t.Fatalf("stale delivery created %d provider executions, want 0", staleExecutionCount)
+	}
+
+	staleFailReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+first.ID+"/fail", FailAgentInboxEventRequest{
+		DeliveryID:    first.DeliveryID,
+		LeaseToken:    first.LeaseToken,
+		Error:         "stale runtime disconnect",
+		FailureReason: "runtime_offline",
+	}, testWorkspaceID, "issue-inbox-fence-daemon")
+	staleFailReq = withURLParam(staleFailReq, "eventId", first.ID)
+	staleFailRec := httptest.NewRecorder()
+	testHandler.FailAgentInboxEvent(staleFailRec, staleFailReq)
+	if staleFailRec.Code != http.StatusConflict {
+		t.Fatalf("stale issue fail: status=%d body=%s, want 409", staleFailRec.Code, staleFailRec.Body.String())
+	}
+
+	staleCompleteReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+first.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: first.DeliveryID,
+		LeaseToken: first.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: "stale issue completion",
+		},
+	}, testWorkspaceID, "issue-inbox-fence-daemon")
+	staleCompleteReq = withURLParam(staleCompleteReq, "eventId", first.ID)
+	staleCompleteRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(staleCompleteRec, staleCompleteReq)
+	if staleCompleteRec.Code != http.StatusConflict {
+		t.Fatalf("stale issue complete: status=%d body=%s, want 409", staleCompleteRec.Code, staleCompleteRec.Body.String())
+	}
+	var eventStatus, currentDeliveryStatus, terminalOutcome string
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status, d.status, COALESCE(e.terminal_outcome, '')
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery d ON d.id = $2
+		WHERE e.id = $1`, task.ID, second.DeliveryID).Scan(&eventStatus, &currentDeliveryStatus, &terminalOutcome); err != nil {
+		t.Fatalf("load state after stale completion: %v", err)
+	}
+	if eventStatus != "draining" || currentDeliveryStatus != "leased" || terminalOutcome != "" {
+		t.Fatalf("state after stale completion = event:%q delivery:%q terminal:%q", eventStatus, currentDeliveryStatus, terminalOutcome)
+	}
+
+	secondExecutionID := uuid.NewString()
+	start(second, secondExecutionID, http.StatusOK)
+	failReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+second.ID+"/fail", FailAgentInboxEventRequest{
+		DeliveryID:    second.DeliveryID,
+		LeaseToken:    second.LeaseToken,
+		Error:         "runtime disconnected",
+		FailureReason: "runtime_offline",
+	}, testWorkspaceID, "issue-inbox-fence-daemon")
+	failReq = withURLParam(failReq, "eventId", second.ID)
+	failRec := httptest.NewRecorder()
+	testHandler.FailAgentInboxEvent(failRec, failReq)
+	if failRec.Code != http.StatusOK {
+		t.Fatalf("fail current issue delivery: status=%d body=%s", failRec.Code, failRec.Body.String())
+	}
+	var parentAttempt, childAttempt int32
+	if err := testPool.QueryRow(ctx, `
+		SELECT parent.attempt, child.attempt
+		FROM agent_inbox_event parent
+		JOIN agent_inbox_event child ON child.parent_task_id = parent.id
+		WHERE parent.id = $1`, task.ID).Scan(&parentAttempt, &childAttempt); err != nil {
+		t.Fatalf("load retry lineage after provider failure: %v", err)
+	}
+	if parentAttempt != 1 || childAttempt != 2 {
+		t.Fatalf("retry lineage attempts = parent:%d child:%d, want 1/2", parentAttempt, childAttempt)
+	}
+}
+
+func TestAgentInboxProviderStartHoldsDeliveryFenceThroughExecutionInsert(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "provider start fence runtime "+uuid.NewString())
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "provider start fence "+uuid.NewString())
+	task, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: parseUUID(runtimeID),
+		IssueID:   parseUUID(issueID),
+		Priority:  0,
+	})
+	if err != nil {
+		t.Fatalf("create provider-start event: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID) })
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "provider-start-fence-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain provider-start event: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil || len(drainResp.Events) != 1 {
+		t.Fatalf("decode provider-start drain=%v events=%+v", err, drainResp.Events)
+	}
+	event := drainResp.Events[0]
+
+	blockTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin execution-insert blocker: %v", err)
+	}
+	defer blockTx.Rollback(context.Background())
+	if _, err := blockTx.Exec(ctx, `LOCK TABLE agent_execution IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock execution table: %v", err)
+	}
+
+	startRec := httptest.NewRecorder()
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/execution", AgentInboxExecutionRequest{
+			DeliveryID:  event.DeliveryID,
+			LeaseToken:  event.LeaseToken,
+			ExecutionID: uuid.NewString(),
+		}, testWorkspaceID, "provider-start-fence-daemon")
+		req = withURLParam(req, "eventId", event.ID)
+		testHandler.StartAgentInboxExecution(startRec, req)
+	}()
+
+	waitDeadline := time.Now().Add(3 * time.Second)
+	for {
+		var blocked bool
+		if err := testPool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND wait_event_type = 'Lock'
+				  AND query ILIKE '%INSERT INTO agent_execution%'
+			)`).Scan(&blocked); err != nil {
+			t.Fatalf("inspect blocked provider start: %v", err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatal("provider start did not reach the blocked execution insert")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	reclaimCtx, cancelReclaim := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancelReclaim()
+	if _, err := testPool.Exec(reclaimCtx, `
+		UPDATE agent_event_delivery
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1`, event.DeliveryID); err == nil {
+		t.Fatal("delivery mutation crossed provider-start fence while execution insert was blocked")
+	}
+
+	if err := blockTx.Rollback(ctx); err != nil {
+		t.Fatalf("release execution-insert blocker: %v", err)
+	}
+	select {
+	case <-startDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider start did not finish after execution table unlock")
+	}
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("provider start after unlock: status=%d body=%s", startRec.Code, startRec.Body.String())
+	}
+}
+
 func TestRetryAgentInboxEventReplaysOriginalPromptAfterNewerCompletion(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

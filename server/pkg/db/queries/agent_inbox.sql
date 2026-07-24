@@ -201,6 +201,52 @@ WHERE d.id = $1
   )
 RETURNING *;
 
+-- name: LockActiveAgentInboxDelivery :one
+-- Provider start and non-chat terminal writes take this fence inside the same
+-- transaction as the event mutation. Reclaim cannot slip between a read-only
+-- lease check and the canonical write boundary.
+SELECT d.runtime_id
+FROM agent_event_delivery d
+JOIN agent_inbox_event e
+  ON e.id = d.inbox_event_id
+ AND e.agent_session_id = d.agent_session_id
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND d.lease_expires_at > now()
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+FOR UPDATE OF d, e;
+
+-- name: LockCurrentAgentInboxDelivery :one
+-- Terminal reports may arrive after their lease timestamp, matching the ACK
+-- contract below, but only while no newer delivery has reclaimed the event.
+SELECT d.runtime_id
+FROM agent_event_delivery d
+JOIN agent_inbox_event e
+  ON e.id = d.inbox_event_id
+ AND e.agent_session_id = d.agent_session_id
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+FOR UPDATE OF d, e;
+
 -- name: AckAgentInboxDelivery :one
 WITH active_delivery AS (
   UPDATE agent_event_delivery d

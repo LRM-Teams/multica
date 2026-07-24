@@ -60,7 +60,7 @@ INSERT INTO agent_session (
 SELECT DISTINCT
   agent.workspace_id,
   task.agent_id,
-  task.runtime_id,
+  agent.runtime_id,
   'agent',
   'active'
 FROM agent_task_queue task
@@ -94,8 +94,8 @@ ALTER TABLE agent_inbox_event
   ADD COLUMN wait_reason TEXT,
   ADD COLUMN initiator_user_id UUID REFERENCES "user"(id) ON DELETE SET NULL;
 
--- Canonical work attempts are one-based. Deliveries now own their own retry
--- counter; newly created work events retain the former task retry budget.
+-- Canonical provider attempts are one-based. Transport deliveries may be
+-- renewed or reclaimed without consuming this logical retry budget.
 ALTER TABLE agent_inbox_event
   ALTER COLUMN attempt SET DEFAULT 1;
 

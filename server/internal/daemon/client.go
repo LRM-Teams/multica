@@ -423,15 +423,6 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []TaskUsageEntry) error {
-	if len(usage) == 0 {
-		return nil
-	}
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/usage", taskID), map[string]any{
-		"usage": usage,
-	}, nil)
-}
-
 // StartAgentInboxExecution persists the daemon-minted provider-run UUID before
 // calling the provider. delivery_id remains only the active transport lease.
 func (c *Client) StartAgentInboxExecution(ctx context.Context, lease AgentInboxLease, executionID string) error {

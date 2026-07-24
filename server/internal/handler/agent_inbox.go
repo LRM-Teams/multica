@@ -445,31 +445,21 @@ func (h *Handler) StartAgentInboxExecution(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if _, ok := h.requireActiveAgentInboxDelivery(w, r, event, deliveryID, leaseToken); !ok {
-		return
-	}
 	executionID, ok := parseUUIDOrBadRequest(w, req.ExecutionID, "execution_id")
 	if !ok {
 		return
 	}
-	if err := h.Queries.CreateAgentInboxExecution(r.Context(), db.CreateAgentInboxExecutionParams{
-		ExecutionID:  executionID,
+	if _, err := h.TaskService.StartAgentInboxTask(r.Context(), executionID, service.AgentInboxDeliveryFence{
+		DeliveryID:   deliveryID,
 		InboxEventID: event.ID,
+		LeaseToken:   leaseToken,
 	}); err != nil {
-		slog.Warn("create inbox execution failed", "execution_id", req.ExecutionID, "inbox_event_id", uuidToString(event.ID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to create inbox execution")
-		return
-	}
-	if _, err := h.Queries.GetAgentInboxExecution(r.Context(), db.GetAgentInboxExecutionParams{ExecutionID: executionID, InboxEventID: event.ID}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "execution_id is already bound to another inbox event")
+			writeError(w, http.StatusConflict, "delivery lease is no longer active or execution_id is already bound")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to verify inbox execution")
-		return
-	}
-	if _, err := h.TaskService.StartTask(r.Context(), event.ID); err != nil {
-		writeError(w, http.StatusConflict, "inbox event is no longer runnable")
+		slog.Warn("start inbox execution failed", "execution_id", req.ExecutionID, "inbox_event_id", uuidToString(event.ID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start inbox execution")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -561,20 +551,30 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var workCompletion *service.CompleteTaskOutcome
+	ackedSeq := int64(0)
 	if !event.ChatSessionID.Valid {
 		result, _ := json.Marshal(req.TaskCompleteRequest)
 		var completionErr error
-		workCompletion, completionErr = h.TaskService.CompleteDaemonTask(
+		workCompletion, completionErr = h.TaskService.CompleteDaemonInboxTask(
 			r.Context(),
-			event.ID,
+			service.AgentInboxDeliveryFence{
+				DeliveryID:   deliveryID,
+				InboxEventID: event.ID,
+				LeaseToken:   leaseToken,
+			},
 			result,
 			req.SessionID,
 			req.WorkDir,
 		)
 		if completionErr != nil {
+			if errors.Is(completionErr, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "delivery lease is no longer active")
+				return
+			}
 			writeError(w, http.StatusBadRequest, completionErr.Error())
 			return
 		}
+		ackedSeq = workCompletion.AckedSeq
 		event = workCompletion.Task
 		task = agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
 	}
@@ -614,18 +614,21 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
-		ID:           deliveryID,
-		InboxEventID: event.ID,
-		LeaseToken:   leaseToken,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "delivery lease is no longer active")
+	if event.ChatSessionID.Valid {
+		acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
+			ID:           deliveryID,
+			InboxEventID: event.ID,
+			LeaseToken:   leaseToken,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "delivery lease is no longer active")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to complete inbox delivery")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to complete inbox delivery")
-		return
+		ackedSeq = acked.SeqTo
 	}
 	result, err := json.Marshal(req.TaskCompleteRequest)
 	if err != nil {
@@ -751,7 +754,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		lifecycleStatus = terminalOutcome
 	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, lifecycleStatus)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": ackedSeq})
 }
 
 func agentInboxCompletionTerminalOutcome(ctx context.Context, h *Handler, event db.AgentInboxEvent, req TaskCompleteRequest, payload *protocol.ChatDonePayload) string {
@@ -804,13 +807,27 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	failureReason := strings.TrimSpace(req.FailureReason)
 	reasonCode := agentInboxFailureReasonCode(errText, failureReason, req.ReasonCode)
 	if failureReason != "" && event.Reason != channelOnboardingReason {
+		deliveryAlreadyAcked := false
+		ackedSeq := int64(0)
 		if !event.ChatSessionID.Valid {
-			if _, err := h.TaskService.FailTask(r.Context(), event.ID, errText, req.SessionID, req.WorkDir, failureReason); err != nil {
+			outcome, err := h.TaskService.FailAgentInboxTask(r.Context(), service.AgentInboxDeliveryFence{
+				DeliveryID:   deliveryID,
+				InboxEventID: event.ID,
+				LeaseToken:   leaseToken,
+			}, errText, req.SessionID, req.WorkDir, failureReason)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeError(w, http.StatusConflict, "delivery lease is no longer active")
+					return
+				}
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			event = outcome.Task
+			deliveryAlreadyAcked = true
+			ackedSeq = outcome.AckedSeq
 		}
-		h.completeFailedAgentInboxEvent(w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir)
+		h.completeFailedAgentInboxEvent(w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir, deliveryAlreadyAcked, ackedSeq)
 		return
 	}
 	failed, err := h.Queries.FailAgentInboxDelivery(r.Context(), db.FailAgentInboxDeliveryParams{
@@ -904,7 +921,7 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 	)
 }
 
-func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID, errText, failureReason, reasonCode, sessionID, workDir string) {
+func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID, errText, failureReason, reasonCode, sessionID, workDir string, deliveryAlreadyAcked bool, ackedSeq int64) {
 	if h.TxStarter == nil {
 		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
 		return
@@ -917,18 +934,21 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
-	acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
-		ID:           deliveryID,
-		InboxEventID: event.ID,
-		LeaseToken:   leaseToken,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "delivery lease is no longer active")
+	if !deliveryAlreadyAcked {
+		acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
+			ID:           deliveryID,
+			InboxEventID: event.ID,
+			LeaseToken:   leaseToken,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "delivery lease is no longer active")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to ack failed inbox delivery")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to ack failed inbox delivery")
-		return
+		ackedSeq = acked.SeqTo
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE agent_inbox_event
@@ -1014,7 +1034,7 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": ackedSeq})
 }
 
 var errAgentInboxEventNotCancellable = errors.New("agent inbox event is not cancellable")

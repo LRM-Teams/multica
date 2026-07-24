@@ -605,6 +605,80 @@ func (q *Queries) GetAgentSession(ctx context.Context, id pgtype.UUID) (AgentSes
 	return i, err
 }
 
+const lockActiveAgentInboxDelivery = `-- name: LockActiveAgentInboxDelivery :one
+SELECT d.runtime_id
+FROM agent_event_delivery d
+JOIN agent_inbox_event e
+  ON e.id = d.inbox_event_id
+ AND e.agent_session_id = d.agent_session_id
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND d.lease_expires_at > now()
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+FOR UPDATE OF d, e
+`
+
+type LockActiveAgentInboxDeliveryParams struct {
+	ID           pgtype.UUID `json:"id"`
+	InboxEventID pgtype.UUID `json:"inbox_event_id"`
+	LeaseToken   pgtype.UUID `json:"lease_token"`
+}
+
+// Provider start and non-chat terminal writes take this fence inside the same
+// transaction as the event mutation. Reclaim cannot slip between a read-only
+// lease check and the canonical write boundary.
+func (q *Queries) LockActiveAgentInboxDelivery(ctx context.Context, arg LockActiveAgentInboxDeliveryParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockActiveAgentInboxDelivery, arg.ID, arg.InboxEventID, arg.LeaseToken)
+	var runtime_id pgtype.UUID
+	err := row.Scan(&runtime_id)
+	return runtime_id, err
+}
+
+const lockCurrentAgentInboxDelivery = `-- name: LockCurrentAgentInboxDelivery :one
+SELECT d.runtime_id
+FROM agent_event_delivery d
+JOIN agent_inbox_event e
+  ON e.id = d.inbox_event_id
+ AND e.agent_session_id = d.agent_session_id
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+FOR UPDATE OF d, e
+`
+
+type LockCurrentAgentInboxDeliveryParams struct {
+	ID           pgtype.UUID `json:"id"`
+	InboxEventID pgtype.UUID `json:"inbox_event_id"`
+	LeaseToken   pgtype.UUID `json:"lease_token"`
+}
+
+// Terminal reports may arrive after their lease timestamp, matching the ACK
+// contract below, but only while no newer delivery has reclaimed the event.
+func (q *Queries) LockCurrentAgentInboxDelivery(ctx context.Context, arg LockCurrentAgentInboxDeliveryParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockCurrentAgentInboxDelivery, arg.ID, arg.InboxEventID, arg.LeaseToken)
+	var runtime_id pgtype.UUID
+	err := row.Scan(&runtime_id)
+	return runtime_id, err
+}
+
 const reclaimExpiredAgentInboxDeliveriesForRuntime = `-- name: ReclaimExpiredAgentInboxDeliveriesForRuntime :exec
 WITH expired_delivery AS (
   UPDATE agent_event_delivery d

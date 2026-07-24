@@ -238,7 +238,6 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		SET status = 'draining',
 		    claimed_at = now(),
 		    dispatched_at = now(),
-		    attempt = attempt + 1,
 		    updated_at = now()
 		WHERE id = $1`, eventID); err != nil {
 		return db.AgentEventDelivery{}, err

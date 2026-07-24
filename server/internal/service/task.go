@@ -1490,6 +1490,59 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 		return nil, fmt.Errorf("start task: %w", err)
 	}
 
+	s.afterTaskStarted(ctx, task)
+	return &task, nil
+}
+
+type AgentInboxDeliveryFence struct {
+	DeliveryID   pgtype.UUID
+	InboxEventID pgtype.UUID
+	LeaseToken   pgtype.UUID
+}
+
+// StartAgentInboxTask persists the immutable provider execution and starts the
+// canonical inbox event under the same active-delivery row lock.
+func (s *TaskService) StartAgentInboxTask(ctx context.Context, executionID pgtype.UUID, fence AgentInboxDeliveryFence) (*db.AgentInboxEvent, error) {
+	var task db.AgentInboxEvent
+	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		if _, err := qtx.LockActiveAgentInboxDelivery(ctx, db.LockActiveAgentInboxDeliveryParams{
+			ID:           fence.DeliveryID,
+			InboxEventID: fence.InboxEventID,
+			LeaseToken:   fence.LeaseToken,
+		}); err != nil {
+			return err
+		}
+		if err := qtx.CreateAgentInboxExecution(ctx, db.CreateAgentInboxExecutionParams{
+			ExecutionID:  executionID,
+			InboxEventID: fence.InboxEventID,
+		}); err != nil {
+			return err
+		}
+		if _, err := qtx.GetAgentInboxExecution(ctx, db.GetAgentInboxExecutionParams{
+			ExecutionID:  executionID,
+			InboxEventID: fence.InboxEventID,
+		}); err != nil {
+			return err
+		}
+		started, err := qtx.StartAgentTask(ctx, fence.InboxEventID)
+		if err != nil {
+			return err
+		}
+		task = started
+		if _, err := qtx.MarkAgentRadarRunRunningByTaskID(ctx, fence.InboxEventID); err != nil {
+			return fmt.Errorf("mark radar run running: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start inbox task: %w", err)
+	}
+
+	s.afterTaskStarted(ctx, task)
+	return &task, nil
+}
+
+func (s *TaskService) afterTaskStarted(ctx context.Context, task db.AgentInboxEvent) {
 	slog.Info("task started", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskStarted(ctx, task)
 	// Tell every connected workspace WS client that this task transitioned
@@ -1499,7 +1552,6 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 	// the issue-card agent activity indicator) lags by up to half a minute
 	// on the transition users care about most.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskRunning, task)
-	return &task, nil
 }
 
 // MarkTaskWaitingLocalDirectory parks a dispatched task in the
@@ -1531,13 +1583,14 @@ type CompleteTaskOutcome struct {
 	Task         db.AgentInboxEvent
 	CompletedNow bool
 	RadarRun     *db.AgentRadarRun
+	AckedSeq     int64
 }
 
 // CompleteTask marks a task as completed. Callers that execute Radar output
 // must use CompleteDaemonTask so completing the task and claiming its Radar
 // run are one atomic transition.
 func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentInboxEvent, error) {
-	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false)
+	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1549,7 +1602,13 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 // or late completion returns CompletedNow=false and never carries execution
 // authority.
 func (s *TaskService) CompleteDaemonTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
-	return s.completeTask(ctx, taskID, result, sessionID, workDir, true)
+	return s.completeTask(ctx, taskID, result, sessionID, workDir, true, nil)
+}
+
+// CompleteDaemonInboxTask fences a non-chat terminal mutation with the active
+// transport delivery and acknowledges both in one transaction.
+func (s *TaskService) CompleteDaemonInboxTask(ctx context.Context, fence AgentInboxDeliveryFence, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
+	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, true, &fence)
 }
 
 // completeTask marks a task as completed.
@@ -1560,11 +1619,21 @@ func (s *TaskService) CompleteDaemonTask(ctx context.Context, taskID pgtype.UUID
 // queued chat message could be claimed in the window between the task
 // flipping to 'completed' and chat_session.session_id being refreshed,
 // causing the new task to resume against a stale (or NULL) session.
-func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string, claimRadar bool) (*CompleteTaskOutcome, error) {
+func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string, claimRadar bool, fence *AgentInboxDeliveryFence) (*CompleteTaskOutcome, error) {
 	var task db.AgentInboxEvent
 	var radarRun *db.AgentRadarRun
+	var ackedSeq int64
 	completeAgentTaskUpdated := false
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		if fence != nil {
+			if _, err := qtx.LockCurrentAgentInboxDelivery(ctx, db.LockCurrentAgentInboxDeliveryParams{
+				ID:           fence.DeliveryID,
+				InboxEventID: fence.InboxEventID,
+				LeaseToken:   fence.LeaseToken,
+			}); err != nil {
+				return err
+			}
+		}
 		t, err := qtx.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
 			ID:        taskID,
 			Result:    result,
@@ -1593,6 +1662,18 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 				}
 				radarRun = &run
 			}
+		}
+
+		if fence != nil {
+			acked, err := qtx.AckAgentInboxDelivery(ctx, db.AckAgentInboxDeliveryParams{
+				ID:           fence.DeliveryID,
+				InboxEventID: fence.InboxEventID,
+				LeaseToken:   fence.LeaseToken,
+			})
+			if err != nil {
+				return err
+			}
+			ackedSeq = acked.SeqTo
 		}
 
 		if t.ChatSessionID.Valid {
@@ -1627,7 +1708,7 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 			// task update succeeded and a later Radar claim returned no rows, the
 			// transaction rolled back and the daemon must receive an error so it
 			// retries instead of acknowledging an uncompleted running task.
-			if errors.Is(err, pgx.ErrNoRows) && !completeAgentTaskUpdated && isTerminalAgentTaskStatus(existing.Status) {
+			if fence == nil && errors.Is(err, pgx.ErrNoRows) && !completeAgentTaskUpdated && isTerminalAgentTaskStatus(existing.Status) {
 				slog.Info("complete task: already finalized",
 					"task_id", util.UUIDToString(taskID),
 					"current_status", existing.Status,
@@ -1819,6 +1900,7 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 		Task:         task,
 		CompletedNow: true,
 		RadarRun:     radarRun,
+		AckedSeq:     ackedSeq,
 	}, nil
 }
 
@@ -1866,7 +1948,11 @@ func isTerminalAgentTaskStatus(status string) bool {
 // (via classifyPoisonedError, the timeout / runtime classifier, etc.)
 // will have their value preserved untouched.
 func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentInboxEvent, error) {
-	return s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false)
+	outcome, err := s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &outcome.Task, nil
 }
 
 // FailTaskWithoutPublicOutput records the terminal failure while suppressing
@@ -1874,10 +1960,25 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // cognition profiles use this fail-closed path so provider/config/schema
 // failures remain internal and can never become a public agent response.
 func (s *TaskService) FailTaskWithoutPublicOutput(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentInboxEvent, error) {
-	return s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true)
+	outcome, err := s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &outcome.Task, nil
 }
 
-func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool) (*db.AgentInboxEvent, error) {
+type FailTaskOutcome struct {
+	Task     db.AgentInboxEvent
+	AckedSeq int64
+}
+
+// FailAgentInboxTask fences a non-chat terminal failure and delivery
+// acknowledgement in one transaction before any retry child is created.
+func (s *TaskService) FailAgentInboxTask(ctx context.Context, fence AgentInboxDeliveryFence, errMsg, sessionID, workDir, failureReason string) (*FailTaskOutcome, error) {
+	return s.failTask(ctx, fence.InboxEventID, errMsg, sessionID, workDir, failureReason, false, &fence)
+}
+
+func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool, fence *AgentInboxDeliveryFence) (*FailTaskOutcome, error) {
 	// MUL-2946: synthesise a refined reason from the error text whenever the
 	// caller didn't supply one. This is the last write-path guard against
 	// "agent_error" coarse rows ending up in agent_inbox_event.failure_reason
@@ -1889,7 +1990,17 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		failureReason = taskfailure.Classify(errMsg).String()
 	}
 	var task db.AgentInboxEvent
+	var ackedSeq int64
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		if fence != nil {
+			if _, err := qtx.LockCurrentAgentInboxDelivery(ctx, db.LockCurrentAgentInboxDeliveryParams{
+				ID:           fence.DeliveryID,
+				InboxEventID: fence.InboxEventID,
+				LeaseToken:   fence.LeaseToken,
+			}); err != nil {
+				return err
+			}
+		}
 		t, err := qtx.FailAgentTask(ctx, db.FailAgentTaskParams{
 			ID:            taskID,
 			Error:         pgtype.Text{String: errMsg, Valid: true},
@@ -1901,6 +2012,18 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 			return err
 		}
 		task = t
+
+		if fence != nil {
+			acked, err := qtx.AckAgentInboxDelivery(ctx, db.AckAgentInboxDeliveryParams{
+				ID:           fence.DeliveryID,
+				InboxEventID: fence.InboxEventID,
+				LeaseToken:   fence.LeaseToken,
+			})
+			if err != nil {
+				return err
+			}
+			ackedSeq = acked.SeqTo
+		}
 
 		// Keep resume-unsafe sessions on the task row for observability, but
 		// do not promote them to the chat-level resume pointer. If the existing
@@ -1935,13 +2058,13 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		return nil
 	}); err != nil {
 		if existing, lookupErr := s.Queries.GetAgentTask(ctx, taskID); lookupErr == nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if fence == nil && errors.Is(err, pgx.ErrNoRows) {
 				slog.Info("fail task: already finalized",
 					"task_id", util.UUIDToString(taskID),
 					"current_status", existing.Status,
 					"agent_id", util.UUIDToString(existing.AgentID),
 				)
-				return &existing, nil
+				return &FailTaskOutcome{Task: existing}, nil
 			}
 			slog.Warn("fail task failed",
 				"task_id", util.UUIDToString(taskID),
@@ -2019,7 +2142,7 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	// Broadcast
 	s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, task)
 
-	return &task, nil
+	return &FailTaskOutcome{Task: task, AckedSeq: ackedSeq}, nil
 }
 
 // retryableReasons enumerates failure reasons that the auto-retry path is

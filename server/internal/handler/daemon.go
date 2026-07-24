@@ -1824,9 +1824,7 @@ func (h *Handler) emitIssueExecutedOnFirstCompletion(r *http.Request, task *db.A
 }
 
 // AgentUsagePayload is the token ledger payload reported by a daemon after an
-// execution. The daemon endpoint intentionally remains task-addressed because
-// agent_inbox_event is the execution lease contract; the stored ledger is
-// agent_usage and covers both issue and chat executions.
+// inbox execution.
 type AgentUsagePayload struct {
 	Provider         string `json:"provider"`
 	Model            string `json:"model"`
@@ -1834,55 +1832,6 @@ type AgentUsagePayload struct {
 	OutputTokens     int64  `json:"output_tokens"`
 	CacheReadTokens  int64  `json:"cache_read_tokens"`
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
-}
-
-func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
-	taskID := chi.URLParam(r, "taskId")
-
-	// Verify the caller owns this task's workspace.
-	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
-	if !ok {
-		return
-	}
-
-	var req struct {
-		Usage []AgentUsagePayload `json:"usage"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	// The normal write boundary is StartTask. Repeat this idempotently only to
-	// cover tasks already running while a server is upgraded to this ledger.
-	if err := h.Queries.CreateAgentQueueExecution(r.Context(), parseUUID(taskID)); err != nil {
-		slog.Warn("ensure queue execution failed", "task_id", taskID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to load task execution")
-		return
-	}
-
-	source := "issue"
-	if task.ChatSessionID.Valid {
-		source = "chat"
-	}
-
-	for _, u := range req.Usage {
-		if err := h.Queries.UpsertAgentUsage(r.Context(), db.UpsertAgentUsageParams{
-			ExecutionID:      parseUUID(taskID),
-			Source:           source,
-			Provider:         u.Provider,
-			Model:            u.Model,
-			InputTokens:      u.InputTokens,
-			OutputTokens:     u.OutputTokens,
-			CacheReadTokens:  u.CacheReadTokens,
-			CacheWriteTokens: u.CacheWriteTokens,
-		}); err != nil {
-			slog.Warn("upsert agent usage failed", "execution_id", taskID, "model", u.Model, "error", err)
-			continue
-		}
-		h.TaskService.CaptureTaskUsage(r.Context(), task, u.Provider, u.Model, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens)
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // GetTaskStatus returns the current status of a task.

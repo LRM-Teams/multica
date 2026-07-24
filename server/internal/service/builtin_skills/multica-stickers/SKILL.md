@@ -1,6 +1,6 @@
 ---
 name: multica-stickers
-description: "Use for short social chat beats that should be a sticker instead of text: greetings, ok/收到, thanks, praise, welcome, laughter, or 'on it'. Covers stable sticker ids, `multica message send --sticker`, combining one sticker with substantive text, and when not to use stickers. Do not use for substantive-only answers or issue comments."
+description: "Use for short social chat beats that should be a sticker instead of text: greetings, ok/收到, thanks, praise, welcome, laughter, or 'on it'. Covers stable sticker ids, standalone-chat final sticker output, channel/DM/thread `multica message send --sticker`, combining one sticker with substantive text, and when not to use stickers. Do not use for substantive-only answers or issue comments."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -33,15 +33,33 @@ These ids are stable; use them straight from this table — do **not** look them
 | 安排 / 这就办 | `on-it` |
 | 哈哈 / 笑死 | `huaji` |
 
-## How to send
+## How to reply
+
+Follow the current Chat Mode delivery contract. There are two distinct paths.
+
+### Standalone chat session
+
+The final assistant output is delivered back to the current session
+automatically. Do not run `multica message send`.
+Do not search for a DM/channel target.
 
 Sticker only (for example user says "hi"):
 
-    multica message send --sticker hi
+    {"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}
 
 Sticker plus explanation (for example user assigns work and you need to answer):
 
-    multica message send --sticker got-it --message "这个问题是因为 xxx，我建议 xxx"
+    {"action":"message_send","parts":[{"type":"sticker","sticker_id":"got-it"},{"type":"text","text":"这个问题是因为 xxx，我建议 xxx"}]}
+
+Return exactly one JSON object as final output, with no surrounding commentary.
+
+### DM, channel, or thread
+
+Use the task-scoped transport with the explicit target supplied by the current
+surface:
+
+    multica message send --target <target> --sticker hi
+    multica message send --target <target> --sticker got-it --message "这个问题是因为 xxx，我建议 xxx"
 
 After `multica message send` succeeds, leave final assistant output empty so the
 platform does not duplicate the reply.
@@ -65,8 +83,9 @@ Use the printed id with `--sticker`.
 - **Don't** stick one on a substantive message that carries real information only —
   a status report, a code explanation, an actual answer with no social beat. At most
   one sticker per message, and never as filler on top of real content.
-- **Don't** paste `:sticker:<id>:` tokens or JSON action envelopes as final output.
-  Use `multica message send --sticker` instead.
+- **Don't** paste legacy `:sticker:<id>:` tokens.
+- **Don't** use a JSON action envelope in a DM/channel/thread transport run, or
+  use `multica message send` for the current reply in a standalone session.
 - **Don't** embed chat files as markdown images (`![](url)`). Upload with
   `multica attachment upload`, then send with
   `multica message send --attachment-id <id>` (optionally with `--message` /

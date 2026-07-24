@@ -304,6 +304,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID: "chat-1",
+		ChannelID:     "channel-1",
 		AgentSkills: []SkillContextForEnv{{
 			Name:        "Issue Triage",
 			Description: "Use when organizing issue work.",
@@ -517,6 +518,7 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID: "chat-1",
+		ChannelID:     "channel-1",
 		Directed:      true,
 	}
 	out := buildMetaSkillContent("codex", ctx)
@@ -557,6 +559,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID: "chat-1",
+		ChannelID:     "channel-1",
 		Directed:      false, // ambient run
 	}
 	out := buildMetaSkillContent("codex", ctx)
@@ -589,6 +592,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
+		ChannelID:                        "channel-1",
 		Directed:                         true,
 		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
 		AgentSkills:                      []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
@@ -633,6 +637,37 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("chat brief should not contain removed transport-unavailable path %q\n---\n%s", banned, out)
+		}
+	}
+}
+
+func TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID: "standalone-chat-1",
+		Directed:      true,
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	const stickerEnvelope = `{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`
+	for _, want := range []string{
+		"standalone Multica chat session",
+		"final assistant output is delivered automatically to this current chat session",
+		"Do not run `multica message send` or `multica message react` to reply to this current chat session",
+		"Do not search for a DM/channel target",
+		stickerEnvelope,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("standalone chat brief missing %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"Visible chat output is delivered only by the task-scoped Multica CLI transport",
+		"For visible chat replies, run `multica message send` or `multica message react`",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("standalone chat brief contains channel transport rule %q\n---\n%s", banned, out)
 		}
 	}
 }
@@ -836,6 +871,7 @@ func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("pi", TaskContextForEnv{
 		ChatSessionID: "chat-1",
+		ChannelID:     "channel-1",
 		ProjectID:     "project-1",
 		ProjectTitle:  "Demo Project",
 		ProjectResources: []ProjectResourceForEnv{{

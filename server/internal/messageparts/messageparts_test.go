@@ -337,6 +337,29 @@ func TestUnwrapStructuredMessageSendTextParts(t *testing.T) {
 	}
 }
 
+func TestUnwrapStructuredMessageSendStickerOnly(t *testing.T) {
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(
+		`{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if !unwrapped {
+		t.Fatal("expected sticker-only message_send payload to unwrap")
+	}
+	if content == "" {
+		t.Fatal("sticker-only payload must receive accessible fallback content")
+	}
+	if len(parts) != 1 ||
+		parts[0].Type != protocol.MessagePartTypeSticker ||
+		parts[0].PackID != BuiltinStickerPackID ||
+		parts[0].StickerID != "hi" ||
+		parts[0].Alt == "" {
+		t.Fatalf("parts = %+v, want one normalized builtin hi sticker", parts)
+	}
+}
+
 func TestUnwrapStructuredMessageSendEmbeddedTextPrefixedEnvelope(t *testing.T) {
 	raw := `Repo is not checked out this turn either - consistent with prior attempts. {"action":"message_send","output":"Visible reply","parts":[{"type":"text","text":"Visible reply"}]}`
 	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)

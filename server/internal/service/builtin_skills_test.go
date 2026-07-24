@@ -76,6 +76,26 @@ func TestBuiltinSkillsConformToTemplate(t *testing.T) {
 	}
 }
 
+func TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery(t *testing.T) {
+	t.Parallel()
+	skill, ok := findSkill(t, "multica-stickers")
+	if !ok {
+		return
+	}
+
+	for _, want := range []string{
+		"Standalone chat session",
+		`{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`,
+		"DM, channel, or thread",
+		"explicit target",
+		"Do not search for a DM/channel target",
+	} {
+		if !strings.Contains(skill.Content, want) {
+			t.Errorf("multica-stickers skill missing delivery contract %q", want)
+		}
+	}
+}
+
 // TestBuiltinSkillsFrontmatterIsStrictYAML is the regression guard for MUL-3100
 // / GitHub #3851: a built-in SKILL.md whose frontmatter is not valid YAML 1.2
 // (the canonical break is an unquoted `: ` inside the description) is silently

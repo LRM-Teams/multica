@@ -310,6 +310,12 @@ func buildChatPrompt(task Task, agentRoot string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a chat assistant for a Multica workspace.\n")
 	b.WriteString("A user is chatting with you directly. Respond to their message.\n\n")
+	if task.ChannelID == "" {
+		b.WriteString("Standalone chat delivery contract:\n")
+		b.WriteString("- Your final assistant output is delivered to this chat session automatically.\n")
+		b.WriteString("- Do not use `multica message send` or search for a DM/channel target to reply to this current chat session.\n")
+		b.WriteString("- For a sticker-only reply, return exactly one JSON object as the final output, with no surrounding commentary. Example greeting sticker: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`.\n\n")
+	}
 	writeAgentRootSection(&b, agentRoot)
 	b.WriteString("Context assembly rules:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread only. Do not assume visibility into other DMs, channels, issues, or threads unless the user explicitly references them and the Multica CLI allows access.\n")

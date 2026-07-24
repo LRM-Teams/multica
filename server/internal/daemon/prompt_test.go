@@ -454,6 +454,35 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 	})
 }
 
+func TestBuildChatPromptStandaloneDeliveryContract(t *testing.T) {
+	t.Parallel()
+
+	const stickerEnvelope = `{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`
+	out := buildChatPrompt(Task{
+		ChatSessionID: "standalone-chat-1",
+		ChatMessage:   "hi",
+	}, "")
+
+	for _, want := range []string{
+		"final assistant output is delivered to this chat session automatically",
+		"Do not use `multica message send` or search for a DM/channel target",
+		stickerEnvelope,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("standalone chat prompt missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+
+	channelOut := buildChatPrompt(Task{
+		ChatSessionID: "channel-chat-1",
+		ChannelID:     "channel-1",
+		ChatMessage:   "hi",
+	}, "")
+	if strings.Contains(channelOut, "final assistant output is delivered to this chat session automatically") {
+		t.Errorf("channel-bound chat prompt must not advertise standalone delivery\n--- output ---\n%s", channelOut)
+	}
+}
+
 // TestBuildPromptDefaultMentionsRecent pins that the catch-all fallback
 // prompt (no trigger comment, no chat, no autopilot, no quick-create) also
 // teaches the agent about --recent as the long-issue-friendly alternative

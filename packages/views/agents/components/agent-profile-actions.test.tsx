@@ -222,10 +222,11 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
   });
 
-  it("isolates Delete in a danger bottom zone for managers", () => {
+  it("Delete is the only solid destructive in a border-t danger zone (LRM-593 lock A)", () => {
     render(<AgentProfileActions agent={agent} canManage />);
     const del = screen.getByTestId("agent-profile-action-delete");
-    expect(del.className).toMatch(/text-destructive/);
+    // Solid destructive: white text on a filled bg-destructive (not the wash).
+    expect(del.className).toMatch(/text-white/);
     expect(del.parentElement?.className).toMatch(/border-t/);
   });
 
@@ -262,6 +263,16 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
       expect(mocks.cancelChannelInboxEvent).toHaveBeenCalledWith("dm-1", "inbox-1");
     });
     expect(mocks.toastSuccess).toHaveBeenCalledWith("Stopped Atlas");
+  });
+
+  it("Stop is a danger wash outline, not solid (LRM-593 lock A hierarchy)", () => {
+    mocks.dms = [dm];
+    mocks.activeTasks = [runningTask()];
+    render(<AgentProfileActions agent={agent} canManage />);
+    const stop = screen.getByTestId("agent-profile-action-stop");
+    // Wash outline: a destructive border, and NOT promoted to solid (no white text).
+    expect(stop.className).toMatch(/border-destructive/);
+    expect(stop.className).not.toMatch(/text-white/);
   });
 
   it("keeps Stop out of the Delete danger zone", () => {

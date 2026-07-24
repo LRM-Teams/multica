@@ -48,6 +48,16 @@ import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
  *
  * LRM-589: DM Agent Stop lives here (not beside the DM header cue). Show
  * Stop only when this agent has a stoppable 1:1 DM task — never "Stop all".
+ *
+ * LRM-593 (Frank lock A, carrier LRM-592): pull the three buttons apart by
+ * weight so they stop reading as a flat red wall (Frank「就是这几个按钮问题」).
+ *   Message = outline · default (lightest)
+ *   Stop    = danger wash OUTLINE  (destructive variant wash + destructive
+ *             border; subordinate — temporary cancel)
+ *   Delete  = the ONLY solid destructive (filled bg-destructive + white),
+ *             above a `border-t` danger zone (heaviest — permanent).
+ * No second destructive variant is invented: Stop reuses the existing
+ * destructive wash + a border; only Delete is promoted to a solid fill.
  */
 export function AgentProfileActions({
   agent,
@@ -159,9 +169,11 @@ export function AgentProfileActions({
         {!isArchived && stoppableTask ? (
           <Button
             type="button"
+            // LRM-593 lock A: Stop = danger wash OUTLINE (existing destructive
+            // wash + destructive border). NOT solid — only Delete is solid.
             variant="destructive"
             size="lg"
-            className="w-full gap-2"
+            className="w-full gap-2 border-destructive/40"
             data-testid="agent-profile-action-stop"
             disabled={stopping}
             onClick={() => void handleStop()}
@@ -182,9 +194,11 @@ export function AgentProfileActions({
           <div className="mt-1 border-t border-border pt-3">
             <Button
               type="button"
+              // LRM-593 lock A: Delete = the ONLY solid destructive (filled
+              // bg-destructive + white text) so it outweighs the wash Stop.
               variant="destructive"
               size="lg"
-              className="w-full gap-2"
+              className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
               data-testid="agent-profile-action-delete"
               disabled={deleting}
               onClick={() => setConfirmDelete(true)}

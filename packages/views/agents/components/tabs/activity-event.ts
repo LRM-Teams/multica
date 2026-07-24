@@ -7,26 +7,36 @@ import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 // not API fields. Mainline vs diagnostic is driven by `activity_kind` semantics
 // (raft-aligned #389), NOT a `visibility` flag (removed in the cutover).
 
-// Keep the palette intentionally quiet: only failures get color; every other
-// state is neutral gray. "Is it live?" now reads via the avatar's breathing
-// pulse (actor-avatar `animate-ping`), not a dot color.
+// LRM-560 — Activity unified design language: node colors are full tokens
+// (command=running, in-progress=brand, waiting=warning, failure=destructive,
+// idle/neutral=muted). Live presence still uses the avatar pulse separately.
 export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure" | "radar";
 
 // SINGLE source for the tone → dot-color map. Both the Activity timeline and the
 // name-row live-status header project the SAME latest Activity row, so the dot
-// must read from ONE table — never two hand-kept copies that can drift (they
-// did: this used to be duplicated verbatim in activity-timeline.tsx and
-// resolve-agent-live-status.ts). Slack-style reduction: active / running /
-// waiting / radar all collapse to neutral gray (distinguished by label + the
-// avatar pulse), and only a failure keeps an accent (destructive red).
+// must read from ONE table — never two hand-kept copies that can drift.
 export const ACTIVITY_TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
-  active: "bg-muted-foreground/40",
-  running: "bg-muted-foreground/40",
-  waiting: "bg-muted-foreground/40",
+  active: "bg-brand",
+  running: "bg-running",
+  waiting: "bg-warning",
   failure: "bg-destructive",
   radar: "bg-muted-foreground/40",
 };
+
+/**
+ * LRM-554 / LRM-560 — collapse model blank lines before `pre-wrap` / markdown
+ * so expanded thinking/output doesn't paint large empty gaps.
+ */
+export function normalizeActivityExpandedText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /

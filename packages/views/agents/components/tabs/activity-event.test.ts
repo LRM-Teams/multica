@@ -4,8 +4,25 @@ import {
   activityExpansionContent,
   activityPresentation,
   isNarrativeActivityEvent,
+  normalizeActivityExpandedText,
+  ACTIVITY_TONE_DOT_CLASS,
   type ActivityLabelKey,
 } from "./activity-event";
+
+describe("normalizeActivityExpandedText (LRM-554 / LRM-560)", () => {
+  it("collapses runs of blank lines to at most one and trims ends", () => {
+    expect(normalizeActivityExpandedText("  a  \n\n\n\nb  \n")).toBe("a\n\nb");
+  });
+
+  it("maps tones onto design tokens (no hex)", () => {
+    expect(ACTIVITY_TONE_DOT_CLASS.running).toBe("bg-running");
+    expect(ACTIVITY_TONE_DOT_CLASS.active).toBe("bg-brand");
+    expect(ACTIVITY_TONE_DOT_CLASS.waiting).toBe("bg-warning");
+    expect(ACTIVITY_TONE_DOT_CLASS.failure).toBe("bg-destructive");
+    expect(ACTIVITY_TONE_DOT_CLASS.neutral).toBe("bg-muted-foreground/40");
+    expect(Object.values(ACTIVITY_TONE_DOT_CLASS).join(" ")).not.toMatch(/#|F5B301/i);
+  });
+});
 
 describe("activityExpansionContent", () => {
   function event(

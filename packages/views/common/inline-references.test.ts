@@ -96,4 +96,51 @@ describe("projectInlineReferences", () => {
     const noSpan = { type: "reference", ref_type: "mention", ref_subtype: "agent", ref_id: "a", label: "@x" } as MessagePart;
     expect(projectInlineReferences("hi @x", [noSpan])).toEqual([{ kind: "text", text: "hi @x" }]);
   });
+
+  describe("emphasis straddling a reference span (#635)", () => {
+    it("folds a **bold**-wrapped issue ref into the reference segment's emphasis", () => {
+      // "Fixed **MUL-123** today" — MUL-123 at [8,15)
+      const segs = projectInlineReferences("Fixed **MUL-123** today", [issueRef(8, 15)]);
+      expect(segs).toEqual([
+        { kind: "text", text: "Fixed " },
+        { kind: "reference", ref: expect.objectContaining({ ref_type: "issue-ref" }), text: "MUL-123", emphasis: "strong" },
+        { kind: "text", text: " today" },
+      ]);
+    });
+
+    it("folds a *em*-wrapped mention, consuming the markers (not left as literal text)", () => {
+      // "see *@Felix* now" — @Felix at [5,11)
+      const segs = projectInlineReferences("see *@Felix* now", [mention(5, 11)]);
+      expect(segs[1]).toMatchObject({ kind: "reference", text: "@Felix", emphasis: "em" });
+      expect(texts(segs)).toEqual(["see ", "@Felix", " now"]);
+      expect(segs[0]).toEqual({ kind: "text", text: "see " });
+      expect(segs[2]).toEqual({ kind: "text", text: " now" });
+    });
+
+    it("folds __bold__ (underscore form) the same way as **bold**", () => {
+      const segs = projectInlineReferences("__MUL-123__ done", [issueRef(2, 9)]);
+      expect(segs[0]).toMatchObject({ emphasis: "strong" });
+      expect(texts(segs)).toEqual(["MUL-123", " done"]);
+    });
+
+    it("does NOT fold when the marker only appears on one side", () => {
+      // "Fixed **MUL-123 today" — closing ** is missing entirely.
+      const segs = projectInlineReferences("Fixed **MUL-123 today", [issueRef(8, 15)]);
+      expect(segs.every((s) => s.kind !== "reference" || !s.emphasis)).toBe(true);
+      expect(texts(segs)).toEqual(["Fixed **", "MUL-123", " today"]);
+    });
+
+    it("does NOT fold across whitespace (matches CommonMark's flanking rule)", () => {
+      // "** MUL-123 **" has spaces immediately inside the markers — not valid
+      // emphasis in CommonMark either, so this must stay untouched/literal.
+      const segs = projectInlineReferences("** MUL-123 ** now", [issueRef(3, 10)]);
+      expect(segs.every((s) => s.kind !== "reference" || !s.emphasis)).toBe(true);
+      expect(texts(segs)).toEqual(["** ", "MUL-123", " ** now"]);
+    });
+
+    it("leaves an ordinary reference with no adjacent markers untouched", () => {
+      const segs = projectInlineReferences("hey @Felix now", [mention(4, 10)]);
+      expect(segs[1]).toEqual({ kind: "reference", ref: expect.objectContaining({ ref_type: "mention" }), text: "@Felix" });
+    });
+  });
 });

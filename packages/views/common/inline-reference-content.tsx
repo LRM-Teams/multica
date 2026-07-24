@@ -66,6 +66,7 @@ export function InlineReferenceContent({
             interactive={interactive}
             highlightQuery={highlightQuery}
             sourceMessageId={sourceMessageId}
+            emphasis={seg.emphasis}
           />
         ),
       )}
@@ -108,8 +109,35 @@ function TextRun({
   );
 }
 
-/** Dispatch a single structured reference to its token renderer. */
+/**
+ * Dispatch a single structured reference to its token renderer, wrapping it
+ * in `<strong>`/`<em>` when {@link stripStraddlingEmphasisMarkers} (#635)
+ * folded a directly-touching `**`/`__`/`*`/`_` pair into this segment — the
+ * author wrote `**LRM-188**`, and each side's markdown pass ran independently
+ * so neither one alone had a matched pair to parse as bold.
+ */
 function ReferenceToken({
+  reference,
+  text,
+  interactive,
+  highlightQuery,
+  sourceMessageId,
+  emphasis,
+}: {
+  reference: ReferencePart;
+  text: string;
+  interactive: boolean;
+  highlightQuery?: string;
+  sourceMessageId?: string;
+  emphasis?: "strong" | "em";
+}): React.JSX.Element {
+  const token = renderReferenceToken({ reference, text, interactive, highlightQuery, sourceMessageId });
+  if (emphasis === "strong") return <strong>{token}</strong>;
+  if (emphasis === "em") return <em>{token}</em>;
+  return token;
+}
+
+function renderReferenceToken({
   reference,
   text,
   interactive,

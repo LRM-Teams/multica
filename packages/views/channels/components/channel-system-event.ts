@@ -1,6 +1,15 @@
 import type { ChannelMessage } from "@multica/core/types";
 
 /**
+ * The parsers below only ever read `type` + `parts` — narrowing to this shape
+ * (rather than requiring a full `ChannelMessage`) lets the same parsers run
+ * against a channel/DM list row's lighter `ChannelLastMessage` too (#634), so
+ * the sidebar preview can share one source of truth with the in-channel row
+ * instead of re-deriving its own copy from the raw fallback `content`.
+ */
+export type SystemEventSource = Pick<ChannelMessage, "type" | "parts">;
+
+/**
  * Member-change system events emitted by the backend (#450). The BE writes a
  * `type=system` message carrying BOTH a canonical fallback `content` string and
  * a typed `parts:[{type:"system_event", event, event_params}]` payload. The FE composes its own copy
@@ -177,7 +186,7 @@ function parseIssueAggregateItems(
  * event — FE does not fold consecutive single-issue rows into a fake group.
  */
 export function parseIssueAggregateSystemEvent(
-  message: ChannelMessage,
+  message: SystemEventSource,
 ): IssueAggregateSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
@@ -209,7 +218,7 @@ export function parseIssueAggregateSystemEvent(
  * {@link parseIssueAggregateSystemEvent} — this parser deliberately skips them
  * so a single row never projects both a summary and a lone issue sentence.
  */
-export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent | null {
+export function parseIssueSystemEvent(message: SystemEventSource): IssueSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
     if (part.type !== "system_event" || !ISSUE_EVENT_KINDS.has(part.event)) continue;
@@ -302,7 +311,7 @@ export function foldedIssueEventIds(
  * 178 converts historical text-JSON payloads rather than retaining a legacy
  * reader here.
  */
-export function parseMemberSystemEvent(message: ChannelMessage): MemberSystemEvent | null {
+export function parseMemberSystemEvent(message: SystemEventSource): MemberSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
     if (part.type !== "system_event" || !MEMBER_EVENT_KINDS.has(part.event)) continue;
@@ -366,7 +375,7 @@ export interface ProjectSystemEvent {
  * be projected into the "把本群关联到项目「X」" sentence — fall back to raw content.
  * Identity is entirely from params — never the fallback `content` string.
  */
-export function parseProjectSystemEvent(message: ChannelMessage): ProjectSystemEvent | null {
+export function parseProjectSystemEvent(message: SystemEventSource): ProjectSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
     if (part.type !== "system_event" || !PROJECT_EVENT_KINDS.has(part.event)) continue;
@@ -427,7 +436,7 @@ export interface ReminderSystemEvent {
  * system message (falls back to the raw canonical `content`) or a row
  * missing the fields the projection depends on (`reminder_id`/`title`).
  */
-export function parseReminderSystemEvent(message: ChannelMessage): ReminderSystemEvent | null {
+export function parseReminderSystemEvent(message: SystemEventSource): ReminderSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
     if (part.type !== "system_event" || !REMINDER_EVENT_KINDS.has(part.event)) continue;

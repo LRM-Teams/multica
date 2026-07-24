@@ -100,17 +100,13 @@ const RESOURCES = {
     actions_stop_aria: "Stop {{name}}'s current task",
     actions_stop_success: "Stopped {{name}}",
     actions_stop_failed: "Failed to stop agent task",
-    actions_archive: "Archive agent",
-  },
-  row_actions: {
-    agent_archived_toast: "Archived",
-    archive_failed_toast: "Archive failed",
-  },
-  detail: {
-    archive_dialog_title: "Archive?",
-    archive_dialog_description: "Archive Atlas",
-    archive_dialog_cancel: "Cancel",
-    archive_dialog_confirm: "Archive",
+    actions_delete: "Delete",
+    delete_dialog_title: "Delete agent?",
+    delete_dialog_description: "Delete {{name}}",
+    delete_dialog_cancel: "Cancel",
+    delete_dialog_confirm: "Confirm delete",
+    agent_deleted_toast: "Deleted",
+    delete_failed_toast: "Delete failed",
   },
 };
 
@@ -220,17 +216,30 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
     expect(screen.queryByText("Report issue")).not.toBeInTheDocument();
   });
 
-  it("hides Archive when canManage is false; keeps Message", () => {
+  it("hides Delete when canManage is false; keeps Message", () => {
     render(<AgentProfileActions agent={agent} canManage={false} />);
-    expect(screen.queryByTestId("agent-profile-action-archive")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
   });
 
-  it("isolates Archive in a danger bottom zone for managers", () => {
+  it("isolates Delete in a danger bottom zone for managers", () => {
     render(<AgentProfileActions agent={agent} canManage />);
-    const archive = screen.getByTestId("agent-profile-action-archive");
-    expect(archive.className).toMatch(/text-destructive/);
-    expect(archive.parentElement?.className).toMatch(/border-t/);
+    const del = screen.getByTestId("agent-profile-action-delete");
+    expect(del.className).toMatch(/text-destructive/);
+    expect(del.parentElement?.className).toMatch(/border-t/);
+  });
+
+  it("Delete confirms then deactivates via archiveAgent (LRM-448: Delete, not Archive)", async () => {
+    render(<AgentProfileActions agent={agent} canManage />);
+    // Button is labeled Delete (never "Archive agent") — LRM-448 AC#2.
+    expect(screen.getByTestId("agent-profile-action-delete")).toHaveTextContent("Delete");
+    expect(screen.queryByText("Archive agent")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("agent-profile-action-delete"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => {
+      expect(mocks.archiveAgent).toHaveBeenCalledWith("agent-1");
+    });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Deleted");
   });
 
   it("hides Stop when the agent has no live DM task", () => {
@@ -255,7 +264,7 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith("Stopped Atlas");
   });
 
-  it("keeps Stop out of the Archive danger zone", () => {
+  it("keeps Stop out of the Delete danger zone", () => {
     mocks.dms = [dm];
     mocks.activeTasks = [runningTask()];
     render(<AgentProfileActions agent={agent} canManage />);

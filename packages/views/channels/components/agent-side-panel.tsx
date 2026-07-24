@@ -338,12 +338,12 @@ function AgentProfileTabContent({
             {t(($) => $.side_panel.info_section)}
           </h3>
           <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-            <span className="text-muted-foreground">{t(($) => $.side_panel.role_label)}</span>
-            <span>
-              <span className="inline-flex rounded-md border border-brand/30 bg-brand/10 px-2 py-0.5 text-xs font-semibold text-brand">
-                {t(($) => $.side_panel.role_agent)}
-              </span>
-            </span>
+            {/* LRM-469: Roles = workspace member roles (Admin/Member), not an
+                "Agent" pill. Agents have no workspace Admin/Member role, so
+                the Profile Info section does not render a Role row — the
+                agent's identity is already conveyed by avatar / handle /
+                visibility. Mixing an "Agent" pill in here conflated agent
+                identity with workspace roles. */}
             <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
             <span className="truncate" title={formatDate(agent.created_at)}>
               {formatDate(agent.created_at)}

@@ -1,13 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  AlertCircle,
-  Loader2,
-  MessageSquare,
-  Square,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, Loader2, MessageSquare, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent } from "@multica/core/types";
@@ -20,7 +14,7 @@ import { dmKeys, dmListOptions } from "@multica/core/dm";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
-import { cn } from "@multica/ui/lib/utils";
+import { Button } from "@multica/ui/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,7 +35,16 @@ import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
  *
  * LRM-468: Restart/Reset · Copy diagnostic · Report issue are out of
  * scope this period (Frank「这几个功能删掉，先不做」). Keep Message +
- * Archive (danger zone) only — do not leave empty shell buttons.
+ * Delete (danger zone) only — do not leave empty shell buttons.
+ *
+ * LRM-448 / Frank 2026-07-23: the destructive action is **Delete**, not
+ * Archive (AC#2 "Message + Delete（非 Archive）"). The backend exposes no
+ * hard-delete endpoint, so "Delete" deactivates via `archiveAgent`
+ * (soft-delete: history preserved, restorable) — the user-facing term is
+ * Delete per the locked spec.
+ *
+ * LRM-480: actions use the standard project Button variants (outline /
+ * destructive) — no custom thick-bordered button style.
  *
  * LRM-589: DM Agent Stop lives here (not beside the DM header cue). Show
  * Stop only when this agent has a stoppable 1:1 DM task — never "Stop all".
@@ -57,8 +60,8 @@ export function AgentProfileActions({
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const { openDM, isPending: openingDM } = useOpenDM();
-  const [confirmArchive, setConfirmArchive] = useState(false);
-  const [archiving, setArchiving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [stopping, setStopping] = useState(false);
 
   const isArchived = !!agent.archived_at;
@@ -85,18 +88,20 @@ export function AgentProfileActions({
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
   };
 
-  const handleArchive = async () => {
-    setArchiving(true);
+  // LRM-448: "Delete" = deactivate via archiveAgent (soft-delete). No
+  // hard-delete endpoint exists; history is preserved and restorable.
+  const handleDelete = async () => {
+    setDeleting(true);
     try {
       await api.archiveAgent(agent.id);
       invalidateAgents();
-      toast.success(t(($) => $.row_actions.agent_archived_toast));
+      toast.success(t(($) => $.side_panel.agent_deleted_toast));
     } catch (e) {
       toast.error(
-        e instanceof Error ? e.message : t(($) => $.row_actions.archive_failed_toast),
+        e instanceof Error ? e.message : t(($) => $.side_panel.delete_failed_toast),
       );
     } finally {
-      setArchiving(false);
+      setDeleting(false);
     }
   };
 
@@ -131,9 +136,12 @@ export function AgentProfileActions({
       </h3>
       <div className="flex flex-col gap-2">
         {!isArchived ? (
-          <ActionButton
-            variant="primary"
-            testId="agent-profile-action-message"
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="w-full gap-2"
+            data-testid="agent-profile-action-message"
             disabled={openingDM}
             onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
           >
@@ -145,45 +153,51 @@ export function AgentProfileActions({
             {openingDM
               ? t(($) => $.side_panel.message_opening)
               : t(($) => $.side_panel.message_button)}
-          </ActionButton>
+          </Button>
         ) : null}
 
         {!isArchived && stoppableTask ? (
-          <ActionButton
-            variant="danger"
-            testId="agent-profile-action-stop"
+          <Button
+            type="button"
+            variant="destructive"
+            size="lg"
+            className="w-full gap-2"
+            data-testid="agent-profile-action-stop"
             disabled={stopping}
             onClick={() => void handleStop()}
-            ariaLabel={t(($) => $.side_panel.actions_stop_aria, {
+            aria-label={t(($) => $.side_panel.actions_stop_aria, {
               name: displayName,
             })}
           >
             {stopping ? (
-              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+              <Loader2 className="size-2.5 shrink-0 animate-spin" aria-hidden />
             ) : (
               <Square className="size-2.5 shrink-0 fill-current" aria-hidden />
             )}
             {t(($) => $.side_panel.actions_stop)}
-          </ActionButton>
+          </Button>
         ) : null}
 
         {canManage && !isArchived ? (
           <div className="mt-1 border-t border-border pt-3">
-            <ActionButton
-              variant="danger"
-              testId="agent-profile-action-archive"
-              disabled={archiving}
-              onClick={() => setConfirmArchive(true)}
+            <Button
+              type="button"
+              variant="destructive"
+              size="lg"
+              className="w-full gap-2"
+              data-testid="agent-profile-action-delete"
+              disabled={deleting}
+              onClick={() => setConfirmDelete(true)}
             >
               <Trash2 className="size-4 shrink-0" aria-hidden />
-              {t(($) => $.side_panel.actions_archive)}
-            </ActionButton>
+              {t(($) => $.side_panel.actions_delete)}
+            </Button>
           </div>
         ) : null}
       </div>
 
-      {confirmArchive ? (
-        <AlertDialog open onOpenChange={(v) => { if (!v) setConfirmArchive(false); }}>
+      {confirmDelete ? (
+        <AlertDialog open onOpenChange={(v) => { if (!v) setConfirmDelete(false); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <div className="flex items-start gap-3">
@@ -192,67 +206,31 @@ export function AgentProfileActions({
                 </div>
                 <div className="flex-1">
                   <AlertDialogTitle>
-                    {t(($) => $.detail.archive_dialog_title)}
+                    {t(($) => $.side_panel.delete_dialog_title)}
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    {t(($) => $.detail.archive_dialog_description, { name: displayName })}
+                    {t(($) => $.side_panel.delete_dialog_description, { name: displayName })}
                   </AlertDialogDescription>
                 </div>
               </div>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>
-                {t(($) => $.detail.archive_dialog_cancel)}
+                {t(($) => $.side_panel.delete_dialog_cancel)}
               </AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
                 onClick={() => {
-                  setConfirmArchive(false);
-                  void handleArchive();
+                  setConfirmDelete(false);
+                  void handleDelete();
                 }}
               >
-                {t(($) => $.detail.archive_dialog_confirm)}
+                {t(($) => $.side_panel.delete_dialog_confirm)}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
       ) : null}
     </section>
-  );
-}
-
-function ActionButton({
-  children,
-  onClick,
-  disabled,
-  variant,
-  testId,
-  ariaLabel,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  variant: "primary" | "danger";
-  testId: string;
-  ariaLabel?: string;
-}) {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      disabled={disabled}
-      onClick={onClick}
-      aria-label={ariaLabel}
-      className={cn(
-        // ≥32px touch target (desktop + mobile).
-        "inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border text-[13px] font-semibold transition-colors disabled:cursor-wait disabled:opacity-70",
-        variant === "primary" &&
-          "border-brand/40 bg-brand/10 text-brand hover:bg-brand/15",
-        variant === "danger" &&
-          "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15",
-      )}
-    >
-      {children}
-    </button>
   );
 }

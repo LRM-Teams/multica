@@ -540,8 +540,6 @@
     "display_name_label": "表示名",
     "description_label": "説明",
     "info_section": "情報",
-    "role_label": "役割",
-    "role_agent": "Agent",
     "actions_section": "アクション",
     "actions_restart": "再起動 / リセット",
     "actions_restart_dialog_title": "「{{name}}」を再起動 / リセットしますか？",
@@ -556,7 +554,13 @@
     "actions_stop_aria": "{{name}} の現在のタスクを停止",
     "actions_stop_success": "{{name}} を停止しました",
     "actions_stop_failed": "タスクの停止に失敗しました",
-    "actions_archive": "エージェントをアーカイブ"
+    "actions_delete": "削除",
+    "delete_dialog_title": "エージェントを削除しますか？",
+    "delete_dialog_description": "“{{name}}” を削除します。割り当てやメンションはできなくなりますが、すべての履歴は保持され、後で復元できます。",
+    "delete_dialog_cancel": "キャンセル",
+    "delete_dialog_confirm": "削除",
+    "agent_deleted_toast": "エージェントを削除しました",
+    "delete_failed_toast": "エージェントを削除できませんでした"
   },
   "live_peek": {
     "current_issue_label": "現在の作業",

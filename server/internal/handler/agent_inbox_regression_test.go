@@ -171,6 +171,66 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	}
 }
 
+func TestAgentInboxDrainPreservesPerAgentFIFOAcrossRuntimes(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	olderRuntimeID := createClaimReclaimRuntime(t, ctx, "cross-runtime FIFO older "+uuid.NewString())
+	currentRuntimeID := createClaimReclaimRuntime(t, ctx, "cross-runtime FIFO current "+uuid.NewString())
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, currentRuntimeID, "cross-runtime FIFO "+uuid.NewString())
+
+	older, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: parseUUID(olderRuntimeID),
+		IssueID:   parseUUID(issueID),
+		Priority:  0,
+	})
+	if err != nil {
+		t.Fatalf("create older cross-runtime event: %v", err)
+	}
+	newer, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: parseUUID(currentRuntimeID),
+		IssueID:   parseUUID(issueID),
+		Priority:  100,
+	})
+	if err != nil {
+		t.Fatalf("create newer cross-runtime event: %v", err)
+	}
+	base := time.Now().Add(-time.Minute)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET created_at = CASE id
+		  WHEN $1 THEN $3::timestamptz
+		  ELSE $3::timestamptz + interval '1 second'
+		END
+		WHERE id IN ($1, $2)`, older.ID, newer.ID, base); err != nil {
+		t.Fatalf("order cross-runtime events: %v", err)
+	}
+
+	currentRuntime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(currentRuntimeID))
+	if err != nil {
+		t.Fatalf("load current runtime: %v", err)
+	}
+	if delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, currentRuntime); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("newer runtime leased %+v before older runtime event, err=%v", delivery, err)
+	}
+
+	olderRuntime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(olderRuntimeID))
+	if err != nil {
+		t.Fatalf("load older runtime: %v", err)
+	}
+	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, olderRuntime)
+	if err != nil {
+		t.Fatalf("lease older cross-runtime event: %v", err)
+	}
+	if delivery.InboxEventID != older.ID {
+		t.Fatalf("leased event %s, want older cross-runtime event %s", uuidToString(delivery.InboxEventID), uuidToString(older.ID))
+	}
+}
+
 func TestAgentWakeAdmissionIsFIFOAndSerialAcrossLegacyQueueAndInbox(t *testing.T) {
 	t.Skip("obsolete transitional queue/inbox admission contract; migration 223 has one inbox source")
 
@@ -674,6 +734,249 @@ func TestAgentInboxProviderStartHoldsDeliveryFenceThroughExecutionInsert(t *test
 	}
 	if startRec.Code != http.StatusOK {
 		t.Fatalf("provider start after unlock: status=%d body=%s", startRec.Code, startRec.Body.String())
+	}
+}
+
+func TestAgentInboxCompletionRollsBackDeliveryAndTaskWhenExecutionFinalizationFails(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "completion atomic runtime "+uuid.NewString())
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "completion atomic "+uuid.NewString())
+	task, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: parseUUID(runtimeID),
+		IssueID:   parseUUID(issueID),
+		Priority:  0,
+	})
+	if err != nil {
+		t.Fatalf("create completion-atomic event: %v", err)
+	}
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "completion-atomic-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain completion-atomic event: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil || len(drainResp.Events) != 1 {
+		t.Fatalf("decode completion-atomic drain=%v events=%+v", err, drainResp.Events)
+	}
+	event := drainResp.Events[0]
+	executionID := uuid.NewString()
+	startReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/execution", AgentInboxExecutionRequest{
+		DeliveryID: event.DeliveryID, LeaseToken: event.LeaseToken, ExecutionID: executionID,
+	}, testWorkspaceID, "completion-atomic-daemon")
+	startReq = withURLParam(startReq, "eventId", event.ID)
+	startRec := httptest.NewRecorder()
+	testHandler.StartAgentInboxExecution(startRec, startReq)
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("start completion-atomic execution: status=%d body=%s", startRec.Code, startRec.Body.String())
+	}
+
+	blockTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin execution-finalization blocker: %v", err)
+	}
+	defer blockTx.Rollback(context.Background())
+	if _, err := blockTx.Exec(ctx, `LOCK TABLE agent_execution IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock execution table: %v", err)
+	}
+
+	completeBody := CompleteAgentInboxEventRequest{
+		DeliveryID:  event.DeliveryID,
+		LeaseToken:  event.LeaseToken,
+		ExecutionID: executionID,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: "atomic completion",
+		},
+	}
+	completeReq := newDaemonTokenRequest(
+		http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/complete", completeBody,
+		testWorkspaceID, "completion-atomic-daemon",
+	)
+	completeReq = withURLParam(completeReq, "eventId", event.ID)
+	completeCtx, cancelComplete := context.WithTimeout(completeReq.Context(), 250*time.Millisecond)
+	completeReq = completeReq.WithContext(completeCtx)
+	completeRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
+	cancelComplete()
+	if completeRec.Code != http.StatusInternalServerError {
+		t.Fatalf("blocked completion status=%d body=%s, want 500", completeRec.Code, completeRec.Body.String())
+	}
+	if err := blockTx.Rollback(ctx); err != nil {
+		t.Fatalf("release execution-finalization blocker: %v", err)
+	}
+
+	var eventStatus, deliveryStatus, terminalOutcome, executionStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status, d.status, COALESCE(e.terminal_outcome, ''), x.status
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery d ON d.id = $2
+		JOIN agent_execution x ON x.id = $3
+		WHERE e.id = $1`,
+		task.ID, event.DeliveryID, executionID,
+	).Scan(&eventStatus, &deliveryStatus, &terminalOutcome, &executionStatus); err != nil {
+		t.Fatalf("load rolled-back completion state: %v", err)
+	}
+	if eventStatus != "draining" || deliveryStatus != "leased" || terminalOutcome != "" || executionStatus != "running" {
+		t.Fatalf(
+			"rolled-back completion = event:%q delivery:%q terminal:%q execution:%q, want draining/leased/empty/running",
+			eventStatus, deliveryStatus, terminalOutcome, executionStatus,
+		)
+	}
+
+	retryReq := newDaemonTokenRequest(
+		http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/complete", completeBody,
+		testWorkspaceID, "completion-atomic-daemon",
+	)
+	retryReq = withURLParam(retryReq, "eventId", event.ID)
+	retryRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(retryRec, retryReq)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("retry completion after rollback: status=%d body=%s", retryRec.Code, retryRec.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status, d.status, COALESCE(e.terminal_outcome, ''), x.status
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery d ON d.id = $2
+		JOIN agent_execution x ON x.id = $3
+		WHERE e.id = $1`,
+		task.ID, event.DeliveryID, executionID,
+	).Scan(&eventStatus, &deliveryStatus, &terminalOutcome, &executionStatus); err != nil {
+		t.Fatalf("load completed retry state: %v", err)
+	}
+	if eventStatus != "acked" || deliveryStatus != "acked" || terminalOutcome != "completed" || executionStatus != "completed" {
+		t.Fatalf(
+			"completed retry = event:%q delivery:%q terminal:%q execution:%q, want acked/acked/completed/completed",
+			eventStatus, deliveryStatus, terminalOutcome, executionStatus,
+		)
+	}
+}
+
+func TestAgentInboxFailureRollsBackDeliveryAndTaskWhenExecutionFinalizationFails(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "failure atomic runtime "+uuid.NewString())
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "failure atomic "+uuid.NewString())
+	task, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: parseUUID(runtimeID),
+		IssueID:   parseUUID(issueID),
+		Priority:  0,
+	})
+	if err != nil {
+		t.Fatalf("create failure-atomic event: %v", err)
+	}
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "failure-atomic-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain failure-atomic event: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil || len(drainResp.Events) != 1 {
+		t.Fatalf("decode failure-atomic drain=%v events=%+v", err, drainResp.Events)
+	}
+	event := drainResp.Events[0]
+	executionID := uuid.NewString()
+	startReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/execution", AgentInboxExecutionRequest{
+		DeliveryID: event.DeliveryID, LeaseToken: event.LeaseToken, ExecutionID: executionID,
+	}, testWorkspaceID, "failure-atomic-daemon")
+	startReq = withURLParam(startReq, "eventId", event.ID)
+	startRec := httptest.NewRecorder()
+	testHandler.StartAgentInboxExecution(startRec, startReq)
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("start failure-atomic execution: status=%d body=%s", startRec.Code, startRec.Body.String())
+	}
+
+	blockTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin failure-finalization blocker: %v", err)
+	}
+	defer blockTx.Rollback(context.Background())
+	if _, err := blockTx.Exec(ctx, `LOCK TABLE agent_execution IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock execution table: %v", err)
+	}
+
+	failBody := FailAgentInboxEventRequest{
+		DeliveryID:    event.DeliveryID,
+		LeaseToken:    event.LeaseToken,
+		Error:         "runtime disconnected during atomic failure",
+		FailureReason: "runtime_offline",
+	}
+	failReq := newDaemonTokenRequest(
+		http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/fail", failBody,
+		testWorkspaceID, "failure-atomic-daemon",
+	)
+	failReq = withURLParam(failReq, "eventId", event.ID)
+	failCtx, cancelFail := context.WithTimeout(failReq.Context(), 250*time.Millisecond)
+	failReq = failReq.WithContext(failCtx)
+	failRec := httptest.NewRecorder()
+	testHandler.FailAgentInboxEvent(failRec, failReq)
+	cancelFail()
+	if failRec.Code != http.StatusInternalServerError {
+		t.Fatalf("blocked failure status=%d body=%s, want 500", failRec.Code, failRec.Body.String())
+	}
+	if err := blockTx.Rollback(ctx); err != nil {
+		t.Fatalf("release failure-finalization blocker: %v", err)
+	}
+
+	var eventStatus, deliveryStatus, terminalOutcome, executionStatus string
+	var retryChildren int
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status, d.status, COALESCE(e.terminal_outcome, ''), x.status,
+		       (SELECT count(*) FROM agent_inbox_event child WHERE child.parent_task_id = e.id)
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery d ON d.id = $2
+		JOIN agent_execution x ON x.id = $3
+		WHERE e.id = $1`,
+		task.ID, event.DeliveryID, executionID,
+	).Scan(&eventStatus, &deliveryStatus, &terminalOutcome, &executionStatus, &retryChildren); err != nil {
+		t.Fatalf("load rolled-back failure state: %v", err)
+	}
+	if eventStatus != "draining" || deliveryStatus != "leased" || terminalOutcome != "" || executionStatus != "running" || retryChildren != 0 {
+		t.Fatalf(
+			"rolled-back failure = event:%q delivery:%q terminal:%q execution:%q children:%d",
+			eventStatus, deliveryStatus, terminalOutcome, executionStatus, retryChildren,
+		)
+	}
+
+	retryReq := newDaemonTokenRequest(
+		http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/fail", failBody,
+		testWorkspaceID, "failure-atomic-daemon",
+	)
+	retryReq = withURLParam(retryReq, "eventId", event.ID)
+	retryRec := httptest.NewRecorder()
+	testHandler.FailAgentInboxEvent(retryRec, retryReq)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("retry failure after rollback: status=%d body=%s", retryRec.Code, retryRec.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status, d.status, COALESCE(e.terminal_outcome, ''), x.status,
+		       (SELECT count(*) FROM agent_inbox_event child WHERE child.parent_task_id = e.id)
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery d ON d.id = $2
+		JOIN agent_execution x ON x.id = $3
+		WHERE e.id = $1`,
+		task.ID, event.DeliveryID, executionID,
+	).Scan(&eventStatus, &deliveryStatus, &terminalOutcome, &executionStatus, &retryChildren); err != nil {
+		t.Fatalf("load failed retry state: %v", err)
+	}
+	if eventStatus != "acked" || deliveryStatus != "acked" || terminalOutcome != "failed" || executionStatus != "failed" || retryChildren != 1 {
+		t.Fatalf(
+			"failed retry = event:%q delivery:%q terminal:%q execution:%q children:%d",
+			eventStatus, deliveryStatus, terminalOutcome, executionStatus, retryChildren,
+		)
 	}
 }
 

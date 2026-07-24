@@ -176,7 +176,6 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		    JOIN agent_session older_session
 		      ON older_session.id = older_event.agent_session_id
 		    WHERE older_event.agent_id = event.agent_id
-		      AND COALESCE(older_event.runtime_id, older_session.runtime_id) = $1
 		      AND older_session.status = 'active'
 		      AND older_event.status IN ('pending', 'failed')
 		      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
@@ -216,7 +215,6 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		    JOIN agent_session older_session
 		      ON older_session.id = older_event.agent_session_id
 		    WHERE older_event.agent_id = event.agent_id
-		      AND COALESCE(older_event.runtime_id, older_session.runtime_id) = $3
 		      AND older_session.status = 'active'
 		      AND older_event.status IN ('pending', 'failed')
 		      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)

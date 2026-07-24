@@ -1586,11 +1586,21 @@ type CompleteTaskOutcome struct {
 	AckedSeq     int64
 }
 
+// AgentInboxCompleteTxHooks lets the inbox handler extend the canonical task
+// completion transaction without splitting delivery/task finalization across
+// commits. Before runs before the delivery row is locked so callers such as
+// channel onboarding can preserve their required lock order. After runs after
+// the task and delivery mutations but before the transaction commits.
+type AgentInboxCompleteTxHooks struct {
+	Before func(qtx *db.Queries, tx pgx.Tx) error
+	After  func(qtx *db.Queries, tx pgx.Tx, outcome *CompleteTaskOutcome) error
+}
+
 // CompleteTask marks a task as completed. Callers that execute Radar output
 // must use CompleteDaemonTask so completing the task and claiming its Radar
 // run are one atomic transition.
 func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentInboxEvent, error) {
-	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false, nil)
+	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false, nil, AgentInboxCompleteTxHooks{})
 	if err != nil {
 		return nil, err
 	}
@@ -1602,13 +1612,26 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 // or late completion returns CompletedNow=false and never carries execution
 // authority.
 func (s *TaskService) CompleteDaemonTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
-	return s.completeTask(ctx, taskID, result, sessionID, workDir, true, nil)
+	return s.completeTask(ctx, taskID, result, sessionID, workDir, true, nil, AgentInboxCompleteTxHooks{})
 }
 
 // CompleteDaemonInboxTask fences a non-chat terminal mutation with the active
 // transport delivery and acknowledges both in one transaction.
 func (s *TaskService) CompleteDaemonInboxTask(ctx context.Context, fence AgentInboxDeliveryFence, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
-	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, true, &fence)
+	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, true, &fence, AgentInboxCompleteTxHooks{})
+}
+
+// CompleteDaemonInboxTaskWithFinalization keeps handler-owned terminal
+// metadata, execution-ledger updates, and collaboration effects in the same
+// transaction as the task transition and delivery acknowledgement.
+func (s *TaskService) CompleteDaemonInboxTaskWithFinalization(
+	ctx context.Context,
+	fence AgentInboxDeliveryFence,
+	result []byte,
+	sessionID, workDir string,
+	hooks AgentInboxCompleteTxHooks,
+) (*CompleteTaskOutcome, error) {
+	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, true, &fence, hooks)
 }
 
 // completeTask marks a task as completed.
@@ -1619,12 +1642,28 @@ func (s *TaskService) CompleteDaemonInboxTask(ctx context.Context, fence AgentIn
 // queued chat message could be claimed in the window between the task
 // flipping to 'completed' and chat_session.session_id being refreshed,
 // causing the new task to resume against a stale (or NULL) session.
-func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string, claimRadar bool, fence *AgentInboxDeliveryFence) (*CompleteTaskOutcome, error) {
+func (s *TaskService) completeTask(
+	ctx context.Context,
+	taskID pgtype.UUID,
+	result []byte,
+	sessionID, workDir string,
+	claimRadar bool,
+	fence *AgentInboxDeliveryFence,
+	hooks AgentInboxCompleteTxHooks,
+) (*CompleteTaskOutcome, error) {
 	var task db.AgentInboxEvent
 	var radarRun *db.AgentRadarRun
 	var ackedSeq int64
 	completeAgentTaskUpdated := false
-	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
+		if hooks.Before != nil {
+			if tx == nil {
+				return errors.New("transaction unavailable for inbox completion finalization")
+			}
+			if err := hooks.Before(qtx, tx); err != nil {
+				return err
+			}
+		}
 		if fence != nil {
 			if _, err := qtx.LockCurrentAgentInboxDelivery(ctx, db.LockCurrentAgentInboxDeliveryParams{
 				ID:           fence.DeliveryID,
@@ -1694,6 +1733,19 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 				RuntimeID: sessionRuntimeID,
 			}); err != nil {
 				return fmt.Errorf("update chat session resume pointer: %w", err)
+			}
+		}
+		if hooks.After != nil {
+			if tx == nil {
+				return errors.New("transaction unavailable for inbox completion finalization")
+			}
+			if err := hooks.After(qtx, tx, &CompleteTaskOutcome{
+				Task:         task,
+				CompletedNow: true,
+				RadarRun:     radarRun,
+				AckedSeq:     ackedSeq,
+			}); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -1948,7 +2000,7 @@ func isTerminalAgentTaskStatus(status string) bool {
 // (via classifyPoisonedError, the timeout / runtime classifier, etc.)
 // will have their value preserved untouched.
 func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentInboxEvent, error) {
-	outcome, err := s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false, nil)
+	outcome, err := s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1960,7 +2012,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // cognition profiles use this fail-closed path so provider/config/schema
 // failures remain internal and can never become a public agent response.
 func (s *TaskService) FailTaskWithoutPublicOutput(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentInboxEvent, error) {
-	outcome, err := s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true, nil)
+	outcome, err := s.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1972,13 +2024,37 @@ type FailTaskOutcome struct {
 	AckedSeq int64
 }
 
+// AgentInboxFailTxFinalizer extends the fenced failure transaction with
+// handler-owned terminal metadata and execution-ledger state. It runs after
+// the task and delivery mutations but before commit.
+type AgentInboxFailTxFinalizer func(qtx *db.Queries, tx pgx.Tx, outcome *FailTaskOutcome) error
+
 // FailAgentInboxTask fences a non-chat terminal failure and delivery
 // acknowledgement in one transaction before any retry child is created.
 func (s *TaskService) FailAgentInboxTask(ctx context.Context, fence AgentInboxDeliveryFence, errMsg, sessionID, workDir, failureReason string) (*FailTaskOutcome, error) {
-	return s.failTask(ctx, fence.InboxEventID, errMsg, sessionID, workDir, failureReason, false, &fence)
+	return s.failTask(ctx, fence.InboxEventID, errMsg, sessionID, workDir, failureReason, false, &fence, nil)
 }
 
-func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool, fence *AgentInboxDeliveryFence) (*FailTaskOutcome, error) {
+// FailAgentInboxTaskWithFinalization keeps terminal metadata, execution-ledger
+// failure, and collaboration effects in the same transaction as the task
+// transition and delivery acknowledgement.
+func (s *TaskService) FailAgentInboxTaskWithFinalization(
+	ctx context.Context,
+	fence AgentInboxDeliveryFence,
+	errMsg, sessionID, workDir, failureReason string,
+	finalize AgentInboxFailTxFinalizer,
+) (*FailTaskOutcome, error) {
+	return s.failTask(ctx, fence.InboxEventID, errMsg, sessionID, workDir, failureReason, false, &fence, finalize)
+}
+
+func (s *TaskService) failTask(
+	ctx context.Context,
+	taskID pgtype.UUID,
+	errMsg, sessionID, workDir, failureReason string,
+	suppressPublicOutput bool,
+	fence *AgentInboxDeliveryFence,
+	finalize AgentInboxFailTxFinalizer,
+) (*FailTaskOutcome, error) {
 	// MUL-2946: synthesise a refined reason from the error text whenever the
 	// caller didn't supply one. This is the last write-path guard against
 	// "agent_error" coarse rows ending up in agent_inbox_event.failure_reason
@@ -1991,7 +2067,7 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	}
 	var task db.AgentInboxEvent
 	var ackedSeq int64
-	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
+	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
 		if fence != nil {
 			if _, err := qtx.LockCurrentAgentInboxDelivery(ctx, db.LockCurrentAgentInboxDeliveryParams{
 				ID:           fence.DeliveryID,
@@ -2053,6 +2129,14 @@ func (s *TaskService) failTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 				RuntimeID: sessionRuntimeID,
 			}); err != nil {
 				return fmt.Errorf("update chat session resume pointer: %w", err)
+			}
+		}
+		if finalize != nil {
+			if tx == nil {
+				return errors.New("transaction unavailable for inbox failure finalization")
+			}
+			if err := finalize(qtx, tx, &FailTaskOutcome{Task: task, AckedSeq: ackedSeq}); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2729,15 +2813,23 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentInb
 // (e.g. some tests construct TaskService directly), fn runs against the
 // regular Queries handle without transactional guarantees.
 func (s *TaskService) runInTx(ctx context.Context, fn func(*db.Queries) error) error {
+	return s.runInTxWithTx(ctx, func(q *db.Queries, _ pgx.Tx) error {
+		return fn(q)
+	})
+}
+
+// runInTxWithTx is the raw transaction seam for terminal paths that must
+// compose service-owned mutations with handler-owned writes before one commit.
+func (s *TaskService) runInTxWithTx(ctx context.Context, fn func(*db.Queries, pgx.Tx) error) error {
 	if s.TxStarter == nil {
-		return fn(s.Queries)
+		return fn(s.Queries, nil)
 	}
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := fn(s.Queries.WithTx(tx)); err != nil {
+	if err := fn(s.Queries.WithTx(tx), tx); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

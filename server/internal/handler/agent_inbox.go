@@ -550,12 +550,29 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	result, err := json.Marshal(req.TaskCompleteRequest)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
+		return
+	}
+	var executionID pgtype.UUID
+	if strings.TrimSpace(req.ExecutionID) != "" {
+		executionID, ok = parseUUIDOrBadRequest(w, req.ExecutionID, "execution_id")
+		if !ok {
+			return
+		}
+	}
+
 	var workCompletion *service.CompleteTaskOutcome
 	ackedSeq := int64(0)
+	isChannelOnboarding := event.Reason == channelOnboardingReason
+	var onboardingID pgtype.UUID
+	channelOnboardingActive := false
+	var chatDonePayload *protocol.ChatDonePayload
+	terminalOutcome := ""
+	var collaborationWakes []channelAgentWake
 	if !event.ChatSessionID.Valid {
-		result, _ := json.Marshal(req.TaskCompleteRequest)
-		var completionErr error
-		workCompletion, completionErr = h.TaskService.CompleteDaemonInboxTask(
+		workCompletion, err = h.TaskService.CompleteDaemonInboxTaskWithFinalization(
 			r.Context(),
 			service.AgentInboxDeliveryFence{
 				DeliveryID:   deliveryID,
@@ -565,56 +582,102 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			result,
 			req.SessionID,
 			req.WorkDir,
+			service.AgentInboxCompleteTxHooks{
+				Before: func(_ *db.Queries, tx pgx.Tx) error {
+					if !isChannelOnboarding {
+						return nil
+					}
+					onboardingID, err = channelOnboardingIDForInboxEventTx(r.Context(), tx, event.ID)
+					if err != nil {
+						return fmt.Errorf("load channel onboarding: %w", err)
+					}
+					if !onboardingID.Valid {
+						return errors.New("channel onboarding inbox event is missing its canonical event")
+					}
+					// Eligibility must be locked before the delivery row. The
+					// membership DELETE trigger owns membership first and then
+					// expires deliveries, so the reverse order can deadlock.
+					channelOnboardingActive, err = channelOnboardingGenerationActiveTx(
+						r.Context(), tx, onboardingID, event.ChannelID, event.AgentID, true,
+					)
+					return err
+				},
+				After: func(qtx *db.Queries, tx pgx.Tx, outcome *service.CompleteTaskOutcome) error {
+					event = outcome.Task
+					task = agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
+					if err := persistAgentInboxCompletionTx(r.Context(), tx, event.ID, result, req.SessionID, req.WorkDir); err != nil {
+						return err
+					}
+					event.Result = result
+					event.SessionID = strToText(req.SessionID)
+					event.WorkDir = strToText(req.WorkDir)
+
+					if isChannelOnboarding {
+						terminalOutcome, err = h.completeChannelOnboardingTx(
+							r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive, req.ChannelOnboardingDecision,
+						)
+						if err != nil {
+							return err
+						}
+					} else {
+						terminalOutcome = "completed"
+					}
+					terminalOutcome = h.agentInboxCompletionOutcomeAfterMustReplyFailure(
+						r.Context(), event, terminalOutcome, isChannelOnboarding, req.MustReplyFailure,
+					)
+					if err := setAgentInboxCompletionFinalizationTx(
+						r.Context(), qtx, tx, event, deliveryID, executionID, result, terminalOutcome,
+					); err != nil {
+						return err
+					}
+					collaborationWakes, err = h.completeCollaborationTurnTx(r.Context(), tx, event)
+					return err
+				},
+			},
 		)
-		if completionErr != nil {
-			if errors.Is(completionErr, pgx.ErrNoRows) {
-				writeError(w, http.StatusConflict, "delivery lease is no longer active")
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, errChannelOnboardingDecisionRequired) {
+				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
-			writeError(w, http.StatusBadRequest, completionErr.Error())
+			writeError(w, http.StatusInternalServerError, "failed to finalize inbox completion")
 			return
 		}
 		ackedSeq = workCompletion.AckedSeq
 		event = workCompletion.Task
 		task = agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
-	}
-	if h.TxStarter == nil {
-		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
-		return
-	}
-
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to begin inbox complete transaction")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	qtx := h.Queries.WithTx(tx)
-	isChannelOnboarding := event.Reason == channelOnboardingReason
-	var onboardingID pgtype.UUID
-	channelOnboardingActive := false
-	if isChannelOnboarding {
-		onboardingID, err = channelOnboardingIDForInboxEventTx(r.Context(), tx, event.ID)
+	} else {
+		if h.TxStarter == nil {
+			writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
+			return
+		}
+		tx, err := h.TxStarter.Begin(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load channel onboarding")
+			writeError(w, http.StatusInternalServerError, "failed to begin inbox complete transaction")
 			return
 		}
-		if !onboardingID.Valid {
-			writeError(w, http.StatusInternalServerError, "channel onboarding inbox event is missing its canonical event")
-			return
-		}
-		// Eligibility must be locked before AckAgentInboxDelivery updates the
-		// delivery/inbox/session rows. The membership DELETE trigger owns the
-		// membership row first and then expires those rows, so taking delivery
-		// first would recreate a delivery -> membership reverse cycle.
-		channelOnboardingActive, err = channelOnboardingGenerationActiveTx(r.Context(), tx, onboardingID, event.ChannelID, event.AgentID, true)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to lock channel onboarding eligibility")
-			return
-		}
-	}
+		defer tx.Rollback(r.Context())
+		qtx := h.Queries.WithTx(tx)
 
-	if event.ChatSessionID.Valid {
+		if isChannelOnboarding {
+			onboardingID, err = channelOnboardingIDForInboxEventTx(r.Context(), tx, event.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load channel onboarding")
+				return
+			}
+			if !onboardingID.Valid {
+				writeError(w, http.StatusInternalServerError, "channel onboarding inbox event is missing its canonical event")
+				return
+			}
+			channelOnboardingActive, err = channelOnboardingGenerationActiveTx(
+				r.Context(), tx, onboardingID, event.ChannelID, event.AgentID, true,
+			)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to lock channel onboarding eligibility")
+				return
+			}
+		}
+
 		acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
 			ID:           deliveryID,
 			InboxEventID: event.ID,
@@ -629,29 +692,14 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			return
 		}
 		ackedSeq = acked.SeqTo
-	}
-	result, err := json.Marshal(req.TaskCompleteRequest)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE agent_inbox_event
-		SET result = $2,
-		    session_id = NULLIF($3, ''),
-		    work_dir = NULLIF($4, ''),
-		    completed_at = COALESCE(completed_at, now()),
-		    updated_at = now()
-		WHERE id = $1`,
-		event.ID, result, req.SessionID, req.WorkDir); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to persist inbox completion")
-		return
-	}
-	event.Result = result
-	event.SessionID = strToText(req.SessionID)
-	event.WorkDir = strToText(req.WorkDir)
-	var chatDonePayload *protocol.ChatDonePayload
-	if event.ChatSessionID.Valid {
+		if err := persistAgentInboxCompletionTx(r.Context(), tx, event.ID, result, req.SessionID, req.WorkDir); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist inbox completion")
+			return
+		}
+		event.Result = result
+		event.SessionID = strToText(req.SessionID)
+		event.WorkDir = strToText(req.WorkDir)
+
 		var sessionRuntimeID pgtype.UUID
 		if req.SessionID != "" {
 			sessionRuntimeID = task.RuntimeID
@@ -666,69 +714,47 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if !isChannelOnboarding {
-			payload, err := h.completedAgentInboxChatPayload(r.Context(), qtx, event, req.TaskCompleteRequest)
+			chatDonePayload, err = h.completedAgentInboxChatPayload(r.Context(), qtx, event, req.TaskCompleteRequest)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to save inbox chat output")
 				return
 			}
-			chatDonePayload = payload
-		}
-	}
-	terminalOutcome := ""
-	if isChannelOnboarding {
-		terminalOutcome, err = h.completeChannelOnboardingTx(r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive, req.ChannelOnboardingDecision)
-		if err != nil {
-			if errors.Is(err, errChannelOnboardingDecisionRequired) {
-				writeError(w, http.StatusConflict, err.Error())
+			terminalOutcome = agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
+		} else {
+			terminalOutcome, err = h.completeChannelOnboardingTx(
+				r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive, req.ChannelOnboardingDecision,
+			)
+			if err != nil {
+				if errors.Is(err, errChannelOnboardingDecisionRequired) {
+					writeError(w, http.StatusConflict, err.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "failed to complete channel onboarding")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "failed to complete channel onboarding")
+		}
+		terminalOutcome = h.agentInboxCompletionOutcomeAfterMustReplyFailure(
+			r.Context(), event, terminalOutcome, isChannelOnboarding, req.MustReplyFailure,
+		)
+		if err := setAgentInboxCompletionFinalizationTx(
+			r.Context(), qtx, tx, event, deliveryID, executionID, result, terminalOutcome,
+		); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "provider execution is no longer active")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to finalize inbox completion")
 			return
 		}
-	} else if event.ChatSessionID.Valid {
-		terminalOutcome = agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
-	} else {
-		terminalOutcome = "completed"
-	}
-	if !isChannelOnboarding && req.MustReplyFailure {
-		// A Raft freshness hold already persisted the attempted output as a
-		// server draft. Acknowledging this execution must not relabel that
-		// draft as an explicit no-reply decision. Actual transport failures
-		// continue through FailAgentInboxEvent.
-		if h.inboxEventHasAgentTransportFreshnessHold(r.Context(), event.ID) {
-			terminalOutcome = "held"
-		} else {
-			terminalOutcome = "no_reply"
+		collaborationWakes, err = h.completeCollaborationTurnTx(r.Context(), tx, event)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to advance collaboration turn")
+			return
 		}
-	}
-	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
-		ID:                 event.ID,
-		WorkspaceID:        event.WorkspaceID,
-		TerminalOutcome:    strToText(terminalOutcome),
-		TerminalDeliveryID: deliveryID,
-		Retryable:          false,
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record inbox terminal outcome")
-		return
-	}
-	collaborationWakes, err := h.completeCollaborationTurnTx(r.Context(), tx, event)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to advance collaboration turn")
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
-		return
-	}
-	if executionID, parseErr := util.ParseUUID(req.ExecutionID); parseErr == nil {
-		_, _ = h.DB.Exec(r.Context(), `
-			UPDATE agent_execution
-			SET status = 'completed',
-			    result = $2,
-			    completed_at = now()
-			WHERE id = $1
-			  AND source_event_id = $3`,
-			executionID, event.Result, event.ID)
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
+			return
+		}
 	}
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	if workCompletion != nil && workCompletion.CompletedNow {
@@ -755,6 +781,82 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, lifecycleStatus)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": ackedSeq})
+}
+
+func persistAgentInboxCompletionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	eventID pgtype.UUID,
+	result []byte,
+	sessionID, workDir string,
+) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET result = $2,
+		    session_id = NULLIF($3, ''),
+		    work_dir = NULLIF($4, ''),
+		    completed_at = COALESCE(completed_at, now()),
+		    updated_at = now()
+		WHERE id = $1`,
+		eventID, result, sessionID, workDir)
+	return err
+}
+
+func (h *Handler) agentInboxCompletionOutcomeAfterMustReplyFailure(
+	ctx context.Context,
+	event db.AgentInboxEvent,
+	terminalOutcome string,
+	isChannelOnboarding, mustReplyFailure bool,
+) string {
+	if isChannelOnboarding || !mustReplyFailure {
+		return terminalOutcome
+	}
+	// A Raft freshness hold already persisted the attempted output as a
+	// server draft. Acknowledging this execution must not relabel that draft
+	// as an explicit no-reply decision.
+	if h.inboxEventHasAgentTransportFreshnessHold(ctx, event.ID) {
+		return "held"
+	}
+	return "no_reply"
+}
+
+func setAgentInboxCompletionFinalizationTx(
+	ctx context.Context,
+	qtx *db.Queries,
+	tx pgx.Tx,
+	event db.AgentInboxEvent,
+	deliveryID, executionID pgtype.UUID,
+	result []byte,
+	terminalOutcome string,
+) error {
+	if _, err := qtx.SetAgentInboxTerminalOutcome(ctx, db.SetAgentInboxTerminalOutcomeParams{
+		ID:                 event.ID,
+		WorkspaceID:        event.WorkspaceID,
+		TerminalOutcome:    strToText(terminalOutcome),
+		TerminalDeliveryID: deliveryID,
+		Retryable:          false,
+	}); err != nil {
+		return fmt.Errorf("record inbox terminal outcome: %w", err)
+	}
+	if !executionID.Valid {
+		return nil
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE agent_execution
+		SET status = 'completed',
+		    result = $2,
+		    completed_at = now()
+		WHERE id = $1
+		  AND source_event_id = $3
+		  AND status = 'running'`,
+		executionID, result, event.ID)
+	if err != nil {
+		return fmt.Errorf("complete agent execution: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func agentInboxCompletionTerminalOutcome(ctx context.Context, h *Handler, event db.AgentInboxEvent, req TaskCompleteRequest, payload *protocol.ChatDonePayload) string {
@@ -807,27 +909,15 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	failureReason := strings.TrimSpace(req.FailureReason)
 	reasonCode := agentInboxFailureReasonCode(errText, failureReason, req.ReasonCode)
 	if failureReason != "" && event.Reason != channelOnboardingReason {
-		deliveryAlreadyAcked := false
-		ackedSeq := int64(0)
 		if !event.ChatSessionID.Valid {
-			outcome, err := h.TaskService.FailAgentInboxTask(r.Context(), service.AgentInboxDeliveryFence{
-				DeliveryID:   deliveryID,
-				InboxEventID: event.ID,
-				LeaseToken:   leaseToken,
-			}, errText, req.SessionID, req.WorkDir, failureReason)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					writeError(w, http.StatusConflict, "delivery lease is no longer active")
-					return
-				}
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			event = outcome.Task
-			deliveryAlreadyAcked = true
-			ackedSeq = outcome.AckedSeq
+			h.completeFailedNonChatAgentInboxEvent(
+				w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir,
+			)
+			return
 		}
-		h.completeFailedAgentInboxEvent(w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir, deliveryAlreadyAcked, ackedSeq)
+		h.completeFailedAgentInboxEvent(
+			w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir, false, 0,
+		)
 		return
 	}
 	failed, err := h.Queries.FailAgentInboxDelivery(r.Context(), db.FailAgentInboxDeliveryParams{
@@ -921,6 +1011,83 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 	)
 }
 
+func (h *Handler) completeFailedNonChatAgentInboxEvent(
+	w http.ResponseWriter,
+	r *http.Request,
+	event db.AgentInboxEvent,
+	deliveryID, leaseToken pgtype.UUID,
+	errText, failureReason, reasonCode, sessionID, workDir string,
+) {
+	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
+	terminalOutcome := "failed"
+	retryable := true
+	if alreadyReplied {
+		terminalOutcome = "replied"
+		retryable = false
+	}
+	var collaborationWakes []channelAgentWake
+	outcome, err := h.TaskService.FailAgentInboxTaskWithFinalization(
+		r.Context(),
+		service.AgentInboxDeliveryFence{
+			DeliveryID:   deliveryID,
+			InboxEventID: event.ID,
+			LeaseToken:   leaseToken,
+		},
+		errText,
+		sessionID,
+		workDir,
+		failureReason,
+		func(qtx *db.Queries, tx pgx.Tx, outcome *service.FailTaskOutcome) error {
+			event = outcome.Task
+			if _, err := tx.Exec(r.Context(), `
+				UPDATE agent_inbox_event
+				SET last_error = $2,
+				    updated_at = now()
+				WHERE id = $1`, event.ID, errText); err != nil {
+				return fmt.Errorf("record inbox failure: %w", err)
+			}
+			if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
+				ID:                 event.ID,
+				WorkspaceID:        event.WorkspaceID,
+				TerminalOutcome:    strToText(terminalOutcome),
+				TerminalDeliveryID: deliveryID,
+				Retryable:          retryable,
+			}); err != nil {
+				return fmt.Errorf("record inbox failure outcome: %w", err)
+			}
+			var wakeErr error
+			collaborationWakes, wakeErr = h.failCollaborationTurnTx(r.Context(), tx, event, errText)
+			if wakeErr != nil {
+				return fmt.Errorf("record collaboration turn failure: %w", wakeErr)
+			}
+			if _, err := tx.Exec(r.Context(), `
+				UPDATE agent_execution
+				SET status = 'failed',
+				    error = $2,
+				    failure_reason = NULLIF($3, ''),
+				    completed_at = now()
+				WHERE source_event_id = $1
+				  AND status = 'running'`,
+				event.ID, errText, failureReason); err != nil {
+				return fmt.Errorf("fail agent execution: %w", err)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "delivery lease is no longer active")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to finalize inbox failure")
+		return
+	}
+	event = outcome.Task
+	h.finishFailedAgentInboxEvent(
+		w, r, event, deliveryID, errText, failureReason, reasonCode, alreadyReplied, collaborationWakes, outcome.AckedSeq,
+	)
+}
+
 func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID, errText, failureReason, reasonCode, sessionID, workDir string, deliveryAlreadyAcked bool, ackedSeq int64) {
 	if h.TxStarter == nil {
 		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
@@ -1009,11 +1176,7 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 			}
 		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
-		return
-	}
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := tx.Exec(r.Context(), `
 		UPDATE agent_execution
 		SET status = 'failed',
 		    error = $2,
@@ -1021,7 +1184,29 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		    completed_at = now()
 		WHERE source_event_id = $1
 		  AND status = 'running'`,
-		event.ID, errText, failureReason)
+		event.ID, errText, failureReason); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize inbox execution ledger")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
+		return
+	}
+	h.finishFailedAgentInboxEvent(
+		w, r, event, deliveryID, errText, failureReason, reasonCode, alreadyReplied, collaborationWakes, ackedSeq,
+	)
+}
+
+func (h *Handler) finishFailedAgentInboxEvent(
+	w http.ResponseWriter,
+	r *http.Request,
+	event db.AgentInboxEvent,
+	deliveryID pgtype.UUID,
+	errText, failureReason, reasonCode string,
+	alreadyReplied bool,
+	collaborationWakes []channelAgentWake,
+	ackedSeq int64,
+) {
 	for _, wake := range collaborationWakes {
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}

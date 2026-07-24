@@ -19,7 +19,7 @@ services:
       # 192.168.0.1:9100, which the sandbox reaches via its gateway (port 9100 is
       # egress-allowlisted). NO /v1 suffix: the stub serves "/chat/completions".
       # From there it bridges over the shared Supabase to the DeepSeek gateway.
-      AREAL_PROXY_URL: http://192.168.0.1:9100
+      AREAL_PROXY_URL: http://10.110.158.143:9100
 
   frontend:
     ports: !reset []

@@ -169,7 +169,7 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 		  workspace_id, stage, trigger_kind, status, date_from, date_to,
 		  runtime_id, execution_owner, attempt, claimed_at, started_at
 		) VALUES ($1, 'agent_self_review', 'scheduled', 'running', '2026-07-18', '2026-07-18',
-		          $2, 'daemon', $3, now() - interval '5 minutes', now())
+		          $2, 'daemon', $3, now() - interval '20 minutes', now())
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, memoryCurationMaxAttempts).Scan(&staleRunID); err != nil {
 		t.Fatal(err)
@@ -208,6 +208,88 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 	}
 }
 
+func TestMemoryCurationActiveHeartbeatRefreshesBeforeExpirySweep(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, owner_id, visibility, last_seen_at
+		) VALUES ($1, 'memory-curator-active-hb-daemon', 'Memory Curator Active HB Runtime', 'local', 'codex', 'online',
+		          'memory curator active heartbeat', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		RETURNING id::text
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	var parentRunID, agentRunID, agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, 'memory_curator_active_hb', 'Memory Curator Active HB', 'local', $2, $3)
+		RETURNING id::text
+	`, testWorkspaceID, runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_run (
+		  workspace_id, stage, trigger_kind, status, date_from, date_to,
+		  runtime_id, execution_owner, attempt, claimed_at, started_at
+		) VALUES ($1, 'all', 'manual', 'running', '2026-07-18', '2026-07-18',
+		          $2, 'daemon', $3, now() - interval '20 minutes', now() - interval '5 minutes')
+		RETURNING id::text
+	`, testWorkspaceID, runtimeID, memoryCurationMaxAttempts).Scan(&parentRunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_agent_run (
+		  parent_run_id, workspace_id, agent_id, stage, status, runtime_id,
+		  attempt, claimed_at, started_at
+		) VALUES ($1, $2, $3, 'agent_self_review', 'running', $4,
+		          $5, now() - interval '20 minutes', now() - interval '5 minutes')
+		RETURNING id::text
+	`, parentRunID, testWorkspaceID, agentID, runtimeID, memoryCurationMaxAttempts).Scan(&agentRunID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_agent_run WHERE id = $1`, agentRunID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_run WHERE id = $1`, parentRunID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	rt, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := testHandler.claimPendingMemoryCurationRun(ctx, rt, agentRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("pending = %+v, want nil while active claim is refreshing", pending)
+	}
+
+	var parentStatus, agentStatus string
+	var parentClaimedAge, agentClaimedAge float64
+	if err := testPool.QueryRow(ctx, `
+		SELECT r.status, extract(epoch from (now() - r.claimed_at)),
+		       cr.status, extract(epoch from (now() - cr.claimed_at))
+		  FROM memory_curation_run r
+		  JOIN memory_curation_agent_run cr ON cr.parent_run_id = r.id
+		 WHERE r.id = $1 AND cr.id = $2
+	`, parentRunID, agentRunID).Scan(&parentStatus, &parentClaimedAge, &agentStatus, &agentClaimedAge); err != nil {
+		t.Fatal(err)
+	}
+	if parentStatus != "running" || agentStatus != "running" {
+		t.Fatalf("status parent/agent = %q/%q, want both running", parentStatus, agentStatus)
+	}
+	if parentClaimedAge > 5 || agentClaimedAge > 5 {
+		t.Fatalf("claimed ages parent/agent = %.1f/%.1f, want refreshed near now", parentClaimedAge, agentClaimedAge)
+	}
+}
+
 func TestWorkspaceMemoryCurationStatusSweepsExpiredRunningRuns(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test database unavailable")
@@ -230,7 +312,7 @@ func TestWorkspaceMemoryCurationStatusSweepsExpiredRunningRuns(t *testing.T) {
 		  workspace_id, stage, trigger_kind, status, date_from, date_to,
 		  runtime_id, execution_owner, attempt, claimed_at, started_at
 		) VALUES ($1, 'all', 'manual', 'running', '2026-07-20', '2026-07-20',
-		          $2, 'daemon', $3, now() - interval '40 minutes', now() - interval '40 minutes')
+		          $2, 'daemon', $3, now() - interval '70 minutes', now() - interval '70 minutes')
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, memoryCurationMaxAttempts).Scan(&staleRunID); err != nil {
 		t.Fatal(err)

@@ -459,9 +459,10 @@ export function ConversationActivityStrip({
 
   if (!typingLabel && stoppableTasks.length === 0) return null;
 
+  // LRM-400 — keep strip in message column; ultrawide justify-between parked Stop all in empty right half.
   return (
     <div
-      className="flex min-h-6 flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
+      className="flex min-h-6 max-w-[min(52rem,100%)] flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
       aria-live="polite"
       data-testid="conversation-activity-strip"
     >
@@ -472,7 +473,7 @@ export function ConversationActivityStrip({
         </span>
       ) : null}
       {stoppableTasks.length === 1 ? (
-        <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex w-fit max-w-full min-w-0 items-center gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate">
             <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
             <span className="truncate">
@@ -492,12 +493,12 @@ export function ConversationActivityStrip({
         <div className="flex flex-col gap-1">
           {/* Multiple agents collapse to one running summary. Keep Stop all
               outside the disclosure button so one click can cancel the whole group. */}
-          <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex w-fit max-w-full min-w-0 items-center gap-2">
             <button
               type="button"
               onClick={() => setExpanded((value) => !value)}
               aria-expanded={expanded}
-              className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left hover:text-foreground"
+              className="flex min-w-0 items-center gap-2 text-left hover:text-foreground"
             >
               <span className="flex min-w-0 items-center gap-1.5 truncate">
                 <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
@@ -526,10 +527,10 @@ export function ConversationActivityStrip({
             ) : null}
           </div>
           {expanded ? (
-            <div className="flex flex-col gap-1 pl-5">
+            <div className="flex max-w-full flex-col gap-1 pl-5">
               {stoppableTasks.map((task) => (
-                <div key={task.task_id} className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="min-w-0 flex-1 truncate">{task.agent_name}</span>
+                <div key={task.task_id} className="flex w-fit max-w-full min-w-0 items-center gap-2">
+                  <span className="min-w-0 truncate">{task.agent_name}</span>
                   {onStopTask ? (
                     <StopTaskButton
                       task={task}
@@ -3528,52 +3529,50 @@ export function ChannelsPage({
           )}
         </main>
   );
-  // Desktop detail (LRM-400 + LRM-481): always keep ResizablePanelGroup so
-  // opening/closing the side dock does not remount the conversation tree
-  // (scroll/composer + title-button refs). A lone conversation panel fills
-  // full width — no blank half-pane. When a dock is open, drag the handle
-  // (min 360 / default 440 / max 640 px; layout id persists across refresh).
-  // Mobile: no drag — full-screen profile/page route instead.
+  // LRM-400 — when no side panel is open, render the conversation full-bleed.
+  // A single-child ResizablePanelGroup can leave a blank right region that looks
+  // like an empty shell (Frank red-box on normal channel Chat). Do not mount
+  // PanelGroup without a dock (Beckham: 无侧栏勿挂单 PanelGroup).
   const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
-    <ResizablePanelGroup
-      orientation="horizontal"
-      className="min-h-0 flex-1"
-      defaultLayout={detailSideDefaultLayout}
-      onLayoutChanged={onDetailSideLayoutChanged}
-    >
-      <ResizablePanel
-        id="conversation"
-        minSize={desktopSidePanel ? "50%" : undefined}
-        className="flex min-h-0 min-w-0 flex-col"
+    desktopSidePanel ? (
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={detailSideDefaultLayout}
+        onLayoutChanged={onDetailSideLayoutChanged}
       >
-        {channelConversationPane}
-      </ResizablePanel>
-      {desktopSidePanel ? (
-        <>
-          <ResizableHandle />
-          <ResizablePanel
-            id={
-              threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"
-            }
-            defaultSize={440}
-            minSize={360}
-            maxSize={640}
-            groupResizeBehavior="preserve-pixel-size"
-            data-testid={
-              threadPanel
-                ? "thread-side-slot"
-                : agentPanel
-                  ? "agent-side-slot"
-                  : "channel-details-side-slot"
-            }
-            className="border-l border-border/30 bg-background"
-          >
-            {desktopSidePanel}
-          </ResizablePanel>
-        </>
-      ) : null}
-    </ResizablePanelGroup>
+        <ResizablePanel
+          id="conversation"
+          minSize="50%"
+          className="flex min-h-0 min-w-0 flex-col"
+        >
+          {channelConversationPane}
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel
+          id={
+            threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"
+          }
+          defaultSize={440}
+          minSize={360}
+          maxSize={640}
+          groupResizeBehavior="preserve-pixel-size"
+          data-testid={
+            threadPanel
+              ? "thread-side-slot"
+              : agentPanel
+                ? "agent-side-slot"
+                : "channel-details-side-slot"
+          }
+          className="border-l border-border/30 bg-background"
+        >
+          {desktopSidePanel}
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    ) : (
+      channelConversationPane
+    )
   ) : (
     threadPanel ?? channelConversationPane
   );

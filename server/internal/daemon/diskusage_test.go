@@ -193,13 +193,52 @@ func TestScanDiskUsage_AggregatesAndCategorizes(t *testing.T) {
 		`"workspace_id"`,
 		`"task_short"`,
 		`"artifact_ratio"`,
+		`"managed_size_bytes"`,
 		`"total_task_count"`,
 		`"total_workspace_count"`,
+		`"total_managed_size_bytes"`,
 		`"total_artifact_ratio"`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("JSON missing required field %s: %s", want, raw)
 		}
+	}
+}
+
+func TestScanDiskUsageAccountsForManagedAgentStateWithoutCallingItATask(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	wsID := "11111111-1111-1111-1111-111111111111"
+	agentID := "22222222-2222-2222-2222-222222222222"
+	managedRoot := filepath.Join(root, wsID, managedAgentWorkspaceNamespace, "agents", agentID)
+	writeFile(t, filepath.Join(managedRoot, "memory", "MEMORY.md"), 700)
+	writeFile(t, filepath.Join(managedRoot, "workspace", "ordinary.txt"), 300)
+	legacyTask := filepath.Join(root, wsID, "aaaaaaaa")
+	writeFile(t, filepath.Join(legacyTask, "workdir", "main.go"), 100)
+
+	report, err := ScanDiskUsage(root, []string{"node_modules"})
+	if err != nil {
+		t.Fatalf("ScanDiskUsage: %v", err)
+	}
+	if report.TotalTaskCount != 1 || len(report.Tasks) != 1 {
+		t.Fatalf("managed state leaked into task count: total=%d tasks=%d", report.TotalTaskCount, len(report.Tasks))
+	}
+	if report.TotalManagedSizeBytes != 1000 {
+		t.Fatalf("total managed size = %d, want 1000", report.TotalManagedSizeBytes)
+	}
+	if report.TotalSizeBytes != 1100 {
+		t.Fatalf("total size = %d, want managed+legacy 1100", report.TotalSizeBytes)
+	}
+	if len(report.Workspaces) != 1 {
+		t.Fatalf("workspaces = %d, want 1", len(report.Workspaces))
+	}
+	ws := report.Workspaces[0]
+	if ws.ManagedSizeBytes != 1000 || ws.SizeBytes != 1100 || ws.TaskCount != 1 {
+		t.Fatalf("unexpected workspace accounting: %+v", ws)
+	}
+	if ws.ArtifactSizeBytes != 0 || report.TotalArtifactSizeBytes != 0 {
+		t.Fatalf("managed state must not be advertised as generic reclaimable artifacts: workspace=%d total=%d",
+			ws.ArtifactSizeBytes, report.TotalArtifactSizeBytes)
 	}
 }
 

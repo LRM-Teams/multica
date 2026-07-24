@@ -129,7 +129,18 @@
       "searching_code": "Searching code…",
       "making_edits": "Editing file…",
       "searching_web": "Searching web…",
+      "updating_todos": "Updating todos…",
+      "running_subagent": "Running subagent…",
+      "planning": "Planning…",
       "fallback": "Working"
     }
+  },
+  "bubble_cursor": {
+    "plan_title": "Plan",
+    "todo_title": "Todos",
+    "todo_progress": "{{done}}/{{total}}",
+    "subagent_title": "Subagents",
+    "subagent_running": "running",
+    "subagent_done": "done"
   }
 }

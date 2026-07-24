@@ -2360,6 +2360,41 @@ func TestMergeUsage(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsFromUsage(t *testing.T) {
+	t.Parallel()
+
+	if got := runtimeStatsFromUsage("cursor", nil); got != nil {
+		t.Fatalf("nil usage → nil stats, got %+v", got)
+	}
+	if got := runtimeStatsFromUsage("cursor", map[string]agent.TokenUsage{
+		"empty": {},
+	}); got != nil {
+		t.Fatalf("zero usage → nil stats, got %+v", got)
+	}
+
+	got := runtimeStatsFromUsage("cursor", map[string]agent.TokenUsage{
+		"gpt-5": {InputTokens: 100, OutputTokens: 40, CacheReadTokens: 10},
+	})
+	if got == nil {
+		t.Fatal("expected stats")
+	}
+	if got.Provider != "cursor" || got.Model != "gpt-5" {
+		t.Fatalf("provider/model = %s/%s", got.Provider, got.Model)
+	}
+	if got.InputTokens != 100 || got.OutputTokens != 40 || got.CacheReadTokens != 10 || got.TotalTokens != 150 {
+		t.Fatalf("tokens = %+v", got)
+	}
+
+	// Multi-model: aggregate counts, pick model with highest total.
+	multi := runtimeStatsFromUsage("cursor", map[string]agent.TokenUsage{
+		"small": {InputTokens: 1, OutputTokens: 1},
+		"big":   {InputTokens: 50, OutputTokens: 50},
+	})
+	if multi == nil || multi.Model != "big" || multi.TotalTokens != 102 {
+		t.Fatalf("multi = %+v", multi)
+	}
+}
+
 // fakeBackend is a test double for agent.Backend that returns preconfigured
 // results. Each call to Execute pops the next entry from the results slice.
 type fakeBackend struct {

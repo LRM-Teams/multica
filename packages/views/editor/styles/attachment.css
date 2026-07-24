@@ -101,7 +101,7 @@
   object-fit: contain;
 }
 
-/* LRM-201 — phone web: keep image thumbs readable without dominating the stream. */
+  /* LRM-201 — phone web: keep image thumbs readable without dominating the stream. */
 @media (max-width: 767px) {
   .message-surface .image-figure {
     max-width: min(100%, 100%);
@@ -111,17 +111,9 @@
   .message-surface .image-content {
     max-height: 12.5rem;
   }
-
-  .message-surface .image-toolbar {
-    opacity: 1;
-  }
-
-  .message-surface .image-toolbar button {
-    width: 2.75rem;
-    height: 2.75rem;
-  }
 }
 
+/* Compose-only toolbar (LRM-546): always visible on coarse pointers. */
 @media (pointer: coarse) {
   .image-toolbar {
     opacity: 1;

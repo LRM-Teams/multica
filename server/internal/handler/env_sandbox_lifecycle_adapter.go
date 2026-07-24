@@ -70,12 +70,12 @@ func (a *envSandboxLifecycleDepsAdapter) GetSandboxInstanceRef(ctx context.Conte
 
 // MintSandboxRuntimeEnv satisfies EnvSandboxLifecycleDeps. It mints the daemon
 // bootstrap env (server URL + PAT + workspace + MULTICA_DAEMON_ENABLED=1 +
-// profile) for an env-dispatch-created sandbox so the in-sandbox daemon can
-// reach multica on boot. Unlike the UI create path, server-side dispatch has no
-// inbound request, so the server URL must come from the configured public URL
-// env vars; an unconfigured URL is a hard error (the daemon needs a reachable
-// server to register + claim tasks).
-func (a *envSandboxLifecycleDepsAdapter) MintSandboxRuntimeEnv(ctx context.Context, workspaceID, actorUserID, instanceID string) (map[string]string, error) {
+// profile + optional display name) for an env-dispatch-created sandbox so the
+// in-sandbox daemon can reach multica on boot. Unlike the UI create path,
+// server-side dispatch has no inbound request, so the server URL must come from
+// the configured public URL env vars; an unconfigured URL is a hard error (the
+// daemon needs a reachable server to register + claim tasks).
+func (a *envSandboxLifecycleDepsAdapter) MintSandboxRuntimeEnv(ctx context.Context, workspaceID, actorUserID, instanceID, displayName string) (map[string]string, error) {
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("parse workspace_id: %w", err)
@@ -88,7 +88,7 @@ func (a *envSandboxLifecycleDepsAdapter) MintSandboxRuntimeEnv(ctx context.Conte
 	if serverURL == "" {
 		return nil, fmt.Errorf("sandbox runtime env: server URL not configured (set MULTICA_PUBLIC_URL/MULTICA_APP_URL/MULTICA_SERVER_URL)")
 	}
-	return a.h.mintSandboxRuntimeEnv(ctx, wsUUID, userUUID, instanceID, serverURL)
+	return a.h.mintSandboxRuntimeEnv(ctx, wsUUID, userUUID, instanceID, serverURL, displayName)
 }
 
 func (a *envSandboxLifecycleDepsAdapter) InsertSandboxInstance(ctx context.Context, in service.CreateSandboxInstanceInput, actorUserID string) (service.SandboxInstanceRef, error) {
@@ -124,7 +124,7 @@ func (a *envSandboxLifecycleDepsAdapter) InsertSandboxInstance(ctx context.Conte
 	if template == "" {
 		template = "default"
 	}
-	metadata := buildSandboxMetadata(nil, "", in.Runtime)
+	metadata := buildSandboxMetadata(nil, in.Name, in.Runtime)
 	inst, err := a.h.Queries.CreateSandboxInstance(ctx, db.CreateSandboxInstanceParams{
 		WorkspaceID:   wsUUID,
 		CreatorUserID: userUUID,

@@ -47,12 +47,14 @@ type EnvSandboxLifecycleDeps interface {
 	InsertSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error)
 	// MintSandboxRuntimeEnv mints the daemon bootstrap env for a sandbox: a
 	// server URL + a personal access token (for the actor) + workspace id +
-	// MULTICA_DAEMON_ENABLED=1 + a per-instance profile. Used by Create when a
-	// sandbox is flagged DaemonEnabled and no RuntimeEnv was supplied, so the
-	// in-sandbox daemon can reach multica on boot. The minted env (which carries
-	// the token) must stay within the create path - it is never returned on the
+	// MULTICA_DAEMON_ENABLED=1 + a per-instance profile. When displayName is
+	// non-empty it is also written as MULTICA_DAEMON_DEVICE_NAME /
+	// MULTICA_SANDBOX_NAME so the daemon registers with the control-plane name.
+	// Used by Create when a sandbox is flagged DaemonEnabled, so the in-sandbox
+	// daemon can reach multica on boot. The minted env (which carries the token)
+	// must stay within the create path - it is never returned on the
 	// SandboxInstanceRef, so it cannot leak into dispatch responses/ledger.
-	MintSandboxRuntimeEnv(ctx context.Context, workspaceID, actorUserID, instanceID string) (map[string]string, error)
+	MintSandboxRuntimeEnv(ctx context.Context, workspaceID, actorUserID, instanceID, displayName string) (map[string]string, error)
 	EnqueueSandboxJob(ctx context.Context, workspaceID, actorUserID, nodeID, instanceID, jobType string, payload json.RawMessage) (SandboxLifecycleJobResult, error)
 	NotifySandboxJobAvailable(ctx context.Context, nodeID, jobID string) error
 	ForceDeleteSandboxInstance(ctx context.Context, workspaceID, instanceID string) error
@@ -66,9 +68,12 @@ type CreateSandboxInstanceInput struct {
 	WorkspaceID string
 	NodeID      string
 	Template    string
-	Limits      json.RawMessage
-	Runtime     json.RawMessage
-	RuntimeEnv  map[string]string
+	// Name is the control-plane display name persisted on metadata.name and
+	// injected into MULTICA_DAEMON_DEVICE_NAME when DaemonEnabled.
+	Name       string
+	Limits     json.RawMessage
+	Runtime    json.RawMessage
+	RuntimeEnv map[string]string
 	// DaemonEnabled requests that Create mint a daemon bootstrap runtime_env
 	// (server URL + PAT + workspace + MULTICA_DAEMON_ENABLED=1 + profile) via
 	// MintSandboxRuntimeEnv when RuntimeEnv is not supplied, so the in-sandbox
@@ -169,7 +174,7 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 	// below) and is never placed on the ref, so the token cannot leak into
 	// dispatch responses or the idempotency ledger.
 	if in.DaemonEnabled {
-		env, err := s.deps.MintSandboxRuntimeEnv(ctx, in.WorkspaceID, actorUserID, ref.InstanceID)
+		env, err := s.deps.MintSandboxRuntimeEnv(ctx, in.WorkspaceID, actorUserID, ref.InstanceID, in.Name)
 		if err != nil {
 			return compensate(fmt.Errorf("mint sandbox runtime env: %w", err))
 		}

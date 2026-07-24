@@ -129,7 +129,6 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtimes")

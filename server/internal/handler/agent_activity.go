@@ -886,6 +886,37 @@ const agentActivityListSQL = `
 		ORDER BY aae.created_at DESC, aae.event_kind DESC, aae.id DESC
 		LIMIT $6
 	),
+	step_counts AS (
+		SELECT tm.task_id, count(*)::bigint AS step_count
+		FROM task_message tm
+		WHERE tm.task_id IN (SELECT id FROM run_candidates)
+		GROUP BY tm.task_id
+	),
+	usage_rows AS (
+		SELECT tu.execution_id,
+		       jsonb_agg(jsonb_build_object(
+		           'provider', provider,
+		           'model', model,
+		           'input_tokens', input_tokens,
+		           'output_tokens', output_tokens,
+		           'cache_read_tokens', cache_read_tokens,
+		           'cache_write_tokens', cache_write_tokens
+		       ) ORDER BY provider, model) AS usage_json
+		FROM agent_usage tu
+		WHERE tu.execution_id IN (SELECT id FROM run_candidates)
+		GROUP BY tu.execution_id
+	),
+	result_messages AS (
+		SELECT DISTINCT ON (cm.task_id)
+		       cm.task_id,
+		       cm.id,
+		       'chat_message'::text AS kind
+		FROM chat_message cm
+		WHERE cm.task_id IN (SELECT id FROM run_candidates)
+		  AND cm.role = 'assistant'
+		  AND cm.content <> ''
+		ORDER BY cm.task_id, cm.created_at DESC, cm.id DESC
+	),
 	activity AS (
 		SELECT
 			'run'::text AS kind,
@@ -916,32 +947,9 @@ const agentActivityListSQL = `
 			result_message.id AS result_message_id,
 			result_message.kind AS result_message_kind
 		FROM run_candidates atq
-		LEFT JOIN LATERAL (
-			SELECT count(*)::bigint AS step_count
-			FROM task_message tm
-			WHERE tm.task_id = atq.id
-		) steps ON true
-		LEFT JOIN LATERAL (
-			SELECT jsonb_agg(jsonb_build_object(
-				       'provider', provider,
-				       'model', model,
-				       'input_tokens', input_tokens,
-				       'output_tokens', output_tokens,
-				       'cache_read_tokens', cache_read_tokens,
-				       'cache_write_tokens', cache_write_tokens
-			       ) ORDER BY provider, model) AS usage_json
-			FROM agent_usage tu
-			WHERE tu.execution_id = atq.id
-		) usage ON true
-		LEFT JOIN LATERAL (
-			SELECT cm.id, 'chat_message'::text AS kind
-			FROM chat_message cm
-			WHERE cm.task_id = atq.id
-			  AND cm.role = 'assistant'
-			  AND cm.content <> ''
-			ORDER BY cm.created_at DESC
-			LIMIT 1
-		) result_message ON true
+		LEFT JOIN step_counts steps ON steps.task_id = atq.id
+		LEFT JOIN usage_rows usage ON usage.execution_id = atq.id
+		LEFT JOIN result_messages result_message ON result_message.task_id = atq.id
 
 		UNION ALL
 

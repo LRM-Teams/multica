@@ -207,6 +207,11 @@ SELECT * FROM agent_radar_action
 WHERE radar_run_id = $1
 ORDER BY created_at ASC, id ASC;
 
+-- name: ListAgentRadarActionsByRuns :many
+SELECT * FROM agent_radar_action
+WHERE radar_run_id = ANY(@radar_run_ids::uuid[])
+ORDER BY radar_run_id ASC, created_at ASC, id ASC;
+
 -- name: UpdateAgentRadarActionStatus :one
 UPDATE agent_radar_action
 SET

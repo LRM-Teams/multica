@@ -51,7 +51,14 @@ vi.mock("react-virtuoso", async () => {
         typeof initialTopMostItemIndex === "object" && initialTopMostItemIndex !== null
           ? initialTopMostItemIndex.index
           : initialTopMostItemIndex;
-      const localTarget = Math.max(0, (initialIndex ?? firstItemIndex) - firstItemIndex);
+      // #689/#1189 index-contract fix: real react-virtuoso resolves
+      // `initialTopMostItemIndex`/`scrollToIndex` against the LOCAL data
+      // array (0..data.length-1) — it never reads `firstItemIndex` for this.
+      // The mock previously subtracted `firstItemIndex` here, which silently
+      // "corrected" a caller bug (adding the offset) back to the right local
+      // index — masking that exact production bug from every test using this
+      // mock. Treat `initialIndex` as already local, matching real Virtuoso.
+      const localTarget = Math.max(0, initialIndex ?? 0);
       const targetIndex = Math.max(0, Math.min(localTarget, data.length - 1));
       const start = Math.max(0, Math.min(targetIndex - 1, data.length - 2));
       const windowedData = data.slice(start, start + 2);
@@ -345,6 +352,9 @@ describe("MessageViewport", () => {
         emptyLabel="No replies"
         initialScroll="top"
         header={<div data-testid="thread-root-preview">Root preview</div>}
+        // #1194 regression guard: a large firstItemIndex must NOT leak into
+        // the thread-top local index (0).
+        firstItemIndex={1_000_000}
       />,
     );
 
@@ -369,6 +379,9 @@ describe("MessageViewport", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         lastReadSeq={6}
+        // #1194 regression guard: a large firstItemIndex must NOT leak into
+        // the unread-anchor local index (2) below.
+        firstItemIndex={1_000_000}
       />,
     );
 
@@ -509,7 +522,16 @@ describe("MessageViewport", () => {
     expect(screen.getByText("No replies")).toBeInTheDocument();
   });
 
-  it("offsets initialTopMostItemIndex and the highlight scrollToIndex call by firstItemIndex", () => {
+  // #689/#1189: `initialTopMostItemIndex` and `scrollToIndex` resolve against
+  // the LOCAL data array (0..data.length-1) regardless of `firstItemIndex` —
+  // confirmed against react-virtuoso's own prepend example
+  // (`firstItemIndex=10000` + 20 items still uses `initialTopMostItemIndex=19`,
+  // never `10019`) and its `scrollToIndexSystem` source, which never reads
+  // `firstItemIndex`. A large `firstItemIndex` (this codebase's real
+  // convention, `CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX = 1_000_000`) must NOT
+  // change the index passed for highlight/unread-anchor/bottom-default
+  // positioning — only Virtuoso's own prepend bookkeeping reads it.
+  it("does not offset initialTopMostItemIndex or the highlight scrollToIndex call by firstItemIndex", () => {
     scrollToIndexMock.mockClear();
     render(
       <MessageViewport
@@ -525,13 +547,31 @@ describe("MessageViewport", () => {
       />,
     );
 
-    // firstItemIndex + local index (1) of the highlighted message.
+    // Local index (1) of the highlighted message — firstItemIndex plays no part.
     expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute(
       "data-initial-index",
-      "999999",
+      "1",
     );
-    expect(scrollToIndexMock).toHaveBeenCalledWith(
-      expect.objectContaining({ index: 999_999 }),
+    expect(scrollToIndexMock).toHaveBeenCalledWith(expect.objectContaining({ index: 1 }));
+  });
+
+  it("lands on the local last-item index at the bottom default, unaffected by a large firstItemIndex", () => {
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "First visible message"),
+          makeMessage("m2", "Second visible message"),
+          makeMessage("m3", "Third visible message"),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        firstItemIndex={1_000_000}
+      />,
+    );
+
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute(
+      "data-initial-index",
+      "2",
     );
   });
 

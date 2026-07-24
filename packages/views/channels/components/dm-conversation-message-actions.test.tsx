@@ -71,7 +71,6 @@ vi.mock("react-virtuoso", async () => {
         data = [],
         itemContent,
         initialTopMostItemIndex,
-        firstItemIndex = 0,
         startReached,
       }: {
         components?: {
@@ -91,7 +90,9 @@ vi.mock("react-virtuoso", async () => {
       const Header = components.Header;
       const List = components.List ?? "div";
       const Footer = components.Footer;
-      const localTarget = Math.max(0, (initialTopMostItemIndex ?? firstItemIndex) - firstItemIndex);
+      // #1194 index-contract fix: initialTopMostItemIndex is already a LOCAL
+      // index (0..data.length-1), never offset by firstItemIndex.
+      const localTarget = Math.max(0, initialTopMostItemIndex ?? 0);
       const targetIndex = Math.max(0, Math.min(localTarget, data.length - 1));
       const start = Math.max(0, Math.min(targetIndex - 1, data.length - 2));
       const windowedData = data.slice(start, start + 2);

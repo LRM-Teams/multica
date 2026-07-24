@@ -158,14 +158,16 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1", "m2", "m3", "m4"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
-        firstItemIndex: 100,
         handleAttached: true,
         virtuosoRef: ref,
         ...landedAt("m3"),
       }),
     );
     expect(result.current.unreadAnchorIndex).toBe(2);
-    expect(scrollToIndex).toHaveBeenCalledWith({ index: 102, align: "start", behavior: "auto" });
+    // #689/#1189: `scrollToIndex` resolves against the LOCAL data array
+    // (0..messages.length-1), never offset by `firstItemIndex` — see
+    // channel-message-list.tsx's matching comment for the upstream evidence.
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
   });
 
   it("scrolls only once per conversation visit (guarded re-renders don't re-anchor)", () => {
@@ -174,7 +176,6 @@ describe("useUnreadAnchorScroll", () => {
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       highlightMessageId: null as string | null,
-      firstItemIndex: 0,
       handleAttached: true,
       virtuosoRef: ref,
       ...landedAt("m3"),
@@ -195,7 +196,6 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1", "m2", "m3"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: "m2",
-        firstItemIndex: 0,
         handleAttached: true,
         virtuosoRef: ref,
         ...landedAt("m3"),
@@ -210,7 +210,6 @@ describe("useUnreadAnchorScroll", () => {
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       highlightMessageId: null as string | null,
-      firstItemIndex: 0,
       handleAttached: true,
       virtuosoRef: ref,
       ...landedAt("m3"),
@@ -232,7 +231,6 @@ describe("useUnreadAnchorScroll", () => {
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
       highlightMessageId: null as string | null,
-      firstItemIndex: 0,
       handleAttached: true,
       virtuosoRef: ref,
       messageRefMap: new Map<string, HTMLElement>([["m3", elAt(0)]]),
@@ -260,7 +258,6 @@ describe("useUnreadAnchorScroll", () => {
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
       highlightMessageId: null as string | null,
-      firstItemIndex: 0,
       virtuosoRef: ref,
       scrollContainerEl: elAt(0), // ready — but the handle hasn't attached yet
       messageRefMap: new Map<string, HTMLElement>([["m3", elAt(0)]]),
@@ -296,7 +293,6 @@ describe("useUnreadAnchorScroll", () => {
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
       highlightMessageId: null as string | null,
-      firstItemIndex: 0,
       handleAttached: true,
       virtuosoRef: ref,
       scrollContainerEl: elAt(0),
@@ -341,7 +337,6 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1", "m2", "m3", "m4", "m5"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
-        firstItemIndex: 0,
         handleAttached: true,
         virtuosoRef: ref,
         scrollContainerEl: elAt(0),
@@ -378,7 +373,6 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1", "m2", "m3"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
-        firstItemIndex: 0,
         handleAttached: true,
         virtuosoRef: ref,
         scrollContainerEl: elAt(0),
@@ -405,7 +399,6 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1", "m2", "m3", "m4", "m5"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
-        firstItemIndex: 0,
         handleAttached: true,
         virtuosoRef: ref,
         scrollContainerEl: elAt(0),
@@ -424,7 +417,6 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1"]),
         newMessagesDivider: null,
         highlightMessageId: null,
-        firstItemIndex: 0,
         handleAttached: true,
         virtuosoRef: ref,
         scrollContainerEl: elAt(0),
@@ -450,7 +442,6 @@ describe("useUnreadAnchorScroll", () => {
         messages: messages(["m1", "m2", "m3"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
-        firstItemIndex: 0,
         handleAttached: true,
         virtuosoRef: ref,
         scrollContainerEl: container,

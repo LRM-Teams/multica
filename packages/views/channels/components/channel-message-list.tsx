@@ -322,7 +322,6 @@ function MessageViewport({
     messages,
     newMessagesDivider,
     highlightMessageId,
-    firstItemIndex,
     // A value-comparable readiness signal so the settle effect re-runs the
     // instant Virtuoso attaches, instead of possibly having already run (and
     // no-op'd) while the handle was still null with no second chance.
@@ -341,7 +340,6 @@ function MessageViewport({
   const { pill, onReachedBottom, onPillClick } = useNewMessagesPill({
     messages,
     currentUserId,
-    firstItemIndex,
     virtuosoRef,
   });
   const handleAtBottomStateChange = useCallback(
@@ -391,8 +389,18 @@ function MessageViewport({
   // container exists and Virtuoso has mounted.
   useEffect(() => {
     if (!highlightMessageId || highlightIndex < 0 || !scrollContainerEl) return;
+    // #689/#1189 index-contract fix: react-virtuoso's `scrollToIndex` (and
+    // `initialTopMostItemIndex` below) resolve against the LOCAL data array
+    // — 0..data.length-1 — never offset by `firstItemIndex`. `firstItemIndex`
+    // is Virtuoso's own internal bookkeeping for prepend-without-jump; it is
+    // not meant to be added to caller-supplied indices. Confirmed against the
+    // library's own prepend example (`firstItemIndex=10000` + 20 items still
+    // uses `initialTopMostItemIndex=19`, not `10019`) and its
+    // `scrollToIndexSystem` source, which resolves purely against
+    // `totalCount - 1` and never reads `firstItemIndex`. `highlightIndex` is
+    // already local (`messages.findIndex(...)`).
     virtuosoRef.current?.scrollToIndex({
-      index: firstItemIndex + highlightIndex,
+      index: highlightIndex,
       align: "center",
       behavior: "smooth",
     });
@@ -400,7 +408,7 @@ function MessageViewport({
       block: "center",
       behavior: "smooth",
     });
-  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap, scrollContainerEl]);
+  }, [highlightMessageId, highlightIndex, messageRefMap, scrollContainerEl]);
 
   if (loadErrorLabel) {
     return (
@@ -559,16 +567,22 @@ function MessageViewport({
   // (Read context above the divider is intentionally omitted in v1 — Slack's
   // "new messages" convention; add later via pure CSS if wanted, not mechanism.)
   // Deep-link/search centers on the target.
+  // #689/#1189 index-contract fix: `initialTopMostItemIndex` resolves
+  // against the LOCAL data array (0..messages.length-1), same as
+  // `scrollToIndex` above — never offset by `firstItemIndex`. See that
+  // effect's comment for the evidence. `firstItemIndex` itself (passed to
+  // Virtuoso below) is unaffected — it still does its real job of prepend
+  // bookkeeping.
   const initialTopMostItemIndex:
     | number
     | { index: number; align: "start" | "center" } =
     highlightIndex >= 0
-      ? { index: firstItemIndex + highlightIndex, align: "center" }
+      ? { index: highlightIndex, align: "center" }
       : unreadAnchorIndex >= 0
-        ? { index: firstItemIndex + unreadAnchorIndex, align: "start" }
+        ? { index: unreadAnchorIndex, align: "start" }
         : initialScroll === "bottom"
-          ? firstItemIndex + Math.max(0, messages.length - 1)
-          : firstItemIndex;
+          ? Math.max(0, messages.length - 1)
+          : 0;
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

@@ -18,6 +18,8 @@ import {
   PROJECT_EVENTS,
   type ProjectSystemEvent,
   type ReminderSystemEvent,
+  THREAD_EVENTS,
+  type ThreadSystemEvent,
 } from "./channel-system-event";
 
 /**
@@ -604,4 +606,56 @@ export function ReminderSystemEventContent({ event }: { event: ReminderSystemEve
       {!event.anchorAvailable && t(($) => $.message.system_event.reminder.anchor_unavailable_suffix)}
     </>
   );
+}
+
+function interpolateActorSlot(template: string, actor: ReactNode): ReactNode {
+  return template.split(/(\{actor\})/g).map((segment, index) => {
+    if (segment === "{actor}") return <Fragment key={index}>{actor}</Fragment>;
+    if (!segment) return null;
+    return <Fragment key={index}>{segment}</Fragment>;
+  });
+}
+
+/**
+ * Thread unfollow/follow system row (LRM-540). Actor ink is the same
+ * SystemEventActorToken / ActorMention path as member rows — live
+ * display_name primary, handle peek / gray unresolved, never slug-as-primary
+ * from the BE fallback content and never a bare uuid (LRM-515 / LRM-238).
+ */
+export function ThreadSystemEventContent({ event }: { event: ThreadSystemEvent }): ReactNode {
+  const { t } = useT("channels");
+
+  const resolvedActorType = toActorMentionType(event.actorType);
+  const actorAsMember = useResolvedActorDisplayName(
+    event.actorId,
+    resolvedActorType ?? "member",
+  );
+  const actorAsAgent = useResolvedActorDisplayName(
+    resolvedActorType ? undefined : event.actorId,
+    resolvedActorType ? null : "agent",
+  );
+  const actorDisplayName = resolvedActorType
+    ? actorAsMember
+    : (actorAsMember ?? actorAsAgent);
+  const actorMentionType: "agent" | "member" | null =
+    resolvedActorType ?? (actorAsAgent && !actorAsMember ? "agent" : actorAsMember ? "member" : null);
+
+  // Unresolved ink must be @handle (gray), never uuid — pass handle into the
+  // ActorMention label so useActorMentionChipLabel's miss path stays honest.
+  const actor = (
+    <SystemEventActorToken
+      actor={{
+        type: actorMentionType,
+        id: event.actorId,
+        displayName: actorDisplayName ?? event.actorHandle ?? "…",
+      }}
+    />
+  );
+
+  const template =
+    event.event === THREAD_EVENTS.followed
+      ? t(($) => $.message.system_event.thread.followed)
+      : t(($) => $.message.system_event.thread.unfollowed);
+
+  return interpolateActorSlot(template, actor);
 }

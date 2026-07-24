@@ -45,9 +45,6 @@ export interface ChannelPresenceClusterProps {
   className?: string;
 }
 
-/** @deprecated Use ChannelPresenceCluster — lock A v3 renamed the surface. */
-export type ChannelAgentsLiveCueProps = ChannelPresenceClusterProps;
-
 function taskRowKey(task: ChannelActiveTask): string {
   return task.inbox_event_id?.trim() || task.task_id;
 }
@@ -569,5 +566,299 @@ export function ChannelPresenceCluster({
   );
 }
 
-/** @deprecated Prefer ChannelPresenceCluster (lock A v3). */
-export const ChannelAgentsLiveCue = ChannelPresenceCluster;
+/** @deprecated Prefer ChannelPresenceCluster for channel headers (lock A v3). */
+export interface ChannelAgentsLiveCueProps {
+  agentCount: number;
+  tasks: readonly ChannelActiveTask[];
+  stoppingTaskId?: string | null;
+  canStop?: boolean;
+  onStopTask?: (task: ChannelActiveTask) => void;
+  onStopAll?: () => void;
+  /**
+   * `channel` — Presence Cluster (requires members/memberCount via
+   * ChannelPresenceCluster). Prefer calling ChannelPresenceCluster directly.
+   * `dm` — compact status beside the peer name (LRM-589; idle → null).
+   */
+  variant?: "channel" | "dm";
+  members?: readonly ChannelMemberBrief[];
+  memberCount?: number;
+  onOpenMembers?: () => void;
+  className?: string;
+}
+
+/**
+ * LRM-589 DM status cue (Stop stays in AgentProfileActions).
+ * Kept as ChannelAgentsLiveCue so merged DM header wiring keeps working after
+ * LRM-581 rewrites the channel surface to Presence Cluster.
+ */
+function DmAgentsLiveCue({
+  tasks,
+  canStop = true,
+  onStopTask,
+  onStopAll,
+  stoppingTaskId = null,
+  className,
+}: {
+  tasks: readonly ChannelActiveTask[];
+  canStop?: boolean;
+  onStopTask?: (task: ChannelActiveTask) => void;
+  onStopAll?: () => void;
+  stoppingTaskId?: string | null;
+  className?: string;
+}) {
+  const { t } = useT("channels");
+  const isMobile = useIsMobile();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const firstSeenRef = useRef<Map<string, number> | null>(null);
+  if (firstSeenRef.current === null) {
+    firstSeenRef.current = new Map();
+  }
+  const [now, setNow] = useState(() => Date.now());
+
+  const presentKeys = useMemo(
+    () => new Set(tasks.map((task) => taskRowKey(task))),
+    [tasks],
+  );
+  const activeDismissed = useMemo(() => {
+    const next = new Set<string>();
+    for (const key of dismissedKeys) {
+      if (presentKeys.has(key)) next.add(key);
+    }
+    return next;
+  }, [dismissedKeys, presentKeys]);
+
+  const { stoppable, terminal, listTasks, runningCount } = useMemo(() => {
+    const stop: ChannelActiveTask[] = [];
+    const term: ChannelActiveTask[] = [];
+    let running = 0;
+    for (const task of tasks) {
+      const key = taskRowKey(task);
+      if (activeDismissed.has(key)) continue;
+      if (isTerminalChannelActiveTask(task)) {
+        const outcome = task.outcome?.trim();
+        if (outcome === "failed" || outcome === "no_reply") {
+          term.push(task);
+        }
+        continue;
+      }
+      stop.push(task);
+      if (task.status === "running") running += 1;
+    }
+    return {
+      stoppable: stop,
+      terminal: term,
+      listTasks: [...stop, ...term],
+      runningCount: running,
+    };
+  }, [tasks, activeDismissed]);
+
+  useEffect(() => {
+    const seen = firstSeenRef.current!;
+    const liveKeys = new Set<string>();
+    for (const task of listTasks) {
+      if (isTerminalChannelActiveTask(task)) continue;
+      const key = taskRowKey(task);
+      liveKeys.add(key);
+      if (!seen.has(key)) seen.set(key, Date.now());
+    }
+    for (const key of [...seen.keys()]) {
+      if (!liveKeys.has(key)) seen.delete(key);
+    }
+  }, [listTasks]);
+
+  useEffect(() => {
+    if (runningCount === 0) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [runningCount]);
+
+  if (listTasks.length === 0) return null;
+
+  const hasStoppable = stoppable.length > 0;
+  const agentsLabel =
+    stoppable.length > 0
+      ? t(($) => $.header.dm_live, { working: stoppable.length })
+      : t(($) => $.header.dm_attention);
+
+  const cueTextClass = cn(
+    "truncate",
+    runningCount > 0 && "animate-chat-text-shimmer font-semibold",
+    runningCount === 0 &&
+      terminal.length > 0 &&
+      "font-semibold text-destructive",
+    runningCount === 0 &&
+      terminal.length === 0 &&
+      "font-semibold text-foreground",
+  );
+
+  const cueButtonClass =
+    "inline-flex min-h-8 min-w-0 items-center rounded-sm px-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+  const dismissTerminal = (task: ChannelActiveTask) => {
+    const key = taskRowKey(task);
+    setDismissedKeys((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  };
+
+  const listBody = (
+    <div className="flex flex-col gap-2" data-testid="channel-agents-working-list">
+      <div className="text-xs font-medium text-muted-foreground">
+        {t(($) => $.header.working_list_title, { count: listTasks.length })}
+      </div>
+      <div className="flex flex-col gap-1">
+        {listTasks.map((task) => (
+          <WorkingListRow
+            key={taskRowKey(task)}
+            task={task}
+            now={now}
+            firstSeen={firstSeenRef.current!.get(taskRowKey(task))}
+            canStop={canStop}
+            stoppingTaskId={stoppingTaskId}
+            onStopTask={onStopTask}
+            onDismiss={dismissTerminal}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  const cueWithHover = isMobile ? (
+    <Popover open={mobileOpen} onOpenChange={setMobileOpen}>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className={cueButtonClass}
+            data-testid="channel-agents-live-cue"
+            aria-expanded={mobileOpen}
+            aria-label={agentsLabel}
+          >
+            <span className={cueTextClass}>{agentsLabel}</span>
+          </button>
+        }
+      />
+      <PopoverContent align="start" className="w-72 p-3">
+        {listBody}
+      </PopoverContent>
+    </Popover>
+  ) : (
+    <HoverCard>
+      <HoverCardTrigger
+        render={
+          <button
+            type="button"
+            className={cueButtonClass}
+            data-testid="channel-agents-live-cue"
+            aria-label={agentsLabel}
+          >
+            <span className={cueTextClass}>{agentsLabel}</span>
+          </button>
+        }
+      />
+      <HoverCardContent align="start" className="w-72 p-3">
+        {listBody}
+      </HoverCardContent>
+    </HoverCard>
+  );
+
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-1",
+        className,
+      )}
+      data-testid="channel-roster-summary"
+    >
+      {cueWithHover}
+      {hasStoppable && canStop && onStopTask && stoppable.length === 1 ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={
+            stoppingTaskId === stoppable[0]!.task_id ||
+            stoppingTaskId === STOPPING_ALL_TASKS_ID
+          }
+          onClick={() => onStopTask(stoppable[0]!)}
+          aria-label={t(($) => $.agent_status.stop_aria, {
+            name: stoppable[0]!.agent_name,
+          })}
+          data-testid="channel-agents-cue-stop"
+        >
+          <Square className="size-2.5 fill-current" />
+          {t(($) => $.agent_status.stop)}
+        </Button>
+      ) : null}
+      {hasStoppable && canStop && onStopAll && stoppable.length > 1 ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
+          onClick={onStopAll}
+          aria-label={t(($) => $.agent_status.stop_all_aria, {
+            count: stoppable.length,
+          })}
+          data-testid="channel-agents-cue-stop-all"
+        >
+          <Square className="size-2.5 fill-current" />
+          {t(($) => $.agent_status.stop_all)}
+        </Button>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Compatibility export: DM uses compact status cue; channel callers should use
+ * ChannelPresenceCluster directly (channels-page already does).
+ */
+export function ChannelAgentsLiveCue({
+  variant = "channel",
+  agentCount,
+  tasks,
+  stoppingTaskId,
+  canStop,
+  onStopTask,
+  onStopAll,
+  members = [],
+  memberCount = 0,
+  onOpenMembers,
+  className,
+}: ChannelAgentsLiveCueProps) {
+  if (variant === "dm") {
+    return (
+      <DmAgentsLiveCue
+        tasks={tasks}
+        canStop={canStop}
+        onStopTask={onStopTask}
+        onStopAll={onStopAll}
+        stoppingTaskId={stoppingTaskId}
+        className={className}
+      />
+    );
+  }
+  return (
+    <ChannelPresenceCluster
+      members={members}
+      memberCount={memberCount}
+      agentCount={agentCount}
+      tasks={tasks}
+      stoppingTaskId={stoppingTaskId}
+      canStop={canStop}
+      onStopTask={onStopTask}
+      onStopAll={onStopAll}
+      onOpenMembers={onOpenMembers}
+      className={className}
+    />
+  );
+}

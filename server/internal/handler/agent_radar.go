@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -52,14 +53,25 @@ func (h *Handler) ListAgentRadarRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list radar runs")
 		return
 	}
-	out := make([]AgentRadarRunResponse, 0, len(runs))
-	for _, run := range runs {
-		actions, err := h.Queries.ListAgentRadarActionsByRun(r.Context(), run.ID)
+	runIDs := make([]pgtype.UUID, len(runs))
+	for i, run := range runs {
+		runIDs[i] = run.ID
+	}
+	actionsByRun := map[string][]db.AgentRadarAction{}
+	if len(runIDs) > 0 {
+		actions, err := h.Queries.ListAgentRadarActionsByRuns(r.Context(), runIDs)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list radar actions")
 			return
 		}
-		out = append(out, agentRadarRunToResponse(run, actions))
+		for _, action := range actions {
+			key := uuidToString(action.RadarRunID)
+			actionsByRun[key] = append(actionsByRun[key], action)
+		}
+	}
+	out := make([]AgentRadarRunResponse, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, agentRadarRunToResponse(run, actionsByRun[uuidToString(run.ID)]))
 	}
 	writeJSON(w, http.StatusOK, ListAgentRadarRunsResponse{Runs: out})
 }

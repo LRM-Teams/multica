@@ -15,6 +15,16 @@ export const evolutionKeys = {
   memoryCurationStatus: (wsId: string) => ["evolution", wsId, "memory-curation-status"] as const,
   memoryCurationRun: (wsId: string, runId: string) => ["evolution", wsId, "memory-curation-run", runId] as const,
   memoryCuratorProfile: (wsId: string) => ["evolution", wsId, "memory-curator-profile"] as const,
+  memoryCurationDailySummary: (wsId: string, since = "", until = "") =>
+    ["evolution", wsId, "memory-curation-daily-summary", since, until] as const,
+  memoryCurationCandidates: (wsId: string, date: string, kind = "all") =>
+    ["evolution", wsId, "memory-curation-candidates", date, kind] as const,
+  memoryCurationCandidate: (wsId: string, candidateId: string) =>
+    ["evolution", wsId, "memory-curation-candidate", candidateId] as const,
+  teamKnowledge: (wsId: string, date = "", kind = "") =>
+    ["evolution", wsId, "team-knowledge", date, kind] as const,
+  teamKnowledgeItem: (wsId: string, itemId: string) =>
+    ["evolution", wsId, "team-knowledge-item", itemId] as const,
 };
 
 export function evolutionReviewSubmissionListOptions(
@@ -65,6 +75,55 @@ export function memoryCuratorProfileOptions(wsId: string) {
     queryKey: evolutionKeys.memoryCuratorProfile(wsId),
     queryFn: () => api.getMemoryCuratorProfile(wsId),
     enabled: !!wsId,
+  });
+}
+
+export function memoryCurationDailySummaryOptions(
+  wsId: string,
+  params: { since?: string; until?: string; timezone?: string } = {},
+) {
+  return queryOptions({
+    queryKey: evolutionKeys.memoryCurationDailySummary(wsId, params.since ?? "", params.until ?? ""),
+    queryFn: () => api.getMemoryCurationDailySummary(wsId, params),
+    enabled: !!wsId,
+  });
+}
+
+export function memoryCurationCandidatesOptions(
+  wsId: string,
+  params: { date: string; kind?: "memory" | "skill" | "all"; status?: string; timezone?: string },
+) {
+  return queryOptions({
+    queryKey: evolutionKeys.memoryCurationCandidates(wsId, params.date, params.kind ?? "all"),
+    queryFn: () => api.listMemoryCurationCandidates(wsId, params),
+    enabled: !!wsId && !!params.date,
+  });
+}
+
+export function memoryCurationCandidateOptions(wsId: string, candidateId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.memoryCurationCandidate(wsId, candidateId),
+    queryFn: () => api.getMemoryCurationCandidate(wsId, candidateId),
+    enabled: !!wsId && !!candidateId,
+  });
+}
+
+export function teamKnowledgeListOptions(
+  wsId: string,
+  params: { date?: string; kind?: string; timezone?: string } = {},
+) {
+  return queryOptions({
+    queryKey: evolutionKeys.teamKnowledge(wsId, params.date ?? "", params.kind ?? ""),
+    queryFn: () => api.listTeamKnowledgeItems(wsId, params),
+    enabled: !!wsId,
+  });
+}
+
+export function teamKnowledgeItemOptions(wsId: string, itemId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.teamKnowledgeItem(wsId, itemId),
+    queryFn: () => api.getTeamKnowledgeItem(wsId, itemId),
+    enabled: !!wsId && !!itemId,
   });
 }
 

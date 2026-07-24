@@ -648,6 +648,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
+					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
+					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
+					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
+					r.Get("/memory-curation/team-knowledge", h.ListTeamKnowledgeItems)
+					r.Get("/memory-curation/team-knowledge/{itemId}", h.GetTeamKnowledgeItem)
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the

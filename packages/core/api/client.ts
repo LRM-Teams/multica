@@ -46,6 +46,11 @@ import type {
   StartMemoryCurationRunResponse,
   MemoryCurationBackfillRequest,
   MemoryCurationBackfillResponse,
+  MemoryCurationDailySummaryResponse,
+  MemoryCurationCandidateItem,
+  MemoryCurationCandidateListResponse,
+  TeamKnowledgeListItem,
+  TeamKnowledgeListResponse,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
@@ -312,6 +317,14 @@ import {
   StartMemoryCurationRunResponseSchema,
   MemoryCurationBackfillResponseSchema,
   EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE,
+  MemoryCurationDailySummaryResponseSchema,
+  EMPTY_MEMORY_CURATION_DAILY_SUMMARY,
+  MemoryCurationCandidateItemSchema,
+  MemoryCurationCandidateListResponseSchema,
+  EMPTY_MEMORY_CURATION_CANDIDATE_LIST,
+  TeamKnowledgeListItemSchema,
+  TeamKnowledgeListResponseSchema,
+  EMPTY_TEAM_KNOWLEDGE_LIST,
   SandboxNodeTemplatesResponseSchema,
   SandboxSnapshotSchema,
   SandboxSnapshotListSchema,
@@ -2265,6 +2278,100 @@ export class ApiClient {
     );
     return parseWithFallback(raw, MemoryCurationBackfillResponseSchema, EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE, {
       endpoint: "POST /api/workspaces/{id}/memory-curation/backfill",
+    });
+  }
+
+  async getMemoryCurationDailySummary(
+    workspaceId: string,
+    params: { since?: string; until?: string; timezone?: string } = {},
+  ): Promise<MemoryCurationDailySummaryResponse> {
+    const query = new URLSearchParams();
+    if (params.since) query.set("since", params.since);
+    if (params.until) query.set("until", params.until);
+    if (params.timezone) query.set("timezone", params.timezone);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/daily-summary${suffix}`,
+    );
+    return parseWithFallback(raw, MemoryCurationDailySummaryResponseSchema, EMPTY_MEMORY_CURATION_DAILY_SUMMARY, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/daily-summary",
+    });
+  }
+
+  async listMemoryCurationCandidates(
+    workspaceId: string,
+    params: { date: string; kind?: "memory" | "skill" | "all"; status?: string; limit?: number; timezone?: string },
+  ): Promise<MemoryCurationCandidateListResponse> {
+    const query = new URLSearchParams();
+    query.set("date", params.date);
+    if (params.kind) query.set("kind", params.kind);
+    if (params.status) query.set("status", params.status);
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.timezone) query.set("timezone", params.timezone);
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/candidates?${query.toString()}`,
+    );
+    return parseWithFallback(raw, MemoryCurationCandidateListResponseSchema, EMPTY_MEMORY_CURATION_CANDIDATE_LIST, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/candidates",
+    });
+  }
+
+  async getMemoryCurationCandidate(
+    workspaceId: string,
+    candidateId: string,
+  ): Promise<MemoryCurationCandidateItem> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/candidates/${encodeURIComponent(candidateId)}`,
+    );
+    return parseWithFallback(raw, MemoryCurationCandidateItemSchema, {
+      id: "",
+      candidate_type: "",
+      scope: "",
+      title: "",
+      snippet: "",
+      confidence: 0,
+      status: "",
+      created_at: "",
+    }, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/candidates/{candidateId}",
+    });
+  }
+
+  async listTeamKnowledgeItems(
+    workspaceId: string,
+    params: { date?: string; kind?: string; limit?: number; timezone?: string; include_content?: boolean } = {},
+  ): Promise<TeamKnowledgeListResponse> {
+    const query = new URLSearchParams();
+    if (params.date) query.set("date", params.date);
+    if (params.kind) query.set("kind", params.kind);
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.timezone) query.set("timezone", params.timezone);
+    if (params.include_content) query.set("include_content", "true");
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/team-knowledge${suffix}`,
+    );
+    return parseWithFallback(raw, TeamKnowledgeListResponseSchema, EMPTY_TEAM_KNOWLEDGE_LIST, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/team-knowledge",
+    });
+  }
+
+  async getTeamKnowledgeItem(
+    workspaceId: string,
+    itemId: string,
+  ): Promise<TeamKnowledgeListItem> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/team-knowledge/${encodeURIComponent(itemId)}`,
+    );
+    return parseWithFallback(raw, TeamKnowledgeListItemSchema, {
+      id: "",
+      kind: "",
+      title: "",
+      snippet: "",
+      status: "",
+      created_at: "",
+    }, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/team-knowledge/{itemId}",
     });
   }
 

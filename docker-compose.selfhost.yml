@@ -131,7 +131,7 @@ services:
       # AReaL gateway's admin key in production; the simulation gateway ignores
       # it, so any non-empty value works for a sim bring-up. Override in
       # /data/multica/.env.
-      AREAL_ADMIN_API_KEY: ${AREAL_ADMIN_API_KEY:-areal-training-admin-key}
+      AREAL_ADMIN_API_KEY: ${AREAL_ADMIN_API_KEY:-areal-admin-5058bdacf2a9ae2ea4d00ada0de399ff2516af047f8d117f}
       # AReaL LLM proxy base_url injected into env-dispatch training sandboxes
       # (service/training_config.go: AREAL_PROXY_URL). Must be reachable from
       # inside the sandbox: typically the db_bridge chat_completions stub

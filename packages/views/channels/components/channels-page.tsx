@@ -234,6 +234,7 @@ import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsHeaderButton } from "./stop-all-agents-control";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
+import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
 
 export interface TypingActor {
   key: string;
@@ -1374,10 +1375,9 @@ export function ChannelsPage({
     () => {
       const memberCount = channelMembers.filter((m) => m.member_type === "user").length;
       const agentCount = channelMembers.filter((m) => m.member_type === "agent").length;
-      if (memberCount === 0 && agentCount === 0) return "";
-      return t(($) => $.header.roster_summary, { members: memberCount, agents: agentCount });
+      return { memberCount, agentCount };
     },
-    [channelMembers, t],
+    [channelMembers],
   );
   // Pinned conversations live in the unified PINNED section (Slack-style),
   // not floated to the top of Channels / Direct messages.
@@ -1926,6 +1926,33 @@ export function ChannelsPage({
       onError: () => toast.error(t(($) => $.archive_dialog.restore_error)),
     });
   };
+
+  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
+    if (!active?.id) return;
+    // LRM-425 / LRM-238 — authoritative id is inbox_event_id; never fall back
+    // to /api/tasks/{id}/cancel for channel wakes (that path returns 409).
+    const inboxEventId = task.inbox_event_id?.trim();
+    if (!inboxEventId) {
+      toast.error(t(($) => $.agent_status.stop_failed));
+      return;
+    }
+    setStoppingChannelTaskId(task.task_id);
+    try {
+      await api.cancelChannelInboxEvent(active.id, inboxEventId);
+      toast.success(
+        isTerminalChannelActiveTask(task)
+          ? t(($) => $.header.working_dismiss)
+          : t(($) => $.agent_status.stop_success, { name: task.agent_name }),
+      );
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    } catch {
+      toast.error(t(($) => $.agent_status.stop_failed));
+    } finally {
+      setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
+    }
+  }, [active?.id, qc, t, wsId]);
 
   const handleStopAllChannelTasks = useCallback(async (tasks: ChannelActiveTask[]) => {
     if (!active?.id || tasks.length === 0) return;
@@ -3169,9 +3196,15 @@ export function ChannelsPage({
               </button>
             }
             meta={
-              <>
-                {rosterSummary || t(($) => $.header.running)}
-              </>
+              <ChannelAgentsLiveCue
+                memberCount={rosterSummary.memberCount}
+                agentCount={rosterSummary.agentCount}
+                tasks={activeTasks}
+                stoppingTaskId={stoppingChannelTaskId}
+                canStop={canPostInChannel}
+                onStopTask={handleStopChannelTask}
+                onStopAll={openStopAllAgentsConfirm}
+              />
             }
             badges={
               <>

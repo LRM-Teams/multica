@@ -20,6 +20,9 @@ import {
   useDeleteChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
+  activeChannelTasksKeys,
+  activeChannelTasksOptions,
+  channelKeys,
 } from "@multica/core/channels";
 import { dmKeys } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
@@ -33,7 +36,11 @@ import type {
   OpenAgentPanelFn,
 } from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelMessage, ChannelMessageSearchResult } from "@multica/core/types";
+import type {
+  ChannelActiveTask,
+  ChannelMessage,
+  ChannelMessageSearchResult,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Popover,
@@ -76,6 +83,9 @@ import { ThreadFollowButton } from "./thread-follow-button";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
+import { ChannelAgentsLiveCue } from "./channel-agents-live-cue";
+import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
+import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -257,6 +267,8 @@ function DmHeader({
   voiceCallAction?: React.ReactNode;
 }) {
   const { t } = useT("channels");
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
   const peerId = dm.peer.id;
@@ -265,9 +277,75 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-248 / LRM-537: agent peers use avatar badge only; composer activity
-  // verbs (Thinking / preparing) were removed — no substitute status line.
-  const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
+  const channelIdForTasks = filesChannelId ?? (isAgentPeer ? dm.id : "");
+  const { data: activeTasks = [] } = useQuery(
+    activeChannelTasksOptions(isAgentPeer ? channelIdForTasks : ""),
+  );
+  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+  const [stopAllConfirmOpen, setStopAllConfirmOpen] = useState(false);
+  // LRM-248 / LRM-537 / LRM-581: agent peers use avatar badge + header live cue
+  // (not composer status). Human peers keep the static meta line.
+  const humanMeta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
+  const handleStopTask = useCallback(
+    async (task: ChannelActiveTask) => {
+      if (!channelIdForTasks) return;
+      const inboxEventId = task.inbox_event_id?.trim();
+      if (!inboxEventId) {
+        toast.error(t(($) => $.agent_status.stop_failed));
+        return;
+      }
+      setStoppingTaskId(task.task_id);
+      try {
+        await api.cancelChannelInboxEvent(channelIdForTasks, inboxEventId);
+        toast.success(
+          isTerminalChannelActiveTask(task)
+            ? t(($) => $.header.working_dismiss)
+            : t(($) => $.agent_status.stop_success, { name: task.agent_name }),
+        );
+        qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelIdForTasks) });
+        qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+        qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      } catch {
+        toast.error(t(($) => $.agent_status.stop_failed));
+      } finally {
+        setStoppingTaskId((current) => (current === task.task_id ? null : current));
+      }
+    },
+    [channelIdForTasks, qc, t, wsId],
+  );
+  const handleStopAll = useCallback(async () => {
+    if (!channelIdForTasks) return;
+    setStoppingTaskId("__all__");
+    try {
+      const result = await api.cancelChannelActiveInboxEvents(channelIdForTasks);
+      if (result.cancelled_count > 0) {
+        toast.success(
+          t(($) => $.agent_status.stop_all_success, { count: result.cancelled_count }),
+        );
+      } else {
+        toast.error(t(($) => $.agent_status.stop_failed));
+      }
+    } catch {
+      toast.error(t(($) => $.agent_status.stop_failed));
+    }
+    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelIdForTasks) });
+    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    setStoppingTaskId(null);
+    setStopAllConfirmOpen(false);
+  }, [channelIdForTasks, qc, t, wsId]);
+  const agentLiveMeta = isAgentPeer ? (
+    <ChannelAgentsLiveCue
+      agentsOnly
+      agentCount={1}
+      tasks={activeTasks}
+      stoppingTaskId={stoppingTaskId}
+      canStop
+      onStopTask={handleStopTask}
+      onStopAll={() => setStopAllConfirmOpen(true)}
+    />
+  ) : null;
+  const meta = agentLiveMeta ?? humanMeta;
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
     [isMuted, t],
@@ -305,58 +383,69 @@ function DmHeader({
     );
 
   return (
-    <ConversationHeader
-      isMobile={isMobile}
-      leading={
-        <>
-          {isMobile && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-10 shrink-0 text-muted-foreground"
-              aria-label={t(($) => $.header.back)}
-              onClick={onBack}
-            >
-              <ArrowLeft className="size-5" />
-            </Button>
-          )}
-          {wrapPeerTrigger(peerAvatar)}
-        </>
-      }
-      title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
-      meta={meta}
-      badges={mutedBadge}
-      actions={
-        <>
-          {voiceCallAction}
-          {onSearchOpen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              aria-label={t(($) => $.conv_search.search_aria)}
-              onClick={onSearchOpen}
-            >
-              <Search className="size-4" />
-            </Button>
-          )}
-          {filesChannelId && (
-            <Popover>
-              <PopoverTrigger
-                className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                aria-label={t(($) => $.dm.files)}
+    <>
+      <ConversationHeader
+        isMobile={isMobile}
+        leading={
+          <>
+            {isMobile && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-10 shrink-0 text-muted-foreground"
+                aria-label={t(($) => $.header.back)}
+                onClick={onBack}
               >
-                <FileText className="size-4" />
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-80">
-                <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
-                <ChannelFilesPanel channelId={filesChannelId} />
-              </PopoverContent>
-            </Popover>
-          )}
-        </>
-      }
-    />
+                <ArrowLeft className="size-5" />
+              </Button>
+            )}
+            {wrapPeerTrigger(peerAvatar)}
+          </>
+        }
+        title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
+        meta={meta}
+        badges={mutedBadge}
+        actions={
+          <>
+            {voiceCallAction}
+            {onSearchOpen && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={t(($) => $.conv_search.search_aria)}
+                onClick={onSearchOpen}
+              >
+                <Search className="size-4" />
+              </Button>
+            )}
+            {filesChannelId && (
+              <Popover>
+                <PopoverTrigger
+                  className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                  aria-label={t(($) => $.dm.files)}
+                >
+                  <FileText className="size-4" />
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-80">
+                  <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
+                  <ChannelFilesPanel channelId={filesChannelId} />
+                </PopoverContent>
+              </Popover>
+            )}
+          </>
+        }
+      />
+      <StopAllAgentsDialog
+        open={stopAllConfirmOpen}
+        onOpenChange={setStopAllConfirmOpen}
+        channelName={dm.peer.name}
+        confirming={stoppingTaskId === "__all__"}
+        onConfirm={() => {
+          void handleStopAll();
+        }}
+      />
+    </>
   );
 }
 

@@ -71,6 +71,16 @@
     "back": "뒤로",
     "more_aria": "더 보기",
     "roster_summary": "멤버 {{members}}명 · 에이전트 {{agents}}개",
+    "members_prefix": "멤버 {{members}}명 · ",
+    "members_only": "멤버 {{members}}명",
+    "agents_idle": "에이전트 {{agents}}개",
+    "agents_live": "에이전트 {{agents}}개 · {{working}} 처리 중",
+    "agents_attention": "에이전트 {{agents}}개 · 확인 필요",
+    "working_list_title": "처리 중 · {{count}}",
+    "working_failed": "응답 불가 · 다시 @",
+    "working_no_reply": "응답 없음 · 다시 @",
+    "working_dismiss": "닫기",
+    "working_dismiss_aria": "{{name}} 상태 닫기",
     "settings_aria": "그룹 설정"
   },
   "members": {

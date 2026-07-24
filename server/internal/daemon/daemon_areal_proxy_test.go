@@ -22,7 +22,7 @@ func TestArealProxyExecOverrideNil(t *testing.T) {
 // env var a deployment's models.json `areal` provider references.
 func TestArealProxyExecOverrideFull(t *testing.T) {
 	p := &ArealProxy{
-		Provider: "areal",
+		Provider: "openai",
 		Model:    "areal-default",
 		APIKey:   "proxy-key-123",
 		BaseURL:  "http://db_bridge_stub:9100/v1",
@@ -31,8 +31,8 @@ func TestArealProxyExecOverrideFull(t *testing.T) {
 	if !ok {
 		t.Fatal("want ok=true")
 	}
-	if model != "areal/areal-default" {
-		t.Errorf("model = %q, want areal/areal-default", model)
+	if model != "openai/areal-default" {
+		t.Errorf("model = %q, want openai/areal-default", model)
 	}
 	if !reflect.DeepEqual(args, []string{"--api-key", "proxy-key-123"}) {
 		t.Errorf("args = %v, want [--api-key proxy-key-123]", args)
@@ -46,8 +46,8 @@ func TestArealProxyExecOverrideFull(t *testing.T) {
 // fixed areal/areal-default when the context object omits them.
 func TestArealProxyExecOverrideDefaults(t *testing.T) {
 	model, args, _, _, ok := arealProxyExecOverride(&ArealProxy{APIKey: "pk", BaseURL: "u"})
-	if !ok || model != "areal/areal-default" {
-		t.Fatalf("defaults: model=%q ok=%v, want areal/areal-default true", model, ok)
+	if !ok || model != "openai/areal-default" {
+		t.Fatalf("defaults: model=%q ok=%v, want openai/areal-default true", model, ok)
 	}
 	if !reflect.DeepEqual(args, []string{"--api-key", "pk"}) {
 		t.Errorf("args = %v, want [--api-key pk]", args)

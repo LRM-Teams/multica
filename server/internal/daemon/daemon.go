@@ -5224,7 +5224,7 @@ func addPiMemoryFastModeEnv(env map[string]string) {
 //     that entry on the runtime host is Task 8's job. Injected into agentEnv
 //     alongside the other provider creds (mirrors CustomEnv's ANTHROPIC_BASE_URL).
 const (
-	arealProxyProvider      = "areal"
+	arealProxyProvider      = "openai"
 	arealProxyModel         = "areal-default"
 	arealProxyBaseURLEnvVar = "AREAL_PROXY_BASE_URL"
 )

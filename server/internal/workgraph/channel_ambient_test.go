@@ -12,7 +12,7 @@ import (
 func TestTouchChannelAmbientDebouncesAndClaimsAfterDelay(t *testing.T) {
 	ctx := t.Context()
 	prev := AmbientDebounce
-	AmbientDebounce = 50 * time.Millisecond
+	AmbientDebounce = 5 * time.Minute
 	t.Cleanup(func() { AmbientDebounce = prev })
 
 	workspaceID := pgUUID(uuid.New())
@@ -28,8 +28,21 @@ func TestTouchChannelAmbientDebouncesAndClaimsAfterDelay(t *testing.T) {
 	createWorkgraphAgent(t, ctx, workspaceID, wendyID, "Wendy Ambient")
 
 	store := NewStore(testPool)
-	if err := store.TouchChannelAmbient(ctx, workspaceID, channelID, wendyID, pgtype.UUID{}, time.Now()); err != nil {
+	messageAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := store.TouchChannelAmbient(ctx, workspaceID, channelID, wendyID, pgtype.UUID{}, messageAt); err != nil {
 		t.Fatalf("touch ambient: %v", err)
+	}
+
+	var reviewNotBefore time.Time
+	if err := testPool.QueryRow(ctx, `
+		SELECT review_not_before
+		FROM wendy_channel_ambient
+		WHERE channel_id = $1
+	`, channelID).Scan(&reviewNotBefore); err != nil {
+		t.Fatalf("read review deadline: %v", err)
+	}
+	if got := reviewNotBefore.Sub(messageAt); got != AmbientDebounce {
+		t.Fatalf("review deadline delay = %v, want %v", got, AmbientDebounce)
 	}
 
 	watches, _, err := store.ClaimDueChannelAmbient(ctx, 10)
@@ -40,7 +53,13 @@ func TestTouchChannelAmbientDebouncesAndClaimsAfterDelay(t *testing.T) {
 		t.Fatalf("claimed %d before debounce, want 0", len(watches))
 	}
 
-	time.Sleep(80 * time.Millisecond)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE wendy_channel_ambient
+		SET review_not_before = now() - INTERVAL '1 millisecond'
+		WHERE channel_id = $1
+	`, channelID); err != nil {
+		t.Fatalf("advance review deadline: %v", err)
+	}
 	watches, token, err := store.ClaimDueChannelAmbient(ctx, 10)
 	if err != nil {
 		t.Fatalf("claim after debounce: %v", err)

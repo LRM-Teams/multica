@@ -254,14 +254,14 @@ func TestDeleteRuntimesByDaemon_RefusesActiveInboxWork(t *testing.T) {
 	}
 
 	var body struct {
-		Code            string `json:"code"`
-		ActiveTaskCount int64  `json:"active_task_count"`
+		Code                  string `json:"code"`
+		ActiveInboxEventCount int64  `json:"active_inbox_event_count"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Code != "computer_has_active_tasks" || body.ActiveTaskCount < 1 {
-		t.Fatalf("expected computer_has_active_tasks with count>=1, got %+v", body)
+	if body.Code != "computer_has_active_inbox_events" || body.ActiveInboxEventCount < 1 {
+		t.Fatalf("expected computer_has_active_inbox_events with count>=1, got %+v", body)
 	}
 	assertRuntimeExists(t, ctx, rtID)
 }
@@ -286,6 +286,65 @@ func TestDeleteRuntimesByDaemon_RuntimeModeFilter(t *testing.T) {
 
 	assertRuntimeGone(t, ctx, localID)
 	assertRuntimeExists(t, ctx, cloudID)
+}
+
+func TestDeleteRuntimesByDaemon_DetachesTerminalInboxEvents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-inbox-terminal-" + uuid.NewString()
+
+	targetRuntimeID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+	otherRuntimeID := createBulkDaemonRuntime(t, ctx, "other-inbox-"+uuid.NewString(), "codex", "offline")
+	agentID := createCascadeFixtureAgent(t, ctx, otherRuntimeID, "Bulk Inbox Agent")
+	eventID := createBulkInboxEvent(t, ctx, targetRuntimeID, agentID, "acked")
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertRuntimeGone(t, ctx, targetRuntimeID)
+	assertInboxEventRuntimeCleared(t, ctx, eventID)
+	assertRuntimeExists(t, ctx, otherRuntimeID)
+}
+
+func TestDeleteRuntimesByDaemon_RefusesActiveInboxEvents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-inbox-active-" + uuid.NewString()
+
+	targetRuntimeID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+	otherRuntimeID := createBulkDaemonRuntime(t, ctx, "other-inbox-"+uuid.NewString(), "codex", "offline")
+	agentID := createCascadeFixtureAgent(t, ctx, otherRuntimeID, "Bulk Active Inbox Agent")
+	createBulkInboxEvent(t, ctx, targetRuntimeID, agentID, "pending")
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Code                  string `json:"code"`
+		ActiveInboxEventCount int64  `json:"active_inbox_event_count"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Code != "computer_has_active_inbox_events" || body.ActiveInboxEventCount < 1 {
+		t.Fatalf("expected active inbox conflict, got %+v", body)
+	}
+	assertRuntimeExists(t, ctx, targetRuntimeID)
+	assertRuntimeExists(t, ctx, otherRuntimeID)
 }
 
 func createBulkDaemonRuntime(t *testing.T, ctx context.Context, daemonID, provider, status string) string {
@@ -332,6 +391,35 @@ func createBulkFixtureIssue(t *testing.T, ctx context.Context) string {
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 	return issueID
+}
+
+func createBulkInboxEvent(t *testing.T, ctx context.Context, runtimeID, agentID, status string) string {
+	t.Helper()
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (workspace_id, agent_id, runtime_id, reason, status, priority)
+		VALUES ($1, $2, $3, 'mention', $4, 0)
+		RETURNING id
+	`, testWorkspaceID, agentID, runtimeID, status).Scan(&eventID); err != nil {
+		t.Fatalf("insert bulk inbox event: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
+	})
+	return eventID
+}
+
+func assertInboxEventRuntimeCleared(t *testing.T, ctx context.Context, eventID string) {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event WHERE id = $1 AND runtime_id IS NULL
+	`, eventID).Scan(&n); err != nil {
+		t.Fatalf("count inbox event: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected inbox event %s runtime_id cleared, count=%d", eventID, n)
+	}
 }
 
 func assertRuntimeGone(t *testing.T, ctx context.Context, runtimeID string) {

@@ -15,10 +15,62 @@ export type ReferencePart = Extract<MessagePart, { type: "reference" }>;
  * The renderer maps `text` runs through the normal text/markdown path and
  * `reference` runs through the shared token renderer (mention / issue-ref /
  * system @handle all consume this ONE projection — Parker/Barry 2026-07-15).
+ *
+ * `emphasis` (#635): each text run is markdown-parsed INDEPENDENTLY of its
+ * neighbors, so an emphasis marker pair that straddles a reference span (the
+ * author wrote `**LRM-188**`) never has both halves in the same run — remark
+ * sees a lone unmatched `**` on each side and leaves it as literal asterisks.
+ * `stripStraddlingEmphasisMarkers` detects exactly this "marker immediately
+ * touches the span on both sides" shape and moves it here so the renderer can
+ * apply the emphasis directly to the token instead of feeding it back through
+ * a second markdown parse.
  */
 export type InlineSegment =
   | { kind: "text"; text: string }
-  | { kind: "reference"; ref: ReferencePart; text: string };
+  | { kind: "reference"; ref: ReferencePart; text: string; emphasis?: "strong" | "em" };
+
+// Longer markers first — `**`/`__` must be tried before `*`/`_` so "**" isn't
+// mistaken for two single-emphasis markers.
+const EMPHASIS_MARKERS: ReadonlyArray<{ marker: string; kind: "strong" | "em" }> = [
+  { marker: "**", kind: "strong" },
+  { marker: "__", kind: "strong" },
+  { marker: "*", kind: "em" },
+  { marker: "_", kind: "em" },
+];
+
+/**
+ * Fold a `**`/`__`/`*`/`_` pair that directly touches a reference span (no
+ * intervening whitespace, matching CommonMark's own left/right-flanking rule)
+ * into that segment's `emphasis`, stripping the marker text from the
+ * surrounding runs. Only a marker that appears at the VERY end of the
+ * preceding run and the VERY start of the following run counts — anything
+ * else is an ordinary mid-sentence marker that the per-run markdown pass
+ * already handles correctly on its own.
+ */
+function stripStraddlingEmphasisMarkers(segments: InlineSegment[]): InlineSegment[] {
+  const result = [...segments];
+  for (let i = 1; i < result.length - 1; i++) {
+    const seg = result[i];
+    const prev = result[i - 1];
+    const next = result[i + 1];
+    if (!seg || seg.kind !== "reference" || !prev || prev.kind !== "text" || !next || next.kind !== "text") {
+      continue;
+    }
+
+    for (const { marker, kind } of EMPHASIS_MARKERS) {
+      if (!prev.text.endsWith(marker) || !next.text.startsWith(marker)) continue;
+      result[i - 1] = { kind: "text", text: prev.text.slice(0, -marker.length) };
+      result[i] = { kind: "reference", ref: seg.ref, text: seg.text, emphasis: kind };
+      result[i + 1] = { kind: "text", text: next.text.slice(marker.length) };
+      break;
+    }
+  }
+  // The fold can leave an empty run when the marker was the entire
+  // preceding/following text (e.g. content starts with "**"+ref) — every
+  // other path in this module already guarantees no empty text segments, so
+  // preserve that invariant here too.
+  return result.filter((seg) => seg.kind !== "text" || seg.text !== "");
+}
 
 function hasSpan(
   part: MessagePart,
@@ -84,5 +136,5 @@ export function projectInlineReferences(
   if (cursor < content.length) {
     segments.push({ kind: "text", text: content.slice(cursor) });
   }
-  return segments;
+  return stripStraddlingEmphasisMarkers(segments);
 }

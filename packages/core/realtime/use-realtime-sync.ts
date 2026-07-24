@@ -51,6 +51,7 @@ import {
   channelKeys,
   invalidateChannelIssues,
   invalidateChannelMessages,
+  patchChannelMessageReactionInCache,
   upsertChannelMessageInCache,
   upsertChannelMessageThreadInCache,
 } from "../channels/queries";
@@ -98,6 +99,7 @@ import type {
   ChatMessagesPage,
   Channel,
   ChannelMessage,
+  ChannelReaction,
   InvitationCreatedPayload,
 } from "../types";
 
@@ -1268,20 +1270,52 @@ export function useRealtimeSync(
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
     });
 
+    // #689 perf audit: a reaction touches one field on one row. Invalidating
+    // the whole channel message list on every reaction re-renders the entire
+    // virtualized viewport — the single largest contributor to mobile scroll
+    // jank measured. Patch the cached row directly when the event carries
+    // enough to compute the new reaction set; fall back to the old
+    // full-list invalidate only for a payload shape this can't patch (never
+    // silently drop the update).
     const unsubChannelReactionAdded = ws.on("channel_reaction:added", (p) => {
-      const payload = p as { channel_id?: string; message_id?: string };
-      if (payload.channel_id) {
+      const payload = p as { channel_id?: string; message_id?: string; reaction?: ChannelReaction };
+      if (!payload.channel_id) return;
+      // Thread panels aren't the audited jank surface and the payload carries
+      // no thread_root_message_id to target one directly — keep this side a
+      // plain invalidate (cheap: only the currently-open thread, if any, is
+      // subscribed) rather than inventing a broader thread-cache patch.
+      qc.invalidateQueries({ queryKey: ["channel-message-thread", payload.channel_id] });
+      if (!payload.message_id || !payload.reaction) {
         invalidateChannelMessages(qc, payload.channel_id);
-        qc.invalidateQueries({ queryKey: ["channel-message-thread", payload.channel_id] });
+        return;
       }
+      const reaction = payload.reaction;
+      patchChannelMessageReactionInCache(qc, payload.channel_id, payload.message_id, (reactions) => {
+        if (reactions?.some((r) => r.id === reaction.id)) return reactions;
+        return [...(reactions ?? []), reaction];
+      });
     });
 
     const unsubChannelReactionRemoved = ws.on("channel_reaction:removed", (p) => {
-      const payload = p as { channel_id?: string; message_id?: string };
-      if (payload.channel_id) {
+      const payload = p as {
+        channel_id?: string;
+        message_id?: string;
+        emoji?: string;
+        actor_type?: string;
+        actor_id?: string;
+      };
+      if (!payload.channel_id) return;
+      qc.invalidateQueries({ queryKey: ["channel-message-thread", payload.channel_id] });
+      if (!payload.message_id || !payload.emoji || !payload.actor_type || !payload.actor_id) {
         invalidateChannelMessages(qc, payload.channel_id);
-        qc.invalidateQueries({ queryKey: ["channel-message-thread", payload.channel_id] });
+        return;
       }
+      const { emoji, actor_type, actor_id } = payload;
+      patchChannelMessageReactionInCache(qc, payload.channel_id, payload.message_id, (reactions) =>
+        reactions?.filter(
+          (r) => !(r.emoji === emoji && r.actor_type === actor_type && r.actor_id === actor_id),
+        ),
+      );
     });
 
     const unsubChannelUpdated = ws.on("channel:updated", () => {

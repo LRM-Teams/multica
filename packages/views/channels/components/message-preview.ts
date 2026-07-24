@@ -7,7 +7,7 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 
-type MentionType = "member" | "agent";
+export type MentionType = "member" | "agent";
 type ChannelAuthorType = "user" | "agent" | "lark" | "system";
 
 export type MentionPreviewResolver = (

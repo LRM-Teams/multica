@@ -20,38 +20,70 @@ import (
 const (
 	// memoryCurationReclaimTimeout is how long a claimed running row may sit
 	// without claimed_at refresh before the server treats it as undelivered /
-	// abandoned and either reclaims or fails it. Keep this short: WS delivery
-	// failures leave claimed rows that the daemon never starts.
-	memoryCurationReclaimTimeout = 2 * time.Minute
-	memoryCurationMaxRunAge      = 30 * time.Minute
+	// abandoned and either reclaims or fails it.
+	//
+	// Must stay above typical team-curator wall time: cursor team curation
+	// regularly exceeds 2 minutes, and a too-short window produces false
+	// "exceeded max daemon claim attempts" failures (~3×timeout) even when
+	// the daemon is still working. Keep it under memoryCurationMaxRunAge so
+	// true undelivered claims still recycle before the hard age cap.
+	memoryCurationReclaimTimeout = 12 * time.Minute
+	memoryCurationMaxRunAge      = 60 * time.Minute
 	memoryCurationMaxAttempts    = 3
 )
 
 func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.AgentRuntime, activeRunID string) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {
+	// Refresh the active claim before sweeping expirations so a briefly delayed
+	// heartbeat cannot fail a still-running curator (fail-then-refresh would
+	// race healthy long team-curation runs into claim-attempt death).
+	activeID := strings.TrimSpace(activeRunID)
+	if activeID != "" {
+		if err := h.refreshActiveMemoryCurationClaim(ctx, rt.ID, activeID); err != nil {
+			return nil, err
+		}
+	}
 	if err := h.failExpiredMemoryCurationRuns(ctx, rt.ID, rt.WorkspaceID); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(activeRunID) != "" {
-		if _, err := h.DB.Exec(ctx, `
-			UPDATE memory_curation_run
-			   SET claimed_at = now()
-			 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
-		`, strings.TrimSpace(activeRunID), rt.ID); err != nil {
-			return nil, err
-		}
-		if _, err := h.DB.Exec(ctx, `
-			UPDATE memory_curation_agent_run
-			   SET claimed_at = now(), updated_at = now()
-			 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
-		`, strings.TrimSpace(activeRunID), rt.ID); err != nil {
-			return nil, err
-		}
+	if activeID != "" {
 		return nil, nil
 	}
 	if pending, err := h.claimPendingMemoryCurationAgentRun(ctx, rt); err != nil || pending != nil {
 		return pending, err
 	}
 	return h.claimPendingMemoryCurationParentRun(ctx, rt)
+}
+
+// refreshActiveMemoryCurationClaim bumps claimed_at for the daemon's in-flight
+// curation row. When the heartbeat carries an agent-run id, also refresh the
+// parent so stage=all parents are not swept while a child self-review is live.
+func (h *Handler) refreshActiveMemoryCurationClaim(ctx context.Context, runtimeID pgtype.UUID, activeRunID string) error {
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_run
+		   SET claimed_at = now()
+		 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
+	`, activeRunID, runtimeID); err != nil {
+		return err
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_agent_run
+		   SET claimed_at = now(), updated_at = now()
+		 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
+	`, activeRunID, runtimeID); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_run r
+		   SET claimed_at = now()
+		  FROM memory_curation_agent_run cr
+		 WHERE cr.id::text = $1
+		   AND cr.runtime_id = $2
+		   AND cr.status = 'running'
+		   AND r.id = cr.parent_run_id
+		   AND r.runtime_id = $2
+		   AND r.status = 'running'
+	`, activeRunID, runtimeID)
+	return err
 }
 
 func (h *Handler) claimPendingMemoryCurationAgentRun(ctx context.Context, rt db.AgentRuntime) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {

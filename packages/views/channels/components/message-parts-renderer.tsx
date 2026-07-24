@@ -202,12 +202,16 @@ function StickerImage({
   alt: string;
   onError: () => void;
 }) {
+  // #689 perf audit: a fixed box (not a max-height/width upper bound applied
+  // only once the browser knows the image's natural size) reserves the same
+  // rendered footprint before and after the async image load, so loading a
+  // sticker never shifts the surrounding message list layout.
   return React.createElement("img", {
     "data-testid": "message-sticker",
     src,
     alt,
     className:
-      "not-prose block h-auto w-auto max-h-32 max-w-32 select-none object-contain sm:max-h-40 sm:max-w-40",
+      "not-prose block size-32 select-none object-contain sm:size-40",
     draggable: false,
     loading: "lazy",
     onError,

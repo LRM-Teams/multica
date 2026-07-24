@@ -518,6 +518,51 @@ func (q *Queries) ListAgentRadarActionsByRun(ctx context.Context, radarRunID pgt
 	return items, nil
 }
 
+const listAgentRadarActionsByRuns = `-- name: ListAgentRadarActionsByRuns :many
+SELECT id, radar_run_id, workspace_id, agent_id, action_type, status, risk_level, confidence, dedupe_key, target_kind, target_id, reason, evidence, payload, result, error, created_at, updated_at FROM agent_radar_action
+WHERE radar_run_id = ANY($1::uuid[])
+ORDER BY radar_run_id ASC, created_at ASC, id ASC
+`
+
+func (q *Queries) ListAgentRadarActionsByRuns(ctx context.Context, radarRunIds []pgtype.UUID) ([]AgentRadarAction, error) {
+	rows, err := q.db.Query(ctx, listAgentRadarActionsByRuns, radarRunIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentRadarAction{}
+	for rows.Next() {
+		var i AgentRadarAction
+		if err := rows.Scan(
+			&i.ID,
+			&i.RadarRunID,
+			&i.WorkspaceID,
+			&i.AgentID,
+			&i.ActionType,
+			&i.Status,
+			&i.RiskLevel,
+			&i.Confidence,
+			&i.DedupeKey,
+			&i.TargetKind,
+			&i.TargetID,
+			&i.Reason,
+			&i.Evidence,
+			&i.Payload,
+			&i.Result,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentRadarRunsByAgent = `-- name: ListAgentRadarRunsByAgent :many
 SELECT id, workspace_id, agent_id, runtime_id, task_id, trigger_kind, trigger_ref, status, cooldown_key, context_summary, action_plan, error, scheduled_for, started_at, finished_at, created_at, updated_at FROM agent_radar_run
 WHERE workspace_id = $1 AND agent_id = $2

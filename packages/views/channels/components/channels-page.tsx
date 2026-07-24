@@ -1701,11 +1701,14 @@ export function ChannelsPage({
     });
   }, [threadRoot]);
 
-  // New messages (from others / agents) refresh the list (unread + preview)
-  // and the open thread. Keep the active channel marked read while viewing it.
+  // New messages (from others / agents) refresh the DM/task/member surfaces
+  // and the open thread. Keep the active channel marked read while viewing
+  // it. #689 perf audit: channelKeys.list(wsId) is NOT invalidated here —
+  // useRealtimeSync's own central "channel:message" subscriber already does
+  // that for every event; this second subscriber repeating it was a literal
+  // duplicate invalidation on every single incoming message.
   useWSEvent("channel:message", (payload) => {
     const e = payload as ChannelMessage;
-    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     // The DM list unions dm_channel items, so a channel message may change a DM
     // row's preview / unread — refresh it too.
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
@@ -2215,14 +2218,17 @@ export function ChannelsPage({
     [active, sendMessage, sendThreadMessage],
   );
 
-  const handleOpenThread = (message: ChannelMessage) => {
+  // Stable identity is load-bearing, not cosmetic: areChannelMessageBubbleProps
+  // Equal compares onOpenThread/onOpenAgent BY REFERENCE, so a fresh closure
+  // on every render defeats every visible bubble's memo on every render.
+  const handleOpenThread = useCallback((message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
     setSidePanel({ kind: "thread", message });
-  };
+  }, []);
 
-  const handleOpenAgentPanel: OpenAgentPanelFn = (agentId, snapshot) => {
+  const handleOpenAgentPanel: OpenAgentPanelFn = useCallback((agentId, snapshot) => {
     setSidePanel({ kind: "agent", agentId, snapshot });
-  };
+  }, []);
 
   // #645 — toggles the same exclusive slot; opening it always wins over
   // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.

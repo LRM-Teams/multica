@@ -114,7 +114,7 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 	for i, rt := range runtimes {
 		runtimeIDs[i] = rt.ID
 	}
-	activeTaskCount, err := h.countActiveRuntimeWork(r.Context(), runtimeIDs)
+	activeTaskCount, err := h.Queries.CountActiveTasksByRuntimeIDs(r.Context(), runtimeIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check runtime task dependencies")
 		return
@@ -125,6 +125,21 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 			"code":              "computer_has_active_tasks",
 			"daemon_id":         daemonID,
 			"active_task_count": activeTaskCount,
+		})
+		return
+	}
+
+	activeInboxEventCount, err := countActiveInboxEventsByRuntimeIDs(r.Context(), h.DB, runtimeIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check runtime inbox dependencies")
+		return
+	}
+	if activeInboxEventCount > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":                    "cannot delete computer: one or more runtimes still have active inbox events. Wait for them to finish or cancel them first.",
+			"code":                     "computer_has_active_inbox_events",
+			"daemon_id":                daemonID,
+			"active_inbox_event_count": activeInboxEventCount,
 		})
 		return
 	}
@@ -249,24 +264,28 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 		return err
 	}
 
+	// agent_inbox_event.runtime_id snapshots the runtime chosen when a chat turn
+	// was enqueued. Terminal rows are history, not live work, so detach them
+	// before deleting the runtime; retryable/claimed rows are refused by callers.
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_inbox_event
+		   SET runtime_id = NULL, updated_at = now()
+		 WHERE runtime_id = $1
+		   AND status NOT IN ('pending', 'draining', 'failed')
+	`, runtimeID); err != nil {
+		return err
+	}
+
 	return qtx.DeleteAgentRuntime(ctx, runtimeID)
 }
 
-func (h *Handler) countActiveRuntimeWork(ctx context.Context, runtimeIDs []pgtype.UUID) (int64, error) {
-	queuedTasks, err := h.Queries.CountActiveTasksByRuntimeIDs(ctx, runtimeIDs)
-	if err != nil {
-		return 0, err
-	}
-
-	var inboxEvents int64
-	if err := h.DB.QueryRow(ctx, `
+func countActiveInboxEventsByRuntimeIDs(ctx context.Context, exec dbExecutor, runtimeIDs []pgtype.UUID) (int64, error) {
+	var count int64
+	err := exec.QueryRow(ctx, `
 		SELECT count(*)::bigint
 		  FROM agent_inbox_event
 		 WHERE runtime_id = ANY($1::uuid[])
 		   AND status IN ('pending', 'draining', 'failed')
-	`, runtimeIDs).Scan(&inboxEvents); err != nil {
-		return 0, err
-	}
-
-	return queuedTasks + inboxEvents, nil
+	`, runtimeIDs).Scan(&count)
+	return count, err
 }

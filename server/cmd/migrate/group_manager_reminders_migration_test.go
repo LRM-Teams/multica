@@ -356,6 +356,48 @@ func TestGroupManagerPatrolIntervalsMigration222UsesIssueProgressAndDormancy(t *
 	`, adaptiveReminderID); err != nil {
 		t.Fatalf("prepare progressed patrol: %v", err)
 	}
+	var progressEventsBefore int
+	if err := conn.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_reminder_lifecycle_event
+		WHERE reminder_id = $1
+		  AND reason_code = 'patrol_issue_progress_reset'
+	`, adaptiveReminderID).Scan(&progressEventsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE issue
+		SET status = status,
+		    assignee_type = assignee_type,
+		    assignee_id = assignee_id,
+		    project_id = project_id
+		WHERE id = $1
+	`, activeIssueID); err != nil {
+		t.Fatalf("execute canonical no-op issue update: %v", err)
+	}
+	var unchangedSeconds int64
+	var progressEventsAfter int
+	if err := conn.QueryRow(ctx, `
+		SELECT reminder.managed_backoff_step,
+		       extract(epoch FROM (reminder.fire_at - now()))::bigint,
+		       (
+		         SELECT count(*)
+		         FROM agent_reminder_lifecycle_event lifecycle
+		         WHERE lifecycle.reminder_id = reminder.id
+		           AND lifecycle.reason_code = 'patrol_issue_progress_reset'
+		       )
+		FROM agent_reminder reminder
+		WHERE reminder.id = $1
+	`, adaptiveReminderID).Scan(&adaptiveStep, &unchangedSeconds, &progressEventsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if adaptiveStep != 3 {
+		t.Fatalf("no-op issue update backoff step=%d, want 3", adaptiveStep)
+	}
+	assertDelayNear("no-op issue update", unchangedSeconds, time.Hour)
+	if progressEventsAfter != progressEventsBefore {
+		t.Fatalf("no-op issue update progress events=%d, want unchanged %d", progressEventsAfter, progressEventsBefore)
+	}
 	if _, err := conn.Exec(ctx, `
 		INSERT INTO comment (issue_id, content) VALUES ($1, 'real issue progress')
 	`, activeIssueID); err != nil {

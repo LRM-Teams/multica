@@ -148,6 +148,17 @@ DECLARE
   target_project_id UUID;
   linked_channel RECORD;
 BEGIN
+  -- UPDATE OF fires when a column appears in SET, even when its value does
+  -- not change. Canonical UpdateIssue writes these columns back on every
+  -- update, so only distinct status/assignee/project values are progress.
+  IF TG_OP = 'UPDATE'
+     AND OLD.status IS NOT DISTINCT FROM NEW.status
+     AND OLD.assignee_type IS NOT DISTINCT FROM NEW.assignee_type
+     AND OLD.assignee_id IS NOT DISTINCT FROM NEW.assignee_id
+     AND OLD.project_id IS NOT DISTINCT FROM NEW.project_id THEN
+    RETURN NEW;
+  END IF;
+
   target_issue_id := COALESCE(NEW.id, OLD.id);
   target_workspace_id := COALESCE(NEW.workspace_id, OLD.workspace_id);
   target_project_id := COALESCE(NEW.project_id, OLD.project_id);

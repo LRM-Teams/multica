@@ -78,7 +78,7 @@ multica issue rerun <issue-id>
 Behavior:
 
 - By default, targets the issue's **current agent assignee** — useful when you want the rerun to follow the current assignment regardless of who ran the prior task.
-- The execution-log retry button on a specific row sends that row's task ID alongside, so the rerun targets **the agent that ran that exact task** — not the current assignee. This makes per-row retry meaningful for squad workers, parallel @-mention agents, or rows whose agent has since been displaced by a reassignment.
+- The execution-log retry button on a specific row sends that row's task ID alongside, so the rerun targets **the agent that ran that exact task** — not the current assignee. This makes per-row retry meaningful for parallel @-mention agents, or rows whose agent has since been displaced by a reassignment.
 - **Cancels** the target agent's queued or running task on this issue (if any). Tasks owned by other agents on the same issue (e.g. parallel @-mention runs) are left alone.
 - Creates a **brand-new** task — attempt count resets to 1, even if the original task hit the attempt ceiling.
 - Starts a **fresh agent session** — the prior session ID is **not** inherited. A manual rerun means you've judged the previous output bad, so resuming the same conversation would replay the same poisoned state. (Automatic retry, by contrast, does inherit the session — that path is for infrastructure failures, not bad output.)

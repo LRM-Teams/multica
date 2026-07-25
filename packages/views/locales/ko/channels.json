@@ -481,7 +481,9 @@
     "muted_label": "음소거됨",
     "close_chat": "대화 닫기",
     "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
-    "composer_placeholder": "{{name}}에게 메시지…"
+    "composer_placeholder": "{{name}}에게 메시지…",
+    "bubble_replied_preview": "버블 답장 완료",
+    "bubble_replied_time": "방금"
   },
   "voice_call": {
     "start_aria": "{{name}}에게 전화",

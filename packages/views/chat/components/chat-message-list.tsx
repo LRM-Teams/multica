@@ -706,15 +706,31 @@ function OuterProcessFold({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex max-w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-        {open ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
-        <span className="shrink-0">
-          {t(($) => $.message_list.process_steps, { count: stepCount })}
+      <CollapsibleTrigger
+        className={cn(
+          // ≥32px touch target; collapsed state reads as a real control, not a
+          // pale caption that looks like the steps vanished after completion.
+          "flex min-h-8 max-w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+          open
+            ? "text-muted-foreground hover:text-foreground"
+            : "border border-border/70 bg-muted/40 text-foreground/90 hover:bg-muted/60 hover:text-foreground",
+        )}
+        aria-label={
+          open
+            ? t(($) => $.message_list.process_steps_hide, { count: stepCount })
+            : t(($) => $.message_list.process_steps_show, { count: stepCount })
+        }
+      >
+        {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+        <span className="shrink-0 font-medium">
+          {open
+            ? t(($) => $.message_list.process_steps, { count: stepCount })
+            : t(($) => $.message_list.process_steps_show, { count: stepCount })}
         </span>
         {enhanced && !open && activeSummary ? (
           <span
             className={cn(
-              "min-w-0 truncate text-muted-foreground/80",
+              "min-w-0 truncate text-muted-foreground",
               isStreaming && "animate-chat-text-shimmer text-foreground/80",
             )}
           >

@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { MessageCircle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { cn } from "@multica/ui/lib/utils";
 import { useChatStore } from "@multica/core/chat";
 import { chatSessionsOptions, pendingChatTasksOptions } from "@multica/core/chat/queries";
@@ -49,6 +51,18 @@ export function DmAgentBubble({
   const isRunning = (pending?.tasks ?? []).some((task) =>
     agentSessions.some((s) => s.id === task.chat_session_id),
   );
+  const displayName = agentName ?? "agent";
+  const wasRunningRef = useRef(isRunning);
+
+  // When a bubble task finishes while the bubble is closed, toast so the DM
+  // shell is not silent (bubble replies do not land in dm_channel messages).
+  useEffect(() => {
+    const wasRunning = wasRunningRef.current;
+    wasRunningRef.current = isRunning;
+    if (!wasRunning || isRunning || isOpen) return;
+    if (unreadSessionCount <= 0) return;
+    toast.message(t(($) => $.dm_bubble.toast_replied, { name: displayName }));
+  }, [isRunning, isOpen, unreadSessionCount, displayName, t]);
 
   const handleClick = () => {
     logger.info("dmBubble.fab.click", {
@@ -63,8 +77,8 @@ export function DmAgentBubble({
   const tooltip = isRunning
     ? t(($) => $.fab.running)
     : unreadSessionCount > 0
-      ? t(($) => $.fab.unread, { count: unreadSessionCount })
-      : t(($) => $.dm_bubble.fab_default, { name: agentName ?? "agent" });
+      ? t(($) => $.dm_bubble.fab_replied, { name: displayName })
+      : t(($) => $.dm_bubble.fab_default, { name: displayName });
 
   return (
     <>
@@ -81,6 +95,9 @@ export function DmAgentBubble({
               // and desktop (composer is ~56–72px tall at the bottom).
               "absolute bottom-20 right-3 z-40 flex size-10 cursor-pointer items-center justify-center rounded-full ring-1 ring-foreground/10 bg-card text-muted-foreground shadow-sm transition-transform hover:scale-110 hover:text-accent-foreground active:scale-95",
               isRunning && "animate-chat-impulse",
+              unreadSessionCount > 0 &&
+                !isRunning &&
+                "ring-2 ring-brand text-foreground shadow-md",
             )}
             aria-label={tooltip}
           >

@@ -481,7 +481,9 @@
     "muted_label": "Muted",
     "close_chat": "Close chat",
     "action_failed": "Action failed, please try again",
-    "composer_placeholder": "Message {{name}}…"
+    "composer_placeholder": "Message {{name}}…",
+    "bubble_replied_preview": "Bubble replied",
+    "bubble_replied_time": "just now"
   },
   "voice_call": {
     "start_aria": "Call {{name}}",

@@ -200,6 +200,7 @@ import {
 } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
+import { useAgentBubbleUnreadByAgent } from "../../chat/lib/agent-bubble-unread";
 import {
   ChannelListSkeleton,
   InitialChannelsShellSkeleton,
@@ -756,6 +757,7 @@ export function ChannelsPage({
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
   const { data: dms = [] } = useQuery(dmListOptions(wsId));
+  const bubbleUnreadByAgent = useAgentBubbleUnreadByAgent(wsId);
   const lastSelectedChannelId = useLastSelectedChannelStore(
     (state) => state.lastSelectedChannelId,
   );
@@ -2452,6 +2454,11 @@ export function ChannelsPage({
                       resolveMentionPreview={resolveMentionPreview}
                       members={workspaceMembers}
                       agents={agents}
+                      bubbleUnreadCount={
+                        dm.peer.type === "agent"
+                          ? (bubbleUnreadByAgent.get(dm.peer.id) ?? 0)
+                          : 0
+                      }
                       onSelect={() => selectDm(dm)}
                       onTogglePin={() => dmActions.togglePin(dm)}
                       onMarkUnread={() => dmActions.markUnread(dm)}

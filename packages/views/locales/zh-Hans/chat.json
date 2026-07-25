@@ -29,6 +29,8 @@
     "tool_result_named": "{{tool}} 结果：",
     "tool_result_unnamed": "结果：",
     "process_steps_other": "{{count}} 步",
+    "process_steps_show_other": "查看执行过程 · {{count}} 步",
+    "process_steps_hide_other": "收起执行过程 · {{count}} 步",
     "copy_action": "复制",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
@@ -92,7 +94,9 @@
     "agent_filter_placeholder": "搜索智能体..."
   },
   "dm_bubble": {
-    "fab_default": "与 {{name}} 专注对话"
+    "fab_default": "与 {{name}} 专注对话",
+    "fab_replied": "{{name}} 气泡已回复",
+    "toast_replied": "{{name}} 已在气泡回复"
   },
   "empty_state": {
     "first_time_title": "和你的智能体对话",

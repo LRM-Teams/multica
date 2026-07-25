@@ -250,6 +250,28 @@ SELECT count(*) FROM agent WHERE runtime_id = $1 AND archived_at IS NULL;
 -- name: DeleteArchivedAgentsByRuntime :exec
 DELETE FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL;
 
+-- name: DetachDerivedAgentsFromSources :exec
+-- A derived agent may outlive the source agent's computer. Permanent computer
+-- deletion removes the source agent, so preserve surviving derived agents while
+-- clearing their lineage FK before the source row is hard-deleted.
+UPDATE agent
+SET source_agent_id = NULL, updated_at = now()
+WHERE source_agent_id = ANY(@source_agent_ids::uuid[]);
+
+-- name: DeleteLegacySquadsByLeaderIDs :exec
+-- Migration 222 retired the Squad surface and emptied this table, but kept the
+-- legacy schema. Delete any unexpected legacy rows whose RESTRICT leader FK
+-- would otherwise make permanent agent deletion fail.
+DELETE FROM squad
+WHERE leader_id = ANY(@leader_ids::uuid[]);
+
+-- name: DeleteVoiceCallSessionsByAgentIDs :exec
+-- voice_call_session.agent_id intentionally has no ON DELETE rule. Computer
+-- deletion owns the archived agent's complete history, so remove both ended and
+-- active session rows here; voice_call_turn follows through ON DELETE CASCADE.
+DELETE FROM voice_call_session
+WHERE agent_id = ANY(@agent_ids::uuid[]);
+
 -- name: PauseAutopilotsByAgentAssignees :exec
 -- Pauses every active autopilot whose agent assignee is in the supplied list.
 -- Called before hard-deleting archived agents on runtime teardown so the rows
@@ -263,11 +285,56 @@ WHERE status = 'active'
   AND assignee_type = 'agent'
   AND assignee_id = ANY(@assignee_ids::uuid[]);
 
+-- name: FailRunningAutopilotRunsByAgentIDs :exec
+-- Makes every in-flight automation executed by the supplied agents terminal.
+-- The parent autopilot relation covers the ordinary agent-assignee path. The
+-- inbox-event relation additionally covers historical/special dispatches whose
+-- executing agent differs from the current definition assignee. Without this
+-- explicit transition, agent_inbox_event's cascading delete / SET NULL links
+-- can leave an autopilot_run permanently marked running after agent teardown.
+UPDATE autopilot_run AS run
+SET status = 'failed',
+    completed_at = COALESCE(run.completed_at, now()),
+    failure_reason = @failure_reason
+WHERE run.status = 'running'
+  AND (
+    EXISTS (
+      SELECT 1
+      FROM autopilot AS definition
+      WHERE definition.id = run.autopilot_id
+        AND definition.assignee_type = 'agent'
+        AND definition.assignee_id = ANY(@agent_ids::uuid[])
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM agent_inbox_event AS event
+      WHERE event.agent_id = ANY(@agent_ids::uuid[])
+        AND (
+          event.autopilot_run_id = run.id
+          OR event.id = run.task_id
+        )
+    )
+  );
+
+-- name: CancelRunningAgentExecutionsByAgentIDs :exec
+-- agent_execution is an immutable attribution ledger and intentionally has no
+-- agent FK, so hard-deleting an agent does not remove its history. It must
+-- still stop claiming that the provider execution is live once the owning
+-- agent is archived or permanently deleted.
+UPDATE agent_execution
+SET status = 'cancelled',
+    completed_at = COALESCE(completed_at, now()),
+    failure_reason = @failure_reason
+WHERE agent_id = ANY(@agent_ids::uuid[])
+  AND status = 'running';
+
 -- name: ListArchivedAgentIDsByRuntime :many
 -- Companion to DeleteArchivedAgentsByRuntime: enumerates the archived agents
 -- about to be hard-deleted so the runtime teardown can pause autopilots that
--- still point at them. Returns ids only — the caller only needs the set.
-SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL;
+-- still point at them. The row lock also prevents a concurrent FK writer from
+-- attaching new voice-call/lineage/legacy-squad dependents between dependent
+-- cleanup and the final agent DELETE.
+SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL FOR UPDATE;
 
 -- name: FindLegacyRuntimesByDaemonID :many
 -- Looks up runtime rows keyed on a prior (hostname-derived) daemon_id. Used

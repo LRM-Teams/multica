@@ -132,6 +132,20 @@ func (h *Handler) RemoveAgentsByDaemon(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to pause agent automations")
 			return
 		}
+		if err := qtx.FailRunningAutopilotRunsByAgentIDs(r.Context(), db.FailRunningAutopilotRunsByAgentIDsParams{
+			FailureReason: "assigned agent removed from computer",
+			AgentIds:      activeAgentIDs,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to stop agent automations")
+			return
+		}
+		if err := qtx.CancelRunningAgentExecutionsByAgentIDs(r.Context(), db.CancelRunningAgentExecutionsByAgentIDsParams{
+			FailureReason: "agent removed from computer",
+			AgentIds:      activeAgentIDs,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to stop agent executions")
+			return
+		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to remove computer agents")
@@ -375,6 +389,9 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 		if err := qtx.PauseAutopilotsByAgentAssignees(ctx, archivedAgentIDs); err != nil {
 			return err
 		}
+		if err := teardownArchivedAgentDependents(ctx, qtx, archivedAgentIDs); err != nil {
+			return err
+		}
 	}
 
 	if err := qtx.DeleteArchivedAgentsByRuntime(ctx, runtimeID); err != nil {
@@ -402,6 +419,35 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 	}
 
 	return qtx.DeleteAgentRuntime(ctx, runtimeID)
+}
+
+// teardownArchivedAgentDependents resolves the non-cascading ownership edges
+// that intentionally survive ordinary agent lifecycle changes but cannot
+// survive permanent computer deletion. Caller owns the transaction and has
+// already enumerated the exact archived-agent set.
+func teardownArchivedAgentDependents(ctx context.Context, qtx *db.Queries, agentIDs []pgtype.UUID) error {
+	if len(agentIDs) == 0 {
+		return nil
+	}
+	if err := qtx.FailRunningAutopilotRunsByAgentIDs(ctx, db.FailRunningAutopilotRunsByAgentIDsParams{
+		FailureReason: "assigned agent permanently deleted",
+		AgentIds:      agentIDs,
+	}); err != nil {
+		return err
+	}
+	if err := qtx.CancelRunningAgentExecutionsByAgentIDs(ctx, db.CancelRunningAgentExecutionsByAgentIDsParams{
+		FailureReason: "agent permanently deleted",
+		AgentIds:      agentIDs,
+	}); err != nil {
+		return err
+	}
+	if err := qtx.DetachDerivedAgentsFromSources(ctx, agentIDs); err != nil {
+		return err
+	}
+	if err := qtx.DeleteLegacySquadsByLeaderIDs(ctx, agentIDs); err != nil {
+		return err
+	}
+	return qtx.DeleteVoiceCallSessionsByAgentIDs(ctx, agentIDs)
 }
 
 func countActiveInboxEventsByRuntimeIDs(ctx context.Context, exec dbExecutor, runtimeIDs []pgtype.UUID) (int64, error) {

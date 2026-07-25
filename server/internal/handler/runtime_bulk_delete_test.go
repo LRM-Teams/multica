@@ -7,9 +7,145 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+func TestTeardownRuntimeWithoutActiveAgents_ProductionScaleSelfFKLookup(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer setupCancel()
+
+	tx, err := testPool.Begin(setupCtx)
+	if err != nil {
+		t.Fatalf("begin production-scale teardown fixture: %v", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	var victimRuntimeID, decoyRuntimeID string
+	for provider, target := range map[string]*string{
+		"kiro":  &victimRuntimeID,
+		"codex": &decoyRuntimeID,
+	} {
+		if err := tx.QueryRow(setupCtx, `
+			INSERT INTO agent_runtime (
+				workspace_id, daemon_id, name, runtime_mode, provider, status,
+				device_info, metadata, owner_id, last_seen_at
+			)
+			VALUES ($1, $2, $3, 'local', $4, 'offline', $3, '{}'::jsonb, $5, now())
+			RETURNING id
+		`, testWorkspaceID, "scale-"+uuid.NewString(), "Scale "+provider+" "+uuid.NewString()[:8], provider, testUserID).Scan(target); err != nil {
+			t.Fatalf("insert %s scale runtime: %v", provider, err)
+		}
+	}
+
+	var victimAgentID, decoyAgentID string
+	if err := tx.QueryRow(setupCtx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id, archived_at
+		)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, now())
+		RETURNING id
+	`, testWorkspaceID, "scale-victim-"+uuid.NewString()[:8], victimRuntimeID, testUserID).Scan(&victimAgentID); err != nil {
+		t.Fatalf("insert scale victim agent: %v", err)
+	}
+	if err := tx.QueryRow(setupCtx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id
+		)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4)
+		RETURNING id
+	`, testWorkspaceID, "scale-decoy-"+uuid.NewString()[:8], decoyRuntimeID, testUserID).Scan(&decoyAgentID); err != nil {
+		t.Fatalf("insert scale decoy agent: %v", err)
+	}
+
+	// Production had 307,842 inbox rows and 1,568 rows owned by the archived
+	// victim. Without the parent_task_id supporting index, PostgreSQL's
+	// self-FK ON DELETE SET NULL trigger scans the whole table once per
+	// deleted parent and exceeds the 30-second request budget.
+	//
+	// The handler test harness installs a per-row fixture-normalization
+	// trigger. It is unrelated to production and makes a 300k INSERT take
+	// minutes, so bypass triggers while loading known-valid rows, then restore
+	// normal trigger/FK enforcement before exercising the real teardown.
+	if _, err := tx.Exec(setupCtx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("bypass test-only fixture trigger: %v", err)
+	}
+	if _, err := tx.Exec(setupCtx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, reason, status, priority
+		)
+		SELECT $1, $2, $3, 'ambient', 'pending', 0
+		FROM generate_series(1, 300000)
+	`, testWorkspaceID, decoyAgentID, decoyRuntimeID); err != nil {
+		t.Fatalf("insert 300k inbox decoys: %v", err)
+	}
+	if _, err := tx.Exec(setupCtx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, reason, status, priority
+		)
+		SELECT $1, $2, $3, 'ambient', 'pending', 0
+		FROM generate_series(1, 1568)
+	`, testWorkspaceID, victimAgentID, victimRuntimeID); err != nil {
+		t.Fatalf("insert victim inbox history: %v", err)
+	}
+	if _, err := tx.Exec(setupCtx, `SET LOCAL session_replication_role = origin`); err != nil {
+		t.Fatalf("restore teardown trigger enforcement: %v", err)
+	}
+
+	// Keep the test deterministic even before the transaction's uncommitted
+	// bulk rows can affect planner statistics. If the supporting index is
+	// removed, PostgreSQL still has no alternative to the repeated seq scan
+	// and this bounded teardown fails.
+	if _, err := tx.Exec(setupCtx, `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatalf("disable seq scan for scale teardown: %v", err)
+	}
+
+	teardownCtx, teardownCancel := context.WithTimeout(setupCtx, 20*time.Second)
+	defer teardownCancel()
+	startedAt := time.Now()
+	if err := teardownRuntimeWithoutActiveAgents(
+		teardownCtx,
+		testHandler.Queries.WithTx(tx),
+		tx,
+		parseUUID(victimRuntimeID),
+	); err != nil {
+		t.Fatalf("production-scale teardown after %s: %v", time.Since(startedAt), err)
+	}
+
+	var victimRuntimeCount, victimAgentCount, victimEventCount, decoyEventCount int
+	if err := tx.QueryRow(setupCtx, `
+		SELECT
+			(SELECT count(*) FROM agent_runtime WHERE id = $1),
+			(SELECT count(*) FROM agent WHERE id = $2),
+			(SELECT count(*) FROM agent_inbox_event WHERE agent_id = $2),
+			(SELECT count(*) FROM agent_inbox_event WHERE agent_id = $3)
+	`, victimRuntimeID, victimAgentID, decoyAgentID).Scan(
+		&victimRuntimeCount,
+		&victimAgentCount,
+		&victimEventCount,
+		&decoyEventCount,
+	); err != nil {
+		t.Fatalf("inspect production-scale teardown: %v", err)
+	}
+	if victimRuntimeCount != 0 || victimAgentCount != 0 || victimEventCount != 0 {
+		t.Fatalf(
+			"victim teardown incomplete: runtime=%d agent=%d events=%d",
+			victimRuntimeCount,
+			victimAgentCount,
+			victimEventCount,
+		)
+	}
+	if decoyEventCount != 300000 {
+		t.Fatalf("unrelated inbox history changed: got %d decoys", decoyEventCount)
+	}
+}
 
 func TestDeleteRuntimesByDaemon_SucceedsWithHistoricalInboxRuntimeSnapshot(t *testing.T) {
 	// LRM-437/438: migration 183 left agent_inbox_event.runtime_id without

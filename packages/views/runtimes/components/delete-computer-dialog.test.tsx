@@ -8,7 +8,10 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import enAgents from "../../locales/en/agents.json";
-import { DeleteComputerDialog } from "./delete-computer-dialog";
+import {
+  DeleteComputerDialog,
+  MachineDeleteControl,
+} from "./delete-computer-dialog";
 import type { RuntimeMachine } from "./runtime-machines";
 
 const TEST_RESOURCES = {
@@ -49,6 +52,11 @@ vi.mock("@multica/core/api", () => ({
     listMembers: vi.fn(async () => []),
   },
   ApiError,
+}));
+
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: "user-me" } }),
 }));
 
 vi.mock("@multica/core/runtimes/mutations", () => ({
@@ -172,6 +180,47 @@ function renderDialog(
     </QueryClientProvider>,
   );
 }
+
+function renderControl(machine: RuntimeMachine) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <I18nProvider resources={TEST_RESOURCES} locale="en">
+        <MachineDeleteControl machine={machine} wsId="ws-1" />
+      </I18nProvider>
+    </QueryClientProvider>,
+  );
+}
+
+describe("MachineDeleteControl", () => {
+  it("shows the delete-computer entry when the caller owns every runtime", () => {
+    renderControl(makeMachine());
+    expect(screen.getByTestId("delete-computer-button")).toBeInTheDocument();
+  });
+
+  it("hides the delete-computer entry when any runtime belongs to someone else", () => {
+    renderControl(
+      makeMachine({
+        runtimes: [
+          makeRuntime(),
+          makeRuntime({ id: "rt-2", owner_id: "user-other" }),
+        ],
+      }),
+    );
+    expect(screen.queryByTestId("delete-computer-button")).toBeNull();
+  });
+
+  it("hides the delete-computer entry when any runtime has no owner", () => {
+    renderControl(
+      makeMachine({
+        runtimes: [makeRuntime({ owner_id: null })],
+      }),
+    );
+    expect(screen.queryByTestId("delete-computer-button")).toBeNull();
+  });
+});
 
 describe("DeleteComputerDialog", () => {
   beforeEach(() => {

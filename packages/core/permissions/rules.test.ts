@@ -264,16 +264,28 @@ describe("canDeleteRuntime", () => {
     expect(canDeleteRuntime(r, { userId: ALICE, role: "member" }).allowed)
       .toBe(true);
   });
-  it("allows workspace admin", () => {
+  it("denies a workspace admin who does not own the runtime", () => {
     const r = makeRuntime(ALICE);
     expect(canDeleteRuntime(r, { userId: BOB, role: "admin" }).allowed).toBe(
-      true,
+      false,
+    );
+  });
+  it("denies a workspace owner who does not own the runtime", () => {
+    const r = makeRuntime(ALICE);
+    expect(canDeleteRuntime(r, { userId: BOB, role: "owner" }).allowed).toBe(
+      false,
     );
   });
   it("denies non-owner non-admin", () => {
     const r = makeRuntime(ALICE);
     expect(canDeleteRuntime(r, { userId: BOB, role: "member" }).allowed)
       .toBe(false);
+  });
+  it("denies an orphan runtime even to a workspace owner", () => {
+    const r = makeRuntime(null);
+    expect(canDeleteRuntime(r, { userId: ALICE, role: "owner" }).allowed).toBe(
+      false,
+    );
   });
 });
 

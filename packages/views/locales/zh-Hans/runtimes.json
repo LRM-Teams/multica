@@ -321,8 +321,8 @@
     "cli_managed_badge": "桌面端",
     "row_actions_aria": "行操作",
     "delete_action": "删除",
-    "delete_permission_hint": "只有运行时所有者和工作区管理员可以删除这个运行时",
-    "delete_admin_hint": "只有运行时所有者和工作区管理员可以删除运行时。"
+    "delete_permission_hint": "只有运行时所有者可以删除这个运行时",
+    "delete_admin_hint": "只有运行时所有者可以删除运行时。"
   },
   "usage": {
     "period_label": "时间范围",

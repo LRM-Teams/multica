@@ -17,11 +17,13 @@ import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { channelsOptions } from "@multica/core/channels/queries";
 import { canAssignAgent } from "@multica/views/issues/components";
 import { api } from "@multica/core/api";
 import { useAgentPresenceDetail, useWorkspaceAgentAvailability } from "@multica/core/agents";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { excludeChannelShellSessions } from "../lib/exclude-channel-shell-sessions";
 import {
   PickerEmpty,
   PickerItem,
@@ -247,13 +249,23 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const { data: allSessions = [], isSuccess: sessionsLoaded } = useQuery(chatSessionsOptions(wsId));
-  const sessions = useMemo(
-    () =>
-      lockedAgentId
-        ? allSessions.filter((s) => s.agent_id === lockedAgentId)
-        : allSessions,
-    [allSessions, lockedAgentId],
+  // Bubble history must stay 1:1 — drop "#channelName" shells that the
+  // server filter missed (orphans) or that are still sitting in a stale
+  // TanStack sessions cache.
+  const { data: workspaceChannels = [] } = useQuery({
+    ...channelsOptions(wsId),
+    enabled: Boolean(lockedAgentId && wsId),
+  });
+  const channelNames = useMemo(
+    () => workspaceChannels.map((channel) => channel.name),
+    [workspaceChannels],
   );
+  const sessions = useMemo(() => {
+    const scoped = lockedAgentId
+      ? allSessions.filter((s) => s.agent_id === lockedAgentId)
+      : allSessions;
+    return lockedAgentId ? excludeChannelShellSessions(scoped, channelNames) : scoped;
+  }, [allSessions, lockedAgentId, channelNames]);
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,

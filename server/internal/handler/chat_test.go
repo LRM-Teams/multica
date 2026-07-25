@@ -325,6 +325,81 @@ func TestUpdateChatSession_RejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+// TestListChatSessions_ExcludesChannelBackedSessions keeps the chat/bubble
+// history free of group/DM channel shells — both live channel_agent_session
+// bindings and orphan "#channelName" titles left after a binding delete.
+func TestListChatSessions_ExcludesChannelBackedSessions(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "BubbleFilterBot", []byte("[]"))
+
+	var dmSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, 'genuine bubble') RETURNING id`,
+		testWorkspaceID, agentID, testUserID).Scan(&dmSessionID); err != nil {
+		t.Fatalf("create dm session: %v", err)
+	}
+
+	var channelID, boundSessionID, orphanSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, 'bubble-filter-chan', $2) RETURNING id`,
+		testWorkspaceID, testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, '#bubble-filter-chan') RETURNING id`,
+		testWorkspaceID, agentID, testUserID).Scan(&boundSessionID); err != nil {
+		t.Fatalf("create bound channel session: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
+		VALUES ($1, $2, $3)`, channelID, agentID, boundSessionID); err != nil {
+		t.Fatalf("link channel session: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, '#bubble-filter-chan') RETURNING id`,
+		testWorkspaceID, agentID, testUserID).Scan(&orphanSessionID); err != nil {
+		t.Fatalf("create orphan channel-titled session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id=$1`, channelID)
+		_, _ = testPool.Exec(context.Background(),
+			`DELETE FROM chat_session WHERE id IN ($1,$2,$3)`,
+			dmSessionID, boundSessionID, orphanSessionID)
+	})
+
+	req := newRequest("GET", "/api/chat/sessions?status=all", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.ListChatSessions(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListChatSessions: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listed []ChatSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, s := range listed {
+		ids[s.ID] = true
+	}
+	if !ids[dmSessionID] {
+		t.Fatalf("genuine bubble session %s missing from ListChatSessions", dmSessionID)
+	}
+	if ids[boundSessionID] {
+		t.Fatalf("channel-bound session %s leaked into ListChatSessions", boundSessionID)
+	}
+	if ids[orphanSessionID] {
+		t.Fatalf("orphan #channel-titled session %s leaked into ListChatSessions", orphanSessionID)
+	}
+}
+
 // TestCreateChatSession_NotChannelBound confirms a plain CreateChatSession
 // (DM bubble path) never inserts channel_agent_session — so group wake
 // builders that only read channel_message + channel_agent_session cannot

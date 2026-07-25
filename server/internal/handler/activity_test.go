@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // fetchTimeline issues a GET /timeline request and returns the decoded entries
@@ -15,8 +17,13 @@ import (
 // (created_at, id) ascending (oldest first); see ListTimeline / #1929.
 func fetchTimeline(t *testing.T, issueID string) ([]TimelineEntry, int) {
 	t.Helper()
+	return fetchTimelineAs(t, testUserID, issueID)
+}
+
+func fetchTimelineAs(t *testing.T, userID, issueID string) ([]TimelineEntry, int) {
+	t.Helper()
 	w := httptest.NewRecorder()
-	req := newRequest("GET", "/api/issues/"+issueID+"/timeline", nil)
+	req := newRequestAs(userID, "GET", "/api/issues/"+issueID+"/timeline", nil)
 	req = withURLParam(req, "id", issueID)
 	testHandler.ListTimeline(w, req)
 	var entries []TimelineEntry
@@ -28,6 +35,88 @@ func fetchTimeline(t *testing.T, issueID string) ([]TimelineEntry, int) {
 
 // createIssueForTimeline returns a freshly-created issue id and registers a
 // cleanup so its timeline rows are deleted after the test.
+func TestTimelineIncludesStableActorIdentitySnapshots(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	issueID := createIssueForTimeline(t, "actor identity timeline "+uuid.NewString())
+	visibleAgentID := createHandlerTestAgent(t, "activity-visible-"+uuid.NewString()[:8], []byte(`{}`))
+	archivedAgentID := createHandlerTestAgent(t, "activity-archived-"+uuid.NewString()[:8], []byte(`{}`))
+	privateAgentID := createHandlerTestAgent(t, "activity-private-"+uuid.NewString()[:8], []byte(`{}`))
+	plainMemberID := createWorkspaceMemberUser(t, "Activity Plain Member", "activity-plain-"+uuid.NewString()+"@multica.test")
+	missingAgentID := uuid.NewString()
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET display_name = CASE id
+			WHEN $1 THEN 'Visible Activity Agent'
+			WHEN $2 THEN 'Archived Activity Agent'
+			WHEN $3 THEN 'Private Activity Agent'
+		END,
+		avatar_url = CASE WHEN id = $1 THEN 'https://example.test/visible.png' ELSE avatar_url END,
+		archived_at = CASE WHEN id = $2 THEN now() ELSE archived_at END
+		WHERE id IN ($1, $2, $3)`, visibleAgentID, archivedAgentID, privateAgentID); err != nil {
+		t.Fatalf("update actor identity agents: %v", err)
+	}
+
+	actors := []struct {
+		actorID string
+		action  string
+	}{
+		{visibleAgentID, "visible_actor"},
+		{archivedAgentID, "archived_actor"},
+		{missingAgentID, "missing_actor"},
+		{privateAgentID, "private_actor"},
+	}
+	for i, actor := range actors {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details, created_at)
+			VALUES ($1, $2, 'agent', $3, $4, '{}'::jsonb, now() + ($5::int * interval '1 second'))`,
+			testWorkspaceID, issueID, actor.actorID, actor.action, i); err != nil {
+			t.Fatalf("insert activity %s: %v", actor.action, err)
+		}
+	}
+
+	ownerEntries, code := fetchTimeline(t, issueID)
+	if code != http.StatusOK {
+		t.Fatalf("owner timeline status = %d", code)
+	}
+	byAction := map[string]TimelineEntry{}
+	for _, entry := range ownerEntries {
+		if entry.Action != nil {
+			byAction[*entry.Action] = entry
+		}
+	}
+	visible := byAction["visible_actor"]
+	if visible.ActorID != visibleAgentID || visible.ActorType != "agent" || visible.DisplayName != "Visible Activity Agent" || visible.ActorStatus != "visible" || visible.Actor == nil || visible.Actor.DisplayName != visible.DisplayName || visible.Handle == nil || *visible.Handle == "" || visible.AvatarURL == nil {
+		t.Fatalf("visible identity = %+v, want populated visible agent snapshot", visible)
+	}
+	archived := byAction["archived_actor"]
+	if archived.DisplayName != "Archived Activity Agent" || archived.ActorStatus != "deleted" {
+		t.Fatalf("archived identity = %+v, want historical display_name with deleted status", archived)
+	}
+	missing := byAction["missing_actor"]
+	if missing.DisplayName != "Deleted agent" || missing.ActorStatus != "deleted" {
+		t.Fatalf("missing identity = %+v, want deleted safe placeholder", missing)
+	}
+
+	memberEntries, code := fetchTimelineAs(t, plainMemberID, issueID)
+	if code != http.StatusOK {
+		t.Fatalf("member timeline status = %d", code)
+	}
+	for _, entry := range memberEntries {
+		if entry.Action != nil && *entry.Action == "private_actor" {
+			if entry.DisplayName != "Hidden agent" || entry.ActorStatus != "hidden" || entry.Actor == nil || entry.Actor.Status != "hidden" {
+				t.Fatalf("private identity for plain member = %+v, want hidden safe placeholder", entry)
+			}
+			return
+		}
+	}
+	t.Fatalf("private actor activity missing from member timeline")
+}
+
 func createIssueForTimeline(t *testing.T, title string) string {
 	t.Helper()
 	w := httptest.NewRecorder()

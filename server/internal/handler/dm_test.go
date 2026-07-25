@@ -234,6 +234,321 @@ func TestListDirectMessages_ChannelsOnly(t *testing.T) {
 	}
 }
 
+func TestAgentDMSupervisionListReadOnlyAndOwnerControls(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Supervised A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Supervised B "+uuid.NewString(), []byte("[]"))
+	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
+	channel, created := testHandler.createDMChannel(
+		ctx,
+		nil,
+		testWorkspaceID,
+		testUserID,
+		canonical,
+		[]dmMember{
+			{memberType: "agent", memberID: parseUUID(firstAgentID)},
+			{memberType: "agent", memberID: parseUUID(secondAgentID)},
+		},
+	)
+	if !created {
+		t.Fatal("create supervised A2A DM channel failed")
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channel.ID)
+		testPool.Exec(ctx, `
+			DELETE FROM agent_dm_owner_control
+			WHERE workspace_id = $1 AND owner_id = $2`,
+			testWorkspaceID, testUserID)
+	})
+
+	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
+	if !ok {
+		t.Fatal("normalize supervised A2A pair failed")
+	}
+	var exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_dm_exchange (
+		  workspace_id, channel_id, agent_low_id, agent_high_id, matter_id,
+		  turn_count, state, pause_reason
+		)
+		VALUES ($1, $2, $3, $4, gen_random_uuid(), 6, 'paused_budget', 'round limit')
+		RETURNING id`,
+		testWorkspaceID, channel.ID, lowID, highID).Scan(&exchangeID); err != nil {
+		t.Fatalf("seed supervised A2A exchange: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(
+		ctx,
+		parseUUID(channel.ID),
+		parseUUID(testWorkspaceID),
+		"agent",
+		parseUUID(firstAgentID),
+		"Supervised A",
+		"private A2A message",
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("seed supervised A2A message: %v", err)
+	}
+
+	listReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodGet, "/api/dm", nil),
+	)
+	listRec := httptest.NewRecorder()
+	testHandler.ListDirectMessages(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("owner list DMs: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var items []DMItem
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode owner DM list: %v", err)
+	}
+	var supervised *DMItem
+	for i := range items {
+		if items[i].ID == channel.ID {
+			supervised = &items[i]
+			break
+		}
+	}
+	if supervised == nil {
+		t.Fatalf("owner DM list omitted supervised channel %s: %+v", channel.ID, items)
+	}
+	if supervised.Mode != "agent_pair" || !supervised.Supervised ||
+		len(supervised.Participants) != 2 || supervised.AgentDMControl == nil {
+		t.Fatalf("unexpected supervised DM item: %+v", supervised)
+	}
+	if supervised.AgentDMControl.ExchangeID == nil || *supervised.AgentDMControl.ExchangeID != exchangeID {
+		t.Fatalf("supervised control exchange=%v, want %s", supervised.AgentDMControl.ExchangeID, exchangeID)
+	}
+
+	messageReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodGet, "/api/channels/"+channel.ID+"/messages", nil),
+		),
+		"channelId",
+		channel.ID,
+	)
+	messageRec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(messageRec, messageReq)
+	if messageRec.Code != http.StatusOK {
+		t.Fatalf("owner read supervised DM: status=%d body=%s", messageRec.Code, messageRec.Body.String())
+	}
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(messageRec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode supervised messages: %v", err)
+	}
+	if len(page.Messages) != 1 || page.A2AControl == nil || page.A2AControl.State != "paused_budget" {
+		t.Fatalf("unexpected supervised messages page: %+v", page)
+	}
+
+	sendReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channel.ID+"/messages", map[string]any{
+				"content":           "owner must not speak",
+				"client_message_id": uuid.NewString(),
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	sendRec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusForbidden {
+		t.Fatalf("owner send to supervised DM: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	controlReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/dm/channels/"+channel.ID+"/a2a-control", map[string]any{
+				"action":      "grant_rounds",
+				"exchange_id": exchangeID,
+				"rounds":      2,
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	controlRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(controlRec, controlReq)
+	if controlRec.Code != http.StatusOK {
+		t.Fatalf("owner grant A2A rounds: status=%d body=%s", controlRec.Code, controlRec.Body.String())
+	}
+	var control AgentDMControlResponse
+	if err := json.Unmarshal(controlRec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("decode owner A2A control: %v", err)
+	}
+	if control.State != "active" || control.RoundLimit != agentDMDefaultRoundLimit+2 {
+		t.Fatalf("control after grant=%+v", control)
+	}
+	pausePairReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/dm/channels/"+channel.ID+"/a2a-control", map[string]any{
+				"action": "pause_pair",
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	pausePairRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(pausePairRec, pausePairReq)
+	if pausePairRec.Code != http.StatusOK {
+		t.Fatalf("owner pause A2A pair: status=%d body=%s", pausePairRec.Code, pausePairRec.Body.String())
+	}
+	resumePairReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/dm/channels/"+channel.ID+"/a2a-control", map[string]any{
+				"action": "resume_pair",
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	resumePairRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(resumePairRec, resumePairReq)
+	if resumePairRec.Code != http.StatusOK {
+		t.Fatalf("owner resume A2A pair: status=%d body=%s", resumePairRec.Code, resumePairRec.Body.String())
+	}
+	globalReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodPost, "/api/dm/a2a-control", map[string]any{
+			"action": "pause_global",
+		}),
+	)
+	globalRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMGlobalControl(globalRec, globalReq)
+	if globalRec.Code != http.StatusOK {
+		t.Fatalf("owner pause global A2A: status=%d body=%s", globalRec.Code, globalRec.Body.String())
+	}
+	var globalControl AgentDMGlobalControlResponse
+	if err := json.Unmarshal(globalRec.Body.Bytes(), &globalControl); err != nil {
+		t.Fatalf("decode global A2A control: %v", err)
+	}
+	if !globalControl.Paused || globalControl.State != "paused_global" {
+		t.Fatalf("global A2A control=%+v", globalControl)
+	}
+	resumeGlobalReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodPost, "/api/dm/a2a-control", map[string]any{
+			"action": "resume_global",
+		}),
+	)
+	resumeGlobalRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMGlobalControl(resumeGlobalRec, resumeGlobalReq)
+	if resumeGlobalRec.Code != http.StatusOK {
+		t.Fatalf("owner resume global A2A: status=%d body=%s", resumeGlobalRec.Code, resumeGlobalRec.Body.String())
+	}
+	var controlEvents []string
+	rows, err := testPool.Query(ctx, `
+		SELECT parts->0->>'event'
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' IN ($2, $3, $4)
+		ORDER BY seq`,
+		channel.ID,
+		agentDMSystemEventPausedPair,
+		agentDMSystemEventPausedGlobal,
+		agentDMSystemEventResumed)
+	if err != nil {
+		t.Fatalf("load global A2A control system events: %v", err)
+	}
+	for rows.Next() {
+		var event string
+		if err := rows.Scan(&event); err != nil {
+			rows.Close()
+			t.Fatalf("scan global A2A control system event: %v", err)
+		}
+		controlEvents = append(controlEvents, event)
+	}
+	rows.Close()
+	if len(controlEvents) != 4 ||
+		controlEvents[0] != agentDMSystemEventPausedPair ||
+		controlEvents[1] != agentDMSystemEventResumed ||
+		controlEvents[2] != agentDMSystemEventPausedGlobal ||
+		controlEvents[3] != agentDMSystemEventResumed {
+		t.Fatalf("A2A control system events=%v, want pair pause/resume then global pause/resume", controlEvents)
+	}
+	repeatResumeReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodPost, "/api/dm/a2a-control", map[string]any{
+			"action": "resume_global",
+		}),
+	)
+	repeatResumeRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMGlobalControl(repeatResumeRec, repeatResumeReq)
+	if repeatResumeRec.Code != http.StatusOK {
+		t.Fatalf("repeat owner resume global A2A: status=%d body=%s", repeatResumeRec.Code, repeatResumeRec.Body.String())
+	}
+	var resumedCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' = $2`,
+		channel.ID, agentDMSystemEventResumed).Scan(&resumedCount); err != nil {
+		t.Fatalf("count resumed A2A system events: %v", err)
+	}
+	if resumedCount != 2 {
+		t.Fatalf("resumed A2A system events=%d, want 2 after pair/global resumes and repeated global resume", resumedCount)
+	}
+
+	otherUserID := seedWorkspaceUserForTransportTargetTest(t, "a2a-non-owner-"+uuid.NewString()[:8])
+	otherListReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(otherUserID, http.MethodGet, "/api/dm", nil),
+	)
+	otherListRec := httptest.NewRecorder()
+	testHandler.ListDirectMessages(otherListRec, otherListReq)
+	if otherListRec.Code != http.StatusOK {
+		t.Fatalf("non-owner list DMs: status=%d body=%s", otherListRec.Code, otherListRec.Body.String())
+	}
+	var otherItems []DMItem
+	if err := json.Unmarshal(otherListRec.Body.Bytes(), &otherItems); err != nil {
+		t.Fatalf("decode non-owner DM list: %v", err)
+	}
+	for _, item := range otherItems {
+		if item.ID == channel.ID {
+			t.Fatalf("non-owner saw supervised A2A DM: %+v", item)
+		}
+	}
+	otherReadReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(otherUserID, http.MethodGet, "/api/channels/"+channel.ID+"/messages", nil),
+		),
+		"channelId",
+		channel.ID,
+	)
+	otherReadRec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(otherReadRec, otherReadReq)
+	if otherReadRec.Code != http.StatusForbidden {
+		t.Fatalf("non-owner read supervised DM: status=%d body=%s", otherReadRec.Code, otherReadRec.Body.String())
+	}
+	otherGlobalReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(otherUserID, http.MethodGet, "/api/dm/a2a-control", nil),
+	)
+	otherGlobalRec := httptest.NewRecorder()
+	testHandler.GetAgentDMGlobalControl(otherGlobalRec, otherGlobalReq)
+	if otherGlobalRec.Code != http.StatusForbidden {
+		t.Fatalf("non-owner global A2A control: status=%d body=%s", otherGlobalRec.Code, otherGlobalRec.Body.String())
+	}
+}
+
 func TestListDirectMessages_UnwrapsStructuredAgentLastMessagePreview(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

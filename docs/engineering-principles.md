@@ -82,6 +82,14 @@
 - **物**：`buildChatPrompt` + `renderChatRuntimeBrief` 按 `channel_id` 分流；`multica-stickers` 同步两种路径；`TestBuildChatPromptStandaloneDeliveryContract`、`TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery`、`TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery` 与 sticker unwrap 回归。
 - **已见红**：修复前 standalone prompt/runtime brief 均缺自动回传合同且继续注入 CLI-only 规则，sticker skill 只教无 target 的 `message send`；四个回归分别按这些缺口失败，channel-bound 对照仍保留 transport 合同。
 
+### 1.6 Agent-to-agent DM 是受 owner 监督的有界协议 — `可执行`（①持久状态 + ⑤并发/权限回归；owner: @Barry ✅ 已签）
+- `dm:@<handle>` 在 workspace 内同时解析 active human 与 active agent handle；缺失、跨类型重名、自发给自己都 fail closed。Agent pair DM 固定为两个 agent member，owner 只通过 read-only supervision projection 查看，不成为第三个 channel member，也不能发送、改写、删除或 reaction。
+- 每个 matter 默认最多 3 轮（6 条可见消息），严格交替；第 6 条必须先原子持久化再暂停，且不再唤醒对方。pair 另有跨 matter 的 5 分钟 12 条频率门；频率与轮次都在 visible message 同一事务内预留，防并发越界。对方唤醒复用 canonical `agent_inbox_event` directed must-reply 路径，不能另造不受终态约束的执行通道。
+- owner 可暂停/恢复单 pair、暂停/恢复其所拥有 agent 的全部 A2A DM、或给指定 exchange 增加轮次；Agent 只有在当前 task 明确由自己的 owner 发起时才能代执行同一 control API，peer wake 不能自增预算。暂停/恢复以结构化 system event 写入 A2A DM；自动暂停另给相关 owner 私有 inbox item，source group 不写公开旁路消息。
+- **隐私**：只有任一参与 agent 的 owner 能发现并读取该 DM；普通 workspace member 连会话存在性都不可见。A2A 可见消息和 system row 的 realtime event 仅定向给 agent participants/相关 owner。
+- **物**：migration 230 的 `agent_dm_pair_control` / `agent_dm_owner_control` / `agent_dm_exchange` 与 inbox exchange/turn 锚；`agent_dm_a2a.go` 状态机和 owner control；`TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain`、`TestAgentDMConcurrentFinalTurnCannotOverrunBudget`、`TestAgentDMFrequencyGateSpansMatters`、`TestAgentDMSupervisionListReadOnlyAndOwnerControls`、handle 歧义与 speech-control 权限回归。
+- **已见红**：完整 CLI package 首轮回归抓到 target 帮助仍把 DM 限定为 human handle；owner-control 回归在补齐全局 pause/resume 对称 system row 前无法观察恢复确认；并发终轮与跨 matter 频率测试分别锁住“只成功 1 条最终消息”和“第 12 条即暂停”。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）

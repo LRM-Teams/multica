@@ -139,6 +139,8 @@ type AgentInboxEvent struct {
 	IsLeaderTask        bool               `json:"is_leader_task"`
 	WaitReason          pgtype.Text        `json:"wait_reason"`
 	InitiatorUserID     pgtype.UUID        `json:"initiator_user_id"`
+	AgentDmExchangeID   pgtype.UUID        `json:"agent_dm_exchange_id"`
+	AgentDmTurn         pgtype.Int4        `json:"agent_dm_turn"`
 }
 
 type AgentInboxToken struct {

@@ -135,6 +135,7 @@ type agentTransportMessageResult struct {
 	Created     bool
 	TransportID string
 	SentDraft   *agentTransportDraft
+	AgentDM     agentDMSendReservation
 }
 
 type AgentTransportSearchRequest struct {
@@ -168,6 +169,8 @@ type AgentTransportThreadUnfollowResponse struct {
 type agentTransportTarget struct {
 	kind                chatOutputTargetKind
 	channel             ChannelResponse
+	recipientType       string
+	recipientID         pgtype.UUID
 	threadRoot          ChannelMessageResponse
 	threadRootMessageID pgtype.UUID
 	threadID            *string
@@ -361,7 +364,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid target; use #channel, #channel:<threadId>, or `dm:@<human-handle>` (for a proactive DM: `multica message send --target dm:@<human-handle> --message-stdin`)")
+		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
 		return
 	}
 	if isChannelOnboarding && !channelOnboardingTargetMatches(onboarding, target) {
@@ -415,6 +418,25 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		}
 		if errors.Is(err, errChannelOnboardingExpired) {
 			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+			return
+		}
+		var paused *agentDMPausedError
+		if errors.As(err, &paused) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":       paused.Error(),
+				"state":       paused.State,
+				"exchange_id": uuidToString(paused.ExchangeID),
+				"channel_id":  uuidToString(paused.ChannelID),
+			})
+			return
+		}
+		var wrongTurn *agentDMTurnError
+		if errors.As(err, &wrongTurn) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":             wrongTurn.Error(),
+				"state":             "waiting_for_peer",
+				"expected_agent_id": uuidToString(wrongTurn.ExpectedSender),
+			})
 			return
 		}
 		slog.Warn("agent transport send failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
@@ -1101,7 +1123,7 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 	return task, origin, event.ID, true
 }
 
-func (h *Handler) resolveAgentTransportTarget(ctx context.Context, _ db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
+func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
 	rawTarget = strings.TrimSpace(rawTarget)
 	if rawTarget == "" {
 		return agentTransportTarget{}, errChatOutputInvalidTarget
@@ -1110,10 +1132,18 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, _ db.AgentInb
 	if err != nil {
 		return agentTransportTarget{}, err
 	}
-	out := agentTransportTarget{kind: resolved.kind, channel: resolved.channel, threadRoot: resolved.threadRoot, raw: rawTarget}
+	out := agentTransportTarget{
+		kind: resolved.kind, channel: resolved.channel,
+		recipientType: resolved.recipientType, recipientID: resolved.recipientID,
+		threadRoot: resolved.threadRoot, raw: rawTarget,
+	}
 	switch resolved.kind {
 	case chatOutputTargetDM:
-		ch, ok := h.agentHumanDMChannel(ctx, origin.workspaceID, origin.agentID, resolved.recipientID, createDM)
+		creatorID := task.InitiatorUserID
+		if !creatorID.Valid {
+			creatorID = h.agentOwnerID(ctx, origin.workspaceID, origin.agentID)
+		}
+		ch, ok := h.agentDMChannel(ctx, origin.workspaceID, origin.agentID, resolved.recipientType, resolved.recipientID, creatorID, createDM)
 		if !ok {
 			return agentTransportTarget{}, errChatOutputInvalidTarget
 		}
@@ -1131,6 +1161,27 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, _ db.AgentInb
 	return out, nil
 }
 
+func (h *Handler) agentOwnerID(ctx context.Context, workspaceID, agentID pgtype.UUID) pgtype.UUID {
+	var ownerID pgtype.UUID
+	_ = h.DB.QueryRow(ctx, `
+		SELECT owner_id
+		FROM agent
+		WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL`,
+		agentID, workspaceID).Scan(&ownerID)
+	return ownerID
+}
+
+func (h *Handler) agentDMChannel(ctx context.Context, workspaceID, senderAgentID pgtype.UUID, recipientType string, recipientID, creatorID pgtype.UUID, create bool) (ChannelResponse, bool) {
+	switch recipientType {
+	case "user":
+		return h.agentHumanDMChannel(ctx, workspaceID, senderAgentID, recipientID, create)
+	case "agent":
+		return h.agentAgentDMChannel(ctx, workspaceID, senderAgentID, recipientID, creatorID, create)
+	default:
+		return ChannelResponse{}, false
+	}
+}
+
 func (h *Handler) agentHumanDMChannel(ctx context.Context, workspaceID, agentID, userID pgtype.UUID, create bool) (ChannelResponse, bool) {
 	workspaceIDText := uuidToString(workspaceID)
 	canonical := dmCanonicalName("user", uuidToString(userID), "agent", uuidToString(agentID))
@@ -1144,6 +1195,37 @@ func (h *Handler) agentHumanDMChannel(ctx context.Context, workspaceID, agentID,
 		return ChannelResponse{}, false
 	}
 	return h.ensureAgentHumanDMChannel(ctx, workspaceID, agentID, userID)
+}
+
+func (h *Handler) agentAgentDMChannel(ctx context.Context, workspaceID, senderAgentID, recipientAgentID, creatorID pgtype.UUID, create bool) (ChannelResponse, bool) {
+	workspaceIDText := uuidToString(workspaceID)
+	canonical := dmCanonicalName("agent", uuidToString(senderAgentID), "agent", uuidToString(recipientAgentID))
+	if ch, found := h.findDMChannel(ctx, workspaceIDText, canonical); found {
+		if h.agentAgentDMChannelMatches(ctx, workspaceID, parseUUID(ch.ID), senderAgentID, recipientAgentID) {
+			return ch, true
+		}
+		return ChannelResponse{}, false
+	}
+	if !create || !creatorID.Valid {
+		return ChannelResponse{}, false
+	}
+	return h.createDMChannel(ctx, nil, workspaceIDText, uuidToString(creatorID), canonical, []dmMember{
+		{memberType: "agent", memberID: senderAgentID},
+		{memberType: "agent", memberID: recipientAgentID},
+	})
+}
+
+func (h *Handler) agentAgentDMChannelMatches(ctx context.Context, workspaceID, channelID, firstAgentID, secondAgentID pgtype.UUID) bool {
+	var matches bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT count(*) = 2
+		  AND count(*) FILTER (WHERE member_type = 'agent') = 2
+		  AND bool_and(member_id = ANY($3::uuid[]))
+		FROM channel_member
+		WHERE workspace_id = $1 AND channel_id = $2`,
+		workspaceID, channelID, []pgtype.UUID{firstAgentID, secondAgentID},
+	).Scan(&matches)
+	return err == nil && matches
 }
 
 func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, sendSavedDraft bool) (agentTransportMessageResult, error) {
@@ -1194,6 +1276,18 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 					h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
 				}
 				h.sendChannelMessageToFeishu(ctx, ch, msg.AuthorName, msg.Content)
+			})
+		} else if target.channel.Kind == "dm" && target.recipientType == "agent" {
+			msg := result.Message
+			reservation := result.AgentDM
+			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+				lowID, highID, ok := normalizedAgentDMPair(source.origin.agentID, target.recipientID)
+				if ok {
+					h.publishAgentDMToOwners(
+						ctx, target.channel, lowID, highID, protocol.EventChannelMessage, msg,
+					)
+				}
+				h.dispatchAgentDMAgentReply(ctx, source, target, msg, reservation, initiatorID)
 			})
 		}
 	}
@@ -1321,6 +1415,21 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 			return agentTransportMessageResult{}, &agentTransportFreshnessHoldError{decision: decision, transportID: transportID}
 		}
 	}
+	reservation, err := h.reserveAgentDMSendTx(ctx, tx, source, target)
+	if err != nil {
+		var paused *agentDMPausedError
+		if errors.As(err, &paused) && paused.Notify {
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				return agentTransportMessageResult{}, commitErr
+			}
+			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+				h.notifyAgentDMPause(ctx, paused.ExchangeID)
+			})
+			return agentTransportMessageResult{}, err
+		}
+		_ = tx.Rollback(ctx)
+		return agentTransportMessageResult{}, err
+	}
 	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, pgtype.UUID{}, nil, input.ThreadRootMessageID, input.ThreadID, input.TriggerDepth)
 	if err != nil {
 		_ = tx.Rollback(ctx)
@@ -1330,6 +1439,10 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		return agentTransportMessageResult{}, err
 	}
 	msg := inserted.Message
+	if err := h.finishAgentDMSendTx(ctx, tx, reservation, parseUUID(msg.ID)); err != nil {
+		_ = tx.Rollback(ctx)
+		return agentTransportMessageResult{}, err
+	}
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
 		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), source.origin.workspaceID, "agent", source.origin.agentID, attachmentIDs); err != nil {
@@ -1361,7 +1474,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		return agentTransportMessageResult{}, err
 	}
 	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
-	return agentTransportMessageResult{Message: msg, Created: true, TransportID: transportID, SentDraft: sentDraft}, nil
+	return agentTransportMessageResult{Message: msg, Created: true, TransportID: transportID, SentDraft: sentDraft, AgentDM: reservation}, nil
 }
 
 func (h *Handler) lockAgentTransportTargetForInsert(ctx context.Context, exec dbExecutor, target agentTransportTarget) error {

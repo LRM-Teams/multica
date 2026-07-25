@@ -113,6 +113,46 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	assertPartMap(t, rawParts[2], map[string]any{"type": "attachment", "attachment_id": "att-b"})
 }
 
+func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/a2a-control" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"target": "dm:@peer-agent",
+			"control": map[string]any{
+				"state":       "active",
+				"round_limit": 5,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newMessageA2AControlCmd()
+	_ = cmd.Flags().Set("target", "dm:@peer-agent")
+	_ = cmd.Flags().Set("action", "grant_rounds")
+	_ = cmd.Flags().Set("exchange-id", "exchange-1")
+	_ = cmd.Flags().Set("rounds", "2")
+	if err := runAgentMessageA2AControl(cmd, nil); err != nil {
+		t.Fatalf("runAgentMessageA2AControl: %v", err)
+	}
+	if body["target"] != "dm:@peer-agent" ||
+		body["action"] != "grant_rounds" ||
+		body["exchange_id"] != "exchange-1" ||
+		body["rounds"] != float64(2) {
+		t.Fatalf("A2A control body=%#v", body)
+	}
+}
+
 func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +362,7 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.run()
-			const want = "target is required; --target accepts #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>"
+			const want = "target is required; --target accepts #channel, #channel:<threadId>, dm:@<handle>, or dm:@<handle>:<threadId>"
 			if err == nil || err.Error() != want {
 				t.Fatalf("error = %v, want %q", err, want)
 			}

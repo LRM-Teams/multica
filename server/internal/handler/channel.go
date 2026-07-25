@@ -195,6 +195,7 @@ type ChannelMessagesPageResponse struct {
 	Limit      int                            `json:"limit"`
 	HasMore    bool                           `json:"has_more"`
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
+	A2AControl *AgentDMControlResponse        `json:"a2a_control,omitempty"`
 
 	// around_seq mode only:
 	AnchorIndex  int                            `json:"anchor_index"`
@@ -212,6 +213,7 @@ type ChannelThreadMessagesCursorResponse struct {
 type ChannelThreadMessagesPageResponse struct {
 	Messages   []ChannelMessageResponse             `json:"messages"`
 	NextCursor *ChannelThreadMessagesCursorResponse `json:"next_cursor"`
+	A2AControl *AgentDMControlResponse              `json:"a2a_control,omitempty"`
 }
 
 type ChannelMessageReply struct {
@@ -1220,7 +1222,9 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+	userUUID := parseUUID(userID)
+	supervisor := h.channelUserIsAgentDMSupervisor(r.Context(), workspaceID, channelID, userUUID)
+	if !h.requireChannelUserViewer(w, r.Context(), workspaceID, channelID, userUUID) {
 		return
 	}
 	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
@@ -1228,8 +1232,14 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
+	}
+	var a2aControl *AgentDMControlResponse
+	if supervisor {
+		a2aControl, _ = h.agentDMControlForOwner(
+			r.Context(), parseUUID(workspaceID), channelID, userUUID,
+		)
 	}
 	limit, beforeSeq, beforeCreatedAt, beforeID, aroundSeq, err := parseChannelMessagesPageParams(r)
 	if err != nil {
@@ -1238,7 +1248,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if aroundSeq > 0 {
-		h.listChannelMessagesAround(w, r, channelID, workspaceID, userID, limit, aroundSeq)
+		h.listChannelMessagesAround(w, r, channelID, workspaceID, userID, limit, aroundSeq, a2aControl)
 		return
 	}
 
@@ -1314,6 +1324,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		Limit:      limit,
 		HasMore:    hasMore,
 		NextCursor: nextCursor,
+		A2AControl: a2aControl,
 	})
 }
 
@@ -1359,7 +1370,7 @@ func (h *Handler) queryChannelMessages(ctx context.Context, channelID, workspace
 	return msgs, rows.Err()
 }
 
-func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Request, channelID pgtype.UUID, workspaceIDStr string, userIDStr string, limit int, aroundSeq int64) {
+func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Request, channelID pgtype.UUID, workspaceIDStr string, userIDStr string, limit int, aroundSeq int64, a2aControl *AgentDMControlResponse) {
 	workspaceID := parseUUID(workspaceIDStr)
 	userID := parseUUID(userIDStr)
 	limitBefore := limit / 2
@@ -1487,6 +1498,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		Limit:        limit,
 		HasMore:      hasMore,
 		NextCursor:   nextCursor,
+		A2AControl:   a2aControl,
 		AnchorIndex:  anchorIndex,
 		HasMoreAfter: hasMoreAfter,
 		AfterCursor:  afterCursor,
@@ -1504,7 +1516,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+	if !h.requireChannelUserViewer(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -2666,7 +2678,9 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+	userUUID := parseUUID(userID)
+	supervisor := h.channelUserIsAgentDMSupervisor(r.Context(), workspaceID, channelID, userUUID)
+	if !h.requireChannelUserViewer(w, r.Context(), workspaceID, channelID, userUUID) {
 		return
 	}
 	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
@@ -2674,8 +2688,14 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
+	}
+	var a2aControl *AgentDMControlResponse
+	if supervisor {
+		a2aControl, _ = h.agentDMControlForOwner(
+			r.Context(), parseUUID(workspaceID), channelID, userUUID,
+		)
 	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
 	if !ok {
@@ -2748,6 +2768,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, ChannelThreadMessagesPageResponse{
 		Messages:   out,
 		NextCursor: nextCursor,
+		A2AControl: a2aControl,
 	})
 }
 

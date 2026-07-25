@@ -109,6 +109,29 @@ func (q *Queries) CancelAgentTasksByRuntimeOrAgent(ctx context.Context, arg Canc
 	return items, nil
 }
 
+const cancelRunningAgentExecutionsByAgentIDs = `-- name: CancelRunningAgentExecutionsByAgentIDs :exec
+UPDATE agent_execution
+SET status = 'cancelled',
+    completed_at = COALESCE(completed_at, now()),
+    failure_reason = $1
+WHERE agent_id = ANY($2::uuid[])
+  AND status = 'running'
+`
+
+type CancelRunningAgentExecutionsByAgentIDsParams struct {
+	FailureReason string        `json:"failure_reason"`
+	AgentIds      []pgtype.UUID `json:"agent_ids"`
+}
+
+// agent_execution is an immutable attribution ledger and intentionally has no
+// agent FK, so hard-deleting an agent does not remove its history. It must
+// still stop claiming that the provider execution is live once the owning
+// agent is archived or permanently deleted.
+func (q *Queries) CancelRunningAgentExecutionsByAgentIDs(ctx context.Context, arg CancelRunningAgentExecutionsByAgentIDsParams) error {
+	_, err := q.db.Exec(ctx, cancelRunningAgentExecutionsByAgentIDs, arg.FailureReason, arg.AgentIds)
+	return err
+}
+
 const countActiveAgentsByRuntime = `-- name: CountActiveAgentsByRuntime :one
 SELECT count(*) FROM agent WHERE runtime_id = $1 AND archived_at IS NULL
 `
@@ -175,6 +198,46 @@ func (q *Queries) DeleteArchivedAgentsByRuntime(ctx context.Context, runtimeID p
 	return err
 }
 
+const deleteLegacySquadsByLeaderIDs = `-- name: DeleteLegacySquadsByLeaderIDs :exec
+DELETE FROM squad
+WHERE leader_id = ANY($1::uuid[])
+`
+
+// Migration 222 retired the Squad surface and emptied this table, but kept the
+// legacy schema. Delete any unexpected legacy rows whose RESTRICT leader FK
+// would otherwise make permanent agent deletion fail.
+func (q *Queries) DeleteLegacySquadsByLeaderIDs(ctx context.Context, leaderIds []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteLegacySquadsByLeaderIDs, leaderIds)
+	return err
+}
+
+const deleteVoiceCallSessionsByAgentIDs = `-- name: DeleteVoiceCallSessionsByAgentIDs :exec
+DELETE FROM voice_call_session
+WHERE agent_id = ANY($1::uuid[])
+`
+
+// voice_call_session.agent_id intentionally has no ON DELETE rule. Computer
+// deletion owns the archived agent's complete history, so remove both ended and
+// active session rows here; voice_call_turn follows through ON DELETE CASCADE.
+func (q *Queries) DeleteVoiceCallSessionsByAgentIDs(ctx context.Context, agentIds []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteVoiceCallSessionsByAgentIDs, agentIds)
+	return err
+}
+
+const detachDerivedAgentsFromSources = `-- name: DetachDerivedAgentsFromSources :exec
+UPDATE agent
+SET source_agent_id = NULL, updated_at = now()
+WHERE source_agent_id = ANY($1::uuid[])
+`
+
+// A derived agent may outlive the source agent's computer. Permanent computer
+// deletion removes the source agent, so preserve surviving derived agents while
+// clearing their lineage FK before the source row is hard-deleted.
+func (q *Queries) DetachDerivedAgentsFromSources(ctx context.Context, sourceAgentIds []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, detachDerivedAgentsFromSources, sourceAgentIds)
+	return err
+}
+
 const deleteStaleOfflineRuntimes = `-- name: DeleteStaleOfflineRuntimes :many
 DELETE FROM agent_runtime
 WHERE status = 'offline'
@@ -209,6 +272,48 @@ func (q *Queries) DeleteStaleOfflineRuntimes(ctx context.Context, staleSeconds f
 		return nil, err
 	}
 	return items, nil
+}
+
+const failRunningAutopilotRunsByAgentIDs = `-- name: FailRunningAutopilotRunsByAgentIDs :exec
+UPDATE autopilot_run AS run
+SET status = 'failed',
+    completed_at = COALESCE(run.completed_at, now()),
+    failure_reason = $1
+WHERE run.status = 'running'
+  AND (
+    EXISTS (
+      SELECT 1
+      FROM autopilot AS definition
+      WHERE definition.id = run.autopilot_id
+        AND definition.assignee_type = 'agent'
+        AND definition.assignee_id = ANY($2::uuid[])
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM agent_inbox_event AS event
+      WHERE event.agent_id = ANY($2::uuid[])
+        AND (
+          event.autopilot_run_id = run.id
+          OR event.id = run.task_id
+        )
+    )
+  )
+`
+
+type FailRunningAutopilotRunsByAgentIDsParams struct {
+	FailureReason string        `json:"failure_reason"`
+	AgentIds      []pgtype.UUID `json:"agent_ids"`
+}
+
+// Makes every in-flight automation executed by the supplied agents terminal.
+// The parent autopilot relation covers the ordinary agent-assignee path. The
+// inbox-event relation additionally covers historical/special dispatches whose
+// executing agent differs from the current definition assignee. Without this
+// explicit transition, agent_inbox_event's cascading delete / SET NULL links
+// can leave an autopilot_run permanently marked running after agent teardown.
+func (q *Queries) FailRunningAutopilotRunsByAgentIDs(ctx context.Context, arg FailRunningAutopilotRunsByAgentIDsParams) error {
+	_, err := q.db.Exec(ctx, failRunningAutopilotRunsByAgentIDs, arg.FailureReason, arg.AgentIds)
+	return err
 }
 
 const failTasksForOfflineRuntimes = `-- name: FailTasksForOfflineRuntimes :many
@@ -698,12 +803,14 @@ func (q *Queries) ListAgentRuntimesByOwner(ctx context.Context, arg ListAgentRun
 }
 
 const listArchivedAgentIDsByRuntime = `-- name: ListArchivedAgentIDsByRuntime :many
-SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
+SELECT id FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL FOR UPDATE
 `
 
 // Companion to DeleteArchivedAgentsByRuntime: enumerates the archived agents
 // about to be hard-deleted so the runtime teardown can pause autopilots that
-// still point at them. Returns ids only — the caller only needs the set.
+// still point at them. The row lock also prevents a concurrent FK writer from
+// attaching new voice-call/lineage/legacy-squad dependents between dependent
+// cleanup and the final agent DELETE.
 func (q *Queries) ListArchivedAgentIDsByRuntime(ctx context.Context, runtimeID pgtype.UUID) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, listArchivedAgentIDsByRuntime, runtimeID)
 	if err != nil {

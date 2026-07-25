@@ -62,6 +62,51 @@ export interface AppConfigResponse {
   dev_agent_profile_access_enabled?: boolean;
 }
 
+export interface DeleteComputerResponse {
+  status: string;
+  daemon_id: string;
+  deleted_count: number;
+  deleted_runtime_ids: string[];
+  tasks_cancelled: number;
+}
+
+export interface RemoveComputerAgentsResponse {
+  status: string;
+  daemon_id: string;
+  agents_archived: number;
+  tasks_cancelled: number;
+}
+
+export const DeleteComputerResponseSchema = z.object({
+  status: z.string(),
+  daemon_id: z.string(),
+  deleted_count: z.number(),
+  deleted_runtime_ids: z.array(z.string()).default([]),
+  tasks_cancelled: z.number().default(0),
+}).loose();
+
+export const EMPTY_DELETE_COMPUTER_RESPONSE: DeleteComputerResponse = {
+  status: "invalid_response",
+  daemon_id: "",
+  deleted_count: 0,
+  deleted_runtime_ids: [],
+  tasks_cancelled: 0,
+};
+
+export const RemoveComputerAgentsResponseSchema = z.object({
+  status: z.string(),
+  daemon_id: z.string(),
+  agents_archived: z.number(),
+  tasks_cancelled: z.number().default(0),
+}).loose();
+
+export const EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE: RemoveComputerAgentsResponse = {
+  status: "invalid_response",
+  daemon_id: "",
+  agents_archived: 0,
+  tasks_cancelled: 0,
+};
+
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive
 // the issue detail page (timeline, comments, subscribers) and the issues

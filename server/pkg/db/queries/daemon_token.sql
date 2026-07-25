@@ -17,7 +17,10 @@ WHERE token_hash = $1 AND expires_at > now();
 -- DB row is gone.
 DELETE FROM daemon_token
 WHERE workspace_id = @workspace_id
-  AND daemon_id = ANY(@daemon_ids::text[])
+  AND LOWER(daemon_id) IN (
+      SELECT LOWER(value)
+      FROM unnest(@daemon_ids::text[]) AS value
+  )
 RETURNING token_hash;
 
 -- name: DeleteExpiredDaemonTokens :exec

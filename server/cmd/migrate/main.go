@@ -42,6 +42,80 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"188_agent_ascii_handle_backfill":    runAgentASCIIHandleBackfillHook,
 	"190_agent_handle_truncation_repair": runAgentASCIIHandleBackfillHook,
 	"191_agent_default_handle_repair":    runAgentDefaultHandleRepairHook,
+	"227_agent_delete_fk_indexes":        runAgentDeleteFKIndexesHook,
+}
+
+type concurrentIndexSpec struct {
+	name string
+	ddl  string
+}
+
+func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
+	indexes := []concurrentIndexSpec{
+		{"idx_agent_inbox_event_runtime", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_runtime ON agent_inbox_event (runtime_id) WHERE runtime_id IS NOT NULL`},
+		{"idx_memory_curation_watermark_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_agent ON memory_curation_watermark (agent_id)`},
+		{"idx_evolution_unit_feedback_event_agent", `CREATE INDEX CONCURRENTLY idx_evolution_unit_feedback_event_agent ON evolution_unit_feedback_event (agent_id)`},
+		{"idx_memory_curation_evidence_cursor_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_evidence_cursor_agent ON memory_curation_evidence_cursor (agent_id)`},
+		{"idx_agent_activity_event_agent", `CREATE INDEX CONCURRENTLY idx_agent_activity_event_agent ON agent_activity_event (agent_id)`},
+		{"idx_memory_curator_target_agent", `CREATE INDEX CONCURRENTLY idx_memory_curator_target_agent ON memory_curator_target (agent_id)`},
+		{"idx_task_token_agent", `CREATE INDEX CONCURRENTLY idx_task_token_agent ON task_token (agent_id)`},
+		{"idx_wendy_nudge_ladder_agent", `CREATE INDEX CONCURRENTLY idx_wendy_nudge_ladder_agent ON wendy_nudge_ladder (agent_id)`},
+		{"idx_voice_call_session_agent", `CREATE INDEX CONCURRENTLY idx_voice_call_session_agent ON voice_call_session (agent_id)`},
+		{"idx_agent_inbox_token_agent", `CREATE INDEX CONCURRENTLY idx_agent_inbox_token_agent ON agent_inbox_token (agent_id)`},
+		{"idx_agent_radar_action_agent", `CREATE INDEX CONCURRENTLY idx_agent_radar_action_agent ON agent_radar_action (agent_id)`},
+		{"idx_agent_radar_run_agent", `CREATE INDEX CONCURRENTLY idx_agent_radar_run_agent ON agent_radar_run (agent_id)`},
+		{"idx_agent_session_agent", `CREATE INDEX CONCURRENTLY idx_agent_session_agent ON agent_session (agent_id)`},
+		{"idx_agent_transport_draft_agent", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_agent ON agent_transport_draft (agent_id)`},
+		{"idx_agent_task_transport_audit_agent", `CREATE INDEX CONCURRENTLY idx_agent_task_transport_audit_agent ON agent_task_transport_audit (agent_id)`},
+		{"idx_channel_agent_session_agent", `CREATE INDEX CONCURRENTLY idx_channel_agent_session_agent ON channel_agent_session (agent_id)`},
+		{"idx_channel_ambient_pending_wake_agent", `CREATE INDEX CONCURRENTLY idx_channel_ambient_pending_wake_agent ON channel_ambient_pending_wake (agent_id)`},
+		{"idx_channel_decision_audit_agent", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_agent ON channel_decision_audit (agent_id)`},
+		{"idx_chat_session_agent", `CREATE INDEX CONCURRENTLY idx_chat_session_agent ON chat_session (agent_id)`},
+		{"idx_collaboration_turn_agent", `CREATE INDEX CONCURRENTLY idx_collaboration_turn_agent ON collaboration_turn (agent_id)`},
+		{"idx_environment_agent_sandbox_agent", `CREATE INDEX CONCURRENTLY idx_environment_agent_sandbox_agent ON environment_agent_sandbox (agent_id)`},
+		{"idx_evolution_training_example_agent", `CREATE INDEX CONCURRENTLY idx_evolution_training_example_agent ON evolution_training_example (agent_id)`},
+		{"idx_team_knowledge_item_curator_agent", `CREATE INDEX CONCURRENTLY idx_team_knowledge_item_curator_agent ON team_knowledge_item (created_by_curator_agent_id)`},
+		{"idx_memory_curator_profile_curator_agent", `CREATE INDEX CONCURRENTLY idx_memory_curator_profile_curator_agent ON memory_curator_profile (curator_agent_id)`},
+		{"idx_memory_curation_run_curator_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_run_curator_agent ON memory_curation_run (curator_agent_id)`},
+		{"idx_channel_group_manager_agent", `CREATE INDEX CONCURRENTLY idx_channel_group_manager_agent ON channel (group_manager_agent_id)`},
+		{"idx_squad_leader", `CREATE INDEX CONCURRENTLY idx_squad_leader ON squad (leader_id)`},
+		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
+		{"idx_wendy_channel_ambient_agent", `CREATE INDEX CONCURRENTLY idx_wendy_channel_ambient_agent ON wendy_channel_ambient (wendy_agent_id)`},
+		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
+		{"idx_workspace_radar_state_supervisor_agent", `CREATE INDEX CONCURRENTLY idx_workspace_radar_state_supervisor_agent ON workspace_radar_state (workspace_id, supervisor_agent_id) WHERE supervisor_agent_id IS NOT NULL`},
+	}
+
+	for _, index := range indexes {
+		var valid bool
+		if err := pool.QueryRow(ctx, `
+			SELECT COALESCE((
+				SELECT i.indisvalid
+				FROM pg_class c
+				JOIN pg_index i ON i.indexrelid = c.oid
+				WHERE c.relnamespace = 'public'::regnamespace
+				  AND c.relname = $1
+			), false)
+		`, index.name).Scan(&valid); err != nil {
+			return fmt.Errorf("inspect concurrent index %s: %w", index.name, err)
+		}
+		if valid {
+			continue
+		}
+
+		// An interrupted CREATE INDEX CONCURRENTLY can leave an invalid index
+		// with the final name. Drop only that invalid remnant, then retry.
+		drop := fmt.Sprintf(
+			"DROP INDEX CONCURRENTLY IF EXISTS %s",
+			pgx.Identifier{index.name}.Sanitize(),
+		)
+		if _, err := pool.Exec(ctx, drop); err != nil {
+			return fmt.Errorf("drop invalid concurrent index %s: %w", index.name, err)
+		}
+		if _, err := pool.Exec(ctx, index.ddl); err != nil {
+			return fmt.Errorf("create concurrent index %s: %w", index.name, err)
+		}
+	}
+	return nil
 }
 
 func runHistoricalUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {

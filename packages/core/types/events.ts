@@ -23,6 +23,7 @@ export type WSEventType =
   | "agent:created"
   | "agent:archived"
   | "agent:restored"
+  | "agent:deleted"
   | "agent.memory_updated"
   | "task:queued"
   | "task:dispatch"
@@ -550,6 +551,7 @@ export interface WSEventPayloadMap {
   "agent:created": AgentCreatedPayload;
   "agent:archived": AgentArchivedPayload;
   "agent:restored": AgentRestoredPayload;
+  "agent:deleted": { agent_id: string };
   "agent.memory_updated": AgentMemoryUpdatedPayload;
   "task:queued": TaskQueuedPayload;
   "task:dispatch": TaskDispatchPayload;

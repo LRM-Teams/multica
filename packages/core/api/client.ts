@@ -334,6 +334,12 @@ import {
   EMPTY_WEB_PUSH_SUBSCRIPTION,
   WebPushPublicKeySchema,
   WebPushSubscriptionSchema,
+  DeleteComputerResponseSchema,
+  EMPTY_DELETE_COMPUTER_RESPONSE,
+  RemoveComputerAgentsResponseSchema,
+  EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
+  type DeleteComputerResponse,
+  type RemoveComputerAgentsResponse,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1339,26 +1345,47 @@ export class ApiClient {
     await this.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
   }
 
-  // Computer / host one-click delete (LRM-438). Deletes every runtime under
-  // the given daemon_id in the current workspace in one request. All-or-nothing:
-  // structured 409 with `code` when any runtime is online, has active agents,
-  // active tasks, or blocking squads — FE must surface the reason (LRM-238),
-  // not fall back to per-row DELETE.
+  // Permanently deletes an empty Computer. Active agents return a structured
+  // 409 and must be explicitly removed through removeAgentsByDaemon first.
   async deleteRuntimesByDaemon(
     daemonId: string,
     opts?: { runtimeMode?: string },
-  ): Promise<{
-    status: string;
-    daemon_id: string;
-    deleted_count: number;
-    deleted_runtime_ids: string[];
-  }> {
+  ): Promise<DeleteComputerResponse> {
     const search = new URLSearchParams();
     if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
     const qs = search.toString();
-    return this.fetch(
+    const raw = await this.fetch<unknown>(
       `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}${qs ? `?${qs}` : ""}`,
       { method: "DELETE" },
+    );
+    return parseWithFallback(
+      raw,
+      DeleteComputerResponseSchema,
+      EMPTY_DELETE_COMPUTER_RESPONSE,
+      { endpoint: "DELETE /api/runtimes/by-daemon/{daemonId}" },
+    );
+  }
+
+  async removeAgentsByDaemon(
+    daemonId: string,
+    expectedActiveAgentIds: string[],
+    opts?: { runtimeMode?: string },
+  ): Promise<RemoveComputerAgentsResponse> {
+    const search = new URLSearchParams();
+    if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
+    const qs = search.toString();
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}/remove-agents${qs ? `?${qs}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_active_agent_ids: expectedActiveAgentIds }),
+      },
+    );
+    return parseWithFallback(
+      raw,
+      RemoveComputerAgentsResponseSchema,
+      EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
+      { endpoint: "POST /api/runtimes/by-daemon/{daemonId}/remove-agents" },
     );
   }
 

@@ -330,6 +330,34 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		ownerID = member.UserID
 	}
 
+	// Registration and permanent removal share one workspace+daemon advisory
+	// lock. Holding it across the tombstone check, runtime upserts, and token
+	// issue closes the race where a heartbeat could check "not removed", wait
+	// behind the delete, then recreate the runtime after deletion commits.
+	registrationLock, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
+		return
+	}
+	defer registrationLock.Rollback(context.Background())
+	if err := lockDaemonRegistration(r.Context(), registrationLock, req.WorkspaceID, req.DaemonID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
+		return
+	}
+
+	tombstoned, err := h.Queries.IsDaemonRegistrationTombstoned(r.Context(), db.IsDaemonRegistrationTombstonedParams{
+		WorkspaceID: wsUUID,
+		DaemonID:    strings.ToLower(req.DaemonID),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify computer registration")
+		return
+	}
+	if tombstoned {
+		writeCodedError(w, http.StatusGone, "daemon_removed", "this computer was permanently removed from the workspace")
+		return
+	}
+
 	ws, err := h.Queries.GetWorkspace(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "workspace not found")
@@ -467,6 +495,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		slog.Error("daemon register: issue daemon token failed",
 			append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)...)
 		writeError(w, http.StatusInternalServerError, "failed to issue daemon token")
+		return
+	}
+
+	if err := registrationLock.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finish computer registration")
 		return
 	}
 

@@ -1158,6 +1158,10 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 			writeError(w, http.StatusInternalServerError, "failed to pause autopilots")
 			return
 		}
+		if err := teardownArchivedAgentDependents(r.Context(), qtx, allArchivedIDs); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to clean up archived agent dependencies")
+			return
+		}
 	}
 
 	// 4. Hard-delete the archived agents so the agent.runtime_id FK

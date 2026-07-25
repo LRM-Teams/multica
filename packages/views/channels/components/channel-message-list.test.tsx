@@ -23,7 +23,6 @@ vi.mock("react-virtuoso", async () => {
         firstItemIndex = 0,
         startReached,
         scrollerRef,
-        totalListHeightChanged,
       }: {
         components?: {
           Footer?: React.ComponentType;
@@ -39,9 +38,6 @@ vi.mock("react-virtuoso", async () => {
         // #325 phase 1: Virtuoso owns its scroller and reports it via scrollerRef.
         // Wire the mock's root so the mount-gated scroll effects still fire.
         scrollerRef?: (el: HTMLElement | Window | null) => void;
-        // DIAGNOSTIC ONLY: only installed when the trace opt-in is set — the
-        // default path must pass `undefined` so Virtuoso never invokes it.
-        totalListHeightChanged?: (height: number) => void;
         itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
@@ -73,7 +69,6 @@ vi.mock("react-virtuoso", async () => {
           data-testid="virtuoso-scroller"
           data-initial-index={initialIndex ?? "unset"}
           data-first-item-index={firstItemIndex}
-          data-tlh-callback={totalListHeightChanged ? "installed" : "absent"}
         >
           {startReached && (
             <button type="button" data-testid="start-reached" onClick={() => startReached()} />
@@ -580,40 +575,6 @@ describe("MessageViewport", () => {
     );
   });
 
-  it("DIAGNOSTIC: does not install the totalListHeightChanged callback on the default path (flag unset)", () => {
-    render(
-      <MessageViewport
-        messages={[makeMessage("m1", "Hello")]}
-        currentUserId="user-1"
-        emptyLabel="No messages"
-      />,
-    );
-    // No opt-in flag → the trace callback prop is `undefined`, so Virtuoso never
-    // invokes it and no per-measurement work happens (Barry's zero-cost contract).
-    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute(
-      "data-tlh-callback",
-      "absent",
-    );
-  });
-
-  it("DIAGNOSTIC: installs the totalListHeightChanged callback only once opted in", () => {
-    (window as unknown as { __bssTraceEnabled?: boolean }).__bssTraceEnabled = true;
-    try {
-      render(
-        <MessageViewport
-          messages={[makeMessage("m1", "Hello")]}
-          currentUserId="user-1"
-          emptyLabel="No messages"
-        />,
-      );
-      expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute(
-        "data-tlh-callback",
-        "installed",
-      );
-    } finally {
-      delete (window as unknown as { __bssTraceEnabled?: boolean }).__bssTraceEnabled;
-    }
-  });
 
   it("requests older history via startReached, but not while already loading or exhausted", () => {
     const onLoadOlder = vi.fn();

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { ChannelMessage } from "@multica/core/types";
 import { useBottomSettleScroll } from "./use-bottom-settle-scroll";
-import * as bssDiag from "./bss-diagnostic";
 
 // Manual frame pump: flush a bounded number of queued frames.
 let nextId: number;
@@ -29,7 +28,6 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.requestAnimationFrame = origRaf;
   globalThis.cancelAnimationFrame = origCaf;
-  delete (window as unknown as { __bssTraceEnabled?: boolean }).__bssTraceEnabled;
   vi.restoreAllMocks();
 });
 
@@ -104,6 +102,7 @@ function harness(opts: { finalHeight: number; stepPerWrite: number }) {
   return {
     el,
     map,
+    lastRowEl,
     get scrollTop() {
       return scrollTop;
     },
@@ -254,7 +253,11 @@ describe("useBottomSettleScroll", () => {
     expect(h.scrollTop).toBe(0);
   });
 
-  it("does nothing while the Virtuoso handle has not attached", () => {
+  it("does not pin while the Virtuoso handle has not attached (loop waits, never writes)", () => {
+    // The loop now STARTS before the handle attaches (so it can catch a late
+    // attach — see the "attaches LATE" test), but it must not pin while detached;
+    // with no attach ever coming it simply waits out the frame cap.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
       useBottomSettleScroll(
@@ -262,7 +265,8 @@ describe("useBottomSettleScroll", () => {
       ),
     );
     flushFrames();
-    expect(h.scrollTop).toBe(0);
+    expect(h.scrollTop).toBe(0); // never pinned — handle never attached
+    expect(warn).toHaveBeenCalled(); // waited out the cap (no attach to pin with)
   });
 
   it("does nothing with no messages (empty conversation)", () => {
@@ -307,38 +311,121 @@ describe("useBottomSettleScroll", () => {
     );
   });
 
-  it("DIAGNOSTIC zero-cost: never reaches a bssRecord call site on the default path (flag unset)", () => {
-    // Every record site is guarded by `if (bssTraceEnabled()) bssRecord(...)`, so
-    // with the flag unset the call is short-circuited and its field object (DOM
-    // reads + Math.round) is never even constructed. Proving bssRecord is never
-    // CALLED proves the fields are never evaluated (Barry's zero-cost contract).
-    const rec = vi.spyOn(bssDiag, "bssRecord");
-    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
-    renderHook(() =>
-      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
-    );
+  // --- around-seq successor contract (2026-07-26) ---
+  // NOTE: the ROOT bug is a browser-layer timing race — Virtuoso detaches/reattaches
+  // its imperative handle mid-mount while the tail row measures/mounts ~440ms late,
+  // and the effect (with `handleAttached` a dep) failed to re-arm the settle at that
+  // moment. jsdom CANNOT reproduce that exact race (here `handleAttached` is a prop,
+  // so any flip re-runs the old effect and it self-heals). These tests therefore
+  // lock the NEW logic's *properties* (loop survives a detach and still lands the
+  // bottom; a late-attaching handle still settles; short content settles at 0);
+  // the definitive gate for the timing bug is Iris's real-device fully-read retest.
+
+  it("survives a handle detach/reattach mid-settle via ONE persistent loop (no effect re-run) and lands the bottom", () => {
+    // Long enough to be genuinely mid-settle after a few frames, but reachable
+    // within the frame cap even after the detach wait (detach frames count toward
+    // the cap; in prod a detach window is a few ms, well within the ~3s backstop).
+    const h = harness({ finalHeight: 2000, stepPerWrite: 40 });
+    // CRITICAL (Ronan): a SINGLE stable `messages` instance across all rerenders.
+    // `messages` IS an effect dep, so `baseProps`' default fresh `messages(IDS)`
+    // array would re-run the effect on every rerender — and the test would silently
+    // stop exercising the property it locks ("one loop survives a handle-only flip
+    // WITHOUT an effect re-run"). We assert cancelAnimationFrame is never called on
+    // the handle-only rerenders: no cleanup ⇒ no effect re-run ⇒ same rAF chain.
+    const stableMessages = messages(IDS);
+    const props = (over: Partial<BottomProps> = {}): BottomProps =>
+      baseProps({ messages: stableMessages, scrollContainerEl: h.el, messageRefMap: h.map, ...over });
+    const { rerender } = renderHook((p: BottomProps) => useBottomSettleScroll(p), {
+      initialProps: props(),
+    });
+    flushFrames(3); // pinning toward the moving bottom, tail not yet measurable
+    const midway = h.scrollTop;
+    expect(midway).toBeGreaterThan(0);
+    expect(midway).toBeLessThan(2000 - CLIENT_HEIGHT);
+
+    // Virtuoso detaches its handle mid-settle. A handle-ONLY rerender must NOT
+    // cancel the running rAF (proving the effect did not re-run and restart it).
+    const cancelsBaseline = cancelled.size;
+    rerender(props({ handleAttached: false }));
+    expect(cancelled.size).toBe(cancelsBaseline); // no cleanup → same persistent loop
+    flushFrames(15);
+    expect(h.scrollTop).toBe(midway); // kept looping but never pinned while detached
+
+    // Reattach (handle-only again, no re-run) — the SAME loop re-arms and lands.
+    rerender(props({ handleAttached: true }));
+    expect(cancelled.size).toBe(cancelsBaseline); // still no effect re-run
     flushFrames();
-    expect(h.scrollTop).toBe(879 - CLIENT_HEIGHT); // behaviour unchanged — still settles
-    expect(rec).not.toHaveBeenCalled();
+    expect(h.scrollTop).toBe(2000 - CLIENT_HEIGHT); // landed, not stuck
   });
 
-  it("DIAGNOSTIC: records the effect/write/reach/settled chronology once opted in", () => {
-    (window as unknown as { __bssTraceEnabled?: boolean }).__bssTraceEnabled = true;
-    const rec = vi.spyOn(bssDiag, "bssRecord");
+  it("a handle that attaches LATE (loop starts before attach) still settles, with no re-run at attach", () => {
     const h = harness({ finalHeight: 879, stepPerWrite: 90 });
+    const stableMessages = messages(IDS);
+    const props = (over: Partial<BottomProps> = {}): BottomProps =>
+      baseProps({ messages: stableMessages, scrollContainerEl: h.el, messageRefMap: h.map, ...over });
+    const { rerender } = renderHook((p: BottomProps) => useBottomSettleScroll(p), {
+      // Mount with the handle NOT yet attached — the loop starts (guard no longer
+      // gates on handleAttached) but waits, pinning nothing.
+      initialProps: props({ handleAttached: false }),
+    });
+    flushFrames(5);
+    expect(h.scrollTop).toBe(0); // nothing pinned while detached
+
+    const cancelsBaseline = cancelled.size;
+    rerender(props({ handleAttached: true })); // handle-only flip
+    expect(cancelled.size).toBe(cancelsBaseline); // the SAME loop picks up the attach live
+    flushFrames();
+    expect(h.scrollTop).toBe(879 - CLIENT_HEIGHT); // pins to bottom once attached
+  });
+
+  it("short content (fits the viewport) completes at scrollTop 0 without a false timeout", () => {
+    // scrollHeight never exceeds clientHeight and the tail row is measurable from
+    // the start (short conversation), so its bottom edge is already within the band
+    // of the container's bottom → hasReached() is true on frame one → completes at 0,
+    // no timeout, no console warn.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = harness({ finalHeight: CLIENT_HEIGHT, stepPerWrite: 0 }); // sh stays === ch
+    h.map.set(LAST_ID, h.lastRowEl); // tail rendered from the start (short list)
     renderHook(() =>
       useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
     );
     flushFrames();
-    const kinds = new Set(rec.mock.calls.map((c) => c[0]));
-    expect(kinds.has("effect")).toBe(true);
-    expect(kinds.has("write")).toBe(true);
-    expect(kinds.has("settled")).toBe(true);
-    // tailSeq/sourceTailComplete are recorded (the source-contract fields Barry
-    // needs to classify data-lag vs measurement-lag), even when absent → null.
-    const effect = rec.mock.calls.find((c) => c[0] === "effect")?.[1];
-    expect(effect).toHaveProperty("tailSeq");
-    expect(effect).toHaveProperty("sourceTailComplete");
-    expect(effect).toHaveProperty("messagesLoading");
+    expect(h.scrollTop).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warm LONG content already at the bottom (declarative mount landed) completes on frame 1, no false ~3s timeout", () => {
+    // Regression guard (Ronan): a long list (sh > ch) that the mount-once
+    // declarative position already landed at the true bottom. The per-frame direct
+    // write is a NO-OP (scrollTop already at max), but the tail row's geometry is
+    // already in the bottom band — completion MUST fire immediately off hasReached,
+    // not spin the frame cap and log a spurious timeout. (An earlier "effective pin
+    // must have MOVED scrollTop" gate wrongly timed this healthy path out.)
+    const SH = 2000;
+    const el = document.createElement("div");
+    let scrollTop = SH - CLIENT_HEIGHT; // 1384 — already at the true bottom
+    Object.defineProperty(el, "clientHeight", { value: CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { value: SH, configurable: true });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = Math.max(0, Math.min(v, SH - CLIENT_HEIGHT)); // write clamps → no-op at max
+      },
+      configurable: true,
+    });
+    el.getBoundingClientRect = () => ({ top: 0, bottom: CLIENT_HEIGHT }) as DOMRect;
+    const lastRowEl = document.createElement("div");
+    // bottom = SH - scrollTop = 616 = container bottom → within BOTTOM_BAND_PX.
+    lastRowEl.getBoundingClientRect = () =>
+      ({ top: SH - scrollTop - 40, bottom: SH - scrollTop }) as DOMRect;
+    const map = new Map<string, HTMLElement>([[LAST_ID, lastRowEl]]);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderHook(() =>
+      useBottomSettleScroll(baseProps({ scrollContainerEl: el, messageRefMap: map })),
+    );
+    flushFrames();
+    expect(scrollTop).toBe(SH - CLIENT_HEIGHT); // held at the bottom (no-op pin)
+    expect(warn).not.toHaveBeenCalled(); // completed frame 1 — no spurious timeout
   });
 });

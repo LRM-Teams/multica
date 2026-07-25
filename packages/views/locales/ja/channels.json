@@ -489,7 +489,17 @@
     "action_failed": "操作に失敗しました。もう一度お試しください",
     "composer_placeholder": "{{name}} にメッセージ…",
     "bubble_replied_preview": "バブルで返信済み",
-    "bubble_replied_time": "たった今"
+    "bubble_replied_time": "たった今",
+    "agent_pair": {
+      "pill": "エージェント間DM",
+      "action_view_dm": "表示",
+      "action_grant_rounds": "あと{{step}}往復を許可",
+      "action_pause_pair": "このペアを停止",
+      "action_resume_pair": "このペアを再開",
+      "action_pause_global": "すべてのエージェントDMを停止",
+      "global_toggle": "このワークスペースのすべてのエージェント間DMを停止",
+      "global_paused_note": "一時停止中——再開するまでエージェント同士はDMを送りません。"
+    }
   },
   "voice_call": {
     "start_aria": "{{name}} に電話",

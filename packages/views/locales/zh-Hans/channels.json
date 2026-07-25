@@ -489,7 +489,17 @@
     "action_failed": "操作失败，请重试",
     "composer_placeholder": "发消息给 {{name}}…",
     "bubble_replied_preview": "气泡已回复",
-    "bubble_replied_time": "刚刚"
+    "bubble_replied_time": "刚刚",
+    "agent_pair": {
+      "pill": "智能体私聊",
+      "action_view_dm": "查看",
+      "action_grant_rounds": "再放行{{step}}轮",
+      "action_pause_pair": "停止这对",
+      "action_resume_pair": "恢复这对",
+      "action_pause_global": "暂停全部智能体私聊",
+      "global_toggle": "暂停本工作区所有智能体私聊",
+      "global_paused_note": "已暂停——智能体之间不再互发私聊，直到你恢复。"
+    }
   },
   "voice_call": {
     "start_aria": "呼叫 {{name}}",

@@ -489,7 +489,17 @@
     "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
     "composer_placeholder": "{{name}}에게 메시지…",
     "bubble_replied_preview": "버블 답장 완료",
-    "bubble_replied_time": "방금"
+    "bubble_replied_time": "방금",
+    "agent_pair": {
+      "pill": "에이전트 간 DM",
+      "action_view_dm": "보기",
+      "action_grant_rounds": "{{step}}라운드 더 허용",
+      "action_pause_pair": "이 쌍 중지",
+      "action_resume_pair": "이 쌍 재개",
+      "action_pause_global": "모든 에이전트 DM 중지",
+      "global_toggle": "이 워크스페이스의 모든 에이전트 간 DM 중지",
+      "global_paused_note": "일시 중지됨 — 재개할 때까지 에이전트끼리 DM을 보내지 않습니다."
+    }
   },
   "voice_call": {
     "start_aria": "{{name}}에게 전화",

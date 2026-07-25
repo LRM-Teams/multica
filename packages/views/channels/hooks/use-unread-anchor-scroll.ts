@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import type { NewMessagesDivider } from "./use-new-messages-divider";
+import { useActiveScrollGesture } from "./use-active-scroll-gesture";
 
 // react-virtuoso #883: on a cold load `scrollToIndex` can run before the list's
 // item heights are measured, so it lands at the wrong offset (the unread divider
@@ -181,41 +182,10 @@ export function useUnreadAnchorScroll({
   // position forever. Only a genuine outcome (reached or timed out) may set it.
   const scrolledDividerChannelRef = useRef<string | null>(null);
 
-  // #689: whether the user currently has an active touch/wheel gesture on the
-  // scroller, so the settle loop below can yield to it instead of re-issuing
-  // scrollToIndex on top of native scroll every frame — the jank only shows
-  // up scrolling *during* cold load (real device only; headless scrollTop
-  // injection doesn't trigger real touch state and can't reproduce it, see
-  // #689 audit). A ref, not state: this flips on every touchmove/wheel tick
-  // and must never trigger a re-render.
-  const activeGestureRef = useRef(false);
-  useEffect(() => {
-    if (!scrollContainerEl) return;
-    const setActive = () => {
-      activeGestureRef.current = true;
-    };
-    const setInactive = () => {
-      activeGestureRef.current = false;
-    };
-    // Wheel has no native "end" event — debounce idle to infer release.
-    let wheelIdleTimer: ReturnType<typeof setTimeout> | null = null;
-    const onWheel = () => {
-      activeGestureRef.current = true;
-      if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
-      wheelIdleTimer = setTimeout(setInactive, 150);
-    };
-    scrollContainerEl.addEventListener("touchstart", setActive, { passive: true });
-    scrollContainerEl.addEventListener("touchend", setInactive, { passive: true });
-    scrollContainerEl.addEventListener("touchcancel", setInactive, { passive: true });
-    scrollContainerEl.addEventListener("wheel", onWheel, { passive: true });
-    return () => {
-      if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
-      scrollContainerEl.removeEventListener("touchstart", setActive);
-      scrollContainerEl.removeEventListener("touchend", setInactive);
-      scrollContainerEl.removeEventListener("touchcancel", setInactive);
-      scrollContainerEl.removeEventListener("wheel", onWheel);
-    };
-  }, [scrollContainerEl]);
+  // #689: yield the settle loop to an active user touch/wheel gesture instead of
+  // re-issuing scrollToIndex on top of native scroll every frame. Shared gate so
+  // the unread-anchor and default-bottom settles use one implementation.
+  const activeGestureRef = useActiveScrollGesture(scrollContainerEl);
 
   useEffect(() => {
     if (!scrollContainerEl || !handleAttached || highlightMessageId || unreadAnchorIndex < 0) return;
@@ -291,6 +261,7 @@ export function useUnreadAnchorScroll({
     anchorId,
     messageRefMap,
     messages,
+    activeGestureRef,
   ]);
 
   return { unreadAnchorIndex, isAnchorSettling };

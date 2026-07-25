@@ -351,6 +351,7 @@ function MessageViewport({
     handleAttached,
     virtuosoRef,
     scrollContainerEl,
+    messageRefMap,
   });
 
   // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325

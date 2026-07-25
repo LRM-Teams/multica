@@ -2,9 +2,10 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import { scrollToIndexUntilSettled } from "./use-unread-anchor-scroll";
+import { useActiveScrollGesture } from "./use-active-scroll-gesture";
 
-// "At the bottom" tolerance: the last row is considered landed once the
-// scroller's remaining distance to the bottom is within this band. Absorbs
+// "At the bottom" tolerance: the scroller is considered landed once its
+// remaining distance to the bottom is within this band. Absorbs
 // sub-pixel/measurement drift and the last row's own height jitter so we don't
 // re-scroll forever chasing an exact 0. Matches the intent of the anchor path's
 // ANCHOR_TOP_BAND_PX, just measured against the bottom edge.
@@ -33,7 +34,8 @@ const BOTTOM_BAND_PX = 24;
  * runs once per channel visit. It does not fight `followOutput` — both target
  * the bottom, so re-issuing `scrollToIndex(last)` while followOutput is also
  * pinning the bottom is idempotent, not a tug-of-war (unlike the anchor settle,
- * which must gate followOutput off because it targets a NON-bottom row).
+ * which must gate followOutput off because it targets a NON-bottom row). It DOES
+ * yield to a live user gesture (#689), same as the anchor settle.
  */
 export function useBottomSettleScroll({
   channelId,
@@ -42,6 +44,7 @@ export function useBottomSettleScroll({
   handleAttached,
   virtuosoRef,
   scrollContainerEl,
+  messageRefMap,
 }: {
   channelId: string | undefined;
   messages: readonly ChannelMessage[];
@@ -60,6 +63,10 @@ export function useBottomSettleScroll({
   /** Virtuoso's `customScrollParent`, or null before it exists. Doubles as the
    * "scroller ready" gate and is measured to tell when the bottom is reached. */
   scrollContainerEl: HTMLElement | null;
+  /** Rendered message-row DOM nodes keyed by message id. Used to confirm the
+   * LAST row has actually rendered before trusting the scroll metrics — see
+   * `hasReached` below. */
+  messageRefMap: ReadonlyMap<string, HTMLElement>;
 }): void {
   // Marks a channel visit's bottom scroll as resolved (reached the bottom band
   // or exhausted the settle timeout). NOT set at the top of the effect: an
@@ -67,15 +74,26 @@ export function useBottomSettleScroll({
   // not permanently block retries before the async settle finishes (#348 scar).
   const settledChannelRef = useRef<string | null>(null);
 
+  // #689: yield to an active user touch/wheel gesture instead of fighting it.
+  const activeGestureRef = useActiveScrollGesture(scrollContainerEl);
+
   useEffect(() => {
     if (!scrollContainerEl || !handleAttached || !enabled || messages.length === 0) return;
     if (settledChannelRef.current === channelId) return;
 
-    // Arrived = the scroller is within the bottom band. getBoundingClientRect /
-    // scroll metrics reflect the real post-scroll layout, so — unlike a
-    // scrollTop-stability check — this can't be fooled by scrollToIndex's async
-    // lag (which reads scrollTop=0 for the first frames on cold load).
+    const lastId = messages[messages.length - 1]?.id ?? null;
+
+    // Arrived = the LAST row has actually rendered AND the scroller is within the
+    // bottom band. The rendered-row gate is load-bearing: on a cold mount
+    // Virtuoso hasn't measured its lazily-rendered rows yet, so the scroller can
+    // report scrollHeight === clientHeight (distanceToBottom = 0) while the real
+    // content is far taller and the last row isn't in the DOM. Trusting the
+    // metric alone would false-settle on the very first frame — before any
+    // scroll took effect — and never retry, exactly the measurement race (#883)
+    // this settle exists to close. Requiring the last row in `messageRefMap`
+    // means rows are rendered/measured, so the metric is meaningful.
     const hasReached = () => {
+      if (!lastId || !messageRefMap.has(lastId)) return false;
       const distanceToBottom =
         scrollContainerEl.scrollHeight -
         scrollContainerEl.scrollTop -
@@ -94,6 +112,7 @@ export function useBottomSettleScroll({
       // "end" pins the last row's bottom to the viewport bottom = at bottom.
       { index: lastIndex, align: "end", behavior: "auto" },
       {
+        isGestureActive: () => activeGestureRef.current,
         onSettleTimeout: () => {
           // Give up cleanly instead of looping forever (e.g. rows never render).
           // Mark resolved and log for prod diagnosability; the declarative
@@ -110,5 +129,14 @@ export function useBottomSettleScroll({
     return () => {
       disposeSettle();
     };
-  }, [scrollContainerEl, handleAttached, enabled, channelId, virtuosoRef, messages]);
+  }, [
+    scrollContainerEl,
+    handleAttached,
+    enabled,
+    channelId,
+    virtuosoRef,
+    messages,
+    messageRefMap,
+    activeGestureRef,
+  ]);
 }

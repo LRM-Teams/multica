@@ -38,11 +38,12 @@ type preMigrationHook func(ctx context.Context, pool *pgxpool.Pool) error
 // monthly-slice backfill for the historical pre-103 schema. Current
 // `agent_usage` recovery backfills use cmd/backfill_agent_usage_hourly.
 var preMigrationHooks = map[string]preMigrationHook{
-	"103_drop_legacy_daily_rollups":      runHistoricalUsageHourlyHook,
-	"188_agent_ascii_handle_backfill":    runAgentASCIIHandleBackfillHook,
-	"190_agent_handle_truncation_repair": runAgentASCIIHandleBackfillHook,
-	"191_agent_default_handle_repair":    runAgentDefaultHandleRepairHook,
-	"227_agent_delete_fk_indexes":        runAgentDeleteFKIndexesHook,
+	"103_drop_legacy_daily_rollups":       runHistoricalUsageHourlyHook,
+	"188_agent_ascii_handle_backfill":     runAgentASCIIHandleBackfillHook,
+	"190_agent_handle_truncation_repair":  runAgentASCIIHandleBackfillHook,
+	"191_agent_default_handle_repair":     runAgentDefaultHandleRepairHook,
+	"227_agent_delete_fk_indexes":         runAgentDeleteFKIndexesHook,
+	"229_agent_delete_cascade_fk_indexes": runAgentDeleteCascadeFKIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -85,11 +86,51 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_workspace_radar_state_supervisor_agent", `CREATE INDEX CONCURRENTLY idx_workspace_radar_state_supervisor_agent ON workspace_radar_state (workspace_id, supervisor_agent_id) WHERE supervisor_agent_id IS NOT NULL`},
 	}
 
+	return ensureConcurrentIndexes(ctx, pool, indexes)
+}
+
+func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
+	// Deleting an archived agent cascades through inbox/session/history rows.
+	// Every FK that points at any table in that recursive delete closure needs
+	// a supporting index: PostgreSQL enforces CASCADE/SET NULL with a child
+	// lookup per deleted parent row. Missing even one turns a bounded teardown
+	// into repeated full-table scans (notably agent_inbox_event.parent_task_id).
+	indexes := []concurrentIndexSpec{
+		{"idx_agent_inbox_event_agent_session", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_agent_session ON agent_inbox_event (agent_session_id) WHERE agent_session_id IS NOT NULL`},
+		{"idx_agent_inbox_event_chat_session", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_chat_session ON agent_inbox_event (chat_session_id) WHERE chat_session_id IS NOT NULL`},
+		{"idx_agent_inbox_event_parent_task", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_parent_task ON agent_inbox_event (parent_task_id) WHERE parent_task_id IS NOT NULL`},
+		{"idx_agent_inbox_event_source_chat_message", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_source_chat_message ON agent_inbox_event (source_chat_message_id) WHERE source_chat_message_id IS NOT NULL`},
+		{"idx_agent_inbox_event_terminal_delivery", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_terminal_delivery ON agent_inbox_event (terminal_delivery_id) WHERE terminal_delivery_id IS NOT NULL`},
+		{"idx_agent_inbox_token_delivery", `CREATE INDEX CONCURRENTLY idx_agent_inbox_token_delivery ON agent_inbox_token (delivery_id) WHERE delivery_id IS NOT NULL`},
+		{"idx_agent_memory_curation_candidate_run", `CREATE INDEX CONCURRENTLY idx_agent_memory_curation_candidate_run ON agent_memory_curation_candidate (run_id) WHERE run_id IS NOT NULL`},
+		{"idx_agent_memory_write_event_task", `CREATE INDEX CONCURRENTLY idx_agent_memory_write_event_task ON agent_memory_write_event (task_id) WHERE task_id IS NOT NULL`},
+		{"idx_agent_reminder_fired_task", `CREATE INDEX CONCURRENTLY idx_agent_reminder_fired_task ON agent_reminder (fired_task_id) WHERE fired_task_id IS NOT NULL`},
+		{"idx_agent_reminder_occurrence_fired_task", `CREATE INDEX CONCURRENTLY idx_agent_reminder_occurrence_fired_task ON agent_reminder_occurrence (fired_task_id) WHERE fired_task_id IS NOT NULL`},
+		{"idx_agent_session_last_acked_event", `CREATE INDEX CONCURRENTLY idx_agent_session_last_acked_event ON agent_session (last_acked_event_id) WHERE last_acked_event_id IS NOT NULL`},
+		{"idx_agent_transport_draft_inbox_event", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_inbox_event ON agent_transport_draft (inbox_event_id) WHERE inbox_event_id IS NOT NULL`},
+		{"idx_agent_transport_draft_task", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_task ON agent_transport_draft (task_id) WHERE task_id IS NOT NULL`},
+		{"idx_autopilot_run_task", `CREATE INDEX CONCURRENTLY idx_autopilot_run_task ON autopilot_run (task_id) WHERE task_id IS NOT NULL`},
+		{"idx_channel_ambient_pending_wake_chat_session", `CREATE INDEX CONCURRENTLY idx_channel_ambient_pending_wake_chat_session ON channel_ambient_pending_wake (chat_session_id) WHERE chat_session_id IS NOT NULL`},
+		{"idx_channel_decision_audit_inbox_event", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_inbox_event ON channel_decision_audit (inbox_event_id) WHERE inbox_event_id IS NOT NULL`},
+		{"idx_channel_message_attachment_workspace_attachment", `CREATE INDEX CONCURRENTLY idx_channel_message_attachment_workspace_attachment ON channel_message_attachment (workspace_id, attachment_id) WHERE attachment_id IS NOT NULL`},
+		{"idx_channel_voice_transcription_attachment", `CREATE INDEX CONCURRENTLY idx_channel_voice_transcription_attachment ON channel_voice_transcription (attachment_id) WHERE attachment_id IS NOT NULL`},
+		{"idx_env_dispatch_run_root_task", `CREATE INDEX CONCURRENTLY idx_env_dispatch_run_root_task ON env_dispatch_run (root_task_id) WHERE root_task_id IS NOT NULL`},
+		{"idx_evolution_unit_feedback_event_task", `CREATE INDEX CONCURRENTLY idx_evolution_unit_feedback_event_task ON evolution_unit_feedback_event (task_id) WHERE task_id IS NOT NULL`},
+		{"idx_lark_user_binding_installation_workspace", `CREATE INDEX CONCURRENTLY idx_lark_user_binding_installation_workspace ON lark_user_binding (installation_id, workspace_id)`},
+		{"idx_memory_curation_watermark_last_run", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_last_run ON memory_curation_watermark (last_run_id) WHERE last_run_id IS NOT NULL`},
+		{"idx_work_node_linked_task", `CREATE INDEX CONCURRENTLY idx_work_node_linked_task ON work_node (linked_task_id) WHERE linked_task_id IS NOT NULL`},
+		{"idx_workspace_radar_directive_artifact_action", `CREATE INDEX CONCURRENTLY idx_workspace_radar_directive_artifact_action ON workspace_radar_directive_artifact (radar_action_id) WHERE radar_action_id IS NOT NULL`},
+	}
+
+	return ensureConcurrentIndexes(ctx, pool, indexes)
+}
+
+func ensureConcurrentIndexes(ctx context.Context, pool *pgxpool.Pool, indexes []concurrentIndexSpec) error {
 	for _, index := range indexes {
 		var valid bool
 		if err := pool.QueryRow(ctx, `
 			SELECT COALESCE((
-				SELECT i.indisvalid
+				SELECT i.indisvalid AND i.indisready
 				FROM pg_class c
 				JOIN pg_index i ON i.indexrelid = c.oid
 				WHERE c.relnamespace = 'public'::regnamespace

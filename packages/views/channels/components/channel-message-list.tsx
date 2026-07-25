@@ -31,7 +31,7 @@ import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { useBottomSettleScroll } from "../hooks/use-bottom-settle-scroll";
 // DIAGNOSTIC ONLY (around-seq false-complete trace) — remove with the successor.
-import { bssRecord } from "../hooks/bss-diagnostic";
+import { bssRecord, bssTraceEnabled } from "../hooks/bss-diagnostic";
 import { buildMessageGroupCompactMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
@@ -178,6 +178,13 @@ type MessageViewportProps = {
   searchQuery?: string;
   /** Initial page is loading and no cached messages are available. */
   loading?: boolean;
+  /**
+   * DIAGNOSTIC ONLY (around-seq false-complete trace) — the loaded latest window
+   * already contains the real tail (`!has_more_after`; always true for the
+   * default/before-cursor page). Recorded, never gated on. Remove with the
+   * successor fix.
+   */
+  diagSourceTailComplete?: boolean;
   /** Older history page is loading above the current viewport. */
   loadingOlder?: boolean;
   /** Whether older history can be requested from the top affordance. */
@@ -214,6 +221,7 @@ function MessageViewport({
   searchHitIds,
   searchQuery,
   loading,
+  diagSourceTailComplete,
   loadingOlder,
   hasOlder,
   onLoadOlder,
@@ -353,6 +361,9 @@ function MessageViewport({
     handleAttached,
     scrollContainerEl,
     messageRefMap,
+    // DIAGNOSTIC ONLY — source contract for the false-complete trace.
+    diagSourceTailComplete,
+    diagMessagesLoading: loading,
   });
 
   // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325
@@ -623,9 +634,13 @@ function MessageViewport({
           // DIAGNOSTIC ONLY (around-seq false-complete trace) — remove with the
           // successor. Records Virtuoso's measured total-height chronology so the
           // trace can align "when did Virtuoso measure the real height" against
-          // the settle's completion frame. No-op unless window.__bssTraceEnabled.
-          totalListHeightChanged={(height) =>
-            bssRecord("tlh", { height: Math.round(height) })
+          // the settle's completion frame. The callback is installed ONLY when
+          // opted in; on the default path the prop is `undefined`, so Virtuoso
+          // never invokes it and no per-measurement work happens (zero cost).
+          totalListHeightChanged={
+            bssTraceEnabled()
+              ? (height) => bssRecord("tlh", { height: Math.round(height) })
+              : undefined
           }
           // 2026-07-24: was 120px — generous enough that scrolling up even a
           // little to reread the last couple messages still read as "at

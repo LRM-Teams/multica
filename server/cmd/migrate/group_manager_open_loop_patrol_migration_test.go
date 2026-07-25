@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/rand/v2"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,14 +216,121 @@ func TestGroupManagerOpenLoopPatrolMigrationRemovesIssueMachineAndRearmsDormant(
 		  (
 		    SELECT count(*)
 		    FROM pg_indexes
-		    WHERE indexname = 'idx_channel_message_agent_outbound_recent'
+		    WHERE indexname IN (
+		      'idx_channel_message_agent_outbound_recent',
+		      'idx_agent_reminder_group_manager_dormant_patrol'
+		    )
 		  )
 	`).Scan(&triggerCount, &functionCount, &markerCount, &indexCount); err != nil {
 		t.Fatal(err)
 	}
-	if triggerCount != 0 || functionCount != 0 || markerCount != 2 || indexCount != 1 {
-		t.Fatalf("cutover catalog triggers=%d functions=%d markers=%d indexes=%d, want 0/0/2/1",
+	if triggerCount != 0 || functionCount != 0 || markerCount != 2 || indexCount != 2 {
+		t.Fatalf("cutover catalog triggers=%d functions=%d markers=%d indexes=%d, want 0/0/2/2",
 			triggerCount, functionCount, markerCount, indexCount)
+	}
+	var dormantIndexDefinition, dormantIndexPredicate string
+	if err := pool.QueryRow(ctx, `
+		SELECT pg_get_indexdef(index.indexrelid), pg_get_expr(index.indpred, index.indrelid)
+		FROM pg_index index
+		JOIN pg_class class ON class.oid = index.indexrelid
+		WHERE class.relname = 'idx_agent_reminder_group_manager_dormant_patrol'
+	`).Scan(&dormantIndexDefinition, &dormantIndexPredicate); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"workspace_id", "anchor_channel_id", "id"} {
+		if !strings.Contains(dormantIndexDefinition, want) {
+			t.Fatalf("dormant patrol index definition missing %q: %s", want, dormantIndexDefinition)
+		}
+	}
+	for _, want := range []string{"group_manager_auto", "patrol", "fired"} {
+		if !strings.Contains(dormantIndexPredicate, want) {
+			t.Fatalf("dormant patrol index predicate missing %q: %s", want, dormantIndexPredicate)
+		}
+	}
+	perfTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer perfTx.Rollback(ctx)
+	if _, err := perfTx.Exec(ctx, `
+		INSERT INTO agent_reminder (
+		  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
+		  fire_at, status, origin_kind, managed_kind, origin_key
+		)
+		SELECT
+		  '78000000-0000-4000-8000-000000000002',
+		  '78000000-0000-4000-8000-000000000004',
+		  '78000000-0000-4000-8000-000000000001',
+		  'cancelled decoy ' || series,
+		  '78000000-0000-4000-8000-000000000008',
+		  now() - interval '1 day',
+		  'cancelled',
+		  'group_manager_auto',
+		  'patrol',
+		  'patrol:cancelled-decoy:' || series
+		FROM generate_series(1, 2000) series;
+
+		INSERT INTO agent_reminder (
+		  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
+		  fire_at, status, origin_kind, managed_kind, origin_key
+		) VALUES (
+		  '78000000-0000-4000-8000-000000000002',
+		  '78000000-0000-4000-8000-000000000004',
+		  '78000000-0000-4000-8000-000000000001',
+		  'dormant explain target',
+		  '78000000-0000-4000-8000-000000000008',
+		  now() - interval '1 hour',
+		  'fired',
+		  'group_manager_auto',
+		  'patrol',
+		  'patrol:explain-target'
+		);
+		ANALYZE agent_reminder;
+	`); err != nil {
+		t.Fatalf("seed dormant patrol explain volume: %v", err)
+	}
+	planRows, err := perfTx.Query(ctx, `
+		EXPLAIN (COSTS OFF)
+		SELECT reminder.id
+		FROM agent_reminder reminder
+		JOIN channel ch
+		  ON ch.id = reminder.anchor_channel_id
+		 AND ch.workspace_id = reminder.workspace_id
+		 AND ch.kind = 'group'
+		 AND ch.archived_at IS NULL
+		 AND ch.group_manager_agent_id = reminder.agent_id
+		WHERE reminder.workspace_id = '78000000-0000-4000-8000-000000000002'
+		  AND reminder.anchor_channel_id = '78000000-0000-4000-8000-000000000008'
+		  AND reminder.origin_kind = 'group_manager_auto'
+		  AND reminder.managed_kind = 'patrol'
+		  AND reminder.status = 'fired'
+		FOR UPDATE OF reminder
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var planLines []string
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			planRows.Close()
+			t.Fatal(err)
+		}
+		planLines = append(planLines, line)
+	}
+	if err := planRows.Err(); err != nil {
+		planRows.Close()
+		t.Fatal(err)
+	}
+	planRows.Close()
+	plan := strings.Join(planLines, "\n")
+	t.Logf("dormant patrol hot-path plan:\n%s", plan)
+	if !strings.Contains(plan, "idx_agent_reminder_group_manager_dormant_patrol") ||
+		strings.Contains(plan, "Seq Scan on agent_reminder") {
+		t.Fatalf("dormant patrol hot-path plan did not use partial index:\n%s", plan)
+	}
+	if err := perfTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
 	}
 
 	var scheduledAfter, dormantAfter time.Time
@@ -268,7 +376,10 @@ func TestGroupManagerOpenLoopPatrolMigrationRemovesIssueMachineAndRearmsDormant(
 		  (
 		    SELECT count(*)
 		    FROM pg_indexes
-		    WHERE indexname = 'idx_channel_message_agent_outbound_recent'
+		    WHERE indexname IN (
+		      'idx_channel_message_agent_outbound_recent',
+		      'idx_agent_reminder_group_manager_dormant_patrol'
+		    )
 		  )
 	`).Scan(&triggerCount, &indexCount); err != nil {
 		t.Fatal(err)

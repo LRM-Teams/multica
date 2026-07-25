@@ -133,7 +133,7 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 		ThreadID:        &threadID,
 		ClientMessageID: &clientMessageID,
 	}
-	message, err := insertChannelMessageWithPartsExec(
+	inserted, err := insertChannelMessageWithPartsExec(
 		ctx,
 		tx,
 		insertInput.ChannelID,
@@ -163,6 +163,7 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 			err,
 		)
 	}
+	message := inserted.Message
 
 	prompt := scopedHandler.buildChannelMentionPrompt(
 		ctx,
@@ -213,6 +214,7 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 	}
 
 	postCommitContext := context.WithoutCancel(ctx)
+	scopedHandler.publishRearmedManagedPatrol(postCommitContext, inserted.RearmedManagedPatrol)
 	message = bridge.handler.attachSingleChannelMessageDetails(
 		postCommitContext,
 		scope.WorkspaceID,

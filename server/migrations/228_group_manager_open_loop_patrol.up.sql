@@ -37,6 +37,14 @@ CREATE INDEX IF NOT EXISTS idx_channel_message_agent_outbound_recent
   ON channel_message(workspace_id, author_id, created_at DESC, id DESC)
   WHERE author_type = 'agent' AND deleted_at IS NULL;
 
+-- Every canonical group/thread message checks whether its manager patrol is
+-- dormant. Keep that hot-path lookup bounded as reminder history accumulates.
+CREATE INDEX IF NOT EXISTS idx_agent_reminder_group_manager_dormant_patrol
+  ON agent_reminder(workspace_id, anchor_channel_id, id)
+  WHERE origin_kind = 'group_manager_auto'
+    AND managed_kind = 'patrol'
+    AND status = 'fired';
+
 -- Give every existing dormant patrol one bounded open-loop evaluation without
 -- replacing its durable definition. Cancelled patrols are explicit human
 -- choices and remain cancelled.

@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -527,6 +528,9 @@ func TestManagedPatrolDormantMessageRearmDoesNotPostponeScheduledTimer(t *testin
 	`, reminderID); err != nil {
 		t.Fatal(err)
 	}
+	notifier := &recordingReminderNotifier{}
+	fixture.handler.ReminderNotifier = notifier
+	changedEvents := captureReminderChangedEvents(t, fixture.handler, fixture.agentIDs[0])
 
 	first := fixture.insertMessage(t, "user", testUserID, "Please research the provider timeout and report a conclusion.", nil)
 	var status, reason string
@@ -552,6 +556,19 @@ func TestManagedPatrolDormantMessageRearmDoesNotPostponeScheduledTimer(t *testin
 		details["message_id"] != first.ID {
 		t.Fatalf("message rearm status=%s delay=%s reason=%s details=%v", status, delay, reason, details)
 	}
+	if !reflect.DeepEqual(notifier.order, []string{"start", "projection"}) ||
+		len(notifier.starts) != 1 || len(notifier.projections) != 1 {
+		t.Fatalf("message rearm notifier order=%v starts=%d projections=%d, want [start projection]/1/1",
+			notifier.order, len(notifier.starts), len(notifier.projections))
+	}
+	if len(*changedEvents) != 1 {
+		t.Fatalf("message rearm human invalidations=%d, want 1", len(*changedEvents))
+	}
+	projection := notifier.projections[0]
+	if projection.EventType != "upsert" || projection.ReminderID != reminderID ||
+		projection.Version != firstVersion || projection.Terminal || projection.FireAt == "" {
+		t.Fatalf("message rearm projection=%+v, want live non-terminal upsert version %d", projection, firstVersion)
+	}
 
 	fixture.insertMessage(t, "agent", fixture.agentIDs[1], "I am investigating now.", nil)
 	var secondFireAt time.Time
@@ -573,6 +590,183 @@ func TestManagedPatrolDormantMessageRearmDoesNotPostponeScheduledTimer(t *testin
 	if !secondFireAt.Equal(firstFireAt) || secondVersion != firstVersion || rearmEvents != 1 {
 		t.Fatalf("scheduled timer was postponed fire_at=%s/%s version=%d/%d events=%d",
 			firstFireAt, secondFireAt, firstVersion, secondVersion, rearmEvents)
+	}
+	if !reflect.DeepEqual(notifier.order, []string{"start", "projection"}) ||
+		len(notifier.starts) != 1 || len(notifier.projections) != 1 {
+		t.Fatalf("scheduled timer emitted duplicate notifier order=%v starts=%d projections=%d",
+			notifier.order, len(notifier.starts), len(notifier.projections))
+	}
+	if len(*changedEvents) != 1 {
+		t.Fatalf("scheduled timer emitted duplicate human invalidations=%d", len(*changedEvents))
+	}
+}
+
+func TestQuickCreateGroupThreadCommitRearmsDormantManagedPatrolLive(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	root := fixture.insertMessage(t, "user", testUserID, "Create an issue from this thread.", nil)
+	reminderID := seedDueManagedPatrolWithActiveIssue(t, fixture, false)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_reminder
+		SET status = 'fired',
+		    current_occurrence_id = NULL,
+		    terminal_reason = NULL,
+		    fired_task_id = NULL,
+		    version = version + 1
+		WHERE id = $1
+	`, reminderID); err != nil {
+		t.Fatal(err)
+	}
+
+	notifier := &recordingReminderNotifier{}
+	fixture.handler.ReminderNotifier = notifier
+	fixture.handler.TaskService = &service.TaskService{
+		PrepareCanonicalChannelMessageCommit: fixture.handler.prepareCanonicalChannelMessageCommit,
+	}
+
+	ctx := context.Background()
+	tx, err := fixture.handler.TxStarter.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var messageID string
+	var messageSeq int64
+	threadID := "quick-create-patrol-" + uuid.NewString()
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO channel_message (
+		  channel_id, workspace_id, author_type, author_id, author_name,
+		  content, parts, source, client_message_id, thread_root_message_id,
+		  thread_id, trigger_depth
+		) VALUES (
+		  $1, $2, 'agent', $3, 'Quick Create Agent',
+		  'Created issue MUL-1 from this thread.', '[]'::jsonb, 'multica',
+		  $4, $5, $6, 1
+		)
+		RETURNING id::text, seq
+	`, fixture.channel.ID, testWorkspaceID, fixture.agentIDs[1],
+		"quick-create-return:"+uuid.NewString(), root.ID, threadID).Scan(&messageID, &messageSeq); err != nil {
+		t.Fatal(err)
+	}
+	afterCommit, err := fixture.handler.TaskService.PrepareCanonicalChannelMessageCommit(
+		ctx,
+		tx,
+		service.CanonicalChannelMessage{
+			ID:                  parseUUID(messageID),
+			WorkspaceID:         parseUUID(testWorkspaceID),
+			ChannelID:           parseUUID(fixture.channel.ID),
+			ThreadRootMessageID: parseUUID(root.ID),
+			ThreadID:            pgtype.Text{String: threadID, Valid: true},
+			AuthorType:          "agent",
+			Seq:                 messageSeq,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCommit == nil {
+		t.Fatal("quick-create group/thread message did not prepare a patrol after-commit publication")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	afterCommit(ctx)
+
+	var status, reason string
+	var version int64
+	var details map[string]any
+	if err := testPool.QueryRow(ctx, `
+		SELECT reminder.status, reminder.version, lifecycle.reason_code, lifecycle.details
+		FROM agent_reminder reminder
+		JOIN agent_reminder_lifecycle_event lifecycle
+		  ON lifecycle.reminder_id = reminder.id
+		 AND lifecycle.reason_code = 'patrol_open_loop_message_rearm'
+		WHERE reminder.id = $1
+		ORDER BY lifecycle.created_at DESC
+		LIMIT 1
+	`, reminderID).Scan(&status, &version, &reason, &details); err != nil {
+		t.Fatal(err)
+	}
+	if status != "scheduled" || reason != "patrol_open_loop_message_rearm" ||
+		details["message_id"] != messageID {
+		t.Fatalf("quick-create rearm status=%s reason=%s details=%v", status, reason, details)
+	}
+	if !reflect.DeepEqual(notifier.order, []string{"start", "projection"}) ||
+		len(notifier.projections) != 1 ||
+		notifier.projections[0].ReminderID != reminderID ||
+		notifier.projections[0].Version != version ||
+		notifier.projections[0].EventType != "upsert" {
+		t.Fatalf("quick-create live notifier order=%v projections=%+v", notifier.order, notifier.projections)
+	}
+}
+
+func TestManagedPatrolMessageRearmDoesNotPublishOnCommitFailure(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	reminderID := seedDueManagedPatrolWithActiveIssue(t, fixture, false)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_reminder
+		SET status = 'fired',
+		    current_occurrence_id = NULL,
+		    terminal_reason = NULL,
+		    fired_task_id = NULL,
+		    version = version + 1
+		WHERE id = $1
+	`, reminderID); err != nil {
+		t.Fatal(err)
+	}
+	var beforeVersion int64
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT version FROM agent_reminder WHERE id = $1`, reminderID).Scan(&beforeVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	notifier := &recordingReminderNotifier{}
+	h := *fixture.handler
+	h.ReminderNotifier = notifier
+	h.TxStarter = radarExecutorCommitFailingTxStarter{base: fixture.handler.TxStarter}
+	content := "commit failure must not publish a patrol projection " + uuid.NewString()
+	if _, err := h.insertChannelMessageWithParts(
+		context.Background(),
+		parseUUID(fixture.channel.ID),
+		parseUUID(testWorkspaceID),
+		"user",
+		parseUUID(testUserID),
+		"Tester",
+		content,
+		nil,
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	); err == nil || !strings.Contains(err.Error(), "injected radar commit failure") {
+		t.Fatalf("commit-failing message insert error=%v, want injected commit failure", err)
+	}
+	if len(notifier.starts) != 0 || len(notifier.projections) != 0 || len(notifier.order) != 0 {
+		t.Fatalf("commit-failed rearm notified start/projection/order=%d/%d/%v, want none",
+			len(notifier.starts), len(notifier.projections), notifier.order)
+	}
+
+	var status string
+	var afterVersion int64
+	var messageCount, rearmEvents int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT reminder.status, reminder.version,
+		       (SELECT count(*) FROM channel_message WHERE channel_id = $2 AND content = $3),
+		       (
+		         SELECT count(*)
+		         FROM agent_reminder_lifecycle_event lifecycle
+		         WHERE lifecycle.reminder_id = reminder.id
+		           AND lifecycle.reason_code = 'patrol_open_loop_message_rearm'
+		       )
+		FROM agent_reminder reminder
+		WHERE reminder.id = $1
+	`, reminderID, fixture.channel.ID, content).Scan(&status, &afterVersion, &messageCount, &rearmEvents); err != nil {
+		t.Fatal(err)
+	}
+	if status != "fired" || afterVersion != beforeVersion || messageCount != 0 || rearmEvents != 0 {
+		t.Fatalf("commit-failed state=%s version=%d/%d messages=%d rearm_events=%d, want fired/unchanged/0/0",
+			status, afterVersion, beforeVersion, messageCount, rearmEvents)
 	}
 }
 
@@ -1667,13 +1861,14 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	root := fixture.insertMessage(t, "user", testUserID, "root secret anchor", nil)
-	reply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
+	insertedReply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
 		parseUUID(fixture.channel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID),
 		"Tester", "reply secret anchor", nil, "multica", nil, nil,
 		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(root.ID), stringPtr("reminder-deleted-root"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	reply := insertedReply.Message
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, reply.ID, "", "")
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_reminder SET anchor_thread_root_message_id = $2 WHERE id = $1`, reminderID, root.ID); err != nil {
 		t.Fatal(err)
@@ -1867,13 +2062,14 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if response.Realtime.EventType != protocol.EventAgentReminderChanged || response.Realtime.Scope != "agent" || response.Realtime.ID != fixture.agentIDs[0] || response.Realtime.Payload != "agent_id" {
 		t.Fatalf("unexpected reminder realtime contract: %+v", response.Realtime)
 	}
-	reply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
+	insertedReply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
 		parseUUID(fixture.channel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID),
 		"Tester", "thread anchor reply", nil, "multica", nil, nil,
 		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(anchor.ID), stringPtr("reminder-test-thread"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	reply := insertedReply.Message
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE agent_reminder
 		SET anchor_message_id = $2, anchor_thread_root_message_id = $3

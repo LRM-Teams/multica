@@ -1,6 +1,7 @@
 BEGIN;
 
 DROP INDEX IF EXISTS idx_channel_message_agent_outbound_recent;
+DROP INDEX IF EXISTS idx_agent_reminder_group_manager_dormant_patrol;
 
 -- Restore the issue-progress reset machine for an application rollback. The
 -- current wake ledger is agent_inbox_event; agent_task_queue was retired by

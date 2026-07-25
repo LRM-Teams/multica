@@ -1321,7 +1321,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 			return agentTransportMessageResult{}, &agentTransportFreshnessHoldError{decision: decision, transportID: transportID}
 		}
 	}
-	msg, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, pgtype.UUID{}, nil, input.ThreadRootMessageID, input.ThreadID, input.TriggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, pgtype.UUID{}, nil, input.ThreadRootMessageID, input.ThreadID, input.TriggerDepth)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if isUniqueViolation(err) {
@@ -1329,6 +1329,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		}
 		return agentTransportMessageResult{}, err
 	}
+	msg := inserted.Message
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
 		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), source.origin.workspaceID, "agent", source.origin.agentID, attachmentIDs); err != nil {
@@ -1359,6 +1360,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err := tx.Commit(ctx); err != nil {
 		return agentTransportMessageResult{}, err
 	}
+	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 	return agentTransportMessageResult{Message: msg, Created: true, TransportID: transportID, SentDraft: sentDraft}, nil
 }
 

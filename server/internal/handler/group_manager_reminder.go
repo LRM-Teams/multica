@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func rearmDormantManagedPatrolForChannelMessage(
@@ -12,9 +14,8 @@ func rearmDormantManagedPatrolForChannelMessage(
 	exec dbExecutor,
 	workspaceID, channelID pgtype.UUID,
 	message ChannelMessageResponse,
-) error {
-	var updated int
-	err := exec.QueryRow(ctx, `
+) (*agentReminder, error) {
+	rearmed, err := scanAgentReminder(exec.QueryRow(ctx, `
 		WITH locked AS (
 		  SELECT reminder.id, reminder.workspace_id, reminder.agent_id,
 		         reminder.fire_at AS previous_fire_at, reminder.title,
@@ -48,9 +49,7 @@ func rearmDormantManagedPatrolForChannelMessage(
 		      updated_at = now()
 		  FROM locked
 		  WHERE reminder.id = locked.id
-		  RETURNING reminder.id, reminder.workspace_id, reminder.agent_id,
-		            reminder.fire_at, reminder.title, reminder.cadence,
-		            reminder.schedule_timezone, locked.previous_fire_at
+		  RETURNING reminder.*, locked.previous_fire_at
 		),
 		lifecycle AS (
 		  INSERT INTO agent_reminder_lifecycle_event (
@@ -72,16 +71,57 @@ func rearmDormantManagedPatrolForChannelMessage(
 		      'delay_seconds', 900
 		    )
 		  FROM rearmed
-		  RETURNING 1
+		  RETURNING reminder_id
 		)
-		SELECT count(*)::int FROM lifecycle`,
+		SELECT `+reminderSelectColumnsWithAlias("rearmed")+`
+		FROM rearmed
+		JOIN lifecycle ON lifecycle.reminder_id = rearmed.id`,
 		workspaceID,
 		channelID,
 		message.ID,
 		message.Seq,
 		message.Type,
-	).Scan(&updated)
-	return err
+	))
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &rearmed, nil
+}
+
+func (h *Handler) publishRearmedManagedPatrol(ctx context.Context, reminder *agentReminder) {
+	if reminder == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
+	h.projectReminderUpsert(ctx, *reminder)
+}
+
+func (h *Handler) prepareCanonicalChannelMessageCommit(
+	ctx context.Context,
+	exec db.DBTX,
+	message service.CanonicalChannelMessage,
+) (func(context.Context), error) {
+	rearmed, err := rearmDormantManagedPatrolForChannelMessage(
+		ctx,
+		exec,
+		message.WorkspaceID,
+		message.ChannelID,
+		ChannelMessageResponse{
+			ID:   uuidToString(message.ID),
+			Seq:  message.Seq,
+			Type: message.AuthorType,
+		},
+	)
+	if err != nil || rearmed == nil {
+		return nil, err
+	}
+	return func(postCommitCtx context.Context) {
+		h.publishRearmedManagedPatrol(postCommitCtx, rearmed)
+	}, nil
 }
 
 // ensureGroupManagerPatrolIfNeverCreated bootstraps the platform-owned adaptive

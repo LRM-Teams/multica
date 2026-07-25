@@ -84,7 +84,7 @@ export function useBottomSettleScroll({
    * always true for the default/before-cursor page). Behaviour never reads it —
    * it is recorded, not gated on. Remove with the successor.
    */
-  diagSourceTailComplete?: boolean;
+  diagSourceTailComplete?: boolean | null;
   /** DIAGNOSTIC ONLY — initial-page loading (`messagesLoading`), recorded to
    * correlate the settle frame with source readiness. Remove with the successor. */
   diagMessagesLoading?: boolean;

@@ -179,12 +179,13 @@ type MessageViewportProps = {
   /** Initial page is loading and no cached messages are available. */
   loading?: boolean;
   /**
-   * DIAGNOSTIC ONLY (around-seq false-complete trace) — the loaded latest window
-   * already contains the real tail (`!has_more_after`; always true for the
+   * DIAGNOSTIC ONLY (around-seq false-complete trace) — three-state: `null` while
+   * the latest page has not returned; otherwise whether the loaded window already
+   * contains the real tail (`!has_more_after`; always true for the
    * default/before-cursor page). Recorded, never gated on. Remove with the
    * successor fix.
    */
-  diagSourceTailComplete?: boolean;
+  diagSourceTailComplete?: boolean | null;
   /** Older history page is loading above the current viewport. */
   loadingOlder?: boolean;
   /** Whether older history can be requested from the top affordance. */

@@ -3228,12 +3228,18 @@ export function ChannelsPage({
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
                 loading={messagesLoading}
-                // DIAGNOSTIC ONLY (around-seq false-complete trace) — whether the
-                // loaded latest window already contains the real tail. `has_more_after`
-                // is absent for the default/before-cursor page (which IS the tail),
-                // so `!...` is correctly true there; in around mode it flips false
-                // while newer messages exist beyond the window. Remove with the successor.
-                diagSourceTailComplete={!messagePages?.pages?.[0]?.has_more_after}
+                // DIAGNOSTIC ONLY (around-seq false-complete trace) — three-state,
+                // so the trace never conflates "page not returned yet" with "tail
+                // complete" (Barry): null while the latest page has not loaded;
+                // otherwise whether the loaded window already contains the real tail
+                // (`!has_more_after` — absent for the default/before-cursor page, which
+                // IS the tail; flips false in around mode when newer messages exist
+                // beyond the window). Remove with the successor.
+                diagSourceTailComplete={
+                  messagePages?.pages?.[0]
+                    ? !messagePages.pages[0].has_more_after
+                    : null
+                }
                 loadingOlder={isFetchingOlderMessages}
                 hasOlder={!!hasOlderMessages}
                 onLoadOlder={() => fetchOlderMessages()}

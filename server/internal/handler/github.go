@@ -180,6 +180,67 @@ func issuePullRequestRowToResponse(p db.ListPullRequestsByIssueRow) GitHubPullRe
 	}
 }
 
+func issuePullRequestsRowToResponse(p db.ListPullRequestsByIssuesRow) GitHubPullRequestResponse {
+	return GitHubPullRequestResponse{
+		ID:               uuidToString(p.ID),
+		WorkspaceID:      uuidToString(p.WorkspaceID),
+		RepoOwner:        p.RepoOwner,
+		RepoName:         p.RepoName,
+		Number:           p.PrNumber,
+		Title:            p.Title,
+		State:            p.State,
+		HtmlURL:          p.HtmlUrl,
+		Branch:           textToPtr(p.Branch),
+		AuthorLogin:      textToPtr(p.AuthorLogin),
+		AuthorAvatarURL:  textToPtr(p.AuthorAvatarUrl),
+		MergedAt:         timestampToPtr(p.MergedAt),
+		ClosedAt:         timestampToPtr(p.ClosedAt),
+		PRCreatedAt:      timestampToString(p.PrCreatedAt),
+		PRUpdatedAt:      timestampToString(p.PrUpdatedAt),
+		MergeableState:   textToPtr(p.MergeableState),
+		ChecksConclusion: aggregateChecksConclusion(p.ChecksFailed, p.ChecksPassed, p.ChecksPending, p.ChecksTotal),
+		ChecksPassed:     p.ChecksPassed,
+		ChecksFailed:     p.ChecksFailed,
+		ChecksPending:    p.ChecksPending,
+		Additions:        p.Additions,
+		Deletions:        p.Deletions,
+		ChangedFiles:     p.ChangedFiles,
+	}
+}
+
+// attachPullRequestsToIssues bulk-hydrates linked PRs for an opt-in issue list.
+// Requested data is critical (unlike decorative labels), so query failure is
+// returned rather than silently presenting an authoritative empty list.
+func (h *Handler) attachPullRequestsToIssues(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	issueIDs []pgtype.UUID,
+	issues []IssueResponse,
+) error {
+	byIssue := make(map[string][]GitHubPullRequestResponse, len(issueIDs))
+	if len(issueIDs) > 0 {
+		rows, err := h.Queries.ListPullRequestsByIssues(ctx, db.ListPullRequestsByIssuesParams{
+			IssueIds:    issueIDs,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			key := uuidToString(row.IssueID)
+			byIssue[key] = append(byIssue[key], issuePullRequestsRowToResponse(row))
+		}
+	}
+	for i := range issues {
+		prs := byIssue[issues[i].ID]
+		if prs == nil {
+			prs = []GitHubPullRequestResponse{}
+		}
+		issues[i].PullRequests = &prs
+	}
+	return nil
+}
+
 // aggregateChecksConclusion collapses the per-PR check_suite counts into a
 // single status surfaced to the UI:
 //   - any failed-class suite wins ("failed");

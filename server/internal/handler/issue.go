@@ -69,6 +69,10 @@ type IssueResponse struct {
 	// preserves whatever labels are already in cache. nil pointer = "field
 	// absent, do not touch"; non-nil (incl. empty slice) = authoritative list.
 	Labels *[]LabelResponse `json:"labels,omitempty"`
+	// PullRequests is opt-in list data for agent work-queue aggregation.
+	// Pointer + omitempty mirrors Labels: nil means the caller did not request
+	// PR hydration; a non-nil empty slice is an authoritative "no linked PRs".
+	PullRequests *[]GitHubPullRequestResponse `json:"pull_requests,omitempty"`
 }
 
 type IssueSourceRefsResponse struct {
@@ -772,6 +776,12 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	withPullRequests := r.URL.Query().Get("with_prs") == "true"
+	withGates := r.URL.Query().Get("with_gates") == "true"
+	if withGates && !withPullRequests {
+		writeError(w, http.StatusBadRequest, "with_gates requires with_prs")
+		return
+	}
 
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -873,6 +883,12 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 				labels = []LabelResponse{}
 			}
 			resp[i].Labels = &labels
+		}
+		if withPullRequests {
+			if err := h.attachPullRequestsToIssues(ctx, wsUUID, ids, resp); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to list issue pull requests")
+				return
+			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -1085,6 +1101,12 @@ ORDER BY %s`, whereSql, orderBy)
 			labels = []LabelResponse{}
 		}
 		resp[i].Labels = &labels
+	}
+	if withPullRequests {
+		if err := h.attachPullRequestsToIssues(ctx, wsUUID, ids, resp); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list issue pull requests")
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

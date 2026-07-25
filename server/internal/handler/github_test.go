@@ -1464,6 +1464,83 @@ func TestWebhook_CheckSuite_AggregatesAcrossApps(t *testing.T) {
 	}
 }
 
+func TestListIssues_WithPRsBulkHydratesCurrentHeadGate(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	ctx := context.Background()
+	const secret = "ci-issue-list-bulk-secret"
+	created, installationID := setupPRTestIssue(t, ctx, secret)
+
+	head := "bulk123456789"
+	firePullRequestWebhookWithHead(t, secret, created.Identifier, installationID, "ci-repo-bulk", 71, "opened", head, "")
+	fireCheckSuiteWebhook(t, secret, installationID, "ci-repo-bulk", []int32{71}, 7101, 17101, head, "success", "2026-05-01T00:00:00Z")
+
+	rec := httptest.NewRecorder()
+	req := newRequest("GET", "/api/issues?workspace_id="+testWorkspaceID+"&with_prs=true&with_gates=true", nil)
+	testHandler.ListIssues(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListIssues: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Issues []IssueResponse `json:"issues"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode ListIssues response: %v", err)
+	}
+	var got *IssueResponse
+	for i := range payload.Issues {
+		if payload.Issues[i].ID == created.ID {
+			got = &payload.Issues[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("created issue %s missing from list", created.ID)
+	}
+	if got.PullRequests == nil || len(*got.PullRequests) != 1 {
+		t.Fatalf("pull_requests = %#v, want one authoritative row", got.PullRequests)
+	}
+	pr := (*got.PullRequests)[0]
+	if pr.Number != 71 || pr.ChecksConclusion == nil || *pr.ChecksConclusion != "passed" {
+		t.Fatalf("pull request = %#v, want #71 gate passed", pr)
+	}
+
+	rec = httptest.NewRecorder()
+	req = newRequest("GET", "/api/issues?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListIssues(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default ListIssues: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var defaultPayload struct {
+		Issues []map[string]any `json:"issues"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&defaultPayload); err != nil {
+		t.Fatalf("decode default ListIssues response: %v", err)
+	}
+	foundDefault := false
+	for _, issue := range defaultPayload.Issues {
+		if issue["id"] == created.ID {
+			foundDefault = true
+			if _, present := issue["pull_requests"]; present {
+				t.Fatalf("default issue response unexpectedly includes pull_requests: %#v", issue)
+			}
+			break
+		}
+	}
+	if !foundDefault {
+		t.Fatalf("created issue %s missing from default list", created.ID)
+	}
+
+	rec = httptest.NewRecorder()
+	req = newRequest("GET", "/api/issues?workspace_id="+testWorkspaceID+"&with_gates=true", nil)
+	testHandler.ListIssues(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "with_gates requires with_prs") {
+		t.Fatalf("gates without prs = %d %s, want 400 requirement", rec.Code, rec.Body.String())
+	}
+}
+
 // TestWebhook_CheckSuite_OldHeadIgnored asserts that a late-arriving
 // check_suite for a stale head SHA doesn't contaminate the current head's
 // pending view. Without the head_sha filter in the aggregation query, the

@@ -147,6 +147,59 @@ LEFT JOIN checks c ON c.pr_id = pr.id
 WHERE ipr.issue_id = sqlc.arg('issue_id')
 ORDER BY pr.pr_created_at DESC;
 
+-- name: ListPullRequestsByIssues :many
+-- Bulk variant for issue work-queue views. It preserves the exact current-head
+-- check-suite aggregation from ListPullRequestsByIssue while returning the
+-- owning issue_id so callers can fold rows without an N+1 query. The workspace
+-- predicate is defense in depth: callers pass issue ids from a workspace-
+-- scoped issue list, and the query independently refuses cross-workspace PRs.
+WITH issue_prs AS (
+    SELECT ipr.issue_id, pr.id, pr.head_sha
+    FROM github_pull_request pr
+    JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
+    WHERE ipr.issue_id = ANY(sqlc.arg('issue_ids')::uuid[])
+      AND pr.workspace_id = sqlc.arg('workspace_id')::uuid
+),
+per_app_latest AS (
+    SELECT DISTINCT ON (cs.pr_id, cs.app_id)
+        cs.pr_id, cs.app_id, cs.conclusion, cs.status
+    FROM github_pull_request_check_suite cs
+    JOIN issue_prs ip ON ip.id = cs.pr_id
+    WHERE cs.head_sha = ip.head_sha AND ip.head_sha <> ''
+    ORDER BY cs.pr_id, cs.app_id, cs.updated_at DESC
+),
+checks AS (
+    SELECT
+        pr_id,
+        COUNT(*)::bigint AS total,
+        SUM(CASE WHEN status = 'completed' AND conclusion IN
+                ('failure','cancelled','timed_out','action_required','startup_failure','stale')
+            THEN 1 ELSE 0 END)::bigint AS failed,
+        SUM(CASE WHEN status = 'completed' AND conclusion IN
+                ('success','neutral','skipped')
+            THEN 1 ELSE 0 END)::bigint AS passed,
+        SUM(CASE WHEN status <> 'completed' OR conclusion IS NULL
+            THEN 1 ELSE 0 END)::bigint AS pending
+    FROM per_app_latest
+    GROUP BY pr_id
+)
+SELECT
+    ip.issue_id,
+    pr.id, pr.workspace_id, pr.installation_id, pr.repo_owner, pr.repo_name,
+    pr.pr_number, pr.title, pr.state, pr.html_url, pr.branch, pr.author_login,
+    pr.author_avatar_url, pr.merged_at, pr.closed_at, pr.pr_created_at,
+    pr.pr_updated_at, pr.head_sha, pr.mergeable_state,
+    pr.additions, pr.deletions, pr.changed_files,
+    pr.created_at, pr.updated_at,
+    COALESCE(c.total, 0)::bigint   AS checks_total,
+    COALESCE(c.passed, 0)::bigint  AS checks_passed,
+    COALESCE(c.failed, 0)::bigint  AS checks_failed,
+    COALESCE(c.pending, 0)::bigint AS checks_pending
+FROM github_pull_request pr
+JOIN issue_prs ip ON ip.id = pr.id
+LEFT JOIN checks c ON c.pr_id = pr.id
+ORDER BY ip.issue_id, pr.pr_created_at DESC;
+
 -- name: ListIssueIDsForPullRequest :many
 SELECT issue_id FROM issue_pull_request
 WHERE pull_request_id = $1;

@@ -93,6 +93,13 @@ var issueListCmd = &cobra.Command{
 	RunE:  runIssueList,
 }
 
+var issueMineCmd = &cobra.Command{
+	Use:   "mine",
+	Short: "List issues assigned to the running agent",
+	Args:  cobra.NoArgs,
+	RunE:  runIssueMine,
+}
+
 var issueGetCmd = &cobra.Command{
 	Use:   "get <id>",
 	Short: "Get issue details",
@@ -246,6 +253,7 @@ var validIssueStatuses = []string{
 
 func init() {
 	issueCmd.AddCommand(issueListCmd)
+	issueCmd.AddCommand(issueMineCmd)
 	issueCmd.AddCommand(issueGetCmd)
 	issueCmd.AddCommand(issuePullRequestsCmd)
 	issueCmd.AddCommand(issueCreateCmd)
@@ -281,6 +289,18 @@ func init() {
 	issueListCmd.Flags().StringSlice("metadata", nil, "Filter by metadata key=value (repeatable; combined with AND). Value is JSON-parsed: 'true'/'false' → bool, numbers → number, otherwise string. Wrap as '\"42\"' to force a string when the value would otherwise sniff as a number.")
 	issueListCmd.Flags().Int("limit", 50, "Maximum number of issues to return")
 	issueListCmd.Flags().Int("offset", 0, "Number of issues to skip (for pagination)")
+
+	// issue mine
+	issueMineCmd.Flags().String("output", "table", "Output format: table or json")
+	issueMineCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
+	issueMineCmd.Flags().String("status", "", "Filter by status")
+	issueMineCmd.Flags().String("priority", "", "Filter by priority")
+	issueMineCmd.Flags().String("project", "", "Filter by project ID")
+	issueMineCmd.Flags().StringSlice("metadata", nil, "Filter by metadata key=value (repeatable; combined with AND)")
+	issueMineCmd.Flags().Int("limit", 50, "Maximum number of issues to return")
+	issueMineCmd.Flags().Int("offset", 0, "Number of issues to skip (for pagination)")
+	issueMineCmd.Flags().Bool("with-prs", false, "Include linked pull requests for each issue")
+	issueMineCmd.Flags().Bool("with-gates", false, "Include each linked pull request's CI gate (requires --with-prs)")
 
 	// issue get
 	issueGetCmd.Flags().String("output", "json", "Output format: table or json")
@@ -392,6 +412,10 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func runIssueList(cmd *cobra.Command, _ []string) error {
+	return runIssueListWithMine(cmd, false)
+}
+
+func runIssueListWithMine(cmd *cobra.Command, forceMine bool) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
@@ -417,7 +441,7 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	if v, _ := cmd.Flags().GetInt("limit"); v > 0 {
 		params.Set("limit", fmt.Sprintf("%d", v))
 	}
-	aID, hasAssignee, err := resolveIssueListAssigneeFilter(ctx, client, cmd)
+	aID, hasAssignee, err := resolveIssueListAssigneeFilter(ctx, client, cmd, forceMine)
 	if err != nil {
 		return err
 	}
@@ -440,6 +464,17 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 		params.Set("metadata", filter)
+	}
+	withPRs, _ := cmd.Flags().GetBool("with-prs")
+	withGates, _ := cmd.Flags().GetBool("with-gates")
+	if withGates && !withPRs {
+		return fmt.Errorf("--with-gates requires --with-prs")
+	}
+	if withPRs {
+		params.Set("with_prs", "true")
+	}
+	if withGates {
+		params.Set("with_gates", "true")
 	}
 
 	path := "/api/issues"
@@ -471,6 +506,10 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	}
 
 	fullID, _ := cmd.Flags().GetBool("full-id")
+	if withPRs {
+		printIssueMineTable(normalizeIssueList(issuesRaw), withGates, fullID)
+		return nil
+	}
 	headers := []string{"KEY", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "START DATE", "DUE DATE"}
 	if fullID {
 		headers = []string{"KEY", "ID", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "START DATE", "DUE DATE"}
@@ -518,8 +557,88 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func resolveIssueListAssigneeFilter(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) (string, bool, error) {
-	mine, _ := cmd.Flags().GetBool("mine")
+func runIssueMine(cmd *cobra.Command, _ []string) error {
+	return runIssueListWithMine(cmd, true)
+}
+
+func normalizeIssueList(raw []any) []map[string]any {
+	issues := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		if issue, ok := item.(map[string]any); ok {
+			issues = append(issues, issue)
+		}
+	}
+	return issues
+}
+
+func printIssueMineTable(issues []map[string]any, withGates, fullID bool) {
+	headers := []string{"KEY"}
+	if fullID {
+		headers = append(headers, "ID")
+	}
+	headers = append(headers, "TITLE", "STATUS", "PRIORITY", "PR", "PR STATE")
+	if withGates {
+		headers = append(headers, "GATE")
+	}
+	headers = append(headers, "URL")
+
+	rows := make([][]string, 0, len(issues))
+	for _, issue := range issues {
+		prs, _ := issue["pull_requests"].([]any)
+		if len(prs) == 0 {
+			rows = append(rows, issueMineRow(issue, nil, withGates, fullID))
+			continue
+		}
+		for _, raw := range prs {
+			pr, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			rows = append(rows, issueMineRow(issue, pr, withGates, fullID))
+		}
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+}
+
+func issueMineRow(issue, pr map[string]any, withGates, fullID bool) []string {
+	prRef, prState, prURL := "none", "none", ""
+	if pr != nil {
+		prRef = pullRequestRef(pr)
+		prState = strVal(pr, "state")
+		prURL = pullRequestURL(pr)
+	}
+	row := []string{issueDisplayKey(issue)}
+	if fullID {
+		row = append(row, strVal(issue, "id"))
+	}
+	row = append(row, strVal(issue, "title"), strVal(issue, "status"), strVal(issue, "priority"), prRef, prState)
+	if withGates {
+		gate := "none"
+		if pr != nil {
+			gate = pullRequestGate(pr)
+		}
+		row = append(row, gate)
+	}
+	return append(row, prURL)
+}
+
+func pullRequestRef(pr map[string]any) string {
+	number := strVal(pr, "number")
+	repo := strings.Trim(strings.Join([]string{strVal(pr, "repo_owner"), strVal(pr, "repo_name")}, "/"), "/")
+	if repo == "" {
+		if number == "" {
+			return "none"
+		}
+		return "#" + number
+	}
+	return repo + "#" + number
+}
+
+func resolveIssueListAssigneeFilter(ctx context.Context, client *cli.APIClient, cmd *cobra.Command, forceMine bool) (string, bool, error) {
+	mine := forceMine
+	if !mine {
+		mine, _ = cmd.Flags().GetBool("mine")
+	}
 	if mine {
 		assignee, _ := cmd.Flags().GetString("assignee")
 		assigneeID, _ := cmd.Flags().GetString("assignee-id")
@@ -585,17 +704,25 @@ func normalizePullRequestList(raw []any) []map[string]any {
 }
 
 func printIssuePullRequestsTable(prs []map[string]any) {
-	headers := []string{"NUMBER", "STATE", "TITLE", "URL"}
+	headers := []string{"NUMBER", "STATE", "GATE", "TITLE", "URL"}
 	rows := make([][]string, 0, len(prs))
 	for _, pr := range prs {
 		rows = append(rows, []string{
 			strVal(pr, "number"),
 			strVal(pr, "state"),
+			pullRequestGate(pr),
 			strVal(pr, "title"),
 			pullRequestURL(pr),
 		})
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
+}
+
+func pullRequestGate(pr map[string]any) string {
+	if gate := strVal(pr, "checks_conclusion"); gate != "" {
+		return gate
+	}
+	return "none"
 }
 
 func pullRequestURL(pr map[string]any) string {

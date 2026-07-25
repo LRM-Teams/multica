@@ -10,33 +10,50 @@ at the bottom before relying on an exact line.
 
 | Behavior | File:line | Drifted from |
 |---|---|---|
-| CLI command `pull-requests <id>` (alias `prs`) | `server/cmd/multica/cmd_issue.go:105` | `:104` |
-| `runIssuePullRequests` handler | `server/cmd/multica/cmd_issue.go:507` | new citation |
-| Calls `GET /api/issues/<id>/pull-requests` | `server/cmd/multica/cmd_issue.go:522` | `:522` (unchanged) |
-| API route registration | `server/cmd/server/router.go:480` | `:480` (unchanged) |
-| Handler `ListPullRequestsForIssue` → `Queries.ListPullRequestsByIssue` | `server/internal/handler/github.go:466,471` | `:466` (unchanged) |
-| Row → response mapper `issuePullRequestRowToResponse` | `server/internal/handler/github.go:149` | new citation |
+| CLI command `pull-requests <id>` (alias `prs`) | `server/cmd/multica/cmd_issue.go:110` | `:105` |
+| `runIssuePullRequests` handler | `server/cmd/multica/cmd_issue.go:665` | `:507` |
+| Calls `GET /api/issues/<id>/pull-requests` | `server/cmd/multica/cmd_issue.go:680` | `:522` |
+| Default table `GATE` projection | `server/cmd/multica/cmd_issue.go:706,721` | new citation |
+| API route registration | `server/cmd/server/router.go:860` | `:480` |
+| Handler `ListPullRequestsForIssue` → `Queries.ListPullRequestsByIssue` | `server/internal/handler/github.go:590` | `:466` |
+| Row → response mapper `issuePullRequestRowToResponse` | `server/internal/handler/github.go:155` | `:149` |
 
 The CLI resolves the issue ref, GETs the endpoint, and (for `--output json`)
 prints the raw `{"pull_requests": [...]}` body. Only `--output` is accepted; the
-default `table` shows `NUMBER STATE TITLE URL`.
+default `table` shows `NUMBER STATE GATE TITLE URL`; `GATE` is the canonical
+`checks_conclusion`, with null rendered as `none`.
+
+## `multica issue mine --with-prs --with-gates` — aggregate my work
+
+| Behavior | File:line |
+|---|---|
+| Agent-only `issue mine` command | `server/cmd/multica/cmd_issue.go:96,560` |
+| Adds `with_prs` / `with_gates` to the single issue-list request | `server/cmd/multica/cmd_issue.go:474` |
+| Issue+PR table renderer | `server/cmd/multica/cmd_issue.go:574` |
+| Opt-in list handler; default response stays unchanged | `server/internal/handler/issue.go:779` |
+| Bulk fold into issue responses | `server/internal/handler/github.go:214` |
+| Workspace-guarded current-head bulk query | `server/pkg/db/queries/github.sql:150` |
+
+`--with-gates` requires `--with-prs`. The JSON result keeps the normal issue-list
+envelope and nests canonical `pull_requests`; the server issues one bulk PR query
+for the page rather than one query per issue.
 
 ## PR response shape
 
-`GitHubPullRequestResponse` struct: `server/internal/handler/github.go:51`. JSON
+`GitHubPullRequestResponse` struct: `server/internal/handler/github.go:57`. JSON
 fields the agent can read off each element of `pull_requests`:
 
-- `number` (`json:"number"`, line 56)
-- `html_url` (`json:"html_url"`, line 59)
-- `title` (`json:"title"`, line 57)
-- `state` (`json:"state"`, line 58) — the folded lifecycle enum (see below)
-- `merged_at` (`json:"merged_at"`, line 63), `closed_at` (line 64)
-- `mergeable_state` (`json:"mergeable_state"`, line 70) — mirrors GitHub; UI only
+- `number` (`json:"number"`, line 62)
+- `html_url` (`json:"html_url"`, line 65)
+- `title` (`json:"title"`, line 63)
+- `state` (`json:"state"`, line 64) — the folded lifecycle enum (see below)
+- `merged_at` (`json:"merged_at"`, line 69), `closed_at` (line 70)
+- `mergeable_state` (`json:"mergeable_state"`, line 76) — mirrors GitHub; UI only
   surfaces `clean`/`dirty`, other values round-trip as unknown
-- `checks_conclusion` (`json:"checks_conclusion"`, line 74) — aggregated
+- `checks_conclusion` (`json:"checks_conclusion"`, line 80) — aggregated
   `"passed"`/`"failed"`/`"pending"` or `null` (no observed suite)
-- `checks_passed` / `checks_failed` / `checks_pending` (lines 78-80) — per-suite
-  counts; `aggregateChecksConclusion` (line 183) folds them into
+- `checks_passed` / `checks_failed` / `checks_pending` (lines 84-86) — per-suite
+  counts; `aggregateChecksConclusion` (line 250) folds them into
   `checks_conclusion`
 
 There is **no** standalone `draft` or `merged` boolean in the response. The
@@ -151,8 +168,10 @@ Re-derive any line above before depending on it:
 ```bash
 cd server
 grep -n 'pull-requests <id>'                 cmd/multica/cmd_issue.go
+grep -n 'var issueMineCmd\|func runIssueMine\|func printIssueMineTable\|with_prs' cmd/multica/cmd_issue.go internal/handler/issue.go
 grep -n 'ListPullRequestsForIssue'           cmd/server/router.go internal/handler/github.go
-grep -n 'func issuePullRequestRowToResponse\|type GitHubPullRequestResponse struct\|func derivePRState\|func extractIdentifiers\|func extractClosingIdentifiers\|closingIdentifierRe' internal/handler/github.go
+grep -n 'func issuePullRequestRowToResponse\|func attachPullRequestsToIssues\|type GitHubPullRequestResponse struct\|func derivePRState\|func extractIdentifiers\|func extractClosingIdentifiers\|closingIdentifierRe' internal/handler/github.go
+grep -n 'ListPullRequestsByIssues' pkg/db/queries/github.sql
 grep -n 'extractIdentifiers(\|extractClosingIdentifiers(\|derivePRState(' internal/handler/github.go
 grep -n 'prevIssue.Status == "backlog"\|func (h \*Handler) shouldEnqueueAgentTask' internal/handler/issue.go
 grep -n 'func notifyParentOfChildDone'       internal/handler/issue_child_done.go

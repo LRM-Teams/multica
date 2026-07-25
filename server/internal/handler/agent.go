@@ -227,11 +227,18 @@ type ProjectResourceData struct {
 }
 
 type AgentTaskResponse struct {
-	ID          string `json:"id"`
-	AgentID     string `json:"agent_id"`
-	RuntimeID   string `json:"runtime_id"`
-	IssueID     string `json:"issue_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ID          string         `json:"id"`
+	AgentID     string         `json:"agent_id"`
+	ActorID     string         `json:"actor_id,omitempty"`
+	ActorType   string         `json:"actor_type,omitempty"`
+	DisplayName string         `json:"display_name,omitempty"`
+	AvatarURL   *string        `json:"avatar_url,omitempty"`
+	Handle      *string        `json:"handle,omitempty"`
+	ActorStatus string         `json:"actor_status,omitempty"`
+	Actor       *ActorIdentity `json:"actor,omitempty"`
+	RuntimeID   string         `json:"runtime_id"`
+	IssueID     string         `json:"issue_id"`
+	WorkspaceID string         `json:"workspace_id"`
 	// WorkspaceContext is the workspace-level system prompt set in workspace
 	// settings (`workspace.context` DB column). Injected into the agent brief
 	// as `## Workspace Context` so every agent running in this workspace —
@@ -1542,8 +1549,16 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].SortAt.After(items[j].SortAt)
 	})
+	actorType, actorID = h.resolveActor(r, requestUserID(r), workspaceID)
+	memberRole := ""
+	if member, err := h.getWorkspaceMember(r.Context(), actorID, workspaceID); err == nil {
+		memberRole = member.Role
+	}
+	resolver := h.newActorIdentityResolver(r.Context(), workspaceID, actorType, actorID, memberRole)
+
 	resp := make([]AgentTaskResponse, 0, len(items))
 	for _, item := range items {
+		applyActorIdentityToTask(&item.Task, resolver.resolve("agent", item.Task.AgentID))
 		resp = append(resp, item.Task)
 	}
 
@@ -1830,11 +1845,7 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 	}
 
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
-		return
-	}
+	resolver := h.newActorIdentityResolver(r.Context(), workspaceID, actorType, actorID, member.Role)
 
 	inboxTasks, err := h.listWorkspaceActiveAgentInboxTaskResponses(r.Context(), parseUUID(workspaceID), workspaceID)
 	if err != nil {
@@ -1844,15 +1855,12 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 
 	resp := make([]AgentTaskResponse, 0, len(tasks)+len(inboxTasks))
 	for _, t := range tasks {
-		if _, ok := allowed[uuidToString(t.AgentID)]; !ok {
-			continue
-		}
-		resp = append(resp, taskToResponse(t, workspaceID))
+		item := taskToResponse(t, workspaceID)
+		applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
+		resp = append(resp, item)
 	}
 	for _, item := range inboxTasks {
-		if _, ok := allowed[item.Task.AgentID]; !ok {
-			continue
-		}
+		applyActorIdentityToTask(&item.Task, resolver.resolve("agent", item.Task.AgentID))
 		resp = append(resp, item.Task)
 	}
 
@@ -1931,18 +1939,25 @@ func (h *Handler) listWorkspaceActiveAgentInboxTaskResponses(ctx context.Context
 }
 
 // AgentTaskFeedItem is one terminal task in the workspace activity feed,
-// trimmed to the fields the overview timeline renders. The agent name is
-// resolved client-side from the cached agent list.
+// trimmed to the fields the overview timeline renders. Actor identity is a
+// backend snapshot so clients do not invent display fallbacks.
 type AgentTaskFeedItem struct {
-	ID              string  `json:"id"`
-	AgentID         string  `json:"agent_id"`
-	IssueID         string  `json:"issue_id"`
-	IssueIdentifier *string `json:"issue_identifier,omitempty"`
-	IssueTitle      *string `json:"issue_title,omitempty"`
-	ChatTitle       *string `json:"chat_title,omitempty"`
-	Status          string  `json:"status"`
-	CompletedAt     *string `json:"completed_at"`
-	TriggerSummary  *string `json:"trigger_summary,omitempty"`
+	ID              string         `json:"id"`
+	AgentID         string         `json:"agent_id"`
+	ActorID         string         `json:"actor_id,omitempty"`
+	ActorType       string         `json:"actor_type,omitempty"`
+	DisplayName     string         `json:"display_name,omitempty"`
+	AvatarURL       *string        `json:"avatar_url,omitempty"`
+	Handle          *string        `json:"handle,omitempty"`
+	ActorStatus     string         `json:"actor_status,omitempty"`
+	Actor           *ActorIdentity `json:"actor,omitempty"`
+	IssueID         string         `json:"issue_id"`
+	IssueIdentifier *string        `json:"issue_identifier,omitempty"`
+	IssueTitle      *string        `json:"issue_title,omitempty"`
+	ChatTitle       *string        `json:"chat_title,omitempty"`
+	Status          string         `json:"status"`
+	CompletedAt     *string        `json:"completed_at"`
+	TriggerSummary  *string        `json:"trigger_summary,omitempty"`
 }
 
 // AgentTaskFeedCursor is the opaque composite cursor for the feed: the
@@ -2027,6 +2042,13 @@ func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	memberRole := ""
+	if member, err := h.getWorkspaceMember(r.Context(), actorID, workspaceID); err == nil {
+		memberRole = member.Role
+	}
+	resolver := h.newActorIdentityResolver(r.Context(), workspaceID, actorType, actorID, memberRole)
+
 	items := make([]AgentTaskFeedItem, 0, limit+1)
 	cursors := make([]AgentTaskFeedCursor, 0, limit+1)
 	for rows.Next() {
@@ -2042,7 +2064,7 @@ func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&id, &agentID, &issueID, &status, &completedAt, &triggerSummary, &issueTitle, &issueIdentifier, &chatTitle); err != nil {
 			continue
 		}
-		items = append(items, AgentTaskFeedItem{
+		item := AgentTaskFeedItem{
 			ID:              uuidToString(id),
 			AgentID:         uuidToString(agentID),
 			IssueID:         uuidToString(issueID),
@@ -2052,7 +2074,9 @@ func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
 			Status:          status,
 			CompletedAt:     timestampToPtr(completedAt),
 			TriggerSummary:  textToPtr(triggerSummary),
-		})
+		}
+		applyActorIdentityToFeedItem(&item, resolver.resolve("agent", item.AgentID))
+		items = append(items, item)
 		cursors = append(cursors, AgentTaskFeedCursor{
 			CompletedAt: completedAt.Time.Format(time.RFC3339Nano),
 			ID:          uuidToString(id),

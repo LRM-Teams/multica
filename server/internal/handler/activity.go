@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -16,9 +17,14 @@ type TimelineEntry struct {
 	Type string `json:"type"` // "activity" or "comment"
 	ID   string `json:"id"`
 
-	ActorType string `json:"actor_type"`
-	ActorID   string `json:"actor_id"`
-	CreatedAt string `json:"created_at"`
+	ActorType   string         `json:"actor_type"`
+	ActorID     string         `json:"actor_id"`
+	DisplayName string         `json:"display_name,omitempty"`
+	AvatarURL   *string        `json:"avatar_url,omitempty"`
+	Handle      *string        `json:"handle,omitempty"`
+	ActorStatus string         `json:"actor_status,omitempty"`
+	Actor       *ActorIdentity `json:"actor,omitempty"`
+	CreatedAt   string         `json:"created_at"`
 
 	// Activity-only fields
 	Action  *string         `json:"action,omitempty"`
@@ -134,10 +140,18 @@ func (h *Handler) ListTimeline(w http.ResponseWriter, r *http.Request) {
 // (created_at, id). When ascending=true, oldest first (the new flat-array
 // contract); otherwise newest first (the wrapped legacy contract).
 func (h *Handler) mergeTimeline(r *http.Request, comments []db.Comment, activities []db.ActivityLog, ascending bool) []TimelineEntry {
+	workspaceID := h.resolveWorkspaceID(r)
+	memberRole := ""
+	if member, ok := middleware.MemberFromContext(r.Context()); ok {
+		memberRole = member.Role
+	}
+	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	resolver := h.newActorIdentityResolver(r.Context(), workspaceID, actorType, actorID, memberRole)
+
 	out := make([]TimelineEntry, 0, len(comments)+len(activities))
-	out = append(out, h.commentsToEntries(r, comments)...)
+	out = append(out, h.commentsToEntries(r, comments, resolver)...)
 	for _, a := range activities {
-		out = append(out, activityToEntry(a))
+		out = append(out, activityToEntry(a, resolver))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt != out[j].CreatedAt {
@@ -156,7 +170,7 @@ func (h *Handler) mergeTimeline(r *http.Request, comments []db.Comment, activiti
 
 // commentsToEntries fetches reactions + attachments for the given comments in
 // one batch each and returns enriched TimelineEntry slices preserving order.
-func (h *Handler) commentsToEntries(r *http.Request, comments []db.Comment) []TimelineEntry {
+func (h *Handler) commentsToEntries(r *http.Request, comments []db.Comment, resolver actorIdentityResolver) []TimelineEntry {
 	if len(comments) == 0 {
 		return nil
 	}
@@ -173,11 +187,18 @@ func (h *Handler) commentsToEntries(r *http.Request, comments []db.Comment) []Ti
 		commentType := c.Type
 		updatedAt := timestampToString(c.UpdatedAt)
 		cid := uuidToString(c.ID)
+		actorID := uuidToString(c.AuthorID)
+		identity := resolver.resolve(c.AuthorType, actorID)
 		out[i] = TimelineEntry{
 			Type:           "comment",
 			ID:             cid,
 			ActorType:      c.AuthorType,
-			ActorID:        uuidToString(c.AuthorID),
+			ActorID:        actorID,
+			DisplayName:    identity.DisplayName,
+			AvatarURL:      identity.AvatarURL,
+			Handle:         identity.Handle,
+			ActorStatus:    identity.Status,
+			Actor:          &identity,
 			Content:        &content,
 			CommentType:    &commentType,
 			ParentID:       uuidToPtr(c.ParentID),
@@ -193,20 +214,27 @@ func (h *Handler) commentsToEntries(r *http.Request, comments []db.Comment) []Ti
 	return out
 }
 
-func activityToEntry(a db.ActivityLog) TimelineEntry {
+func activityToEntry(a db.ActivityLog, resolver actorIdentityResolver) TimelineEntry {
 	action := a.Action
 	actorType := ""
 	if a.ActorType.Valid {
 		actorType = a.ActorType.String
 	}
+	actorID := uuidToString(a.ActorID)
+	identity := resolver.resolve(actorType, actorID)
 	return TimelineEntry{
-		Type:      "activity",
-		ID:        uuidToString(a.ID),
-		ActorType: actorType,
-		ActorID:   uuidToString(a.ActorID),
-		Action:    &action,
-		Details:   a.Details,
-		CreatedAt: timestampToString(a.CreatedAt),
+		Type:        "activity",
+		ID:          uuidToString(a.ID),
+		ActorType:   actorType,
+		ActorID:     actorID,
+		DisplayName: identity.DisplayName,
+		AvatarURL:   identity.AvatarURL,
+		Handle:      identity.Handle,
+		ActorStatus: identity.Status,
+		Actor:       &identity,
+		Action:      &action,
+		Details:     a.Details,
+		CreatedAt:   timestampToString(a.CreatedAt),
 	}
 }
 

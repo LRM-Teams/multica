@@ -250,6 +250,9 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	if queuedInboxTask.Kind != "chat" || queuedInboxTask.ChatSessionID == "" || queuedInboxTask.TriggerSummary == nil || strings.TrimSpace(*queuedInboxTask.TriggerSummary) == "" {
 		t.Fatalf("queued inbox task = %+v, want chat task with session and trigger summary", queuedInboxTask)
 	}
+	if queuedInboxTask.ActorID != agentD || queuedInboxTask.ActorType != "agent" || queuedInboxTask.DisplayName == "" || queuedInboxTask.ActorStatus != "visible" || queuedInboxTask.Actor == nil || queuedInboxTask.Actor.DisplayName != queuedInboxTask.DisplayName || queuedInboxTask.Handle == nil {
+		t.Fatalf("queued inbox actor identity = %+v, want stable visible agent snapshot", queuedInboxTask)
+	}
 	runningInboxTask, ok := byID[runningInboxEventID]
 	if !ok {
 		t.Fatalf("running inbox event %s missing from snapshot", runningInboxEventID)
@@ -259,6 +262,15 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 
 	// The OLD failed terminal on agent A must be excluded.
+	for _, task := range tasks {
+		if task.AgentID == agentA && task.Status == "queued" {
+			if task.ActorID != agentA || task.ActorType != "agent" || task.DisplayName == "" || task.ActorStatus != "visible" || task.Actor == nil {
+				t.Fatalf("legacy active task actor identity = %+v, want populated actor snapshot", task)
+			}
+			break
+		}
+	}
+
 	if counts[key{agentA, "failed"}] != 0 {
 		t.Errorf("agent A old failed must be superseded by newer completed; got %d", counts[key{agentA, "failed"}])
 	}
@@ -275,6 +287,93 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 				agentID, counts[key{agentID, "cancelled"}])
 		}
 	}
+}
+
+func TestListWorkspaceAgentTaskSnapshotIncludesActorIdentity(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	visibleAgentID := createHandlerTestAgent(t, "snapshot-identity-visible-"+uuid.NewString()[:8], []byte(`{}`))
+	privateAgentID := createHandlerTestAgent(t, "snapshot-identity-private-"+uuid.NewString()[:8], []byte(`{}`))
+	plainMemberID := createWorkspaceMemberUser(t, "Snapshot Plain Member", "snapshot-plain-"+uuid.NewString()+"@multica.test")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET display_name = CASE id
+			WHEN $1 THEN 'Snapshot Visible Agent'
+			WHEN $2 THEN 'Snapshot Private Agent'
+		END,
+		avatar_url = CASE WHEN id = $1 THEN 'https://example.test/snapshot.png' ELSE avatar_url END
+		WHERE id IN ($1, $2)`, visibleAgentID, privateAgentID); err != nil {
+		t.Fatalf("update snapshot agents: %v", err)
+	}
+
+	quickCreateContext := fmt.Sprintf(`{"type":"quick_create","workspace_id":%q,"prompt":"snapshot identity"}`, testWorkspaceID)
+	insertTask := func(agentID, status string, started bool) string {
+		var id string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_inbox_event (
+				workspace_id, agent_id, reason, requires_wake, status, priority,
+				runtime_id, context, started_at
+			)
+			VALUES ($1, $2, 'quick_create', true, $3, 0, $4, $5::jsonb,
+			        CASE WHEN $6 THEN now() ELSE NULL END)
+			RETURNING id`, testWorkspaceID, agentID, status, handlerTestRuntimeID(t), quickCreateContext, started).Scan(&id); err != nil {
+			t.Fatalf("insert snapshot identity task: %v", err)
+		}
+		return id
+	}
+	visibleTaskID := insertTask(visibleAgentID, "pending", false)
+	privateTaskID := insertTask(privateAgentID, "draining", true)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id IN ($1, $2)`, visibleTaskID, privateTaskID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodGet, "/api/agent-task-snapshot", nil)
+	testHandler.ListWorkspaceAgentTaskSnapshot(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner snapshot status=%d body=%s", w.Code, w.Body.String())
+	}
+	var ownerTasks []AgentTaskResponse
+	if err := json.NewDecoder(w.Body).Decode(&ownerTasks); err != nil {
+		t.Fatalf("decode owner tasks: %v", err)
+	}
+	visible, ok := findAgentTaskResponse(ownerTasks, visibleTaskID)
+	if !ok {
+		t.Fatalf("visible task %s missing", visibleTaskID)
+	}
+	if visible.ActorID != visibleAgentID || visible.ActorType != "agent" || visible.DisplayName != "Snapshot Visible Agent" || visible.ActorStatus != "visible" || visible.Actor == nil || visible.Actor.DisplayName != visible.DisplayName || visible.AvatarURL == nil || visible.Handle == nil {
+		t.Fatalf("visible task identity = %+v, want populated actor snapshot", visible)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, http.MethodGet, "/api/agent-task-snapshot", nil)
+	testHandler.ListWorkspaceAgentTaskSnapshot(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("member snapshot status=%d body=%s", w.Code, w.Body.String())
+	}
+	var memberTasks []AgentTaskResponse
+	if err := json.NewDecoder(w.Body).Decode(&memberTasks); err != nil {
+		t.Fatalf("decode member tasks: %v", err)
+	}
+	privateTask, ok := findAgentTaskResponse(memberTasks, privateTaskID)
+	if !ok {
+		t.Fatalf("private task %s missing", privateTaskID)
+	}
+	if privateTask.ActorID != privateAgentID || privateTask.ActorType != "agent" || privateTask.DisplayName != "Hidden agent" || privateTask.ActorStatus != "hidden" || privateTask.Actor == nil || privateTask.Actor.Status != "hidden" {
+		t.Fatalf("private task identity = %+v, want hidden actor snapshot", privateTask)
+	}
+}
+
+func findAgentTaskResponse(tasks []AgentTaskResponse, id string) (AgentTaskResponse, bool) {
+	for _, task := range tasks {
+		if task.ID == id {
+			return task, true
+		}
+	}
+	return AgentTaskResponse{}, false
 }
 
 func TestListAgentTasksUsesSingleInboxHistory(t *testing.T) {

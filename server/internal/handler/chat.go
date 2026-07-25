@@ -200,19 +200,28 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // channelBoundChatSessionIDs returns the set of chat_session ids in a workspace
-// that back a channel agent session. These are NOT 1:1 DMs and must be hidden
-// from the chat/DM panel and from agent-DM session resolution.
+// that back a channel agent session (or look like one). These are NOT 1:1 /
+// bubble DMs and must be hidden from ListChatSessions and the agent bubble
+// history dropdown.
+//
+// Two sources:
+//  1. Live channel_agent_session bindings (canonical).
+//  2. Orphan shells whose title is still "#channelName" after the binding
+//     row was deleted — otherwise they leak into the bubble as fake 1:1
+//     history (e.g. "#multica_jhp研发群").
 func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID string) (map[string]bool, error) {
+	wsUUID := parseUUID(workspaceID)
+	out := map[string]bool{}
+
 	rows, err := h.DB.Query(ctx, `
 		SELECT cas.chat_session_id
 		FROM channel_agent_session cas
 		JOIN channel ch ON ch.id = cas.channel_id
-		WHERE ch.workspace_id = $1`, parseUUID(workspaceID))
+		WHERE ch.workspace_id = $1`, wsUUID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]bool{}
 	for rows.Next() {
 		var id pgtype.UUID
 		if err := rows.Scan(&id); err != nil {
@@ -220,7 +229,29 @@ func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID st
 		}
 		out[uuidToString(id)] = true
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	orphanRows, err := h.DB.Query(ctx, `
+		SELECT cs.id
+		FROM chat_session cs
+		JOIN channel ch
+		  ON ch.workspace_id = cs.workspace_id
+		 AND cs.title = ('#' || ch.name)
+		WHERE cs.workspace_id = $1`, wsUUID)
+	if err != nil {
+		return nil, err
+	}
+	defer orphanRows.Close()
+	for orphanRows.Next() {
+		var id pgtype.UUID
+		if err := orphanRows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[uuidToString(id)] = true
+	}
+	return out, orphanRows.Err()
 }
 
 func (h *Handler) loadChatSessionForUser(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, bool) {

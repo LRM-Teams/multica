@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { cn } from "@multica/ui/lib/utils";
 import { useChatStore } from "@multica/core/chat";
 import { chatSessionsOptions, pendingChatTasksOptions } from "@multica/core/chat/queries";
+import { channelsOptions } from "@multica/core/channels/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { createLogger } from "@multica/core/logger";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
@@ -16,6 +17,7 @@ import {
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n";
+import { excludeChannelShellSessions } from "../lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "./chat-window";
 
 const logger = createLogger("chat.dm-bubble");
@@ -43,10 +45,15 @@ export function DmAgentBubble({
   const openAgentId = useChatStore((s) => s.dmBubbleOpenAgentId);
   const toggleDmBubble = useChatStore((s) => s.toggleDmBubble);
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
+  const { data: channels = [] } = useQuery(channelsOptions(wsId));
   const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
 
   const isOpen = openAgentId === agentId;
-  const agentSessions = sessions.filter((s) => s.agent_id === agentId);
+  const channelNames = channels.map((channel) => channel.name);
+  const agentSessions = excludeChannelShellSessions(
+    sessions.filter((s) => s.agent_id === agentId),
+    channelNames,
+  );
   const unreadSessionCount = agentSessions.filter((s) => s.has_unread).length;
   const isRunning = (pending?.tasks ?? []).some((task) =>
     agentSessions.some((s) => s.id === task.chat_session_id),

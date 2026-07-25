@@ -16,10 +16,32 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+type agentDMPauseFailOnceDBTX struct {
+	db.DBTX
+	failed bool
+}
+
+func (f *agentDMPauseFailOnceDBTX) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	if !f.failed && strings.Contains(query, "INSERT INTO inbox_item") {
+		f.failed = true
+		return agentDMPauseErrorRow{err: errors.New("forced owner inbox write failure")}
+	}
+	return f.DBTX.QueryRow(ctx, query, args...)
+}
+
+type agentDMPauseErrorRow struct {
+	err error
+}
+
+func (r agentDMPauseErrorRow) Scan(...any) error {
+	return r.err
+}
 
 func TestAgentTransportVoiceReplyPartsRequireSameTimeline(t *testing.T) {
 	channelID := uuid.NewString()
@@ -290,18 +312,22 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 			testWorkspaceID)
 	})
 
-	send := func(taskID, agentID, targetHandle string, turn int) *httptest.ResponseRecorder {
+	send := func(taskID, agentID, target string, turn int) *httptest.ResponseRecorder {
 		t.Helper()
 		return agentTransportSendForTest(t, taskID, agentID, map[string]any{
-			"target":            "dm:@" + targetHandle,
+			"target":            target,
 			"content":           fmt.Sprintf("A2A turn %d", turn),
 			"client_message_id": fmt.Sprintf("a2a-%d-%s", turn, uuid.NewString()),
 		})
 	}
 
-	first := send(firstTaskID, firstAgentID, secondHandle, 1)
+	first := send(firstTaskID, firstAgentID, "dm:@"+secondHandle, 1)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("turn 1 send: status=%d body=%s", first.Code, first.Body.String())
+	}
+	var firstBody AgentTransportSendResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatalf("decode turn 1 send: %v", err)
 	}
 
 	var channelID, exchangeID string
@@ -318,7 +344,8 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 	}
 
 	currentRecipient := secondAgentID
-	currentTargetHandle := firstHandle
+	currentTarget := "dm:@" + firstHandle + ":" + firstBody.Message.ID
+	lastEventID := ""
 	for turn := 1; turn <= 5; turn++ {
 		var eventID, responseMode string
 		var requiresWake bool
@@ -346,16 +373,30 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 			WHERE id = $1`, eventID); err != nil {
 			t.Fatalf("activate turn %d inbox event: %v", turn, err)
 		}
-		reply := send(eventID, currentRecipient, currentTargetHandle, turn+1)
+		lastEventID = eventID
+		reply := send(eventID, currentRecipient, currentTarget, turn+1)
 		if reply.Code != http.StatusCreated {
 			t.Fatalf("turn %d send: status=%d body=%s", turn+1, reply.Code, reply.Body.String())
 		}
+		if turn == 1 {
+			var threadReply AgentTransportSendResponse
+			if err := json.Unmarshal(reply.Body.Bytes(), &threadReply); err != nil {
+				t.Fatalf("decode active A2A thread send: %v", err)
+			}
+			if threadReply.Message.ThreadRootMessageID == nil ||
+				*threadReply.Message.ThreadRootMessageID != firstBody.Message.ID {
+				t.Fatalf(
+					"active A2A thread root=%v, want %s",
+					threadReply.Message.ThreadRootMessageID, firstBody.Message.ID,
+				)
+			}
+		}
 		if currentRecipient == secondAgentID {
 			currentRecipient = firstAgentID
-			currentTargetHandle = secondHandle
+			currentTarget = "dm:@" + secondHandle
 		} else {
 			currentRecipient = secondAgentID
-			currentTargetHandle = firstHandle
+			currentTarget = "dm:@" + firstHandle
 		}
 	}
 
@@ -405,6 +446,30 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 			agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount,
 		)
 	}
+	pausedThread := send(
+		lastEventID,
+		secondAgentID,
+		"dm:@"+firstHandle+":"+firstBody.Message.ID,
+		7,
+	)
+	if pausedThread.Code == http.StatusCreated {
+		t.Fatalf("paused A2A thread send unexpectedly created: body=%s", pausedThread.Body.String())
+	}
+	var agentMessageCountAfterPausedThread int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'`,
+		channelID,
+	).Scan(&agentMessageCountAfterPausedThread); err != nil {
+		t.Fatalf("count A2A messages after paused thread send: %v", err)
+	}
+	if agentMessageCountAfterPausedThread != 6 {
+		t.Fatalf(
+			"paused A2A thread send persisted visible row: messages=%d, want 6",
+			agentMessageCountAfterPausedThread,
+		)
+	}
 	var systemPartsRaw, inboxDetailsRaw []byte
 	if err := testPool.QueryRow(ctx, `
 		SELECT parts
@@ -450,6 +515,102 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 		inboxDetails.RoundLimit != 3 {
 		t.Fatalf("owner A2A inbox details=%+v", inboxDetails)
 	}
+}
+
+func TestAgentDMPauseNotificationFailureRetriesAtomicallyWithoutDuplicates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Pause Retry A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Pause Retry B "+uuid.NewString(), []byte("[]"))
+	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
+	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
+	if !ok {
+		t.Fatal("normalize pause retry pair failed")
+	}
+	var exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_dm_exchange (
+		  workspace_id, channel_id, agent_low_id, agent_high_id,
+		  matter_id, turn_count, state, pause_reason, notification_epoch
+		)
+		VALUES (
+		  $1, $2, $3, $4,
+		  gen_random_uuid(), 6, 'paused_budget', 'forced retry test', 1
+		)
+		RETURNING id`,
+		testWorkspaceID, channel.ID, lowID, highID,
+	).Scan(&exchangeID); err != nil {
+		t.Fatalf("seed pause retry exchange: %v", err)
+	}
+
+	tx, err := testHandler.TxStarter.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin forced pause notification failure: %v", err)
+	}
+	failing := &agentDMPauseFailOnceDBTX{DBTX: tx}
+	if _, err := testHandler.persistAgentDMPauseNotificationTx(
+		ctx, failing, parseUUID(exchangeID),
+	); err == nil || !strings.Contains(err.Error(), "forced owner inbox write failure") {
+		tx.Rollback(ctx)
+		t.Fatalf("forced pause notification failure=%v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback forced pause notification failure: %v", err)
+	}
+
+	assertDurableCounts := func(wantMarker bool, wantMessages, wantInbox int) {
+		t.Helper()
+		var marker bool
+		if err := testPool.QueryRow(ctx, `
+			SELECT notification_sent_at IS NOT NULL
+			FROM agent_dm_exchange
+			WHERE id = $1`, exchangeID).Scan(&marker); err != nil {
+			t.Fatalf("load pause notification marker: %v", err)
+		}
+		if marker != wantMarker {
+			t.Fatalf("pause notification marker=%v, want %v", marker, wantMarker)
+		}
+		var messages, inboxItems int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_dm_pause_notification receipt
+			JOIN channel_message message ON message.id = receipt.channel_message_id
+			WHERE receipt.exchange_id = $1
+			  AND receipt.notification_epoch = 1
+			  AND message.workspace_id = $2
+			  AND message.channel_id = $3
+			  AND message.author_type = 'system'`,
+			exchangeID, testWorkspaceID, channel.ID,
+		).Scan(&messages); err != nil {
+			t.Fatalf("count durable pause DM rows: %v", err)
+		}
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM inbox_item
+			WHERE workspace_id = $1
+			  AND recipient_id = $2
+			  AND type = 'agent_dm_paused'
+			  AND details->>'exchange_id' = $3`,
+			testWorkspaceID, testUserID, exchangeID,
+		).Scan(&inboxItems); err != nil {
+			t.Fatalf("count durable pause owner inbox rows: %v", err)
+		}
+		if messages != wantMessages || inboxItems != wantInbox {
+			t.Fatalf(
+				"durable pause rows messages=%d inbox=%d, want %d/%d",
+				messages, inboxItems, wantMessages, wantInbox,
+			)
+		}
+	}
+	assertDurableCounts(false, 0, 0)
+
+	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
+	assertDurableCounts(true, 1, 1)
+	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
+	assertDurableCounts(true, 1, 1)
 }
 
 func TestAgentDMConcurrentFinalTurnCannotOverrunBudget(t *testing.T) {

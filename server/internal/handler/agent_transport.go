@@ -131,11 +131,12 @@ func (e *agentTransportFreshnessHoldError) Error() string {
 var errAgentTransportDraftNotFound = errors.New("saved draft not found")
 
 type agentTransportMessageResult struct {
-	Message     ChannelMessageResponse
-	Created     bool
-	TransportID string
-	SentDraft   *agentTransportDraft
-	AgentDM     agentDMSendReservation
+	Message      ChannelMessageResponse
+	Created      bool
+	TransportID  string
+	SentDraft    *agentTransportDraft
+	AgentDM      agentDMSendReservation
+	AgentDMPause *agentDMPauseNotificationResult
 }
 
 type AgentTransportSearchRequest struct {
@@ -1280,12 +1281,16 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 		} else if target.channel.Kind == "dm" && target.recipientType == "agent" {
 			msg := result.Message
 			reservation := result.AgentDM
+			pauseNotification := result.AgentDMPause
 			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
 				lowID, highID, ok := normalizedAgentDMPair(source.origin.agentID, target.recipientID)
 				if ok {
 					h.publishAgentDMToOwners(
 						ctx, target.channel, lowID, highID, protocol.EventChannelMessage, msg,
 					)
+				}
+				if pauseNotification != nil {
+					h.publishAgentDMPauseNotification(ctx, *pauseNotification)
 				}
 				h.dispatchAgentDMAgentReply(ctx, source, target, msg, reservation, initiatorID)
 			})
@@ -1419,12 +1424,17 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err != nil {
 		var paused *agentDMPausedError
 		if errors.As(err, &paused) && paused.Notify {
+			notification, notificationErr := h.persistAgentDMPauseNotificationTx(
+				ctx, tx, paused.ExchangeID,
+			)
+			if notificationErr != nil {
+				_ = tx.Rollback(ctx)
+				return agentTransportMessageResult{}, notificationErr
+			}
 			if commitErr := tx.Commit(ctx); commitErr != nil {
 				return agentTransportMessageResult{}, commitErr
 			}
-			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
-				h.notifyAgentDMPause(ctx, paused.ExchangeID)
-			})
+			h.publishAgentDMPauseNotification(ctx, notification)
 			return agentTransportMessageResult{}, err
 		}
 		_ = tx.Rollback(ctx)
@@ -1442,6 +1452,17 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err := h.finishAgentDMSendTx(ctx, tx, reservation, parseUUID(msg.ID)); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
+	}
+	var pauseNotification *agentDMPauseNotificationResult
+	if reservation.PauseAfterSend {
+		notification, err := h.persistAgentDMPauseNotificationTx(
+			ctx, tx, reservation.ExchangeID,
+		)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, err
+		}
+		pauseNotification = &notification
 	}
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
@@ -1474,7 +1495,14 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		return agentTransportMessageResult{}, err
 	}
 	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
-	return agentTransportMessageResult{Message: msg, Created: true, TransportID: transportID, SentDraft: sentDraft, AgentDM: reservation}, nil
+	return agentTransportMessageResult{
+		Message:      msg,
+		Created:      true,
+		TransportID:  transportID,
+		SentDraft:    sentDraft,
+		AgentDM:      reservation,
+		AgentDMPause: pauseNotification,
+	}, nil
 }
 
 func (h *Handler) lockAgentTransportTargetForInsert(ctx context.Context, exec dbExecutor, target agentTransportTarget) error {

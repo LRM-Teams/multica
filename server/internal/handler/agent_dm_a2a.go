@@ -139,7 +139,10 @@ func normalizedAgentDMPair(a, b pgtype.UUID) (pgtype.UUID, pgtype.UUID, bool) {
 }
 
 func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source agentTransportSource, target agentTransportTarget) (agentDMSendReservation, error) {
-	if target.kind != chatOutputTargetDM || target.recipientType != "agent" {
+	if target.recipientType != "agent" {
+		return agentDMSendReservation{}, nil
+	}
+	if target.kind != chatOutputTargetDM && target.kind != chatOutputTargetThread {
 		return agentDMSendReservation{}, nil
 	}
 	lowID, highID, ok := normalizedAgentDMPair(source.origin.agentID, target.recipientID)
@@ -148,6 +151,22 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 	}
 	workspaceID := source.origin.workspaceID
 	channelID := parseUUID(target.channel.ID)
+	var exactPairDM bool
+	if err := exec.QueryRow(ctx, `
+		SELECT ch.kind = 'dm'
+		  AND count(*) = 2
+		  AND count(*) FILTER (WHERE cm.member_type = 'agent') = 2
+		  AND bool_and(cm.member_id = ANY($3::uuid[]))
+		FROM channel ch
+		JOIN channel_member cm
+		  ON cm.workspace_id = ch.workspace_id
+		 AND cm.channel_id = ch.id
+		WHERE ch.workspace_id = $1 AND ch.id = $2
+		GROUP BY ch.kind`,
+		workspaceID, channelID, []pgtype.UUID{lowID, highID},
+	).Scan(&exactPairDM); err != nil || !exactPairDM {
+		return agentDMSendReservation{}, errChatOutputInvalidTarget
+	}
 
 	if _, err := exec.Exec(ctx, `
 		INSERT INTO agent_dm_pair_control (
@@ -327,6 +346,10 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 		    state = $3,
 		    pause_reason = $4,
 		    next_sender_agent_id = $5,
+		    notification_epoch = CASE
+		      WHEN $3 = 'active' THEN notification_epoch
+		      ELSE notification_epoch + 1
+		    END,
 		    notified_at = CASE WHEN $3 = 'active' THEN notified_at ELSE COALESCE(notified_at, now()) END,
 		    updated_at = now()
 		WHERE id = $1`, exchangeID, nextTurn, nextState, pauseReason, target.recipientID); err != nil {
@@ -347,6 +370,7 @@ func (h *Handler) pauseAgentDMExchangeTx(ctx context.Context, exec db.DBTX, exch
 		UPDATE agent_dm_exchange
 		SET state = $2,
 		    pause_reason = $3,
+		    notification_epoch = notification_epoch + 1,
 		    notified_at = COALESCE(notified_at, now()),
 		    updated_at = now()
 		WHERE id = $1 AND state = 'active'`,
@@ -381,7 +405,6 @@ func (h *Handler) dispatchAgentDMAgentReply(ctx context.Context, source agentTra
 		return
 	}
 	if reservation.PauseAfterSend {
-		h.notifyAgentDMPause(ctx, reservation.ExchangeID)
 		return
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
@@ -485,50 +508,125 @@ func (h *Handler) buildAgentDMPrompt(ctx context.Context, ch ChannelResponse, ag
 	return b.String()
 }
 
+type agentDMPauseNotificationResult struct {
+	Created              bool
+	ExchangeID           pgtype.UUID
+	WorkspaceID          pgtype.UUID
+	ChannelID            pgtype.UUID
+	LowID                pgtype.UUID
+	HighID               pgtype.UUID
+	State                string
+	TurnCount            int
+	RoundLimit           int
+	Message              ChannelMessageResponse
+	RearmedManagedPatrol *agentReminder
+	InboxItems           []db.InboxItem
+}
+
 func (h *Handler) notifyAgentDMPause(ctx context.Context, exchangeID pgtype.UUID) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("agent dm pause notification begin failed", "exchange_id", uuidToString(exchangeID), "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+	result, err := h.persistAgentDMPauseNotificationTx(ctx, tx, exchangeID)
+	if err != nil {
+		slog.Warn("agent dm pause notification persist failed", "exchange_id", uuidToString(exchangeID), "error", err)
+		return
+	}
+	if !result.Created {
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("agent dm pause notification commit failed", "exchange_id", uuidToString(exchangeID), "error", err)
+		return
+	}
+	h.publishAgentDMPauseNotification(ctx, result)
+}
+
+func (h *Handler) publishAgentDMPauseNotification(
+	ctx context.Context,
+	result agentDMPauseNotificationResult,
+) {
+	if !result.Created {
+		return
+	}
+	h.publishRearmedManagedPatrol(ctx, result.RearmedManagedPatrol)
+	if dmChannel, found := h.getChannel(ctx, uuidToString(result.WorkspaceID), result.ChannelID); found {
+		h.publishAgentDMToOwners(
+			ctx, dmChannel, result.LowID, result.HighID, protocol.EventChannelMessage, result.Message,
+		)
+	}
+	for _, item := range result.InboxItems {
+		h.publishToUsers(
+			protocol.EventInboxNew,
+			uuidToString(result.WorkspaceID),
+			"system",
+			"",
+			[]string{uuidToString(item.RecipientID)},
+			map[string]any{"item": inboxToResponse(item)},
+		)
+	}
+	slog.Info("agent dm exchange paused",
+		"workspace_id", uuidToString(result.WorkspaceID),
+		"channel_id", uuidToString(result.ChannelID),
+		"exchange_id", uuidToString(result.ExchangeID),
+		"agent_low_id", uuidToString(result.LowID),
+		"agent_high_id", uuidToString(result.HighID),
+		"state", result.State,
+		"turn_count", result.TurnCount,
+		"round_limit", result.RoundLimit,
+	)
+}
+
+// persistAgentDMPauseNotificationTx makes the durable DM system row, every
+// owner inbox item, and the exchange receipt one transaction. The exchange row
+// lock serializes attempts; agent_dm_pause_notification persists
+// exchange_id + notification_epoch as a stable idempotency key so an uncertain
+// retry cannot duplicate either user-visible surface.
+func (h *Handler) persistAgentDMPauseNotificationTx(
+	ctx context.Context,
+	exec db.DBTX,
+	exchangeID pgtype.UUID,
+) (agentDMPauseNotificationResult, error) {
 	var workspaceID, channelID, sourceChannelID, sourceMessageID, matterID, lowID, highID pgtype.UUID
 	var state, reason, lowHandle, lowName, highHandle, highName string
-	var turnCount, roundLimit, grantedRounds int
-	err := h.DB.QueryRow(ctx, `
-		WITH claimed AS (
-		  UPDATE agent_dm_exchange
-		  SET notification_sent_at = now(),
-		      updated_at = now()
-		  WHERE id = $1
-		    AND state <> 'active'
-		    AND notification_sent_at IS NULL
-		  RETURNING workspace_id, channel_id, source_channel_id,
-		            source_message_id, matter_id,
-		            agent_low_id, agent_high_id, state, pause_reason,
-		            turn_count, round_limit, granted_rounds
-		)
-		SELECT claimed.workspace_id, claimed.channel_id, claimed.source_channel_id,
-		       claimed.source_message_id, claimed.matter_id,
-		       claimed.agent_low_id, claimed.agent_high_id,
-		       claimed.state, COALESCE(claimed.pause_reason, ''),
-		       claimed.turn_count, claimed.round_limit, claimed.granted_rounds,
+	var turnCount, roundLimit, grantedRounds, notificationEpoch int
+	err := exec.QueryRow(ctx, `
+		SELECT exchange.workspace_id, exchange.channel_id, exchange.source_channel_id,
+		       exchange.source_message_id, exchange.matter_id,
+		       exchange.agent_low_id, exchange.agent_high_id,
+		       exchange.state, COALESCE(exchange.pause_reason, ''),
+		       exchange.turn_count, exchange.round_limit, exchange.granted_rounds,
+		       exchange.notification_epoch,
 		       low.name, COALESCE(NULLIF(low.display_name, ''), low.name),
 		       high.name, COALESCE(NULLIF(high.display_name, ''), high.name)
-		FROM claimed
-		JOIN agent low ON low.id = claimed.agent_low_id
-		JOIN agent high ON high.id = claimed.agent_high_id`,
+		FROM agent_dm_exchange exchange
+		JOIN agent low ON low.id = exchange.agent_low_id
+		JOIN agent high ON high.id = exchange.agent_high_id
+		WHERE exchange.id = $1
+		  AND exchange.state <> 'active'
+		  AND exchange.notification_sent_at IS NULL
+		FOR UPDATE OF exchange`,
 		exchangeID,
 	).Scan(
 		&workspaceID, &channelID, &sourceChannelID,
 		&sourceMessageID, &matterID,
 		&lowID, &highID, &state, &reason,
 		&turnCount, &roundLimit, &grantedRounds,
+		&notificationEpoch,
 		&lowHandle, &lowName, &highHandle, &highName,
 	)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Warn("agent dm pause notification claim failed", "exchange_id", uuidToString(exchangeID), "error", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return agentDMPauseNotificationResult{}, nil
 		}
-		return
+		return agentDMPauseNotificationResult{}, fmt.Errorf("lock agent dm pause notification: %w", err)
 	}
 	round := (turnCount + 1) / 2
 	totalLimit := roundLimit + grantedRounds
-	matter := h.agentDMMatterLabel(ctx, workspaceID, sourceMessageID)
+	matter := h.agentDMMatterLabelWithExec(ctx, exec, workspaceID, sourceMessageID)
 	var content string
 	switch state {
 	case "paused_budget":
@@ -567,37 +665,95 @@ func (h *Handler) notifyAgentDMPause(ctx context.Context, exchangeID pgtype.UUID
 	}
 	paramsJSON, marshalErr := json.Marshal(params)
 	if marshalErr != nil {
-		slog.Warn("agent dm pause event marshal failed", "exchange_id", uuidToString(exchangeID), "error", marshalErr)
-		return
+		return agentDMPauseNotificationResult{}, fmt.Errorf("marshal agent dm pause event: %w", marshalErr)
 	}
-	dmChannel, found := h.getChannel(ctx, uuidToString(workspaceID), channelID)
-	if found {
-		if msg, err := h.insertChannelMessageWithParts(
-			ctx, channelID, workspaceID, "system", pgtype.UUID{}, "",
-			content,
-			[]protocol.MessagePart{{
-				Type:        protocol.MessagePartTypeSystemEvent,
-				Event:       event,
-				EventParams: paramsJSON,
-			}},
-			"multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0,
-		); err == nil {
-			h.publishAgentDMToOwners(ctx, dmChannel, lowID, highID, protocol.EventChannelMessage, msg)
+	inserted, err := insertChannelMessageWithPartsExec(
+		ctx, exec, channelID, workspaceID, "system", pgtype.UUID{}, "",
+		content,
+		[]protocol.MessagePart{{
+			Type:        protocol.MessagePartTypeSystemEvent,
+			Event:       event,
+			EventParams: paramsJSON,
+		}},
+		"multica", nil, nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0,
+	)
+	if err != nil {
+		return agentDMPauseNotificationResult{}, fmt.Errorf("insert agent dm pause system row: %w", err)
+	}
+	recipients, err := agentDMOwnerIDsWithExec(ctx, exec, workspaceID, lowID, highID)
+	if err != nil {
+		return agentDMPauseNotificationResult{}, fmt.Errorf("load agent dm pause owners: %w", err)
+	}
+	details, err := json.Marshal(agentDMPauseInboxDetails{
+		agentDMSystemEventParams: params,
+		Kind:                     "agent_dm_paused",
+		SystemEvent:              event,
+	})
+	if err != nil {
+		return agentDMPauseNotificationResult{}, fmt.Errorf("marshal agent dm pause inbox details: %w", err)
+	}
+	title := fmt.Sprintf("%s 和 %s 的智能体私聊已暂停", params.AgentAName, params.AgentBName)
+	qtx := db.New(exec)
+	inboxItems := make([]db.InboxItem, 0, len(recipients))
+	for _, recipientID := range recipients {
+		item, err := qtx.CreateInboxItem(ctx, db.CreateInboxItemParams{
+			WorkspaceID:   workspaceID,
+			RecipientType: "member",
+			RecipientID:   recipientID,
+			Type:          "agent_dm_paused",
+			Severity:      "action_required",
+			Title:         title,
+			Body:          strToText(content),
+			ActorType:     strToText("system"),
+			Details:       details,
+		})
+		if err != nil {
+			return agentDMPauseNotificationResult{}, fmt.Errorf(
+				"insert agent dm pause owner inbox for %s: %w",
+				uuidToString(recipientID), err,
+			)
 		}
+		inboxItems = append(inboxItems, item)
 	}
-	h.createAgentDMPauseOwnerInboxItems(
-		ctx, workspaceID, lowID, highID, event, params, content,
+	if _, err := exec.Exec(ctx, `
+		INSERT INTO agent_dm_pause_notification (
+		  exchange_id, notification_epoch, channel_message_id
+		)
+		VALUES ($1, $2, $3)`,
+		exchangeID, notificationEpoch, parseUUID(inserted.Message.ID),
+	); err != nil {
+		return agentDMPauseNotificationResult{}, fmt.Errorf("record agent dm pause notification receipt: %w", err)
+	}
+	tag, err := exec.Exec(ctx, `
+		UPDATE agent_dm_exchange
+		SET notification_sent_at = now(),
+		    updated_at = now()
+		WHERE id = $1
+		  AND notification_epoch = $2
+		  AND notification_sent_at IS NULL`,
+		exchangeID, notificationEpoch,
 	)
-	slog.Info("agent dm exchange paused",
-		"workspace_id", uuidToString(workspaceID),
-		"channel_id", uuidToString(channelID),
-		"exchange_id", uuidToString(exchangeID),
-		"agent_low_id", uuidToString(lowID),
-		"agent_high_id", uuidToString(highID),
-		"state", state,
-		"turn_count", turnCount,
-		"round_limit", totalLimit,
-	)
+	if err != nil {
+		return agentDMPauseNotificationResult{}, fmt.Errorf("confirm agent dm pause notification: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return agentDMPauseNotificationResult{}, errors.New("agent dm pause notification changed during persistence")
+	}
+	return agentDMPauseNotificationResult{
+		Created:              true,
+		ExchangeID:           exchangeID,
+		WorkspaceID:          workspaceID,
+		ChannelID:            channelID,
+		LowID:                lowID,
+		HighID:               highID,
+		State:                state,
+		TurnCount:            turnCount,
+		RoundLimit:           totalLimit,
+		Message:              inserted.Message,
+		RearmedManagedPatrol: inserted.RearmedManagedPatrol,
+		InboxItems:           inboxItems,
+	}, nil
 }
 
 func agentDMSystemEventForState(state string) string {
@@ -614,11 +770,19 @@ func agentDMSystemEventForState(state string) string {
 }
 
 func (h *Handler) agentDMMatterLabel(ctx context.Context, workspaceID, sourceMessageID pgtype.UUID) string {
+	return h.agentDMMatterLabelWithExec(ctx, h.DB, workspaceID, sourceMessageID)
+}
+
+func (h *Handler) agentDMMatterLabelWithExec(
+	ctx context.Context,
+	exec db.DBTX,
+	workspaceID, sourceMessageID pgtype.UUID,
+) string {
 	if !sourceMessageID.Valid {
 		return "当前事项"
 	}
 	var content string
-	if err := h.DB.QueryRow(ctx, `
+	if err := exec.QueryRow(ctx, `
 		SELECT content
 		FROM channel_message
 		WHERE id = $1 AND workspace_id = $2`,
@@ -644,7 +808,23 @@ func (h *Handler) publishAgentDMToOwners(ctx context.Context, ch ChannelResponse
 }
 
 func (h *Handler) agentDMOwnerIDs(ctx context.Context, workspaceID, lowID, highID pgtype.UUID) []string {
-	rows, err := h.DB.Query(ctx, `
+	recipients, err := agentDMOwnerIDsWithExec(ctx, h.DB, workspaceID, lowID, highID)
+	if err != nil {
+		return nil
+	}
+	result := make([]string, 0, len(recipients))
+	for _, recipientID := range recipients {
+		result = append(result, uuidToString(recipientID))
+	}
+	return result
+}
+
+func agentDMOwnerIDsWithExec(
+	ctx context.Context,
+	exec db.DBTX,
+	workspaceID, lowID, highID pgtype.UUID,
+) ([]pgtype.UUID, error) {
+	rows, err := exec.Query(ctx, `
 		SELECT DISTINCT owner_id
 		FROM agent
 		WHERE workspace_id = $1
@@ -653,70 +833,17 @@ func (h *Handler) agentDMOwnerIDs(ctx context.Context, workspaceID, lowID, highI
 		workspaceID, []pgtype.UUID{lowID, highID},
 	)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
-	var recipients []string
+	var recipients []pgtype.UUID
 	for rows.Next() {
 		var ownerID pgtype.UUID
 		if rows.Scan(&ownerID) == nil && ownerID.Valid {
-			recipients = append(recipients, uuidToString(ownerID))
+			recipients = append(recipients, ownerID)
 		}
 	}
-	return recipients
-}
-
-func (h *Handler) createAgentDMPauseOwnerInboxItems(
-	ctx context.Context,
-	workspaceID, lowID, highID pgtype.UUID,
-	event string,
-	params agentDMSystemEventParams,
-	body string,
-) {
-	recipients := h.agentDMOwnerIDs(ctx, workspaceID, lowID, highID)
-	if len(recipients) == 0 {
-		return
-	}
-	details, err := json.Marshal(agentDMPauseInboxDetails{
-		agentDMSystemEventParams: params,
-		Kind:                     "agent_dm_paused",
-		SystemEvent:              event,
-	})
-	if err != nil {
-		return
-	}
-	title := fmt.Sprintf("%s 和 %s 的智能体私聊已暂停", params.AgentAName, params.AgentBName)
-	for _, recipientID := range recipients {
-		item, err := h.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-			WorkspaceID:   workspaceID,
-			RecipientType: "member",
-			RecipientID:   parseUUID(recipientID),
-			Type:          "agent_dm_paused",
-			Severity:      "action_required",
-			Title:         title,
-			Body:          strToText(body),
-			ActorType:     strToText("system"),
-			Details:       details,
-		})
-		if err != nil {
-			slog.Warn(
-				"agent dm pause owner inbox failed",
-				"workspace_id", uuidToString(workspaceID),
-				"exchange_id", params.ExchangeID,
-				"recipient_id", recipientID,
-				"error", err,
-			)
-			continue
-		}
-		h.publishToUsers(
-			protocol.EventInboxNew,
-			uuidToString(workspaceID),
-			"system",
-			"",
-			[]string{recipientID},
-			map[string]any{"item": inboxToResponse(item)},
-		)
-	}
+	return recipients, rows.Err()
 }
 
 func (h *Handler) channelUserIsAgentDMSupervisor(ctx context.Context, workspaceID string, channelID, userID pgtype.UUID) bool {
@@ -990,6 +1117,7 @@ func (h *Handler) updateAgentDMControl(ctx context.Context, workspaceID, channel
 			_, err = h.DB.Exec(ctx, `
 				UPDATE agent_dm_exchange
 				SET state = 'paused_pair', pause_reason = 'paused by owner',
+				    notification_epoch = notification_epoch + 1,
 				    notified_at = COALESCE(notified_at, now()), updated_at = now()
 				WHERE workspace_id = $1 AND agent_low_id = $2 AND agent_high_id = $3
 				  AND state = 'active'`,
@@ -1155,6 +1283,7 @@ func (h *Handler) updateAgentDMOwnerGlobalControl(ctx context.Context, workspace
 			UPDATE agent_dm_exchange e
 			SET state = 'paused_global',
 			    pause_reason = 'paused by owner',
+			    notification_epoch = notification_epoch + 1,
 			    notified_at = COALESCE(notified_at, now()),
 			    updated_at = now()
 			WHERE e.workspace_id = $1

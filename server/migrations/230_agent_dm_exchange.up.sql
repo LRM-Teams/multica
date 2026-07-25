@@ -46,6 +46,7 @@ CREATE TABLE agent_dm_exchange (
   pause_reason TEXT,
   notified_at TIMESTAMPTZ,
   notification_sent_at TIMESTAMPTZ,
+  notification_epoch INT NOT NULL DEFAULT 0 CHECK (notification_epoch >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, agent_low_id, agent_high_id, matter_id),
@@ -57,6 +58,39 @@ CREATE INDEX idx_agent_dm_exchange_channel_updated
 
 CREATE INDEX idx_agent_dm_exchange_pair_updated
   ON agent_dm_exchange(workspace_id, agent_low_id, agent_high_id, updated_at DESC);
+
+-- Durable idempotency receipt for one pause occurrence. The DM system row,
+-- every owner inbox item, this receipt, and notification_sent_at are committed
+-- together; a failed attempt leaves none of them behind.
+CREATE TABLE agent_dm_pause_notification (
+  exchange_id UUID NOT NULL REFERENCES agent_dm_exchange(id) ON DELETE CASCADE,
+  notification_epoch INT NOT NULL CHECK (notification_epoch > 0),
+  channel_message_id UUID NOT NULL REFERENCES channel_message(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (exchange_id, notification_epoch)
+);
+
+CREATE INDEX idx_agent_dm_pause_notification_message
+  ON agent_dm_pause_notification(channel_message_id);
+
+-- Agent hard-delete must be able to enforce every new FK without scanning the
+-- whole A2A control/exchange tables. These single-column prefixes are required
+-- even though the pair indexes above begin with workspace_id.
+CREATE INDEX idx_agent_dm_pair_control_agent_low
+  ON agent_dm_pair_control(agent_low_id);
+
+CREATE INDEX idx_agent_dm_pair_control_agent_high
+  ON agent_dm_pair_control(agent_high_id);
+
+CREATE INDEX idx_agent_dm_exchange_agent_low
+  ON agent_dm_exchange(agent_low_id);
+
+CREATE INDEX idx_agent_dm_exchange_agent_high
+  ON agent_dm_exchange(agent_high_id);
+
+CREATE INDEX idx_agent_dm_exchange_next_sender
+  ON agent_dm_exchange(next_sender_agent_id)
+  WHERE next_sender_agent_id IS NOT NULL;
 
 ALTER TABLE agent_inbox_event
   ADD COLUMN agent_dm_exchange_id UUID REFERENCES agent_dm_exchange(id) ON DELETE SET NULL,

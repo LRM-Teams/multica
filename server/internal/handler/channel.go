@@ -6101,6 +6101,9 @@ func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, cha
 	if err := incrementChannelMentionUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, content, parts); err != nil {
 		return ChannelMessageResponse{}, err
 	}
+	if err := rearmDormantManagedPatrolForChannelMessage(ctx, exec, workspaceID, channelID, msg); err != nil {
+		return ChannelMessageResponse{}, err
+	}
 	return msg, nil
 }
 

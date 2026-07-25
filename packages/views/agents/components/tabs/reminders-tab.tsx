@@ -236,6 +236,29 @@ function TimeRow({ iso, label }: { iso: string; label?: string }) {
   );
 }
 
+function ManagedPatrolTimeRow({
+  iso,
+  kind,
+}: {
+  iso: string;
+  kind: "next" | "last";
+}) {
+  const { t } = useT("agents");
+  const relative = formatRelativeInstant(iso);
+  const label =
+    kind === "next"
+      ? t(($) => $.reminders.managed_patrol_next, { time: relative })
+      : t(($) => $.reminders.managed_patrol_last, { time: relative });
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
+      <Clock className="size-3.5 shrink-0" aria-hidden />
+      <span className="font-medium text-foreground">{label}</span>
+      <span aria-hidden>·</span>
+      <span>{formatAbsoluteInstant(iso)}</span>
+    </div>
+  );
+}
+
 type DisplayStatus = "scheduled" | "firing" | "overdue" | "dormant";
 
 function resolveUpcomingStatus(row: ReminderDefinitionRow, nowMs = Date.now()): DisplayStatus {
@@ -295,11 +318,20 @@ function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
         <StatusBadge status={displayStatus} />
       </div>
       {row.status !== "fired" ? (
-        <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
+        managedPatrol ? (
+          <ManagedPatrolTimeRow iso={row.nextFireAt} kind="next" />
+        ) : (
+          <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
+        )
+      ) : managedPatrol ? (
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <Clock className="size-3.5 shrink-0" aria-hidden />
+          <span>{t(($) => $.reminders.managed_patrol_dormant)}</span>
+        </div>
       ) : null}
       {managedPatrol ? (
         row.lastFireAt ? (
-          <TimeRow iso={row.lastFireAt} label={t(($) => $.reminders.last_patrol_label)} />
+          <ManagedPatrolTimeRow iso={row.lastFireAt} kind="last" />
         ) : (
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <Clock className="size-3.5 shrink-0" aria-hidden />

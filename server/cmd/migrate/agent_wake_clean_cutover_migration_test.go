@@ -28,7 +28,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 	for _, file := range files {
 		if migrations.ExtractVersion(file) == "223_agent_wake_clean_cutover" {
 			cutoverFile = file
-			continue
+			break
 		}
 		beforeCutover = append(beforeCutover, file)
 	}

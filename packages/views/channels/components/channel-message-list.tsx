@@ -30,6 +30,8 @@ import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { useBottomSettleScroll } from "../hooks/use-bottom-settle-scroll";
+// DIAGNOSTIC ONLY (around-seq false-complete trace) — remove with the successor.
+import { bssRecord } from "../hooks/bss-diagnostic";
 import { buildMessageGroupCompactMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
@@ -618,6 +620,13 @@ function MessageViewport({
           firstItemIndex={firstItemIndex}
           initialTopMostItemIndex={initialTopMostItemIndex}
           increaseViewportBy={{ top: 320, bottom: 520 }}
+          // DIAGNOSTIC ONLY (around-seq false-complete trace) — remove with the
+          // successor. Records Virtuoso's measured total-height chronology so the
+          // trace can align "when did Virtuoso measure the real height" against
+          // the settle's completion frame. No-op unless window.__bssTraceEnabled.
+          totalListHeightChanged={(height) =>
+            bssRecord("tlh", { height: Math.round(height) })
+          }
           // 2026-07-24: was 120px — generous enough that scrolling up even a
           // little to reread the last couple messages still read as "at
           // bottom" to Virtuoso, so a live message arriving mid-read yanked

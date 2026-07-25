@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { ChannelMessage } from "@multica/core/types";
 import { useActiveScrollGesture } from "./use-active-scroll-gesture";
+// DIAGNOSTIC ONLY (around-seq false-complete trace) — remove with the successor.
+import { bssRecord } from "./bss-diagnostic";
 
 // "At the bottom" tolerance: the last row counts as landed once its bottom edge
 // sits within this band of the scroller's bottom edge. Absorbs sub-pixel /
@@ -110,6 +112,16 @@ export function useBottomSettleScroll({
     // durably across effect re-runs, not just for this rAF chain.
     const startEpoch = visitBaselineRef.current.epoch;
 
+    // DIAGNOSTIC: one entry per effect run — shows when `messages` populates
+    // (e.g. 0→69 as the around page arrives) and re-targets the settle.
+    bssRecord("effect", {
+      msgLen: messages.length,
+      tailInMap: !!lastId && messageRefMap.has(lastId),
+      scrollTop: scrollContainerEl.scrollTop,
+      scrollHeight: scrollContainerEl.scrollHeight,
+      clientHeight: scrollContainerEl.clientHeight,
+    });
+
     // Arrived = the last row is rendered AND its BOTTOM edge is within the band
     // of the scroller's bottom edge — real geometry, mirroring the unread-anchor
     // check (its top edge). Immune to the scrollHeight metric lag (an earlier
@@ -118,12 +130,28 @@ export function useBottomSettleScroll({
     const hasReached = () => {
       if (!lastId) return false;
       const el = messageRefMap.get(lastId);
-      return (
-        !!el &&
-        el.getBoundingClientRect().bottom -
-          scrollContainerEl.getBoundingClientRect().bottom <=
-          BOTTOM_BAND_PX
-      );
+      if (!el) {
+        // DIAGNOSTIC: tail row not yet in the DOM/ref map.
+        bssRecord("reach", { tailInMap: false, result: false });
+        return false;
+      }
+      const rowBottom = el.getBoundingClientRect().bottom;
+      const containerBottom = scrollContainerEl.getBoundingClientRect().bottom;
+      const delta = rowBottom - containerBottom;
+      const result = delta <= BOTTOM_BAND_PX;
+      // DIAGNOSTIC: the exact geometry the completion decision is made on —
+      // whether the tail row's bottom is within the band while content may still
+      // be measuring (the suspected frame-of-false-completion).
+      bssRecord("reach", {
+        tailInMap: true,
+        rowBottom: Math.round(rowBottom),
+        containerBottom: Math.round(containerBottom),
+        delta: Math.round(delta),
+        scrollTop: scrollContainerEl.scrollTop,
+        scrollHeight: scrollContainerEl.scrollHeight,
+        result,
+      });
+      return result;
     };
 
     let raf = 0;
@@ -137,19 +165,31 @@ export function useBottomSettleScroll({
       //  - epoch changed: a NEW gesture started at some point since we began.
       if (activeGestureRef.current || gestureEpochRef.current !== startEpoch) {
         settledChannelRef.current = channelId ?? null;
+        bssRecord("settled", { reason: "gesture", frame });
         return;
       }
       // Directly pin the owned scroll parent to its current bottom. As rows
       // render and scrollHeight grows, this re-pins to the true bottom each
       // frame (measurement-evolution safe); the browser clamps to max scroll.
+      const stBefore = scrollContainerEl.scrollTop;
       scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
       frame += 1;
+      // DIAGNOSTIC: did the direct write actually move scrollTop this frame?
+      bssRecord("write", {
+        frame,
+        stBefore: Math.round(stBefore),
+        stAfter: Math.round(scrollContainerEl.scrollTop),
+        scrollHeight: scrollContainerEl.scrollHeight,
+        clientHeight: scrollContainerEl.clientHeight,
+      });
       if (hasReached()) {
         settledChannelRef.current = channelId ?? null;
+        bssRecord("settled", { reason: "reached", frame });
         return;
       }
       if (frame >= MAX_FRAMES) {
         settledChannelRef.current = channelId ?? null;
+        bssRecord("settled", { reason: "timeout", frame });
         // eslint-disable-next-line no-console
         console.warn(
           "[useBottomSettleScroll] settle timed out — never reached the bottom band",

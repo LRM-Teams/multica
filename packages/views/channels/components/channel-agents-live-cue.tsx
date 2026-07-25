@@ -396,15 +396,12 @@ export function ChannelPresenceCluster({
             style={{
               marginLeft: i === 0 ? 0 : -overlap,
               zIndex: i + 1,
-              animationDelay: isWorkingFace ? `${i * 60}ms` : undefined,
             }}
             className={cn(
-              // Separator ring only when idle — working faces use the brand
-              // breathing ring alone so overlaps don't double-stroke.
+              // Separator ring only when idle — working faces use a thin brand
+              // breathing ring alone (no enter-pop / thick ring / idle motion).
               "relative inline-flex rounded-full",
               !isWorkingFace && "ring-2 ring-background",
-              isWorkingFace &&
-                "animate-[presence-face-enter_0.42s_cubic-bezier(0.2,0.8,0.2,1)_both]",
             )}
           >
             <ActorAvatar
@@ -413,14 +410,14 @@ export function ChannelPresenceCluster({
               size={FACE_SIZE}
               avatarUrlHint={m.avatar_url}
               // Dense facepile: status-dot punch-outs collide with neighbor rings
-              // (Frank 2026-07-24 shot). Working is signaled by brand ring only.
+              // (Frank 2026-07-24 shot). Working = light brand ring only.
               showStatusDot={false}
               profileLink={false}
             />
             {isWorkingFace ? (
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-[-2px] rounded-full border-[1.5px] border-brand motion-reduce:animate-none animate-[presence-ring-pulse_1.6s_ease-in-out_infinite]"
+                className="pointer-events-none absolute inset-[-1px] rounded-full border border-brand/50 motion-reduce:animate-none animate-[presence-ring-pulse_2.2s_ease-in-out_infinite]"
               />
             ) : null}
           </span>

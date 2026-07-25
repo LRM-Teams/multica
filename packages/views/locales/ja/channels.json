@@ -481,7 +481,9 @@
     "muted_label": "ミュート中",
     "close_chat": "チャットを閉じる",
     "action_failed": "操作に失敗しました。もう一度お試しください",
-    "composer_placeholder": "{{name}} にメッセージ…"
+    "composer_placeholder": "{{name}} にメッセージ…",
+    "bubble_replied_preview": "バブルで返信済み",
+    "bubble_replied_time": "たった今"
   },
   "voice_call": {
     "start_aria": "{{name}} に電話",

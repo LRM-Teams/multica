@@ -32,6 +32,10 @@
     "tool_result_unnamed": "결과: ",
     "process_steps_one": "단계 {{count}}개",
     "process_steps_other": "단계 {{count}}개",
+    "process_steps_show_one": "실행 과정 보기 · {{count}}단계",
+    "process_steps_show_other": "실행 과정 보기 · {{count}}단계",
+    "process_steps_hide_one": "실행 과정 숨기기 · {{count}}단계",
+    "process_steps_hide_other": "실행 과정 숨기기 · {{count}}단계",
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
@@ -95,7 +99,9 @@
     "agent_filter_placeholder": "에이전트 검색..."
   },
   "dm_bubble": {
-    "fab_default": "{{name}}와 집중 채팅"
+    "fab_default": "{{name}}와 집중 채팅",
+    "fab_replied": "{{name}} 버블 답장 완료",
+    "toast_replied": "{{name}}이(가) 버블에서 답장을 마쳤습니다"
   },
   "empty_state": {
     "first_time_title": "에이전트와 채팅하기",

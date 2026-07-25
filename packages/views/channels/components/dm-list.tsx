@@ -57,6 +57,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { useOpenDM } from "../../common/use-open-dm";
+import { useAgentBubbleUnreadByAgent } from "../../chat/lib/agent-bubble-unread";
 import {
   formatChannelMessagePreview,
   resolveChannelAuthorDisplayName,
@@ -114,6 +115,7 @@ export function DmList({
   const { data: dms = [], isPending: dmsPending } = useQuery(dmListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const bubbleUnreadByAgent = useAgentBubbleUnreadByAgent(wsId);
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -126,10 +128,14 @@ export function DmList({
     () =>
       sumUnmutedUnreadCounts(
         unpinnedDms,
-        (dm) => dm.real_unread ?? dm.unread ?? 0,
+        (dm) => {
+          const channelUnread = dm.real_unread ?? dm.unread ?? 0;
+          if (dm.peer.type !== "agent") return channelUnread;
+          return channelUnread + (bubbleUnreadByAgent.get(dm.peer.id) ?? 0);
+        },
         (dm) => isConversationMuted(dm),
       ),
-    [unpinnedDms],
+    [unpinnedDms, bubbleUnreadByAgent],
   );
 
   // Server already returns recency order; do not float pinned items — they live
@@ -147,9 +153,20 @@ export function DmList({
   );
   const filteredDms = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return unpinnedDms;
-    return unpinnedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
-  }, [searchQuery, unpinnedDms]);
+    const base = q
+      ? unpinnedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q))
+      : unpinnedDms;
+    // Bubble replies do not update dm_channel.updated_at — soft-bump agent
+    // rows that have unread chat_sessions so "顶上来" works without mirroring.
+    return base.toSorted((a, b) => {
+      const aBubble =
+        a.peer.type === "agent" ? (bubbleUnreadByAgent.get(a.peer.id) ?? 0) : 0;
+      const bBubble =
+        b.peer.type === "agent" ? (bubbleUnreadByAgent.get(b.peer.id) ?? 0) : 0;
+      if (aBubble !== bBubble) return bBubble - aBubble;
+      return 0;
+    });
+  }, [searchQuery, unpinnedDms, bubbleUnreadByAgent]);
   const hasSearchQuery = searchQuery.trim().length > 0;
 
   // Header "+" still available when the only DMs are pinned (they live above).
@@ -206,6 +223,11 @@ export function DmList({
           resolveMentionPreview={resolveMentionPreview}
           members={members}
           agents={agents}
+          bubbleUnreadCount={
+            dm.peer.type === "agent"
+              ? (bubbleUnreadByAgent.get(dm.peer.id) ?? 0)
+              : 0
+          }
           onSelect={() => onSelect(dm)}
           onTogglePin={() => dmActions.togglePin(dm)}
           onMarkUnread={() => dmActions.markUnread(dm)}
@@ -420,6 +442,7 @@ export function DmConversationRow({
   resolveMentionPreview,
   members,
   agents,
+  bubbleUnreadCount = 0,
   onSelect,
   onTogglePin,
   onMarkUnread,
@@ -433,6 +456,8 @@ export function DmConversationRow({
   resolveMentionPreview: MentionPreviewResolver;
   members: MemberWithUser[];
   agents: Agent[];
+  /** Unread independent bubble (chat_session) replies for this agent peer. */
+  bubbleUnreadCount?: number;
   onSelect: () => void;
   /** Pin / unpin (toggles based on current pinned state). */
   onTogglePin: () => void;
@@ -450,7 +475,7 @@ export function DmConversationRow({
   // row renders (#634) — try that first so the preview never disagrees with
   // the message by falling back to the BE's raw English fallback `content`.
   const systemPreview = last ? formatSystemEventPreviewText(last, t, resolveMentionPreview) : null;
-  const preview =
+  const channelPreview =
     systemPreview ??
     (last
       ? formatChannelMessagePreview(
@@ -466,13 +491,17 @@ export function DmConversationRow({
           },
         )
       : "");
+  const hasBubbleReply = bubbleUnreadCount > 0;
+  const preview = hasBubbleReply
+    ? t(($) => $.dm.bubble_replied_preview)
+    : channelPreview;
   // Surface mentions of the viewer at full foreground weight (no bold) so an
   // @-mention reads as more salient than ordinary preview text.
   const mentionsUser =
     !!last &&
     !!currentUserName &&
     last.content.toLowerCase().includes(`@${currentUserName.toLowerCase()}`);
-  const realUnread = dm.real_unread ?? dm.unread ?? 0;
+  const realUnread = (dm.real_unread ?? dm.unread ?? 0) + bubbleUnreadCount;
   const isManualDot = !!dm.manually_unread && realUnread === 0;
   const pinned = !!dm.pinned_at;
   const isMuted = isConversationMuted(dm);
@@ -523,9 +552,11 @@ export function DmConversationRow({
                 </span>
                 {isMuted && <MutedIndicator label={t(($) => $.dm.muted_label)} />}
               </span>
-              {last && (
+              {(last || hasBubbleReply) && (
                 <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {timeAgo(last.created_at)}
+                  {hasBubbleReply
+                    ? t(($) => $.dm.bubble_replied_time)
+                    : timeAgo(last!.created_at)}
                 </span>
               )}
             </div>
@@ -533,7 +564,10 @@ export function DmConversationRow({
               <span
                 className={cn(
                   "truncate text-xs",
-                  mentionsUser ? "text-foreground" : "text-muted-foreground",
+                  hasBubbleReply || mentionsUser
+                    ? "text-foreground"
+                    : "text-muted-foreground",
+                  hasBubbleReply && "font-medium",
                 )}
               >
                 {preview}

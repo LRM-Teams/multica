@@ -481,7 +481,9 @@
     "muted_label": "已静音",
     "close_chat": "关闭会话",
     "action_failed": "操作失败，请重试",
-    "composer_placeholder": "发消息给 {{name}}…"
+    "composer_placeholder": "发消息给 {{name}}…",
+    "bubble_replied_preview": "气泡已回复",
+    "bubble_replied_time": "刚刚"
   },
   "voice_call": {
     "start_aria": "呼叫 {{name}}",

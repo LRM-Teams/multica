@@ -29,6 +29,8 @@
     "tool_result_named": "{{tool}} の結果: ",
     "tool_result_unnamed": "結果: ",
     "process_steps_other": "ステップ {{count}}個",
+    "process_steps_show_other": "実行過程を表示 · {{count}} ステップ",
+    "process_steps_hide_other": "実行過程を隠す · {{count}} ステップ",
     "copy_action": "コピー",
     "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",
@@ -92,7 +94,9 @@
     "agent_filter_placeholder": "エージェントを検索..."
   },
   "dm_bubble": {
-    "fab_default": "{{name}} と集中チャット"
+    "fab_default": "{{name}} と集中チャット",
+    "fab_replied": "{{name}} がバブルで返信済み",
+    "toast_replied": "{{name}} がバブルで返信しました"
   },
   "empty_state": {
     "first_time_title": "エージェントとチャット",

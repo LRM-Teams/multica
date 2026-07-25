@@ -32,6 +32,10 @@
     "tool_result_unnamed": "result: ",
     "process_steps_one": "{{count}} step",
     "process_steps_other": "{{count}} steps",
+    "process_steps_show_one": "Show process · {{count}} step",
+    "process_steps_show_other": "Show process · {{count}} steps",
+    "process_steps_hide_one": "Hide process · {{count}} step",
+    "process_steps_hide_other": "Hide process · {{count}} steps",
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
@@ -95,7 +99,9 @@
     "agent_filter_placeholder": "Search agents..."
   },
   "dm_bubble": {
-    "fab_default": "Focus chat with {{name}}"
+    "fab_default": "Focus chat with {{name}}",
+    "fab_replied": "{{name}} replied in bubble",
+    "toast_replied": "{{name}} finished a bubble reply"
   },
   "empty_state": {
     "first_time_title": "Chat with your agents",

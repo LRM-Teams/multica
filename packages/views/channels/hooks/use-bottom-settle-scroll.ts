@@ -4,11 +4,11 @@ import type { ChannelMessage } from "@multica/core/types";
 import { scrollToIndexUntilSettled } from "./use-unread-anchor-scroll";
 import { useActiveScrollGesture } from "./use-active-scroll-gesture";
 
-// "At the bottom" tolerance: the scroller is considered landed once its
-// remaining distance to the bottom is within this band. Absorbs
-// sub-pixel/measurement drift and the last row's own height jitter so we don't
-// re-scroll forever chasing an exact 0. Matches the intent of the anchor path's
-// ANCHOR_TOP_BAND_PX, just measured against the bottom edge.
+// "At the bottom" tolerance: the last row counts as landed once its bottom edge
+// sits within this band of the scroller's bottom edge. Absorbs sub-pixel /
+// measurement drift and the last row's own height jitter so we don't re-scroll
+// forever chasing an exact 0. Mirror of the anchor path's ANCHOR_TOP_BAND_PX,
+// measured against the bottom edge instead of the top.
 const BOTTOM_BAND_PX = 24;
 
 /**
@@ -83,22 +83,28 @@ export function useBottomSettleScroll({
 
     const lastId = messages[messages.length - 1]?.id ?? null;
 
-    // Arrived = the LAST row has actually rendered AND the scroller is within the
-    // bottom band. The rendered-row gate is load-bearing: on a cold mount
-    // Virtuoso hasn't measured its lazily-rendered rows yet, so the scroller can
-    // report scrollHeight === clientHeight (distanceToBottom = 0) while the real
-    // content is far taller and the last row isn't in the DOM. Trusting the
-    // metric alone would false-settle on the very first frame — before any
-    // scroll took effect — and never retry, exactly the measurement race (#883)
-    // this settle exists to close. Requiring the last row in `messageRefMap`
-    // means rows are rendered/measured, so the metric is meaningful.
+    // Arrived = the LAST row is rendered AND its BOTTOM edge sits within the band
+    // of the scroller's bottom edge. This mirrors the unread-anchor settle's
+    // proven check (which uses the anchor row's TOP edge vs the scroller's top),
+    // just against the bottom edges. Real geometry (getBoundingClientRect)
+    // reflects the actual painted layout, so — unlike the scroller's
+    // `scrollHeight` metric — it can't be fooled by the cold-mount measurement
+    // lag (an earlier version checked `scrollHeight - scrollTop - clientHeight`;
+    // on a cold mount the scroller transiently reports scrollHeight ≈ clientHeight
+    // before Virtuoso has updated its size model, so distanceToBottom read 0 and
+    // the settle false-settled at scrollTop=0 while the last row was actually
+    // 263px below the fold — Iris's real-device measurement of the #1204 failure).
+    // Geometry: last row below the fold (stuck at top) → bottom - containerBottom
+    // is large positive → not reached; scrolled to the bottom → ≈ 0 → reached;
+    // short list not filling the viewport → negative → already at the bottom.
     const hasReached = () => {
-      if (!lastId || !messageRefMap.has(lastId)) return false;
-      const distanceToBottom =
-        scrollContainerEl.scrollHeight -
-        scrollContainerEl.scrollTop -
-        scrollContainerEl.clientHeight;
-      const reached = distanceToBottom <= BOTTOM_BAND_PX;
+      if (!lastId) return false;
+      const el = messageRefMap.get(lastId);
+      const reached =
+        !!el &&
+        el.getBoundingClientRect().bottom -
+          scrollContainerEl.getBoundingClientRect().bottom <=
+          BOTTOM_BAND_PX;
       if (reached) settledChannelRef.current = channelId ?? null;
       return reached;
     };

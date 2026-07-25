@@ -7,4 +7,12 @@ export {
   useMarkDMUnread,
   useCloseDM,
 } from "./mutations";
-export type { DMItem, DMPeer, CreateOrFindDMBody } from "./types";
+export type {
+  DMItem,
+  DMPeer,
+  CreateOrFindDMBody,
+  AgentDMControl,
+  AgentDMControlAction,
+  AgentDMSystemEvent,
+  AgentDMPauseEventParams,
+} from "./types";

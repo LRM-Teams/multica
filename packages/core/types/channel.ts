@@ -279,6 +279,12 @@ export interface ChannelStats {
 export interface ChannelActiveTask {
   agent_id: string;
   agent_name: string;
+  /**
+   * Emit-time agent face from `/active-tasks` (LRM-391 AC#5 / LRM-597).
+   * Prefer this over ListAgents / thin channel-member briefs for Working /
+   * Presence facepile — those can omit channel/private / group-manager agents.
+   */
+  avatar_url?: string | null;
   task_id: string;
   status: string;
   /**

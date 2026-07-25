@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { Square } from "lucide-react";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
 import {
@@ -19,6 +18,7 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { memberProfileOptions } from "@multica/core/workspace/queries";
 import {
   directoryActorDisplayName,
@@ -39,6 +39,26 @@ import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 function taskEmitDisplayName(agentName: string | undefined): string | null {
   const trimmed = agentName?.trim() ?? "";
   return isDirectoryActorMiss(trimmed) ? null : trimmed;
+}
+
+/** Channel roster label — never treat directory-miss sentinels as real names. */
+function memberBriefDisplayName(
+  member: ChannelMemberBrief | undefined,
+): string | null {
+  if (!member) return null;
+  const trimmed = (member.display_name || member.name || "").trim();
+  return isDirectoryActorMiss(trimmed) ? null : trimmed;
+}
+
+function memberBriefAvatarUrl(
+  member: ChannelMemberBrief | undefined,
+): string | null {
+  return resolvePublicFileUrl(member?.avatar_url ?? null);
+}
+
+/** Emit-time face from `/active-tasks` snapshot (LRM-391 AC#5 / LRM-597). */
+function taskEmitAvatarUrl(task: ChannelActiveTask): string | null {
+  return resolvePublicFileUrl(task.avatar_url ?? null);
 }
 
 const STOPPING_ALL_TASKS_ID = "__all__";
@@ -137,6 +157,7 @@ function useWorkingRowActivityVerb(
 function WorkingListRow({
   task,
   displayName,
+  avatarUrl,
   now,
   firstSeen,
   canStop,
@@ -147,6 +168,8 @@ function WorkingListRow({
   task: ChannelActiveTask;
   /** Resolved live label — never "Unknown Agent" (LRM-391). */
   displayName: string;
+  /** Directory / channel roster / member-profile face (AC#5). */
+  avatarUrl: string | null;
   now: number;
   firstSeen: number | undefined;
   canStop: boolean;
@@ -155,7 +178,6 @@ function WorkingListRow({
   onDismiss: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
-  const { getActorInitials, getActorAvatarUrl } = useActorName();
   const isTerminal = isTerminalChannelActiveTask(task);
   const { verb, verbClass, dotClass, ping } = useWorkingRowActivityVerb(
     task.agent_id,
@@ -173,16 +195,14 @@ function WorkingListRow({
       data-testid="channel-agents-working-row"
       data-terminal={isTerminal ? "true" : "false"}
     >
-      <ActorAvatarBase
+      <ActorAvatar
+        actorType="agent"
+        actorId={task.agent_id}
         name={displayName}
-        initials={
-          /[a-z]/i.test(displayName.charAt(0))
-            ? displayName.charAt(0).toUpperCase()
-            : displayName.charAt(0) || getActorInitials("agent", task.agent_id)
-        }
-        avatarUrl={getActorAvatarUrl("agent", task.agent_id)}
-        isAgent
+        avatarUrlHint={avatarUrl}
         size={22}
+        showStatusDot={false}
+        profileLink={false}
       />
       <span className="relative inline-flex h-1.5 w-1.5 shrink-0">
         {ping ? (
@@ -270,7 +290,7 @@ export function ChannelPresenceCluster({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
-  const { getActorName } = useActorName();
+  const { getActorName, getActorAvatarUrl } = useActorName();
   const [mobileOpen, setMobileOpen] = useState(false);
   const firstSeenRef = useRef<Map<string, number> | null>(null);
   if (firstSeenRef.current === null) {
@@ -285,9 +305,11 @@ export function ChannelPresenceCluster({
   );
 
   // LRM-391: ListAgents can miss channel/private / group-manager agents, so
-  // `getActorName` alone returns "Unknown Agent". Resolve directory → emit-time
-  // name → member-profile; UI Designer 2026-07-25: unresolved rows stay out of
-  // the Working list (no sentinel fallback — LRM-238).
+  // `getActorName` alone returns "Unknown Agent". Resolve directory → channel
+  // roster → emit-time name → member-profile; UI Designer 2026-07-25: unresolved
+  // rows stay out of the Working list (no sentinel fallback — LRM-238).
+  // AC#5: also resolve avatars the same way — do not omit roster agents that
+  // already have display_name/avatar just to dodge Unknown Agent.
   const uniqueLiveAgentIds = useMemo(() => {
     const ids: string[] = [];
     const seen = new Set<string>();
@@ -298,6 +320,14 @@ export function ChannelPresenceCluster({
     }
     return ids;
   }, [liveTasks]);
+
+  const memberByAgentId = useMemo(() => {
+    const map = new Map<string, ChannelMemberBrief>();
+    for (const m of members) {
+      if (m.member_type === "agent") map.set(m.member_id, m);
+    }
+    return map;
+  }, [members]);
 
   const emitNamesByAgent = useMemo(() => {
     const map = new Map<string, string>();
@@ -318,13 +348,66 @@ export function ChannelPresenceCluster({
     return map;
   }, [uniqueLiveAgentIds, getActorName]);
 
+  const rosterNamesByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agentId of uniqueLiveAgentIds) {
+      const name = memberBriefDisplayName(memberByAgentId.get(agentId));
+      if (name) map.set(agentId, name);
+    }
+    return map;
+  }, [uniqueLiveAgentIds, memberByAgentId]);
+
+  const directoryAvatarsByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agentId of uniqueLiveAgentIds) {
+      const url = resolvePublicFileUrl(getActorAvatarUrl("agent", agentId));
+      if (url) map.set(agentId, url);
+    }
+    return map;
+  }, [uniqueLiveAgentIds, getActorAvatarUrl]);
+
+  const rosterAvatarsByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agentId of uniqueLiveAgentIds) {
+      const url = memberBriefAvatarUrl(memberByAgentId.get(agentId));
+      if (url) map.set(agentId, url);
+    }
+    return map;
+  }, [uniqueLiveAgentIds, memberByAgentId]);
+
+  const emitAvatarsByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const task of liveTasks) {
+      if (map.has(task.agent_id)) continue;
+      const url = taskEmitAvatarUrl(task);
+      if (url) map.set(task.agent_id, url);
+    }
+    return map;
+  }, [liveTasks]);
+
   const profileMissIds = useMemo(
     () =>
-      uniqueLiveAgentIds.filter(
-        (agentId) =>
-          !directoryNamesByAgent.has(agentId) && !emitNamesByAgent.has(agentId),
-      ),
-    [uniqueLiveAgentIds, directoryNamesByAgent, emitNamesByAgent],
+      uniqueLiveAgentIds.filter((agentId) => {
+        const hasName =
+          directoryNamesByAgent.has(agentId) ||
+          rosterNamesByAgent.has(agentId) ||
+          emitNamesByAgent.has(agentId);
+        const hasAvatar =
+          directoryAvatarsByAgent.has(agentId) ||
+          rosterAvatarsByAgent.has(agentId) ||
+          emitAvatarsByAgent.has(agentId);
+        // Need profile when name or face is still missing.
+        return !hasName || !hasAvatar;
+      }),
+    [
+      uniqueLiveAgentIds,
+      directoryNamesByAgent,
+      rosterNamesByAgent,
+      emitNamesByAgent,
+      directoryAvatarsByAgent,
+      rosterAvatarsByAgent,
+      emitAvatarsByAgent,
+    ],
   );
 
   const profileQueries = useQueries({
@@ -343,41 +426,73 @@ export function ChannelPresenceCluster({
     return map;
   }, [profileMissIds, profileQueries]);
 
+  const profileAvatarsByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    profileMissIds.forEach((agentId, index) => {
+      const url = resolvePublicFileUrl(
+        profileQueries[index]?.data?.avatar_url ?? null,
+      );
+      if (url) map.set(agentId, url);
+    });
+    return map;
+  }, [profileMissIds, profileQueries]);
+
   // Working chrome = live Activity work only (Frank 2026-07-24): never fold
   // terminal `no_reply` / `failed` into the header Working list — those stay
   // on Activity / composer surfaces. Also drop identity-unresolved rows so the
   // hover/popover never paints "Unknown Agent".
-  const { stoppable, listTasks, runningCount, workingAgentIds, displayNameByAgent } =
-    useMemo(() => {
-      const stop: ChannelActiveTask[] = [];
-      const workingIds = new Set<string>();
-      const names = new Map<string, string>();
-      let running = 0;
-      for (const task of liveTasks) {
-        const displayName =
-          directoryNamesByAgent.get(task.agent_id) ??
-          emitNamesByAgent.get(task.agent_id) ??
-          profileNamesByAgent.get(task.agent_id) ??
-          null;
-        if (!displayName) continue;
-        stop.push(task);
-        workingIds.add(task.agent_id);
-        names.set(task.agent_id, displayName);
-        if (task.status === "running") running += 1;
-      }
-      return {
-        stoppable: stop,
-        listTasks: stop,
-        runningCount: running,
-        workingAgentIds: workingIds,
-        displayNameByAgent: names,
-      };
-    }, [
-      liveTasks,
-      directoryNamesByAgent,
-      emitNamesByAgent,
-      profileNamesByAgent,
-    ]);
+  const {
+    stoppable,
+    listTasks,
+    runningCount,
+    workingAgentIds,
+    displayNameByAgent,
+    avatarUrlByAgent,
+  } = useMemo(() => {
+    const stop: ChannelActiveTask[] = [];
+    const workingIds = new Set<string>();
+    const names = new Map<string, string>();
+    const avatars = new Map<string, string>();
+    let running = 0;
+    for (const task of liveTasks) {
+      const displayName =
+        directoryNamesByAgent.get(task.agent_id) ??
+        rosterNamesByAgent.get(task.agent_id) ??
+        emitNamesByAgent.get(task.agent_id) ??
+        profileNamesByAgent.get(task.agent_id) ??
+        null;
+      if (!displayName) continue;
+      const avatarUrl =
+        directoryAvatarsByAgent.get(task.agent_id) ??
+        rosterAvatarsByAgent.get(task.agent_id) ??
+        emitAvatarsByAgent.get(task.agent_id) ??
+        profileAvatarsByAgent.get(task.agent_id) ??
+        null;
+      stop.push(task);
+      workingIds.add(task.agent_id);
+      names.set(task.agent_id, displayName);
+      if (avatarUrl) avatars.set(task.agent_id, avatarUrl);
+      if (task.status === "running") running += 1;
+    }
+    return {
+      stoppable: stop,
+      listTasks: stop,
+      runningCount: running,
+      workingAgentIds: workingIds,
+      displayNameByAgent: names,
+      avatarUrlByAgent: avatars,
+    };
+  }, [
+    liveTasks,
+    directoryNamesByAgent,
+    rosterNamesByAgent,
+    emitNamesByAgent,
+    profileNamesByAgent,
+    directoryAvatarsByAgent,
+    rosterAvatarsByAgent,
+    emitAvatarsByAgent,
+    profileAvatarsByAgent,
+  ]);
 
   useEffect(() => {
     const seen = firstSeenRef.current!;
@@ -411,15 +526,40 @@ export function ChannelPresenceCluster({
     }
     const working: ChannelMemberBrief[] = [];
     const rest: ChannelMemberBrief[] = [];
+    const seen = new Set<string>();
     for (const m of members) {
+      const key = `${m.member_type}:${m.member_id}`;
       if (m.member_type === "agent" && workingAgentIds.has(m.member_id)) {
-        working.push(m);
+        working.push({
+          ...m,
+          display_name: displayNameByAgent.get(m.member_id) ?? m.display_name,
+          avatar_url:
+            avatarUrlByAgent.get(m.member_id) ?? m.avatar_url ?? null,
+        });
+        seen.add(key);
       } else {
         rest.push(m);
+        seen.add(key);
       }
     }
+    // AC#5: working agents resolved via emit/profile but absent from the
+    // channel roster must still appear in the facepile (no blank stack).
+    for (const agentId of workingAgentIds) {
+      const key = `agent:${agentId}`;
+      if (seen.has(key)) continue;
+      const displayName = displayNameByAgent.get(agentId);
+      if (!displayName) continue;
+      working.push({
+        member_type: "agent",
+        member_id: agentId,
+        name: agentId,
+        display_name: displayName,
+        avatar_url: avatarUrlByAgent.get(agentId) ?? null,
+      });
+      seen.add(key);
+    }
     return [...working, ...rest].slice(0, FACE_MAX);
-  }, [members, isLive, workingAgentIds]);
+  }, [members, isLive, workingAgentIds, displayNameByAgent, avatarUrlByAgent]);
 
   // Outer chip is faces (+ working ring motion) only — no N · M / K working
   // text (Frank red-box 2026-07-24). Counts stay available to screen readers.
@@ -446,6 +586,7 @@ export function ChannelPresenceCluster({
             key={taskRowKey(task)}
             task={task}
             displayName={displayNameByAgent.get(task.agent_id) ?? task.agent_id}
+            avatarUrl={avatarUrlByAgent.get(task.agent_id) ?? null}
             now={now}
             firstSeen={firstSeenRef.current!.get(taskRowKey(task))}
             canStop={canStop}
@@ -511,6 +652,11 @@ export function ChannelPresenceCluster({
             <ActorAvatar
               actorType={m.member_type === "agent" ? "agent" : "member"}
               actorId={m.member_id}
+              name={
+                m.member_type === "agent"
+                  ? (displayNameByAgent.get(m.member_id) ?? m.display_name)
+                  : m.display_name
+              }
               size={FACE_SIZE}
               avatarUrlHint={m.avatar_url}
               // Dense facepile: status-dot punch-outs collide with neighbor rings

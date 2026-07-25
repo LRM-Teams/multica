@@ -101,4 +101,29 @@ describe("useResolvedActorIdentity (LRM-391)", () => {
     expect(resolvedActorLabel(result.current, "agent-pending")).toBe("agent-pending");
     expect(resolvedActorLabel(result.current, "agent-pending")).not.toBe("Unknown Agent");
   });
+
+  it("AC#5: directory name with no face still fetches profile for avatar", async () => {
+    getActorNameMock.mockImplementation((type: string, id: string) =>
+      type === "agent" && id === "agent-thin" ? "Thin Agent" : "Unknown Agent",
+    );
+    getActorAvatarUrlMock.mockReturnValue(null);
+    getMemberProfileMock.mockResolvedValue({
+      member_type: "agent",
+      member_id: "agent-thin",
+      name: "thin",
+      display_name: "Thin Agent",
+      avatar_url: "/uploads/thin.png",
+    });
+
+    const { result } = renderHook(
+      () => useResolvedActorIdentity("agent-thin", "agent"),
+      { wrapper },
+    );
+
+    expect(result.current.displayName).toBe("Thin Agent");
+    await waitFor(() => {
+      expect(result.current.avatarUrl).toBe("/uploads/thin.png");
+    });
+    expect(getMemberProfileMock).toHaveBeenCalledWith("agent", "agent-thin");
+  });
 });

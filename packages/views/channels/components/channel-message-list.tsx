@@ -29,6 +29,7 @@ import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
+import { useBottomSettleScroll } from "../hooks/use-bottom-settle-scroll";
 import { buildMessageGroupCompactMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
@@ -329,6 +330,26 @@ function MessageViewport({
     virtuosoRef,
     // The scroll container gates the anchor scroll (Virtuoso only mounts once it
     // exists) and its rect tells the settle helper when the anchor row arrives.
+    scrollContainerEl,
+    messageRefMap,
+  });
+
+  // Cold-open "land at the latest message" safety net for the DEFAULT case (no
+  // deep-link highlight, no unread anchor, initialScroll === "bottom"). The
+  // declarative mount-once `initialTopMostItemIndex` below is unreliable with
+  // customScrollParent + async data on a fresh/no-cache mount (real-device P0:
+  // the list opened at scrollTop=0 with the oldest row on top despite the index
+  // computing to the last row). The unread-anchor path never hit this because it
+  // ALSO runs an imperative scrollToIndex settle after mount; this gives the
+  // bottom-default case the same imperative net. Mutually exclusive with the
+  // anchor/highlight settles.
+  useBottomSettleScroll({
+    channelId,
+    messages,
+    enabled:
+      highlightIndex < 0 && unreadAnchorIndex < 0 && initialScroll === "bottom",
+    handleAttached,
+    virtuosoRef,
     scrollContainerEl,
     messageRefMap,
   });

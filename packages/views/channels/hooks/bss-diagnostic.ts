@@ -15,7 +15,26 @@
  * sample. Records only numbers/booleans/short kinds — no message content, tokens,
  * or raw identifiers.
  */
+import type { ChannelMessagesPage } from "@multica/core/types";
+
 const MAX_ENTRIES = 200;
+
+/**
+ * DIAGNOSTIC ONLY — three-state source-tail-complete for the trace, so it never
+ * conflates "latest page not returned yet" with "tail complete" (the first link
+ * in the data-ready vs measurement-lag causal chain the trace must classify):
+ *   - no page loaded          -> null  (unknown — data not ready yet)
+ *   - loaded, has_more_after   -> false (newer messages exist beyond the window)
+ *   - loaded, tail in window   -> true  (`has_more_after` absent = the
+ *                                        default/before-cursor page, which IS the tail)
+ * Remove with the successor fix.
+ */
+export function deriveDiagSourceTailComplete(
+  firstPage: ChannelMessagesPage | undefined,
+): boolean | null {
+  if (!firstPage) return null;
+  return !firstPage.has_more_after;
+}
 
 interface BssTraceWindow {
   __bssTraceEnabled?: boolean;

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { bssRecord, bssTraceEnabled } from "./bss-diagnostic";
+import type { ChannelMessagesPage } from "@multica/core/types";
+import { bssRecord, bssTraceEnabled, deriveDiagSourceTailComplete } from "./bss-diagnostic";
 
 type W = { __bssTraceEnabled?: boolean; __bssTrace?: Array<Record<string, unknown>> };
 const w = window as unknown as W;
@@ -35,5 +36,29 @@ describe("bss-diagnostic (opt-in trace recorder)", () => {
     // The cap keeps the earliest frames (the mount / data-arrival window we care
     // about), not the tail.
     expect(w.__bssTrace?.[0]).toMatchObject({ frame: 0 });
+  });
+});
+
+describe("deriveDiagSourceTailComplete (three-state source contract)", () => {
+  // Never conflate "latest page not returned yet" with "tail complete" — that
+  // first link in the causal chain must stay honest so the trace can classify
+  // data-not-ready vs Virtuoso measurement-lag (Barry).
+  it("is null while the latest page has not returned (data not ready)", () => {
+    expect(deriveDiagSourceTailComplete(undefined)).toBeNull();
+  });
+
+  it("is false when the loaded around window has newer messages beyond it", () => {
+    expect(
+      deriveDiagSourceTailComplete({ has_more_after: true } as ChannelMessagesPage),
+    ).toBe(false);
+  });
+
+  it("is true when the loaded window contains the real tail", () => {
+    // around mode, no newer messages beyond the window
+    expect(
+      deriveDiagSourceTailComplete({ has_more_after: false } as ChannelMessagesPage),
+    ).toBe(true);
+    // default/before-cursor page — has_more_after absent, the page IS the tail
+    expect(deriveDiagSourceTailComplete({} as ChannelMessagesPage)).toBe(true);
   });
 });

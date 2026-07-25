@@ -56,6 +56,11 @@ function memberBriefAvatarUrl(
   return resolvePublicFileUrl(member?.avatar_url ?? null);
 }
 
+/** Emit-time face from `/active-tasks` snapshot (LRM-391 AC#5 / LRM-597). */
+function taskEmitAvatarUrl(task: ChannelActiveTask): string | null {
+  return resolvePublicFileUrl(task.avatar_url ?? null);
+}
+
 const STOPPING_ALL_TASKS_ID = "__all__";
 const FACE_MAX = 3;
 const FACE_SIZE = 22;
@@ -370,6 +375,16 @@ export function ChannelPresenceCluster({
     return map;
   }, [uniqueLiveAgentIds, memberByAgentId]);
 
+  const emitAvatarsByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const task of liveTasks) {
+      if (map.has(task.agent_id)) continue;
+      const url = taskEmitAvatarUrl(task);
+      if (url) map.set(task.agent_id, url);
+    }
+    return map;
+  }, [liveTasks]);
+
   const profileMissIds = useMemo(
     () =>
       uniqueLiveAgentIds.filter((agentId) => {
@@ -379,7 +394,8 @@ export function ChannelPresenceCluster({
           emitNamesByAgent.has(agentId);
         const hasAvatar =
           directoryAvatarsByAgent.has(agentId) ||
-          rosterAvatarsByAgent.has(agentId);
+          rosterAvatarsByAgent.has(agentId) ||
+          emitAvatarsByAgent.has(agentId);
         // Need profile when name or face is still missing.
         return !hasName || !hasAvatar;
       }),
@@ -390,6 +406,7 @@ export function ChannelPresenceCluster({
       emitNamesByAgent,
       directoryAvatarsByAgent,
       rosterAvatarsByAgent,
+      emitAvatarsByAgent,
     ],
   );
 
@@ -448,6 +465,7 @@ export function ChannelPresenceCluster({
       const avatarUrl =
         directoryAvatarsByAgent.get(task.agent_id) ??
         rosterAvatarsByAgent.get(task.agent_id) ??
+        emitAvatarsByAgent.get(task.agent_id) ??
         profileAvatarsByAgent.get(task.agent_id) ??
         null;
       stop.push(task);
@@ -472,6 +490,7 @@ export function ChannelPresenceCluster({
     profileNamesByAgent,
     directoryAvatarsByAgent,
     rosterAvatarsByAgent,
+    emitAvatarsByAgent,
     profileAvatarsByAgent,
   ]);
 
@@ -633,6 +652,11 @@ export function ChannelPresenceCluster({
             <ActorAvatar
               actorType={m.member_type === "agent" ? "agent" : "member"}
               actorId={m.member_id}
+              name={
+                m.member_type === "agent"
+                  ? (displayNameByAgent.get(m.member_id) ?? m.display_name)
+                  : m.display_name
+              }
               size={FACE_SIZE}
               avatarUrlHint={m.avatar_url}
               // Dense facepile: status-dot punch-outs collide with neighbor rings

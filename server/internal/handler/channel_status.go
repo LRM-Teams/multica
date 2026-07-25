@@ -14,8 +14,12 @@ import (
 type ChannelActiveTask struct {
 	AgentID   string `json:"agent_id"`
 	AgentName string `json:"agent_name"`
-	TaskID    string `json:"task_id"`
-	Status    string `json:"status"`
+	// AvatarURL is the emit-time agent face (LRM-391 AC#5 / LRM-597). Working
+	// / Presence facepile must not depend only on channel-member briefs or
+	// ListAgents — those can miss channel/private / group-manager agents.
+	AvatarURL *string `json:"avatar_url,omitempty"`
+	TaskID    string  `json:"task_id"`
+	Status    string  `json:"status"`
 	// Kind discriminates composer-strip rows (LRM-287). Only `reply` rows are
 	// meant to render above the composer; quick_create / issue_create are
 	// filtered client-side (and omitted server-side when sourced here).
@@ -79,6 +83,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				SELECT DISTINCT ON (e.agent_id)
 				       e.agent_id,
 				       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name,
+				       a.avatar_url AS avatar_url,
 				       e.id AS task_id,
 				       e.status AS inbox_status,
 				       e.reason,
@@ -128,12 +133,12 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				    OR (li.terminal_outcome = 'no_reply' AND li.terminal_at > now() - interval '2 minutes')
 				  )
 			)
-			SELECT agent_id, agent_name, task_id, status, terminal_outcome, retryable,
+			SELECT agent_id, agent_name, avatar_url, task_id, status, terminal_outcome, retryable,
 			       inbox_event_id, delivery_id, conversation_id, channel_id, chat_session_id,
 			       thread_root_message_id, source_message_id, terminal_at, kind, reason
 			FROM active_tasks
 			UNION ALL
-			SELECT agent_id, agent_name, task_id, status, terminal_outcome, retryable,
+			SELECT agent_id, agent_name, avatar_url, task_id, status, terminal_outcome, retryable,
 			       inbox_event_id, delivery_id, conversation_id, channel_id, chat_session_id,
 			       thread_root_message_id, source_message_id, terminal_at, kind, reason
 			FROM terminal_tasks
@@ -150,8 +155,9 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 		var inboxEventID, deliveryID, conversationID, rowChannelID, chatSessionID, threadRootMessageID, sourceMessageID pgtype.UUID
 		var terminalAt pgtype.Timestamptz
 		var name, status, terminalOutcome, kind, reason string
+		var avatarURL pgtype.Text
 		var retryable bool
-		if err := rows.Scan(&agentID, &name, &taskID, &status, &terminalOutcome, &retryable, &inboxEventID, &deliveryID, &conversationID, &rowChannelID, &chatSessionID, &threadRootMessageID, &sourceMessageID, &terminalAt, &kind, &reason); err != nil {
+		if err := rows.Scan(&agentID, &name, &avatarURL, &taskID, &status, &terminalOutcome, &retryable, &inboxEventID, &deliveryID, &conversationID, &rowChannelID, &chatSessionID, &threadRootMessageID, &sourceMessageID, &terminalAt, &kind, &reason); err != nil {
 			continue
 		}
 		if channelComposerStripExcludedKind(kind) || channelComposerStripExcludedInboxReason(reason) {
@@ -160,6 +166,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 		task := ChannelActiveTask{
 			AgentID:             uuidToString(agentID),
 			AgentName:           name,
+			AvatarURL:           textToPtr(avatarURL),
 			TaskID:              uuidToString(taskID),
 			Status:              status,
 			Kind:                kind,

@@ -483,4 +483,42 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
       expect(screen.getAllByText("有脸Agent").length).toBeGreaterThanOrEqual(1);
     });
   });
+
+  it("LRM-391 AC#5: emit-time task.avatar_url seeds facepile without roster/profile", () => {
+    mobileState.isMobile = true;
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1"])}
+        memberCount={1}
+        agentCount={2}
+        tasks={[
+          task({
+            agent_id: "a-snap",
+            agent_name: "快照Agent",
+            avatar_url: "/agent-avatars/snap.png",
+            task_id: "t-s",
+            inbox_event_id: "i-s",
+            status: "running",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "true");
+    expect(screen.getByTestId("face-a-snap")).toHaveAttribute(
+      "data-avatar-hint",
+      "/agent-avatars/snap.png",
+    );
+    fireEvent.click(chip);
+    expect(screen.getAllByText("快照Agent").length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen
+        .getAllByTestId("face-a-snap")
+        .some(
+          (el) =>
+            el.getAttribute("data-avatar-hint") === "/agent-avatars/snap.png",
+        ),
+    ).toBe(true);
+  });
 });

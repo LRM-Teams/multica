@@ -10,10 +10,7 @@ import {
   useDeleteRuntimesByDaemon,
   useRemoveAgentsByDaemon,
 } from "@multica/core/runtimes/mutations";
-import {
-  agentListOptions,
-  memberListOptions,
-} from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import {
@@ -39,10 +36,9 @@ import {
  * Machine-header control for Computer one-click delete (LRM-439).
  * Calls `DELETE /api/runtimes/by-daemon/{daemonId}` — never N× row DELETE.
  *
- * Always visible when the machine has runtimes (LRM-238). Active agents are
- * surfaced after the first confirm so the user can review and archive the
- * exact set before returning to the permanent-delete confirmation. Ownership
- * still gates both destructive paths.
+ * Visible only when the current user owns every runtime on the machine. Active
+ * agents are surfaced after the first confirm so the user can review and
+ * archive the exact set before returning to the permanent-delete confirmation.
  */
 export function MachineDeleteControl({
   machine,
@@ -55,23 +51,17 @@ export function MachineDeleteControl({
 }) {
   const { t } = useT("runtimes");
   const user = useAuthStore((s) => s.user);
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
   const [open, setOpen] = useState(false);
 
   const canDelete = useMemo(() => {
-    if (machine.runtimes.length === 0) return false;
-    const currentMember = user
-      ? members.find((m) => m.user_id === user.id)
-      : null;
-    const isAdmin = currentMember
-      ? currentMember.role === "owner" || currentMember.role === "admin"
-      : false;
-    if (isAdmin) return true;
-    if (!user) return false;
-    return machine.runtimes.every((r) => r.owner_id === user.id);
-  }, [machine.runtimes, members, user]);
+    return (
+      machine.runtimes.length > 0 &&
+      !!user &&
+      machine.runtimes.every((r) => r.owner_id === user.id)
+    );
+  }, [machine.runtimes, user]);
 
-  if (machine.runtimes.length === 0) return null;
+  if (!canDelete) return null;
 
   return (
     <>
@@ -83,11 +73,6 @@ export function MachineDeleteControl({
         onClick={() => setOpen(true)}
         data-testid="delete-computer-button"
         aria-label={t(($) => $.machine.delete_computer.button)}
-        title={
-          canDelete
-            ? undefined
-            : t(($) => $.list.delete_permission_hint)
-        }
       >
         <Trash2 className="h-3.5 w-3.5" aria-hidden />
         {t(($) => $.machine.delete_computer.button)}

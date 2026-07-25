@@ -96,8 +96,9 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const isAdmin = currentMember
     ? currentMember.role === "owner" || currentMember.role === "admin"
     : false;
-  const isRuntimeOwner = user && runtime.owner_id === user.id;
-  const canDelete = isAdmin || isRuntimeOwner;
+  const isRuntimeOwner = !!user && runtime.owner_id === user.id;
+  const canManage = isAdmin || isRuntimeOwner;
+  const canDelete = isRuntimeOwner;
 
   const servingAgents = agents.filter(
     (a) => a.runtime_id === runtime.id && !a.archived_at,
@@ -125,7 +126,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
           </span>
         }
         actions={
-          !canDelete ? (
+          !canManage ? (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <Lock className="h-3 w-3" />
               {t(($) => $.detail.read_only)}
@@ -164,7 +165,8 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
               runtime={runtime}
               cliVersion={cliVersion}
               launchedBy={launchedBy}
-              canDelete={!!canDelete}
+              canManage={canManage}
+              canDelete={canDelete}
               onDelete={() => setDeleteOpen(true)}
             />
           </div>
@@ -432,20 +434,19 @@ function DiagnosticsCard({
   runtime,
   cliVersion,
   launchedBy,
+  canManage,
   canDelete,
   onDelete,
 }: {
   runtime: AgentRuntime;
   cliVersion: string | null;
   launchedBy: string | null;
+  canManage: boolean;
   canDelete: boolean;
   onDelete: () => void;
 }) {
   const { t } = useT("runtimes");
   const isLocal = runtime.runtime_mode === "local";
-  // canDelete here doubles as the "can edit runtime" predicate — it already
-  // means "workspace owner/admin OR runtime owner", which is the same gate
-  // the server enforces for the visibility PATCH.
   return (
     <div className="rounded-lg border">
       <div className="border-b px-4 py-2.5">
@@ -456,7 +457,7 @@ function DiagnosticsCard({
           <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
             {t(($) => $.detail.diagnostics_visibility)}
           </div>
-          {canDelete ? (
+          {canManage ? (
             <VisibilityEditor runtime={runtime} />
           ) : (
             <VisibilityReadout runtime={runtime} />
@@ -476,7 +477,7 @@ function DiagnosticsCard({
               updateError={runtime.update_error}
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
-              canUpdate={canDelete}
+              canUpdate={canManage}
             />
           </div>
         )}

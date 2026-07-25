@@ -321,8 +321,8 @@
     "cli_managed_badge": "デスクトップ",
     "row_actions_aria": "行の操作",
     "delete_action": "削除",
-    "delete_permission_hint": "ランタイムの所有者とワークスペース管理者のみが、このランタイムを削除できます",
-    "delete_admin_hint": "ランタイムの所有者とワークスペース管理者のみが、ランタイムを削除できます。"
+    "delete_permission_hint": "ランタイムの所有者のみが、このランタイムを削除できます",
+    "delete_admin_hint": "ランタイムの所有者のみが、ランタイムを削除できます。"
   },
   "usage": {
     "period_label": "期間",

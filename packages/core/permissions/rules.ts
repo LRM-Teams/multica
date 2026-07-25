@@ -142,13 +142,12 @@ export function canDeleteRuntime(
   if (ctx.userId === null) {
     return deny("not_authenticated", "Sign in to delete runtimes.");
   }
-  if (isAdminLike(ctx.role)) return ALLOW;
   if (runtime.owner_id !== null && runtime.owner_id === ctx.userId) {
     return ALLOW;
   }
   return deny(
     "not_resource_owner",
-    "Only the runtime owner and workspace admins can delete this runtime.",
+    "Only the runtime owner can delete this runtime.",
   );
 }
 

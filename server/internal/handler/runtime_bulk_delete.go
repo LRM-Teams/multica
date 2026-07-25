@@ -79,8 +79,8 @@ func (h *Handler) RemoveAgentsByDaemon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rt := range runtimes {
-		if !canEditRuntime(member, rt) {
-			writeError(w, http.StatusForbidden, "you can only edit your own runtimes")
+		if !canDeleteRuntime(member, rt) {
+			writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
 			return
 		}
 	}
@@ -228,7 +228,7 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 	}
 
 	for _, rt := range runtimes {
-		if !canEditRuntime(member, rt) {
+		if !canDeleteRuntime(member, rt) {
 			writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
 			return
 		}

@@ -331,8 +331,8 @@
     "cli_managed_badge": "Desktop",
     "row_actions_aria": "Row actions",
     "delete_action": "Delete",
-    "delete_permission_hint": "Only the runtime owner and workspace admins can delete this runtime",
-    "delete_admin_hint": "Only the runtime owner and workspace admins can delete a runtime."
+    "delete_permission_hint": "Only the runtime owner can delete this runtime",
+    "delete_admin_hint": "Only the runtime owner can delete a runtime."
   },
   "usage": {
     "period_label": "Period",

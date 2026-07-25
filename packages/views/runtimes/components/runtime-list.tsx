@@ -95,13 +95,6 @@ export function RuntimeList({
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
-  const currentMember = user
-    ? members.find((m) => m.user_id === user.id)
-    : null;
-  const isAdmin = currentMember
-    ? currentMember.role === "owner" || currentMember.role === "admin"
-    : false;
-
   const workloadIndex = useMemo(
     () => buildWorkloadIndex(agents, snapshot),
     [agents, snapshot],
@@ -131,9 +124,9 @@ export function RuntimeList({
         ? memberById.get(runtime.owner_id) ?? null
         : null,
       workload: workloadIndex.get(runtime.id) ?? EMPTY_WORKLOAD,
-      canDelete: isAdmin || (!!user && runtime.owner_id === user.id),
+      canDelete: !!user && runtime.owner_id === user.id,
     }));
-  }, [runtimes, memberById, workloadIndex, isAdmin, user]);
+  }, [runtimes, memberById, workloadIndex, user]);
 
   const columns = useMemo(
     () =>

@@ -13,7 +13,10 @@ const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
 
-const mockUpdateRuntime = vi.hoisted(() => vi.fn());
+const { mockUpdateRuntime, mockQueryData } = vi.hoisted(() => ({
+  mockUpdateRuntime: vi.fn(),
+  mockQueryData: { value: [] as unknown[] },
+}));
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -48,7 +51,7 @@ vi.mock("@tanstack/react-query", async () => {
     );
   return {
     ...actual,
-    useQuery: vi.fn(() => ({ data: [], isLoading: false })),
+    useQuery: vi.fn(() => ({ data: mockQueryData.value, isLoading: false })),
   };
 });
 
@@ -148,7 +151,10 @@ function renderDetail(runtime: AgentRuntime) {
 }
 
 describe("RuntimeDetail visibility section", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQueryData.value = [];
+  });
 
   it("shows owner-editable visibility choices when the caller owns the runtime", () => {
     renderDetail(makeRuntime({ owner_id: "user-me" }));
@@ -170,5 +176,18 @@ describe("RuntimeDetail visibility section", () => {
     expect(screen.getByText("Public")).toBeInTheDocument();
     // The editor's "Private" choice button must not render in read-only mode.
     expect(screen.queryByText("Private")).not.toBeInTheDocument();
+  });
+
+  it("lets an admin manage another runtime but hides its delete action", () => {
+    mockQueryData.value = [
+      { user_id: "user-me", role: "admin", display_name: "Admin" },
+    ];
+    renderDetail(makeRuntime({ owner_id: "someone-else", visibility: "private" }));
+
+    expect(screen.getByText("Private")).toBeInTheDocument();
+    expect(screen.getByText("Public")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /delete runtime/i }),
+    ).toBeNull();
   });
 });

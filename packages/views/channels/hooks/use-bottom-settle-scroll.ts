@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
 import type { ChannelMessage } from "@multica/core/types";
 import { useActiveScrollGesture } from "./use-active-scroll-gesture";
+// DIAGNOSTIC ONLY (around-seq false-complete trace) — remove with the successor.
+// Every record site is guarded by `bssTraceEnabled()` so the default path
+// (flag unset) evaluates no fields, reads no DOM, and allocates no objects.
+import { bssRecord, bssTraceEnabled } from "./bss-diagnostic";
 
 // "At the bottom" tolerance: the last row counts as landed once its bottom edge
 // sits within this band of the scroller's bottom edge. Absorbs sub-pixel /
@@ -53,6 +57,8 @@ export function useBottomSettleScroll({
   handleAttached,
   scrollContainerEl,
   messageRefMap,
+  diagSourceTailComplete,
+  diagMessagesLoading,
 }: {
   channelId: string | undefined;
   messages: readonly ChannelMessage[];
@@ -71,6 +77,17 @@ export function useBottomSettleScroll({
   /** Rendered message-row DOM nodes keyed by message id — the last row's real
    * geometry is the completion check. */
   messageRefMap: ReadonlyMap<string, HTMLElement>;
+  /**
+   * DIAGNOSTIC ONLY — the around/latest source contract, so the trace can tell
+   * apart data-lag from measurement-lag at the false-complete frame: true when
+   * the loaded latest window already contains the real tail (`!has_more_after`;
+   * always true for the default/before-cursor page). Behaviour never reads it —
+   * it is recorded, not gated on. Remove with the successor.
+   */
+  diagSourceTailComplete?: boolean | null;
+  /** DIAGNOSTIC ONLY — initial-page loading (`messagesLoading`), recorded to
+   * correlate the settle frame with source readiness. Remove with the successor. */
+  diagMessagesLoading?: boolean;
 }): void {
   // Marks a channel visit's bottom scroll as resolved (reached the bottom band,
   // handed off to a user gesture, or exhausted the frame cap). NOT set at the top
@@ -101,14 +118,57 @@ export function useBottomSettleScroll({
   }
 
   useEffect(() => {
+    const lastMsg = messages[messages.length - 1];
+    const lastId = lastMsg?.id ?? null;
+
+    // DIAGNOSTIC: one entry per effect run, recorded BEFORE the early-return
+    // guards so the empty→populated transition (msgLen 0→69 as the around page
+    // arrives) is captured, not just runs that pass the guards. Records the
+    // source contract (`tailSeq` / `sourceTailComplete` / `messagesLoading`) so a
+    // false-complete frame can be classified as data-lag vs measurement-lag.
+    // Fully behind the opt-in flag: no field object, no DOM read on the default
+    // path (Barry's zero-cost contract).
+    if (bssTraceEnabled()) {
+      bssRecord("effect", {
+        msgLen: messages.length,
+        enabled,
+        handleAttached,
+        hasContainer: !!scrollContainerEl,
+        tailSeq: lastMsg?.seq ?? null,
+        tailInMap: !!lastId && messageRefMap.has(lastId),
+        sourceTailComplete: diagSourceTailComplete ?? null,
+        messagesLoading: diagMessagesLoading ?? null,
+        scrollTop: scrollContainerEl?.scrollTop ?? null,
+        scrollHeight: scrollContainerEl?.scrollHeight ?? null,
+        clientHeight: scrollContainerEl?.clientHeight ?? null,
+      });
+    }
+
     if (!scrollContainerEl || !handleAttached || !enabled || messages.length === 0) return;
     if (settledChannelRef.current === channelId) return;
 
-    const lastId = messages[messages.length - 1]?.id ?? null;
     // Per-visit baseline (see visitBaselineRef): any epoch beyond it means a real
     // touch/wheel began at some point this visit, so we hand off and stay off —
     // durably across effect re-runs, not just for this rAF chain.
     const startEpoch = visitBaselineRef.current.epoch;
+
+    let raf = 0;
+    let frame = 0;
+
+    // DIAGNOSTIC: settle resolution, correlatable to the `effect` records above
+    // via `tailSeq`. Guarded so nothing is evaluated on the default path.
+    const recordSettled = (reason: string) => {
+      if (!bssTraceEnabled()) return;
+      bssRecord("settled", {
+        reason,
+        frame,
+        tailSeq: lastMsg?.seq ?? null,
+        tailInMap: !!lastId && messageRefMap.has(lastId),
+        sourceTailComplete: diagSourceTailComplete ?? null,
+        scrollTop: scrollContainerEl.scrollTop,
+        scrollHeight: scrollContainerEl.scrollHeight,
+      });
+    };
 
     // Arrived = the last row is rendered AND its BOTTOM edge is within the band
     // of the scroller's bottom edge — real geometry, mirroring the unread-anchor
@@ -118,16 +178,34 @@ export function useBottomSettleScroll({
     const hasReached = () => {
       if (!lastId) return false;
       const el = messageRefMap.get(lastId);
-      return (
-        !!el &&
-        el.getBoundingClientRect().bottom -
-          scrollContainerEl.getBoundingClientRect().bottom <=
-          BOTTOM_BAND_PX
-      );
+      if (!el) {
+        // DIAGNOSTIC: tail row not yet in the DOM/ref map.
+        if (bssTraceEnabled()) bssRecord("reach", { tailInMap: false, result: false });
+        return false;
+      }
+      const rowBottom = el.getBoundingClientRect().bottom;
+      const containerBottom = scrollContainerEl.getBoundingClientRect().bottom;
+      const delta = rowBottom - containerBottom;
+      const result = delta <= BOTTOM_BAND_PX;
+      // DIAGNOSTIC: the exact geometry the completion decision is made on —
+      // whether the tail row's bottom is within the band while content may still
+      // be measuring (the suspected frame-of-false-completion). rowBottom/delta
+      // are already computed for the real decision above; only the record (its
+      // Math.round + object) is guarded away on the default path.
+      if (bssTraceEnabled()) {
+        bssRecord("reach", {
+          tailInMap: true,
+          rowBottom: Math.round(rowBottom),
+          containerBottom: Math.round(containerBottom),
+          delta: Math.round(delta),
+          scrollTop: scrollContainerEl.scrollTop,
+          scrollHeight: scrollContainerEl.scrollHeight,
+          result,
+        });
+      }
+      return result;
     };
 
-    let raf = 0;
-    let frame = 0;
     const tick = () => {
       // Permanent ownership handoff on any real user gesture — do NOT resume
       // even after touchend / wheel-idle; the user owns scroll now. Two signals:
@@ -137,19 +215,34 @@ export function useBottomSettleScroll({
       //  - epoch changed: a NEW gesture started at some point since we began.
       if (activeGestureRef.current || gestureEpochRef.current !== startEpoch) {
         settledChannelRef.current = channelId ?? null;
+        recordSettled("gesture");
         return;
       }
       // Directly pin the owned scroll parent to its current bottom. As rows
       // render and scrollHeight grows, this re-pins to the true bottom each
       // frame (measurement-evolution safe); the browser clamps to max scroll.
+      // `stBefore` is read only for the diagnostic — behind the opt-in flag.
+      const stBefore = bssTraceEnabled() ? scrollContainerEl.scrollTop : 0;
       scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
       frame += 1;
+      // DIAGNOSTIC: did the direct write actually move scrollTop this frame?
+      if (bssTraceEnabled()) {
+        bssRecord("write", {
+          frame,
+          stBefore: Math.round(stBefore),
+          stAfter: Math.round(scrollContainerEl.scrollTop),
+          scrollHeight: scrollContainerEl.scrollHeight,
+          clientHeight: scrollContainerEl.clientHeight,
+        });
+      }
       if (hasReached()) {
         settledChannelRef.current = channelId ?? null;
+        recordSettled("reached");
         return;
       }
       if (frame >= MAX_FRAMES) {
         settledChannelRef.current = channelId ?? null;
+        recordSettled("timeout");
         // eslint-disable-next-line no-console
         console.warn(
           "[useBottomSettleScroll] settle timed out — never reached the bottom band",
@@ -172,5 +265,7 @@ export function useBottomSettleScroll({
     messageRefMap,
     activeGestureRef,
     gestureEpochRef,
+    diagSourceTailComplete,
+    diagMessagesLoading,
   ]);
 }

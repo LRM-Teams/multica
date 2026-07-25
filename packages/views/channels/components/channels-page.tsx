@@ -169,6 +169,7 @@ import {
   buildChatMessageParts,
   useComposerPendingAttachments,
 } from "../hooks/use-composer-pending-attachments";
+import { deriveDiagSourceTailComplete } from "../hooks/bss-diagnostic";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import {
@@ -3235,6 +3236,10 @@ export function ChannelsPage({
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
                 loading={messagesLoading}
+                // DIAGNOSTIC ONLY (around-seq false-complete trace) — three-state via
+                // the tested helper, so the trace never conflates "page not returned
+                // yet" (null) with "tail complete" (Barry). Remove with the successor.
+                diagSourceTailComplete={deriveDiagSourceTailComplete(messagePages?.pages?.[0])}
                 loadingOlder={isFetchingOlderMessages}
                 hasOlder={!!hasOlderMessages}
                 onLoadOlder={() => fetchOlderMessages()}

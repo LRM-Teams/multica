@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { ChannelMessage } from "@multica/core/types";
 import { useBottomSettleScroll } from "./use-bottom-settle-scroll";
+import * as bssDiag from "./bss-diagnostic";
 
 // Manual frame pump: flush a bounded number of queued frames.
 let nextId: number;
@@ -28,6 +29,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.requestAnimationFrame = origRaf;
   globalThis.cancelAnimationFrame = origCaf;
+  delete (window as unknown as { __bssTraceEnabled?: boolean }).__bssTraceEnabled;
   vi.restoreAllMocks();
 });
 
@@ -303,5 +305,40 @@ describe("useBottomSettleScroll", () => {
       "[useBottomSettleScroll] settle timed out — never reached the bottom band",
       { channelId: "c1" },
     );
+  });
+
+  it("DIAGNOSTIC zero-cost: never reaches a bssRecord call site on the default path (flag unset)", () => {
+    // Every record site is guarded by `if (bssTraceEnabled()) bssRecord(...)`, so
+    // with the flag unset the call is short-circuited and its field object (DOM
+    // reads + Math.round) is never even constructed. Proving bssRecord is never
+    // CALLED proves the fields are never evaluated (Barry's zero-cost contract).
+    const rec = vi.spyOn(bssDiag, "bssRecord");
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
+    renderHook(() =>
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
+    );
+    flushFrames();
+    expect(h.scrollTop).toBe(879 - CLIENT_HEIGHT); // behaviour unchanged — still settles
+    expect(rec).not.toHaveBeenCalled();
+  });
+
+  it("DIAGNOSTIC: records the effect/write/reach/settled chronology once opted in", () => {
+    (window as unknown as { __bssTraceEnabled?: boolean }).__bssTraceEnabled = true;
+    const rec = vi.spyOn(bssDiag, "bssRecord");
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
+    renderHook(() =>
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
+    );
+    flushFrames();
+    const kinds = new Set(rec.mock.calls.map((c) => c[0]));
+    expect(kinds.has("effect")).toBe(true);
+    expect(kinds.has("write")).toBe(true);
+    expect(kinds.has("settled")).toBe(true);
+    // tailSeq/sourceTailComplete are recorded (the source-contract fields Barry
+    // needs to classify data-lag vs measurement-lag), even when absent → null.
+    const effect = rec.mock.calls.find((c) => c[0] === "effect")?.[1];
+    expect(effect).toHaveProperty("tailSeq");
+    expect(effect).toHaveProperty("sourceTailComplete");
+    expect(effect).toHaveProperty("messagesLoading");
   });
 });

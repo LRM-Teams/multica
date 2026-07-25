@@ -657,6 +657,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       qc,
       setActiveSession,
       t,
+      wsId,
     ],
   );
 

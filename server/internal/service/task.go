@@ -54,6 +54,16 @@ type EphemeralSandboxManager interface {
 	Cleanup(context.Context, db.AgentInboxEvent) error
 }
 
+type CanonicalChannelMessage struct {
+	ID                  pgtype.UUID
+	WorkspaceID         pgtype.UUID
+	ChannelID           pgtype.UUID
+	ThreadRootMessageID pgtype.UUID
+	ThreadID            pgtype.Text
+	AuthorType          string
+	Seq                 int64
+}
+
 type TaskService struct {
 	Queries   *db.Queries
 	TxStarter TxStarter
@@ -71,6 +81,14 @@ type TaskService struct {
 	// OnTaskCompleted is an optional best-effort callback fired only after a
 	// task completion transaction commits successfully.
 	OnTaskCompleted func(ctx context.Context, task db.AgentInboxEvent)
+	// PrepareCanonicalChannelMessageCommit extends a canonical visible message
+	// transaction with handler-owned dependent state. The returned callback is
+	// invoked only after the same transaction commits successfully.
+	PrepareCanonicalChannelMessageCommit func(
+		ctx context.Context,
+		exec db.DBTX,
+		message CanonicalChannelMessage,
+	) (afterCommit func(context.Context), err error)
 
 	// Training, when non-nil, enables the RL session-open hook at task
 	// creation (see maybeOpenTrainingSession). Nil = training not configured

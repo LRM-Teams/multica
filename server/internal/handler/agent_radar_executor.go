@@ -842,7 +842,7 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	directive.Content = content
 	directive.Parts = parts
 
-	msg, err := insertChannelMessageWithPartsExec(
+	inserted, err := insertChannelMessageWithPartsExec(
 		ctx, exec, directive.Target.ChannelID, run.WorkspaceID,
 		"agent", supervisor.ID, agentDisplayName(supervisor), directive.Content, directive.Parts,
 		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
@@ -851,6 +851,7 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	if err != nil {
 		return execution, fmt.Errorf("create visible radar directive: %w", err)
 	}
+	msg := inserted.Message
 	if _, err := exec.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, directive.Target.ChannelID); err != nil {
 		return execution, fmt.Errorf("update directed channel: %w", err)
 	}
@@ -868,6 +869,7 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	}
 	execution.AfterCommit = func() {
 		// Realtime and activity publication must observe committed rows only.
+		h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 		h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), directive.Target.ChannelID)
 		messages := []ChannelMessageResponse{msg}
 		h.attachChannelMessageAuthorAvatars(ctx, uuidToString(run.WorkspaceID), messages)

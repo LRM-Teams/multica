@@ -230,10 +230,14 @@ func (s *TaskService) resolveQuickCreateReturnTarget(ctx context.Context, worksp
 }
 
 func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, workspaceID, agentID pgtype.UUID, agentName string, target quickCreateReturnTarget, content, clientMessageID string) (quickCreateReturnMessage, bool, error) {
-	exec := s.dbExec()
-	if exec == nil {
-		return quickCreateReturnMessage{}, false, errors.New("missing db executor")
+	if s.TxStarter == nil {
+		return quickCreateReturnMessage{}, false, errors.New("missing transaction starter")
 	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return quickCreateReturnMessage{}, false, err
+	}
+	defer tx.Rollback(ctx)
 	const insertSQL = `
 		INSERT INTO channel_message (
 			channel_id, workspace_id, author_type, author_id, author_name,
@@ -245,7 +249,7 @@ func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, worksp
 		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts,
 		          source, external_message_id, client_message_id, reply_to_message_id,
 		          thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`
-	row := exec.QueryRow(ctx, insertSQL,
+	row := tx.QueryRow(ctx, insertSQL,
 		target.channelID,
 		workspaceID,
 		agentID,
@@ -257,26 +261,48 @@ func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, worksp
 		target.threadID,
 		target.depth,
 	)
-	msg, err := scanQuickCreateReturnMessage(row)
-	if err == nil {
-		return msg, true, nil
+	msg, scanErr := scanQuickCreateReturnMessage(row)
+	if scanErr != nil && !errors.Is(scanErr, pgx.ErrNoRows) {
+		return quickCreateReturnMessage{}, false, scanErr
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(scanErr, pgx.ErrNoRows) {
+		const selectSQL = `
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts,
+			       source, external_message_id, client_message_id, reply_to_message_id,
+			       thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			FROM channel_message
+			WHERE workspace_id = $1
+			  AND channel_id = $2
+			  AND author_type = 'agent'
+			  AND author_id = $3
+			  AND client_message_id = $4
+			LIMIT 1`
+		msg, err = scanQuickCreateReturnMessage(tx.QueryRow(ctx, selectSQL, workspaceID, target.channelID, agentID, clientMessageID))
+		return msg, false, err
+	}
+
+	var afterCommit func(context.Context)
+	if s.PrepareCanonicalChannelMessageCommit != nil {
+		afterCommit, err = s.PrepareCanonicalChannelMessageCommit(ctx, tx, CanonicalChannelMessage{
+			ID:                  msg.id,
+			WorkspaceID:         msg.workspaceID,
+			ChannelID:           msg.channelID,
+			ThreadRootMessageID: msg.threadRootMessageID,
+			ThreadID:            msg.threadID,
+			AuthorType:          msg.authorType,
+			Seq:                 msg.seq,
+		})
+		if err != nil {
+			return quickCreateReturnMessage{}, false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return quickCreateReturnMessage{}, false, err
 	}
-	const selectSQL = `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts,
-		       source, external_message_id, client_message_id, reply_to_message_id,
-		       thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
-		FROM channel_message
-		WHERE workspace_id = $1
-		  AND channel_id = $2
-		  AND author_type = 'agent'
-		  AND author_id = $3
-		  AND client_message_id = $4
-		LIMIT 1`
-	msg, err = scanQuickCreateReturnMessage(exec.QueryRow(ctx, selectSQL, workspaceID, target.channelID, agentID, clientMessageID))
-	return msg, false, err
+	if afterCommit != nil {
+		afterCommit(context.WithoutCancel(ctx))
+	}
+	return msg, true, nil
 }
 
 func scanQuickCreateReturnMessage(row pgx.Row) (quickCreateReturnMessage, error) {

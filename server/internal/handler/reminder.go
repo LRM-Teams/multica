@@ -114,16 +114,6 @@ func managedPatrolStepForDelaySeconds(delaySeconds *int64) (int16, error) {
 	}
 }
 
-func validateManagedPatrolChoice(state managedPatrolIssueState, step int16) error {
-	if state.Active == 0 {
-		return fmt.Errorf("managed group patrol is dormant because the group has no active issue")
-	}
-	if state.Blocked > 0 && step != 0 {
-		return fmt.Errorf("managed group patrol with blocked work must use delay_seconds 900")
-	}
-	return nil
-}
-
 type agentReminder struct {
 	ID                        pgtype.UUID
 	WorkspaceID               pgtype.UUID
@@ -156,17 +146,14 @@ type reminderQueryRower interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+type reminderQueryer interface {
+	reminderQueryRower
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 type reminderAnchorSnapshot struct {
 	Excerpt   string
 	Available bool
-}
-
-type managedPatrolIssueState struct {
-	Active    int
-	Pending   int
-	Executing int
-	InReview  int
-	Blocked   int
 }
 
 type agentReminderResponse struct {
@@ -596,20 +583,16 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	}
 	managedPatrol := previous.OriginKind == "group_manager_auto" && previous.ManagedKind.String == "patrol"
 	managedStep := previous.ManagedBackoffStep
-	var managedState managedPatrolIssueState
+	var managedContext managedPatrolOpenLoopContext
 	if managedPatrol {
 		managedStep, err = managedPatrolStepForDelaySeconds(req.DelaySeconds)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		managedState, err = loadManagedPatrolIssueState(r.Context(), tx, previous.WorkspaceID, previous.AnchorChannelID)
+		managedContext, err = loadManagedPatrolOpenLoopContext(r.Context(), tx, previous.WorkspaceID, previous.AnchorChannelID, previous.AgentID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to validate managed group patrol")
-			return
-		}
-		if err := validateManagedPatrolChoice(managedState, managedStep); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 	}
@@ -659,12 +642,12 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	var lifecycleDetails any = []byte(`{}`)
 	if managedPatrol {
 		lifecycleDetails = map[string]any{
-			"policy":          "group_manager_issue_progress_v1",
-			"controlled_dial": true,
-			"backoff_step":    managedStep,
-			"delay_seconds":   *req.DelaySeconds,
-			"active_issues":   managedState.Active,
-			"blocked_issues":  managedState.Blocked,
+			"policy":             "group_manager_open_loop_v1",
+			"controlled_dial":    true,
+			"backoff_step":       managedStep,
+			"delay_seconds":      *req.DelaySeconds,
+			"issue_candidates":   len(managedContext.Issues),
+			"message_candidates": len(managedContext.Messages),
 		}
 	}
 	if _, err := tx.Exec(r.Context(), `
@@ -794,7 +777,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	}
 	managedPatrol := previous.OriginKind == "group_manager_auto" && previous.ManagedKind.String == "patrol"
 	managedStep := previous.ManagedBackoffStep
-	var managedState managedPatrolIssueState
+	var managedContext managedPatrolOpenLoopContext
 	if previous.OriginKind == "group_manager_auto" {
 		if !managedPatrol || explicitFireAt == nil || req.DelaySeconds == nil {
 			writeError(w, http.StatusBadRequest, "managed reminders only allow replanning the next group patrol")
@@ -805,13 +788,9 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		managedState, err = loadManagedPatrolIssueState(r.Context(), tx, previous.WorkspaceID, previous.AnchorChannelID)
+		managedContext, err = loadManagedPatrolOpenLoopContext(r.Context(), tx, previous.WorkspaceID, previous.AnchorChannelID, previous.AgentID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to validate managed group patrol")
-			return
-		}
-		if err := validateManagedPatrolChoice(managedState, managedStep); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 	}
@@ -889,12 +868,12 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	if managedPatrol {
 		lifecycleReason = "patrol_replanned_by_group_manager"
 		lifecycleDetails = map[string]any{
-			"policy":          "group_manager_issue_progress_v1",
-			"controlled_dial": true,
-			"backoff_step":    managedStep,
-			"delay_seconds":   *req.DelaySeconds,
-			"active_issues":   managedState.Active,
-			"blocked_issues":  managedState.Blocked,
+			"policy":             "group_manager_open_loop_v1",
+			"controlled_dial":    true,
+			"backoff_step":       managedStep,
+			"delay_seconds":      *req.DelaySeconds,
+			"issue_candidates":   len(managedContext.Issues),
+			"message_candidates": len(managedContext.Messages),
 		}
 	}
 	if _, err := tx.Exec(r.Context(), `
@@ -1913,21 +1892,21 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	if err != nil {
 		return err
 	}
-	var patrolState managedPatrolIssueState
+	var patrolContext managedPatrolOpenLoopContext
 	managedPatrol := reminder.OriginKind == "group_manager_auto" && reminder.ManagedKind.String == "patrol"
 	if managedPatrol {
-		patrolState, err = loadManagedPatrolIssueState(ctx, tx, reminder.WorkspaceID, reminder.AnchorChannelID)
+		patrolContext, err = loadManagedPatrolOpenLoopContext(ctx, tx, reminder.WorkspaceID, reminder.AnchorChannelID, reminder.AgentID)
 		if err != nil {
 			return err
 		}
-		if patrolState.Active == 0 {
+		if !patrolContext.HasCandidates() {
 			return h.dormantManagedPatrolOccurrence(ctx, tx, reminder, occurrenceID)
 		}
 	}
 
 	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
 	if managedPatrol {
-		prompt = buildManagedPatrolPrompt(ch, reminder, occurrenceID, patrolState)
+		prompt = buildManagedPatrolPrompt(ch, reminder, occurrenceID, patrolContext)
 	}
 	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
 	if err != nil {
@@ -1957,24 +1936,18 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		if nextStep > 3 {
 			nextStep = 3
 		}
-		if patrolState.Blocked > 0 {
-			nextStep = 0
-		}
 		delay := managedPatrolDelayForStep(nextStep)
 		next := time.Now().UTC().Add(delay)
 		resultingState = "scheduled"
 		nextFireAt = next
 		lifecycleReason = "patrol_controlled_dial_fallback_rearmed"
 		lifecycleDetails = map[string]any{
-			"policy":           "group_manager_issue_progress_v1",
-			"controlled_dial":  true,
-			"active_issues":    patrolState.Active,
-			"pending_issues":   patrolState.Pending,
-			"executing_issues": patrolState.Executing,
-			"review_issues":    patrolState.InReview,
-			"blocked_issues":   patrolState.Blocked,
-			"fallback_step":    nextStep,
-			"fallback_seconds": int64(delay / time.Second),
+			"policy":             "group_manager_open_loop_v1",
+			"controlled_dial":    true,
+			"issue_candidates":   len(patrolContext.Issues),
+			"message_candidates": len(patrolContext.Messages),
+			"fallback_step":      nextStep,
+			"fallback_seconds":   int64(delay / time.Second),
 		}
 		if err := tx.QueryRow(ctx, `
 			UPDATE agent_reminder
@@ -2065,72 +2038,6 @@ func managedPatrolDelayForStep(step int16) time.Duration {
 	default:
 		return managedPatrolMaxDelay
 	}
-}
-
-func loadManagedPatrolIssueState(
-	ctx context.Context,
-	q reminderQueryRower,
-	workspaceID, channelID pgtype.UUID,
-) (managedPatrolIssueState, error) {
-	var state managedPatrolIssueState
-	err := q.QueryRow(ctx, `
-		WITH scoped AS (
-		  SELECT DISTINCT work.id, work.status
-		  FROM channel ch
-		  JOIN issue work
-		    ON work.workspace_id = ch.workspace_id
-		   AND work.status NOT IN ('done', 'cancelled')
-		   AND (
-		     (ch.project_id IS NOT NULL AND work.project_id = ch.project_id)
-		     OR EXISTS (
-		       SELECT 1
-		       FROM issue_source_message source
-		       WHERE source.issue_id = work.id
-		         AND source.workspace_id = ch.workspace_id
-		         AND source.channel_id = ch.id
-		     )
-		   )
-		  WHERE ch.id = $1
-		    AND ch.workspace_id = $2
-		    AND ch.kind = 'group'
-		    AND ch.archived_at IS NULL
-		)
-		SELECT
-		  count(*)::int,
-		  count(*) FILTER (WHERE status IN ('backlog', 'todo'))::int,
-		  count(*) FILTER (WHERE status = 'in_progress')::int,
-		  count(*) FILTER (WHERE status = 'in_review')::int,
-		  count(*) FILTER (WHERE status = 'blocked')::int
-		FROM scoped`, channelID, workspaceID).Scan(
-		&state.Active,
-		&state.Pending,
-		&state.Executing,
-		&state.InReview,
-		&state.Blocked,
-	)
-	return state, err
-}
-
-func buildManagedPatrolPrompt(
-	ch ChannelResponse,
-	reminder agentReminder,
-	occurrenceID pgtype.UUID,
-	state managedPatrolIssueState,
-) string {
-	var b strings.Builder
-	b.WriteString("A managed issue-progress patrol is due and requires group-manager coordination.\n")
-	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
-	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
-	fmt.Fprintf(&b, "Group: #%s\n", ch.Name)
-	fmt.Fprintf(&b, "Active issue snapshot: total=%d pending=%d executing=%d in_review=%d blocked=%d.\n",
-		state.Active, state.Pending, state.Executing, state.InReview, state.Blocked)
-	b.WriteString("Inspect only the active issues and their task lifecycle, ownership, review gate, blockers, issue comments, concrete outputs, and explicit near-term commitments. Group chat quietness or chatter alone is not progress. Before finishing, choose when this exact patrol should check again by running `multica reminder snooze --id <reminder-id> --delay-seconds <seconds>` with exactly one of 900, 1800, 2700, or 3600. Use 900 when any issue is blocked. Never create, cancel, or mutate any other patrol reminder. The server has already armed a bounded fallback and will reset this same reminder to 15 minutes on real issue progress.\n")
-	b.WriteString("Pending work needs ownership/start coordination; executing work needs progress verification; in-review work needs reviewer/merge-gate coordination rather than executor rework. For blocked work, check whether the blocker is cleared without repeatedly disturbing the blocked executor. A task still incomplete without real progress at the one-hour boundary is stalled and needs coordination.\n")
-	b.WriteString("Act as a normal group member and speak only when the issue state genuinely merits coordination. Prefer private coordination for one recipient and minimize group noise; use the related group or thread only when shared visibility or multiple participants are necessary. Issue creation, assignment, and status system events plus their directed wakes already own work delivery. Do not duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands. If no visible coordination is needed, send no visible message, but still choose the next check for this same reminder.\n")
-	b.WriteString(channelOutputContractInstruction)
-	b.WriteString("\n")
-	b.WriteString(channelContinuationInstruction)
-	return b.String()
 }
 
 func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, reminder agentReminder) (reminderAnchorSnapshot, error) {
@@ -2238,7 +2145,7 @@ func (h *Handler) dormantManagedPatrolOccurrence(
 	reminder agentReminder,
 	occurrenceID pgtype.UUID,
 ) error {
-	const reason = "patrol_no_active_issue_dormant"
+	const reason = "patrol_no_open_loop_context_dormant"
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_reminder_occurrence
 		SET status = 'cancelled', terminal_reason = $2, anchor_available = true,
@@ -2262,7 +2169,7 @@ func (h *Handler) dormantManagedPatrolOccurrence(
 			timezone_snapshot, resulting_state, reason_code, details
 		) VALUES (
 			$1, $2, $3, $4, 'cancelled', 'system', $5, $6, $7, $8,
-			'fired', $9, '{"policy":"group_manager_issue_progress_v1","active_issue":false}'::jsonb
+			'fired', $9, '{"policy":"group_manager_open_loop_v1","candidate_count":0}'::jsonb
 		)`,
 		reminder.ID, reminder.WorkspaceID, reminder.AgentID, occurrenceID,
 		reminder.FireAt, reminder.Title, nullableText(reminder.Cadence),

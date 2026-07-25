@@ -5,7 +5,124 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func rearmDormantManagedPatrolForChannelMessage(
+	ctx context.Context,
+	exec dbExecutor,
+	workspaceID, channelID pgtype.UUID,
+	message ChannelMessageResponse,
+) (*agentReminder, error) {
+	rearmed, err := scanAgentReminder(exec.QueryRow(ctx, `
+		WITH locked AS (
+		  SELECT reminder.id, reminder.workspace_id, reminder.agent_id,
+		         reminder.fire_at AS previous_fire_at, reminder.title,
+		         reminder.cadence, reminder.schedule_timezone
+		  FROM agent_reminder reminder
+		  JOIN channel ch
+		    ON ch.id = reminder.anchor_channel_id
+		   AND ch.workspace_id = reminder.workspace_id
+		   AND ch.kind = 'group'
+		   AND ch.archived_at IS NULL
+		   AND ch.group_manager_agent_id = reminder.agent_id
+		  WHERE reminder.workspace_id = $1
+		    AND reminder.anchor_channel_id = $2
+		    AND reminder.origin_kind = 'group_manager_auto'
+		    AND reminder.managed_kind = 'patrol'
+		    AND reminder.status = 'fired'
+		  FOR UPDATE OF reminder
+		),
+		rearmed AS (
+		  UPDATE agent_reminder reminder
+		  SET status = 'scheduled',
+		      fire_at = now() + interval '15 minutes',
+		      cadence = NULL,
+		      schedule_timezone = NULL,
+		      cadence_next_at = NULL,
+		      current_occurrence_id = NULL,
+		      terminal_reason = NULL,
+		      fired_task_id = NULL,
+		      managed_backoff_step = 0,
+		      version = reminder.version + 1,
+		      updated_at = now()
+		  FROM locked
+		  WHERE reminder.id = locked.id
+		  RETURNING reminder.*, locked.previous_fire_at
+		),
+		lifecycle AS (
+		  INSERT INTO agent_reminder_lifecycle_event (
+		    reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
+		    previous_fire_at, next_fire_at, title_snapshot, cadence_snapshot,
+		    timezone_snapshot, resulting_state, reason_code, details
+		  )
+		  SELECT
+		    rearmed.id, rearmed.workspace_id, rearmed.agent_id,
+		    'scheduled', 'system', rearmed.agent_id,
+		    rearmed.previous_fire_at, rearmed.fire_at, rearmed.title,
+		    rearmed.cadence, rearmed.schedule_timezone, 'scheduled',
+		    'patrol_open_loop_message_rearm',
+		    jsonb_build_object(
+		      'policy', 'group_manager_open_loop_v1',
+		      'message_id', $3::text,
+		      'message_seq', $4::bigint,
+		      'author_type', $5::text,
+		      'delay_seconds', 900
+		    )
+		  FROM rearmed
+		  RETURNING reminder_id
+		)
+		SELECT `+reminderSelectColumnsWithAlias("rearmed")+`
+		FROM rearmed
+		JOIN lifecycle ON lifecycle.reminder_id = rearmed.id`,
+		workspaceID,
+		channelID,
+		message.ID,
+		message.Seq,
+		message.Type,
+	))
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &rearmed, nil
+}
+
+func (h *Handler) publishRearmedManagedPatrol(ctx context.Context, reminder *agentReminder) {
+	if reminder == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
+	h.projectReminderUpsert(ctx, *reminder)
+}
+
+func (h *Handler) prepareCanonicalChannelMessageCommit(
+	ctx context.Context,
+	exec db.DBTX,
+	message service.CanonicalChannelMessage,
+) (func(context.Context), error) {
+	rearmed, err := rearmDormantManagedPatrolForChannelMessage(
+		ctx,
+		exec,
+		message.WorkspaceID,
+		message.ChannelID,
+		ChannelMessageResponse{
+			ID:   uuidToString(message.ID),
+			Seq:  message.Seq,
+			Type: message.AuthorType,
+		},
+	)
+	if err != nil || rearmed == nil {
+		return nil, err
+	}
+	return func(postCommitCtx context.Context) {
+		h.publishRearmedManagedPatrol(postCommitCtx, rearmed)
+	}, nil
+}
 
 // ensureGroupManagerPatrolIfNeverCreated bootstraps the platform-owned adaptive
 // patrol for a newly bound group-manager agent. It deliberately treats any historical
@@ -60,14 +177,14 @@ func (h *Handler) ensureGroupManagerPatrolIfNeverCreated(ctx context.Context, wo
 		FROM channel_message
 		WHERE workspace_id = $1 AND channel_id = $2 AND deleted_at IS NULL
 		ORDER BY created_at ASC, id ASC LIMIT 1`, workspaceID, channelID).Scan(&anchorMessageID)
-	patrolState, err := loadManagedPatrolIssueState(ctx, tx, workspaceID, channelID)
+	patrolContext, err := loadManagedPatrolOpenLoopContext(ctx, tx, workspaceID, channelID, managerID)
 	if err != nil {
 		return err
 	}
 	next := time.Now().UTC().Add(managedPatrolMinDelay)
 	status := "fired"
 	reason := "group_manager_patrol_bootstrapped_dormant"
-	if patrolState.Active > 0 {
+	if patrolContext.HasCandidates() {
 		status = "scheduled"
 		reason = "group_manager_patrol_bootstrapped"
 	}

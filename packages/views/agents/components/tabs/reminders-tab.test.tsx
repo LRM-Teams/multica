@@ -152,8 +152,8 @@ describe("RemindersTab", () => {
     renderTab();
 
     expect(await screen.findByText("群巡检")).toBeInTheDocument();
-    expect(screen.getByText("Next")).toBeInTheDocument();
-    expect(screen.getByText("Last patrol")).toBeInTheDocument();
+    expect(screen.getByText(/Group manager on duty · Next check around/)).toBeInTheDocument();
+    expect(screen.getByText(/Last checked/)).toBeInTheDocument();
   });
 
   it("shows an honest first-run patrol state when no fire has happened yet", async () => {
@@ -190,8 +190,11 @@ describe("RemindersTab", () => {
 
     expect(await screen.findByText("群巡检")).toBeInTheDocument();
     expect(screen.getByText("Dormant")).toBeInTheDocument();
-    expect(screen.getByText("Last patrol")).toBeInTheDocument();
-    expect(screen.queryByText("Next")).toBeNull();
+    expect(
+      screen.getByText("Group manager on duty · Will remind when follow-up is needed"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Last checked/)).toBeInTheDocument();
+    expect(screen.queryByText(/Next check around/)).toBeNull();
   });
 
   it("shows one cadence and timezone chip for a recurring calendar reminder", async () => {

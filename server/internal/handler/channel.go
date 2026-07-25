@@ -3741,7 +3741,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer tx.Rollback(r.Context())
-	msg, err := insertChannelMessageWithPartsExec(
+	inserted, err := insertChannelMessageWithPartsExec(
 		r.Context(), tx, parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{},
 		authorName, content, parts, "lark", external, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
 		pgtype.UUID{}, &threadID, 0,
@@ -3754,10 +3754,12 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to import lark message")
 		return
 	}
+	msg := inserted.Message
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit lark message import")
 		return
 	}
+	h.publishRearmedManagedPatrol(r.Context(), inserted.RearmedManagedPatrol)
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(msg.ChannelID))
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, parseUUID(ch.ID), msg)
@@ -5906,7 +5908,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	msg, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if in.ClientMessageID != nil && isUniqueViolation(err) {
@@ -5914,6 +5916,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 		}
 		return channelMessageCreateResult{}, err
 	}
+	msg := inserted.Message
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
 		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), in.WorkspaceID, "member", in.AuthorID, attachmentIDs); err != nil {
@@ -5947,6 +5950,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err := tx.Commit(ctx); err != nil {
 		return channelMessageCreateResult{}, err
 	}
+	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 	return channelMessageCreateResult{Message: msg, Created: true}, nil
 }
 
@@ -6085,10 +6089,33 @@ func (h *Handler) insertChannelMessage(ctx context.Context, channelID, workspace
 }
 
 func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID *string, replyToMessageID, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (ChannelMessageResponse, error) {
-	return insertChannelMessageWithPartsExec(ctx, h.DB, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth)
+	if h == nil || h.TxStarter == nil {
+		return ChannelMessageResponse{}, errors.New("channel transaction starter unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
+	return inserted.Message, nil
 }
 
-func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (ChannelMessageResponse, error) {
+type channelMessageInsertResult struct {
+	Message              ChannelMessageResponse
+	RearmedManagedPatrol *agentReminder
+}
+
+// insertChannelMessageWithPartsExec mutates only transactional state. A caller
+// that receives RearmedManagedPatrol must publish it strictly after commit.
+func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (channelMessageInsertResult, error) {
 	row := exec.QueryRow(ctx, `
 			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth)
 			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16)
@@ -6096,12 +6123,16 @@ func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, cha
 		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth)
 	msg, err := scanChannelMessage(row)
 	if err != nil {
-		return ChannelMessageResponse{}, err
+		return channelMessageInsertResult{}, err
 	}
 	if err := incrementChannelMentionUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, content, parts); err != nil {
-		return ChannelMessageResponse{}, err
+		return channelMessageInsertResult{}, err
 	}
-	return msg, nil
+	rearmed, err := rearmDormantManagedPatrolForChannelMessage(ctx, exec, workspaceID, channelID, msg)
+	if err != nil {
+		return channelMessageInsertResult{}, err
+	}
+	return channelMessageInsertResult{Message: msg, RearmedManagedPatrol: rearmed}, nil
 }
 
 func channelMentionedMemberIDs(content string, parts []protocol.MessagePart, authorType string, authorID pgtype.UUID) []pgtype.UUID {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -162,6 +163,40 @@ func TestQuickCreateCompletion_ReturnsToSourceChannelThreadAndIsIdempotent(t *te
 	ctx := context.Background()
 	queries := db.New(testPool)
 	taskSvc := service.NewTaskService(queries, testPool, nil, events.New())
+	var preparedMessages []service.CanonicalChannelMessage
+	var afterCommitCount int
+	taskSvc.PrepareCanonicalChannelMessageCommit = func(
+		ctx context.Context,
+		exec db.DBTX,
+		message service.CanonicalChannelMessage,
+	) (func(context.Context), error) {
+		var visibleInsideTransaction bool
+		if err := exec.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM channel_message WHERE id = $1)`,
+			message.ID,
+		).Scan(&visibleInsideTransaction); err != nil {
+			return nil, err
+		}
+		if !visibleInsideTransaction {
+			return nil, errors.New("canonical quick-create return was not visible inside its transaction")
+		}
+		preparedMessages = append(preparedMessages, message)
+		return func(postCommitCtx context.Context) {
+			var visibleAfterCommit bool
+			if err := testPool.QueryRow(postCommitCtx,
+				`SELECT EXISTS (SELECT 1 FROM channel_message WHERE id = $1)`,
+				message.ID,
+			).Scan(&visibleAfterCommit); err != nil {
+				t.Errorf("load committed quick-create return: %v", err)
+				return
+			}
+			if !visibleAfterCommit {
+				t.Error("quick-create return after-commit callback ran before commit")
+				return
+			}
+			afterCommitCount++
+		}, nil
+	}
 	agentID := quickCreateFixtureAgentID(t)
 	channelID, rootID, replyID, threadID := seedQuickCreateSourceThread(t, "group", agentID, true)
 
@@ -205,6 +240,18 @@ func TestQuickCreateCompletion_ReturnsToSourceChannelThreadAndIsIdempotent(t *te
 	if !strings.Contains(content, "mention://member/"+testUserID) {
 		t.Fatalf("return content must mention the quick-create requester so they get notified, got: %q", content)
 	}
+	if len(preparedMessages) != 1 || afterCommitCount != 1 {
+		t.Fatalf("canonical quick-create commit hooks prepared/after=%d/%d, want 1/1",
+			len(preparedMessages), afterCommitCount)
+	}
+	prepared := preparedMessages[0]
+	if util.UUIDToString(prepared.WorkspaceID) != testWorkspaceID ||
+		util.UUIDToString(prepared.ChannelID) != channelID ||
+		util.UUIDToString(prepared.ThreadRootMessageID) != rootID ||
+		!prepared.ThreadID.Valid || prepared.ThreadID.String != threadID ||
+		prepared.AuthorType != "agent" || prepared.Seq <= 0 {
+		t.Fatalf("canonical quick-create group/thread message=%+v", prepared)
+	}
 	assertQuickCreateReturnMetadata(t, issue.ID, "sent", "")
 
 	// Duplicate terminal callbacks are treated as idempotent success by the
@@ -224,6 +271,10 @@ func TestQuickCreateCompletion_ReturnsToSourceChannelThreadAndIsIdempotent(t *te
 	}
 	if returnCount != 1 {
 		t.Fatalf("duplicate completion return count = %d, want 1", returnCount)
+	}
+	if len(preparedMessages) != 1 || afterCommitCount != 1 {
+		t.Fatalf("duplicate completion repeated canonical commit hooks prepared/after=%d/%d",
+			len(preparedMessages), afterCommitCount)
 	}
 }
 

@@ -309,6 +309,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		h.WorkGraph = workgraph.NewStore(pool)
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
+	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
 	return h
 }
 

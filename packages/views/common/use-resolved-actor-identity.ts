@@ -44,22 +44,26 @@ export function useResolvedActorIdentity(
       ? getActorAvatarUrl(mentionType, actorId)
       : null;
 
+  const directoryAvatarResolved = resolvePublicFileUrl(directoryAvatar);
+  // AC#5 / LRM-391: directory may have a name but no face (ListAgents thin).
+  // Still hit member-profiles for avatar — do not leave Presence/Working blank.
+  const needsProfile = !fromDirectory || !directoryAvatarResolved;
+
   const wsId = useWorkspaceId();
   const profileType = mentionType ? toMemberProfileType(mentionType) : "user";
   const { data: profile } = useQuery({
     ...memberProfileOptions(wsId, profileType, actorId ?? ""),
-    enabled: !!wsId && !!actorId && mentionType != null && !fromDirectory,
+    enabled: !!wsId && !!actorId && mentionType != null && needsProfile,
   });
 
   if (!actorId || !mentionType) {
     return { displayName: null, avatarUrl: null };
   }
-  if (fromDirectory) {
-    return { displayName: fromDirectory, avatarUrl: directoryAvatar };
-  }
+  const profileName = profileActorDisplayName(profile);
+  const profileAvatar = resolvePublicFileUrl(profile?.avatar_url);
   return {
-    displayName: profileActorDisplayName(profile),
-    avatarUrl: resolvePublicFileUrl(profile?.avatar_url),
+    displayName: fromDirectory ?? profileName,
+    avatarUrl: directoryAvatarResolved ?? profileAvatar,
   };
 }
 

@@ -41,6 +41,16 @@ vi.mock("@multica/core/workspace/queries", () => ({
           member_id: "a-hidden",
           name: "hidden-slug",
           display_name: "隐藏群管",
+          avatar_url: "/agent-avatars/hidden.png",
+        };
+      }
+      if (id === "a-face") {
+        return {
+          member_type: "agent",
+          member_id: "a-face",
+          name: "face-slug",
+          display_name: "有脸Agent",
+          avatar_url: "/agent-avatars/face.png",
         };
       }
       throw new Error(`profile missing: ${type}/${id}`);
@@ -95,13 +105,19 @@ vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({
     actorId,
     showStatusDot,
+    avatarUrlHint,
+    name,
   }: {
     actorId: string;
     showStatusDot?: boolean;
+    avatarUrlHint?: string | null;
+    name?: string;
   }) => (
     <span
       data-testid={`face-${actorId}`}
       data-show-status-dot={showStatusDot ? "true" : "false"}
+      data-avatar-hint={avatarUrlHint ?? ""}
+      data-name={name ?? ""}
     >
       {actorId}
     </span>
@@ -110,6 +126,10 @@ vi.mock("../../common/actor-avatar", () => ({
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
   ActorAvatar: ({ name }: { name: string }) => <span data-testid="avatar">{name}</span>,
+}));
+
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
 function task(over: Partial<ChannelActiveTask>): ChannelActiveTask {
@@ -125,13 +145,17 @@ function task(over: Partial<ChannelActiveTask>): ChannelActiveTask {
   };
 }
 
-function members(ids: string[]): ChannelMemberBrief[] {
+function members(
+  ids: string[],
+  extras?: Record<string, Partial<ChannelMemberBrief>>,
+): ChannelMemberBrief[] {
   return ids.map((id) => ({
     member_type: id.startsWith("u") ? ("user" as const) : ("agent" as const),
     member_id: id,
     name: id,
     display_name: id,
     avatar_url: null,
+    ...extras?.[id],
   }));
 }
 
@@ -311,7 +335,14 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     mobileState.isMobile = true;
     renderWithQuery(
       <ChannelPresenceCluster
-        members={members(["u1", "a1", "a-hidden"])}
+        members={members(["u1", "a1", "a-hidden"], {
+          // Roster sentinel must not block profile (AC#5 still uses profile face).
+          "a-hidden": {
+            display_name: "Unknown Agent",
+            name: "Unknown Agent",
+            avatar_url: null,
+          },
+        })}
         memberCount={3}
         agentCount={2}
         tasks={[
@@ -337,6 +368,17 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
       expect(screen.getAllByText("隐藏群管").length).toBeGreaterThanOrEqual(1);
     });
     expect(screen.queryByText("Unknown Agent")).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByTestId("face-a-hidden")
+          .some(
+            (el) =>
+              el.getAttribute("data-avatar-hint") ===
+              "/agent-avatars/hidden.png",
+          ),
+      ).toBe(true);
+    });
   });
 
   it("LRM-391: emit-time agent_name wins over directory Unknown Agent sentinel", () => {
@@ -361,5 +403,84 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     fireEvent.click(screen.getByTestId("channel-header-members-chip"));
     expect(screen.getAllByText("前端工程师").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("Unknown Agent")).toBeNull();
+  });
+
+  it("LRM-391 AC#5: channel roster name+avatar keeps Working face (no over-omit)", () => {
+    mobileState.isMobile = true;
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1", "a-roster"], {
+          "a-roster": {
+            display_name: "群内Agent",
+            avatar_url: "/agent-avatars/roster.png",
+          },
+        })}
+        memberCount={2}
+        agentCount={2}
+        tasks={[
+          task({
+            agent_id: "a-roster",
+            agent_name: "Unknown Agent",
+            task_id: "t-r",
+            inbox_event_id: "i-r",
+            status: "running",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "true");
+    expect(screen.getByTestId("face-a-roster")).toHaveAttribute(
+      "data-avatar-hint",
+      "/agent-avatars/roster.png",
+    );
+    fireEvent.click(chip);
+    expect(screen.getAllByText("群内Agent").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Unknown Agent")).toBeNull();
+    // Working row Avatar also gets the roster face hint.
+    const workingFace = screen.getAllByTestId("face-a-roster");
+    expect(
+      workingFace.some(
+        (el) => el.getAttribute("data-avatar-hint") === "/agent-avatars/roster.png",
+      ),
+    ).toBe(true);
+  });
+
+  it("LRM-391 AC#5: profile fills Working avatar when directory has name but no face", async () => {
+    mobileState.isMobile = true;
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1"])}
+        memberCount={1}
+        agentCount={2}
+        tasks={[
+          task({
+            agent_id: "a-face",
+            agent_name: "Unknown Agent",
+            task_id: "t-f",
+            inbox_event_id: "i-f",
+            status: "running",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("channel-header-members-chip")).toHaveAttribute(
+        "data-presence-working",
+        "true",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("face-a-face")).toHaveAttribute(
+        "data-avatar-hint",
+        "/agent-avatars/face.png",
+      );
+    });
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    await waitFor(() => {
+      expect(screen.getAllByText("有脸Agent").length).toBeGreaterThanOrEqual(1);
+    });
   });
 });

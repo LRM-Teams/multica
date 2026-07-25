@@ -1,148 +1,176 @@
-import { useEffect, useRef, type RefObject } from "react";
-import type { VirtuosoHandle } from "react-virtuoso";
+import { useEffect, useRef } from "react";
 import type { ChannelMessage } from "@multica/core/types";
-import { scrollToIndexUntilSettled } from "./use-unread-anchor-scroll";
 import { useActiveScrollGesture } from "./use-active-scroll-gesture";
 
 // "At the bottom" tolerance: the last row counts as landed once its bottom edge
 // sits within this band of the scroller's bottom edge. Absorbs sub-pixel /
-// measurement drift and the last row's own height jitter so we don't re-scroll
+// measurement drift and the last row's own height jitter so we don't re-write
 // forever chasing an exact 0. Mirror of the anchor path's ANCHOR_TOP_BAND_PX,
 // measured against the bottom edge instead of the top.
 const BOTTOM_BAND_PX = 24;
+// Frame cap backstop, matching the anchor settle's default.
+const MAX_FRAMES = 180;
 
 /**
- * Measure-safe "land at the bottom on cold open" settle for the DEFAULT case —
- * no deep-link highlight and no unread anchor, i.e. a normal channel/DM open
- * that should show the latest message.
+ * "Land at the bottom on cold open" settle for the DEFAULT case — no deep-link
+ * highlight and no unread anchor, i.e. a normal channel/DM open that should show
+ * the latest message.
  *
- * Why this exists (real-device P0, 2026-07-25): the latest-message position was
- * seeded ONLY by the mount-once declarative `initialTopMostItemIndex` prop. With
- * `customScrollParent` and asynchronously-loaded messages, that prop is
- * unreliable on a cold (fresh/no-cache) mount — Virtuoso can't apply the initial
- * scroll before it has measured the (lazily-rendered) rows, so the list is left
- * at scrollTop=0 (the oldest message pinned to the top) with nothing to correct
- * it. Iris measured exactly this: `initialTopMostItemIndex` computed to the last
- * index, yet the served list opened at scrollTop=0 with the oldest row at the
- * head. The unread-anchor path never hit this because it ALSO runs an imperative
- * `scrollToIndex` settle loop (#883) after mount; the imperative call is
- * reliable with customScrollParent where the declarative mount-once prop is not.
- * This hook gives the default-bottom case the same imperative safety net.
+ * Why direct scrollTop, not scrollToIndex (real-device P0, 2026-07-25): the
+ * latest-message position was first seeded by the mount-once declarative
+ * `initialTopMostItemIndex` (unreliable on a cold customScrollParent mount), then
+ * by an imperative `scrollToIndex(lastIndex, align:"end")` settle. Both FAILED on
+ * real devices: Iris measured the served build opening at scrollTop=0 with the
+ * geometry predicate correctly reporting "not at bottom" — yet scrollToIndex
+ * never moved the scroll. Root cause: scrollToIndex to the LAST index needs
+ * Virtuoso's FULL content measurement to place it (unlike the unread-anchor
+ * path's mid-list target, resolvable incrementally from the top), and that
+ * measurement isn't ready during a cold mount.
  *
- * Deliberately narrow: only activates when the caller wants the bottom
- * (`enabled` — no highlight, no unread anchor, initialScroll === "bottom") and
- * runs once per channel visit. It does not fight `followOutput` — both target
- * the bottom, so re-issuing `scrollToIndex(last)` while followOutput is also
- * pinning the bottom is idempotent, not a tug-of-war (unlike the anchor settle,
- * which must gate followOutput off because it targets a NON-bottom row). It DOES
- * yield to a live user gesture (#689), same as the anchor settle.
+ * The scroll container is Virtuoso's `customScrollParent` — a real element WE
+ * own. Writing its `scrollTop` directly moves the scroll regardless of Virtuoso's
+ * internal measurement state (Iris confirmed on a real device: forcing
+ * `scrollTop = scrollHeight` jumped to the bottom and stayed, no bounce). We
+ * re-issue every frame so that as the rows render and `scrollHeight` grows
+ * through the measurement-evolution window, `scrollTop` re-pins to the true
+ * bottom each frame — not a one-shot. Completion is judged by the last row's
+ * real geometry (#1211), immune to the scrollHeight metric lag.
+ *
+ * Ownership (Barry's contract): this owns the initial position ONLY for the
+ * default-latest state (`enabled` — mutually exclusive with unread anchor and
+ * deep-link highlight, which keep their own scrollToIndex positioning). On the
+ * FIRST real user gesture during the settle it hands ownership to the user and
+ * PERMANENTLY exits for this visit (no resume, unlike the anchor path's
+ * pause-resume) — a cold mount starts at the top, so `isNearBottom` can't be used
+ * to detect a real scroll-up; the gesture epoch is the durable signal. After it
+ * exits (reached / gesture / timeout), the existing `followOutput` handles later
+ * new messages once the user is at the bottom.
  */
 export function useBottomSettleScroll({
   channelId,
   messages,
   enabled,
   handleAttached,
-  virtuosoRef,
   scrollContainerEl,
   messageRefMap,
 }: {
   channelId: string | undefined;
   messages: readonly ChannelMessage[];
   /**
-   * True only when the default-bottom position actually owns the mount — no
-   * deep-link highlight and no unread anchor, and the list wants to open at the
-   * latest message (`initialScroll === "bottom"`). Mutually exclusive with the
-   * unread-anchor settle, so the two never scroll at once.
+   * True only when the default-bottom position owns the mount — no deep-link
+   * highlight and no unread anchor, and the list wants to open at the latest
+   * message (`initialScroll === "bottom"`).
    */
   enabled: boolean;
-  /** Value-comparable readiness flag: flips true once Virtuoso's imperative
-   * handle attaches (see useUnreadAnchorScroll for why it's a boolean, not the
-   * handle object). */
+  /** True once Virtuoso's imperative handle has attached — a value-comparable
+   * readiness signal so the effect re-runs the instant the list is live. */
   handleAttached: boolean;
-  virtuosoRef: RefObject<VirtuosoHandle | null>;
-  /** Virtuoso's `customScrollParent`, or null before it exists. Doubles as the
-   * "scroller ready" gate and is measured to tell when the bottom is reached. */
+  /** Virtuoso's `customScrollParent`, or null before it exists. We write its
+   * `scrollTop` directly and measure its bottom edge. */
   scrollContainerEl: HTMLElement | null;
-  /** Rendered message-row DOM nodes keyed by message id. Used to confirm the
-   * LAST row has actually rendered before trusting the scroll metrics — see
-   * `hasReached` below. */
+  /** Rendered message-row DOM nodes keyed by message id — the last row's real
+   * geometry is the completion check. */
   messageRefMap: ReadonlyMap<string, HTMLElement>;
 }): void {
-  // Marks a channel visit's bottom scroll as resolved (reached the bottom band
-  // or exhausted the settle timeout). NOT set at the top of the effect: an
-  // "attempt was made" is not "the scroll is done", so a stray re-render must
+  // Marks a channel visit's bottom scroll as resolved (reached the bottom band,
+  // handed off to a user gesture, or exhausted the frame cap). NOT set at the top
+  // of the effect: an "attempt was made" is not "done", so a stray re-render must
   // not permanently block retries before the async settle finishes (#348 scar).
   const settledChannelRef = useRef<string | null>(null);
 
-  // #689: yield to an active user touch/wheel gesture instead of fighting it.
-  const activeGestureRef = useActiveScrollGesture(scrollContainerEl);
+  const { activeGestureRef, gestureEpochRef } = useActiveScrollGesture(scrollContainerEl);
+
+  // The gesture-handoff baseline is PER CHANNEL VISIT, not per effect run.
+  // Captured once when the visit begins and preserved across every effect
+  // cleanup/re-run within the same visit; reset only on a real channel change.
+  // If it were re-captured each effect run (the effect depends on `messages`), a
+  // normal message-array churn arriving after a gesture — but before the pending
+  // frame observed the epoch and cancelled by cleanup — would re-baseline the
+  // now-bumped epoch, see the gesture already released (active=false), and
+  // resume direct-write, re-stealing scroll ownership from the user (Barry's
+  // race). Snapshotting at visit start makes the epoch bump durably observable.
+  const visitBaselineRef = useRef<{ channelId: string | null; epoch: number }>({
+    channelId: null,
+    epoch: 0,
+  });
+  if (visitBaselineRef.current.channelId !== (channelId ?? null)) {
+    visitBaselineRef.current = {
+      channelId: channelId ?? null,
+      epoch: gestureEpochRef.current,
+    };
+  }
 
   useEffect(() => {
     if (!scrollContainerEl || !handleAttached || !enabled || messages.length === 0) return;
     if (settledChannelRef.current === channelId) return;
 
     const lastId = messages[messages.length - 1]?.id ?? null;
+    // Per-visit baseline (see visitBaselineRef): any epoch beyond it means a real
+    // touch/wheel began at some point this visit, so we hand off and stay off —
+    // durably across effect re-runs, not just for this rAF chain.
+    const startEpoch = visitBaselineRef.current.epoch;
 
-    // Arrived = the LAST row is rendered AND its BOTTOM edge sits within the band
-    // of the scroller's bottom edge. This mirrors the unread-anchor settle's
-    // proven check (which uses the anchor row's TOP edge vs the scroller's top),
-    // just against the bottom edges. Real geometry (getBoundingClientRect)
-    // reflects the actual painted layout, so — unlike the scroller's
-    // `scrollHeight` metric — it can't be fooled by the cold-mount measurement
-    // lag (an earlier version checked `scrollHeight - scrollTop - clientHeight`;
-    // on a cold mount the scroller transiently reports scrollHeight ≈ clientHeight
-    // before Virtuoso has updated its size model, so distanceToBottom read 0 and
-    // the settle false-settled at scrollTop=0 while the last row was actually
-    // 263px below the fold — Iris's real-device measurement of the #1204 failure).
-    // Geometry: last row below the fold (stuck at top) → bottom - containerBottom
-    // is large positive → not reached; scrolled to the bottom → ≈ 0 → reached;
-    // short list not filling the viewport → negative → already at the bottom.
+    // Arrived = the last row is rendered AND its BOTTOM edge is within the band
+    // of the scroller's bottom edge — real geometry, mirroring the unread-anchor
+    // check (its top edge). Immune to the scrollHeight metric lag (an earlier
+    // version trusted `scrollHeight - scrollTop - clientHeight`, which reads 0
+    // transiently on a cold mount and false-settled at the top).
     const hasReached = () => {
       if (!lastId) return false;
       const el = messageRefMap.get(lastId);
-      const reached =
+      return (
         !!el &&
         el.getBoundingClientRect().bottom -
           scrollContainerEl.getBoundingClientRect().bottom <=
-          BOTTOM_BAND_PX;
-      if (reached) settledChannelRef.current = channelId ?? null;
-      return reached;
+          BOTTOM_BAND_PX
+      );
     };
 
-    const lastIndex = Math.max(0, messages.length - 1);
-    const disposeSettle = scrollToIndexUntilSettled(
-      virtuosoRef.current,
-      hasReached,
-      // Local index (0..messages.length-1), never offset by firstItemIndex —
-      // same index contract as every other scrollToIndex call (#1194). align
-      // "end" pins the last row's bottom to the viewport bottom = at bottom.
-      { index: lastIndex, align: "end", behavior: "auto" },
-      {
-        isGestureActive: () => activeGestureRef.current,
-        onSettleTimeout: () => {
-          // Give up cleanly instead of looping forever (e.g. rows never render).
-          // Mark resolved and log for prod diagnosability; the declarative
-          // initialTopMostItemIndex is the remaining fallback.
-          settledChannelRef.current = channelId ?? null;
-          // eslint-disable-next-line no-console
-          console.warn(
-            "[useBottomSettleScroll] settle timed out — never reached the bottom band",
-            { channelId },
-          );
-        },
-      },
-    );
+    let raf = 0;
+    let frame = 0;
+    const tick = () => {
+      // Permanent ownership handoff on any real user gesture — do NOT resume
+      // even after touchend / wheel-idle; the user owns scroll now. Two signals:
+      //  - `activeGestureRef.current`: a gesture is in progress RIGHT NOW,
+      //    including one already underway when this effect ran / re-targeted
+      //    (the epoch baseline captured below would miss that one).
+      //  - epoch changed: a NEW gesture started at some point since we began.
+      if (activeGestureRef.current || gestureEpochRef.current !== startEpoch) {
+        settledChannelRef.current = channelId ?? null;
+        return;
+      }
+      // Directly pin the owned scroll parent to its current bottom. As rows
+      // render and scrollHeight grows, this re-pins to the true bottom each
+      // frame (measurement-evolution safe); the browser clamps to max scroll.
+      scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
+      frame += 1;
+      if (hasReached()) {
+        settledChannelRef.current = channelId ?? null;
+        return;
+      }
+      if (frame >= MAX_FRAMES) {
+        settledChannelRef.current = channelId ?? null;
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[useBottomSettleScroll] settle timed out — never reached the bottom band",
+          { channelId },
+        );
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
     return () => {
-      disposeSettle();
+      if (raf) cancelAnimationFrame(raf);
     };
   }, [
     scrollContainerEl,
     handleAttached,
     enabled,
     channelId,
-    virtuosoRef,
     messages,
     messageRefMap,
     activeGestureRef,
+    gestureEpochRef,
   ]);
 }

@@ -184,8 +184,9 @@ export function useUnreadAnchorScroll({
 
   // #689: yield the settle loop to an active user touch/wheel gesture instead of
   // re-issuing scrollToIndex on top of native scroll every frame. Shared gate so
-  // the unread-anchor and default-bottom settles use one implementation.
-  const activeGestureRef = useActiveScrollGesture(scrollContainerEl);
+  // the unread-anchor and default-bottom settles use one implementation. The
+  // anchor path pause-resumes, so it only needs the in-progress boolean.
+  const { activeGestureRef } = useActiveScrollGesture(scrollContainerEl);
 
   useEffect(() => {
     if (!scrollContainerEl || !handleAttached || highlightMessageId || unreadAnchorIndex < 0) return;

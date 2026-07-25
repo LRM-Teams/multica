@@ -349,7 +349,6 @@ function MessageViewport({
     enabled:
       highlightIndex < 0 && unreadAnchorIndex < 0 && initialScroll === "bottom",
     handleAttached,
-    virtuosoRef,
     scrollContainerEl,
     messageRefMap,
   });

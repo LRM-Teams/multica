@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueries } from "@tanstack/react-query";
 import { Square } from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
@@ -18,12 +19,27 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { memberProfileOptions } from "@multica/core/workspace/queries";
+import {
+  directoryActorDisplayName,
+  isDirectoryActorMiss,
+  profileActorDisplayName,
+} from "@multica/core/workspace/resolved-actor-name";
 import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { useT } from "../../i18n";
 import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
+
+/**
+ * LRM-391 / UI Designer 2026-07-25: emit-time `agent_name` is usable only when
+ * it is a real display label — never the directory-miss sentinel.
+ */
+function taskEmitDisplayName(agentName: string | undefined): string | null {
+  const trimmed = agentName?.trim() ?? "";
+  return isDirectoryActorMiss(trimmed) ? null : trimmed;
+}
 
 const STOPPING_ALL_TASKS_ID = "__all__";
 const FACE_MAX = 3;
@@ -120,6 +136,7 @@ function useWorkingRowActivityVerb(
 
 function WorkingListRow({
   task,
+  displayName,
   now,
   firstSeen,
   canStop,
@@ -128,6 +145,8 @@ function WorkingListRow({
   onDismiss,
 }: {
   task: ChannelActiveTask;
+  /** Resolved live label — never "Unknown Agent" (LRM-391). */
+  displayName: string;
   now: number;
   firstSeen: number | undefined;
   canStop: boolean;
@@ -136,7 +155,7 @@ function WorkingListRow({
   onDismiss: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
-  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+  const { getActorInitials, getActorAvatarUrl } = useActorName();
   const isTerminal = isTerminalChannelActiveTask(task);
   const { verb, verbClass, dotClass, ping } = useWorkingRowActivityVerb(
     task.agent_id,
@@ -155,8 +174,12 @@ function WorkingListRow({
       data-terminal={isTerminal ? "true" : "false"}
     >
       <ActorAvatarBase
-        name={getActorName("agent", task.agent_id) || task.agent_name}
-        initials={getActorInitials("agent", task.agent_id)}
+        name={displayName}
+        initials={
+          /[a-z]/i.test(displayName.charAt(0))
+            ? displayName.charAt(0).toUpperCase()
+            : displayName.charAt(0) || getActorInitials("agent", task.agent_id)
+        }
         avatarUrl={getActorAvatarUrl("agent", task.agent_id)}
         isAgent
         size={22}
@@ -174,9 +197,7 @@ function WorkingListRow({
         <span className={cn("relative h-1.5 w-1.5 rounded-full", dotClass)} />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-semibold text-foreground">
-          {getActorName("agent", task.agent_id) || task.agent_name}
-        </div>
+        <div className="truncate font-semibold text-foreground">{displayName}</div>
         <div className={cn("truncate", verbClass)}>{verb}</div>
       </div>
       {isTerminal ? (
@@ -191,7 +212,7 @@ function WorkingListRow({
             onDismiss(task);
           }}
           aria-label={t(($) => $.header.working_dismiss_aria, {
-            name: task.agent_name,
+            name: displayName,
           })}
           data-testid="channel-agents-working-dismiss"
         >
@@ -213,7 +234,7 @@ function WorkingListRow({
             onStopTask(task);
           }}
           aria-label={t(($) => $.agent_status.stop_aria, {
-            name: task.agent_name,
+            name: displayName,
           })}
           data-testid="channel-agents-working-stop"
         >
@@ -248,6 +269,8 @@ export function ChannelPresenceCluster({
 }: ChannelPresenceClusterProps) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
+  const wsId = useWorkspaceId();
+  const { getActorName } = useActorName();
   const [mobileOpen, setMobileOpen] = useState(false);
   const firstSeenRef = useRef<Map<string, number> | null>(null);
   if (firstSeenRef.current === null) {
@@ -255,26 +278,106 @@ export function ChannelPresenceCluster({
   }
   const [now, setNow] = useState(() => Date.now());
 
+  // Live (non-terminal) tasks — Working chrome source before identity filter.
+  const liveTasks = useMemo(
+    () => tasks.filter((task) => !isTerminalChannelActiveTask(task)),
+    [tasks],
+  );
+
+  // LRM-391: ListAgents can miss channel/private / group-manager agents, so
+  // `getActorName` alone returns "Unknown Agent". Resolve directory → emit-time
+  // name → member-profile; UI Designer 2026-07-25: unresolved rows stay out of
+  // the Working list (no sentinel fallback — LRM-238).
+  const uniqueLiveAgentIds = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const task of liveTasks) {
+      if (!task.agent_id || seen.has(task.agent_id)) continue;
+      seen.add(task.agent_id);
+      ids.push(task.agent_id);
+    }
+    return ids;
+  }, [liveTasks]);
+
+  const emitNamesByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const task of liveTasks) {
+      if (map.has(task.agent_id)) continue;
+      const emit = taskEmitDisplayName(task.agent_name);
+      if (emit) map.set(task.agent_id, emit);
+    }
+    return map;
+  }, [liveTasks]);
+
+  const directoryNamesByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agentId of uniqueLiveAgentIds) {
+      const name = directoryActorDisplayName(getActorName, "agent", agentId);
+      if (name) map.set(agentId, name);
+    }
+    return map;
+  }, [uniqueLiveAgentIds, getActorName]);
+
+  const profileMissIds = useMemo(
+    () =>
+      uniqueLiveAgentIds.filter(
+        (agentId) =>
+          !directoryNamesByAgent.has(agentId) && !emitNamesByAgent.has(agentId),
+      ),
+    [uniqueLiveAgentIds, directoryNamesByAgent, emitNamesByAgent],
+  );
+
+  const profileQueries = useQueries({
+    queries: profileMissIds.map((agentId) => ({
+      ...memberProfileOptions(wsId, "agent", agentId),
+      enabled: !!wsId && !!agentId,
+    })),
+  });
+
+  const profileNamesByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    profileMissIds.forEach((agentId, index) => {
+      const name = profileActorDisplayName(profileQueries[index]?.data);
+      if (name) map.set(agentId, name);
+    });
+    return map;
+  }, [profileMissIds, profileQueries]);
+
   // Working chrome = live Activity work only (Frank 2026-07-24): never fold
   // terminal `no_reply` / `failed` into the header Working list — those stay
-  // on Activity / composer surfaces.
-  const { stoppable, listTasks, runningCount, workingAgentIds } = useMemo(() => {
-    const stop: ChannelActiveTask[] = [];
-    const workingIds = new Set<string>();
-    let running = 0;
-    for (const task of tasks) {
-      if (isTerminalChannelActiveTask(task)) continue;
-      stop.push(task);
-      workingIds.add(task.agent_id);
-      if (task.status === "running") running += 1;
-    }
-    return {
-      stoppable: stop,
-      listTasks: stop,
-      runningCount: running,
-      workingAgentIds: workingIds,
-    };
-  }, [tasks]);
+  // on Activity / composer surfaces. Also drop identity-unresolved rows so the
+  // hover/popover never paints "Unknown Agent".
+  const { stoppable, listTasks, runningCount, workingAgentIds, displayNameByAgent } =
+    useMemo(() => {
+      const stop: ChannelActiveTask[] = [];
+      const workingIds = new Set<string>();
+      const names = new Map<string, string>();
+      let running = 0;
+      for (const task of liveTasks) {
+        const displayName =
+          directoryNamesByAgent.get(task.agent_id) ??
+          emitNamesByAgent.get(task.agent_id) ??
+          profileNamesByAgent.get(task.agent_id) ??
+          null;
+        if (!displayName) continue;
+        stop.push(task);
+        workingIds.add(task.agent_id);
+        names.set(task.agent_id, displayName);
+        if (task.status === "running") running += 1;
+      }
+      return {
+        stoppable: stop,
+        listTasks: stop,
+        runningCount: running,
+        workingAgentIds: workingIds,
+        displayNameByAgent: names,
+      };
+    }, [
+      liveTasks,
+      directoryNamesByAgent,
+      emitNamesByAgent,
+      profileNamesByAgent,
+    ]);
 
   useEffect(() => {
     const seen = firstSeenRef.current!;
@@ -342,6 +445,7 @@ export function ChannelPresenceCluster({
           <WorkingListRow
             key={taskRowKey(task)}
             task={task}
+            displayName={displayNameByAgent.get(task.agent_id) ?? task.agent_id}
             now={now}
             firstSeen={firstSeenRef.current!.get(taskRowKey(task))}
             canStop={canStop}

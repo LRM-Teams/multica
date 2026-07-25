@@ -1,7 +1,9 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import {
   ChannelPresenceCluster,
@@ -23,11 +25,38 @@ vi.mock("../../agents/use-agent-live-status", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (_type: string, id: string) =>
-      id === "a1" ? "Beckham" : id === "a2" ? "Wendy" : "Agent",
+      id === "a1" ? "Beckham" : id === "a2" ? "Wendy" : "Unknown Agent",
     getActorInitials: () => "A",
     getActorAvatarUrl: () => null,
   }),
 }));
+
+vi.mock("@multica/core/workspace/queries", () => ({
+  memberProfileOptions: (_wsId: string, type: string, id: string) => ({
+    queryKey: ["workspaces", "ws-1", "member-profiles", type, id],
+    queryFn: async () => {
+      if (id === "a-hidden") {
+        return {
+          member_type: "agent",
+          member_id: "a-hidden",
+          name: "hidden-slug",
+          display_name: "隐藏群管",
+        };
+      }
+      throw new Error(`profile missing: ${type}/${id}`);
+    },
+    enabled: !!id,
+  }),
+}));
+
+function renderWithQuery(ui: ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
+  );
+}
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
@@ -114,7 +143,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
 
   it("idle K≥2 shows faces only — no outer N · M counts or Stop", () => {
     const onOpen = vi.fn();
-    render(
+    renderWithQuery(
       <ChannelPresenceCluster
         members={members(["u1", "a1", "a2"])}
         memberCount={4}
@@ -137,7 +166,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
   });
 
   it("K=1 never shows Working chrome even with running tasks", () => {
-    render(
+    renderWithQuery(
       <ChannelPresenceCluster
         members={members(["u1", "a1"])}
         memberCount={2}
@@ -154,7 +183,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
   it("K≥2 working: faces + ring only (no outer count/working text); Stop all in card", () => {
     const onStopAll = vi.fn();
     mobileState.isMobile = true;
-    render(
+    renderWithQuery(
       <ChannelPresenceCluster
         members={members(["u1", "a1", "a2"])}
         memberCount={4}
@@ -191,7 +220,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
 
   it("terminal no_reply/failed alone do not open Working chrome (Activity SoT)", () => {
     mobileState.isMobile = true;
-    render(
+    renderWithQuery(
       <ChannelPresenceCluster
         members={members(["u1", "a1", "a2"])}
         memberCount={4}
@@ -216,7 +245,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
   });
 
   it("facepile stacks with z-index and no status-dot punch-outs", () => {
-    const { container } = render(
+    const { container } = renderWithQuery(
       <ChannelPresenceCluster
         members={members(["a1", "a2", "u1"])}
         memberCount={4}
@@ -246,5 +275,91 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(
       container.querySelectorAll('[data-show-status-dot="false"]').length,
     ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("LRM-391: directory-miss Unknown Agent rows stay out of Working list", () => {
+    mobileState.isMobile = true;
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1", "a1", "a2"])}
+        memberCount={4}
+        agentCount={8}
+        tasks={[
+          task({ task_id: "t1", inbox_event_id: "i1", status: "running" }),
+          task({
+            agent_id: "a-gone",
+            agent_name: "Unknown Agent",
+            task_id: "t-gone",
+            inbox_event_id: "i-gone",
+            status: "running",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId("channel-header-members-chip");
+    expect(chip).toHaveAttribute("data-presence-working", "true");
+    fireEvent.click(chip);
+    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
+    expect(screen.getAllByText("Beckham").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Unknown Agent")).toBeNull();
+    expect(screen.getByText("Working · 1")).toBeInTheDocument();
+    expect(screen.getAllByTestId("channel-agents-working-row")).toHaveLength(1);
+  });
+
+  it("LRM-391: directory-miss resolves via member-profile into Working list", async () => {
+    mobileState.isMobile = true;
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1", "a1", "a-hidden"])}
+        memberCount={3}
+        agentCount={2}
+        tasks={[
+          task({
+            agent_id: "a-hidden",
+            agent_name: "Unknown Agent",
+            task_id: "t-h",
+            inbox_event_id: "i-h",
+            status: "running",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("channel-header-members-chip")).toHaveAttribute(
+        "data-presence-working",
+        "true",
+      );
+    });
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    await waitFor(() => {
+      expect(screen.getAllByText("隐藏群管").length).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.queryByText("Unknown Agent")).toBeNull();
+  });
+
+  it("LRM-391: emit-time agent_name wins over directory Unknown Agent sentinel", () => {
+    mobileState.isMobile = true;
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1", "a1"])}
+        memberCount={2}
+        agentCount={2}
+        tasks={[
+          task({
+            agent_id: "a-emit",
+            agent_name: "前端工程师",
+            task_id: "t-e",
+            inbox_event_id: "i-e",
+            status: "running",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    expect(screen.getAllByText("前端工程师").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Unknown Agent")).toBeNull();
   });
 });

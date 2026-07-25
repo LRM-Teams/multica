@@ -135,28 +135,17 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
-/* LRM-581 Presence Cluster — brand breathing ring on working faces. */
+/* LRM-581 Presence Cluster — light brand breathing ring on Working faces only
+ * (UI Designer 2026-07-25: thin / low-contrast; no thick ring or enter pop). */
 @keyframes presence-ring-pulse {
   0%,
   100% {
-    opacity: 0.55;
+    opacity: 0.28;
     transform: scale(1);
   }
   50% {
-    opacity: 1;
-    transform: scale(1.08);
-  }
-}
-
-/* LRM-581 Presence Cluster — working faces enter the stack. */
-@keyframes presence-face-enter {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.86);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    opacity: 0.55;
+    transform: scale(1.02);
   }
 }
 

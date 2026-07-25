@@ -112,7 +112,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     mobileState.isMobile = false;
   });
 
-  it("idle K≥2 shows faces · N · M with no working chrome or outer Stop", () => {
+  it("idle K≥2 shows faces only — no outer N · M counts or Stop", () => {
     const onOpen = vi.fn();
     render(
       <ChannelPresenceCluster
@@ -125,10 +125,11 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     );
     const chip = screen.getByTestId("channel-header-members-chip");
     expect(chip).toHaveAttribute("data-presence-working", "false");
-    expect(screen.getByTestId("channel-presence-counts")).toHaveTextContent(
-      "4 · 8",
-    );
+    expect(screen.getByTestId("channel-presence-faces")).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-presence-counts")).toBeNull();
     expect(screen.queryByTestId("channel-presence-working")).toBeNull();
+    expect(chip).not.toHaveTextContent("4");
+    expect(chip).not.toHaveTextContent("8");
     expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
     expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
     fireEvent.click(chip);
@@ -150,7 +151,7 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(screen.queryByTestId("channel-agents-working-list")).toBeNull();
   });
 
-  it("K≥2 working shows shimmer and no outer Stop; Stop all only in card", () => {
+  it("K≥2 working: faces + ring only (no outer count/working text); Stop all in card", () => {
     const onStopAll = vi.fn();
     mobileState.isMobile = true;
     render(
@@ -174,9 +175,12 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     );
     const chip = screen.getByTestId("channel-header-members-chip");
     expect(chip).toHaveAttribute("data-presence-working", "true");
-    const working = screen.getByTestId("channel-presence-working");
-    expect(working).toHaveTextContent("2 working");
-    expect(working.className).toContain("animate-chat-text-shimmer");
+    expect(screen.getByTestId("channel-presence-faces")).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-presence-counts")).toBeNull();
+    expect(screen.queryByTestId("channel-presence-working")).toBeNull();
+    expect(chip).not.toHaveTextContent("working");
+    expect(chip).not.toHaveTextContent("4");
+    expect(chip).not.toHaveTextContent("8");
     expect(screen.queryByTestId("channel-agents-cue-stop-all")).toBeNull();
 
     fireEvent.click(chip);

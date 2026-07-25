@@ -228,10 +228,11 @@ function WorkingListRow({
 /**
  * LRM-581 lock A v3 — right-rail Presence Cluster.
  *
- * - K=1: faces · N · M only; no Working chrome / list / outer Stop (Activity owns work).
- * - K≥2 idle: faces · N · M; click → Members.
- * - K≥2 working: working faces first + brand breathing ring + · K working shimmer;
- *   desktop HoverCard / mobile Popover (≥32px) → Working list; Stop only inside card.
+ * - K=1: faces only; no Working chrome / list / outer Stop (Activity owns work).
+ * - K≥2 idle: silent facepile (no N/M count text); click → Members.
+ * - K≥2 working: working faces first + brand breathing ring (no outer count /
+ *   "K working" text); desktop HoverCard / mobile Popover (≥32px) → Working list;
+ *   Stop only inside card. (Frank + UI Designer 2026-07-24: outer text gone.)
  */
 export function ChannelPresenceCluster({
   members,
@@ -317,6 +318,8 @@ export function ChannelPresenceCluster({
     return [...working, ...rest].slice(0, FACE_MAX);
   }, [members, isLive, workingAgentIds]);
 
+  // Outer chip is faces (+ working ring motion) only — no N · M / K working
+  // text (Frank red-box 2026-07-24). Counts stay available to screen readers.
   const countsIdle = t(($) => $.header.presence_counts, {
     members: memberCount,
     agents: agentCount,
@@ -325,10 +328,9 @@ export function ChannelPresenceCluster({
     isLive && workingCount > 0
       ? t(($) => $.header.presence_working, { working: workingCount })
       : null;
-
   const ariaLabel = workingLabel
     ? `${countsIdle} · ${workingLabel}`
-    : countsIdle;
+    : t(($) => $.header.view_members_aria);
 
   const listBody = (
     <div className="flex flex-col gap-2" data-testid="channel-agents-working-list">
@@ -394,15 +396,12 @@ export function ChannelPresenceCluster({
             style={{
               marginLeft: i === 0 ? 0 : -overlap,
               zIndex: i + 1,
-              animationDelay: isWorkingFace ? `${i * 60}ms` : undefined,
             }}
             className={cn(
-              // Separator ring only when idle — working faces use the brand
-              // breathing ring alone so overlaps don't double-stroke.
+              // Separator ring only when idle — working faces use a thin brand
+              // breathing ring alone (no enter-pop / thick ring / idle motion).
               "relative inline-flex rounded-full",
               !isWorkingFace && "ring-2 ring-background",
-              isWorkingFace &&
-                "animate-[presence-face-enter_0.42s_cubic-bezier(0.2,0.8,0.2,1)_both]",
             )}
           >
             <ActorAvatar
@@ -411,14 +410,14 @@ export function ChannelPresenceCluster({
               size={FACE_SIZE}
               avatarUrlHint={m.avatar_url}
               // Dense facepile: status-dot punch-outs collide with neighbor rings
-              // (Frank 2026-07-24 shot). Working is signaled by brand ring only.
+              // (Frank 2026-07-24 shot). Working = light brand ring only.
               showStatusDot={false}
               profileLink={false}
             />
             {isWorkingFace ? (
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-[-2px] rounded-full border-[1.5px] border-brand motion-reduce:animate-none animate-[presence-ring-pulse_1.6s_ease-in-out_infinite]"
+                className="pointer-events-none absolute inset-[-1px] rounded-full border border-brand/50 motion-reduce:animate-none animate-[presence-ring-pulse_2.2s_ease-in-out_infinite]"
               />
             ) : null}
           </span>
@@ -427,32 +426,10 @@ export function ChannelPresenceCluster({
     </span>
   );
 
-  const countText = (
-    <span
-      className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"
-      data-testid="channel-presence-counts"
-    >
-      {/* Idle roster only — never chain `N · M · K working` as one middot row
-          (UI Designer lock 2026-07-24: faces · N · M + independent K working). */}
-      <span>{countsIdle}</span>
-      {workingLabel ? (
-        <span
-          className={cn(
-            "min-w-0",
-            runningCount > 0 && "animate-chat-text-shimmer font-semibold",
-            runningCount === 0 && "font-semibold text-foreground",
-          )}
-          data-testid="channel-presence-working"
-        >
-          {workingLabel}
-        </span>
-      ) : null}
-    </span>
-  );
-
   const triggerClass = cn(
     // ≥32px touch; no chip chrome (border/bg/pill) per LRM-587.
-    "inline-flex min-h-8 min-w-8 items-center gap-1.5 rounded-md py-0.5 pl-1 pr-1.5 text-foreground outline-none transition-colors",
+    // Faces-only outer chip — no count / working text gap after the stack.
+    "inline-flex min-h-8 min-w-8 items-center rounded-md py-0.5 pl-1 pr-1.5 text-foreground outline-none transition-colors",
     "hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
   );
 
@@ -472,7 +449,6 @@ export function ChannelPresenceCluster({
         data-presence-working="false"
       >
         {faceStack}
-        {countText}
       </button>
     );
   }
@@ -492,7 +468,6 @@ export function ChannelPresenceCluster({
               data-presence-working="true"
             >
               {faceStack}
-              {countText}
             </button>
           }
         />
@@ -520,7 +495,6 @@ export function ChannelPresenceCluster({
             }}
           >
             {faceStack}
-            {countText}
           </button>
         }
       />

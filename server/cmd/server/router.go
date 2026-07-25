@@ -1105,6 +1105,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// registered before /{runtimeId} so "by-daemon" is not
 				// captured as a runtime UUID.
 				r.Delete("/by-daemon/{daemonId}", h.DeleteRuntimesByDaemon)
+				r.Post("/by-daemon/{daemonId}/remove-agents", h.RemoveAgentsByDaemon)
 				r.Route("/{runtimeId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateAgentRuntime)
 					r.Get("/usage", h.GetRuntimeUsage)

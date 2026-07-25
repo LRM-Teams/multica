@@ -7,10 +7,8 @@ import type { Agent } from "@multica/core/types";
  * N× per-runtime DELETE (LRM-238).
  */
 export type ComputerDeleteConflictCode =
-  | "computer_has_online_runtimes"
   | "computer_has_active_agents"
-  | "computer_has_active_squads"
-  | "computer_has_active_tasks"
+  | "computer_agent_plan_changed"
   | "missing_daemon_id";
 
 export interface ComputerDeleteConflict {
@@ -20,10 +18,8 @@ export interface ComputerDeleteConflict {
 }
 
 const CONFLICT_CODES = new Set<string>([
-  "computer_has_online_runtimes",
   "computer_has_active_agents",
-  "computer_has_active_squads",
-  "computer_has_active_tasks",
+  "computer_agent_plan_changed",
   "missing_daemon_id",
 ]);
 
@@ -44,7 +40,7 @@ export function parseComputerDeleteConflict(
       : err.message;
 
   let activeAgents: Agent[] = [];
-  if (code === "computer_has_active_agents") {
+  if (code === "computer_has_active_agents" || code === "computer_agent_plan_changed") {
     const rawAgents = record.active_agents;
     if (Array.isArray(rawAgents)) {
       activeAgents = rawAgents.filter(

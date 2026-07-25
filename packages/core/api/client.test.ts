@@ -6,6 +6,59 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("removes the exact confirmed agent set from a computer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        status: "ok",
+        daemon_id: "daemon-1",
+        agents_archived: 2,
+        tasks_cancelled: 1,
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(
+      client.removeAgentsByDaemon("daemon-1", ["agent-1", "agent-2"], {
+        runtimeMode: "local",
+      }),
+    ).resolves.toMatchObject({
+      daemon_id: "daemon-1",
+      agents_archived: 2,
+      tasks_cancelled: 1,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/runtimes/by-daemon/daemon-1/remove-agents?runtime_mode=local",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          expected_active_agent_ids: ["agent-1", "agent-2"],
+        }),
+      }),
+    );
+  });
+
+  it("degrades a malformed computer delete response to the safe fallback", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "ok", deleted_count: "two" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.deleteRuntimesByDaemon("daemon-1")).resolves.toEqual({
+      status: "invalid_response",
+      daemon_id: "",
+      deleted_count: 0,
+      deleted_runtime_ids: [],
+      tasks_cancelled: 0,
+    });
+  });
+
   it("transcribes PCM through the authenticated voice endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ text: " 你好 " }), {

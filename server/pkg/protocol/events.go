@@ -24,6 +24,7 @@ const (
 	EventAgentCreated         = "agent:created"
 	EventAgentArchived        = "agent:archived"
 	EventAgentRestored        = "agent:restored"
+	EventAgentDeleted         = "agent:deleted"
 	EventAgentReminderChanged = "agent_reminder:changed"
 
 	// Task events (server <-> daemon).

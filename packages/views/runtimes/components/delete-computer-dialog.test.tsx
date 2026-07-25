@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { AgentRuntime } from "@multica/core/types";
+import type { Agent, AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
@@ -15,32 +15,37 @@ const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
 
-const { ApiError, apiDeleteByDaemon } = vi.hoisted(() => {
-  class ApiError extends Error {
-    status: number;
-    statusText: string;
-    body: unknown;
-    constructor(
-      message: string,
-      status: number,
-      statusText: string,
-      body: unknown,
-    ) {
-      super(message);
-      this.status = status;
-      this.statusText = statusText;
-      this.body = body;
+const { ApiError, apiDeleteByDaemon, apiRemoveByDaemon, apiListAgents } =
+  vi.hoisted(() => {
+    class ApiError extends Error {
+      status: number;
+      statusText: string;
+      body: unknown;
+      constructor(
+        message: string,
+        status: number,
+        statusText: string,
+        body: unknown,
+      ) {
+        super(message);
+        this.status = status;
+        this.statusText = statusText;
+        this.body = body;
+      }
     }
-  }
-  return {
-    ApiError,
-    apiDeleteByDaemon: vi.fn(),
-  };
-});
+    return {
+      ApiError,
+      apiDeleteByDaemon: vi.fn(),
+      apiRemoveByDaemon: vi.fn(),
+      apiListAgents: vi.fn(async (_params: unknown): Promise<unknown[]> => []),
+    };
+  });
 
 vi.mock("@multica/core/api", () => ({
   api: {
     deleteRuntimesByDaemon: (...args: unknown[]) => apiDeleteByDaemon(...args),
+    removeAgentsByDaemon: (...args: unknown[]) => apiRemoveByDaemon(...args),
+    listAgents: (...args: unknown[]) => apiListAgents(args[0]),
     listMembers: vi.fn(async () => []),
   },
   ApiError,
@@ -50,6 +55,10 @@ vi.mock("@multica/core/runtimes/mutations", () => ({
   useDeleteRuntimesByDaemon: () => ({
     isPending: false,
     mutateAsync: (...args: unknown[]) => apiDeleteByDaemon(...args),
+  }),
+  useRemoveAgentsByDaemon: () => ({
+    isPending: false,
+    mutateAsync: (...args: unknown[]) => apiRemoveByDaemon(...args),
   }),
 }));
 
@@ -99,6 +108,16 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     updated_at: new Date().toISOString(),
     ...overrides,
   } as AgentRuntime;
+}
+
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: "agent-1",
+    name: "worker",
+    display_name: "Worker",
+    runtime_id: "rt-1",
+    ...overrides,
+  } as Agent;
 }
 
 function makeMachine(
@@ -157,6 +176,9 @@ function renderDialog(
 describe("DeleteComputerDialog", () => {
   beforeEach(() => {
     apiDeleteByDaemon.mockReset();
+    apiRemoveByDaemon.mockReset();
+    apiListAgents.mockReset();
+    apiListAgents.mockResolvedValue([]);
   });
 
   it("calls deleteRuntimesByDaemon once with daemon id + mode (not N× row delete)", async () => {
@@ -169,6 +191,9 @@ describe("DeleteComputerDialog", () => {
     const onDeleted = vi.fn();
     renderDialog({ onDeleted });
 
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "build-01" },
+    });
     fireEvent.click(screen.getByTestId("delete-computer-confirm"));
 
     await waitFor(() => {
@@ -181,21 +206,119 @@ describe("DeleteComputerDialog", () => {
     expect(onDeleted).toHaveBeenCalled();
   });
 
-  it("surfaces computer_has_active_tasks without falling back to row delete", async () => {
+  it("archives the exact reviewed active-agent set before permanent deletion", async () => {
+    const activeAgent = makeAgent();
+    apiDeleteByDaemon
+      .mockRejectedValueOnce(
+        new ApiError("blocked", 409, "Conflict", {
+          code: "computer_has_active_agents",
+          error: "active agents",
+          active_agents: [activeAgent],
+        }),
+      )
+      .mockResolvedValueOnce({
+        status: "ok",
+        daemon_id: "daemon-1",
+        deleted_count: 1,
+        deleted_runtime_ids: ["rt-1"],
+      });
+    apiRemoveByDaemon.mockResolvedValue({
+      status: "ok",
+      daemon_id: "daemon-1",
+      agents_archived: 1,
+      tasks_cancelled: 0,
+    });
+    const onDeleted = vi.fn();
+    renderDialog({ onDeleted });
+
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "build-01" },
+    });
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/still has 1 agent/i)).toBeTruthy();
+      expect(screen.getByText("Worker")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove all agents" }));
+    expect(screen.queryByTestId("remove-computer-agents-confirmation")).toBeNull();
+    fireEvent.click(screen.getByTestId("remove-computer-agents-confirm"));
+
+    await waitFor(() => {
+      expect(apiRemoveByDaemon).toHaveBeenCalledWith({
+        daemonId: "daemon-1",
+        runtimeMode: "local",
+        expectedActiveAgentIds: ["agent-1"],
+      });
+      expect(screen.getByTestId("delete-computer-confirmation")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "build-01" },
+    });
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
+
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+    expect(apiDeleteByDaemon).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires re-review when the active-agent set changes", async () => {
     apiDeleteByDaemon.mockRejectedValue(
       new ApiError("blocked", 409, "Conflict", {
-        code: "computer_has_active_tasks",
-        error: "active tasks",
+        code: "computer_has_active_agents",
+        error: "active agents",
+        active_agents: [makeAgent()],
+      }),
+    );
+    apiRemoveByDaemon.mockRejectedValue(
+      new ApiError("changed", 409, "Conflict", {
+        code: "computer_agent_plan_changed",
+        error: "plan changed",
+        active_agents: [
+          makeAgent({ id: "agent-2", name: "second", display_name: "Second" }),
+        ],
       }),
     );
     renderDialog();
 
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "build-01" },
+    });
     fireEvent.click(screen.getByTestId("delete-computer-confirm"));
+    await screen.findByRole("button", { name: "Remove all agents" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove all agents" }));
+    fireEvent.click(screen.getByTestId("remove-computer-agents-confirm"));
 
     await waitFor(() => {
-      expect(screen.getByText(/active tasks still running/i)).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: '"build-01" changed' }),
+      ).toBeTruthy();
+      expect(screen.getByText("Second")).toBeTruthy();
     });
-    expect(apiDeleteByDaemon).toHaveBeenCalledTimes(1);
+    expect(apiRemoveByDaemon).toHaveBeenCalledWith({
+      daemonId: "daemon-1",
+      runtimeMode: "local",
+      expectedActiveAgentIds: ["agent-1"],
+    });
+  });
+
+  it("counts pre-existing archived agents in the permanent-delete warning", async () => {
+    apiListAgents.mockResolvedValue([
+      makeAgent({ archived_at: "2026-07-25T00:00:00Z" }),
+    ]);
+    renderDialog();
+
+    await waitFor(() => {
+      expect(apiListAgents).toHaveBeenCalledWith({
+        workspace_id: "ws-1",
+        include_archived: true,
+      });
+      expect(
+        screen.getByText(/all archived agents on it \(1 total\)/i),
+      ).toBeTruthy();
+    });
   });
 
   it("blocks machines without daemon id without calling the API", () => {

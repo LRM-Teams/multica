@@ -141,6 +141,14 @@ WHERE runtime_id = $1 AND archived_at IS NULL
 ORDER BY name ASC
 FOR UPDATE;
 
+-- name: ListActiveAgentsByRuntimesForUpdate :many
+-- Computer removal locks every active agent across the selected provider
+-- runtimes and compares this exact set with the user's confirmation snapshot.
+SELECT * FROM agent
+WHERE runtime_id = ANY(@runtime_ids::uuid[]) AND archived_at IS NULL
+ORDER BY name ASC, id ASC
+FOR UPDATE;
+
 -- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1

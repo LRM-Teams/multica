@@ -46,7 +46,10 @@ func (q *Queries) CreateDaemonToken(ctx context.Context, arg CreateDaemonTokenPa
 const deleteDaemonTokensByWorkspaceAndDaemons = `-- name: DeleteDaemonTokensByWorkspaceAndDaemons :many
 DELETE FROM daemon_token
 WHERE workspace_id = $1
-  AND daemon_id = ANY($2::text[])
+  AND LOWER(daemon_id) IN (
+      SELECT LOWER(value)
+      FROM unnest($2::text[]) AS value
+  )
 RETURNING token_hash
 `
 

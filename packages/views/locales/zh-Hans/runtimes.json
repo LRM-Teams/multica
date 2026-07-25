@@ -59,40 +59,46 @@
       "local_daemon": "本地守护进程"
     },
     "delete_computer": {
-      "button": "删除整机",
-      "toast_deleted_one": "已删除该主机上的 {{count}} 个 Runtime",
-      "toast_deleted_other": "已删除该主机上的 {{count}} 个 Runtime",
-      "delete_failed_toast": "删除整机失败",
-      "close": "关闭",
-      "confirm": {
-        "title": "删除这台电脑？",
-        "description_one": "将永久删除「{{name}}」上的全部 {{count}} 个 Runtime，该机将从 Remote 列表消失。此操作无法撤销。",
-        "description_other": "将永久删除「{{name}}」上的全部 {{count}} 个 Runtime，该机将从 Remote 列表消失。此操作无法撤销。",
-        "cancel": "取消",
-        "confirm": "删除整机",
-        "submitting": "删除中…"
+      "button": "永久删除此电脑",
+      "toast_deleted": "已永久删除「{{name}}」。",
+      "operation_failed": {
+        "title": "操作失败，没有任何改动。",
+        "description": "「{{name}}」未被删除，agent 保持原样。请稍后重试。"
       },
-      "blocked_online": {
-        "title": "主机仍在线",
-        "description": "「{{name}}」上仍有在线 Runtime。请等整机离线后再试。"
+      "confirm": {
+        "title": "永久删除此电脑？",
+        "description": "此操作不可撤销。「{{name}}」、以及它上面已归档的全部 agent（共 {{count}} 个）及其历史和消息将被永久删除、无法恢复，之后无法再连接到 Multica。",
+        "type_to_confirm": "请输入电脑名「{{name}}」以确认。",
+        "cancel": "取消",
+        "confirm": "永久删除",
+        "submitting": "正在永久删除…"
       },
       "blocked_by_agents": {
-        "title_one": "这台电脑上仍有 {{count}} 个 Agent",
-        "title_other": "这台电脑上仍有 {{count}} 个 Agent",
-        "description": "请先归档或改绑下列 Agent，才能删除「{{name}}」。",
-        "view_agent": "查看 Agent"
+        "title_one": "「{{name}}」还有 {{count}} 个 agent",
+        "title_other": "「{{name}}」还有 {{count}} 个 agent",
+        "description": "需要先移除这台电脑上的全部 agent，才能删除它。",
+        "view_agent": "查看 agent",
+        "remove_all": "移除全部 agent"
       },
-      "blocked_squads": {
-        "title": "仍有活跃小队占用此机",
-        "description": "「{{name}}」上仍有由已归档 Agent 领导的活跃小队。请先归档这些小队或更换 leader。"
+      "plan_changed": {
+        "title": "「{{name}}」的状态有变化",
+        "description": "确认前，这台电脑上的 agent 列表发生了变化。请重新核对。",
+        "review": "重新核对"
       },
-      "blocked_tasks": {
-        "title": "仍有活跃任务",
-        "description": "「{{name}}」上仍有进行中的任务。请取消或等待完成后再试。"
+      "remove_agents": {
+        "title": "移除「{{name}}」上的全部 agent？",
+        "description_one": "这个 agent 将被停用并归档、移出这台电脑。",
+        "description_other": "这 {{count}} 个 agent 将被停用并归档、移出这台电脑。",
+        "restore_hint": "永久删除电脑前，你仍可在 Agents 的 Archived 视图恢复这些 agent。",
+        "confirm": "移除全部 agent",
+        "submitting_one": "正在移除 {{count}} 个 agent…",
+        "submitting_other": "正在移除 {{count}} 个 agent…",
+        "toast_removed_one": "已移除 {{count}} 个 agent。",
+        "toast_removed_other": "已移除 {{count}} 个 agent。"
       },
       "blocked_missing_daemon": {
         "title": "无法删除这台电脑",
-        "description": "「{{name}}」没有 daemon id，无法使用一键删除。不会改用逐行删除作为替代。"
+        "description": "「{{name}}」缺少电脑标识，无法永久删除。"
       }
     }
   },

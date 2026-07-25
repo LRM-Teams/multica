@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -73,6 +74,13 @@ func TestDeleteRuntimesByDaemon_HappyPathDeletesAllOfflineProviders(t *testing.T
 	rtCodex := createBulkDaemonRuntime(t, ctx, daemonID, "codex", "offline")
 	// Unrelated machine must survive.
 	other := createBulkDaemonRuntime(t, ctx, "other-daemon-"+uuid.NewString(), "claude", "offline")
+	if _, _, err := testHandler.issueDaemonRegisterToken(
+		ctx,
+		parseUUID(testWorkspaceID),
+		strings.ToUpper(daemonID),
+	); err != nil {
+		t.Fatalf("issue daemon token: %v", err)
+	}
 
 	w := httptest.NewRecorder()
 	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
@@ -105,9 +113,21 @@ func TestDeleteRuntimesByDaemon_HappyPathDeletesAllOfflineProviders(t *testing.T
 	assertRuntimeGone(t, ctx, rtClaude)
 	assertRuntimeGone(t, ctx, rtCodex)
 	assertRuntimeExists(t, ctx, other)
+	assertDaemonTombstoned(t, ctx, daemonID)
+
+	var tokenCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM daemon_token
+		WHERE workspace_id = $1 AND lower(daemon_id) = lower($2)
+	`, testWorkspaceID, daemonID).Scan(&tokenCount); err != nil {
+		t.Fatalf("count daemon tokens: %v", err)
+	}
+	if tokenCount != 0 {
+		t.Fatalf("expected all daemon tokens revoked, count=%d", tokenCount)
+	}
 }
 
-func TestDeleteRuntimesByDaemon_RefusesOnline(t *testing.T) {
+func TestDeleteRuntimesByDaemon_DeletesOnlineComputer(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -121,25 +141,16 @@ func TestDeleteRuntimesByDaemon_RefusesOnline(t *testing.T) {
 	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
 	req = withURLParam(req, "daemonId", daemonID)
 	testHandler.DeleteRuntimesByDaemon(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var body struct {
-		Code string `json:"code"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Code != "computer_has_online_runtimes" {
-		t.Fatalf("expected computer_has_online_runtimes, got %q", body.Code)
-	}
-
-	assertRuntimeExists(t, ctx, onlineID)
-	assertRuntimeExists(t, ctx, offlineID)
+	assertRuntimeGone(t, ctx, onlineID)
+	assertRuntimeGone(t, ctx, offlineID)
+	assertDaemonTombstoned(t, ctx, daemonID)
 }
 
-func TestDeleteRuntimesByDaemon_RefusesActiveAgents(t *testing.T) {
+func TestDeleteRuntimesByDaemon_BlocksUntilExactAgentPlanIsRemoved(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -171,9 +182,70 @@ func TestDeleteRuntimesByDaemon_RefusesActiveAgents(t *testing.T) {
 		t.Fatalf("expected active agent %s, got %+v", agentID, body.ActiveAgents)
 	}
 	assertRuntimeExists(t, ctx, rtID)
+
+	stalePlan := httptest.NewRecorder()
+	stalePlanReq := newRequest("POST", "/api/runtimes/by-daemon/"+daemonID+"/remove-agents", map[string]any{
+		"expected_active_agent_ids": []string{},
+	})
+	stalePlanReq = withURLParam(stalePlanReq, "daemonId", daemonID)
+	testHandler.RemoveAgentsByDaemon(stalePlan, stalePlanReq)
+	if stalePlan.Code != http.StatusConflict {
+		t.Fatalf("expected stale agent plan 409, got %d: %s", stalePlan.Code, stalePlan.Body.String())
+	}
+	var staleBody struct {
+		Code         string          `json:"code"`
+		ActiveAgents []AgentResponse `json:"active_agents"`
+	}
+	if err := json.NewDecoder(stalePlan.Body).Decode(&staleBody); err != nil {
+		t.Fatalf("decode stale plan: %v", err)
+	}
+	if staleBody.Code != "computer_agent_plan_changed" ||
+		len(staleBody.ActiveAgents) != 1 ||
+		staleBody.ActiveAgents[0].ID != agentID {
+		t.Fatalf("unexpected stale plan body: %+v", staleBody)
+	}
+
+	remove := httptest.NewRecorder()
+	removeReq := newRequest("POST", "/api/runtimes/by-daemon/"+daemonID+"/remove-agents", map[string]any{
+		"expected_active_agent_ids": []string{agentID},
+	})
+	removeReq = withURLParam(removeReq, "daemonId", daemonID)
+	testHandler.RemoveAgentsByDaemon(remove, removeReq)
+	if remove.Code != http.StatusOK {
+		t.Fatalf("expected remove agents 200, got %d: %s", remove.Code, remove.Body.String())
+	}
+	assertRuntimeExists(t, ctx, rtID)
+
+	var archived bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT archived_at IS NOT NULL
+		FROM agent WHERE id = $1
+	`, agentID).Scan(&archived); err != nil {
+		t.Fatalf("read removed agent: %v", err)
+	}
+	if !archived {
+		t.Fatal("expected agent archived before computer delete")
+	}
+
+	confirm := httptest.NewRecorder()
+	confirmReq := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
+	confirmReq = withURLParam(confirmReq, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(confirm, confirmReq)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("expected empty computer delete 200, got %d: %s", confirm.Code, confirm.Body.String())
+	}
+	assertRuntimeGone(t, ctx, rtID)
+
+	var agentCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE id = $1`, agentID).Scan(&agentCount); err != nil {
+		t.Fatalf("count deleted agent: %v", err)
+	}
+	if agentCount != 0 {
+		t.Fatalf("expected removed agent hard-deleted with computer, count=%d", agentCount)
+	}
 }
 
-func TestDeleteRuntimesByDaemon_RefusesActiveTasks(t *testing.T) {
+func TestDeleteRuntimesByDaemon_CancelsArchivedAgentTaskWithoutRuntimeSnapshot(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -181,49 +253,62 @@ func TestDeleteRuntimesByDaemon_RefusesActiveTasks(t *testing.T) {
 	daemonID := "bulk-tasks-" + uuid.NewString()
 
 	rtID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
-	// Active task without a live agent binding still blocks computer delete
-	// (LRM-438 / LRM-238): refuse with an explicit reason.
+	// Active work on an already-removed agent is cancelled atomically with the
+	// empty-computer cleanup.
 	agentID := createCascadeFixtureAgent(t, ctx, rtID, "Bulk Task Agent")
-	// Archive the agent so the active-agents guard does not fire first —
-	// we specifically want the active-tasks branch.
+	// Archive the agent so the active-agents guard does not fire. The task has
+	// no runtime snapshot, so only the archived-agent id can match it.
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent SET archived_at = now(), archived_by = $2 WHERE id = $1
 	`, agentID, testUserID); err != nil {
 		t.Fatalf("archive agent: %v", err)
 	}
 	issueID := createBulkFixtureIssue(t, ctx)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
-		VALUES ($1, $2, $3, 'pending', 0)
-	`, agentID, rtID, issueID); err != nil {
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, issue_id, reason, status, priority
+		)
+		VALUES ($1, $2, NULL, $3, 'issue', 'pending', 0)
+		RETURNING id
+	`, testWorkspaceID, agentID, issueID).Scan(&eventID); err != nil {
 		t.Fatalf("insert active task: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE runtime_id = $1`, rtID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
 	})
 
 	w := httptest.NewRecorder()
 	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
 	req = withURLParam(req, "daemonId", daemonID)
 	testHandler.DeleteRuntimesByDaemon(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var body struct {
-		Code            string `json:"code"`
-		ActiveTaskCount int64  `json:"active_task_count"`
+		TasksCancelled int `json:"tasks_cancelled"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Code != "computer_has_active_tasks" || body.ActiveTaskCount < 1 {
-		t.Fatalf("expected computer_has_active_tasks with count>=1, got %+v", body)
+	if body.TasksCancelled != 1 {
+		t.Fatalf("expected one cancelled task, got %+v", body)
 	}
-	assertRuntimeExists(t, ctx, rtID)
+	assertRuntimeGone(t, ctx, rtID)
+
+	var eventCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event WHERE id = $1
+	`, eventID).Scan(&eventCount); err != nil {
+		t.Fatalf("count cancelled task: %v", err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("expected removed agent task history deleted, count=%d", eventCount)
+	}
 }
 
-func TestDeleteRuntimesByDaemon_RefusesActiveInboxWork(t *testing.T) {
+func TestDeleteRuntimesByDaemon_CancelsActiveInboxWork(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -237,33 +322,43 @@ func TestDeleteRuntimesByDaemon_RefusesActiveInboxWork(t *testing.T) {
 	`, agentID, testUserID); err != nil {
 		t.Fatalf("archive agent: %v", err)
 	}
-	if _, err := testPool.Exec(ctx, `
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_inbox_event (workspace_id, agent_id, runtime_id, reason, status, priority)
 		VALUES ($1, $2, $3, 'mention', 'pending', 0)
-	`, testWorkspaceID, agentID, rtID); err != nil {
+		RETURNING id
+	`, testWorkspaceID, agentID, rtID).Scan(&eventID); err != nil {
 		t.Fatalf("insert active inbox event: %v", err)
 	}
-	defer testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE runtime_id = $1`, rtID)
+	defer testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
 
 	w := httptest.NewRecorder()
 	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
 	req = withURLParam(req, "daemonId", daemonID)
 	testHandler.DeleteRuntimesByDaemon(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var body struct {
-		Code            string `json:"code"`
-		ActiveTaskCount int64  `json:"active_task_count"`
+		TasksCancelled int `json:"tasks_cancelled"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Code != "computer_has_active_tasks" || body.ActiveTaskCount < 1 {
-		t.Fatalf("expected computer_has_active_tasks with count>=1, got %+v", body)
+	if body.TasksCancelled != 1 {
+		t.Fatalf("expected one cancelled inbox event, got %+v", body)
 	}
-	assertRuntimeExists(t, ctx, rtID)
+	assertRuntimeGone(t, ctx, rtID)
+	var eventCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event WHERE id = $1
+	`, eventID).Scan(&eventCount); err != nil {
+		t.Fatalf("count cancelled inbox event: %v", err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("expected removed agent inbox history deleted, count=%d", eventCount)
+	}
 }
 
 func TestDeleteRuntimesByDaemon_RuntimeModeFilter(t *testing.T) {
@@ -313,7 +408,7 @@ func TestDeleteRuntimesByDaemon_DetachesTerminalInboxEvents(t *testing.T) {
 	assertRuntimeExists(t, ctx, otherRuntimeID)
 }
 
-func TestDeleteRuntimesByDaemon_RefusesActiveInboxEvents(t *testing.T) {
+func TestDeleteRuntimesByDaemon_CancelsActiveInboxEventOnOtherAgent(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -329,22 +424,65 @@ func TestDeleteRuntimesByDaemon_RefusesActiveInboxEvents(t *testing.T) {
 	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID, nil)
 	req = withURLParam(req, "daemonId", daemonID)
 	testHandler.DeleteRuntimesByDaemon(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
+	assertRuntimeGone(t, ctx, targetRuntimeID)
+	assertRuntimeExists(t, ctx, otherRuntimeID)
+}
 
+func TestDaemonRegister_RejectsPermanentlyRemovedComputer(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "removed-daemon-" + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO daemon_registration_tombstone (workspace_id, daemon_id, removed_by)
+		VALUES ($1, lower($2), $3)
+	`, testWorkspaceID, daemonID, testUserID); err != nil {
+		t.Fatalf("insert daemon tombstone: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `
+			DELETE FROM daemon_registration_tombstone
+			WHERE workspace_id = $1 AND daemon_id = lower($2)
+		`, testWorkspaceID, daemonID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    strings.ToUpper(daemonID),
+		"device_name":  "removed computer",
+		"runtimes": []map[string]any{
+			{"name": "claude", "type": "claude", "status": "online"},
+		},
+	})
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
+	}
 	var body struct {
-		Code            string `json:"code"`
-		ActiveTaskCount int64  `json:"active_task_count"`
+		Code string `json:"code"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
+		t.Fatalf("decode response: %v", err)
 	}
-	if body.Code != "computer_has_active_tasks" || body.ActiveTaskCount < 1 {
-		t.Fatalf("expected active work conflict, got %+v", body)
+	if body.Code != "daemon_removed" {
+		t.Fatalf("expected daemon_removed, got %q", body.Code)
 	}
-	assertRuntimeExists(t, ctx, targetRuntimeID)
-	assertRuntimeExists(t, ctx, otherRuntimeID)
+
+	var runtimeCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_runtime
+		WHERE workspace_id = $1 AND lower(daemon_id) = lower($2)
+	`, testWorkspaceID, daemonID).Scan(&runtimeCount); err != nil {
+		t.Fatalf("count recreated runtimes: %v", err)
+	}
+	if runtimeCount != 0 {
+		t.Fatalf("expected no recreated runtime, count=%d", runtimeCount)
+	}
 }
 
 func createBulkDaemonRuntime(t *testing.T, ctx context.Context, daemonID, provider, status string) string {
@@ -441,5 +579,19 @@ func assertRuntimeExists(t *testing.T, ctx context.Context, runtimeID string) {
 	}
 	if n != 1 {
 		t.Fatalf("expected runtime %s to exist, count=%d", runtimeID, n)
+	}
+}
+
+func assertDaemonTombstoned(t *testing.T, ctx context.Context, daemonID string) {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM daemon_registration_tombstone
+		WHERE workspace_id = $1 AND daemon_id = lower($2)
+	`, testWorkspaceID, daemonID).Scan(&n); err != nil {
+		t.Fatalf("count daemon tombstone: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected daemon %s tombstoned, count=%d", daemonID, n)
 	}
 }

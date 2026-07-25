@@ -533,6 +533,13 @@ type DaemonConnection struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DaemonRegistrationTombstone struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	DaemonID    string             `json:"daemon_id"`
+	RemovedBy   pgtype.UUID        `json:"removed_by"`
+	RemovedAt   pgtype.Timestamptz `json:"removed_at"`
+}
+
 type DaemonToken struct {
 	ID          pgtype.UUID        `json:"id"`
 	TokenHash   string             `json:"token_hash"`

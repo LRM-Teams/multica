@@ -10,6 +10,8 @@ export function useDeleteRuntime(wsId: string) {
     mutationFn: (runtimeId: string) => api.deleteRuntime(runtimeId),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     },
   });
 }
@@ -28,6 +30,26 @@ export function useDeleteRuntimesByDaemon(wsId: string) {
     }) => api.deleteRuntimesByDaemon(daemonId, { runtimeMode }),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    },
+  });
+}
+
+export function useRemoveAgentsByDaemon(wsId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      daemonId,
+      runtimeMode,
+      expectedActiveAgentIds,
+    }: {
+      daemonId: string;
+      runtimeMode?: string;
+      expectedActiveAgentIds: string[];
+    }) => api.removeAgentsByDaemon(daemonId, expectedActiveAgentIds, { runtimeMode }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     },
   });
 }

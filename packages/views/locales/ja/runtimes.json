@@ -60,39 +60,45 @@
     },
     "delete_computer": {
       "button": "コンピューターを削除",
-      "toast_deleted_one": "このコンピューターから {{count}} 件のランタイムを削除しました",
-      "toast_deleted_other": "このコンピューターから {{count}} 件のランタイムを削除しました",
-      "delete_failed_toast": "コンピューターの削除に失敗しました",
-      "close": "閉じる",
-      "confirm": {
-        "title": "このコンピューターを削除しますか？",
-        "description_one": "「{{name}}」上の {{count}} 件のランタイムをすべて完全に削除します。Remote から消えます。元に戻せません。",
-        "description_other": "「{{name}}」上の {{count}} 件のランタイムをすべて完全に削除します。Remote から消えます。元に戻せません。",
-        "cancel": "キャンセル",
-        "confirm": "コンピューターを削除",
-        "submitting": "削除中…"
+      "toast_deleted": "「{{name}}」を完全に削除しました。",
+      "operation_failed": {
+        "title": "操作に失敗しました。変更はありません。",
+        "description": "「{{name}}」は削除されず、エージェントも変更されていません。後でもう一度お試しください。"
       },
-      "blocked_online": {
-        "title": "コンピューターがオンラインです",
-        "description": "「{{name}}」にはまだオンラインのランタイムがあります。オフラインになってから再試行してください。"
+      "confirm": {
+        "title": "このコンピューターを完全に削除しますか？",
+        "description": "この操作は元に戻せません。「{{name}}」、このコンピューター上のアーカイブ済みエージェント全件（計 {{count}} 件）、その履歴とメッセージを完全に削除し、以後 Multica に接続できなくなります。",
+        "type_to_confirm": "確認のためコンピューター名「{{name}}」を入力してください。",
+        "cancel": "キャンセル",
+        "confirm": "完全に削除",
+        "submitting": "完全に削除しています…"
       },
       "blocked_by_agents": {
-        "title_one": "このコンピューターに {{count}} 件のエージェントが残っています",
-        "title_other": "このコンピューターに {{count}} 件のエージェントが残っています",
-        "description": "「{{name}}」を削除する前に、以下のエージェントをアーカイブまたは再割り当てしてください。",
-        "view_agent": "エージェントを表示"
+        "title_one": "「{{name}}」にエージェントが {{count}} 件残っています",
+        "title_other": "「{{name}}」にエージェントが {{count}} 件残っています",
+        "description": "このコンピューターを削除する前に、すべてのエージェントを削除してください。",
+        "view_agent": "エージェントを表示",
+        "remove_all": "すべてのエージェントを削除"
       },
-      "blocked_squads": {
-        "title": "アクティブなスクワッドが残っています",
-        "description": "「{{name}}」にはアーカイブ済みリーダーのアクティブなスクワッドがあります。スクワッドをアーカイブするかリーダーを変更してください。"
+      "plan_changed": {
+        "title": "「{{name}}」の状態が変わりました",
+        "description": "確認前にエージェント一覧が変わりました。現在の一覧をもう一度確認してください。",
+        "review": "もう一度確認"
       },
-      "blocked_tasks": {
-        "title": "アクティブなタスクが残っています",
-        "description": "「{{name}}」にはまだアクティブなタスクがあります。キャンセルするか完了を待ってから再試行してください。"
+      "remove_agents": {
+        "title": "「{{name}}」の全エージェントを削除しますか？",
+        "description_one": "このエージェントを停止してアーカイブし、コンピューターから削除します。",
+        "description_other": "{{count}} 件のエージェントを停止してアーカイブし、コンピューターから削除します。",
+        "restore_hint": "コンピューターを削除する前なら、Agents → Archived から復元できます。",
+        "confirm": "すべてのエージェントを削除",
+        "submitting_one": "エージェント {{count}} 件を削除しています…",
+        "submitting_other": "エージェント {{count}} 件を削除しています…",
+        "toast_removed_one": "エージェント {{count}} 件を削除しました。",
+        "toast_removed_other": "エージェント {{count}} 件を削除しました。"
       },
       "blocked_missing_daemon": {
         "title": "このコンピュータは削除できません",
-        "description": "「{{name}}」には daemon id がないため、一括削除は利用できません。行ごとの削除で代替しません。"
+        "description": "「{{name}}」にはコンピューター識別子がないため、完全に削除できません。"
       }
     }
   },

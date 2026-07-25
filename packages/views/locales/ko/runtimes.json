@@ -64,39 +64,45 @@
     },
     "delete_computer": {
       "button": "컴퓨터 삭제",
-      "toast_deleted_one": "이 컴퓨터에서 런타임 {{count}}개를 삭제했습니다",
-      "toast_deleted_other": "이 컴퓨터에서 런타임 {{count}}개를 삭제했습니다",
-      "delete_failed_toast": "컴퓨터 삭제에 실패했습니다",
-      "close": "닫기",
-      "confirm": {
-        "title": "이 컴퓨터를 삭제할까요?",
-        "description_one": "「{{name}}」의 런타임 {{count}}개를 모두 영구 삭제합니다. Remote 목록에서 사라지며 되돌릴 수 없습니다.",
-        "description_other": "「{{name}}」의 런타임 {{count}}개를 모두 영구 삭제합니다. Remote 목록에서 사라지며 되돌릴 수 없습니다.",
-        "cancel": "취소",
-        "confirm": "컴퓨터 삭제",
-        "submitting": "삭제 중…"
+      "toast_deleted": "「{{name}}」을(를) 영구 삭제했습니다.",
+      "operation_failed": {
+        "title": "작업에 실패했습니다. 변경된 내용은 없습니다.",
+        "description": "「{{name}}」은(는) 삭제되지 않았고 에이전트도 그대로입니다. 나중에 다시 시도하세요."
       },
-      "blocked_online": {
-        "title": "컴퓨터가 아직 온라인입니다",
-        "description": "「{{name}}」에 아직 온라인 런타임이 있습니다. 오프라인이 된 후 다시 시도하세요."
+      "confirm": {
+        "title": "이 컴퓨터를 영구 삭제할까요?",
+        "description": "이 작업은 되돌릴 수 없습니다. 「{{name}}」, 이 컴퓨터에 보관된 모든 에이전트(총 {{count}}개), 그리고 해당 기록과 메시지가 영구 삭제되며 이후 Multica에 연결할 수 없습니다.",
+        "type_to_confirm": "확인하려면 컴퓨터 이름 「{{name}}」을(를) 입력하세요.",
+        "cancel": "취소",
+        "confirm": "영구 삭제",
+        "submitting": "영구 삭제 중…"
       },
       "blocked_by_agents": {
-        "title_one": "이 컴퓨터에 에이전트 {{count}}개가 남아 있습니다",
-        "title_other": "이 컴퓨터에 에이전트 {{count}}개가 남아 있습니다",
-        "description": "「{{name}}」을(를) 삭제하려면 아래 에이전트를 먼저 보관하거나 재할당하세요.",
-        "view_agent": "에이전트 보기"
+        "title_one": "「{{name}}」에 에이전트 {{count}}개가 남아 있습니다",
+        "title_other": "「{{name}}」에 에이전트 {{count}}개가 남아 있습니다",
+        "description": "이 컴퓨터를 삭제하려면 먼저 모든 에이전트를 제거해야 합니다.",
+        "view_agent": "에이전트 보기",
+        "remove_all": "모든 에이전트 제거"
       },
-      "blocked_squads": {
-        "title": "활성 스쿼드가 남아 있습니다",
-        "description": "「{{name}}」에 보관된 리더의 활성 스쿼드가 있습니다. 스쿼드를 보관하거나 리더를 바꾸세요."
+      "plan_changed": {
+        "title": "「{{name}}」의 상태가 변경되었습니다",
+        "description": "확인 전에 에이전트 목록이 변경되었습니다. 현재 목록을 다시 확인하세요.",
+        "review": "다시 확인"
       },
-      "blocked_tasks": {
-        "title": "활성 작업이 남아 있습니다",
-        "description": "「{{name}}」에 아직 활성 작업이 있습니다. 취소하거나 완료될 때까지 기다린 후 다시 시도하세요."
+      "remove_agents": {
+        "title": "「{{name}}」의 모든 에이전트를 제거할까요?",
+        "description_one": "이 에이전트는 중지 및 보관되고 컴퓨터에서 제거됩니다.",
+        "description_other": "에이전트 {{count}}개는 중지 및 보관되고 컴퓨터에서 제거됩니다.",
+        "restore_hint": "컴퓨터를 삭제하기 전에는 Agents → Archived에서 에이전트를 복원할 수 있습니다.",
+        "confirm": "모든 에이전트 제거",
+        "submitting_one": "에이전트 {{count}}개 제거 중…",
+        "submitting_other": "에이전트 {{count}}개 제거 중…",
+        "toast_removed_one": "에이전트 {{count}}개를 제거했습니다.",
+        "toast_removed_other": "에이전트 {{count}}개를 제거했습니다."
       },
       "blocked_missing_daemon": {
         "title": "이 컴퓨터를 삭제할 수 없습니다",
-        "description": "「{{name}}」에 daemon id가 없어 일괄 삭제를 사용할 수 없습니다. 행 단위 삭제로 대체하지 않습니다."
+        "description": "「{{name}}」에 컴퓨터 식별자가 없어 영구 삭제할 수 없습니다."
       }
     }
   },

@@ -17,7 +17,6 @@ import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { channelsOptions } from "@multica/core/channels/queries";
 import { canAssignAgent } from "@multica/views/issues/components";
 import { api } from "@multica/core/api";
 import { useAgentPresenceDetail, useWorkspaceAgentAvailability } from "@multica/core/agents";
@@ -249,23 +248,16 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const { data: allSessions = [], isSuccess: sessionsLoaded } = useQuery(chatSessionsOptions(wsId));
-  // Bubble history must stay 1:1 — drop "#channelName" shells that the
-  // server filter missed (orphans) or that are still sitting in a stale
-  // TanStack sessions cache.
-  const { data: workspaceChannels = [] } = useQuery({
-    ...channelsOptions(wsId),
-    enabled: Boolean(lockedAgentId && wsId),
-  });
-  const channelNames = useMemo(
-    () => workspaceChannels.map((channel) => channel.name),
-    [workspaceChannels],
-  );
+  // Bubble history must stay 1:1 — drop "#channelName" shells (no whitespace)
+  // even when the sessions cache is stale or the live channel list is empty.
   const sessions = useMemo(() => {
     const scoped = lockedAgentId
       ? allSessions.filter((s) => s.agent_id === lockedAgentId)
       : allSessions;
-    return lockedAgentId ? excludeChannelShellSessions(scoped, channelNames) : scoped;
-  }, [allSessions, lockedAgentId, channelNames]);
+    // Always drop "#token" channel shells — backend does too, but the
+    // sessions query uses staleTime: Infinity so a pre-fix cache can linger.
+    return excludeChannelShellSessions(scoped);
+  }, [allSessions, lockedAgentId]);
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,

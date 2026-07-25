@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
-import { channelsOptions } from "@multica/core/channels/queries";
 import { excludeChannelShellSessions } from "./exclude-channel-shell-sessions";
 
 /**
@@ -11,14 +10,12 @@ import { excludeChannelShellSessions } from "./exclude-channel-shell-sessions";
  */
 export function useAgentBubbleUnreadByAgent(wsId: string): Map<string, number> {
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
-  const { data: channels = [] } = useQuery(channelsOptions(wsId));
-  const channelNames = useMemo(() => channels.map((channel) => channel.name), [channels]);
   return useMemo(() => {
     const counts = new Map<string, number>();
-    for (const session of excludeChannelShellSessions(sessions, channelNames)) {
+    for (const session of excludeChannelShellSessions(sessions)) {
       if (!session.has_unread) continue;
       counts.set(session.agent_id, (counts.get(session.agent_id) ?? 0) + 1);
     }
     return counts;
-  }, [sessions, channelNames]);
+  }, [sessions]);
 }

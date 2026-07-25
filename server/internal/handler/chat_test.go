@@ -343,7 +343,7 @@ func TestListChatSessions_ExcludesChannelBackedSessions(t *testing.T) {
 		t.Fatalf("create dm session: %v", err)
 	}
 
-	var channelID, boundSessionID, orphanSessionID string
+	var channelID, boundSessionID, orphanSessionID, deletedNameSessionID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by)
 		VALUES ($1, 'bubble-filter-chan', $2) RETURNING id`,
@@ -367,11 +367,18 @@ func TestListChatSessions_ExcludesChannelBackedSessions(t *testing.T) {
 		testWorkspaceID, agentID, testUserID).Scan(&orphanSessionID); err != nil {
 		t.Fatalf("create orphan channel-titled session: %v", err)
 	}
+	// Renamed/deleted channel leftover: #token title with no matching channel row.
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, '#multica_jhp研发群') RETURNING id`,
+		testWorkspaceID, agentID, testUserID).Scan(&deletedNameSessionID); err != nil {
+		t.Fatalf("create deleted-name hash title session: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id=$1`, channelID)
 		_, _ = testPool.Exec(context.Background(),
-			`DELETE FROM chat_session WHERE id IN ($1,$2,$3)`,
-			dmSessionID, boundSessionID, orphanSessionID)
+			`DELETE FROM chat_session WHERE id IN ($1,$2,$3,$4)`,
+			dmSessionID, boundSessionID, orphanSessionID, deletedNameSessionID)
 	})
 
 	req := newRequest("GET", "/api/chat/sessions?status=all", nil)
@@ -397,6 +404,9 @@ func TestListChatSessions_ExcludesChannelBackedSessions(t *testing.T) {
 	}
 	if ids[orphanSessionID] {
 		t.Fatalf("orphan #channel-titled session %s leaked into ListChatSessions", orphanSessionID)
+	}
+	if ids[deletedNameSessionID] {
+		t.Fatalf("hash-token session %s leaked into ListChatSessions", deletedNameSessionID)
 	}
 }
 

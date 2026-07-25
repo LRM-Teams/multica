@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import { useBottomSettleScroll } from "./use-bottom-settle-scroll";
 
-// Manual frame pump (NOT recursive-synchronous rAF): the settle can skip frames
-// indefinitely while a gesture is active, which a self-calling cb(0) rAF would
-// turn into an infinite loop. Queue callbacks and flush a bounded number.
+// Manual frame pump: flush a bounded number of queued frames.
 let nextId: number;
 let scheduled: Array<{ id: number; cb: FrameRequestCallback }>;
 let cancelled: Set<number>;
@@ -53,62 +50,75 @@ function messages(ids: string[]): ChannelMessage[] {
 }
 const IDS = ["a", "b", "c"];
 const LAST_ID = "c";
-
-const CONTAINER_BOTTOM = 616;
+const CLIENT_HEIGHT = 616;
 
 /**
- * Models a cold Virtuoso mount HONESTLY, in the axis the hook actually reads:
- * the LAST ROW's real geometry (getBoundingClientRect().bottom) vs the
- * container's bottom edge. On the failing #1204 open the last row was rendered
- * but 263px BELOW the fold (rowBottom = 879, containerBottom = 616), while the
- * scroller's `scrollHeight` metric transiently read === clientHeight (the trap
- * that false-settled the old metric-based predicate). This harness exposes BOTH:
- * the trap metric AND the true row geometry, so a revert to the metric predicate
- * is caught.
+ * Honest harness (Barry's #3): row geometry is DERIVED from the real scrollTop
+ * setter + scrollHeight, never set by the mock action.
+ *
+ * Models the cold-mount measurement-evolution window: the scroller starts with
+ * scrollHeight === clientHeight (the trap: distanceToBottom reads 0), and each
+ * direct write (one per settle frame) "measures" a bit more content until it
+ * reaches `finalHeight`. Consistent with a real browser:
+ *  - `el.scrollTop` has a clamping setter (a write of scrollHeight lands at
+ *    scrollHeight - clientHeight, the true bottom) — this is why direct scrollTop
+ *    moves the scroll where Virtuoso's `scrollToIndex` (its internal model) did
+ *    not.
+ *  - the LAST row enters the ref map only once content has grown to include it
+ *    (rows render/measure lazily) — so geometry is never read against a
+ *    half-measured list, which is exactly what stops the frame-1 false-settle.
+ *  - the last row's bottom edge = `scrollHeight - scrollTop` (content bottom's
+ *    position after scrolling), derived, not mock-set.
  */
-function coldMountHarness(opts: {
-  rowBottomStart: number; // last row's bottom edge in viewport coords at scrollTop 0
-  perScrollDelta: number; // px the row rises toward the fold per honored scroll
-  rendersAfterAttempts?: number; // when the last row enters the ref map (default 1 = present)
-  trapScrollHeightEqualsClient?: boolean; // expose the misleading metric
-}) {
+function harness(opts: { finalHeight: number; stepPerWrite: number }) {
   const el = document.createElement("div");
-  el.getBoundingClientRect = () =>
-    ({ top: 0, bottom: CONTAINER_BOTTOM }) as DOMRect;
-  // The trap: cold-mount scroller reports scrollHeight === clientHeight before
-  // Virtuoso updates its size model. A metric predicate would read
-  // distanceToBottom = 0 here and false-settle; the geometry predicate ignores it.
-  Object.defineProperty(el, "clientHeight", { value: CONTAINER_BOTTOM, configurable: true });
-  Object.defineProperty(el, "scrollHeight", {
-    get: () => (opts.trapScrollHeightEqualsClient ? CONTAINER_BOTTOM : 10_000),
+  let scrollTop = 0;
+  let writes = 0;
+  const scrollHeightNow = () =>
+    Math.min(opts.finalHeight, CLIENT_HEIGHT + writes * opts.stepPerWrite);
+
+  const lastRowEl = document.createElement("div");
+  const map = new Map<string, HTMLElement>();
+  lastRowEl.getBoundingClientRect = () => {
+    const sh = scrollHeightNow();
+    return { top: sh - scrollTop - 40, bottom: sh - scrollTop } as DOMRect;
+  };
+
+  Object.defineProperty(el, "clientHeight", { value: CLIENT_HEIGHT, configurable: true });
+  Object.defineProperty(el, "scrollHeight", { get: scrollHeightNow, configurable: true });
+  Object.defineProperty(el, "scrollTop", {
+    get: () => scrollTop,
+    set: (v: number) => {
+      writes += 1; // one direct write = one measurement step of progress
+      const sh = scrollHeightNow();
+      scrollTop = Math.max(0, Math.min(v, sh - CLIENT_HEIGHT)); // browser clamp
+      // The last row becomes measurable once the full content height is reached.
+      if (sh >= opts.finalHeight) map.set(LAST_ID, lastRowEl);
+    },
     configurable: true,
   });
-  el.scrollTop = 0;
+  el.getBoundingClientRect = () => ({ top: 0, bottom: CLIENT_HEIGHT }) as DOMRect;
 
-  const map = new Map<string, HTMLElement>();
-  let rowBottom = opts.rowBottomStart;
-  const lastRowEl = document.createElement("div");
-  lastRowEl.getBoundingClientRect = () =>
-    ({ top: rowBottom - 40, bottom: rowBottom }) as DOMRect;
-  const rendersAfter = opts.rendersAfterAttempts ?? 1;
-  if (rendersAfter <= 0) map.set(LAST_ID, lastRowEl);
-
-  let attempts = 0;
-  const scrollToIndex = vi.fn((_loc: unknown) => {
-    attempts += 1;
-    if (!map.has(LAST_ID) && attempts >= rendersAfter) map.set(LAST_ID, lastRowEl);
-    // A honored scroll brings the last row up toward (and no further than) the
-    // container's bottom edge.
-    rowBottom = Math.max(CONTAINER_BOTTOM, rowBottom - opts.perScrollDelta);
-  });
-  const ref = { current: { scrollToIndex } as unknown as VirtuosoHandle };
-  return { el, map, scrollToIndex, ref };
+  return {
+    el,
+    map,
+    get scrollTop() {
+      return scrollTop;
+    },
+    get scrollHeight() {
+      return scrollHeightNow();
+    },
+    userScrollTo(v: number) {
+      // A user scroll must NOT count as a settle write / measurement step.
+      const sh = scrollHeightNow();
+      scrollTop = Math.max(0, Math.min(v, sh - CLIENT_HEIGHT));
+    },
+  };
 }
 
 type BottomProps = Parameters<typeof useBottomSettleScroll>[0];
 const baseProps = (
-  over: Partial<BottomProps> &
-    Pick<BottomProps, "virtuosoRef" | "scrollContainerEl" | "messageRefMap">,
+  over: Partial<BottomProps> & Pick<BottomProps, "scrollContainerEl" | "messageRefMap">,
 ): BottomProps => ({
   channelId: "c1",
   messages: messages(IDS),
@@ -118,149 +128,177 @@ const baseProps = (
 });
 
 describe("useBottomSettleScroll", () => {
-  it("scrolls to the LAST local index with align:end", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM, perScrollDelta: 0 });
+  it("cold top, no gesture: per-frame direct write follows scrollHeight growth to the geometry bottom", () => {
+    // 879 final (263 over the viewport), grows ~90px per write → a few frames.
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
     );
     flushFrames();
-    // messages.length - 1 = 2 (local index), never offset by firstItemIndex.
-    expect(h.scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "end", behavior: "auto" });
+    expect(h.scrollHeight).toBe(879); // measurement completed
+    expect(h.scrollTop).toBe(879 - CLIENT_HEIGHT); // 263 — pinned to the true bottom
   });
 
-  it("does NOT false-settle when the scrollHeight metric reads 'at bottom' but the last row is below the fold (the #1204 runtime bug)", () => {
-    // Trap metric ON (scrollHeight === clientHeight → distanceToBottom 0) AND the
-    // last row is rendered but 263px below the fold. The old metric predicate
-    // would settle on frame 1 (a single scroll). The geometry predicate must keep
-    // re-issuing until the row's bottom actually reaches the container bottom.
-    const h = coldMountHarness({
-      rowBottomStart: CONTAINER_BOTTOM + 263,
-      perScrollDelta: 90, // the row rises gradually; several frames to land
-      trapScrollHeightEqualsClient: true,
-    });
+  it("does not false-settle at the top while scrollHeight is still === clientHeight (the trap)", () => {
+    // Content never actually overflows in this contrived setup (never grows),
+    // so the last row never becomes measurable → the settle can't confirm the
+    // bottom and times out, rather than silently false-settling at scrollTop 0.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = harness({ finalHeight: 879, stepPerWrite: 0 }); // scrollHeight stuck at 616
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
     );
     flushFrames();
-    // The geometry predicate keeps re-issuing while the row is still below the
-    // fold, landing only after the row's bottom reaches the container bottom.
-    // A metric-only predicate would false-settle on frame 1 (trap metric = 0)
-    // and produce exactly 1 call — so > 1 is the regression that catches a revert.
-    expect(h.scrollToIndex.mock.calls.length).toBeGreaterThan(1);
+    expect(h.scrollTop).toBe(0);
+    expect(warn).toHaveBeenCalledWith(
+      "[useBottomSettleScroll] settle timed out — never reached the bottom band",
+      { channelId: "c1" },
+    );
   });
 
-  it("re-issues across frames until the last row's bottom reaches the container bottom", () => {
-    const h = coldMountHarness({
-      rowBottomStart: CONTAINER_BOTTOM + 500,
-      perScrollDelta: 100, // 5 frames to close the 500px gap
-    });
+  it("hands off PERMANENTLY on the first real gesture — no re-pin after release", () => {
+    const h = harness({ finalHeight: 5000, stepPerWrite: 20 }); // long, slow to settle
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
     );
-    flushFrames();
-    expect(h.scrollToIndex).toHaveBeenCalledTimes(5);
-  });
+    flushFrames(5); // a few settle frames — it's actively pinning toward the moving bottom
+    expect(h.scrollTop).toBeGreaterThan(0);
 
-  it("settles immediately for a short list whose last row is already above the fold", () => {
-    // Short conversation: last row bottom sits ABOVE the container bottom (content
-    // doesn't fill the viewport) — already at the bottom, one scroll confirms it.
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM - 100, perScrollDelta: 0 });
-    renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
-    );
-    flushFrames();
-    expect(h.scrollToIndex).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not trust the metric until the last row has rendered", () => {
-    // Last row not in the ref map until attempt 3; geometry can't be read before
-    // then, so it must keep re-issuing rather than settle on the trap metric.
-    const h = coldMountHarness({
-      rowBottomStart: CONTAINER_BOTTOM, // once rendered, already at bottom
-      perScrollDelta: 0,
-      rendersAfterAttempts: 3,
-      trapScrollHeightEqualsClient: true,
-    });
-    renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
-    );
-    flushFrames();
-    expect(h.scrollToIndex).toHaveBeenCalledTimes(3);
-  });
-
-  it("yields to an active touch gesture (no scrollToIndex while held), then resumes on release", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM + 5000, perScrollDelta: 10 });
-    renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
-    );
-    const beforeGesture = h.scrollToIndex.mock.calls.length;
-    expect(beforeGesture).toBeGreaterThanOrEqual(1);
+    // User grabs, releases, and scrolls up to the top themselves.
     h.el.dispatchEvent(new Event("touchstart"));
-    flushFrames(30);
-    expect(h.scrollToIndex.mock.calls.length).toBe(beforeGesture);
     h.el.dispatchEvent(new Event("touchend"));
-    flushFrames(30);
-    expect(h.scrollToIndex.mock.calls.length).toBeGreaterThan(beforeGesture);
+    h.userScrollTo(0);
+
+    flushFrames(60);
+    // The settle permanently exited on the gesture epoch bump — it must NOT have
+    // re-pinned to the bottom after release. The user's position (0) stands.
+    expect(h.scrollTop).toBe(0);
+  });
+
+  it("keeps pinning across a wheel that goes idle is NOT a thing — a wheel also hands off permanently", () => {
+    const h = harness({ finalHeight: 5000, stepPerWrite: 20 });
+    renderHook(() =>
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
+    );
+    flushFrames(5);
+    expect(h.scrollTop).toBeGreaterThan(0);
+    h.el.dispatchEvent(new Event("wheel")); // real wheel → epoch bump → permanent handoff
+    h.userScrollTo(0);
+    flushFrames(60);
+    expect(h.scrollTop).toBe(0);
+  });
+
+  it("does not write when a gesture is ALREADY active as the settle starts (epoch baseline would miss it)", () => {
+    const h = harness({ finalHeight: 5000, stepPerWrite: 20 });
+    // Start disabled so the settle doesn't run yet, but the shared gesture hook
+    // still attaches its listeners. A touch begins (bumps the epoch to 1) WHILE
+    // disabled. Then enable: the settle's first run captures startEpoch = 1, so
+    // the epoch is already at baseline and can't signal the in-progress gesture —
+    // only the active flag can. It must hand off immediately, never writing.
+    const { rerender } = renderHook((props: BottomProps) => useBottomSettleScroll(props), {
+      initialProps: baseProps({ enabled: false, scrollContainerEl: h.el, messageRefMap: h.map }),
+    });
+    h.el.dispatchEvent(new Event("touchstart")); // epoch 0→1, active=true, while disabled
+    rerender(baseProps({ enabled: true, scrollContainerEl: h.el, messageRefMap: h.map }));
+    flushFrames(60);
+    expect(h.scrollTop).toBe(0); // never pinned — aborted on the active flag
+  });
+
+  it("stays handed off across a messages churn that re-runs the effect after a gesture (per-visit baseline)", () => {
+    // The race: gesture + release, then a normal messages-array churn re-runs the
+    // effect BEFORE the pending frame observed the gesture (its rAF is cancelled
+    // by cleanup). A per-effect-run epoch baseline would re-baseline the bumped
+    // epoch, see the gesture released (active=false), and resume pinning. The
+    // per-visit baseline keeps the handoff durable.
+    const h = harness({ finalHeight: 5000, stepPerWrite: 20 });
+    const { rerender } = renderHook((props: BottomProps) => useBottomSettleScroll(props), {
+      initialProps: baseProps({ scrollContainerEl: h.el, messageRefMap: h.map }),
+    });
+    flushFrames(3); // actively pinning toward the moving bottom
+    expect(h.scrollTop).toBeGreaterThan(0);
+
+    // User grabs, releases, scrolls up.
+    h.el.dispatchEvent(new Event("touchstart"));
+    h.el.dispatchEvent(new Event("touchend"));
+    h.userScrollTo(0);
+
+    // Messages churn re-runs the effect (new array, same channel) WITHOUT first
+    // flushing the pending frame.
+    rerender(
+      baseProps({ messages: messages([...IDS, "d"]), scrollContainerEl: h.el, messageRefMap: h.map }),
+    );
+    flushFrames(60);
+    // Ownership stayed with the user — no re-pin after the churn.
+    expect(h.scrollTop).toBe(0);
   });
 
   it("does nothing when disabled (a highlight/anchor owns the mount)", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM, perScrollDelta: 0 });
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ enabled: false, virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(
+        baseProps({ enabled: false, scrollContainerEl: h.el, messageRefMap: h.map }),
+      ),
     );
     flushFrames();
-    expect(h.scrollToIndex).not.toHaveBeenCalled();
+    expect(h.scrollTop).toBe(0);
   });
 
   it("does nothing before the scroll container exists", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM, perScrollDelta: 0 });
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: null, messageRefMap: h.map })),
+      useBottomSettleScroll(baseProps({ scrollContainerEl: null, messageRefMap: h.map })),
     );
     flushFrames();
-    expect(h.scrollToIndex).not.toHaveBeenCalled();
+    expect(h.scrollTop).toBe(0);
   });
 
   it("does nothing while the Virtuoso handle has not attached", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM, perScrollDelta: 0 });
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ handleAttached: false, virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(
+        baseProps({ handleAttached: false, scrollContainerEl: h.el, messageRefMap: h.map }),
+      ),
     );
     flushFrames();
-    expect(h.scrollToIndex).not.toHaveBeenCalled();
+    expect(h.scrollTop).toBe(0);
   });
 
   it("does nothing with no messages (empty conversation)", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM, perScrollDelta: 0 });
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ messages: [], virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(
+        baseProps({ messages: [], scrollContainerEl: h.el, messageRefMap: h.map }),
+      ),
     );
     flushFrames();
-    expect(h.scrollToIndex).not.toHaveBeenCalled();
+    expect(h.scrollTop).toBe(0);
   });
 
-  it("only settles once per channel visit (a guarded re-render does not re-scroll)", () => {
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM, perScrollDelta: 0 });
+  it("only settles once per channel visit (a guarded re-render does not re-pin)", () => {
+    const h = harness({ finalHeight: 879, stepPerWrite: 879 - CLIENT_HEIGHT }); // one write to full
     const { rerender } = renderHook((props: BottomProps) => useBottomSettleScroll(props), {
-      initialProps: baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map }),
+      initialProps: baseProps({ scrollContainerEl: h.el, messageRefMap: h.map }),
     });
     flushFrames();
-    const afterFirst = h.scrollToIndex.mock.calls.length;
-    expect(afterFirst).toBeGreaterThanOrEqual(1);
-    rerender(baseProps({ messages: messages(IDS), virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map }));
+    expect(h.scrollTop).toBe(879 - CLIENT_HEIGHT); // reached the bottom
+    // User scrolls up; a benign re-render (e.g. messages refetch echo) must NOT re-pin.
+    h.userScrollTo(0);
+    rerender(baseProps({ messages: messages(IDS), scrollContainerEl: h.el, messageRefMap: h.map }));
     flushFrames();
-    expect(h.scrollToIndex.mock.calls.length).toBe(afterFirst);
+    expect(h.scrollTop).toBe(0);
   });
 
-  it("gives up at the frame cap and logs when the bottom is never reached", () => {
+  it("times out and logs if the last row never renders", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Row stays far below the fold forever (scroll never honored).
-    const h = coldMountHarness({ rowBottomStart: CONTAINER_BOTTOM + 500, perScrollDelta: 0 });
+    // Content grows past the viewport but the last row is force-removed from the
+    // map every time it's added → geometry never confirmable → cap + warn.
+    const h = harness({ finalHeight: 879, stepPerWrite: 90 });
+    const origSet = h.map.set.bind(h.map);
+    h.map.set = ((k: string, v: HTMLElement) => (k === LAST_ID ? h.map : origSet(k, v))) as typeof h.map.set;
     renderHook(() =>
-      useBottomSettleScroll(baseProps({ virtuosoRef: h.ref, scrollContainerEl: h.el, messageRefMap: h.map })),
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
     );
     flushFrames();
-    expect(h.scrollToIndex).toHaveBeenCalledTimes(180);
     expect(warn).toHaveBeenCalledWith(
       "[useBottomSettleScroll] settle timed out — never reached the bottom band",
       { channelId: "c1" },

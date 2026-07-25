@@ -1401,7 +1401,7 @@ func (h *Handler) insertAgentDMControlSystemEvent(
 		SELECT e.id, e.source_channel_id, e.source_message_id, e.matter_id,
 		       e.state, e.turn_count, e.round_limit, e.granted_rounds,
 		       e.agent_low_id, e.agent_high_id,
-		       low.handle, low.display_name, high.handle, high.display_name,
+		       low.name, low.display_name, high.name, high.display_name,
 		       EXISTS (
 		         SELECT 1
 		         FROM agent a

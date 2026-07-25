@@ -31,6 +31,11 @@ import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { buildTimeline } from "../../common/task-transcript";
 import { TaskStatusPill } from "./task-status-pill";
 import { StickerMessage } from "./sticker-message";
+import { MessagePartsRenderer } from "../../channels/components/message-parts-renderer";
+import {
+  resolveMessageParts,
+  unwrapStructuredPreviewContent,
+} from "../../channels/components/message-parts-preview";
 import { formatElapsedMs } from "../lib/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import {
@@ -45,6 +50,7 @@ import {
   BubbleTodoPanel,
 } from "./bubble-cursor-panels";
 import { useT } from "../../i18n";
+import type { MessagePart } from "@multica/core/types";
 
 // ─── Public component ────────────────────────────────────────────────────
 
@@ -368,9 +374,19 @@ function AssistantMessage({
   return (
     <div className="w-full space-y-1.5">
       {timeline.length > 0 ? (
-        <TimelineView items={timeline} attachments={message.attachments} enhanced={enhanced} />
+        <TimelineView
+          items={timeline}
+          attachments={message.attachments}
+          enhanced={enhanced}
+          messageParts={message.parts}
+          messageContent={message.content}
+        />
       ) : (
-        <MessageProse content={message.content} attachments={message.attachments} />
+        <MessageProse
+          content={message.content}
+          parts={message.parts}
+          attachments={message.attachments}
+        />
       )}
       <AttachmentList
         attachments={message.attachments}
@@ -535,20 +551,41 @@ function FailureBubble({
 }
 
 /**
- * Renders a block of assistant/user message text. If the body is a structured
- * sticker-parts reply (e.g. `{"parts":[{"type":"sticker","sticker_id":"hi"}]}`)
- * it renders the sticker(s) instead of the raw JSON; otherwise it falls back to
- * the normal prose markdown pipeline. Shared by the no-timeline assistant path
- * and the timeline "final" region so a sticker reply renders identically
- * regardless of whether the task timeline has loaded (LRM-84).
+ * Renders assistant/user message body. Prefers denormalized `parts`, otherwise
+ * unwraps a historical `action:message_send` envelope from `content` (same
+ * contract as channel bubbles) so protocol JSON never paints as markdown.
  */
 function MessageProse({
   content,
+  parts,
   attachments,
 }: {
   content: string;
+  parts?: MessagePart[] | null;
   attachments?: import("@multica/core/types").Attachment[];
 }) {
+  const resolved = resolveMessageParts(content, parts);
+  if (resolved?.length) {
+    const stickerOnly = resolved.every((p) => p.type === "sticker");
+    if (stickerOnly) {
+      return (
+        <div className="flex flex-wrap gap-1.5 py-0.5">
+          {resolved.map((part, i) =>
+            part.type === "sticker" ? (
+              <StickerMessage key={`${part.sticker_id}-${i}`} id={part.sticker_id} />
+            ) : null,
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className={cn("text-sm leading-relaxed max-w-none", selectableMessageTextClass)}>
+        <MessagePartsRenderer parts={resolved} />
+      </div>
+    );
+  }
+
+  // Legacy sticker-only `{"parts":[...]}` without action (LRM-84).
   const stickerIds = parseStickerMessage(content);
   if (stickerIds) {
     return (
@@ -559,9 +596,11 @@ function MessageProse({
       </div>
     );
   }
+
+  const unwrapped = unwrapStructuredPreviewContent(content);
   return (
     <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-      <Markdown attachments={attachments}>{content}</Markdown>
+      <Markdown attachments={attachments}>{unwrapped ?? content}</Markdown>
     </div>
   );
 }
@@ -585,15 +624,24 @@ function TimelineView({
   isStreaming,
   attachments,
   enhanced,
+  messageParts,
+  messageContent,
 }: {
   items: ChatTimelineItem[];
   isStreaming?: boolean;
   attachments?: import("@multica/core/types").Attachment[];
   /** DM bubble Cursor-like panels + richer tool labels. */
   enhanced?: boolean;
+  /** Assistant message parts — used when the final region is an envelope. */
+  messageParts?: MessagePart[] | null;
+  messageContent?: string;
 }) {
   const { preface, middle, final } = splitTimeline(items);
   const panels = enhanced ? deriveBubbleCursorPanels(middle) : null;
+  const finalText = final.map((t) => t.content ?? "").join("");
+  // Prefer timeline final text; if empty (e.g. sticker-only completion), fall
+  // back to the persisted chat_message body so envelopes still unwrap.
+  const proseContent = finalText || messageContent || "";
 
   return (
     <>
@@ -622,9 +670,10 @@ function TimelineView({
           isStreaming={isStreaming}
         />
       )}
-      {final.length > 0 && (
+      {proseContent.length > 0 && (
         <MessageProse
-          content={final.map((t) => t.content ?? "").join("")}
+          content={proseContent}
+          parts={finalText ? undefined : messageParts}
           attachments={attachments}
         />
       )}

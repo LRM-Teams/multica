@@ -53,6 +53,12 @@ Sticker plus explanation (for example user assigns work and you need to answer):
 
 Return exactly one JSON object as final output, with no surrounding commentary.
 
+If you mistakenly run `multica message send` in a standalone session and the
+CLI returns `agent task is not a channel task` (403): **stop immediately**.
+That error means the task shape is standalone, not that Multica CLI is broken.
+Do not chase help pages, env vars, transcripts, or daemon status — reply with
+final output (sticker JSON or text) instead.
+
 ### DM, channel, or thread
 
 Use the task-scoped transport with the explicit target supplied by the current
@@ -86,6 +92,8 @@ Use the printed id with `--sticker`.
 - **Don't** paste legacy `:sticker:<id>:` tokens.
 - **Don't** use a JSON action envelope in a DM/channel/thread transport run, or
   use `multica message send` for the current reply in a standalone session.
+- **Don't** treat a standalone-session `not a channel task` error as a CLI outage;
+  switch to final-output delivery instead of diagnosing Multica.
 - **Don't** embed chat files as markdown images (`![](url)`). Upload with
   `multica attachment upload`, then send with
   `multica message send --attachment-id <id>` (optionally with `--message` /

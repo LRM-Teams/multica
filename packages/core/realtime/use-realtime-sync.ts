@@ -165,6 +165,9 @@ export function applyChatDoneToCache(
   qc.setQueryData<ChatPendingTask | Record<string, never>>(
     chatKeys.pendingTask(sessionId),
     (old) => {
+      // Empty task_id = platform fast-path completion (e.g. greeting sticker).
+      // Always clear this session's pending pill.
+      if (!taskId) return {};
       if (old && "task_id" in old && old.task_id && old.task_id !== taskId) {
         return old;
       }

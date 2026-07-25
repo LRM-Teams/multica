@@ -596,6 +596,16 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         taskId: result.task_id,
       });
       replaceOptimisticChatMessageId(qc, sessionId, optimistic.id, result.message_id, result.task_id);
+      // Greeting fast path (L4): server returns no task_id and already wrote
+      // the assistant sticker. Clear pending pill and refresh messages.
+      if (!result.task_id) {
+        stopRequestedBeforeTaskRef.current = false;
+        qc.setQueryData(chatKeys.pendingTask(sessionId), {});
+        qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
+        qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+        return true;
+      }
       // Replace the temporary task_id with the server's real one (so the WS
       // task: handlers can match against it) and snap the anchor to the
       // server's created_at — keeping the elapsed-seconds reading stable.
@@ -647,6 +657,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       qc,
       setActiveSession,
       t,
+      wsId,
     ],
   );
 

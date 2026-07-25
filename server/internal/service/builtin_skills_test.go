@@ -89,6 +89,7 @@ func TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery(t *testing.T) 
 		"DM, channel, or thread",
 		"explicit target",
 		"Do not search for a DM/channel target",
+		"agent task is not a channel task",
 	} {
 		if !strings.Contains(skill.Content, want) {
 			t.Errorf("multica-stickers skill missing delivery contract %q", want)

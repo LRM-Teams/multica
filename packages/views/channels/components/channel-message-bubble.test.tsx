@@ -545,6 +545,15 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("lets message content fill the conversation column (LRM-400)", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+    const body = screen.getByTestId("message-body");
+    const contentCol = body.parentElement;
+    expect(contentCol).not.toBeNull();
+    expect(contentCol!.className).toMatch(/\bmax-w-full\b/);
+    expect(contentCol!.className).not.toMatch(/760px/);
+  });
+
   it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {
     render(
       <ChannelMessageBubble

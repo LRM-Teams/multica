@@ -774,7 +774,10 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       ) : (
         avatar
       )}
-      <div className="min-w-0 max-w-[min(760px,100%)]">
+      {/* LRM-400: fill the conversation column — a 760px cap left a wide empty
+          right band that still read as Frank's "半屏空白" after the PanelGroup
+          shell fix (#1154). Soft wrap stays on `.message-surface`. */}
+      <div className="min-w-0 max-w-full">
         {showAuthor && (
           <div className="mb-0.5 flex select-none items-baseline gap-2 text-[13.5px] md:pr-24">
             {profileActorType && profileActorId ? (

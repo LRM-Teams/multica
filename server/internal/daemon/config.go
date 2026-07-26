@@ -58,13 +58,13 @@ const (
 	DefaultGCArtifactTTL            = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
 	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
-	DefaultMemoryCurationRunTimeout       = 10 * time.Minute
+	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
 	// the curator agent (self-review / team curation / L3). 30s was too short
 	// for Cursor/Codex team curation over multiple agents and evidence.
 	DefaultMemoryCurationL3ReviewTimeout = 10 * time.Minute
-	DefaultGrokPersistentIdleTTL    = 15 * time.Minute
-	DefaultPiPersistentIdleTTL      = 15 * time.Minute
+	DefaultGrokPersistentIdleTTL         = 15 * time.Minute
+	DefaultPiPersistentIdleTTL           = 15 * time.Minute
 )
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
@@ -97,7 +97,9 @@ type Config struct {
 	GCArtifactTTL                  time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
 	GCArtifactPatterns             []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
 	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
+	AutoUpdateConfigSource         string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
 	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	UpdateObservationPath          string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
 	SharedSkillsDir                string                // optional global override; when empty each provider uses its own shared root
 	SharedSkillsSyncInterval       time.Duration         // how often to scan and sync SharedSkillsDir
 	MemoryCurationL3ReviewEnabled  bool                  // run the local Pi L3 reviewer during daemon-side curation
@@ -475,16 +477,23 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// auto-update off by default for self-host avoids both footguns (MUL-2381).
 	// Operators on either side can flip the default with MULTICA_DAEMON_AUTO_UPDATE.
 	autoUpdateEnabled := isOfficialCloudServer(serverBaseURL)
+	autoUpdateConfigSource := "self_host_default"
+	if autoUpdateEnabled {
+		autoUpdateConfigSource = "official_host_default"
+	}
 	if v := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_AUTO_UPDATE")); v != "" {
 		switch strings.ToLower(v) {
 		case "false", "0", "no", "off":
 			autoUpdateEnabled = false
+			autoUpdateConfigSource = "env_disabled"
 		case "true", "1", "yes", "on":
 			autoUpdateEnabled = true
+			autoUpdateConfigSource = "env_enabled"
 		}
 	}
 	if overrides.DisableAutoUpdate {
 		autoUpdateEnabled = false
+		autoUpdateConfigSource = "cli_disabled"
 	}
 	autoUpdateInterval, err := durationFromEnv("MULTICA_DAEMON_AUTO_UPDATE_INTERVAL", DefaultAutoUpdateCheckInterval)
 	if err != nil {
@@ -493,6 +502,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if overrides.AutoUpdateCheckInterval > 0 {
 		autoUpdateInterval = overrides.AutoUpdateCheckInterval
 	}
+	versionStoreRoot, err := cli.DefaultVersionStoreRoot()
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve daemon update observation path: %w", err)
+	}
+	updateObservationPath := filepath.Join(versionStoreRoot, "daemon-update-status.json")
 
 	// Empty means "resolve per provider" in shared_skills.go (pi → ~/.pi/share/skills).
 	sharedSkillsDir := strings.TrimSpace(os.Getenv("MULTICA_SHARED_SKILLS_DIR"))
@@ -552,7 +566,9 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		GCArtifactTTL:                  gcArtifactTTL,
 		GCArtifactPatterns:             gcArtifactPatterns,
 		AutoUpdateEnabled:              autoUpdateEnabled,
+		AutoUpdateConfigSource:         autoUpdateConfigSource,
 		AutoUpdateCheckInterval:        autoUpdateInterval,
+		UpdateObservationPath:          updateObservationPath,
 		SharedSkillsDir:                sharedSkillsDir,
 		SharedSkillsSyncInterval:       sharedSkillsInterval,
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,

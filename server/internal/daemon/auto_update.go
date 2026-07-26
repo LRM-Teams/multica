@@ -107,18 +107,27 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	// by the strict re-check under claimMu inside trySetClaimBarrier.
 	if running := d.activeTasks.Load(); running > 0 {
 		d.logger.Debug("auto-update: skip — tasks running", "active", running)
+		if d.beginUpdateObservation("auto", "waiting", "") {
+			d.finishUpdateObservation("waiting", "busy", "", "", "")
+		}
 		return
 	}
 
+	if !d.beginUpdateObservation("auto", "checking", "") {
+		return
+	}
 	release, err := fetchLatestRelease()
 	if err != nil {
 		d.logger.Warn("auto-update: fetch latest release failed — will retry", "error", err)
+		d.finishUpdateObservation("waiting", "fetch_failed", "", "release_fetch_failed", "Unable to fetch the latest release.")
 		return
 	}
 	if release == nil || release.TagName == "" {
+		d.finishUpdateObservation("waiting", "up_to_date", "", "", "")
 		return
 	}
 	if !isNewerVersion(release.TagName, d.cfg.CLIVersion) {
+		d.finishUpdateObservation("waiting", "up_to_date", release.TagName, "", "")
 		return
 	}
 
@@ -146,6 +155,7 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	// no in-flight task will be cancelled by triggerRestart.
 	if !d.trySetClaimBarrier() {
 		d.logger.Info("auto-update: deferring — task or claim in flight at barrier check")
+		d.finishUpdateObservation("waiting", "busy", release.TagName, "", "")
 		return
 	}
 	barrierReleased := false
@@ -157,15 +167,20 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 
 	d.logger.Info("auto-update: newer release available, upgrading",
 		"current", d.cfg.CLIVersion, "target", release.TagName)
+	if !d.beginUpdateObservation("auto", "updating", release.TagName) {
+		return
+	}
 
 	output, err := d.runUpdateFn(release.TagName)
 	if err != nil {
 		d.logger.Warn("auto-update: upgrade failed — will retry", "error", err, "output", output)
+		d.finishUpdateObservation("waiting", "update_failed", release.TagName, "download_update_failed", "The release download update failed.")
 		return
 	}
 	verifiedVersion, err := d.verifyUpdatedBinaryVersion(release.TagName, output)
 	if err != nil {
 		d.logger.Warn("auto-update: upgrade verification failed — will retry", "error", err, "output", output)
+		d.finishUpdateObservation("waiting", "verification_failed", release.TagName, "updated_binary_verification_failed", "The updated CLI version could not be verified.")
 		return
 	}
 
@@ -175,6 +190,9 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	// the updating flag and the claim barrier held — process exit is
 	// imminent and clearing either would open a window for new claims / a
 	// second auto-update tick to fire mid-shutdown.
+	if !d.finishUpdateObservation("restart_pending", "update_succeeded", release.TagName, "", "") {
+		return
+	}
 	released = true
 	barrierReleased = true
 	d.triggerRestart()

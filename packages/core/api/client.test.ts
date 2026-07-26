@@ -59,6 +59,59 @@ describe("ApiClient", () => {
     });
   });
 
+  it("keeps a runtime row while degrading an unknown auto-update enum to null", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([{
+        id: "runtime-1",
+        workspace_id: "workspace-1",
+        daemon_id: "daemon-1",
+        name: "Codex",
+        runtime_mode: "local",
+        provider: "codex",
+        launch_header: "",
+        status: "online",
+        device_info: "",
+        metadata: {},
+        current_version: "v0.3.72",
+        update_state: "idle",
+        runtime_health: "ok",
+        owner_id: "user-1",
+        visibility: "private",
+        last_seen_at: "2026-07-27T00:00:00Z",
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        auto_update: {
+          session_id: "session-1",
+          revision: 1,
+          observed_at: "2026-07-27T00:00:00Z",
+          auto_update_effective_enabled: true,
+          config_source: "future_default",
+          ineligible_reason: null,
+          check_interval_seconds: 21600,
+          phase: "waiting",
+          attempt_source: null,
+          last_attempt_at: null,
+          last_outcome: "never_checked",
+          target_version: null,
+          error_code: null,
+          error_message: null,
+          staged_version: null,
+          activation_generation: null,
+          received_at: "2026-07-27T00:00:00Z",
+          updated_at: "2026-07-27T00:00:00Z",
+        },
+      }]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listRuntimes()).resolves.toMatchObject([
+      { id: "runtime-1", auto_update: null },
+    ]);
+  });
+
   it("transcribes PCM through the authenticated voice endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ text: " 你好 " }), {

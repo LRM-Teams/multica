@@ -234,6 +234,12 @@
 - **物**：`server/internal/cli/version_store.go`、`version_store_{unix,windows}.go`；`TestVersionStore*` 覆盖 checksum/version fail-before-publish、immutable same-tag conflict、16-way concurrent stage、generation CAS one-winner、unstaged activation；Windows cross-compile gate验证 `LockFileEx + MoveFileEx(REPLACE_EXISTING|WRITE_THROUGH)` adapter。
 - **已见红**：Phase A 测试在实现前因 `VersionStore/BinaryVerifier/ActivationState` 全部不存在而 compile-fail；实现后 focused race suite 与完整 `internal/cli` suite 通过。
 
+### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）
+- daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再发布给 HTTP/WS heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。
+- server 以 `(workspace_id, daemon_id)` 保存 daemon-scope 最新事实。register 采用新 session，同 session 只接受更高 revision；完全相同的重复 revision 是零写入幂等，旧 session/较低 revision 忽略，同 revision 不同 payload fail closed 并保留 daemon liveness。旧 daemon 在 register 时没有 envelope 必须清空旧投影，不能继续显示历史“健康”状态。
+- 配置来源、运行资格、当前 phase、最近 outcome 是四个独立 typed 轴，禁止用一个字符串混写。`observed_at` 只在 daemon 语义变化时更新，server 另记 `received_at`；错误只允许有限枚举 code 与长度受限、去空白的安全摘要，不得上传原始命令输出、环境变量或凭据。runtime API 对新 daemon 返回 typed `auto_update`，对旧/未知/非法未来枚举返回 `null`，不能因此丢掉 runtime 行。
+- **物**：migration 231 `daemon_update_status`、register/heartbeat session-revision CAS、`daemon-update-status.json` atomic snapshot、HTTP+WS change wake、runtime typed projection、old-daemon clear、duplicate-zero-write / stale-session / conflicting-revision / interrupted-replay / malformed-future-enum regressions。此阶段只增加观测，不改变 host default、claim barrier、supervisor 激活或 UI。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

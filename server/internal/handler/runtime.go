@@ -19,23 +19,24 @@ import (
 )
 
 type AgentRuntimeResponse struct {
-	ID             string   `json:"id"`
-	WorkspaceID    string   `json:"workspace_id"`
-	DaemonID       *string  `json:"daemon_id"`
-	Name           string   `json:"name"`
-	RuntimeMode    string   `json:"runtime_mode"`
-	Provider       string   `json:"provider"`
-	LaunchHeader   string   `json:"launch_header"`
-	Status         string   `json:"status"`
-	DeviceInfo     string   `json:"device_info"`
-	Metadata       any      `json:"metadata"`
-	Capabilities   []string `json:"capabilities"`
-	CurrentVersion *string  `json:"current_version"`
-	TargetVersion  *string  `json:"target_version,omitempty"`
-	UpdateState    string   `json:"update_state"`
-	RuntimeHealth  string   `json:"runtime_health"`
-	UpdateError    *string  `json:"update_error,omitempty"`
-	OwnerID        *string  `json:"owner_id"`
+	ID             string                      `json:"id"`
+	WorkspaceID    string                      `json:"workspace_id"`
+	DaemonID       *string                     `json:"daemon_id"`
+	Name           string                      `json:"name"`
+	RuntimeMode    string                      `json:"runtime_mode"`
+	Provider       string                      `json:"provider"`
+	LaunchHeader   string                      `json:"launch_header"`
+	Status         string                      `json:"status"`
+	DeviceInfo     string                      `json:"device_info"`
+	Metadata       any                         `json:"metadata"`
+	Capabilities   []string                    `json:"capabilities"`
+	CurrentVersion *string                     `json:"current_version"`
+	TargetVersion  *string                     `json:"target_version,omitempty"`
+	UpdateState    string                      `json:"update_state"`
+	RuntimeHealth  string                      `json:"runtime_health"`
+	UpdateError    *string                     `json:"update_error,omitempty"`
+	AutoUpdate     *DaemonUpdateStatusResponse `json:"auto_update"`
+	OwnerID        *string                     `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
@@ -43,6 +44,27 @@ type AgentRuntimeResponse struct {
 	LastSeenAt *string `json:"last_seen_at"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+}
+
+type DaemonUpdateStatusResponse struct {
+	SessionID                  string  `json:"session_id"`
+	Revision                   int64   `json:"revision"`
+	ObservedAt                 string  `json:"observed_at"`
+	AutoUpdateEffectiveEnabled bool    `json:"auto_update_effective_enabled"`
+	ConfigSource               string  `json:"config_source"`
+	IneligibleReason           *string `json:"ineligible_reason"`
+	CheckIntervalSeconds       int64   `json:"check_interval_seconds"`
+	Phase                      string  `json:"phase"`
+	AttemptSource              *string `json:"attempt_source"`
+	LastAttemptAt              *string `json:"last_attempt_at"`
+	LastOutcome                string  `json:"last_outcome"`
+	TargetVersion              *string `json:"target_version"`
+	ErrorCode                  *string `json:"error_code"`
+	ErrorMessage               *string `json:"error_message"`
+	StagedVersion              *string `json:"staged_version"`
+	ActivationGeneration       *int64  `json:"activation_generation"`
+	ReceivedAt                 string  `json:"received_at"`
+	UpdatedAt                  string  `json:"updated_at"`
 }
 
 func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
@@ -56,7 +78,7 @@ func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) Age
 
 func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
-	return runtimeToResponseWithUpdateAndRelease(rt, update, release)
+	return runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
 }
 
 func (h *Handler) latestRuntimeUpdate(ctx context.Context, rt db.AgentRuntime) *UpdateRequest {
@@ -149,6 +171,15 @@ func runtimeToResponseWithUpdate(rt db.AgentRuntime, update *UpdateRequest) Agen
 }
 
 func runtimeToResponseWithUpdateAndRelease(rt db.AgentRuntime, update *UpdateRequest, release *RuntimeRelease) AgentRuntimeResponse {
+	return runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, nil)
+}
+
+func runtimeToResponseWithUpdateReleaseAndObservation(
+	rt db.AgentRuntime,
+	update *UpdateRequest,
+	release *RuntimeRelease,
+	autoUpdate *DaemonUpdateStatusResponse,
+) AgentRuntimeResponse {
 	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
 	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
@@ -175,6 +206,7 @@ func runtimeToResponseWithUpdateAndRelease(rt db.AgentRuntime, update *UpdateReq
 		UpdateState:    updateState,
 		RuntimeHealth:  runtimeHealth,
 		UpdateError:    runtimeUpdateError(update, currentVersion, updateState),
+		AutoUpdate:     autoUpdate,
 		OwnerID:        uuidToPtr(rt.OwnerID),
 		Visibility:     rt.Visibility,
 		LastSeenAt:     timestampToPtr(rt.LastSeenAt),
@@ -873,8 +905,11 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]AgentRuntimeResponse, len(runtimes))
 	updates := h.runtimeUpdatesForList(r.Context(), runtimes)
+	autoUpdates := h.daemonUpdateStatusesForList(r.Context(), runtimes)
 	for i, rt := range runtimes {
-		resp[i] = h.runtimeToResponseWithResolvedUpdate(r.Context(), rt, updates[uuidToString(rt.ID)])
+		update := updates[uuidToString(rt.ID)]
+		release := h.runtimeReleaseForResponse(r.Context(), rt, update)
+		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -954,6 +989,10 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	// the runtime row.
 	if err := teardownRuntimeWithoutActiveAgents(r.Context(), qtx, tx, rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
+		return
+	}
+	if err := deleteOrphanDaemonUpdateStatusForRuntime(r.Context(), qtx, rt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete runtime update status")
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -1192,6 +1231,10 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 	// 5. Finally delete the runtime row itself.
 	if err := qtx.DeleteAgentRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
+		return
+	}
+	if err := deleteOrphanDaemonUpdateStatusForRuntime(r.Context(), qtx, rt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete runtime update status")
 		return
 	}
 

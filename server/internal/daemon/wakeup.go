@@ -228,6 +228,12 @@ func (d *Daemon) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done ch
 // pick it up next tick).
 func (d *Daemon) runWSHeartbeatSender(ctx context.Context, runtimeIDs []string, writes chan<- []byte) {
 	d.sendWSHeartbeats(ctx, runtimeIDs, writes)
+	var updateChanged <-chan struct{}
+	unsubscribe := func() {}
+	if d.updateObservation != nil {
+		updateChanged, unsubscribe = d.updateObservation.Subscribe()
+	}
+	defer unsubscribe()
 	interval := d.cfg.HeartbeatInterval
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -238,6 +244,8 @@ func (d *Daemon) runWSHeartbeatSender(ctx context.Context, runtimeIDs []string, 
 		select {
 		case <-ctx.Done():
 			return
+		case <-updateChanged:
+			d.sendWSHeartbeats(ctx, runtimeIDs, writes)
 		case <-ticker.C:
 			d.sendWSHeartbeats(ctx, runtimeIDs, writes)
 		}
@@ -245,6 +253,10 @@ func (d *Daemon) runWSHeartbeatSender(ctx context.Context, runtimeIDs []string, 
 }
 
 func (d *Daemon) sendWSHeartbeats(ctx context.Context, runtimeIDs []string, writes chan<- []byte) {
+	var observation *protocol.DaemonUpdateObservation
+	if d.updateObservation != nil {
+		observation = d.updateObservation.PublishedSnapshot()
+	}
 	for _, rid := range runtimeIDs {
 		if ctx.Err() != nil {
 			return
@@ -256,6 +268,7 @@ func (d *Daemon) sendWSHeartbeats(ctx context.Context, runtimeIDs []string, writ
 				SupportsBatchImport:       true,
 				SupportsMemoryCuration:    true,
 				ActiveMemoryCurationRunID: d.activeMemoryCurationRun(rid),
+				UpdateObservation:         observation,
 			}),
 		})
 		if err != nil {

@@ -180,12 +180,13 @@ type DaemonRegisterRequest struct {
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
 	// and tasks keep working without manual intervention.
-	LegacyDaemonIDs   []string `json:"legacy_daemon_ids"`
-	DeviceName        string   `json:"device_name"`
-	CLIVersion        string   `json:"cli_version"` // multica CLI version
-	LaunchedBy        string   `json:"launched_by"` // "desktop" when spawned by the Electron app
-	Capabilities      []string `json:"capabilities"`
-	SandboxInstanceID string   `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	LegacyDaemonIDs   []string                          `json:"legacy_daemon_ids"`
+	DeviceName        string                            `json:"device_name"`
+	CLIVersion        string                            `json:"cli_version"` // multica CLI version
+	LaunchedBy        string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities      []string                          `json:"capabilities"`
+	SandboxInstanceID string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	UpdateObservation *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
 	Runtimes          []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
@@ -364,6 +365,19 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	capabilities := normalizeDaemonCapabilities(req.Capabilities)
+	if err := h.registerDaemonUpdateObservation(r.Context(), wsUUID, req.DaemonID, req.UpdateObservation); err != nil {
+		if errors.Is(err, errDaemonUpdateObservationConflict) {
+			writeError(w, http.StatusConflict, "auto_update revision conflicts with stored payload")
+			return
+		}
+		var validationErr *daemonUpdateObservationValidationError
+		if errors.As(err, &validationErr) {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to persist auto-update observation")
+		return
+	}
 
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
@@ -745,10 +759,11 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 }
 
 type DaemonHeartbeatRequest struct {
-	RuntimeID                 string `json:"runtime_id"`
-	SupportsBatchImport       bool   `json:"supports_batch_import,omitempty"`
-	SupportsMemoryCuration    bool   `json:"supports_memory_curation,omitempty"`
-	ActiveMemoryCurationRunID string `json:"active_memory_curation_run_id,omitempty"`
+	RuntimeID                 string                            `json:"runtime_id"`
+	SupportsBatchImport       bool                              `json:"supports_batch_import,omitempty"`
+	SupportsMemoryCuration    bool                              `json:"supports_memory_curation,omitempty"`
+	ActiveMemoryCurationRunID string                            `json:"active_memory_curation_run_id,omitempty"`
+	UpdateObservation         *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
 }
 
 // heartbeatHasPendingTimeout bounds the cheap HasPending probe on the
@@ -879,7 +894,7 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	authMs = time.Since(start).Milliseconds()
 
-	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID)
+	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID, req.UpdateObservation)
 	updateMs = m.UpdateMs
 	probeModelMs = m.ProbeModelMs
 	popModelMs = m.PopModelMs
@@ -956,7 +971,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	if identity.WorkspaceID != "" && identity.WorkspaceID != uuidToString(rt.WorkspaceID) {
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
-	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID)
+	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID, payload.UpdateObservation)
 	return ack, err
 }
 
@@ -1029,7 +1044,13 @@ type heartbeatMetrics struct {
 // the WebSocket daemon:heartbeat path: records liveness and pulls any pending
 // actions queued for the runtime. Auth and request decoding live in the
 // caller because they differ between transports.
-func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supportsBatchImport, supportsMemoryCuration bool, activeMemoryCurationRunID string) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
+func (h *Handler) processHeartbeat(
+	ctx context.Context,
+	rt db.AgentRuntime,
+	supportsBatchImport, supportsMemoryCuration bool,
+	activeMemoryCurationRunID string,
+	updateObservation *protocol.DaemonUpdateObservation,
+) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
 	var m heartbeatMetrics
 	runtimeID := uuidToString(rt.ID)
 
@@ -1039,6 +1060,7 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 		return nil, m, err
 	}
 	m.UpdateMs = time.Since(updateStart).Milliseconds()
+	h.advanceDaemonUpdateObservation(ctx, rt, updateObservation)
 
 	slog.Debug("daemon heartbeat", "runtime_id", runtimeID)
 

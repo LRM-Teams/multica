@@ -30,6 +30,7 @@ import type {
   ChannelMessagesPage,
   ChannelThreadMessagesPage,
   AgentHealthResponse,
+  AgentRuntime,
   StickerCatalogResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
@@ -106,6 +107,102 @@ export const EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE: RemoveComputerAgentsResponse
   agents_archived: 0,
   tasks_cancelled: 0,
 };
+
+const DaemonUpdateStatusSchema = z.object({
+  session_id: z.string(),
+  revision: z.number().int().positive(),
+  observed_at: z.string(),
+  auto_update_effective_enabled: z.boolean(),
+  config_source: z.enum([
+    "official_host_default",
+    "self_host_default",
+    "env_enabled",
+    "env_disabled",
+    "cli_disabled",
+  ]),
+  ineligible_reason: z
+    .enum(["desktop_managed", "non_release_build"])
+    .nullable()
+    .default(null),
+  check_interval_seconds: z.number().int().positive(),
+  phase: z.enum([
+    "disabled",
+    "waiting",
+    "checking",
+    "updating",
+    "restart_pending",
+  ]),
+  attempt_source: z.enum(["auto", "server"]).nullable().default(null),
+  last_attempt_at: z.string().nullable().default(null),
+  last_outcome: z.enum([
+    "never_checked",
+    "up_to_date",
+    "busy",
+    "fetch_failed",
+    "update_failed",
+    "verification_failed",
+    "update_succeeded",
+    "interrupted",
+  ]),
+  target_version: z.string().nullable().default(null),
+  error_code: z
+    .enum([
+      "daemon_restarted_during_update",
+      "release_fetch_failed",
+      "download_update_failed",
+      "updated_binary_verification_failed",
+      "desktop_managed",
+    ])
+    .nullable()
+    .default(null),
+  error_message: z.string().nullable().default(null),
+  staged_version: z.string().nullable().default(null),
+  activation_generation: z.number().int().nonnegative().nullable().default(null),
+  received_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const AgentRuntimeSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  daemon_id: z.string().nullable(),
+  name: z.string(),
+  runtime_mode: z.enum(["local", "cloud"]),
+  provider: z.string(),
+  launch_header: z.string().default(""),
+  status: z.enum(["online", "offline"]),
+  device_info: z.string().default(""),
+  metadata: z.record(z.string(), z.unknown()).catch({}),
+  capabilities: z.array(z.string()).optional(),
+  current_version: z.string().nullable(),
+  target_version: z.string().nullable().optional(),
+  update_state: z
+    .enum([
+      "idle",
+      "pending",
+      "running",
+      "completed",
+      "ready_to_apply",
+      "failed",
+      "timed_out",
+    ])
+    .catch("idle"),
+  runtime_health: z
+    .enum(["ok", "update_available", "updating", "failed", "offline"])
+    .catch("offline"),
+  update_error: z.string().nullable().optional(),
+  // Unknown/malformed future update observations degrade only this optional
+  // field. The runtime row remains usable by older installed desktop builds.
+  auto_update: DaemonUpdateStatusSchema.nullable().optional().catch(null),
+  owner_id: z.string().nullable(),
+  visibility: z.enum(["private", "public"]).catch("private"),
+  last_seen_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
+export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive

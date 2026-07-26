@@ -551,6 +551,30 @@ type DaemonToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type DaemonUpdateStatus struct {
+	WorkspaceID                pgtype.UUID        `json:"workspace_id"`
+	DaemonID                   string             `json:"daemon_id"`
+	SessionID                  pgtype.UUID        `json:"session_id"`
+	Revision                   int64              `json:"revision"`
+	ObservedAt                 pgtype.Timestamptz `json:"observed_at"`
+	AutoUpdateEffectiveEnabled bool               `json:"auto_update_effective_enabled"`
+	ConfigSource               string             `json:"config_source"`
+	IneligibleReason           pgtype.Text        `json:"ineligible_reason"`
+	CheckIntervalSeconds       int64              `json:"check_interval_seconds"`
+	Phase                      string             `json:"phase"`
+	AttemptSource              pgtype.Text        `json:"attempt_source"`
+	LastAttemptAt              pgtype.Timestamptz `json:"last_attempt_at"`
+	LastOutcome                string             `json:"last_outcome"`
+	TargetVersion              pgtype.Text        `json:"target_version"`
+	ErrorCode                  pgtype.Text        `json:"error_code"`
+	ErrorMessage               pgtype.Text        `json:"error_message"`
+	StagedVersion              pgtype.Text        `json:"staged_version"`
+	ActivationGeneration       pgtype.Int8        `json:"activation_generation"`
+	PayloadHash                string             `json:"payload_hash"`
+	ReceivedAt                 pgtype.Timestamptz `json:"received_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EnvCheckpoint struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

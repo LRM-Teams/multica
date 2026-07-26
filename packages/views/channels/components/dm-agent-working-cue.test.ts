@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import type { ActivityEvent } from "../../agents/components/tabs/activity-event";
-import { resolveDmShortWorkingLabel } from "./dm-agent-working-cue";
+import { resolveDmShortWorkingLabel } from "./dm-agent-working-label";
 
 function presence(over: Partial<AgentPresenceDetail> = {}): AgentPresenceDetail {
   return {

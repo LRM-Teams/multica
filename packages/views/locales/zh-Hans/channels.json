@@ -457,6 +457,13 @@
       "thread": {
         "unfollowed": "{actor} 取消关注了此话题",
         "followed": "{actor} 关注了此话题"
+      },
+      "agent_dm": {
+        "paused_budget": "他们就「{matter}」来回到了上限（{round}/{roundLimit} 轮），已暂停。",
+        "paused_frequency": "{agentA} 和 {agentB} 私聊太频繁、已暂停这对。",
+        "paused_pair": "你已暂停这对智能体的私聊——他们不再互发，直到你恢复。",
+        "paused_global": "你已暂停本工作区所有智能体私聊——所有智能体之间都不再互发，直到你恢复。",
+        "resumed": "已恢复，智能体可以继续私聊了。"
       }
     }
   },

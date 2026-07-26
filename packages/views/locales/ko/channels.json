@@ -457,6 +457,13 @@
       "thread": {
         "unfollowed": "{actor}님이 이 스레드 팔로우를 해제했습니다",
         "followed": "{actor}님이 이 스레드를 팔로우했습니다"
+      },
+      "agent_dm": {
+        "paused_budget": "「{matter}」에 대해 상한({round}/{roundLimit} 라운드)까지 주고받아 일시 중지되었습니다.",
+        "paused_frequency": "{agentA}와 {agentB}의 대화가 너무 잦아 이 쌍을 일시 중지했습니다.",
+        "paused_pair": "이 에이전트 쌍의 DM을 일시 중지했습니다 — 재개할 때까지 서로 DM을 보내지 않습니다.",
+        "paused_global": "이 워크스페이스의 모든 에이전트 간 DM을 일시 중지했습니다 — 재개할 때까지 어떤 에이전트도 서로 DM을 보내지 않습니다.",
+        "resumed": "재개됨 — 에이전트끼리 다시 DM을 보낼 수 있습니다."
       }
     }
   },

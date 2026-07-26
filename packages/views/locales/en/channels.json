@@ -457,6 +457,13 @@
       "thread": {
         "unfollowed": "{actor} unfollowed this thread",
         "followed": "{actor} followed this thread"
+      },
+      "agent_dm": {
+        "paused_budget": "They went back and forth about “{matter}” up to the limit ({round}/{roundLimit} rounds) — now paused.",
+        "paused_frequency": "{agentA} and {agentB} are messaging too frequently — this pair is paused.",
+        "paused_pair": "You paused this agent pair’s DMs — they won’t message each other until you resume.",
+        "paused_global": "You paused all agent-to-agent DMs in this workspace — no agents will DM each other until you resume.",
+        "resumed": "Resumed — agents can DM each other again."
       }
     }
   },

@@ -457,6 +457,13 @@
       "thread": {
         "unfollowed": "{actor} がこのスレッドのフォローを解除しました",
         "followed": "{actor} がこのスレッドをフォローしました"
+      },
+      "agent_dm": {
+        "paused_budget": "「{matter}」について上限（{round}/{roundLimit} 往復）までやり取りしたため、一時停止しました。",
+        "paused_frequency": "{agentA} と {agentB} のやり取りが頻繁すぎるため、このペアを一時停止しました。",
+        "paused_pair": "このエージェントのペアのDMを一時停止しました——再開するまで互いにDMを送りません。",
+        "paused_global": "このワークスペースのすべてのエージェント間DMを一時停止しました——再開するまでどのエージェントも互いにDMを送りません。",
+        "resumed": "再開しました——エージェント同士が再びDMを送れます。"
       }
     }
   },

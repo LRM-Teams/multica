@@ -137,6 +137,16 @@ test_same_version_legacy_path_is_migrated_to_user_local() {
     echo "installer must not destructively remove the legacy binary" >&2
     return 1
   fi
+  if ! grep -qF "\"$tmp/home/.local/bin/multica\" daemon restart" "$tmp/install.err"; then
+    echo "expected explicit idle daemon adoption command" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+  if ! grep -qF "\"$tmp/home/.local/bin/multica\" --profile staging daemon restart" "$tmp/install.err"; then
+    echo "expected named-profile daemon adoption command" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
 }
 
 test_fish_path_config_is_idempotent() {
@@ -148,14 +158,125 @@ test_fish_path_config_is_idempotent() {
   _run_installer "$tmp" /usr/bin/fish
   _run_installer "$tmp" /usr/bin/fish "$tmp/home/.local/bin"
 
-  local fish_file="$tmp/home/.config/fish/conf.d/multica.fish"
+  local fish_file="$tmp/home/.config/fish/config.fish"
   if [[ ! -f "$fish_file" ]]; then
     echo "expected fish PATH config" >&2
     return 1
   fi
-  if [[ "$(grep -cF 'fish_add_path --prepend "$HOME/.local/bin"' "$fish_file")" -ne 1 ]]; then
+  if [[ "$(grep -cF 'fish_add_path --prepend --global --move "$HOME/.local/bin"' "$fish_file")" -ne 1 ]]; then
     echo "expected one canonical fish PATH entry" >&2
     cat "$fish_file" >&2
+    return 1
+  fi
+}
+
+test_bash_login_and_non_login_shells_resolve_canonical_path() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  _run_installer "$tmp" /bin/bash
+
+  local login_resolved interactive_resolved
+  login_resolved="$(
+    HOME="$tmp/home" PATH="/usr/bin:/bin" \
+      bash --login -c 'command -v multica'
+  )"
+  if [[ "$login_resolved" != "$tmp/home/.local/bin/multica" ]]; then
+    echo "bash login shell resolved $login_resolved, expected canonical binary" >&2
+    return 1
+  fi
+
+  interactive_resolved="$(
+    HOME="$tmp/home" PATH="/usr/bin:/bin" \
+      bash --noprofile --rcfile "$tmp/home/.bashrc" -ic 'command -v multica' 2>/dev/null
+  )"
+  if [[ "$interactive_resolved" != "$tmp/home/.local/bin/multica" ]]; then
+    echo "bash non-login interactive shell resolved $interactive_resolved, expected canonical binary" >&2
+    return 1
+  fi
+}
+
+test_managed_block_moves_after_legacy_shadow_and_stays_idempotent() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  mkdir -p "$tmp/legacy-bin"
+  cp "$tmp/payload/multica" "$tmp/legacy-bin/multica"
+  cat >"$tmp/home/.zshrc" <<'RC'
+export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/legacy-bin:$PATH"
+RC
+
+  _run_installer "$tmp" /bin/zsh "$tmp/legacy-bin"
+  _run_installer "$tmp" /bin/zsh "$tmp/home/.local/bin"
+
+  local resolved
+  resolved="$(
+    HOME="$tmp/home" PATH="/usr/bin:/bin" \
+      bash -c '. "$HOME/.zshrc"; command -v multica'
+  )"
+  if [[ "$resolved" != "$tmp/home/.local/bin/multica" ]]; then
+    echo "persisted PATH still lets a later legacy path shadow canonical Multica" >&2
+    cat "$tmp/home/.zshrc" >&2
+    return 1
+  fi
+  if [[ "$(grep -cF 'export PATH="$HOME/.local/bin:$PATH"' "$tmp/home/.zshrc")" -ne 1 ]]; then
+    echo "expected exactly one managed canonical PATH entry after rerun" >&2
+    cat "$tmp/home/.zshrc" >&2
+    return 1
+  fi
+}
+
+test_unknown_shell_fallback_moves_canonical_path_last() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  mkdir -p "$tmp/legacy-bin"
+  cp "$tmp/payload/multica" "$tmp/legacy-bin/multica"
+  cat >"$tmp/home/.profile" <<'RC'
+export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/legacy-bin:$PATH"
+RC
+
+  _run_installer "$tmp" /bin/sh "$tmp/legacy-bin"
+
+  local resolved
+  resolved="$(
+    HOME="$tmp/home" PATH="/usr/bin:/bin" \
+      bash -c '. "$HOME/.profile"; command -v multica'
+  )"
+  if [[ "$resolved" != "$tmp/home/.local/bin/multica" ]]; then
+    echo "fallback profile did not give canonical Multica final priority" >&2
+    cat "$tmp/home/.profile" >&2
+    return 1
+  fi
+}
+
+test_managed_path_update_preserves_dotfile_symlink() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  mkdir -p "$tmp/home/dotfiles"
+  printf '%s\n' 'export PATH="$HOME/legacy-bin:$PATH"' >"$tmp/home/dotfiles/zshrc"
+  ln -s "dotfiles/zshrc" "$tmp/home/.zshrc"
+
+  _run_installer "$tmp" /bin/zsh
+
+  if [[ ! -L "$tmp/home/.zshrc" ]]; then
+    echo "installer must preserve a symlinked shell config" >&2
+    return 1
+  fi
+  if ! grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$tmp/home/dotfiles/zshrc"; then
+    echo "expected managed path block in symlink target" >&2
+    cat "$tmp/home/dotfiles/zshrc" >&2
     return 1
   fi
 }
@@ -163,4 +284,8 @@ test_fish_path_config_is_idempotent() {
 test_default_installs_only_to_user_local_without_sudo
 test_same_version_legacy_path_is_migrated_to_user_local
 test_fish_path_config_is_idempotent
+test_bash_login_and_non_login_shells_resolve_canonical_path
+test_managed_block_moves_after_legacy_shadow_and_stays_idempotent
+test_unknown_shell_fallback_moves_canonical_path_last
+test_managed_path_update_preserves_dotfile_symlink
 echo "install.sh tests passed"

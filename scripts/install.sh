@@ -161,30 +161,86 @@ prepend_to_path() {
   hash -r 2>/dev/null || true
 }
 
+write_managed_path_block() {
+  local rc="$1"
+  local line="$2"
+  local start="# >>> Multica CLI PATH >>>"
+  local end="# <<< Multica CLI PATH <<<"
+  local tmp
+
+  mkdir -p "$(dirname "$rc")"
+  touch "$rc"
+  tmp="$(mktemp)"
+  awk -v start="$start" -v end="$end" -v line="$line" '
+    BEGIN { in_block = 0; count = 0 }
+    $0 == start { in_block = 1; next }
+    in_block && $0 == end { in_block = 0; next }
+    in_block { next }
+    $0 == line { next }
+    { lines[++count] = $0 }
+    END {
+      while (count > 0 && lines[count] == "") {
+        count--
+      }
+      for (i = 1; i <= count; i++) {
+        print lines[i]
+      }
+    }
+  ' "$rc" >"$tmp"
+
+  if [ -s "$tmp" ]; then
+    printf '\n' >>"$tmp"
+  fi
+  printf '%s\n%s\n%s\n' "$start" "$line" "$end" >>"$tmp"
+  cat "$tmp" >"$rc"
+  rm -f "$tmp"
+}
+
 persist_cli_path() {
   local shell_name
   shell_name="$(basename "${SHELL:-}")"
 
   if [ "$shell_name" = "fish" ]; then
-    local fish_dir="$HOME/.config/fish/conf.d"
-    local fish_file="$fish_dir/multica.fish"
-    mkdir -p "$fish_dir"
-    if [ ! -f "$fish_file" ] || ! grep -qF 'fish_add_path --prepend "$HOME/.local/bin"' "$fish_file"; then
-      printf '%s\n' '# Added by Multica installer' 'fish_add_path --prepend "$HOME/.local/bin"' >"$fish_file"
-    fi
+    write_managed_path_block \
+      "$HOME/.config/fish/config.fish" \
+      'fish_add_path --prepend --global --move "$HOME/.local/bin"'
     return
   fi
 
-  local rc
-  case "$shell_name" in
-    zsh)  rc="$HOME/.zshrc" ;;
-    bash) rc="$HOME/.bashrc" ;;
-    *)    rc="$HOME/.profile" ;;
-  esac
   local line='export PATH="$HOME/.local/bin:$PATH"'
-  if [ ! -f "$rc" ] || ! grep -qF "$line" "$rc"; then
-    printf '\n# Added by Multica installer\n%s\n' "$line" >>"$rc"
-  fi
+  case "$shell_name" in
+    zsh)
+      write_managed_path_block "$HOME/.zshrc" "$line"
+      ;;
+    bash)
+      local login_rc="$HOME/.bash_profile"
+      if [ -f "$HOME/.bash_profile" ]; then
+        login_rc="$HOME/.bash_profile"
+      elif [ -f "$HOME/.bash_login" ]; then
+        login_rc="$HOME/.bash_login"
+      elif [ -f "$HOME/.profile" ]; then
+        login_rc="$HOME/.profile"
+      fi
+      write_managed_path_block "$HOME/.bashrc" "$line"
+      write_managed_path_block "$login_rc" "$line"
+      ;;
+    *)
+      write_managed_path_block "$HOME/.profile" "$line"
+      ;;
+  esac
+}
+
+print_daemon_adoption_guidance() {
+  local old_path="$1"
+  warn "A daemon already started from $old_path keeps using that executable until it is restarted."
+  warn "Do not interrupt active agent work. When all work on the profile is idle, adopt the canonical binary with:"
+  printf '  "%s" daemon status\n' "$CLI_PATH" >&2
+  printf '  "%s" daemon restart\n' "$CLI_PATH" >&2
+  printf '  "%s" daemon status\n' "$CLI_PATH" >&2
+  warn "For a named profile, put --profile before daemon, for example:"
+  printf '  "%s" --profile staging daemon restart\n' "$CLI_PATH" >&2
+  warn "Adoption is complete when daemon status reports the same Version as:"
+  printf '  "%s" version\n' "$CLI_PATH" >&2
 }
 
 get_latest_version() {
@@ -278,6 +334,9 @@ install_cli() {
     local new_ver
     new_ver=$("$CLI_PATH" version 2>/dev/null | awk '{print $2}' || echo "unknown")
     ok "Multica CLI upgraded ($current_ver → $new_ver)"
+    if [ "$current_path" != "$CLI_PATH" ]; then
+      print_daemon_adoption_guidance "$current_path"
+    fi
     return 0
   fi
 

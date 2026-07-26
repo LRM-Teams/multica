@@ -6,7 +6,90 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestAssignmentSnapshotBriefAvoidsRedundantRoundTrips(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		commentCount    int64
+		wantCommentRead bool
+	}{
+		{name: "zero comments", commentCount: 0, wantCommentRead: false},
+		{name: "existing comments", commentCount: 3, wantCommentRead: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := TaskContextForEnv{
+				IssueID: "issue-assignment",
+				AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+					Title:              "Frozen title",
+					AcceptanceCriteria: []string{},
+					Status:             "in_progress",
+					Metadata:           map[string]any{},
+					CommentCount:       tc.commentCount,
+				},
+			}
+			out := buildMetaSkillContent("claude", ctx)
+			for _, forbidden := range []string{
+				"Run `multica issue get issue-assignment --output json`",
+				"Run `multica issue metadata list issue-assignment --output json`",
+			} {
+				if strings.Contains(out, forbidden) {
+					t.Errorf("snapshot brief contains redundant read %q\n--- output ---\n%s", forbidden, out)
+				}
+			}
+			hasCommentRead := strings.Contains(out, "`multica issue comment list issue-assignment --output json`")
+			if hasCommentRead != tc.wantCommentRead {
+				t.Errorf("comment read present=%v, want %v\n--- output ---\n%s", hasCommentRead, tc.wantCommentRead, out)
+			}
+			if !strings.Contains(out, "claim-time current status") {
+				t.Errorf("snapshot brief does not identify current status semantics\n--- output ---\n%s", out)
+			}
+			issueContext := renderIssueContext("claude", ctx)
+			if strings.Contains(issueContext, "multica issue get") {
+				t.Errorf("snapshot issue_context contains redundant issue get\n--- output ---\n%s", issueContext)
+			}
+		})
+	}
+}
+
+func TestTerminalAssignmentSnapshotStopsWithoutIssueCommands(t *testing.T) {
+	ctx := TaskContextForEnv{
+		IssueID: "issue-terminal",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Title:              "Frozen title",
+			AcceptanceCriteria: []string{},
+			Status:             "cancelled",
+			Metadata:           map[string]any{},
+			CommentCount:       5,
+		},
+	}
+	out := buildMetaSkillContent("claude", ctx)
+	for _, want := range []string{
+		"already `cancelled` at claim time",
+		"stale assignment wake",
+		"do not perform issue work",
+		"one concise terminal-state result",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("terminal snapshot brief missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{
+		"multica issue get issue-terminal",
+		"multica issue metadata list issue-terminal",
+		"multica issue comment list issue-terminal",
+		"multica issue status issue-terminal",
+		"multica issue comment add issue-terminal",
+		"Complete the task **to its acceptance criteria",
+		"## Sub-issue Creation",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("terminal snapshot brief contains forbidden instruction %q\n--- output ---\n%s", forbidden, out)
+		}
+	}
+}
 
 // Sub-issue Creation section — after MUL-2538 the platform posts the
 // child-done parent notification itself, so the brief no longer carries

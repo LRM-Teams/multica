@@ -3457,6 +3457,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		TriggerThreadID:                  task.TriggerThreadID,
 		NewCommentCount:                  task.NewCommentCount,
 		NewCommentsSince:                 task.NewCommentsSince,
+		AssignmentSnapshot:               task.AssignmentSnapshot,
 		PriorSessionResumed:              task.PriorSessionID != "",
 		FreshSessionNoticeReason:         task.FreshSessionNoticeReason,
 		AgentID:                          agentID,

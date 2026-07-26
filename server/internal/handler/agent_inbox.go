@@ -2182,6 +2182,21 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 			return false
 		}
 		resp.ThreadName = issue.Title
+		if !event.TriggerCommentID.Valid {
+			snapshot, found, err := service.IssueAssignmentSnapshotFromContext(event.Context)
+			if err != nil {
+				slog.Error("agent inbox claim: invalid assignment snapshot",
+					"inbox_event_id", uuidToString(event.ID),
+					"error", err,
+				)
+				return false
+			}
+			if found {
+				snapshot.Status = issue.Status
+				resp.AssignmentSnapshot = &snapshot
+				resp.ThreadName = snapshot.Title
+			}
+		}
 		loadProject(issue.ProjectID)
 		if event.TriggerCommentID.Valid {
 			if comment, err := h.Queries.GetComment(ctx, event.TriggerCommentID); err == nil {

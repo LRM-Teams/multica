@@ -7,6 +7,94 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestBuildPromptAssignmentSnapshotAvoidsRedundantReads(t *testing.T) {
+	description := "Frozen description"
+	task := Task{
+		IssueID: "issue-assignment-1",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Version:            1,
+			Title:              "Frozen title",
+			Description:        &description,
+			AcceptanceCriteria: []string{"Ship the snapshot"},
+			Status:             "done",
+			Metadata:           map[string]any{"lane": "backend"},
+			CommentCount:       0,
+		},
+	}
+	out := BuildPrompt(task, "claude", "")
+	for _, want := range []string{
+		"Current issue state at claim:",
+		"- Status: done",
+		"Assignment-time issue snapshot:",
+		"- Title: Frozen title",
+		"Frozen description",
+		"Ship the snapshot",
+		`"lane":"backend"`,
+		"No comments existed",
+		"Treat this as a stale assignment wake",
+		"do not reopen it",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("assignment prompt missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{
+		"Start by running `multica issue get",
+		"Run `multica issue metadata list",
+		"Read comments with `multica issue comment list issue-assignment-1 --output json`",
+		"multica issue status issue-assignment-1 in_progress",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("zero-comment assignment prompt contains redundant read %q\n--- output ---\n%s", forbidden, out)
+		}
+	}
+}
+
+func TestBuildPromptAssignmentSnapshotUsesCommentCursorWhenNeeded(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID: "issue-assignment-2",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Version:            1,
+			Title:              "Frozen title",
+			AcceptanceCriteria: []string{},
+			Status:             "in_progress",
+			Metadata:           map[string]any{},
+			CommentCount:       4,
+		},
+	}, "claude", "")
+	for _, want := range []string{
+		"`multica issue comment list issue-assignment-2 --output json`",
+		"--recent 20 --output json",
+		"Next thread cursor:",
+		"--before",
+		"--before-id",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("non-zero assignment prompt missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+func TestBuildPromptCommentTriggerIgnoresAssignmentSnapshot(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID:               "issue-comment-1",
+		TriggerCommentID:      "comment-1",
+		TriggerCommentContent: "Please recheck",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Title:        "Must not render",
+			Status:       "done",
+			Metadata:     map[string]any{},
+			CommentCount: 0,
+		},
+	}, "claude", "")
+	if strings.Contains(out, "Must not render") || strings.Contains(out, "Assignment-time issue snapshot") {
+		t.Fatalf("comment-trigger prompt rendered assignment snapshot\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "Please recheck") {
+		t.Fatalf("comment-trigger prompt lost trigger body\n--- output ---\n%s", out)
+	}
+}
+
 // TestBuildQuickCreatePromptRules locks in the rules that govern how the
 // quick-create agent is allowed to translate raw user input into the issue
 // description body. Each substring corresponds to a concrete failure mode

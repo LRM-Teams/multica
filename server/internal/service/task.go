@@ -560,8 +560,9 @@ func taskErrorType(reason string) string {
 }
 
 // EnqueueTaskForIssue creates a queued task for an agent-assigned issue.
-// No context snapshot is stored — the agent fetches all data it needs at
-// runtime via the multica CLI.
+// Assignment-triggered tasks snapshot the visible issue read-model at enqueue
+// time. Comment-triggered tasks keep their existing trigger-body + cursor
+// contract and do not duplicate issue/comment context into the task.
 func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, triggerCommentID ...pgtype.UUID) (db.AgentInboxEvent, error) {
 	var commentID pgtype.UUID
 	if len(triggerCommentID) > 0 {
@@ -590,11 +591,27 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		slog.Debug("task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID))
 		return db.AgentInboxEvent{}, fmt.Errorf("agent is archived")
 	}
+	if agent.WorkspaceID != issue.WorkspaceID {
+		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID), "error", "agent workspace does not match issue")
+		return db.AgentInboxEvent{}, fmt.Errorf("agent workspace does not match issue")
+	}
 	if !agent.RuntimeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
 		return db.AgentInboxEvent{}, fmt.Errorf("agent has no runtime")
 	}
-	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
+	var taskContext []byte
+	if !triggerCommentID.Valid {
+		snapshot, err := s.buildIssueAssignmentSnapshot(ctx, issue)
+		if err != nil {
+			slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
+			return db.AgentInboxEvent{}, fmt.Errorf("snapshot issue assignment: %w", err)
+		}
+		taskContext, err = withIssueAssignmentSnapshot(taskContext, snapshot)
+		if err != nil {
+			return db.AgentInboxEvent{}, fmt.Errorf("encode issue assignment snapshot: %w", err)
+		}
+	}
+	taskContext, err = WithTaskExecutionConfig(taskContext, agent.Model.String, agent.ThinkingLevel.String)
 	if err != nil {
 		return db.AgentInboxEvent{}, fmt.Errorf("snapshot issue task execution config: %w", err)
 	}

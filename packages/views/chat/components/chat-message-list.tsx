@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
@@ -24,7 +32,7 @@ import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multica/core/agents";
-import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multica/core/types";
+import type { ChatMessage, ChatPendingTask, TaskFailureReason, TaskMessagePayload } from "@multica/core/types";
 import type { ChatTimelineItem } from "@multica/core/chat";
 import { parseStickerMessage } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
@@ -51,6 +59,65 @@ import {
 } from "./bubble-cursor-panels";
 import { useT } from "../../i18n";
 import type { MessagePart } from "@multica/core/types";
+
+// ─── Virtuoso chrome (stable component types — avoid Footer remount) ─────
+//
+// Inline `Footer: () => …` recreates a component *type* every parent render.
+// Token badge / live timeline updates then remount the live TimelineView and
+// wipe Collapsible open state — mobile feels like "details vanished / can't
+// expand". Keep Header/Footer identities stable; pass data via context.
+
+interface ChatListChrome {
+  isFetchingOlderMessages: boolean;
+  hasLive: boolean;
+  liveTimeline: ChatTimelineItem[];
+  isDmBubble: boolean;
+  showStatusPill: boolean;
+  pendingTask: ChatPendingTask | null | undefined;
+  liveTaskMessages: readonly TaskMessagePayload[];
+  availability: AgentAvailability | undefined;
+  loadingOlderLabel: string;
+}
+
+const ChatListChromeContext = createContext<ChatListChrome | null>(null);
+
+function ChatMessageListHeader() {
+  const chrome = use(ChatListChromeContext);
+  if (!chrome) return null;
+  return (
+    <div className="mx-auto w-full max-w-4xl px-5 pt-4">
+      {chrome.isFetchingOlderMessages && (
+        <div className="text-center text-xs text-muted-foreground">{chrome.loadingOlderLabel}</div>
+      )}
+    </div>
+  );
+}
+
+function ChatMessageListFooter() {
+  const chrome = use(ChatListChromeContext);
+  if (!chrome) return null;
+  return (
+    <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
+      {chrome.hasLive && (
+        <div className="w-full space-y-1.5">
+          <TimelineView items={chrome.liveTimeline} isStreaming enhanced={chrome.isDmBubble} />
+        </div>
+      )}
+      {chrome.showStatusPill && chrome.pendingTask && (
+        <TaskStatusPill
+          pendingTask={chrome.pendingTask}
+          taskMessages={chrome.liveTaskMessages}
+          availability={chrome.availability}
+        />
+      )}
+    </div>
+  );
+}
+
+const chatMessageListVirtuosoComponents = {
+  Header: ChatMessageListHeader,
+  Footer: ChatMessageListFooter,
+};
 
 // ─── Public component ────────────────────────────────────────────────────
 
@@ -150,7 +217,33 @@ export function ChatMessageList({
     scrollRef.current?.scrollTo({ top, behavior: "smooth" });
   }, []);
 
+  const chromeValue = useMemo<ChatListChrome>(
+    () => ({
+      isFetchingOlderMessages,
+      hasLive,
+      liveTimeline,
+      isDmBubble,
+      showStatusPill,
+      pendingTask,
+      liveTaskMessages: liveTaskMessages ?? [],
+      availability,
+      loadingOlderLabel: t(($) => $.message_list.loading_older),
+    }),
+    [
+      isFetchingOlderMessages,
+      hasLive,
+      liveTimeline,
+      isDmBubble,
+      showStatusPill,
+      pendingTask,
+      liveTaskMessages,
+      availability,
+      t,
+    ],
+  );
+
   return (
+    <ChatListChromeContext.Provider value={chromeValue}>
     <div className="relative flex-1 min-h-0">
       <div
         ref={setScrollContainerRef}
@@ -177,31 +270,7 @@ export function ChatMessageList({
               }
             }}
             computeItemKey={(_, msg) => msg.id}
-            components={{
-              Header: () => (
-                <div className="mx-auto w-full max-w-4xl px-5 pt-4">
-                  {isFetchingOlderMessages && (
-                    <div className="text-center text-xs text-muted-foreground">{t(($) => $.message_list.loading_older)}</div>
-                  )}
-                </div>
-              ),
-              Footer: () => (
-                <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-                  {hasLive && (
-                    <div className="w-full space-y-1.5">
-                      <TimelineView items={liveTimeline} isStreaming enhanced={isDmBubble} />
-                    </div>
-                  )}
-                  {showStatusPill && pendingTask && (
-                    <TaskStatusPill
-                      pendingTask={pendingTask}
-                      taskMessages={liveTaskMessages ?? []}
-                      availability={availability}
-                    />
-                  )}
-                </div>
-              ),
-            }}
+            components={chatMessageListVirtuosoComponents}
             itemContent={(_, msg) => (
               <div className="mx-auto w-full max-w-4xl px-5 py-2">
                 <MessageBubble
@@ -250,6 +319,7 @@ export function ChatMessageList({
         </div>
       )}
     </div>
+    </ChatListChromeContext.Provider>
   );
 }
 
@@ -818,10 +888,15 @@ function getToolSummary(item: ChatTimelineItem): string {
   if (inp.query) return inp.query;
   if (inp.file_path) return shortenPath(inp.file_path);
   if (inp.path) return shortenPath(inp.path);
+  if (inp.target_file) return shortenPath(inp.target_file);
   if (inp.pattern) return inp.pattern;
   if (inp.description) return String(inp.description);
   if (inp.command) {
     const cmd = String(inp.command);
+    return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
+  }
+  if (inp.cmd) {
+    const cmd = String(inp.cmd);
     return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
   }
   if (inp.prompt) {
@@ -852,14 +927,17 @@ function ToolCallRow({
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger
+        disabled={!hasInput}
         className={cn(
-          "flex w-full items-center gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors",
+          // ≥32px touch target (matches OuterProcessFold / mobile a11y).
+          "flex min-h-8 w-full items-center gap-1.5 rounded-md px-1.5 -mx-1 py-1.5 text-xs transition-colors",
+          hasInput ? "hover:bg-accent/30" : "cursor-default",
           enhanced && active && "bg-accent/40",
         )}
       >
         <ChevronRight
           className={cn(
-            "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
             open && "rotate-90",
             !hasInput && "invisible",
           )}
@@ -873,7 +951,9 @@ function ToolCallRow({
         >
           {label}
         </span>
-        {summary && <span className="truncate text-muted-foreground">{summary}</span>}
+        {summary ? (
+          <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">{summary}</span>
+        ) : null}
       </CollapsibleTrigger>
       {hasInput && (
         <CollapsibleContent>
@@ -899,11 +979,11 @@ function ToolResultRow({ item }: { item: ChatTimelineItem }) {
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-start gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors">
+      <CollapsibleTrigger className="flex min-h-8 w-full items-start gap-1.5 rounded-md px-1.5 -mx-1 py-1.5 text-xs hover:bg-accent/30 transition-colors">
         <ChevronRight
-          className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform mt-0.5", open && "rotate-90")}
+          className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform mt-0.5", open && "rotate-90")}
         />
-        <span className="text-muted-foreground/70 truncate">
+        <span className="min-w-0 flex-1 text-left text-muted-foreground/70 truncate">
           {labelPrefix}{preview}
         </span>
       </CollapsibleTrigger>
@@ -925,9 +1005,9 @@ function ThinkingRow({ item }: { item: ChatTimelineItem }) {
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-start gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors">
-        <Brain className="h-3 w-3 shrink-0 text-muted-foreground/60 mt-0.5" />
-        <span className="text-muted-foreground italic truncate">{preview}</span>
+      <CollapsibleTrigger className="flex min-h-8 w-full items-start gap-1.5 rounded-md px-1.5 -mx-1 py-1.5 text-xs hover:bg-accent/30 transition-colors">
+        <Brain className="size-3.5 shrink-0 text-muted-foreground/60 mt-0.5" />
+        <span className="min-w-0 flex-1 text-left text-muted-foreground italic truncate">{preview}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre className={cn("ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-words", selectableMessageTextClass)}>

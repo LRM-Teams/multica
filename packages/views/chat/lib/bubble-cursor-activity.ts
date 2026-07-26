@@ -263,12 +263,28 @@ export function activeBubbleStepSummary(items: ChatTimelineItem[]): string | nul
 export function bubbleToolSummary(item: ChatTimelineItem): string {
   if (!item.input) return "";
   const inp = item.input as Record<string, unknown>;
-  for (const key of ["query", "file_path", "path", "pattern", "description", "command", "prompt", "skill"]) {
+  for (const key of [
+    "query",
+    "file_path",
+    "path",
+    "target_file",
+    "pattern",
+    "description",
+    "command",
+    "cmd",
+    "prompt",
+    "skill",
+  ]) {
     const v = inp[key];
     if (typeof v === "string" && v.trim()) {
       const s = v.trim();
-      if (key === "file_path" || key === "path") return shortenPath(s);
+      if (key === "file_path" || key === "path" || key === "target_file") return shortenPath(s);
       return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+    }
+  }
+  for (const v of Object.values(inp)) {
+    if (typeof v === "string" && v.trim() && v.trim().length < 120) {
+      return v.trim();
     }
   }
   return "";

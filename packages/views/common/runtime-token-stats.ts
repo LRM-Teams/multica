@@ -20,7 +20,9 @@ export function runtimeTokenStatsLabel(stats?: RuntimeTokenStats | null): string
   const cacheRead = formatCompactRuntimeTokens(stats.cache_read_tokens);
   if (input) chunks.push(`in ${input}`);
   if (output) chunks.push(`out ${output}`);
-  if (cacheRead) chunks.push(`R${cacheRead}`);
+  // Prefer "cache N" over opaque "RN" — mobile truncates the badge and a lone
+  // "R6" looked like a mysterious popup when users tapped the chip.
+  if (cacheRead) chunks.push(`cache ${cacheRead}`);
   const cost = formatRuntimeStatsMoney(stats.cost_usd);
   if (cost) chunks.push(cost);
   if (stats.context_percent != null && Number.isFinite(stats.context_percent)) {

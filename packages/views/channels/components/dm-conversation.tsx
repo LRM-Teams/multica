@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Eye, FileText, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   channelMessageThreadOptions,
@@ -72,6 +72,7 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
+import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { ThreadFollowButton } from "./thread-follow-button";
@@ -80,6 +81,12 @@ import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 import { DmAgentWorkingCue } from "./dm-agent-working-cue";
+
+// #692 finding 1: a supervised agent_pair owner is NOT a channel_member, so the
+// automatic member-only mark-read mutation 403s. Pass this no-op instead of the
+// real mark-read for the read-only supervision surface; the "N new" divider
+// still falls back to the entry cursor, no member-only request is fired.
+const noopMarkRead = () => {};
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -274,9 +281,18 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // Agent DM: short bubble-style working cue (思考中 / Edit / Shell). Human
-  // peers keep the static "Human" meta. Stop stays in AgentProfileActions.
-  const workingCue = isAgentPeer ? (
+  // #692 supervised agent↔agent DM header: both agents named + the 「智能体私聊」
+  // pill, a non-interactive dual avatar (no single-peer agent-panel trigger —
+  // the owner supervises the pair, not one agent).
+  const [pairA, pairB] = dm.participants ?? [];
+  const agentPair =
+    dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
+  // Ordinary agent DM: short bubble-style working cue (思考中 / Edit / Shell). A
+  // supervised agent_pair is NOT one working agent, so it never shows the
+  // single-agent cue — its header is the dual-avatar/pill supervision chrome
+  // instead. Human peers keep the static "Human" meta; Stop stays in
+  // AgentProfileActions.
+  const workingCue = isAgentPeer && !agentPair ? (
     <DmAgentWorkingCue agentId={peerId} />
   ) : undefined;
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
@@ -288,6 +304,24 @@ function DmHeader({
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
     [isMuted, t],
+  );
+  // #692: the 「智能体私聊」pill sits alongside any muted badge. Memoized (like
+  // `mutedBadge`) so the JSX handed to ConversationHeader's `badges` prop keeps a
+  // stable identity; keyed on the primitive `isAgentPair`, not the per-render
+  // `agentPair` object, so the memo actually holds.
+  const isAgentPair = !!agentPair;
+  const headerBadges = useMemo(
+    () => (
+      <>
+        {isAgentPair && (
+          <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">
+            {t(($) => $.dm.agent_pair.pill)}
+          </span>
+        )}
+        {mutedBadge}
+      </>
+    ),
+    [isAgentPair, mutedBadge, t],
   );
   const peerAvatar = (
     <ActorAvatar
@@ -337,16 +371,41 @@ function DmHeader({
               <ArrowLeft className="size-5" />
             </Button>
           )}
-          {wrapPeerTrigger(peerAvatar)}
+          {agentPair ? (
+            <div className="relative size-7 shrink-0" aria-hidden>
+              <ActorAvatar
+                actorType="agent"
+                actorId={agentPair.a.id}
+                size={20}
+                showStatusDot={false}
+                profileLink={false}
+              />
+              <div className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-background">
+                <ActorAvatar
+                  actorType="agent"
+                  actorId={agentPair.b.id}
+                  size={16}
+                  showStatusDot={false}
+                  profileLink={false}
+                />
+              </div>
+            </div>
+          ) : (
+            wrapPeerTrigger(peerAvatar)
+          )}
         </>
       }
-      title={wrapPeerTrigger(
-        <span className="block truncate">{dm.peer.name}</span>,
-      )}
+      title={
+        agentPair ? (
+          <span className="block truncate">{`${agentPair.a.name} · ${agentPair.b.name}`}</span>
+        ) : (
+          wrapPeerTrigger(<span className="block truncate">{dm.peer.name}</span>)
+        )
+      }
       meta={headerMeta}
       // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
       status={headerStatus}
-      badges={mutedBadge}
+      badges={headerBadges}
       actions={
         <>
           {voiceCallAction}
@@ -572,8 +631,31 @@ function DmChannelConversation({
 
   // 1-on-1 DM: scope the composer's @-mention picker to the peer only. Without
   // an allowlist the picker defaults to the whole workspace, which is wrong for
-  // a 1-on-1 (only the peer is reachable here).
-  const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
+  // a 1-on-1 (only the peer is reachable here). A supervised agent_pair DM has
+  // two agents rather than a single peer (#692); the owner is read-only there so
+  // the composer never renders, but keep the allowlist honest to the pair.
+  const mentionAllowedActorIds = useMemo(
+    () =>
+      dm.mode === "agent_pair" && dm.participants && dm.participants.length > 0
+        ? new Set(dm.participants.map((p) => p.id))
+        : new Set([dm.peer.id]),
+    [dm.mode, dm.participants, dm.peer.id],
+  );
+
+  // #692: the owner of a supervised agent_pair DM reads it read-only — the
+  // server rejects any send/edit/delete/reaction from the supervisor, so the
+  // composer becomes a quiet supervision banner (mirrors the archived-channel
+  // read-only surface). `supervised` is set by the BE only for the owner view.
+  const supervisedReadOnly = !!dm.supervised;
+  // Plain const element (like `peerAvatar`), not a memo: a cheap leaf only
+  // consumed when `supervisedReadOnly` is true, so memoizing it would just add a
+  // JSX-returning hook before the effects' early-returns for no real saving.
+  const supervisedReadOnlyContent = (
+    <>
+      <Eye className="size-4 shrink-0" />
+      <span className="flex-1">{t(($) => $.dm.agent_pair.owner_readonly_note)}</span>
+    </>
+  );
 
   const searchHitIds = useMemo(
     () =>
@@ -638,7 +720,11 @@ function DmChannelConversation({
   // Mark read on open — clears the badge — and expose the pre-advance read
   // cursor from the mark-read response for the race-free "N new messages"
   // divider (#303).
-  const dividerLastReadSeq = useEntryReadCursor(channelId, dm.last_read_seq, markChannelRead);
+  const dividerLastReadSeq = useEntryReadCursor(
+    channelId,
+    dm.last_read_seq,
+    supervisedReadOnly ? noopMarkRead : markChannelRead,
+  );
 
   useEffect(() => {
     dispatch({ type: "resetForChannel" });
@@ -682,8 +768,10 @@ function DmChannelConversation({
 
   useEffect(() => {
     if (!threadRoot) return;
+    // #692 finding 1: supervisor isn't a channel_member — thread mark-read 403s.
+    if (supervisedReadOnly) return;
     markThreadRead({ channelId, messageId: threadRoot.id });
-  }, [channelId, threadRoot, markThreadRead]);
+  }, [channelId, threadRoot, markThreadRead, supervisedReadOnly]);
 
   useEffect(() => {
     if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
@@ -703,7 +791,9 @@ function DmChannelConversation({
     const e = payload as { channel_id?: string };
     if (e.channel_id !== channelId) return;
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    markChannelRead(channelId);
+    // #692 finding 1: don't auto-mark-read on new messages for the read-only
+    // supervision surface — the supervisor isn't a member, so it would 403.
+    if (!supervisedReadOnly) markChannelRead(channelId);
   });
 
   useWSEvent("task:cancelled", () => {
@@ -722,7 +812,12 @@ function DmChannelConversation({
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
-  const publishTyping = (isTyping: boolean) => setTyping.mutate({ channelId, isTyping });
+  // #692 finding 1: a read-only supervisor never types — and typing is a
+  // member-only mutation that would 403 — so it's a no-op on that surface.
+  const publishTyping = (isTyping: boolean) => {
+    if (supervisedReadOnly) return;
+    setTyping.mutate({ channelId, isTyping });
+  };
 
   const scheduleTypingStop = () => {
     if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
@@ -1005,15 +1100,19 @@ function DmChannelConversation({
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader actions slot
           actions={
             <>
-              <ThreadFollowButton
-                followed={threadSurfaceRoot.thread_followed === true}
-                disabled={
-                  threadLoading ||
-                  (setThreadFollowed.isPending &&
-                    setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
-                }
-                onFollowChange={handleThreadFollowChange}
-              />
+              {/* #692 finding 1: thread-follow is a member-only mutation — hidden
+                  for the read-only supervisor (it would 403). */}
+              {!supervisedReadOnly && (
+                <ThreadFollowButton
+                  followed={threadSurfaceRoot.thread_followed === true}
+                  disabled={
+                    threadLoading ||
+                    (setThreadFollowed.isPending &&
+                      setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
+                  }
+                  onFollowChange={handleThreadFollowChange}
+                />
+              )}
               {/* LRM-572 — no Maximize2;「在对话中查看」lives in the subtitle meta. */}
               {!isMobile && (
                 <Button
@@ -1049,14 +1148,19 @@ function DmChannelConversation({
           loading={threadLoading}
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
-          onReact={handleReactToMessage}
-          onQuoteMessage={setThreadQuoteTarget}
-          onEditMessage={handleEditMessage}
-          onDeleteMessage={handleDeleteMessage}
-          onRetrySend={handleRetrySend}
+          // #692 finding 1: the read-only supervisor gets no message-mutation
+          // affordances — omitting these handlers makes ChannelMessageBubble drop
+          // its reaction / quote / edit / delete / retry controls entirely.
+          onReact={supervisedReadOnly ? undefined : handleReactToMessage}
+          onQuoteMessage={supervisedReadOnly ? undefined : setThreadQuoteTarget}
+          onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
+          onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
+          onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
         />
         <Composer
           surface="thread"
+          readOnly={supervisedReadOnly}
+          readOnlyContent={supervisedReadOnlyContent}
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={
             (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
@@ -1136,13 +1240,21 @@ function DmChannelConversation({
         filesChannelId={channelId}
         onSearchOpen={() => dispatch({ type: "openSearch" })}
         voiceCallAction={
-          <DmAgentVoiceCall
-            workspaceId={wsId}
-            channelId={channelId}
-            peer={dm.peer}
-          />
+          // #692 finding 1: no voice call on the read-only supervision surface —
+          // the supervisor owns neither end's session and the projected `peer`
+          // is only one of the two agents.
+          supervisedReadOnly ? undefined : (
+            <DmAgentVoiceCall
+              workspaceId={wsId}
+              channelId={channelId}
+              peer={dm.peer}
+            />
+          )
         }
       />
+      {dm.mode === "agent_pair" && dm.a2a_control && (
+        <AgentDMControlStrip channelId={channelId} control={dm.a2a_control} />
+      )}
       {convSearch.open && (
         <div
           className={cn(
@@ -1241,14 +1353,19 @@ function DmChannelConversation({
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
         onOpenAgent={handleOpenAgentPanel}
-        onReact={handleReactToMessage}
-        onQuoteMessage={setQuoteTarget}
-        onEditMessage={handleEditMessage}
-        onDeleteMessage={handleDeleteMessage}
-        onRetrySend={handleRetrySend}
+        // #692 finding 1: read-only supervisor gets no message-mutation
+        // affordances — dropping these handlers removes the bubble's
+        // reaction / quote / edit / delete / retry controls.
+        onReact={supervisedReadOnly ? undefined : handleReactToMessage}
+        onQuoteMessage={supervisedReadOnly ? undefined : setQuoteTarget}
+        onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
+        onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
+        onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
       />
       <Composer
         surface="dm_channel"
+        readOnly={supervisedReadOnly}
+        readOnlyContent={supervisedReadOnlyContent}
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={
           (draftEmpty && dmPending.readyAttachmentParts.length === 0) ||

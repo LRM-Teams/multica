@@ -5,12 +5,75 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestAgentDMControlActionsAreTruthfulForEffectiveState(t *testing.T) {
+	tests := []struct {
+		name           string
+		state          string
+		exchangeExists bool
+		ownerPaused    bool
+		want           []string
+	}{
+		{
+			name:           "active",
+			state:          "active",
+			exchangeExists: true,
+			want:           []string{"view_dm", "pause_pair", "pause_global"},
+		},
+		{
+			name:           "budget needs more rounds",
+			state:          "paused_budget",
+			exchangeExists: true,
+			want:           []string{"view_dm", "grant_rounds", "pause_pair", "pause_global"},
+		},
+		{
+			name:           "frequency needs pair resume",
+			state:          "paused_frequency",
+			exchangeExists: true,
+			want:           []string{"view_dm", "resume_pair", "pause_global"},
+		},
+		{
+			name:           "manual pair pause needs pair resume",
+			state:          "paused_pair",
+			exchangeExists: true,
+			want:           []string{"view_dm", "resume_pair", "pause_global"},
+		},
+		{
+			name:           "this owner global pause needs global resume",
+			state:          "paused_global",
+			exchangeExists: true,
+			ownerPaused:    true,
+			want:           []string{"view_dm", "resume_global"},
+		},
+		{
+			name:           "other owner global pause is not recoverable by viewer",
+			state:          "paused_global",
+			exchangeExists: true,
+			want:           []string{"view_dm", "pause_global"},
+		},
+		{
+			name: "no exchange cannot grant",
+			want: []string{"view_dm", "pause_pair", "pause_global"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agentDMControlActions(tt.state, tt.exchangeExists, tt.ownerPaused)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("agentDMControlActions(%q, %t, %t) = %v, want %v",
+					tt.state, tt.exchangeExists, tt.ownerPaused, got, tt.want)
+			}
+		})
+	}
+}
 
 // TestDMCanonicalName locks in the deterministic, order-independent, lowercased
 // canonical name that makes DM create-or-find idempotent via UNIQUE(workspace_id,name).
@@ -231,6 +294,581 @@ func TestListDirectMessages_ChannelsOnly(t *testing.T) {
 	}
 	if count[agentC] != 1 || source[agentC] != dmSourceChannel {
 		t.Fatalf("agentC should keep visible dm_channel only, source=%q count=%d", source[agentC], count[agentC])
+	}
+}
+
+func TestAgentDMSupervisionListReadOnlyAndOwnerControls(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Supervised A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Supervised B "+uuid.NewString(), []byte("[]"))
+	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
+	channel, created := testHandler.createDMChannel(
+		ctx,
+		nil,
+		testWorkspaceID,
+		testUserID,
+		canonical,
+		[]dmMember{
+			{memberType: "agent", memberID: parseUUID(firstAgentID)},
+			{memberType: "agent", memberID: parseUUID(secondAgentID)},
+		},
+	)
+	if !created {
+		t.Fatal("create supervised A2A DM channel failed")
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channel.ID)
+		testPool.Exec(ctx, `
+			DELETE FROM agent_dm_owner_control
+			WHERE workspace_id = $1 AND owner_id = $2`,
+			testWorkspaceID, testUserID)
+	})
+
+	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
+	if !ok {
+		t.Fatal("normalize supervised A2A pair failed")
+	}
+	var exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_dm_exchange (
+		  workspace_id, channel_id, agent_low_id, agent_high_id, matter_id,
+		  turn_count, state, pause_reason
+		)
+		VALUES ($1, $2, $3, $4, gen_random_uuid(), 6, 'paused_budget', 'round limit')
+		RETURNING id`,
+		testWorkspaceID, channel.ID, lowID, highID).Scan(&exchangeID); err != nil {
+		t.Fatalf("seed supervised A2A exchange: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(
+		ctx,
+		parseUUID(channel.ID),
+		parseUUID(testWorkspaceID),
+		"agent",
+		parseUUID(firstAgentID),
+		"Supervised A",
+		"private A2A message",
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("seed supervised A2A message: %v", err)
+	}
+
+	listReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodGet, "/api/dm", nil),
+	)
+	listRec := httptest.NewRecorder()
+	testHandler.ListDirectMessages(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("owner list DMs: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var items []DMItem
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode owner DM list: %v", err)
+	}
+	var supervised *DMItem
+	for i := range items {
+		if items[i].ID == channel.ID {
+			supervised = &items[i]
+			break
+		}
+	}
+	if supervised == nil {
+		t.Fatalf("owner DM list omitted supervised channel %s: %+v", channel.ID, items)
+	}
+	if supervised.Mode != "agent_pair" || !supervised.Supervised ||
+		len(supervised.Participants) != 2 || supervised.AgentDMControl == nil {
+		t.Fatalf("unexpected supervised DM item: %+v", supervised)
+	}
+	if supervised.AgentDMControl.ExchangeID == nil || *supervised.AgentDMControl.ExchangeID != exchangeID {
+		t.Fatalf("supervised control exchange=%v, want %s", supervised.AgentDMControl.ExchangeID, exchangeID)
+	}
+	if want := []string{"view_dm", "grant_rounds", "pause_pair", "pause_global"}; !slices.Equal(supervised.AgentDMControl.Actions, want) {
+		t.Fatalf("paused-budget actions=%v, want %v", supervised.AgentDMControl.Actions, want)
+	}
+	if !supervised.AgentDMControl.CanGrantRounds || !supervised.AgentDMControl.CanPausePair ||
+		!supervised.AgentDMControl.CanPauseGlobal {
+		t.Fatalf("paused-budget capabilities=%+v", supervised.AgentDMControl)
+	}
+
+	messageReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodGet, "/api/channels/"+channel.ID+"/messages", nil),
+		),
+		"channelId",
+		channel.ID,
+	)
+	messageRec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(messageRec, messageReq)
+	if messageRec.Code != http.StatusOK {
+		t.Fatalf("owner read supervised DM: status=%d body=%s", messageRec.Code, messageRec.Body.String())
+	}
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(messageRec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode supervised messages: %v", err)
+	}
+	if len(page.Messages) != 1 || page.A2AControl == nil || page.A2AControl.State != "paused_budget" {
+		t.Fatalf("unexpected supervised messages page: %+v", page)
+	}
+
+	sendReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channel.ID+"/messages", map[string]any{
+				"content":           "owner must not speak",
+				"client_message_id": uuid.NewString(),
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	sendRec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusForbidden {
+		t.Fatalf("owner send to supervised DM: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	controlReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/dm/channels/"+channel.ID+"/a2a-control", map[string]any{
+				"action":      "grant_rounds",
+				"exchange_id": exchangeID,
+				"rounds":      2,
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	controlRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(controlRec, controlReq)
+	if controlRec.Code != http.StatusOK {
+		t.Fatalf("owner grant A2A rounds: status=%d body=%s", controlRec.Code, controlRec.Body.String())
+	}
+	var control AgentDMControlResponse
+	if err := json.Unmarshal(controlRec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("decode owner A2A control: %v", err)
+	}
+	if control.State != "active" || control.RoundLimit != agentDMDefaultRoundLimit+2 {
+		t.Fatalf("control after grant=%+v", control)
+	}
+	if want := []string{"view_dm", "pause_pair", "pause_global"}; !slices.Equal(control.Actions, want) {
+		t.Fatalf("actions after grant=%v, want %v", control.Actions, want)
+	}
+	pausePairReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/dm/channels/"+channel.ID+"/a2a-control", map[string]any{
+				"action": "pause_pair",
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	pausePairRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(pausePairRec, pausePairReq)
+	if pausePairRec.Code != http.StatusOK {
+		t.Fatalf("owner pause A2A pair: status=%d body=%s", pausePairRec.Code, pausePairRec.Body.String())
+	}
+	if err := json.Unmarshal(pausePairRec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("decode pair-pause control: %v", err)
+	}
+	if control.State != "paused_pair" {
+		t.Fatalf("control after pair pause=%+v", control)
+	}
+	if want := []string{"view_dm", "resume_pair", "pause_global"}; !slices.Equal(control.Actions, want) {
+		t.Fatalf("actions after pair pause=%v, want %v", control.Actions, want)
+	}
+	newResumePairReq := func() *http.Request {
+		return withURLParam(
+			withChatTestWorkspaceCtx(
+				t,
+				newRequestAs(testUserID, http.MethodPost, "/api/dm/channels/"+channel.ID+"/a2a-control", map[string]any{
+					"action": "resume_pair",
+				}),
+			),
+			"channelId",
+			channel.ID,
+		)
+	}
+	resumePairRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(resumePairRec, newResumePairReq())
+	if resumePairRec.Code != http.StatusOK {
+		t.Fatalf("owner resume A2A pair: status=%d body=%s", resumePairRec.Code, resumePairRec.Body.String())
+	}
+	if err := json.Unmarshal(resumePairRec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("decode pair-resume control: %v", err)
+	}
+	if control.State != "active" {
+		t.Fatalf("control after pair resume=%+v", control)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_dm_pair_control
+		SET state = 'paused_frequency', pause_reason = 'frequency limit'
+		WHERE workspace_id = $1 AND agent_low_id = $2 AND agent_high_id = $3`,
+		testWorkspaceID, lowID, highID); err != nil {
+		t.Fatalf("seed frequency pair pause: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_dm_exchange
+		SET state = 'paused_frequency', pause_reason = 'frequency limit'
+		WHERE id = $1`,
+		exchangeID); err != nil {
+		t.Fatalf("seed frequency exchange pause: %v", err)
+	}
+	frequencyControl, ok := testHandler.agentDMControlForOwner(
+		ctx, parseUUID(testWorkspaceID), parseUUID(channel.ID), parseUUID(testUserID),
+	)
+	if !ok || frequencyControl.State != "paused_frequency" {
+		t.Fatalf("frequency control=%+v ok=%t", frequencyControl, ok)
+	}
+	if want := []string{"view_dm", "resume_pair", "pause_global"}; !slices.Equal(frequencyControl.Actions, want) {
+		t.Fatalf("frequency actions=%v, want %v", frequencyControl.Actions, want)
+	}
+	frequencyResumeRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMControl(frequencyResumeRec, newResumePairReq())
+	if frequencyResumeRec.Code != http.StatusOK {
+		t.Fatalf("owner resume frequency-paused pair: status=%d body=%s",
+			frequencyResumeRec.Code, frequencyResumeRec.Body.String())
+	}
+	if err := json.Unmarshal(frequencyResumeRec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("decode frequency-resume control: %v", err)
+	}
+	if control.State != "active" {
+		t.Fatalf("control after frequency resume=%+v", control)
+	}
+	globalReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodPost, "/api/dm/a2a-control", map[string]any{
+			"action": "pause_global",
+		}),
+	)
+	globalRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMGlobalControl(globalRec, globalReq)
+	if globalRec.Code != http.StatusOK {
+		t.Fatalf("owner pause global A2A: status=%d body=%s", globalRec.Code, globalRec.Body.String())
+	}
+	var globalControl AgentDMGlobalControlResponse
+	if err := json.Unmarshal(globalRec.Body.Bytes(), &globalControl); err != nil {
+		t.Fatalf("decode global A2A control: %v", err)
+	}
+	if !globalControl.Paused || globalControl.State != "paused_global" {
+		t.Fatalf("global A2A control=%+v", globalControl)
+	}
+	globalPairControl, ok := testHandler.agentDMControlForOwner(
+		ctx, parseUUID(testWorkspaceID), parseUUID(channel.ID), parseUUID(testUserID),
+	)
+	if !ok || globalPairControl.State != "paused_global" {
+		t.Fatalf("owner-global pair control=%+v ok=%t", globalPairControl, ok)
+	}
+	if want := []string{"view_dm", "resume_global"}; !slices.Equal(globalPairControl.Actions, want) {
+		t.Fatalf("owner-global actions=%v, want %v", globalPairControl.Actions, want)
+	}
+	resumeGlobalReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodPost, "/api/dm/a2a-control", map[string]any{
+			"action": "resume_global",
+		}),
+	)
+	resumeGlobalRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMGlobalControl(resumeGlobalRec, resumeGlobalReq)
+	if resumeGlobalRec.Code != http.StatusOK {
+		t.Fatalf("owner resume global A2A: status=%d body=%s", resumeGlobalRec.Code, resumeGlobalRec.Body.String())
+	}
+	var controlEvents []string
+	rows, err := testPool.Query(ctx, `
+		SELECT parts->0->>'event'
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' IN ($2, $3, $4)
+		ORDER BY seq`,
+		channel.ID,
+		agentDMSystemEventPausedPair,
+		agentDMSystemEventPausedGlobal,
+		agentDMSystemEventResumed)
+	if err != nil {
+		t.Fatalf("load global A2A control system events: %v", err)
+	}
+	for rows.Next() {
+		var event string
+		if err := rows.Scan(&event); err != nil {
+			rows.Close()
+			t.Fatalf("scan global A2A control system event: %v", err)
+		}
+		controlEvents = append(controlEvents, event)
+	}
+	rows.Close()
+	wantControlEvents := []string{
+		agentDMSystemEventPausedPair,
+		agentDMSystemEventResumed,
+		agentDMSystemEventResumed,
+		agentDMSystemEventPausedGlobal,
+		agentDMSystemEventResumed,
+	}
+	if !slices.Equal(controlEvents, wantControlEvents) {
+		t.Fatalf("A2A control system events=%v, want pair pause/resume, frequency resume, then global pause/resume", controlEvents)
+	}
+	var pausedGlobalContent, resumedContent string
+	if err := testPool.QueryRow(ctx, `
+		SELECT content
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND parts->0->>'event' = $2
+		ORDER BY seq DESC
+		LIMIT 1`,
+		channel.ID, agentDMSystemEventPausedGlobal).Scan(&pausedGlobalContent); err != nil {
+		t.Fatalf("load owner-scoped global-pause copy: %v", err)
+	}
+	if pausedGlobalContent != "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。" {
+		t.Fatalf("global-pause copy=%q", pausedGlobalContent)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT content
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND parts->0->>'event' = $2
+		ORDER BY seq DESC
+		LIMIT 1`,
+		channel.ID, agentDMSystemEventResumed).Scan(&resumedContent); err != nil {
+		t.Fatalf("load owner-scoped resume copy: %v", err)
+	}
+	if resumedContent != "已恢复，你的智能体可以继续私聊了。" {
+		t.Fatalf("resume copy=%q", resumedContent)
+	}
+	repeatResumeReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(testUserID, http.MethodPost, "/api/dm/a2a-control", map[string]any{
+			"action": "resume_global",
+		}),
+	)
+	repeatResumeRec := httptest.NewRecorder()
+	testHandler.UpdateAgentDMGlobalControl(repeatResumeRec, repeatResumeReq)
+	if repeatResumeRec.Code != http.StatusOK {
+		t.Fatalf("repeat owner resume global A2A: status=%d body=%s", repeatResumeRec.Code, repeatResumeRec.Body.String())
+	}
+	var resumedCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' = $2`,
+		channel.ID, agentDMSystemEventResumed).Scan(&resumedCount); err != nil {
+		t.Fatalf("count resumed A2A system events: %v", err)
+	}
+	if resumedCount != 3 {
+		t.Fatalf("resumed A2A system events=%d, want 3 after pair/frequency/global resumes and repeated global resume no-op", resumedCount)
+	}
+
+	otherUserID := seedWorkspaceUserForTransportTargetTest(t, "a2a-non-owner-"+uuid.NewString()[:8])
+	otherListReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(otherUserID, http.MethodGet, "/api/dm", nil),
+	)
+	otherListRec := httptest.NewRecorder()
+	testHandler.ListDirectMessages(otherListRec, otherListReq)
+	if otherListRec.Code != http.StatusOK {
+		t.Fatalf("non-owner list DMs: status=%d body=%s", otherListRec.Code, otherListRec.Body.String())
+	}
+	var otherItems []DMItem
+	if err := json.Unmarshal(otherListRec.Body.Bytes(), &otherItems); err != nil {
+		t.Fatalf("decode non-owner DM list: %v", err)
+	}
+	for _, item := range otherItems {
+		if item.ID == channel.ID {
+			t.Fatalf("non-owner saw supervised A2A DM: %+v", item)
+		}
+	}
+	otherReadReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(otherUserID, http.MethodGet, "/api/channels/"+channel.ID+"/messages", nil),
+		),
+		"channelId",
+		channel.ID,
+	)
+	otherReadRec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(otherReadRec, otherReadReq)
+	if otherReadRec.Code != http.StatusForbidden {
+		t.Fatalf("non-owner read supervised DM: status=%d body=%s", otherReadRec.Code, otherReadRec.Body.String())
+	}
+	otherGlobalReq := withChatTestWorkspaceCtx(
+		t,
+		newRequestAs(otherUserID, http.MethodGet, "/api/dm/a2a-control", nil),
+	)
+	otherGlobalRec := httptest.NewRecorder()
+	testHandler.GetAgentDMGlobalControl(otherGlobalRec, otherGlobalReq)
+	if otherGlobalRec.Code != http.StatusForbidden {
+		t.Fatalf("non-owner global A2A control: status=%d body=%s", otherGlobalRec.Code, otherGlobalRec.Body.String())
+	}
+}
+
+func TestAgentDMGlobalPauseIsScopedToPairsInvolvingOwnedAgents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	otherOwnerID := seedWorkspaceUserForTransportTargetTest(
+		t,
+		"a2a-second-owner-"+uuid.NewString()[:8],
+	)
+	firstOwnerAgentID := createHandlerTestAgent(t, "First Owner Agent "+uuid.NewString(), []byte("[]"))
+	otherOwnerAgentAID := createHandlerTestAgent(t, "Other Owner Agent A "+uuid.NewString(), []byte("[]"))
+	otherOwnerAgentBID := createHandlerTestAgent(t, "Other Owner Agent B "+uuid.NewString(), []byte("[]"))
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET owner_id = $1
+		WHERE id = ANY($2::uuid[])`,
+		otherOwnerID,
+		[]pgtype.UUID{parseUUID(otherOwnerAgentAID), parseUUID(otherOwnerAgentBID)},
+	); err != nil {
+		t.Fatalf("assign second owner's agents: %v", err)
+	}
+
+	type pairFixture struct {
+		channelID  string
+		exchangeID string
+	}
+	createPair := func(agentAID, agentBID string) pairFixture {
+		t.Helper()
+		channel, created := testHandler.createDMChannel(
+			ctx,
+			nil,
+			testWorkspaceID,
+			testUserID,
+			dmCanonicalName("agent", agentAID, "agent", agentBID),
+			[]dmMember{
+				{memberType: "agent", memberID: parseUUID(agentAID)},
+				{memberType: "agent", memberID: parseUUID(agentBID)},
+			},
+		)
+		if !created {
+			t.Fatalf("create supervised pair %s/%s failed", agentAID, agentBID)
+		}
+		lowID, highID, ok := normalizedAgentDMPair(parseUUID(agentAID), parseUUID(agentBID))
+		if !ok {
+			t.Fatalf("normalize supervised pair %s/%s failed", agentAID, agentBID)
+		}
+		var exchangeID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_dm_exchange (
+			  workspace_id, channel_id, agent_low_id, agent_high_id, matter_id
+			)
+			VALUES ($1, $2, $3, $4, gen_random_uuid())
+			RETURNING id`,
+			testWorkspaceID, channel.ID, lowID, highID,
+		).Scan(&exchangeID); err != nil {
+			t.Fatalf("seed supervised exchange: %v", err)
+		}
+		return pairFixture{channelID: channel.ID, exchangeID: exchangeID}
+	}
+
+	mixedOwners := createPair(firstOwnerAgentID, otherOwnerAgentAID)
+	otherOwnerOnly := createPair(otherOwnerAgentAID, otherOwnerAgentBID)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `
+			DELETE FROM agent_dm_owner_control
+			WHERE workspace_id = $1 AND owner_id IN ($2, $3)`,
+			testWorkspaceID, testUserID, otherOwnerID)
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id IN ($1, $2)`,
+			mixedOwners.channelID, otherOwnerOnly.channelID)
+	})
+
+	changed, err := testHandler.updateAgentDMOwnerGlobalControl(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(testUserID),
+		true,
+	)
+	if err != nil || !changed {
+		t.Fatalf("pause first owner's A2A: changed=%t err=%v", changed, err)
+	}
+	var mixedState, otherOnlyState string
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+		  (SELECT state FROM agent_dm_exchange WHERE id = $1),
+		  (SELECT state FROM agent_dm_exchange WHERE id = $2)`,
+		mixedOwners.exchangeID, otherOwnerOnly.exchangeID,
+	).Scan(&mixedState, &otherOnlyState); err != nil {
+		t.Fatalf("load exchange states after owner pause: %v", err)
+	}
+	if mixedState != "paused_global" {
+		t.Fatalf("mixed-owner exchange state=%q, want paused_global", mixedState)
+	}
+	if otherOnlyState != "active" {
+		t.Fatalf("other-owner-only exchange state=%q, want active", otherOnlyState)
+	}
+	if control := testHandler.agentDMGlobalControl(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(otherOwnerID),
+	); control.Paused || control.State != "active" {
+		t.Fatalf("other owner's independent global control=%+v, want active", control)
+	}
+	otherView, ok := testHandler.agentDMControlForOwner(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(mixedOwners.channelID),
+		parseUUID(otherOwnerID),
+	)
+	if !ok || otherView.State != "paused_global" {
+		t.Fatalf("other owner mixed-pair control=%+v ok=%t", otherView, ok)
+	}
+	if want := []string{"view_dm", "pause_global"}; !slices.Equal(otherView.Actions, want) {
+		t.Fatalf("other owner mixed-pair actions=%v, want %v", otherView.Actions, want)
+	}
+
+	changed, err = testHandler.updateAgentDMOwnerGlobalControl(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(otherOwnerID),
+		false,
+	)
+	if err != nil || changed {
+		t.Fatalf("other owner no-op resume: changed=%t err=%v", changed, err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT state
+		FROM agent_dm_exchange
+		WHERE id = $1`,
+		mixedOwners.exchangeID,
+	).Scan(&mixedState); err != nil {
+		t.Fatalf("load mixed exchange after other owner resume: %v", err)
+	}
+	if mixedState != "paused_global" {
+		t.Fatalf("other owner resumed first owner's pause: state=%q", mixedState)
+	}
+
+	changed, err = testHandler.updateAgentDMOwnerGlobalControl(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(testUserID),
+		false,
+	)
+	if err != nil || !changed {
+		t.Fatalf("resume first owner's A2A: changed=%t err=%v", changed, err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT state
+		FROM agent_dm_exchange
+		WHERE id = $1`,
+		mixedOwners.exchangeID,
+	).Scan(&mixedState); err != nil {
+		t.Fatalf("load mixed exchange after owning resume: %v", err)
+	}
+	if mixedState != "active" {
+		t.Fatalf("mixed-owner exchange state after owning resume=%q, want active", mixedState)
 	}
 }
 

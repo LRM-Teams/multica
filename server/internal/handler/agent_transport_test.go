@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,10 +16,32 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+type agentDMPauseFailOnceDBTX struct {
+	db.DBTX
+	failed bool
+}
+
+func (f *agentDMPauseFailOnceDBTX) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	if !f.failed && strings.Contains(query, "INSERT INTO inbox_item") {
+		f.failed = true
+		return agentDMPauseErrorRow{err: errors.New("forced owner inbox write failure")}
+	}
+	return f.DBTX.QueryRow(ctx, query, args...)
+}
+
+type agentDMPauseErrorRow struct {
+	err error
+}
+
+func (r agentDMPauseErrorRow) Scan(...any) error {
+	return r.err
+}
 
 func TestAgentTransportVoiceReplyPartsRequireSameTimeline(t *testing.T) {
 	channelID := uuid.NewString()
@@ -264,6 +287,607 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	}
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 	assertNoChannelMessageContent(t, channelID, finalText)
+}
+
+func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstTaskID, _ := createChannelCompletionTask(t, "group")
+	firstAgentID := agentIDForTask(t, firstTaskID)
+	secondAgentID := createHandlerTestAgent(t, "A2A Peer "+uuid.NewString(), []byte("[]"))
+	firstHandle := agentHandleForTransportTest(t, firstAgentID)
+	secondHandle := agentHandleForTransportTest(t, secondAgentID)
+	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `
+			DELETE FROM channel
+			WHERE workspace_id = $1 AND name = $2 AND kind = 'dm'`,
+			testWorkspaceID, canonical)
+		testPool.Exec(ctx, `
+			DELETE FROM inbox_item
+			WHERE workspace_id = $1 AND type = 'agent_dm_paused'`,
+			testWorkspaceID)
+	})
+
+	send := func(taskID, agentID, target string, turn int) *httptest.ResponseRecorder {
+		t.Helper()
+		return agentTransportSendForTest(t, taskID, agentID, map[string]any{
+			"target":            target,
+			"content":           fmt.Sprintf("A2A turn %d", turn),
+			"client_message_id": fmt.Sprintf("a2a-%d-%s", turn, uuid.NewString()),
+		})
+	}
+
+	first := send(firstTaskID, firstAgentID, "dm:@"+secondHandle, 1)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("turn 1 send: status=%d body=%s", first.Code, first.Body.String())
+	}
+	var firstBody AgentTransportSendResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatalf("decode turn 1 send: %v", err)
+	}
+
+	var channelID, exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_id, id
+		FROM agent_dm_exchange
+		WHERE workspace_id = $1
+		  AND agent_low_id = LEAST($2::uuid, $3::uuid)
+		  AND agent_high_id = GREATEST($2::uuid, $3::uuid)
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		testWorkspaceID, firstAgentID, secondAgentID).Scan(&channelID, &exchangeID); err != nil {
+		t.Fatalf("load A2A exchange: %v", err)
+	}
+
+	currentRecipient := secondAgentID
+	currentTarget := "dm:@" + firstHandle + ":" + firstBody.Message.ID
+	lastEventID := ""
+	for turn := 1; turn <= 5; turn++ {
+		var eventID, responseMode string
+		var requiresWake bool
+		var eventTurn int
+		if err := testPool.QueryRow(ctx, `
+			SELECT id, response_mode, requires_wake, agent_dm_turn
+			FROM agent_inbox_event
+			WHERE agent_dm_exchange_id = $1
+			  AND agent_dm_turn = $2
+			  AND agent_id = $3`,
+			exchangeID, turn, currentRecipient).Scan(
+			&eventID, &responseMode, &requiresWake, &eventTurn,
+		); err != nil {
+			t.Fatalf("turn %d recipient inbox event: %v", turn, err)
+		}
+		if responseMode != "public_response" || !requiresWake || eventTurn != turn {
+			t.Fatalf(
+				"turn %d event mode=%q requires_wake=%v event_turn=%d",
+				turn, responseMode, requiresWake, eventTurn,
+			)
+		}
+		if _, err := testPool.Exec(ctx, `
+			UPDATE agent_inbox_event
+			SET status = 'draining', started_at = now(), updated_at = now()
+			WHERE id = $1`, eventID); err != nil {
+			t.Fatalf("activate turn %d inbox event: %v", turn, err)
+		}
+		lastEventID = eventID
+		reply := send(eventID, currentRecipient, currentTarget, turn+1)
+		if reply.Code != http.StatusCreated {
+			t.Fatalf("turn %d send: status=%d body=%s", turn+1, reply.Code, reply.Body.String())
+		}
+		if turn == 1 {
+			var threadReply AgentTransportSendResponse
+			if err := json.Unmarshal(reply.Body.Bytes(), &threadReply); err != nil {
+				t.Fatalf("decode active A2A thread send: %v", err)
+			}
+			if threadReply.Message.ThreadRootMessageID == nil ||
+				*threadReply.Message.ThreadRootMessageID != firstBody.Message.ID {
+				t.Fatalf(
+					"active A2A thread root=%v, want %s",
+					threadReply.Message.ThreadRootMessageID, firstBody.Message.ID,
+				)
+			}
+		}
+		if currentRecipient == secondAgentID {
+			currentRecipient = firstAgentID
+			currentTarget = "dm:@" + secondHandle
+		} else {
+			currentRecipient = secondAgentID
+			currentTarget = "dm:@" + firstHandle
+		}
+	}
+
+	var turnCount int
+	var state string
+	if err := testPool.QueryRow(ctx, `
+		SELECT turn_count, state
+		FROM agent_dm_exchange
+		WHERE id = $1`, exchangeID).Scan(&turnCount, &state); err != nil {
+		t.Fatalf("load final A2A exchange: %v", err)
+	}
+	if turnCount != 6 || state != "paused_budget" {
+		t.Fatalf("final exchange turn_count=%d state=%q, want 6 paused_budget", turnCount, state)
+	}
+	var agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'`, channelID).Scan(&agentMessageCount); err != nil {
+		t.Fatalf("count A2A messages: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE agent_dm_exchange_id = $1`, exchangeID).Scan(&wakeCount); err != nil {
+		t.Fatalf("count A2A wake events: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'system'`, channelID).Scan(&systemMessageCount); err != nil {
+		t.Fatalf("count A2A system messages: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM inbox_item
+		WHERE workspace_id = $1
+		  AND recipient_id = $2
+		  AND type = 'agent_dm_paused'
+		  AND details->>'exchange_id' = $3`,
+		testWorkspaceID, testUserID, exchangeID).Scan(&ownerInboxCount); err != nil {
+		t.Fatalf("count owner A2A inbox items: %v", err)
+	}
+	if agentMessageCount != 6 || wakeCount != 5 || systemMessageCount != 1 || ownerInboxCount != 1 {
+		t.Fatalf(
+			"messages=%d wakes=%d system=%d owner_inbox=%d, want 6/5/1/1",
+			agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount,
+		)
+	}
+	pausedThread := send(
+		lastEventID,
+		secondAgentID,
+		"dm:@"+firstHandle+":"+firstBody.Message.ID,
+		7,
+	)
+	if pausedThread.Code == http.StatusCreated {
+		t.Fatalf("paused A2A thread send unexpectedly created: body=%s", pausedThread.Body.String())
+	}
+	var agentMessageCountAfterPausedThread int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'`,
+		channelID,
+	).Scan(&agentMessageCountAfterPausedThread); err != nil {
+		t.Fatalf("count A2A messages after paused thread send: %v", err)
+	}
+	if agentMessageCountAfterPausedThread != 6 {
+		t.Fatalf(
+			"paused A2A thread send persisted visible row: messages=%d, want 6",
+			agentMessageCountAfterPausedThread,
+		)
+	}
+	var systemPartsRaw, inboxDetailsRaw []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT parts
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'system'
+		ORDER BY seq DESC
+		LIMIT 1`, channelID).Scan(&systemPartsRaw); err != nil {
+		t.Fatalf("load A2A system event parts: %v", err)
+	}
+	var systemParts []protocol.MessagePart
+	if err := json.Unmarshal(systemPartsRaw, &systemParts); err != nil {
+		t.Fatalf("decode A2A system event parts: %v", err)
+	}
+	if len(systemParts) != 1 ||
+		systemParts[0].Type != protocol.MessagePartTypeSystemEvent ||
+		systemParts[0].Event != agentDMSystemEventPausedBudget {
+		t.Fatalf("A2A system event parts=%+v", systemParts)
+	}
+	var params agentDMSystemEventParams
+	if err := json.Unmarshal(systemParts[0].EventParams, &params); err != nil {
+		t.Fatalf("decode A2A system event params: %v", err)
+	}
+	if params.ExchangeID != exchangeID || params.Round != 3 || params.RoundLimit != 3 ||
+		params.AgentAID == "" || params.AgentBID == "" || len(params.Actions) != 4 {
+		t.Fatalf("A2A system event params=%+v", params)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT details
+		FROM inbox_item
+		WHERE workspace_id = $1
+		  AND recipient_id = $2
+		  AND type = 'agent_dm_paused'
+		  AND details->>'exchange_id' = $3`,
+		testWorkspaceID, testUserID, exchangeID).Scan(&inboxDetailsRaw); err != nil {
+		t.Fatalf("load owner A2A inbox details: %v", err)
+	}
+	var inboxDetails agentDMPauseInboxDetails
+	if err := json.Unmarshal(inboxDetailsRaw, &inboxDetails); err != nil {
+		t.Fatalf("decode owner A2A inbox details: %v", err)
+	}
+	if inboxDetails.SystemEvent != agentDMSystemEventPausedBudget ||
+		inboxDetails.ExchangeID != exchangeID ||
+		inboxDetails.RoundLimit != 3 {
+		t.Fatalf("owner A2A inbox details=%+v", inboxDetails)
+	}
+}
+
+func TestAgentDMPauseNotificationFailureRetriesAtomicallyWithoutDuplicates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Pause Retry A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Pause Retry B "+uuid.NewString(), []byte("[]"))
+	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
+	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
+	if !ok {
+		t.Fatal("normalize pause retry pair failed")
+	}
+	var exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_dm_exchange (
+		  workspace_id, channel_id, agent_low_id, agent_high_id,
+		  matter_id, turn_count, state, pause_reason, notification_epoch
+		)
+		VALUES (
+		  $1, $2, $3, $4,
+		  gen_random_uuid(), 6, 'paused_budget', 'forced retry test', 1
+		)
+		RETURNING id`,
+		testWorkspaceID, channel.ID, lowID, highID,
+	).Scan(&exchangeID); err != nil {
+		t.Fatalf("seed pause retry exchange: %v", err)
+	}
+
+	tx, err := testHandler.TxStarter.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin forced pause notification failure: %v", err)
+	}
+	failing := &agentDMPauseFailOnceDBTX{DBTX: tx}
+	if _, err := testHandler.persistAgentDMPauseNotificationTx(
+		ctx, failing, parseUUID(exchangeID),
+	); err == nil || !strings.Contains(err.Error(), "forced owner inbox write failure") {
+		tx.Rollback(ctx)
+		t.Fatalf("forced pause notification failure=%v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback forced pause notification failure: %v", err)
+	}
+
+	assertDurableCounts := func(wantMarker bool, wantMessages, wantInbox int) {
+		t.Helper()
+		var marker bool
+		if err := testPool.QueryRow(ctx, `
+			SELECT notification_sent_at IS NOT NULL
+			FROM agent_dm_exchange
+			WHERE id = $1`, exchangeID).Scan(&marker); err != nil {
+			t.Fatalf("load pause notification marker: %v", err)
+		}
+		if marker != wantMarker {
+			t.Fatalf("pause notification marker=%v, want %v", marker, wantMarker)
+		}
+		var messages, inboxItems int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_dm_pause_notification receipt
+			JOIN channel_message message ON message.id = receipt.channel_message_id
+			WHERE receipt.exchange_id = $1
+			  AND receipt.notification_epoch = 1
+			  AND message.workspace_id = $2
+			  AND message.channel_id = $3
+			  AND message.author_type = 'system'`,
+			exchangeID, testWorkspaceID, channel.ID,
+		).Scan(&messages); err != nil {
+			t.Fatalf("count durable pause DM rows: %v", err)
+		}
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM inbox_item
+			WHERE workspace_id = $1
+			  AND recipient_id = $2
+			  AND type = 'agent_dm_paused'
+			  AND details->>'exchange_id' = $3`,
+			testWorkspaceID, testUserID, exchangeID,
+		).Scan(&inboxItems); err != nil {
+			t.Fatalf("count durable pause owner inbox rows: %v", err)
+		}
+		if messages != wantMessages || inboxItems != wantInbox {
+			t.Fatalf(
+				"durable pause rows messages=%d inbox=%d, want %d/%d",
+				messages, inboxItems, wantMessages, wantInbox,
+			)
+		}
+	}
+	assertDurableCounts(false, 0, 0)
+
+	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
+	assertDurableCounts(true, 1, 1)
+	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
+	assertDurableCounts(true, 1, 1)
+}
+
+func TestAgentDMConcurrentFinalTurnCannotOverrunBudget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Concurrent A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Concurrent B "+uuid.NewString(), []byte("[]"))
+	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
+	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
+	if !ok {
+		t.Fatal("normalize concurrent A2A pair failed")
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_dm_pair_control (
+		  workspace_id, agent_low_id, agent_high_id, window_message_count
+		)
+		VALUES ($1, $2, $3, 5)`,
+		testWorkspaceID, lowID, highID); err != nil {
+		t.Fatalf("seed concurrent pair control: %v", err)
+	}
+	var exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_dm_exchange (
+		  workspace_id, channel_id, agent_low_id, agent_high_id,
+		  next_sender_agent_id, matter_id, turn_count
+		)
+		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), 5)
+		RETURNING id`,
+		testWorkspaceID, channel.ID, lowID, highID, secondAgentID).Scan(&exchangeID); err != nil {
+		t.Fatalf("seed concurrent exchange: %v", err)
+	}
+
+	source := agentTransportSource{
+		task: db.AgentInboxEvent{
+			ID:                parseUUID(uuid.NewString()),
+			AgentDmExchangeID: parseUUID(exchangeID),
+		},
+		origin: chatOutputOrigin{
+			workspaceID: parseUUID(testWorkspaceID),
+			agentID:     parseUUID(secondAgentID),
+		},
+	}
+	target := agentTransportTarget{
+		kind:          chatOutputTargetDM,
+		channel:       channel,
+		recipientType: "agent",
+		recipientID:   parseUUID(firstAgentID),
+	}
+
+	const contenders = 12
+	start := make(chan struct{})
+	results := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			tx, err := testHandler.TxStarter.Begin(ctx)
+			if err != nil {
+				results <- err
+				return
+			}
+			defer tx.Rollback(ctx)
+			_, err = testHandler.reserveAgentDMSendTx(ctx, tx, source, target)
+			if err == nil {
+				err = tx.Commit(ctx)
+			}
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		var paused *agentDMPausedError
+		if !errors.As(err, &paused) {
+			t.Fatalf("unexpected concurrent reservation error: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent final-turn successes=%d, want exactly 1", successes)
+	}
+	var turnCount int
+	var state string
+	if err := testPool.QueryRow(ctx, `
+		SELECT turn_count, state
+		FROM agent_dm_exchange
+		WHERE id = $1`, exchangeID).Scan(&turnCount, &state); err != nil {
+		t.Fatalf("load concurrent final exchange: %v", err)
+	}
+	if turnCount != 6 || state != "paused_budget" {
+		t.Fatalf("concurrent final exchange turn_count=%d state=%q", turnCount, state)
+	}
+}
+
+func TestAgentDMFrequencyGateSpansMatters(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Frequency A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Frequency B "+uuid.NewString(), []byte("[]"))
+	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
+
+	runMatter := func(matterID string) string {
+		t.Helper()
+		exchangeID := ""
+		for turn := 1; turn <= 6; turn++ {
+			senderID, recipientID := firstAgentID, secondAgentID
+			if turn%2 == 0 {
+				senderID, recipientID = secondAgentID, firstAgentID
+			}
+			task := db.AgentInboxEvent{ID: parseUUID(matterID)}
+			if exchangeID != "" {
+				task.AgentDmExchangeID = parseUUID(exchangeID)
+			}
+			source := agentTransportSource{
+				task: task,
+				origin: chatOutputOrigin{
+					workspaceID: parseUUID(testWorkspaceID),
+					agentID:     parseUUID(senderID),
+				},
+			}
+			target := agentTransportTarget{
+				kind:          chatOutputTargetDM,
+				channel:       channel,
+				recipientType: "agent",
+				recipientID:   parseUUID(recipientID),
+			}
+			tx, err := testHandler.TxStarter.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin frequency turn %d: %v", turn, err)
+			}
+			reservation, err := testHandler.reserveAgentDMSendTx(ctx, tx, source, target)
+			if err != nil {
+				tx.Rollback(ctx)
+				t.Fatalf("reserve frequency turn %d: %v", turn, err)
+			}
+			if exchangeID == "" {
+				exchangeID = uuidToString(reservation.ExchangeID)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatalf("commit frequency turn %d: %v", turn, err)
+			}
+		}
+		return exchangeID
+	}
+
+	firstExchangeID := runMatter(uuid.NewString())
+	var firstState string
+	if err := testPool.QueryRow(ctx, `
+		SELECT state
+		FROM agent_dm_exchange
+		WHERE id = $1`, firstExchangeID).Scan(&firstState); err != nil {
+		t.Fatalf("load first frequency exchange: %v", err)
+	}
+	if firstState != "paused_budget" {
+		t.Fatalf("first exchange state=%q, want paused_budget", firstState)
+	}
+
+	secondExchangeID := runMatter(uuid.NewString())
+	var secondState, pairState string
+	var windowCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT exchange.state, pair.state, pair.window_message_count
+		FROM agent_dm_exchange exchange
+		JOIN agent_dm_pair_control pair
+		  ON pair.workspace_id = exchange.workspace_id
+		 AND pair.agent_low_id = exchange.agent_low_id
+		 AND pair.agent_high_id = exchange.agent_high_id
+		WHERE exchange.id = $1`, secondExchangeID).Scan(
+		&secondState, &pairState, &windowCount,
+	); err != nil {
+		t.Fatalf("load second frequency exchange: %v", err)
+	}
+	if secondState != "paused_frequency" || pairState != "paused_frequency" || windowCount != 12 {
+		t.Fatalf(
+			"frequency states exchange=%q pair=%q count=%d, want paused_frequency/paused_frequency/12",
+			secondState, pairState, windowCount,
+		)
+	}
+}
+
+func TestAgentTransportA2AControlRequiresSourceAgentOwnerTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	sourceAgentID := agentIDForTask(t, taskID)
+	peerAgentID := createHandlerTestAgent(t, "Control Peer "+uuid.NewString(), []byte("[]"))
+	peerHandle := agentHandleForTransportTest(t, peerAgentID)
+	canonical := dmCanonicalName("agent", sourceAgentID, "agent", peerAgentID)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `
+			DELETE FROM channel
+			WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, canonical)
+	})
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET initiator_user_id = $2
+		WHERE id = $1`, taskID, testUserID); err != nil {
+		t.Fatalf("seed owner-initiated task: %v", err)
+	}
+	first := agentTransportSendForTest(t, taskID, sourceAgentID, map[string]any{
+		"target":            "dm:@" + peerHandle,
+		"content":           "start controlled A2A",
+		"client_message_id": "a2a-control-" + uuid.NewString(),
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("start controlled A2A: status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	pause := agentTransportA2AControlForTest(t, taskID, sourceAgentID, map[string]any{
+		"target": "dm:@" + peerHandle,
+		"action": "pause_pair",
+	})
+	if pause.Code != http.StatusOK {
+		t.Fatalf("owner-task A2A pause: status=%d body=%s", pause.Code, pause.Body.String())
+	}
+	var body agentTransportDMControlResponse
+	if err := json.Unmarshal(pause.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode owner-task A2A control: %v", err)
+	}
+	if body.Control == nil || body.Control.State != "paused_pair" {
+		t.Fatalf("owner-task A2A control=%+v", body)
+	}
+
+	nonOwnerID := seedWorkspaceUserForTransportTargetTest(t, "a2a-control-nonowner-"+uuid.NewString()[:8])
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET initiator_user_id = $2
+		WHERE id = $1`, taskID, nonOwnerID); err != nil {
+		t.Fatalf("seed non-owner initiated task: %v", err)
+	}
+	resume := agentTransportA2AControlForTest(t, taskID, sourceAgentID, map[string]any{
+		"target": "dm:@" + peerHandle,
+		"action": "resume_pair",
+	})
+	if resume.Code != http.StatusForbidden {
+		t.Fatalf("non-owner task A2A control: status=%d body=%s", resume.Code, resume.Body.String())
+	}
+}
+
+func createAgentAgentDMChannelForTest(t *testing.T, firstAgentID, secondAgentID string) ChannelResponse {
+	t.Helper()
+	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
+	channel, created := testHandler.createDMChannel(
+		context.Background(),
+		nil,
+		testWorkspaceID,
+		testUserID,
+		canonical,
+		[]dmMember{
+			{memberType: "agent", memberID: parseUUID(firstAgentID)},
+			{memberType: "agent", memberID: parseUUID(secondAgentID)},
+		},
+	)
+	if !created {
+		t.Fatal("create A2A DM channel failed")
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channel.ID)
+	})
+	return channel
 }
 
 func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *testing.T) {
@@ -2190,6 +2814,33 @@ func TestAgentTransportDMHandleTargetRejectsMissingAndAmbiguousHandles(t *testin
 	if ambiguous.Code != http.StatusBadRequest {
 		t.Fatalf("ambiguous dm handle target: status=%d body=%s", ambiguous.Code, ambiguous.Body.String())
 	}
+
+	crossTypeHandle := "cross-type-" + uuid.NewString()[:8]
+	seedWorkspaceUserForTransportTargetTest(t, crossTypeHandle)
+	crossTypeAgentID := createHandlerTestAgent(t, "Cross Type Agent "+uuid.NewString(), []byte("[]"))
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		SET name = $2
+		WHERE id = $1`, crossTypeAgentID, crossTypeHandle); err != nil {
+		t.Fatalf("seed cross-type ambiguous agent handle: %v", err)
+	}
+	crossType := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            "dm:@" + crossTypeHandle,
+		"content":           "should not send",
+		"client_message_id": "transport-" + uuid.NewString(),
+	})
+	if crossType.Code != http.StatusBadRequest {
+		t.Fatalf("cross-type ambiguous dm target: status=%d body=%s", crossType.Code, crossType.Body.String())
+	}
+
+	self := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            "dm:@" + agentHandleForTransportTest(t, agentID),
+		"content":           "should not send",
+		"client_message_id": "transport-" + uuid.NewString(),
+	})
+	if self.Code != http.StatusBadRequest {
+		t.Fatalf("self agent dm target: status=%d body=%s", self.Code, self.Body.String())
+	}
 }
 
 func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
@@ -2398,6 +3049,14 @@ func agentTransportSearchForTest(t *testing.T, taskID, agentID string, body map[
 	return rec
 }
 
+func agentTransportA2AControlForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/a2a-control", taskID, agentID, body)
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportUpdateDMControl(rec, req)
+	return rec
+}
+
 func agentTransportUnfollowThreadForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/threads/unfollow", taskID, agentID, body)
@@ -2442,6 +3101,18 @@ func userHandleForTransportTest(t *testing.T, userID string) string {
 	var name string
 	if err := testPool.QueryRow(context.Background(), `SELECT name FROM "user" WHERE id = $1`, userID).Scan(&name); err != nil {
 		t.Fatalf("load user name: %v", err)
+	}
+	return name
+}
+
+func agentHandleForTransportTest(t *testing.T, agentID string) string {
+	t.Helper()
+	var name string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT name
+		FROM agent
+		WHERE id = $1`, agentID).Scan(&name); err != nil {
+		t.Fatalf("load agent name: %v", err)
 	}
 	return name
 }

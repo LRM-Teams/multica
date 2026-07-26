@@ -10,6 +10,8 @@ import {
   parseProjectSystemEvent,
   parseReminderSystemEvent,
   parseThreadSystemEvent,
+  AGENT_DM_PAUSE_EVENTS,
+  parseAgentDMPauseSystemEvent,
   type SystemEventSource,
 } from "./channel-system-event";
 import type { TFunction } from "i18next";
@@ -255,6 +257,31 @@ function formatThreadEventPreview(
   return fillSlots(template, { actor });
 }
 
+function formatAgentDMPauseEventPreview(
+  event: NonNullable<ReturnType<typeof parseAgentDMPauseSystemEvent>>,
+  t: T,
+): string {
+  switch (event.event) {
+    case AGENT_DM_PAUSE_EVENTS.budget:
+      return fillSlots(t(($) => $.message.system_event.agent_dm.paused_budget), {
+        matter: event.matter,
+        round: String(event.round),
+        roundLimit: String(event.roundLimit),
+      });
+    case AGENT_DM_PAUSE_EVENTS.frequency:
+      return fillSlots(t(($) => $.message.system_event.agent_dm.paused_frequency), {
+        agentA: event.agentAName,
+        agentB: event.agentBName,
+      });
+    case AGENT_DM_PAUSE_EVENTS.pair:
+      return t(($) => $.message.system_event.agent_dm.paused_pair);
+    case AGENT_DM_PAUSE_EVENTS.global:
+      return t(($) => $.message.system_event.agent_dm.paused_global);
+    default:
+      return t(($) => $.message.system_event.agent_dm.resumed);
+  }
+}
+
 export function formatSystemEventPreviewText(
   message: SystemEventSource,
   t: T,
@@ -279,6 +306,9 @@ export function formatSystemEventPreviewText(
 
   const threadEvent = parseThreadSystemEvent(message);
   if (threadEvent) return formatThreadEventPreview(threadEvent, t, resolveMention);
+
+  const agentDMPauseEvent = parseAgentDMPauseSystemEvent(message);
+  if (agentDMPauseEvent) return formatAgentDMPauseEventPreview(agentDMPauseEvent, t);
 
   return null;
 }

@@ -60,6 +60,10 @@ const apiMock = vi.hoisted(() => {
 });
 vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
+// #692 finding 1: the lazily-proxied mark-read spy (same cached fn the real
+// useMarkChannelRead hook calls via api.markChannelRead), typed for assertions.
+const markReadSpy = apiMock.proxy.markChannelRead as ReturnType<typeof vi.fn>;
+
 // Reuse the message-list test's virtuoso shim: real react-virtuoso doesn't
 // render rows in jsdom, so window a couple of items around the target.
 vi.mock("react-virtuoso", async () => {
@@ -181,6 +185,12 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
+// The agent-DM floating bubble reads the app chat store (registered at boot);
+// stub it so the agent_pair render path doesn't require chat-store bootstrap.
+vi.mock("../../chat/components/dm-agent-bubble", () => ({
+  DmAgentBubble: () => null,
+}));
+
 // Expose `plainUrls` so a test can assert the DM composer opts into plain-text
 // URLs (#542) — same miss-surface regression guard as the channel composer.
 vi.mock("../../editor/content-editor", () => ({
@@ -242,6 +252,48 @@ function renderDm() {
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
         <DmConversation dm={dm} onBack={() => {}} />
+      </QueryClientProvider>
+    </I18nProvider>,
+  );
+}
+
+// #692 finding 1: a supervised agent_pair DM the owner reads read-only. The
+// supervisor is NOT a channel_member, so every member-only affordance/mutation
+// must be gone (would 403 or render dead).
+const supervisedDm: DMItem = {
+  id: "dm-chan-1",
+  source: "dm_channel",
+  mode: "agent_pair",
+  peer: { type: "agent", id: "agent-a", name: "Agent A" },
+  participants: [
+    { type: "agent", id: "agent-a", name: "Agent A" },
+    { type: "agent", id: "agent-b", name: "Agent B" },
+  ],
+  supervised: true,
+  a2a_control: {
+    state: "active",
+    round: 0,
+    round_limit: 3,
+    can_grant_rounds: false,
+    can_pause_pair: true,
+    can_pause_global: true,
+    actions: ["view_dm", "pause_pair", "pause_global"],
+  },
+  unread: 0,
+  updated_at: "2026-06-17T09:00:00Z",
+};
+
+function renderSupervisedDm() {
+  const qc = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+      <QueryClientProvider client={qc}>
+        <DmConversation dm={supervisedDm} onBack={() => {}} />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -397,5 +449,40 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     await waitFor(() => {
       expect(apiMock.unfollowChannelThread).toHaveBeenCalledWith("dm-chan-1", "m-1");
     });
+  });
+});
+
+describe.sequential("DmConversation supervised agent_pair read-only surface (#692 finding 1)", () => {
+  beforeEach(() => {
+    currentPageMessages = [peerMessage()];
+    // markChannelRead is lazily proxied; clear its call log between tests.
+    markReadSpy.mockClear();
+  });
+
+  it("read-only composer + NO auto member-only mark-read + NO thread-follow affordance", async () => {
+    const user = userEvent.setup();
+    renderSupervisedDm();
+    await screen.findByTestId("message-bubble");
+
+    // Composer is the read-only supervision banner, not an editor.
+    expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+    // The supervisor isn't a channel_member — opening must NOT auto mark-read
+    // (that member-only mutation 403s). This is the core of finding 1.
+    expect(markReadSpy).not.toHaveBeenCalled();
+
+    // Open a thread → the close button confirms the panel is open, and neither
+    // the (member-only) follow affordance nor a writable composer appears.
+    const replyButtons = await screen.findAllByRole("button", { name: "Reply in thread" });
+    await user.click(replyButtons[0]!);
+    await screen.findByRole("button", { name: "Close thread" });
+    expect(screen.queryByRole("button", { name: "Unfollow thread" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Follow thread" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+  });
+
+  it("baseline: a NON-supervised DM DOES auto mark-read on open (proves the guard suppresses it)", async () => {
+    renderDm();
+    await screen.findByTestId("message-bubble");
+    await waitFor(() => expect(markReadSpy).toHaveBeenCalled());
   });
 });

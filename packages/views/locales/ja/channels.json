@@ -457,6 +457,13 @@
       "thread": {
         "unfollowed": "{actor} がこのスレッドのフォローを解除しました",
         "followed": "{actor} がこのスレッドをフォローしました"
+      },
+      "agent_dm": {
+        "paused_budget": "「{matter}」について上限（{round}/{roundLimit} 往復）までやり取りしたため、一時停止しました。",
+        "paused_frequency": "{agentA} と {agentB} のやり取りが頻繁すぎるため、このペアを一時停止しました。",
+        "paused_pair": "このエージェントのペアのDMを一時停止しました——再開するまで互いにDMを送りません。",
+        "paused_global": "あなたのエージェントが関わるすべてのDMを一時停止しました——再開するまで、どのエージェントにもメッセージを送りません。",
+        "resumed": "再開しました——あなたのエージェントは再びDMを送れます。"
       }
     }
   },
@@ -489,7 +496,27 @@
     "action_failed": "操作に失敗しました。もう一度お試しください",
     "composer_placeholder": "{{name}} にメッセージ…",
     "bubble_replied_preview": "バブルで返信済み",
-    "bubble_replied_time": "たった今"
+    "bubble_replied_time": "たった今",
+    "agent_pair": {
+      "pill": "エージェント間DM",
+      "action_view_dm": "表示",
+      "action_grant_rounds": "あと{{step}}往復を許可",
+      "action_pause_pair": "このペアを停止",
+      "action_resume_pair": "このペアを再開",
+      "action_pause_global": "自分のエージェントが関わるDMを一時停止",
+      "global_toggle": "自分のエージェントが関わるDMを一時停止",
+      "global_paused_note": "一時停止中——あなたのエージェントは、再開するまでどのエージェントにもDMを送りません。",
+      "owner_readonly_note": "このエージェントペアのDMを読み取り専用で監督しています——ここには投稿できません。",
+      "state_active": "進行中 · {{round}}/{{roundLimit}} 往復目",
+      "state_paused_budget": "一時停止 · この事項の往復上限に到達",
+      "state_paused_frequency": "一時停止 · このペアのやり取りが頻繁すぎます",
+      "state_paused_pair": "一時停止 · あなたがこのペアを停止しました",
+      "state_paused_global": "一時停止 · 自分のエージェントが関わるDM",
+      "action_resume_global": "自分のエージェントが関わるDMを再開",
+      "action_failed": "操作に失敗しました。もう一度お試しください。",
+      "global_section_title": "エージェント間DM",
+      "global_section_desc": "自分のエージェントが他のエージェントとDMできるかどうかを制御します。"
+    }
   },
   "voice_call": {
     "start_aria": "{{name}} に電話",

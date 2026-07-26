@@ -508,6 +508,13 @@ export function DmConversationRow({
   // peer.type "user" maps to the member-style avatar; agents get the presence
   // status dot. Both resolve name/avatar from the workspace queries.
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
+  // #692 supervised agent↔agent DM: the owner reads it read-only, so the row
+  // shows BOTH agents (dual avatar + "A · B" title) and the 「智能体私聊」pill,
+  // never a single human-looking peer. `participants` carries the two agents;
+  // fall back to the direct `peer` rendering if the BE omitted it.
+  const [pairA, pairB] = dm.participants ?? [];
+  const agentPair = dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
+  const title = agentPair ? `${agentPair.a.name} · ${agentPair.b.name}` : dm.peer.name;
 
   return (
     <ContextMenu>
@@ -527,13 +534,34 @@ export function DmConversationRow({
           onClick={onSelect}
           className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
         >
-          <ActorAvatar
-            actorType={actorType}
-            actorId={dm.peer.id}
-            size={40}
-            showStatusDot
-            profileLink={false}
-          />
+          {agentPair ? (
+            <div className="relative size-10 shrink-0" aria-hidden={false}>
+              <ActorAvatar
+                actorType="agent"
+                actorId={agentPair.a.id}
+                size={28}
+                showStatusDot={false}
+                profileLink={false}
+              />
+              <div className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-background">
+                <ActorAvatar
+                  actorType="agent"
+                  actorId={agentPair.b.id}
+                  size={24}
+                  showStatusDot={false}
+                  profileLink={false}
+                />
+              </div>
+            </div>
+          ) : (
+            <ActorAvatar
+              actorType={actorType}
+              actorId={dm.peer.id}
+              size={40}
+              showStatusDot
+              profileLink={false}
+            />
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <span className="flex min-w-0 items-center gap-1">
@@ -548,8 +576,13 @@ export function DmConversationRow({
                     realUnread > 0 && !isMuted ? "font-semibold" : "font-medium",
                   )}
                 >
-                  {dm.peer.name}
+                  {title}
                 </span>
+                {agentPair && (
+                  <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">
+                    {t(($) => $.dm.agent_pair.pill)}
+                  </span>
+                )}
                 {isMuted && <MutedIndicator label={t(($) => $.dm.muted_label)} />}
               </span>
               {(last || hasBubbleReply) && (
@@ -584,40 +617,47 @@ export function DmConversationRow({
             </div>
           </div>
         </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                type="button"
-                aria-label={t(($) => $.dm.menu_aria)}
-                className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
-              >
-                <MoreHorizontal className="size-4" />
-              </button>
-            }
-          />
-          <DropdownMenuContent align="end">
-            <DmDropdownMenuItems
-              pinned={pinned}
-              isMuted={isMuted}
-              onMarkUnread={onMarkUnread}
-              onTogglePin={onTogglePin}
-              onToggleMute={onToggleMute}
-              onClose={onClose}
+        {/* #692 finding 1: a supervised agent_pair DM is read-only for the owner
+            — pin/unread/mute/close are member-conversation mutations that 403, so
+            the row exposes neither the ⋯ menu nor the right-click menu. */}
+        {!agentPair && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t(($) => $.dm.menu_aria)}
+                  className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                >
+                  <MoreHorizontal className="size-4" />
+                </button>
+              }
             />
-          </DropdownMenuContent>
-        </DropdownMenu>
+            <DropdownMenuContent align="end">
+              <DmDropdownMenuItems
+                pinned={pinned}
+                isMuted={isMuted}
+                onMarkUnread={onMarkUnread}
+                onTogglePin={onTogglePin}
+                onToggleMute={onToggleMute}
+                onClose={onClose}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </ContextMenuTrigger>
-      <ContextMenuContent>
-        <DmContextMenuItems
-          pinned={pinned}
-          isMuted={isMuted}
-          onMarkUnread={onMarkUnread}
-          onTogglePin={onTogglePin}
-          onToggleMute={onToggleMute}
-          onClose={onClose}
-        />
-      </ContextMenuContent>
+      {!agentPair && (
+        <ContextMenuContent>
+          <DmContextMenuItems
+            pinned={pinned}
+            isMuted={isMuted}
+            onMarkUnread={onMarkUnread}
+            onTogglePin={onTogglePin}
+            onToggleMute={onToggleMute}
+            onClose={onClose}
+          />
+        </ContextMenuContent>
+      )}
     </ContextMenu>
   );
 }

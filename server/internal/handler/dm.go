@@ -40,7 +40,11 @@ type DMPeer struct {
 type DMItem struct {
 	ID             string                      `json:"id"` // dm channel id
 	Source         string                      `json:"source"`
+	Mode           string                      `json:"mode,omitempty"`
 	Peer           DMPeer                      `json:"peer"`
+	Participants   []DMPeer                    `json:"participants,omitempty"`
+	Supervised     bool                        `json:"supervised,omitempty"`
+	AgentDMControl *AgentDMControlResponse     `json:"a2a_control,omitempty"`
 	LastMessage    *ChannelLastMessage         `json:"last_message,omitempty"`
 	Unread         int                         `json:"unread"`
 	RealUnread     int                         `json:"real_unread"`
@@ -234,7 +238,7 @@ func writeDMCreateError(w http.ResponseWriter) {
 // the DM and the unified list endpoint computes them) — keeping create-or-find
 // a single write with no extra read.
 func dmItemForChannel(ch ChannelResponse, peer DMPeer) DMItem {
-	return DMItem{ID: ch.ID, Source: dmSourceChannel, Peer: peer, UpdatedAt: ch.UpdatedAt}
+	return DMItem{ID: ch.ID, Source: dmSourceChannel, Mode: "direct", Peer: peer, UpdatedAt: ch.UpdatedAt}
 }
 
 type dmPeerRef struct {
@@ -646,6 +650,7 @@ func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 
 	items := []DMItem{}
 	items = append(items, h.listDMChannels(r.Context(), workspaceID, userID, allowed)...)
+	items = append(items, h.listSupervisedAgentDMChannels(r.Context(), workspaceID, userID)...)
 	sort.SliceStable(items, func(i, j int) bool { return preferDMItem(items[i], items[j]) })
 
 	limit, offset := dmPageParams(r)
@@ -789,6 +794,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		item := DMItem{
 			ID:             uuidToString(id),
 			Source:         dmSourceChannel,
+			Mode:           "direct",
 			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar)},
 			Unread:         unread,
 			RealUnread:     unread,
@@ -815,6 +821,134 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		out = append(out, item)
 	}
 	return out
+}
+
+// listSupervisedAgentDMChannels returns agent-to-agent DMs for which the caller
+// owns at least one participant. The owner deliberately is not a channel
+// member: this is a read-only supervision projection, not an invitation to
+// speak as a third participant.
+func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID, userID string) []DMItem {
+	rows, err := h.DB.Query(ctx, `
+		SELECT ch.id, ch.updated_at,
+		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at
+		FROM channel ch
+		LEFT JOIN LATERAL (
+			SELECT author_type, author_name, content, parts, created_at
+			FROM channel_message message
+			WHERE message.channel_id = ch.id
+			ORDER BY message.seq DESC
+			LIMIT 1
+		) lm ON true
+		WHERE ch.workspace_id = $1
+		  AND ch.kind = 'dm'
+		  AND (
+		    SELECT count(*)
+		    FROM channel_member member
+		    WHERE member.channel_id = ch.id
+		      AND member.workspace_id = ch.workspace_id
+		      AND member.member_type = 'agent'
+		  ) = 2
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM channel_member member
+		    WHERE member.channel_id = ch.id
+		      AND member.workspace_id = ch.workspace_id
+		      AND member.member_type <> 'agent'
+		  )
+		  AND EXISTS (
+		    SELECT 1
+		    FROM channel_member member
+		    JOIN agent owned
+		      ON owned.id = member.member_id
+		     AND owned.workspace_id = member.workspace_id
+		    WHERE member.channel_id = ch.id
+		      AND member.workspace_id = ch.workspace_id
+		      AND member.member_type = 'agent'
+		      AND owned.owner_id = $2
+		  )
+		ORDER BY ch.updated_at DESC`,
+		parseUUID(workspaceID), parseUUID(userID))
+	if err != nil {
+		slog.Warn("list supervised agent dm channels failed", "workspace", workspaceID, "user", userID, "error", err)
+		return nil
+	}
+	defer rows.Close()
+
+	out := []DMItem{}
+	for rows.Next() {
+		var channelID pgtype.UUID
+		var updatedAt, lastAt pgtype.Timestamptz
+		var lastType, lastName, lastContent pgtype.Text
+		var lastParts []byte
+		if err := rows.Scan(
+			&channelID, &updatedAt,
+			&lastType, &lastName, &lastContent, &lastParts, &lastAt,
+		); err != nil {
+			continue
+		}
+		participants := h.agentDMParticipants(ctx, parseUUID(workspaceID), channelID)
+		if len(participants) != 2 {
+			continue
+		}
+		control, ok := h.agentDMControlForOwner(
+			ctx, parseUUID(workspaceID), channelID, parseUUID(userID),
+		)
+		if !ok {
+			continue
+		}
+		item := DMItem{
+			ID:             uuidToString(channelID),
+			Source:         dmSourceChannel,
+			Mode:           "agent_pair",
+			Peer:           participants[0],
+			Participants:   participants,
+			Supervised:     true,
+			AgentDMControl: control,
+			UpdatedAt:      timestampToString(updatedAt),
+		}
+		if lastContent.Valid {
+			item.LastMessage = channelLastMessage(
+				lastType.String, lastName.String, lastContent.String, lastParts, lastAt,
+			)
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func (h *Handler) agentDMParticipants(ctx context.Context, workspaceID, channelID pgtype.UUID) []DMPeer {
+	rows, err := h.DB.Query(ctx, `
+		SELECT agent.id,
+		       COALESCE(NULLIF(agent.display_name, ''), agent.name),
+		       agent.avatar_url
+		FROM channel_member member
+		JOIN agent
+		  ON agent.id = member.member_id
+		 AND agent.workspace_id = member.workspace_id
+		WHERE member.workspace_id = $1
+		  AND member.channel_id = $2
+		  AND member.member_type = 'agent'
+		ORDER BY agent.id::text`,
+		workspaceID, channelID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	participants := []DMPeer{}
+	for rows.Next() {
+		var id pgtype.UUID
+		var name string
+		var avatarURL pgtype.Text
+		if rows.Scan(&id, &name, &avatarURL) == nil {
+			participants = append(participants, DMPeer{
+				Type:      "agent",
+				ID:        uuidToString(id),
+				Name:      name,
+				AvatarURL: textToPtr(avatarURL),
+			})
+		}
+	}
+	return participants
 }
 
 // dispatchDMAgentReply dispatches a 1-on-1 DM's user message to the channel's

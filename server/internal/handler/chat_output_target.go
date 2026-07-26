@@ -30,10 +30,11 @@ type chatOutputOrigin struct {
 }
 
 type resolvedChatOutputTarget struct {
-	kind        chatOutputTargetKind
-	channel     ChannelResponse
-	recipientID pgtype.UUID
-	threadRoot  ChannelMessageResponse
+	kind          chatOutputTargetKind
+	channel       ChannelResponse
+	recipientType string
+	recipientID   pgtype.UUID
+	threadRoot    ChannelMessageResponse
 }
 
 func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentInboxEvent, rawTarget string) error {
@@ -67,12 +68,12 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 	}
 	if strings.HasPrefix(target, "dm:@") {
 		handle, rawMessageID, hasMessageID := splitDMOutputTarget(strings.TrimPrefix(target, "dm:@"))
-		recipientID, err := h.resolveHumanDMOutputTarget(ctx, origin, handle)
+		recipientType, recipientID, err := h.resolveDMOutputTarget(ctx, origin, handle)
 		if err != nil {
 			return resolvedChatOutputTarget{}, err
 		}
 		if hasMessageID {
-			ch, ok := h.agentHumanDMChannel(ctx, origin.workspaceID, origin.agentID, recipientID, false)
+			ch, ok := h.agentDMChannel(ctx, origin.workspaceID, origin.agentID, recipientType, recipientID, pgtype.UUID{}, false)
 			if !ok {
 				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 			}
@@ -84,9 +85,15 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 			if err != nil {
 				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 			}
-			return resolvedChatOutputTarget{kind: chatOutputTargetThread, channel: ch, threadRoot: root}, nil
+			return resolvedChatOutputTarget{
+				kind:          chatOutputTargetThread,
+				channel:       ch,
+				recipientType: recipientType,
+				recipientID:   recipientID,
+				threadRoot:    root,
+			}, nil
 		}
-		return resolvedChatOutputTarget{kind: chatOutputTargetDM, recipientID: recipientID}, nil
+		return resolvedChatOutputTarget{kind: chatOutputTargetDM, recipientType: recipientType, recipientID: recipientID}, nil
 	}
 	if strings.HasPrefix(target, "#") {
 		return h.resolveChannelOutputTarget(ctx, origin, strings.TrimPrefix(target, "#"))
@@ -109,49 +116,73 @@ func splitDMOutputTarget(raw string) (handle, rawMessageID string, hasMessageID 
 	return handle, rawMessageID, hasMessageID
 }
 
-func (h *Handler) resolveHumanDMOutputTarget(ctx context.Context, origin chatOutputOrigin, handle string) (pgtype.UUID, error) {
+func (h *Handler) resolveDMOutputTarget(ctx context.Context, origin chatOutputOrigin, handle string) (string, pgtype.UUID, error) {
 	handle = strings.TrimSpace(handle)
 	if handle == "" {
-		return pgtype.UUID{}, errChatOutputInvalidTarget
+		return "", pgtype.UUID{}, errChatOutputInvalidTarget
 	}
-	var agentName string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT name
-		FROM agent
-		WHERE id = $1 AND workspace_id = $2`, origin.agentID, origin.workspaceID).Scan(&agentName); err == nil && strings.EqualFold(strings.TrimSpace(agentName), handle) {
-		return pgtype.UUID{}, errChatOutputInvalidTarget
-	}
-	var userID pgtype.UUID
+
 	rows, err := h.DB.Query(ctx, `
+		SELECT actor_type, actor_id
+		FROM (
+		  SELECT 'user'::text AS actor_type, m.user_id AS actor_id, m.created_at
+		  FROM member m
+		  JOIN "user" u ON u.id = m.user_id
+		  WHERE m.workspace_id = $1 AND lower(u.name) = lower($2)
+		  UNION ALL
+		  SELECT 'agent'::text AS actor_type, a.id AS actor_id, a.created_at
+		  FROM agent a
+		  WHERE a.workspace_id = $1
+		    AND a.archived_at IS NULL
+		    AND lower(a.name) = lower($2)
+		) matches
+		ORDER BY created_at ASC
+		LIMIT 2`, origin.workspaceID, handle)
+	if err != nil {
+		return "", pgtype.UUID{}, errChatOutputInvalidTarget
+	}
+	defer rows.Close()
+	type actorRef struct {
+		typ string
+		id  pgtype.UUID
+	}
+	var matches []actorRef
+	for rows.Next() {
+		var match actorRef
+		if err := rows.Scan(&match.typ, &match.id); err != nil {
+			return "", pgtype.UUID{}, errChatOutputInvalidTarget
+		}
+		matches = append(matches, match)
+	}
+	if rows.Err() != nil || len(matches) != 1 {
+		return "", pgtype.UUID{}, errChatOutputInvalidTarget
+	}
+	match := matches[0]
+	if match.typ == "agent" {
+		if match.id == origin.agentID {
+			return "", pgtype.UUID{}, errChatOutputInvalidTarget
+		}
+		return match.typ, match.id, nil
+	}
+
+	var userID pgtype.UUID
+	err = h.DB.QueryRow(ctx, `
 		SELECT m.user_id
 		FROM member m
 		JOIN "user" u ON u.id = m.user_id
-		WHERE m.workspace_id = $1 AND lower(u.name) = lower($2)
-		ORDER BY m.created_at ASC
-		LIMIT 2`, origin.workspaceID, handle)
+		WHERE m.workspace_id = $1 AND m.user_id = $2`,
+		origin.workspaceID, match.id).Scan(&userID)
 	if err != nil {
-		return pgtype.UUID{}, errChatOutputInvalidTarget
+		return "", pgtype.UUID{}, errChatOutputInvalidTarget
 	}
-	defer rows.Close()
-	var matches []pgtype.UUID
-	for rows.Next() {
-		if err := rows.Scan(&userID); err != nil {
-			return pgtype.UUID{}, errChatOutputInvalidTarget
-		}
-		matches = append(matches, userID)
-	}
-	if rows.Err() != nil || len(matches) != 1 {
-		return pgtype.UUID{}, errChatOutputInvalidTarget
-	}
-	userID = matches[0]
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: origin.agentID, WorkspaceID: origin.workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
-		return pgtype.UUID{}, errChatOutputInvalidTarget
+		return "", pgtype.UUID{}, errChatOutputInvalidTarget
 	}
 	if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(userID), uuidToString(origin.workspaceID)) {
-		return pgtype.UUID{}, errChatOutputInvalidTarget
+		return "", pgtype.UUID{}, errChatOutputInvalidTarget
 	}
-	return userID, nil
+	return "user", userID, nil
 }
 
 func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOutputOrigin, raw string) (resolvedChatOutputTarget, error) {
@@ -292,11 +323,22 @@ func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chat
 		slog.Warn("channel bridge: suppressing invalid chat output target", "chat_session_id", payload.ChatSessionID, "target", payload.Target, "error", err)
 		return
 	}
+	// Agent-to-agent DMs must use the agent message transport. That is the
+	// canonical write boundary where exchange and frequency accounting are
+	// committed atomically with the visible message.
+	if target.recipientType == "agent" {
+		slog.Warn(
+			"channel bridge: agent dm requires canonical transport",
+			"chat_session_id", payload.ChatSessionID,
+			"target", payload.Target,
+		)
+		return
+	}
 	if archived, found := h.channelIsArchived(ctx, uuidToString(origin.workspaceID), origin.channelID); !found || archived {
 		return
 	}
 	if target.kind == chatOutputTargetDM {
-		ch, ok := h.ensureAgentHumanDMChannel(ctx, origin.workspaceID, origin.agentID, target.recipientID)
+		ch, ok := h.agentDMChannel(ctx, origin.workspaceID, origin.agentID, target.recipientType, target.recipientID, initiatorID, true)
 		if !ok {
 			slog.Warn("channel bridge: create targeted dm failed", "chat_session_id", payload.ChatSessionID, "target", payload.Target)
 			return

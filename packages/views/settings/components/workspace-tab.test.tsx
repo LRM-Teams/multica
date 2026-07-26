@@ -50,10 +50,21 @@ vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"], queryFn: vi.fn() }),
   workspaceListOptions: () => ({ queryKey: ["workspaces"], queryFn: vi.fn() }),
   workspaceKeys: { list: () => ["workspaces"] },
+  // #692: WorkspaceTab now mounts AgentDMGlobalPauseSection, which reads the
+  // agent list to gate itself on ownership. Empty list → not an owner → the
+  // section renders null, leaving these prefix-editing tests unaffected.
+  agentListOptions: () => ({ queryKey: ["agents"], queryFn: vi.fn() }),
 }));
 
 vi.mock("@multica/core/issues/queries", () => ({
   issueKeys: { all: (wsId: string) => ["issues", wsId] },
+}));
+
+// #692: stub the A2A global-control deps AgentDMGlobalPauseSection pulls in, so
+// the real dm module (and its react-query usage) isn't dragged into this test.
+vi.mock("@multica/core/dm", () => ({
+  agentDMGlobalControlOptions: () => ({ queryKey: ["a2a-global"], queryFn: vi.fn() }),
+  useAgentDMGlobalControl: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@multica/core/workspace/mutations", () => ({

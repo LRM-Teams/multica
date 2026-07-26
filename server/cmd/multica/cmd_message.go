@@ -117,6 +117,7 @@ var messageCmd = &cobra.Command{
 
 var messageReadCmd = newMessageReadCmd()
 var messageSearchCmd = newMessageSearchCmd()
+var messageA2AControlCmd = newMessageA2AControlCmd()
 
 func init() {
 	messageCmd.AddCommand(messageSendCmd)
@@ -124,6 +125,7 @@ func init() {
 	messageCmd.AddCommand(messageAskChoiceCmd)
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
+	messageCmd.AddCommand(messageA2AControlCmd)
 }
 
 func newMessageReadCmd() *cobra.Command {
@@ -151,6 +153,67 @@ func newMessageSearchCmd() *cobra.Command {
 	return cmd
 }
 
+func newMessageA2AControlCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "a2a-control",
+		Short: "Apply an owner-authorized control to an agent direct message",
+		Long: "Pause, resume, or extend an existing agent-to-agent direct message. " +
+			"This command succeeds only while executing a task explicitly initiated " +
+			"by the source agent's owner; peer-only tasks cannot grant themselves more budget.",
+		RunE: runAgentMessageA2AControl,
+	}
+	cmd.Flags().String("target", "", "Required existing agent DM target: dm:@<agent-handle>")
+	cmd.Flags().String("action", "", "Required action: pause_pair, resume_pair, grant_rounds, pause_global, or resume_global")
+	cmd.Flags().String("exchange-id", "", "Exchange UUID to extend; defaults to the latest exchange for grant_rounds")
+	cmd.Flags().Int("rounds", 0, "Additional rounds for grant_rounds")
+	cmd.Flags().String("output", "json", "Output format: json or text")
+	return cmd
+}
+
+func runAgentMessageA2AControl(cmd *cobra.Command, _ []string) error {
+	target, err := requiredMessageTarget(cmd)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(target, "dm:@") || strings.Contains(strings.TrimPrefix(target, "dm:@"), ":") {
+		return fmt.Errorf("--target must be an agent DM target: dm:@<agent-handle>")
+	}
+	action := strings.TrimSpace(flagString(cmd, "action"))
+	switch action {
+	case "pause_pair", "resume_pair", "grant_rounds", "pause_global", "resume_global":
+	default:
+		return fmt.Errorf("--action must be pause_pair, resume_pair, grant_rounds, pause_global, or resume_global")
+	}
+	rounds, _ := cmd.Flags().GetInt("rounds")
+	if action == "grant_rounds" && rounds <= 0 {
+		return fmt.Errorf("--rounds must be positive for grant_rounds")
+	}
+	if action != "grant_rounds" && rounds != 0 {
+		return fmt.Errorf("--rounds is only valid with grant_rounds")
+	}
+	body := map[string]any{
+		"target": target,
+		"action": action,
+	}
+	if exchangeID := strings.TrimSpace(flagString(cmd, "exchange-id")); exchangeID != "" {
+		body["exchange_id"] = exchangeID
+	}
+	if rounds > 0 {
+		body["rounds"] = rounds
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
+	defer cancel()
+	var out map[string]any
+	if err := client.PostJSON(ctx, "/api/agent/messages/a2a-control", body, &out); err != nil {
+		return fmt.Errorf("update agent dm control: %w", err)
+	}
+	return printAgentTransportOutput(cmd, out, "Agent DM control updated.")
+}
+
 func messageTargetFlagUsage() string {
 	return "Required target: #channel, #channel:<threadId>, dm:@handle, or dm:@handle:<threadId>"
 }
@@ -158,7 +221,7 @@ func messageTargetFlagUsage() string {
 func requiredMessageTarget(cmd *cobra.Command) (string, error) {
 	target := strings.TrimSpace(flagString(cmd, "target"))
 	if target == "" {
-		return "", fmt.Errorf("target is required; --target accepts #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>")
+		return "", fmt.Errorf("target is required; --target accepts #channel, #channel:<threadId>, dm:@<handle>, or dm:@<handle>:<threadId>")
 	}
 	return target, nil
 }

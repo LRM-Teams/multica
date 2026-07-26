@@ -20,8 +20,8 @@ RELEASE_REPO_WEB_URL="${MULTICA_RELEASE_REPO_WEB_URL:-$REPO_WEB_URL}"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh"
 POWERSHELL_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
-BREW_PACKAGE="${MULTICA_BREW_PACKAGE:-}"
-LEGACY_BREW_PACKAGE="multica-ai/tap/multica"
+CLI_BIN_DIR="$HOME/.local/bin"
+CLI_PATH="$CLI_BIN_DIR/multica"
 
 # Colors (disabled when not a terminal)
 if [ -t 1 ] || [ -t 2 ]; then
@@ -44,14 +44,6 @@ warn()  { printf "${BOLD}${YELLOW}⚠ %s${RESET}\n" "$*" >&2; }
 fail()  { printf "${BOLD}${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
-
-legacy_brew_package_configured() {
-  [ "$BREW_PACKAGE" = "$LEGACY_BREW_PACKAGE" ]
-}
-
-valid_brew_package_configured() {
-  [ -n "$BREW_PACKAGE" ] && ! legacy_brew_package_configured
-}
 
 env_file_value() {
   local file="$1"
@@ -115,50 +107,6 @@ detect_os() {
 # ---------------------------------------------------------------------------
 # CLI Installation
 # ---------------------------------------------------------------------------
-_dump_brew_log() {
-  local log="$1"
-  if [ -s "$log" ]; then
-    warn "Homebrew output (last 80 lines):"
-    tail -n 80 "$log" | sed 's/^/  /' >&2
-  fi
-}
-
-install_cli_brew() {
-  if legacy_brew_package_configured; then
-    warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
-    return 1
-  fi
-  if ! valid_brew_package_configured; then
-    return 1
-  fi
-
-  info "Installing Multica CLI via Homebrew..."
-  local brew_log
-  brew_log=$(mktemp)
-  local brew_tap="${BREW_PACKAGE%/*}"
-  if ! brew tap "$brew_tap" >"$brew_log" 2>&1; then
-    warn "Failed to add Homebrew tap. Falling back to GitHub Releases binary install."
-    _dump_brew_log "$brew_log"
-    rm -f "$brew_log"
-    return 1
-  fi
-  # brew install exits non-zero if already installed on older Homebrew versions
-  if ! brew install "$BREW_PACKAGE" >"$brew_log" 2>&1; then
-    if brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      rm -f "$brew_log"
-      ok "Multica CLI already installed via Homebrew"
-    else
-      warn "Failed to install multica via Homebrew. Falling back to GitHub Releases binary install."
-      _dump_brew_log "$brew_log"
-      rm -f "$brew_log"
-      return 1
-    fi
-  else
-    rm -f "$brew_log"
-    ok "Multica CLI installed via Homebrew"
-  fi
-}
-
 install_cli_binary() {
   info "Installing Multica CLI from GitHub Releases..."
 
@@ -182,37 +130,61 @@ install_cli_binary() {
 
   tar -xzf "$tmp_dir/multica.tar.gz" -C "$tmp_dir" multica
 
-  # Try /usr/local/bin first, fall back to ~/.local/bin. Tests and scripted
-  # installs can override the first choice with MULTICA_BIN_DIR.
-  local bin_dir="${MULTICA_BIN_DIR:-/usr/local/bin}"
-  if [ -w "$bin_dir" ]; then
-    mv "$tmp_dir/multica" "$bin_dir/multica"
-  elif command_exists sudo; then
-    sudo mv "$tmp_dir/multica" "$bin_dir/multica"
-  else
-    bin_dir="$HOME/.local/bin"
-    mkdir -p "$bin_dir"
-    mv "$tmp_dir/multica" "$bin_dir/multica"
-    chmod +x "$bin_dir/multica"
-    # Add to PATH if not already there
-    if ! echo "$PATH" | tr ':' '\n' | grep -q "^$bin_dir$"; then
-      export PATH="$bin_dir:$PATH"
-      add_to_path "$bin_dir"
-    fi
-  fi
+  mkdir -p "$CLI_BIN_DIR"
+  mv "$tmp_dir/multica" "$CLI_PATH"
+  chmod +x "$CLI_PATH"
+  prepend_to_path "$CLI_BIN_DIR"
+  persist_cli_path
 
   rm -rf "$tmp_dir"
-  ok "Multica CLI installed to $bin_dir/multica"
+  ok "Multica CLI installed to $CLI_PATH"
 }
 
-add_to_path() {
+prepend_to_path() {
   local dir="$1"
-  local line="export PATH=\"$dir:\$PATH\""
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ -f "$rc" ] && ! grep -qF "$dir" "$rc"; then
-      printf '\n# Added by Multica installer\n%s\n' "$line" >> "$rc"
+  local old_ifs="$IFS"
+  local entry
+  local rest=""
+  IFS=:
+  for entry in $PATH; do
+    if [ "$entry" = "$dir" ]; then
+      continue
+    fi
+    if [ -n "$rest" ]; then
+      rest="$rest:$entry"
+    else
+      rest="$entry"
     fi
   done
+  IFS="$old_ifs"
+  export PATH="$dir${rest:+:$rest}"
+  hash -r 2>/dev/null || true
+}
+
+persist_cli_path() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  if [ "$shell_name" = "fish" ]; then
+    local fish_dir="$HOME/.config/fish/conf.d"
+    local fish_file="$fish_dir/multica.fish"
+    mkdir -p "$fish_dir"
+    if [ ! -f "$fish_file" ] || ! grep -qF 'fish_add_path --prepend "$HOME/.local/bin"' "$fish_file"; then
+      printf '%s\n' '# Added by Multica installer' 'fish_add_path --prepend "$HOME/.local/bin"' >"$fish_file"
+    fi
+    return
+  fi
+
+  local rc
+  case "$shell_name" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bashrc" ;;
+    *)    rc="$HOME/.profile" ;;
+  esac
+  local line='export PATH="$HOME/.local/bin:$PATH"'
+  if [ ! -f "$rc" ] || ! grep -qF "$line" "$rc"; then
+    printf '\n# Added by Multica installer\n%s\n' "$line" >>"$rc"
+  fi
 }
 
 get_latest_version() {
@@ -269,28 +241,10 @@ pull_official_selfhost_images() {
   exit 1
 }
 
-upgrade_cli_brew() {
-  if legacy_brew_package_configured; then
-    warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
-    return 1
-  fi
-  if ! valid_brew_package_configured; then
-    return 1
-  fi
-
-  info "Upgrading Multica CLI via Homebrew..."
-  brew update 2>/dev/null || true
-  if brew upgrade "$BREW_PACKAGE" 2>/dev/null; then
-    ok "Multica CLI upgraded via Homebrew"
-  else
-    # brew upgrade exits non-zero if already up to date
-    ok "Multica CLI is already the latest version"
-  fi
-}
-
 install_cli() {
   if command_exists multica; then
-    local current_ver
+    local current_path current_ver
+    current_path="$(command -v multica)"
     # `multica version` outputs "multica v0.1.13 (commit: abc1234)" — extract just the version
     current_ver=$(multica version 2>/dev/null | awk '{print $2}' || echo "unknown")
 
@@ -304,38 +258,33 @@ install_cli() {
     local current_cmp="${current_ver#v}"
     local latest_cmp="${latest_ver#v}"
 
-    if [ "$current_cmp" = "$latest_cmp" ]; then
+    if [ "$current_cmp" = "$latest_cmp" ] && [ "$current_path" = "$CLI_PATH" ]; then
       ok "Multica CLI is up to date ($current_ver)"
+      prepend_to_path "$CLI_BIN_DIR"
+      persist_cli_path
       return 0
     fi
 
-    info "Multica CLI $current_ver installed, latest is $latest_ver — upgrading..."
-    if valid_brew_package_configured && command_exists brew && brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      upgrade_cli_brew || install_cli_binary
+    if [ "$current_path" != "$CLI_PATH" ]; then
+      warn "Migrating Multica CLI from $current_path to the user-owned $CLI_PATH."
+      warn "The old binary is no longer managed; remove it separately if it shadows $CLI_PATH in another shell."
+    elif [ "$current_cmp" != "$latest_cmp" ]; then
+      info "Multica CLI $current_ver installed, latest is $latest_ver — upgrading..."
     else
-      if legacy_brew_package_configured; then
-        warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
-      fi
-      install_cli_binary
+      info "Reinstalling Multica CLI $current_ver at the canonical user-owned path..."
     fi
+    install_cli_binary
 
     local new_ver
-    new_ver=$(multica version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    new_ver=$("$CLI_PATH" version 2>/dev/null | awk '{print $2}' || echo "unknown")
     ok "Multica CLI upgraded ($current_ver → $new_ver)"
     return 0
   fi
 
-  if valid_brew_package_configured && command_exists brew; then
-    install_cli_brew || install_cli_binary
-  else
-    if legacy_brew_package_configured; then
-      warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
-    fi
-    install_cli_binary
-  fi
+  install_cli_binary
 
   # Verify
-  if ! command_exists multica; then
+  if [ ! -x "$CLI_PATH" ] || [ "$(command -v multica 2>/dev/null || true)" != "$CLI_PATH" ]; then
     fail "CLI installed but 'multica' not found on PATH. You may need to restart your shell."
   fi
 }
@@ -554,17 +503,11 @@ main() {
         echo "Environment variables:"
         echo "  MULTICA_INSTALL_DIR   Self-host server install directory"
         echo "                        (default: \$HOME/.multica/server)"
-        echo "  MULTICA_BIN_DIR       Target directory for the CLI binary when"
-        echo "                        installing from GitHub Releases"
-        echo "                        (default: /usr/local/bin, then \$HOME/.local/bin)"
         echo "  MULTICA_SELFHOST_REF  Git ref to check out for self-host assets"
         echo "                        (default: latest release tag, falling back to main)"
         echo "  MULTICA_RELEASE_REPO_WEB_URL"
         echo "                        GitHub repo used for CLI release assets"
         echo "                        (default: $REPO_WEB_URL)"
-        echo "  MULTICA_BREW_PACKAGE  Optional Homebrew formula (for example owner/tap/name)"
-        echo "                        (unset by default; binary release install is used)"
-        echo "                        ($LEGACY_BREW_PACKAGE is ignored)"
         echo ""
         echo "After installation, run 'multica setup' to configure your environment."
         exit 0

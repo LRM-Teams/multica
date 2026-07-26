@@ -17,7 +17,9 @@ curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/inst
 git clone https://github.com/LRM-Teams/multica.git
 cd multica
 make build
-cp server/bin/multica /usr/local/bin/multica
+mkdir -p "$HOME/.local/bin"
+cp server/bin/multica "$HOME/.local/bin/multica"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Download from GitHub Releases
@@ -42,9 +44,17 @@ VERSION="${LATEST#v}"
 curl -sL "https://github.com/LRM-Teams/multica/releases/download/${LATEST}/multica-cli-${VERSION}-${OS}-${ARCH}.tar.gz" \
   -o /tmp/multica.tar.gz
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
-sudo mv /tmp/multica /usr/local/bin/multica
+mkdir -p "$HOME/.local/bin"
+mv /tmp/multica "$HOME/.local/bin/multica"
+chmod +x "$HOME/.local/bin/multica"
+export PATH="$HOME/.local/bin:$PATH"
 rm /tmp/multica.tar.gz
 ```
+
+`$HOME/.local/bin/multica` is the only supported macOS/Linux install target.
+If an older installation resolves from another path, install the user-owned
+binary first, put `$HOME/.local/bin` first on `PATH`, then have the machine
+owner remove the old binary through the normal software-management process.
 
 ### Update
 
@@ -52,7 +62,8 @@ rm /tmp/multica.tar.gz
 multica update
 ```
 
-`multica update` downloads the current CLI from the Multica GitHub Releases channel. If you maintain a Homebrew tap, set `MULTICA_BREW_PACKAGE=<owner/tap/package>` before running update.
+`multica update` downloads the current CLI from the Multica GitHub Releases
+channel into the canonical user-owned installation.
 
 ## Quick Start
 

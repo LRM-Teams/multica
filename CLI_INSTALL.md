@@ -17,10 +17,13 @@ Fetch https://github.com/LRM-Teams/multica/blob/main/CLI_INSTALL.md and follow t
 Run:
 
 ```bash
-multica version
+CLI_PATH=$(command -v multica 2>/dev/null || true)
+printf 'Multica path: %s\n' "${CLI_PATH:-not installed}"
+[ -n "$CLI_PATH" ] && multica version
 ```
 
-- **If it prints a version string** (e.g. `multica v0.x.x`): skip to **Step 3**.
+- **If it prints a version string and the path is `$HOME/.local/bin/multica`**: skip to **Step 3**.
+- **If it prints a version from any other path**: continue to **Step 2**. The installer will migrate the CLI to the canonical user-owned path even when the version is already current.
 - **If command not found**: continue to **Step 2**.
 
 ---
@@ -67,20 +70,60 @@ LATEST=$(curl -sI https://github.com/LRM-Teams/multica/releases/latest | grep -i
 VERSION="${LATEST#v}"
 curl -sL "https://github.com/LRM-Teams/multica/releases/download/${LATEST}/multica-cli-${VERSION}-${OS}-${ARCH}.tar.gz" -o /tmp/multica.tar.gz
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
-sudo mv /tmp/multica /usr/local/bin/multica
+mkdir -p "$HOME/.local/bin"
+mv /tmp/multica "$HOME/.local/bin/multica"
+chmod +x "$HOME/.local/bin/multica"
 rm /tmp/multica.tar.gz
+```
+
+Make the user-owned directory available in the current shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+hash -r 2>/dev/null || true
+```
+
+Persist it in the user's shell configuration:
+
+```bash
+case "$(basename "${SHELL:-}")" in
+  fish)
+    mkdir -p "$HOME/.config/fish/conf.d"
+    printf '%s\n' 'fish_add_path --prepend "$HOME/.local/bin"' >"$HOME/.config/fish/conf.d/multica.fish"
+    ;;
+  zsh)
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.zshrc"
+    ;;
+  bash)
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
+    ;;
+  *)
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.profile"
+    ;;
+esac
 ```
 
 Verify:
 
 ```bash
 multica version
+command -v multica
 ```
 
 **If this fails:**
-- Check that `/usr/local/bin` is in `$PATH`.
-- On Linux, you may need `chmod +x /usr/local/bin/multica`.
-- If `sudo` is not available, install to a user-writable directory: `mv /tmp/multica ~/.local/bin/multica` and ensure `~/.local/bin` is in `$PATH`.
+- Confirm that `command -v multica` prints `$HOME/.local/bin/multica`.
+- Restart the terminal so the updated user PATH takes effect.
+
+### Migrating an older system-owned installation
+
+The macOS/Linux installer has one supported target: `$HOME/.local/bin/multica`. It never writes to a system directory and never elevates privileges.
+
+If `command -v multica` still reports an older system path after installation:
+
+1. Start a fresh shell and run `type -a multica`.
+2. Confirm `$HOME/.local/bin/multica version` succeeds.
+3. Remove the old system binary through the machine owner or administrator's normal software-management process. The Multica installer deliberately does not modify it.
+4. Run `hash -r` (or restart the shell) and confirm `command -v multica` resolves to `$HOME/.local/bin/multica`.
 
 ### Option C: Windows (PowerShell)
 

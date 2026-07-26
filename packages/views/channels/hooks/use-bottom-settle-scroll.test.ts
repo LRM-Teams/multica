@@ -428,4 +428,56 @@ describe("useBottomSettleScroll", () => {
     expect(scrollTop).toBe(SH - CLIENT_HEIGHT); // held at the bottom (no-op pin)
     expect(warn).not.toHaveBeenCalled(); // completed frame 1 — no spurious timeout
   });
+
+  it("does NOT settle while DETACHED on a transient bottom-band geometry; reattach lands the EXACT true bottom (not the sh===ch false bottom, not stuck at 0)", () => {
+    // Ronan's successor-contract blocker: `hasReached()` alone can be true during a
+    // detach/remount when the tail momentarily enters the ref map with a band
+    // geometry (the untrustworthy measurement window). Completing there — on ZERO
+    // attached pin — ends the loop for good (reattach can't restart the effect),
+    // reproducing the stuck-at-top failure. Only an ATTACHED, pinned frame may
+    // complete. Custom harness: scrollHeight is EXTERNALLY controlled (not
+    // write-coupled) so we can model the transient collapsed height (sh===ch) while
+    // detached, then the real measured total after reattach — and assert the exact
+    // final landing, matching the red control. (The generic harness kept the tail
+    // out of the map while detached, so it never exercised this branch.)
+    const SH_FINAL = 2000;
+    const el = document.createElement("div");
+    let sh = CLIENT_HEIGHT; // 616 — transient collapsed height during the detach window
+    let scrollTop = 0;
+    Object.defineProperty(el, "clientHeight", { value: CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { get: () => sh, configurable: true });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = Math.max(0, Math.min(v, sh - CLIENT_HEIGHT)); // browser clamp
+      },
+      configurable: true,
+    });
+    el.getBoundingClientRect = () => ({ top: 0, bottom: CLIENT_HEIGHT }) as DOMRect;
+    const lastRowEl = document.createElement("div");
+    // bottom = sh - scrollTop: within the band ONLY at the true bottom for the
+    // CURRENT sh. While detached at sh===ch with scrollTop 0 it is transiently in
+    // the band (616 = container bottom) — the false-complete condition.
+    lastRowEl.getBoundingClientRect = () =>
+      ({ top: sh - scrollTop - 40, bottom: sh - scrollTop }) as DOMRect;
+    const map = new Map<string, HTMLElement>([[LAST_ID, lastRowEl]]);
+
+    const stableMessages = messages(IDS);
+    const props = (over: Partial<BottomProps> = {}): BottomProps =>
+      baseProps({ messages: stableMessages, scrollContainerEl: el, messageRefMap: map, ...over });
+    const { rerender } = renderHook((p: BottomProps) => useBottomSettleScroll(p), {
+      initialProps: props({ handleAttached: false }), // mounted DETACHED
+    });
+    flushFrames(6);
+    // Buggy version: settles here at 0 on zero attached pin, stuck forever.
+    // Fix: nothing pinned while detached → no premature settle.
+    expect(scrollTop).toBe(0);
+
+    // Measurement completes (the real total is now known) and the handle reattaches.
+    // The same still-alive loop pins and lands the EXACT true bottom.
+    sh = SH_FINAL;
+    rerender(props({ handleAttached: true }));
+    flushFrames();
+    expect(scrollTop).toBe(SH_FINAL - CLIENT_HEIGHT); // 1384 — real bottom, NOT 0, NOT 616's false bottom
+  });
 });

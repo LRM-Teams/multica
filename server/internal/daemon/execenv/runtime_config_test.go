@@ -2013,3 +2013,40 @@ func TestBuildMetaSkillContentUsesStructuralManagedRole(t *testing.T) {
 		t.Fatalf("display name inferred managed role: %q", withoutRole)
 	}
 }
+
+func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ctx  TaskContextForEnv
+	}{
+		{name: "assignment", ctx: TaskContextForEnv{IssueID: "issue-1"}},
+		{name: "comment", ctx: TaskContextForEnv{IssueID: "issue-1", TriggerCommentID: "comment-1"}},
+		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create an issue"}},
+		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}},
+	}
+	rules := []string{
+		`1. **传达就是传达。** 收到"转告/同步/提醒"类指令时直接执行，不做顺手调查、验证或扩展；只有对方明确要求核实才去查。`,
+		`2. **多催合并一次回。** 同一事项的多条催促/追问，合并成一条回复；不逐条应答。`,
+		`3. **讨论从哪来回哪去。** thread 里的讨论只回 thread，不在主频道复读同一内容。`,
+		`4. **对 agent 只说增量。** 与其他 agent 往来只传新信息，不复述双方已知上下文；无新信息不回复。`,
+		`5. **对人不贴原始输出。** 面向人的消息说结论和必要事实，不贴命令行、JSON 或工具原始输出。`,
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", tc.ctx)
+			if got := strings.Count(out, executionDisciplineBrief); got != 1 {
+				t.Fatalf("execution discipline block count = %d, want 1", got)
+			}
+			for _, rule := range rules {
+				if got := strings.Count(out, rule); got != 1 {
+					t.Errorf("rule count = %d, want 1 for %q", got, rule)
+				}
+			}
+		})
+	}
+}

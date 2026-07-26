@@ -371,6 +371,16 @@ func CleanupRuntimeConfig(workDir, provider string) error {
 	return os.WriteFile(path, []byte(remainder), 0o644)
 }
 
+const executionDisciplineBrief = `## 运行规则 / 执行纪律
+
+**执行纪律（五条，违反即返工）**
+
+1. **传达就是传达。** 收到"转告/同步/提醒"类指令时直接执行，不做顺手调查、验证或扩展；只有对方明确要求核实才去查。
+2. **多催合并一次回。** 同一事项的多条催促/追问，合并成一条回复；不逐条应答。
+3. **讨论从哪来回哪去。** thread 里的讨论只回 thread，不在主频道复读同一内容。
+4. **对 agent 只说增量。** 与其他 agent 往来只传新信息，不复述双方已知上下文；无新信息不回复。
+5. **对人不贴原始输出。** 面向人的消息说结论和必要事实，不贴命令行、JSON 或工具原始输出。`
+
 // buildMetaSkillContent generates the meta skill markdown that teaches the agent
 // about the Multica runtime environment and available CLI tools.
 func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
@@ -529,6 +539,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			renderMemoryOperatingGuide(&b, ctx)
 		}
 	}
+
+	b.WriteString(executionDisciplineBrief)
+	b.WriteString("\n\n")
 
 	if ctx.ChatSessionID != "" {
 		renderChatRuntimeBrief(&b, provider, ctx)

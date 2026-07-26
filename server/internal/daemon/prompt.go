@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -42,11 +43,62 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 	if task.AgentRadarPrompt != "" {
 		return task.AgentRadarPrompt
 	}
+	if task.AssignmentSnapshot != nil {
+		return buildAssignmentPrompt(task)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
+	return b.String()
+}
+
+func buildAssignmentPrompt(task Task) string {
+	snapshot := task.AssignmentSnapshot
+	if snapshot == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
+	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
+	b.WriteString("Current issue state at claim:\n")
+	fmt.Fprintf(&b, "- Status: %s\n\n", snapshot.Status)
+	b.WriteString("Assignment-time issue snapshot:\n")
+	fmt.Fprintf(&b, "- Title: %s\n", snapshot.Title)
+	fmt.Fprintf(&b, "- Comment count: %d\n", snapshot.CommentCount)
+	b.WriteString("- Description:\n")
+	if snapshot.Description == nil || strings.TrimSpace(*snapshot.Description) == "" {
+		b.WriteString("  (none)\n")
+	} else {
+		b.WriteString(strings.TrimSpace(*snapshot.Description))
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "- Acceptance criteria (%d):\n", len(snapshot.AcceptanceCriteria))
+	if len(snapshot.AcceptanceCriteria) == 0 {
+		b.WriteString("  (none)\n")
+	} else {
+		for _, criterion := range snapshot.AcceptanceCriteria {
+			fmt.Fprintf(&b, "  - %s\n", criterion)
+		}
+	}
+	metadata, err := json.Marshal(snapshot.Metadata)
+	if err != nil {
+		metadata = []byte("{}")
+	}
+	fmt.Fprintf(&b, "- Metadata: %s\n\n", metadata)
+	b.WriteString("The title, description, acceptance criteria, metadata, and comment count were captured when the assignment wake was enqueued. The status above is current at claim time.\n")
+	if snapshot.IsTerminal() {
+		fmt.Fprintf(&b, "The issue is already %s. Treat this as a stale assignment wake: do not reopen it, do not start issue work, and stop after reporting the terminal state.\n", snapshot.Status)
+		return b.String()
+	}
+	b.WriteString("Use this as the starting issue context; do not run `multica issue get` or `multica issue metadata list` merely to rediscover these fields.\n")
+	if snapshot.CommentCount > 0 {
+		fmt.Fprintf(&b, "Comment bodies are intentionally not copied into the snapshot. Read them through the existing cursor flow: `multica issue comment list %s --output json`; for a long issue use `--recent 20 --output json` and follow the `Next thread cursor:` with `--before` / `--before-id` until you have enough history.\n", task.IssueID)
+	} else {
+		b.WriteString("No comments existed when this assignment wake was enqueued. Do not run `multica issue comment list` merely to confirm the zero count.\n")
+	}
 	return b.String()
 }
 

@@ -509,7 +509,11 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	}
 
 	b.WriteString("## Quick Start\n\n")
-	fmt.Fprintf(&b, "Run `multica issue get %s --output json` to fetch the full issue details.\n\n", ctx.IssueID)
+	if ctx.TriggerCommentID == "" && ctx.AssignmentSnapshot != nil {
+		b.WriteString("The current task prompt already includes the assignment snapshot and claim-time status. Start from that context; do not fetch the issue merely to repeat it.\n\n")
+	} else {
+		fmt.Fprintf(&b, "Run `multica issue get %s --output json` to fetch the full issue details.\n\n", ctx.IssueID)
+	}
 
 	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 

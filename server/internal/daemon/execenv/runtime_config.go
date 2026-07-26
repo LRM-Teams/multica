@@ -375,6 +375,9 @@ func CleanupRuntimeConfig(workDir, provider string) error {
 // about the Multica runtime environment and available CLI tools.
 func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	var b strings.Builder
+	terminalAssignment := ctx.TriggerCommentID == "" &&
+		ctx.AssignmentSnapshot != nil &&
+		ctx.AssignmentSnapshot.IsTerminal()
 
 	b.WriteString("# Multica Agent Runtime\n\n")
 	b.WriteString("You are a coding agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
@@ -724,20 +727,36 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("9. Do NOT change the issue status unless the comment explicitly asks for it\n\n")
 	} else {
 		// Assignment-triggered: defer to agent Skills for workflow specifics.
-		b.WriteString("You are responsible for managing the issue status throughout your work, unless your Agent Identity forbids issue status changes.\n\n")
-		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand your task\n", ctx.IssueID)
-		fmt.Fprintf(&b, "2. Run `multica issue metadata list %s --output json` to see what prior agents pinned — best-effort, empty `{}` and CLI failures are normal. See the `## Issue Metadata` section above for what to look for.\n", ctx.IssueID)
-		fmt.Fprintf(&b, "3. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions. When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history to satisfy this mandatory step. `--recent` is a way to read the full history page-by-page, not a shortcut that replaces it.\n", ctx.IssueID)
-		fmt.Fprintf(&b, "4. Run `multica issue status %s in_progress` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
-		b.WriteString("5. Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries — build the full, production-quality result, not a quick shallow pass just to reply. Then **self-verify before you treat it as done**: re-read the acceptance criteria and check your work against EACH one with real evidence (build/compile, run it, exercise the actual behavior, run or add tests; for UI compare the running screenshot to the target), and fix whatever fails. Do NOT report a shallow/partial result and wait to be bounced in review; if a requirement genuinely cannot be met, raise it as a blocker (step 9) instead of quietly shipping less. Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action; if your role is delegation-only, perform the allowed delegation work and stop once that outcome is delivered.\n")
-		if ctx.IsSquadLeader {
-			fmt.Fprintf(&b, "6. **Post your final results as a comment** (unless your outcome is `no_action` — in that case, calling `multica squad activity %s no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment announcing no_action or saying you are exiting silently): post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID, ctx.IssueID)
+		if terminalAssignment {
+			fmt.Fprintf(&b, "The issue is already `%s` at claim time. This is a stale assignment wake. Do not reopen the issue, do not perform issue work, and do not run issue read or write commands; return one concise terminal-state result and stop.\n\n", ctx.AssignmentSnapshot.Status)
 		} else {
-			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+			b.WriteString("You are responsible for managing the issue status throughout your work, unless your Agent Identity forbids issue status changes.\n\n")
+			if ctx.AssignmentSnapshot != nil {
+				b.WriteString("1. Start from the current task prompt. It already contains the claim-time current status plus the assignment-time title, description, acceptance criteria, metadata, and comment count. Do not run `multica issue get` or `multica issue metadata list` merely to rediscover those fields.\n")
+				b.WriteString("2. Review the snapshot's metadata as the same best-effort hints described in `## Issue Metadata`; the latest comments and code still win if a pinned value is stale.\n")
+				if ctx.AssignmentSnapshot.CommentCount > 0 {
+					fmt.Fprintf(&b, "3. The snapshot reports %d comment(s). Read their bodies with `multica issue comment list %s --output json` (returns all comments, capped server-side at 2000) — this is mandatory when the assignment-time count is non-zero. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history. `--recent` is a way to read the history page-by-page, not a shortcut that replaces it.\n", ctx.AssignmentSnapshot.CommentCount, ctx.IssueID)
+				} else {
+					b.WriteString("3. The assignment-time snapshot reports zero comments. Do not run `multica issue comment list` merely to confirm that count.\n")
+				}
+			} else {
+				// API-boundary fallback for historical tasks or a newer daemon
+				// talking to an older server that cannot supply a snapshot.
+				fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand your task\n", ctx.IssueID)
+				fmt.Fprintf(&b, "2. Run `multica issue metadata list %s --output json` to see what prior agents pinned — best-effort, empty `{}` and CLI failures are normal. See the `## Issue Metadata` section above for what to look for.\n", ctx.IssueID)
+				fmt.Fprintf(&b, "3. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions. When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history to satisfy this mandatory step. `--recent` is a way to read the full history page-by-page, not a shortcut that replaces it.\n", ctx.IssueID)
+			}
+			fmt.Fprintf(&b, "4. Run `multica issue status %s in_progress` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
+			b.WriteString("5. Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries — build the full, production-quality result, not a quick shallow pass just to reply. Then **self-verify before you treat it as done**: re-read the acceptance criteria and check your work against EACH one with real evidence (build/compile, run it, exercise the actual behavior, run or add tests; for UI compare the running screenshot to the target), and fix whatever fails. Do NOT report a shallow/partial result and wait to be bounced in review; if a requirement genuinely cannot be met, raise it as a blocker (step 9) instead of quietly shipping less. Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action; if your role is delegation-only, perform the allowed delegation work and stop once that outcome is delivered.\n")
+			if ctx.IsSquadLeader {
+				fmt.Fprintf(&b, "6. **Post your final results as a comment** (unless your outcome is `no_action` — in that case, calling `multica squad activity %s no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment announcing no_action or saying you are exiting silently): post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID, ctx.IssueID)
+			} else {
+				fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+			}
+			b.WriteString("7. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
+			fmt.Fprintf(&b, "8. When done, run `multica issue status %s in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
+			fmt.Fprintf(&b, "9. If blocked, run `multica issue status %s blocked` unless your Agent Identity forbids issue status changes. Post a comment explaining the blocker unless your Agent Identity forbids issue comments.\n\n", ctx.IssueID)
 		}
-		b.WriteString("7. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
-		fmt.Fprintf(&b, "8. When done, run `multica issue status %s in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
-		fmt.Fprintf(&b, "9. If blocked, run `multica issue status %s blocked` unless your Agent Identity forbids issue status changes. Post a comment explaining the blocker unless your Agent Identity forbids issue comments.\n\n", ctx.IssueID)
 	}
 
 	// Sub-issue creation semantics — the only piece of the old Parent /
@@ -747,7 +766,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// `done`, and the agent has nothing to do or avoid on that path.
 	// Section is skipped for chat, quick-create, and run-only autopilot
 	// runs (no parent/child semantics there).
-	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" {
+	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && !terminalAssignment {
 		b.WriteString("## Sub-issue Creation\n\n")
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
@@ -795,6 +814,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- On CLI failure, exit with the CLI error as the only output. The platform translates that into a `quick_create_failed` inbox item carrying the original prompt for the user.\n")
 	case ctx.AgentRadarPrompt != "":
 		b.WriteString("This is an Agent Radar task. Return only the JSON action plan requested by the prompt. Do not add prose outside the JSON.\n")
+	case terminalAssignment:
+		b.WriteString("This assignment wake is stale because the issue is already terminal. Return one concise line with the current terminal status; do not call issue read or write commands.\n")
 	default:
 		if ctx.IsSquadLeader {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")

@@ -243,7 +243,10 @@ func TestWorkingOnIssuesSkillCoversIssueLoopContracts(t *testing.T) {
 	// references/source-map.md, not here, so a downstream main merge that
 	// shifts a line cannot rot this test into pinning a stale lie.
 	mustContain := []string{
+		"multica issue mine --with-prs --with-gates --output json",
+		"one CLI/API round-trip",
 		"multica issue pull-requests <issue-id> --output json",
+		"`GATE`",
 		"Default for code-changing issue work",
 		"open or update a PR before posting the final Multica issue comment",
 		"This is a default, not",

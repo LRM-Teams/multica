@@ -72,6 +72,19 @@ that explicitly.
 
 ## Reading a linked PR's real state
 
+For a single read of the running agent's complete work queue, use the aggregate
+command instead of repeating `list` plus one `pull-requests` call per issue:
+
+```bash
+multica issue mine --with-prs --with-gates --output json
+```
+
+The result keeps the normal issue-list envelope and nests canonical
+`pull_requests` on each issue. `--with-gates` requires `--with-prs`; the server
+bulk-folds every linked PR in the page, so this remains one CLI/API round-trip
+rather than hiding an N+1 fan-out. Without `--with-prs`, `issue mine` is the
+agent-only shorthand for the existing `issue list --mine` queue.
+
 When a step depends on PR state, query Multica's link table — do not infer it
 from branch names, GitHub search, memory, or `pr_url` metadata (which can be
 stale).
@@ -96,6 +109,10 @@ Returns `{"pull_requests": [...]}`. Each element exposes:
 
 So "is it merged?" is `state == "merged"` (or `merged_at != null`); "is it still
 a draft?" is `state == "draft"`; CI status is `checks_conclusion`.
+
+The default `issue pull-requests` table exposes that same value in its `GATE`
+column. It prints `none` when `checks_conclusion` is null; this is not a second
+gate model.
 
 If the command returns no linked PRs after a PR was opened, the link scanner did
 not observe a routable issue key in the PR title/body/branch.

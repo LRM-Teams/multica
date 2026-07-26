@@ -363,6 +363,141 @@ func newIssueListTestCmd() *cobra.Command {
 	return cmd
 }
 
+func newIssueMineTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "mine"}
+	cmd.Flags().String("output", "table", "")
+	cmd.Flags().Bool("full-id", false, "")
+	cmd.Flags().String("status", "", "")
+	cmd.Flags().String("priority", "", "")
+	cmd.Flags().String("project", "", "")
+	cmd.Flags().StringSlice("metadata", nil, "")
+	cmd.Flags().Int("limit", 50, "")
+	cmd.Flags().Int("offset", 0, "")
+	cmd.Flags().Bool("with-prs", false, "")
+	cmd.Flags().Bool("with-gates", false, "")
+	return cmd
+}
+
+func TestRunIssueMineAggregatesPRsAndGatesInOneRequest(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/api/issues" {
+			t.Errorf("path = %s, want /api/issues", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		for key, want := range map[string]string{
+			"workspace_id": "ws-1",
+			"assignee_id":  "agent-123",
+			"with_prs":     "true",
+			"with_gates":   "true",
+		} {
+			if got := r.URL.Query().Get(key); got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issues": []map[string]any{{
+				"id":         "issue-710",
+				"identifier": "MUL-710",
+				"title":      "Aggregate my work",
+				"status":     "in_progress",
+				"priority":   "high",
+				"pull_requests": []map[string]any{{
+					"repo_owner":        "multica-ai",
+					"repo_name":         "multica",
+					"number":            42,
+					"state":             "open",
+					"checks_conclusion": "passed",
+					"html_url":          "https://github.com/multica-ai/multica/pull/42",
+				}},
+			}},
+			"total": 1,
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "task-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+
+	cmd := newIssueMineTestCmd()
+	_ = cmd.Flags().Set("with-prs", "true")
+	_ = cmd.Flags().Set("with-gates", "true")
+	out, err := captureStdout(t, func() error {
+		return runIssueMine(cmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("runIssueMine: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want 1", calls)
+	}
+	for _, want := range []string{
+		"KEY", "TITLE", "STATUS", "PRIORITY", "PR", "PR STATE", "GATE", "URL",
+		"MUL-710", "Aggregate my work", "high", "multica-ai/multica#42", "open", "passed",
+		"https://github.com/multica-ai/multica/pull/42",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("mine table missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunIssueMineRejectsGatesWithoutPRsBeforeRequest(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "task-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+
+	cmd := newIssueMineTestCmd()
+	_ = cmd.Flags().Set("with-gates", "true")
+	_, err := captureStdout(t, func() error {
+		return runIssueMine(cmd, nil)
+	})
+	if err == nil || !strings.Contains(err.Error(), "--with-gates requires --with-prs") {
+		t.Fatalf("error = %v, want with-prs requirement", err)
+	}
+	if calls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0", calls)
+	}
+}
+
+func TestRunIssueMineFailsOutsideAgentContext(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "user-token")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	cmd := newIssueMineTestCmd()
+	_, err := captureStdout(t, func() error {
+		return runIssueMine(cmd, nil)
+	})
+	if err == nil || !strings.Contains(err.Error(), "--mine can only be used in an agent execution context") {
+		t.Fatalf("error = %v, want agent-context requirement", err)
+	}
+	if calls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0", calls)
+	}
+}
+
 func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
 	var called bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -702,12 +837,21 @@ func TestRunIssuePullRequestsListsLinkedPRsAsJSON(t *testing.T) {
 }
 
 func TestRunIssuePullRequestsTableIncludesCoreFields(t *testing.T) {
-	prs := []map[string]any{{
-		"url":    "https://github.com/multica-ai/multica/pull/42",
-		"number": float64(42),
-		"state":  "open",
-		"title":  "MUL-2818 add issue PR CLI",
-	}}
+	prs := []map[string]any{
+		{
+			"url":               "https://github.com/multica-ai/multica/pull/42",
+			"number":            float64(42),
+			"state":             "open",
+			"checks_conclusion": "passed",
+			"title":             "MUL-2818 add issue PR CLI",
+		},
+		{
+			"url":    "https://github.com/multica-ai/multica/pull/43",
+			"number": float64(43),
+			"state":  "draft",
+			"title":  "MUL-2818 draft without observed checks",
+		},
+	}
 
 	old := os.Stdout
 	r, w, _ := os.Pipe()
@@ -717,7 +861,7 @@ func TestRunIssuePullRequestsTableIncludesCoreFields(t *testing.T) {
 	os.Stdout = old
 	out, _ := io.ReadAll(r)
 	text := string(out)
-	for _, want := range []string{"NUMBER", "STATE", "TITLE", "URL", "42", "open", "MUL-2818 add issue PR CLI", "https://github.com/multica-ai/multica/pull/42"} {
+	for _, want := range []string{"NUMBER", "STATE", "GATE", "TITLE", "URL", "42", "open", "passed", "MUL-2818 add issue PR CLI", "https://github.com/multica-ai/multica/pull/42", "43", "draft", "none"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("table output missing %q:\n%s", want, text)
 		}

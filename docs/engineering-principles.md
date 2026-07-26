@@ -227,6 +227,13 @@
 - 10 分钟 deadline 到达时，无论当前是否繁忙，都必须在 `claimMu` 下原子设置 claim barrier；从这一刻起拒绝所有新 ClaimTask，只等待 barrier 前已经进入 claim/handoff/active 的工作全部归零。只有 `claims_in_flight=0 && active_tasks=0` 后才能调用 `triggerRestart`；禁止靠提前 cancel root context 强杀活跃 Agent。函数入口、deadline/ticker 分支和 durable ACK 后的 immediate-idle 分支都必须在 restart 前 fail-closed 复查 root context；等待上下文取消只终止等待并释放已持有 barrier，不触发 restart。
 - **物**：migration 217 的 `daemon_runtime_update` 表与 active partial unique index（①②）；`PostgresUpdateStore` 的 create/exclusion/atomic pop/ready/complete/fail/timeout/latest 与 pool replacement 回归；`waitForSafeRestartWithWindow` 的 deadline stop-claim、claim-handoff drain、active-task drain、cancel-no-restart、deadline 前 idle opportunity 回归（⑤）。旧实现“只等全 idle、期间永久继续 claim”会使这些 deadline 回归见红。
 
+### 4.11 Daemon 版本必须先不可变 stage，再由 supervisor 事务激活 — `可执行`（② state/CAS 类型 + ③单一 VersionStore + ⑤并发/损坏回归；owner: @Barry）
+- release binary 只能先发布到 user-owned `~/.local/share/multica/versions/<tag>/multica[.exe]`；stage 的固定顺序是 checksum → temp write/chmod/fsync → 真实 `--version` → immutable directory publish。同一个 tag 的相同 digest 幂等，不同 digest fail closed；坏 checksum、版本不符或半写绝不能留下 final version dir。
+- 激活状态只有一份小型 manifest：`active_version + previous_version + generation`。写入必须在 OS advisory lock 内按 generation CAS，并用平台原子 replace；active/previous 都必须已经 stage。并发 actor 对同一 generation 最多一个 winner，其他 actor 得到显式 conflict，不能 last-write-wins。
+- Phase A 只建立持久版本/激活事实，不允许新旧 caller 双写或悄悄改现有 daemon 行为。后续唯一 supervisor 才能在跨 worker claim barrier 内消费 manifest：新 worker health/version/register commit 前保持 claim-disabled；失败在同一 barrier 下 rollback previous。Windows stable launcher 永不由 worker/version binary 覆盖。
+- **物**：`server/internal/cli/version_store.go`、`version_store_{unix,windows}.go`；`TestVersionStore*` 覆盖 checksum/version fail-before-publish、immutable same-tag conflict、16-way concurrent stage、generation CAS one-winner、unstaged activation；Windows cross-compile gate验证 `LockFileEx + MoveFileEx(REPLACE_EXISTING|WRITE_THROUGH)` adapter。
+- **已见红**：Phase A 测试在实现前因 `VersionStore/BinaryVerifier/ActivationState` 全部不存在而 compile-fail；实现后 focused race suite 与完整 `internal/cli` suite 通过。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

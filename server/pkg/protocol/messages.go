@@ -13,7 +13,21 @@ const (
 	MessagePartTypeReference   = "reference"
 	MessagePartTypeSystemEvent = "system_event"
 	MessagePartTypeVoice       = "voice"
+	MessagePartTypeChoice      = "choice"
+	MessagePartTypeChoiceReply = "choice_reply"
 )
+
+const (
+	ChoiceLayoutBinary = "binary"
+	ChoiceLayoutList   = "list"
+)
+
+// ChoiceOption is one selectable item inside a choice MessagePart.
+type ChoiceOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
 
 const VoiceTranscriptMaxRunes = 4096
 
@@ -54,6 +68,19 @@ type MessagePart struct {
 	// SynthesisStatus is server-owned lifecycle state for Agent TTS output.
 	// Recorded human voice messages leave it empty.
 	SynthesisStatus string `json:"synthesis_status,omitempty"`
+
+	// Choice card fields (type=choice). SelectedOptionID is set server-side
+	// after the user locks an answer (v1: select-once).
+	ChoiceID         string         `json:"choice_id,omitempty"`
+	Prompt           string         `json:"prompt,omitempty"`
+	Layout           string         `json:"layout,omitempty"`
+	Options          []ChoiceOption `json:"options,omitempty"`
+	AllowDismiss     *bool          `json:"allow_dismiss,omitempty"`
+	ExpiresAt        string         `json:"expires_at,omitempty"`
+	SelectedOptionID string         `json:"selected_option_id,omitempty"`
+
+	// Choice reply fields (type=choice_reply) — user-visible answer after click.
+	OptionID string `json:"option_id,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

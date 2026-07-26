@@ -44,6 +44,7 @@ function MessageBodyInner({
   sourceMessageId,
   consumedAttachmentIds,
   contentMode = "all",
+  choiceContext,
 }: {
   content: string;
   parts?: ChannelMessage["parts"];
@@ -53,6 +54,7 @@ function MessageBodyInner({
   sourceMessageId?: string;
   consumedAttachmentIds?: readonly string[];
   contentMode?: MessageBodyContentMode;
+  choiceContext?: { channelId: string; messageId: string };
 }) {
   const { getActorName } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
@@ -77,10 +79,10 @@ function MessageBodyInner({
       // A sticker-bearing message renders its parts (image + any text) height-
       // capped; sticker-free content stays a clamped text preview so a long agent
       // message never expands the parent header.
-      if (presentedParts?.some((part) => part.type === "sticker")) {
+      if (presentedParts?.some((part) => part.type === "sticker" || part.type === "choice")) {
         return (
           <div className="max-h-40 overflow-hidden">
-            <MessagePartsRenderer parts={presentedParts} />
+            <MessagePartsRenderer parts={presentedParts} choiceContext={choiceContext} />
           </div>
         );
       }
@@ -126,7 +128,11 @@ function MessageBodyInner({
       // of collapsing to an empty bubble.
       const hasBodyContent =
         bodyParts.some(
-          (part) => (part.type === "text" && part.text.trim()) || part.type === "sticker",
+          (part) =>
+            (part.type === "text" && part.text.trim()) ||
+            part.type === "sticker" ||
+            part.type === "choice" ||
+            part.type === "choice_reply",
         ) || (hasReferenceParts && content.trim() !== "");
       if (!hasBodyContent) return null;
       // Structured mention / issue-ref parts (#463): the canonical `content` now
@@ -136,7 +142,9 @@ function MessageBodyInner({
       // issue links (the bare-text migration window dropped them). Stickers still
       // render as images alongside. No refs → the existing parts renderer.
       if (hasReferenceParts) {
-        const stickerParts = bodyParts.filter((part) => part.type === "sticker");
+        const stickerAndChoiceParts = bodyParts.filter(
+          (part) => part.type === "sticker" || part.type === "choice" || part.type === "choice_reply",
+        );
         return (
           <>
             <InlineReferenceContent
@@ -145,11 +153,19 @@ function MessageBodyInner({
               highlightQuery={highlightQuery}
               sourceMessageId={sourceMessageId}
             />
-            {stickerParts.length > 0 && <MessagePartsRenderer parts={stickerParts} />}
+            {stickerAndChoiceParts.length > 0 && (
+              <MessagePartsRenderer parts={stickerAndChoiceParts} choiceContext={choiceContext} />
+            )}
           </>
         );
       }
-      return <MessagePartsRenderer parts={bodyParts} highlightQuery={highlightQuery} />;
+      return (
+        <MessagePartsRenderer
+          parts={bodyParts}
+          highlightQuery={highlightQuery}
+          choiceContext={choiceContext}
+        />
+      );
     }
 
     if (contentMode !== "all") return null;

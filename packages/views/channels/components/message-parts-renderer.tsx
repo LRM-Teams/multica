@@ -8,6 +8,7 @@ import type { MessagePart, StickerAsset, StickerCatalogResponse } from "@multica
 import { cn } from "@multica/ui/lib/utils";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { useT } from "../../i18n/use-t";
+import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
 
 const SAFE_STICKER_ID = /^[a-z0-9-]+$/;
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -20,9 +21,11 @@ interface StickerAssetIndex {
 export function MessagePartsRenderer({
   parts,
   highlightQuery,
+  choiceContext,
 }: {
   parts: MessagePart[];
   highlightQuery?: string;
+  choiceContext?: { channelId: string; messageId: string };
 }) {
   const keyCounts = new Map<string, number>();
   return (
@@ -43,6 +46,19 @@ export function MessagePartsRenderer({
         }
         if (part.type === "sticker") {
           return <StickerPart key={key} part={part} />;
+        }
+        if (part.type === "choice") {
+          return (
+            <ChoiceCard
+              key={key}
+              part={part}
+              channelId={choiceContext?.channelId}
+              messageId={choiceContext?.messageId}
+            />
+          );
+        }
+        if (part.type === "choice_reply") {
+          return <ChoiceReplyPart key={key} part={part} />;
         }
         if (part.type === "reference") {
           return null;
@@ -105,6 +121,10 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `system-event-${part.event}-${hashString(JSON.stringify(part.event_params))}`;
   } else if (part.type === "voice") {
     base = `voice-${part.duration_ms ?? 0}`;
+  } else if (part.type === "choice") {
+    base = `choice-${part.choice_id}-${part.selected_option_id ?? "open"}`;
+  } else if (part.type === "choice_reply") {
+    base = `choice-reply-${part.choice_id}-${part.option_id}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

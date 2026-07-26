@@ -43,6 +43,7 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { ReplyFeedbackBar } from "./reply-feedback-bar";
 import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
 import { MessageQuoteCard } from "./message-quote";
@@ -936,7 +937,15 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               sourceMessageId={message.id}
               consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
               contentMode={hidesVoiceTranscript ? "non-transcript" : "all"}
+              choiceContext={{ channelId: message.channel_id, messageId: message.id }}
             />
+            {isAgent && !message.deleted_at && (
+              <ReplyFeedbackBar
+                channelId={message.channel_id}
+                messageId={message.id}
+                initial={message.my_reply_feedback}
+              />
+            )}
             <VoiceMessageAudio
               message={message}
               presentation={voicePresentation}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -330,57 +331,66 @@ func (s *VersionStore) readActivationState() (ActivationState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return ActivationState{}, fmt.Errorf("decode activation state: %w", err)
 	}
+	if err := validateActivationState(state); err != nil {
+		return ActivationState{}, err
+	}
+	return state, nil
+}
+
+func validateActivationState(state ActivationState) error {
 	if state.SchemaVersion != versionStoreSchemaVersion {
-		return ActivationState{}, fmt.Errorf("unsupported activation schema %d", state.SchemaVersion)
+		return fmt.Errorf(
+			"invalid activation state: unsupported schema %d",
+			state.SchemaVersion,
+		)
 	}
 	if state.ActiveVersion != "" {
 		active, err := normalizeVersionStoreTag(state.ActiveVersion)
 		if err != nil || active != state.ActiveVersion {
-			return ActivationState{}, fmt.Errorf("invalid active version %q", state.ActiveVersion)
+			return fmt.Errorf(
+				"invalid activation state: invalid active version %q",
+				state.ActiveVersion,
+			)
 		}
 	}
 	if state.PreviousVersion != "" {
 		previous, err := normalizeVersionStoreTag(state.PreviousVersion)
 		if err != nil || previous != state.PreviousVersion {
-			return ActivationState{}, fmt.Errorf("invalid previous version %q", state.PreviousVersion)
+			return fmt.Errorf(
+				"invalid activation state: invalid previous version %q",
+				state.PreviousVersion,
+			)
 		}
 	}
-	return state, nil
+	switch {
+	case state.Generation == 0 &&
+		(state.ActiveVersion != "" || state.PreviousVersion != ""):
+		return errors.New("invalid activation state: generation zero must be empty")
+	case state.Generation == 1 &&
+		(state.ActiveVersion == "" || state.PreviousVersion != ""):
+		return errors.New(
+			"invalid activation state: first generation requires active without predecessor",
+		)
+	case state.Generation >= 2 &&
+		(state.ActiveVersion == "" || state.PreviousVersion == ""):
+		return errors.New(
+			"invalid activation state: later generation requires active and predecessor",
+		)
+	case state.ActiveVersion != "" &&
+		state.ActiveVersion == state.PreviousVersion:
+		return errors.New("invalid activation state: active and predecessor must differ")
+	}
+	return nil
 }
 
 func (s *VersionStore) CompareAndSwapActivation(
 	ctx context.Context,
 	expectedGeneration uint64,
 	activeVersion string,
-	previousVersion string,
 ) (ActivationState, error) {
 	active, err := normalizeVersionStoreTag(activeVersion)
 	if err != nil {
 		return ActivationState{}, fmt.Errorf("active version: %w", err)
-	}
-	previous := ""
-	if strings.TrimSpace(previousVersion) != "" {
-		previous, err = normalizeVersionStoreTag(previousVersion)
-		if err != nil {
-			return ActivationState{}, fmt.Errorf("previous version: %w", err)
-		}
-		if previous == active {
-			return ActivationState{}, errors.New("active and previous versions must differ")
-		}
-	}
-	if _, err := s.verifyExisting(ctx, active, ""); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ActivationState{}, fmt.Errorf("active version %s is not staged", active)
-		}
-		return ActivationState{}, err
-	}
-	if previous != "" {
-		if _, err := s.verifyExisting(ctx, previous, ""); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return ActivationState{}, fmt.Errorf("previous version %s is not staged", previous)
-			}
-			return ActivationState{}, err
-		}
 	}
 
 	lockFile, err := os.OpenFile(
@@ -409,6 +419,27 @@ func (s *VersionStore) CompareAndSwapActivation(
 			current.Generation,
 		)
 	}
+	if current.Generation == math.MaxUint64 {
+		return ActivationState{}, errors.New("activation generation overflow")
+	}
+	if current.ActiveVersion == active {
+		return ActivationState{}, fmt.Errorf("active version %s is already active", active)
+	}
+	if _, err := s.verifyExisting(ctx, active, ""); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ActivationState{}, fmt.Errorf("active version %s is not staged", active)
+		}
+		return ActivationState{}, err
+	}
+	previous := current.ActiveVersion
+	if previous != "" {
+		if _, err := s.verifyExisting(ctx, previous, ""); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return ActivationState{}, fmt.Errorf("previous version %s is not staged", previous)
+			}
+			return ActivationState{}, err
+		}
+	}
 	next := ActivationState{
 		SchemaVersion:   versionStoreSchemaVersion,
 		ActiveVersion:   active,
@@ -423,6 +454,9 @@ func (s *VersionStore) CompareAndSwapActivation(
 }
 
 func (s *VersionStore) writeActivationState(state ActivationState) error {
+	if err := validateActivationState(state); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode activation state: %w", err)

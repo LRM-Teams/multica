@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testBinaryDigest(data []byte) string {
@@ -245,7 +248,6 @@ func TestVersionStoreActivationStateUsesGenerationCAS(t *testing.T) {
 		context.Background(),
 		0,
 		"v0.3.72",
-		"",
 	)
 	if err != nil {
 		t.Fatalf("first CompareAndSwapActivation: %v", err)
@@ -256,9 +258,24 @@ func TestVersionStoreActivationStateUsesGenerationCAS(t *testing.T) {
 
 	_, err = store.CompareAndSwapActivation(
 		context.Background(),
+		1,
+		"v0.3.72",
+	)
+	if err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("same-version CAS error = %v, want already active", err)
+	}
+	unchanged, err := store.ReadActivationState()
+	if err != nil {
+		t.Fatalf("ReadActivationState after same-version CAS: %v", err)
+	}
+	if unchanged != first {
+		t.Fatalf("same-version CAS changed state: got %+v, want %+v", unchanged, first)
+	}
+
+	_, err = store.CompareAndSwapActivation(
+		context.Background(),
 		0,
 		"v0.3.73",
-		"v0.3.72",
 	)
 	if !errors.Is(err, ErrActivationConflict) {
 		t.Fatalf("stale CAS error = %v, want ErrActivationConflict", err)
@@ -268,7 +285,6 @@ func TestVersionStoreActivationStateUsesGenerationCAS(t *testing.T) {
 		context.Background(),
 		1,
 		"0.3.73",
-		"0.3.72",
 	)
 	if err != nil {
 		t.Fatalf("second CompareAndSwapActivation: %v", err)
@@ -284,6 +300,20 @@ func TestVersionStoreActivationStateUsesGenerationCAS(t *testing.T) {
 	if got != second {
 		t.Fatalf("ReadActivationState = %+v, want %+v", got, second)
 	}
+
+	rollback, err := store.CompareAndSwapActivation(
+		context.Background(),
+		2,
+		"v0.3.72",
+	)
+	if err != nil {
+		t.Fatalf("rollback CompareAndSwapActivation: %v", err)
+	}
+	if rollback.Generation != 3 ||
+		rollback.ActiveVersion != "v0.3.72" ||
+		rollback.PreviousVersion != "v0.3.73" {
+		t.Fatalf("rollback activation = %+v", rollback)
+	}
 }
 
 func TestVersionStoreActivationRejectsUnstagedVersion(t *testing.T) {
@@ -293,7 +323,6 @@ func TestVersionStoreActivationRejectsUnstagedVersion(t *testing.T) {
 		context.Background(),
 		0,
 		"v0.3.73",
-		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "is not staged") {
 		t.Fatalf("CompareAndSwapActivation error = %v, want not staged", err)
@@ -329,7 +358,6 @@ func TestVersionStoreActivationFailsClosedOnCorruptManifest(t *testing.T) {
 		context.Background(),
 		0,
 		"v0.3.73",
-		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "decode activation state") {
 		t.Fatalf("CompareAndSwapActivation error = %v, want decode activation state", err)
@@ -340,6 +368,113 @@ func TestVersionStoreActivationFailsClosedOnCorruptManifest(t *testing.T) {
 	}
 	if string(got) != string(corrupt) {
 		t.Fatalf("corrupt activation manifest was overwritten: %q", got)
+	}
+}
+
+func TestVersionStoreActivationRejectsSemanticCorruption(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	tests := []struct {
+		name  string
+		state ActivationState
+	}{
+		{
+			name: "generation zero with active",
+			state: ActivationState{
+				SchemaVersion: versionStoreSchemaVersion,
+				ActiveVersion: "v0.3.72",
+			},
+		},
+		{
+			name: "generation one without active",
+			state: ActivationState{
+				SchemaVersion: versionStoreSchemaVersion,
+				Generation:    1,
+			},
+		},
+		{
+			name: "generation one with predecessor",
+			state: ActivationState{
+				SchemaVersion:   versionStoreSchemaVersion,
+				ActiveVersion:   "v0.3.73",
+				PreviousVersion: "v0.3.72",
+				Generation:      1,
+			},
+		},
+		{
+			name: "later generation without predecessor",
+			state: ActivationState{
+				SchemaVersion: versionStoreSchemaVersion,
+				ActiveVersion: "v0.3.73",
+				Generation:    2,
+			},
+		},
+		{
+			name: "active equals predecessor",
+			state: ActivationState{
+				SchemaVersion:   versionStoreSchemaVersion,
+				ActiveVersion:   "v0.3.73",
+				PreviousVersion: "v0.3.73",
+				Generation:      2,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.state)
+			if err != nil {
+				t.Fatalf("Marshal activation state: %v", err)
+			}
+			if err := os.WriteFile(store.activationStatePath(), data, 0o600); err != nil {
+				t.Fatalf("write activation state: %v", err)
+			}
+			if _, err := store.ReadActivationState(); err == nil ||
+				!strings.Contains(err.Error(), "invalid activation state") {
+				t.Fatalf("ReadActivationState error = %v, want invalid activation state", err)
+			}
+		})
+	}
+}
+
+func TestVersionStoreActivationRejectsGenerationOverflow(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	for _, version := range []string{"v0.3.72", "v0.3.73"} {
+		data := []byte("multica-" + version)
+		if _, err := store.StageBinary(
+			context.Background(),
+			version,
+			data,
+			testBinaryDigest(data),
+			0o755,
+		); err != nil {
+			t.Fatalf("stage %s: %v", version, err)
+		}
+	}
+	current := ActivationState{
+		SchemaVersion:   versionStoreSchemaVersion,
+		ActiveVersion:   "v0.3.72",
+		PreviousVersion: "v0.3.73",
+		Generation:      math.MaxUint64,
+		UpdatedAt:       time.Now().UTC(),
+	}
+	if err := store.writeActivationState(current); err != nil {
+		t.Fatalf("seed maximum generation: %v", err)
+	}
+
+	_, err := store.CompareAndSwapActivation(
+		context.Background(),
+		math.MaxUint64,
+		"v0.3.73",
+	)
+	if err == nil || !strings.Contains(err.Error(), "generation overflow") {
+		t.Fatalf("CompareAndSwapActivation error = %v, want generation overflow", err)
+	}
+	got, readErr := store.ReadActivationState()
+	if readErr != nil {
+		t.Fatalf("ReadActivationState after overflow: %v", readErr)
+	}
+	if got != current {
+		t.Fatalf("overflow changed activation state: got %+v, want %+v", got, current)
 	}
 }
 
@@ -372,7 +507,6 @@ func TestVersionStoreConcurrentActivationCASHasOneWinner(t *testing.T) {
 				context.Background(),
 				0,
 				version,
-				"",
 			)
 			results <- result{state: state, err: err}
 		}()

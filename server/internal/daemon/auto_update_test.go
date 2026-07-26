@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -51,6 +54,60 @@ func TestTryAutoUpdate_SkipsWhenUpdating(t *testing.T) {
 
 	if restartCalls.Load() != 0 {
 		t.Fatalf("triggerRestart called while another update was in progress")
+	}
+}
+
+func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
+	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
+	d.updateObservation = newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+	d.client = NewClient(srv.URL)
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	previousFetchLatestRelease := fetchLatestRelease
+	fetchLatestRelease = func() (*cli.GitHubRelease, error) {
+		close(fetchStarted)
+		<-releaseFetch
+		return nil, errors.New("network down")
+	}
+	t.Cleanup(func() { fetchLatestRelease = previousFetchLatestRelease })
+
+	var updateCalls atomic.Int32
+	d.runUpdateFn = func(string) (string, error) {
+		updateCalls.Add(1)
+		return "updated", nil
+	}
+
+	autoDone := make(chan struct{})
+	go func() {
+		defer close(autoDone)
+		d.tryAutoUpdate(context.Background())
+	}()
+	<-fetchStarted
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.1.14",
+		SupportsReadyToApply: true,
+	})
+	close(releaseFetch)
+	<-autoDone
+
+	if updateCalls.Load() != 0 {
+		t.Fatalf("server update entered while auto check owned the attempt: calls=%d", updateCalls.Load())
+	}
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart triggered while auto check owned the attempt: calls=%d", restartCalls.Load())
+	}
+	observation := d.updateObservation.Snapshot()
+	if observation.AttemptSource != "auto" || observation.Phase != "waiting" || observation.LastOutcome != "fetch_failed" {
+		t.Fatalf("observation = %+v, want auto waiting/fetch_failed without server overwrite", observation)
 	}
 }
 

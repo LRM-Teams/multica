@@ -982,6 +982,12 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if daemonID := runtimeDaemonKey(rt); daemonID != "" {
+		if err := lockDaemonRegistration(r.Context(), tx, wsID, daemonID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
+			return
+		}
+	}
 	qtx := h.Queries.WithTx(tx)
 
 	// Shared teardown with computer bulk-delete (DeleteRuntimesByDaemon):
@@ -1106,6 +1112,12 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if daemonID := runtimeDaemonKey(rt); daemonID != "" {
+		if err := lockDaemonRegistration(r.Context(), tx, wsID, daemonID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
+			return
+		}
+	}
 	qtx := h.Queries.WithTx(tx)
 
 	// Lock the runtime row first. PostgreSQL's FK validation on

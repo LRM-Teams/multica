@@ -92,14 +92,22 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	// Don't race the server-triggered update path. If a manual update from
-	// the Runtimes page is already in flight, let it finish and re-check next
-	// tick (by which time we'll either be on the new binary or it failed and
-	// we can retry).
-	if d.updating.Load() {
+
+	// Own the whole attempt before publishing any observation, including a
+	// busy result from the cheap pre-fetch check below. Checking the flag and
+	// publishing first allowed a concurrent server update to finish and then
+	// be overwritten by this caller's stale result.
+	if !d.updating.CompareAndSwap(false, true) {
 		d.logger.Debug("auto-update: skip — update already in progress")
 		return
 	}
+	released := false
+	defer func() {
+		if !released {
+			d.updating.Store(false)
+		}
+	}()
+
 	// Cheap pre-fetch idle check: the release-metadata fetch below makes an
 	// HTTPS call to GitHub, and there is no point paying that cost (or the
 	// rate-limit budget) when we already know we are going to defer. A task
@@ -130,21 +138,6 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 		d.finishUpdateObservation("waiting", "up_to_date", release.TagName, "", "")
 		return
 	}
-
-	// CAS the updating flag so a concurrent server-triggered handleUpdate
-	// dropped onto a heartbeat tick can't double-fire. Release on every exit
-	// path before triggerRestart — once that lands, the daemon ctx is
-	// cancelled and the flag dies with the process.
-	if !d.updating.CompareAndSwap(false, true) {
-		d.logger.Debug("auto-update: skip — update already in progress (raced)")
-		return
-	}
-	released := false
-	defer func() {
-		if !released {
-			d.updating.Store(false)
-		}
-	}()
 
 	// Strict barrier: between the cheap pre-fetch idle check and now the
 	// release fetch took anywhere from tens of milliseconds (typical) to

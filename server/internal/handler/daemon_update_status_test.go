@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -236,5 +238,98 @@ func TestDeleteDaemonUpdateStatusIfOrphanPreservesSharedDaemonUntilLastRuntime(t
 	}
 	if _, err := queries.GetDaemonUpdateStatus(ctx, db.GetDaemonUpdateStatusParams(deleteArgs)); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("status after last runtime deletion err = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+func TestDaemonUpdateStatusRegisterSerializesWithLastRuntimeCleanup(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	workspaceID := parseUUID(testWorkspaceID)
+	daemonID := "update-observation-register-delete-race-" + uuid.NewString()
+	runtimeID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
+
+	registrationTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin registration transaction: %v", err)
+	}
+	defer registrationTx.Rollback(context.Background())
+	if err := lockDaemonRegistration(ctx, registrationTx, testWorkspaceID, daemonID); err != nil {
+		t.Fatalf("lock registration transaction: %v", err)
+	}
+	var lockClassID, lockObjectID int64
+	var lockObjectSubID int32
+	if err := registrationTx.QueryRow(ctx, `
+		SELECT classid::bigint, objid::bigint, objsubid::int
+		FROM pg_locks
+		WHERE pid = pg_backend_pid() AND locktype = 'advisory' AND granted
+	`).Scan(&lockClassID, &lockObjectID, &lockObjectSubID); err != nil {
+		t.Fatalf("inspect registration advisory lock: %v", err)
+	}
+
+	deleteDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		req := newRequest(http.MethodDelete, "/api/runtimes/"+runtimeID, nil)
+		req = withURLParam(req, "runtimeId", runtimeID)
+		testHandler.DeleteAgentRuntime(recorder, req)
+		deleteDone <- recorder
+	}()
+
+	waitDeadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case recorder := <-deleteDone:
+			t.Fatalf("last-runtime cleanup crossed registration lock: status=%d body=%s", recorder.Code, recorder.Body.String())
+		default:
+		}
+		var waiterCount int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM pg_locks
+			WHERE locktype = 'advisory'
+			  AND NOT granted
+			  AND classid::bigint = $1
+			  AND objid::bigint = $2
+			  AND objsubid::int = $3
+		`, lockClassID, lockObjectID, lockObjectSubID).Scan(&waiterCount); err != nil {
+			t.Fatalf("inspect last-runtime cleanup advisory waiter: %v", err)
+		}
+		if waiterCount > 0 {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatal("last-runtime cleanup never waited on the registration advisory lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	registrationHandler := *testHandler
+	registrationHandler.Queries = testHandler.Queries.WithTx(registrationTx)
+	registrationHandler.DB = registrationTx
+	observation := testDaemonUpdateObservation(uuid.NewString(), 1)
+	if err := registrationHandler.registerDaemonUpdateObservation(ctx, workspaceID, daemonID, &observation); err != nil {
+		t.Fatalf("adopt status in registration transaction: %v", err)
+	}
+	if err := registrationTx.Commit(ctx); err != nil {
+		t.Fatalf("commit registration transaction: %v", err)
+	}
+
+	recorder := <-deleteDone
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("last-runtime cleanup after registration commit: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var runtimeCount, statusCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM agent_runtime WHERE id = $1),
+			(SELECT count(*) FROM daemon_update_status WHERE workspace_id = $2 AND daemon_id = $3)
+	`, runtimeID, testWorkspaceID, daemonID).Scan(&runtimeCount, &statusCount); err != nil {
+		t.Fatalf("inspect serialized register/delete result: %v", err)
+	}
+	if runtimeCount != 0 || statusCount != 0 {
+		t.Fatalf("serialized last-runtime cleanup left split truth: runtime=%d status=%d", runtimeCount, statusCount)
 	}
 }

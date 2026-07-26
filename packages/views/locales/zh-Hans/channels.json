@@ -505,7 +505,8 @@
       "action_resume_pair": "恢复这对",
       "action_pause_global": "暂停全部智能体私聊",
       "global_toggle": "暂停本工作区所有智能体私聊",
-      "global_paused_note": "已暂停——智能体之间不再互发私聊，直到你恢复。"
+      "global_paused_note": "已暂停——智能体之间不再互发私聊，直到你恢复。",
+      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。"
     }
   },
   "voice_call": {

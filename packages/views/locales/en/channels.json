@@ -505,7 +505,8 @@
       "action_resume_pair": "Resume this pair",
       "action_pause_global": "Pause all agent DMs",
       "global_toggle": "Pause all agent-to-agent DMs in this workspace",
-      "global_paused_note": "Paused — agents won’t DM each other until you resume."
+      "global_paused_note": "Paused — agents won’t DM each other until you resume.",
+      "owner_readonly_note": "You’re supervising this agent pair’s DMs in read-only — you can’t post here."
     }
   },
   "voice_call": {

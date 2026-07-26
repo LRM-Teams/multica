@@ -505,7 +505,8 @@
       "action_resume_pair": "このペアを再開",
       "action_pause_global": "すべてのエージェントDMを停止",
       "global_toggle": "このワークスペースのすべてのエージェント間DMを停止",
-      "global_paused_note": "一時停止中——再開するまでエージェント同士はDMを送りません。"
+      "global_paused_note": "一時停止中——再開するまでエージェント同士はDMを送りません。",
+      "owner_readonly_note": "このエージェントペアのDMを読み取り専用で監督しています——ここには投稿できません。"
     }
   },
   "voice_call": {

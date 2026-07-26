@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Eye, FileText, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   channelMessageThreadOptions,
@@ -274,9 +274,18 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // Agent DM: short bubble-style working cue (思考中 / Edit / Shell). Human
-  // peers keep the static "Human" meta. Stop stays in AgentProfileActions.
-  const workingCue = isAgentPeer ? (
+  // #692 supervised agent↔agent DM header: both agents named + the 「智能体私聊」
+  // pill, a non-interactive dual avatar (no single-peer agent-panel trigger —
+  // the owner supervises the pair, not one agent).
+  const [pairA, pairB] = dm.participants ?? [];
+  const agentPair =
+    dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
+  // Ordinary agent DM: short bubble-style working cue (思考中 / Edit / Shell). A
+  // supervised agent_pair is NOT one working agent, so it never shows the
+  // single-agent cue — its header is the dual-avatar/pill supervision chrome
+  // instead. Human peers keep the static "Human" meta; Stop stays in
+  // AgentProfileActions.
+  const workingCue = isAgentPeer && !agentPair ? (
     <DmAgentWorkingCue agentId={peerId} />
   ) : undefined;
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
@@ -337,16 +346,50 @@ function DmHeader({
               <ArrowLeft className="size-5" />
             </Button>
           )}
-          {wrapPeerTrigger(peerAvatar)}
+          {agentPair ? (
+            <div className="relative size-7 shrink-0" aria-hidden>
+              <ActorAvatar
+                actorType="agent"
+                actorId={agentPair.a.id}
+                size={20}
+                showStatusDot={false}
+                profileLink={false}
+              />
+              <div className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-background">
+                <ActorAvatar
+                  actorType="agent"
+                  actorId={agentPair.b.id}
+                  size={16}
+                  showStatusDot={false}
+                  profileLink={false}
+                />
+              </div>
+            </div>
+          ) : (
+            wrapPeerTrigger(peerAvatar)
+          )}
         </>
       }
-      title={wrapPeerTrigger(
-        <span className="block truncate">{dm.peer.name}</span>,
-      )}
+      title={
+        agentPair ? (
+          <span className="block truncate">{`${agentPair.a.name} · ${agentPair.b.name}`}</span>
+        ) : (
+          wrapPeerTrigger(<span className="block truncate">{dm.peer.name}</span>)
+        )
+      }
       meta={headerMeta}
       // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
       status={headerStatus}
-      badges={mutedBadge}
+      badges={
+        <>
+          {agentPair && (
+            <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">
+              {t(($) => $.dm.agent_pair.pill)}
+            </span>
+          )}
+          {mutedBadge}
+        </>
+      }
       actions={
         <>
           {voiceCallAction}
@@ -572,8 +615,31 @@ function DmChannelConversation({
 
   // 1-on-1 DM: scope the composer's @-mention picker to the peer only. Without
   // an allowlist the picker defaults to the whole workspace, which is wrong for
-  // a 1-on-1 (only the peer is reachable here).
-  const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
+  // a 1-on-1 (only the peer is reachable here). A supervised agent_pair DM has
+  // two agents rather than a single peer (#692); the owner is read-only there so
+  // the composer never renders, but keep the allowlist honest to the pair.
+  const mentionAllowedActorIds = useMemo(
+    () =>
+      dm.mode === "agent_pair" && dm.participants && dm.participants.length > 0
+        ? new Set(dm.participants.map((p) => p.id))
+        : new Set([dm.peer.id]),
+    [dm.mode, dm.participants, dm.peer.id],
+  );
+
+  // #692: the owner of a supervised agent_pair DM reads it read-only — the
+  // server rejects any send/edit/delete/reaction from the supervisor, so the
+  // composer becomes a quiet supervision banner (mirrors the archived-channel
+  // read-only surface). `supervised` is set by the BE only for the owner view.
+  const supervisedReadOnly = !!dm.supervised;
+  const supervisedReadOnlyContent = useMemo(
+    () => (
+      <>
+        <Eye className="size-4 shrink-0" />
+        <span className="flex-1">{t(($) => $.dm.agent_pair.owner_readonly_note)}</span>
+      </>
+    ),
+    [t],
+  );
 
   const searchHitIds = useMemo(
     () =>
@@ -1057,6 +1123,8 @@ function DmChannelConversation({
         />
         <Composer
           surface="thread"
+          readOnly={supervisedReadOnly}
+          readOnlyContent={supervisedReadOnlyContent}
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={
             (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
@@ -1249,6 +1317,8 @@ function DmChannelConversation({
       />
       <Composer
         surface="dm_channel"
+        readOnly={supervisedReadOnly}
+        readOnlyContent={supervisedReadOnlyContent}
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={
           (draftEmpty && dmPending.readyAttachmentParts.length === 0) ||

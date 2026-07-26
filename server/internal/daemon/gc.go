@@ -60,6 +60,23 @@ type gcStats struct {
 	byPattern       map[string]int // basename -> reclaim count, for visibility
 }
 
+// gcSkipWorkspaceRootName reports whether a top-level name under WorkspacesRoot
+// is a reserved daemon layout directory rather than a Multica workspace UUID.
+//
+// Managed project local_directory paths live at projects/<project-id>/workdir
+// (see project_resource managed workdir). Scanning that tree as if it were a
+// workspace would treat project dirs without .gc_meta.json as orphans and
+// RemoveAll them after GCOrphanTTL — the failure mode behind live
+// "local_directory: path does not exist" on shared project workdirs.
+func gcSkipWorkspaceRootName(name string) bool {
+	switch name {
+	case ".repos", "projects":
+		return true
+	default:
+		return false
+	}
+}
+
 // runGC performs a single GC scan across all workspace directories.
 func (d *Daemon) runGC(ctx context.Context) {
 	root := d.cfg.WorkspacesRoot
@@ -74,7 +91,7 @@ func (d *Daemon) runGC(ctx context.Context) {
 
 	stats := &gcStats{byPattern: map[string]int{}}
 	for _, wsEntry := range entries {
-		if !wsEntry.IsDir() || wsEntry.Name() == ".repos" {
+		if !wsEntry.IsDir() || gcSkipWorkspaceRootName(wsEntry.Name()) {
 			continue
 		}
 		wsDir := filepath.Join(root, wsEntry.Name())

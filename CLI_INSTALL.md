@@ -17,10 +17,13 @@ Fetch https://github.com/LRM-Teams/multica/blob/main/CLI_INSTALL.md and follow t
 Run:
 
 ```bash
-multica version
+CLI_PATH=$(command -v multica 2>/dev/null || true)
+printf 'Multica path: %s\n' "${CLI_PATH:-not installed}"
+[ -n "$CLI_PATH" ] && multica version
 ```
 
-- **If it prints a version string** (e.g. `multica v0.x.x`): skip to **Step 3**.
+- **If it prints a version string and the path is `$HOME/.local/bin/multica`**: skip to **Step 3**.
+- **If it prints a version from any other path**: continue to **Step 2**. The installer will migrate the CLI to the canonical user-owned path even when the version is already current.
 - **If command not found**: continue to **Step 2**.
 
 ---
@@ -67,20 +70,90 @@ LATEST=$(curl -sI https://github.com/LRM-Teams/multica/releases/latest | grep -i
 VERSION="${LATEST#v}"
 curl -sL "https://github.com/LRM-Teams/multica/releases/download/${LATEST}/multica-cli-${VERSION}-${OS}-${ARCH}.tar.gz" -o /tmp/multica.tar.gz
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
-sudo mv /tmp/multica /usr/local/bin/multica
+mkdir -p "$HOME/.local/bin"
+mv /tmp/multica "$HOME/.local/bin/multica"
+chmod +x "$HOME/.local/bin/multica"
 rm /tmp/multica.tar.gz
 ```
+
+Make the user-owned directory available in the current shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+hash -r 2>/dev/null || true
+```
+
+Persist it in the user's shell configuration:
+
+```bash
+case "$(basename "${SHELL:-}")" in
+  fish)
+    mkdir -p "$HOME/.config/fish"
+    printf '\n%s\n' 'fish_add_path --prepend --global --move "$HOME/.local/bin"' >>"$HOME/.config/fish/config.fish"
+    ;;
+  zsh)
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.zshrc"
+    ;;
+  bash)
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
+    BASH_LOGIN_RC="$HOME/.bash_profile"
+    [ -f "$HOME/.bash_profile" ] || [ ! -f "$HOME/.bash_login" ] || BASH_LOGIN_RC="$HOME/.bash_login"
+    [ -f "$HOME/.bash_profile" ] || [ -f "$HOME/.bash_login" ] || [ ! -f "$HOME/.profile" ] || BASH_LOGIN_RC="$HOME/.profile"
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$BASH_LOGIN_RC"
+    ;;
+  *)
+    printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.profile"
+    ;;
+esac
+```
+
+Keep the canonical line as the final PATH prepend in each file. Remove older
+duplicate Multica PATH lines or a later legacy `/usr/local/bin`/Homebrew
+prepend that shadows it. The install script performs this managed-block
+cleanup automatically and is preferred for repeatable installs.
 
 Verify:
 
 ```bash
 multica version
+command -v multica
 ```
 
 **If this fails:**
-- Check that `/usr/local/bin` is in `$PATH`.
-- On Linux, you may need `chmod +x /usr/local/bin/multica`.
-- If `sudo` is not available, install to a user-writable directory: `mv /tmp/multica ~/.local/bin/multica` and ensure `~/.local/bin` is in `$PATH`.
+- Confirm that `command -v multica` prints `$HOME/.local/bin/multica`.
+- Restart the terminal so the updated user PATH takes effect.
+
+### Migrating an older system-owned installation
+
+The macOS/Linux installer has one supported target: `$HOME/.local/bin/multica`. It never writes to a system directory and never elevates privileges.
+
+If `command -v multica` still reports an older system path after installation:
+
+1. Start a fresh shell and run `type -a multica`.
+2. Confirm `$HOME/.local/bin/multica version` succeeds.
+3. Remove the old system binary through the machine owner or administrator's normal software-management process. The Multica installer deliberately does not modify it.
+4. Run `hash -r` (or restart the shell) and confirm `command -v multica` resolves to `$HOME/.local/bin/multica`.
+5. A daemon that was already started from the old path keeps that executable.
+   Wait until no agent task is running on the affected profile, then restart it
+   explicitly through the canonical binary:
+
+```bash
+"$HOME/.local/bin/multica" daemon status
+"$HOME/.local/bin/multica" daemon restart
+"$HOME/.local/bin/multica" daemon status
+"$HOME/.local/bin/multica" version
+```
+
+For every named profile that was started from the old installation, repeat the
+same adoption gate with the profile before `daemon`:
+
+```bash
+"$HOME/.local/bin/multica" --profile staging daemon restart
+"$HOME/.local/bin/multica" --profile staging daemon status
+```
+
+Do not restart while an agent task is active. Adoption is complete when
+`daemon status` reports the same `Version` as the canonical `multica version`.
 
 ### Option C: Windows (PowerShell)
 
@@ -140,7 +213,11 @@ First, check if the daemon is already running:
 multica daemon status
 ```
 
-- **If status is "running"**: skip to **Step 5**.
+- **If status is "running" and this was not a migration from another install
+  path**: skip to **Step 5**.
+- **If status is "running" from an older install path**: do not silently skip
+  it. Finish active work, then follow the canonical daemon adoption gate in
+  Step 2 before continuing.
 - **If status is "stopped"**: start it:
 
 ```bash

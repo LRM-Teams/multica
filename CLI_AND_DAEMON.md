@@ -16,8 +16,33 @@ curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/inst
 git clone https://github.com/LRM-Teams/multica.git
 cd multica
 make build
-cp server/bin/multica /usr/local/bin/multica
+mkdir -p "$HOME/.local/bin"
+cp server/bin/multica "$HOME/.local/bin/multica"
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+`$HOME/.local/bin/multica` is the only supported macOS/Linux install target.
+If `command -v multica` still resolves to an older path, put
+`$HOME/.local/bin` first on `PATH` and have the machine owner remove the old
+binary through the normal software-management process.
+
+If a daemon was already started from that older path, it keeps the old
+executable. Do not interrupt active agent work. When the affected profile is
+idle, adopt the canonical binary explicitly and confirm the daemon-reported
+version:
+
+```bash
+"$HOME/.local/bin/multica" daemon restart
+"$HOME/.local/bin/multica" daemon status
+"$HOME/.local/bin/multica" version
+
+# Named profile:
+"$HOME/.local/bin/multica" --profile staging daemon restart
+"$HOME/.local/bin/multica" --profile staging daemon status
+```
+
+Adoption is complete when `daemon status` reports the same `Version` as the
+canonical `multica version`.
 
 ### Update
 
@@ -25,7 +50,10 @@ cp server/bin/multica /usr/local/bin/multica
 multica update
 ```
 
-`multica update` downloads the current CLI from the Multica GitHub Releases channel. If you maintain a Homebrew tap, set `MULTICA_BREW_PACKAGE=<owner/tap/package>` before running update.
+`multica update` updates the executable that invoked it. If Multica still
+resolves from an older system/Homebrew path, rerun the install script first to
+migrate to `$HOME/.local/bin/multica`; then use `multica update` on that
+canonical installation.
 
 ## Quick Start
 

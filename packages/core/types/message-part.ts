@@ -55,6 +55,31 @@ export type MessagePart =
       type: "system_event";
       event: string;
       event_params: Record<string, unknown>;
+    }
+  | {
+      /** Agent-emitted interactive choice card (Multica-native; not vendor AskUserQuestion). */
+      type: "choice";
+      choice_id: string;
+      prompt: string;
+      layout: "binary" | "list";
+      options: Array<{
+        id: string;
+        label: string;
+        description?: string;
+      }>;
+      allow_dismiss?: boolean;
+      expires_at?: string;
+      /** Current pick after the human selects (v1: one reselect allowed). */
+      selected_option_id?: string;
+      /** 1 = first pick (reselect left), 2 = locked after reselect. */
+      select_count?: number;
+    }
+  | {
+      /** User-visible answer produced when a choice option is tapped. */
+      type: "choice_reply";
+      choice_id: string;
+      option_id: string;
+      label: string;
     };
 
 /**

@@ -85,6 +85,7 @@ const (
 	EventChannelTyping          = "channel:typing"
 	EventChannelReactionAdded   = "channel_reaction:added"
 	EventChannelReactionRemoved = "channel_reaction:removed"
+	EventChannelReplyFeedback   = "channel_reply_feedback"
 	EventChannelUpdated         = "channel:updated"
 	EventChannelDeleted         = "channel:deleted"
 

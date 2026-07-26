@@ -146,6 +146,7 @@ type ChannelMessageResponse struct {
 	ThreadID              *string                       `json:"thread_id,omitempty"`
 	TriggerDepth          int                           `json:"trigger_depth"`
 	Reactions             []ChannelReactionResponse     `json:"reactions,omitempty"`
+	MyReplyFeedback       *ReplyFeedbackResponse        `json:"my_reply_feedback,omitempty"`
 	CreatedAt             string                        `json:"created_at"`
 	EditedAt              *string                       `json:"edited_at,omitempty"`
 	DeletedAt             *string                       `json:"deleted_at,omitempty"`
@@ -1299,6 +1300,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		h.attachChannelMessageAuthorAvatars(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageAttachments(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageReplyFeedback(r.Context(), workspaceID, parseUUID(userID), msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceID, msgs)
@@ -1470,6 +1472,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		h.attachChannelMessageAuthorAvatars(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageAttachments(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageReplyFeedback(r.Context(), workspaceIDStr, userID, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceIDStr, msgs)
@@ -1667,6 +1670,7 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	h.attachChannelMessageAuthorAvatars(ctx, workspaceID, messages)
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
+	h.attachChannelMessageReplyFeedback(ctx, workspaceID, userID, messages)
 	h.attachChannelMessageQuotes(ctx, workspaceID, messages)
 	h.attachChannelMessageThreadMetadata(ctx, workspaceID, userID, messages)
 	h.attachChannelMessageThreadReadModel(ctx, workspaceID, messages)
@@ -1779,6 +1783,7 @@ func applyChannelMessageTombstone(msg *ChannelMessageResponse) {
 	msg.Parts = nil
 	msg.Attachments = nil
 	msg.Reactions = nil
+	msg.MyReplyFeedback = nil
 	msg.ReplyTo = nil
 	msg.Quote = nil
 	msg.ThreadRoot = nil
@@ -5902,7 +5907,7 @@ func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 func channelPartsAllowEmptyContent(parts []protocol.MessagePart) bool {
 	for _, p := range parts {
 		switch p.Type {
-		case protocol.MessagePartTypeSticker, protocol.MessagePartTypeAttachment:
+		case protocol.MessagePartTypeSticker, protocol.MessagePartTypeAttachment, protocol.MessagePartTypeChoice, protocol.MessagePartTypeChoiceReply:
 			return true
 		case protocol.MessagePartTypeVoice:
 			if p.TranscriptionStatus == protocol.VoiceTranscriptionPending && p.AttachmentID != "" {

@@ -3028,6 +3028,43 @@ export class ApiClient {
     });
   }
 
+  async chooseChannelMessageOption(
+    channelId: string,
+    messageId: string,
+    choiceId: string,
+    optionId: string,
+  ): Promise<{ message: ChannelMessage; reply?: ChannelMessage }> {
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/choice`, {
+      method: "POST",
+      body: JSON.stringify({ choice_id: choiceId, option_id: optionId }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+  }
+
+  async upsertChannelReplyFeedback(
+    channelId: string,
+    messageId: string,
+    value: 1 | -1,
+  ): Promise<import("../types").ReplyFeedback> {
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reply-feedback`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    });
+  }
+
+  async deleteChannelReplyFeedback(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/reply-feedback`, {
+      method: "DELETE",
+    });
+  }
+
+  async listChannelReplyFeedback(
+    channelId: string,
+    messageId: string,
+  ): Promise<{ feedback: import("../types").ReplyFeedback[] }> {
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reply-feedback`);
+  }
+
   async sendChannelThreadMessage(
     channelId: string,
     messageId: string,

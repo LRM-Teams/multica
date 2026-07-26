@@ -45,6 +45,14 @@ export function formatMessagePartsPreview(parts?: MessagePart[] | null): string 
     if (part.type === "sticker") {
       return part.sticker_id ? [safeStickerLabel(part)] : [STICKER_UNAVAILABLE_LABEL];
     }
+    if (part.type === "choice") {
+      const prompt = normalizeText(part.prompt);
+      return prompt ? [prompt] : ["[Choice]"];
+    }
+    if (part.type === "choice_reply") {
+      const label = normalizeText(part.label);
+      return [`选择：${label || "?"}`];
+    }
     return [];
   });
   return chunks.length > 0 ? chunks.join(" ") : null;

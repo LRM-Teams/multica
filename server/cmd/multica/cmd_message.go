@@ -72,11 +72,36 @@ func newMessageReactCmd() *cobra.Command {
 // Canonical grouped forms: `multica message send` / `multica message react`.
 var messageSendCmd = newMessageSendCmd()
 var messageReactCmd = newMessageReactCmd()
+var messageAskChoiceCmd = newMessageAskChoiceCmd()
 
 // Top-level `multica react` remains as a compatibility alias while older
 // runtimes still learn the ungrouped reaction command. Sending has no
 // top-level alias: agents must use `multica message send`.
 var reactCmd = newCompatMessageAlias(newMessageReactCmd(), "message react")
+
+func newMessageAskChoiceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "ask-choice",
+		Short: "Send a Multica choice card (binary/list) from the running agent task",
+		Long: "Emit a platform-native choice MessagePart so the human can tap an " +
+			"option in chat/DM. Cursor / PI / Claude and other runtimes all use this " +
+			"path — do not rely on vendor AskUserQuestion UIs. Layout binary = two " +
+			"horizontal buttons; list = 2–4 vertical options. Repeat --option as " +
+			"id=...,label=... (optional description=...).",
+		RunE: runAgentMessageAskChoice,
+	}
+	cmd.Flags().String("target", "", messageTargetFlagUsage())
+	cmd.Flags().String("prompt", "", "Short question shown above the options")
+	cmd.Flags().String("layout", "binary", "binary (exactly 2 options) or list (2–4 options)")
+	cmd.Flags().StringSlice("option", nil, "Option as id=...,label=...[,description=...] (repeatable)")
+	cmd.Flags().String("choice-id", "", "Stable choice id; generated when omitted")
+	cmd.Flags().String("message", "", "Optional text above the choice card")
+	cmd.Flags().Bool("message-stdin", false, "Read optional preamble text from stdin")
+	cmd.Flags().String("message-file", "", "Read optional preamble text from a UTF-8 file")
+	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
+	cmd.Flags().String("output", "json", "Output format: json or text")
+	return cmd
+}
 
 func newCompatMessageAlias(cmd *cobra.Command, canonical string) *cobra.Command {
 	cmd.Short += " (alias of `multica " + canonical + "`)"
@@ -96,6 +121,7 @@ var messageSearchCmd = newMessageSearchCmd()
 func init() {
 	messageCmd.AddCommand(messageSendCmd)
 	messageCmd.AddCommand(messageReactCmd)
+	messageCmd.AddCommand(messageAskChoiceCmd)
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
 }
@@ -285,6 +311,110 @@ func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("react to message: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "Reaction sent.")
+}
+
+func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {
+	target, err := requiredMessageTarget(cmd)
+	if err != nil {
+		return err
+	}
+	prompt := strings.TrimSpace(flagString(cmd, "prompt"))
+	if prompt == "" {
+		return fmt.Errorf("prompt is required; pass --prompt")
+	}
+	layout := strings.TrimSpace(strings.ToLower(flagString(cmd, "layout")))
+	if layout == "" {
+		layout = protocol.ChoiceLayoutBinary
+	}
+	optionFlags, _ := cmd.Flags().GetStringSlice("option")
+	options, err := parseChoiceOptionFlags(optionFlags)
+	if err != nil {
+		return err
+	}
+	if layout == protocol.ChoiceLayoutBinary && len(options) != 2 {
+		return fmt.Errorf("binary layout requires exactly 2 --option flags")
+	}
+	if len(options) < 2 || len(options) > 4 {
+		return fmt.Errorf("provide 2–4 --option flags")
+	}
+	choiceID := strings.TrimSpace(flagString(cmd, "choice-id"))
+	if choiceID == "" {
+		choiceID = uuid.NewString()
+	}
+	preamble, preambleOK, err := resolveTextFlag(cmd, "message")
+	if err != nil {
+		return err
+	}
+	text := ""
+	if preambleOK {
+		text = strings.TrimSpace(preamble)
+	}
+	parts := make([]protocol.MessagePart, 0, 2)
+	if text != "" {
+		parts = append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeText, Text: text})
+	}
+	parts = append(parts, protocol.MessagePart{
+		Type:     protocol.MessagePartTypeChoice,
+		ChoiceID: choiceID,
+		Prompt:   prompt,
+		Layout:   layout,
+		Options:  options,
+	})
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{
+		"target":            target,
+		"client_message_id": clientMessageIDFlag(cmd),
+		"parts":             parts,
+	}
+	if text != "" {
+		body["content"] = text
+	}
+	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
+		body["seen_up_to_seq"] = seenUpToSeq
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
+	defer cancel()
+	var out map[string]any
+	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {
+		return fmt.Errorf("ask choice: %w", err)
+	}
+	return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
+}
+
+func parseChoiceOptionFlags(raw []string) ([]protocol.ChoiceOption, error) {
+	out := make([]protocol.ChoiceOption, 0, len(raw))
+	for i, item := range raw {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		opt := protocol.ChoiceOption{}
+		for _, field := range strings.Split(item, ",") {
+			field = strings.TrimSpace(field)
+			key, val, ok := strings.Cut(field, "=")
+			if !ok {
+				return nil, fmt.Errorf("--option %d: expected id=...,label=... got %q", i+1, item)
+			}
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "id":
+				opt.ID = strings.TrimSpace(val)
+			case "label":
+				opt.Label = strings.TrimSpace(val)
+			case "description", "desc":
+				opt.Description = strings.TrimSpace(val)
+			default:
+				return nil, fmt.Errorf("--option %d: unknown field %q", i+1, key)
+			}
+		}
+		if opt.ID == "" || opt.Label == "" {
+			return nil, fmt.Errorf("--option %d: id and label are required", i+1)
+		}
+		out = append(out, opt)
+	}
+	return out, nil
 }
 
 func runAgentMessageRead(cmd *cobra.Command, _ []string) error {

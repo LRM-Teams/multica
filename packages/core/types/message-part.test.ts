@@ -48,3 +48,26 @@ describe("MessagePart voice lifecycle contract", () => {
     ]);
   });
 });
+
+describe("MessagePart choice contract", () => {
+  it("represents binary and list choice cards plus reply lock", () => {
+    const binary = {
+      type: "choice",
+      choice_id: "c1",
+      prompt: "开 PR？",
+      layout: "binary",
+      options: [
+        { id: "yes", label: "是" },
+        { id: "no", label: "否" },
+      ],
+    } satisfies MessagePart;
+    const reply = {
+      type: "choice_reply",
+      choice_id: "c1",
+      option_id: "yes",
+      label: "是",
+    } satisfies MessagePart;
+    expect(binary.layout).toBe("binary");
+    expect(reply.option_id).toBe("yes");
+  });
+});

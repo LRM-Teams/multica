@@ -38,7 +38,7 @@ func Normalize(content string, parts []protocol.MessagePart) (string, []protocol
 		if err != nil {
 			return "", nil, fmt.Errorf("part %d: %w", i, err)
 		}
-		out = append(out, normalized)
+		out = append(out, scrubForeignPartFields(normalized))
 	}
 	if normalizedContent == "" {
 		normalizedContent = FallbackContent(out)
@@ -252,6 +252,19 @@ func FallbackContent(parts []protocol.MessagePart) string {
 				label = "[Sticker]"
 			}
 			values = append(values, label)
+		case protocol.MessagePartTypeChoice:
+			prompt := strings.TrimSpace(part.Prompt)
+			if prompt != "" {
+				values = append(values, prompt)
+			} else {
+				values = append(values, "[Choice]")
+			}
+		case protocol.MessagePartTypeChoiceReply:
+			label := strings.TrimSpace(part.Label)
+			if label == "" {
+				label = "[Choice reply]"
+			}
+			values = append(values, "选择："+label)
 		case protocol.MessagePartTypeAttachment:
 			// Attachment-only messages may have empty content. Do not invent
 			// markdown URLs or synthetic labels from attachment metadata.
@@ -421,6 +434,10 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.ContentType = strings.TrimSpace(part.ContentType)
 		// SizeBytes is optional; keep as provided.
 		return part, nil
+	case protocol.MessagePartTypeChoice:
+		return normalizeChoicePart(part)
+	case protocol.MessagePartTypeChoiceReply:
+		return normalizeChoiceReplyPart(part)
 	case protocol.MessagePartTypeVoice:
 		if part.DurationMS < 0 || part.DurationMS > 60_000 {
 			return protocol.MessagePart{}, fmt.Errorf("duration_ms must be between 0 and 60000")
@@ -453,6 +470,163 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 	default:
 		return protocol.MessagePart{}, fmt.Errorf("unsupported type %q", part.Type)
 	}
+}
+
+const (
+	choiceIDMaxLen    = 64
+	choiceLabelMaxLen = 80
+	choiceDescMaxLen  = 160
+	choicePromptMaxLen = 280
+	choiceMaxOptions  = 4
+	choiceMinOptions  = 2
+)
+
+func normalizeChoicePart(part protocol.MessagePart) (protocol.MessagePart, error) {
+	clearNonChoiceFields(&part)
+	part.ChoiceID = strings.TrimSpace(part.ChoiceID)
+	if part.ChoiceID == "" {
+		return protocol.MessagePart{}, fmt.Errorf("choice_id is required")
+	}
+	if utf8.RuneCountInString(part.ChoiceID) > choiceIDMaxLen {
+		return protocol.MessagePart{}, fmt.Errorf("choice_id is too long")
+	}
+	part.Prompt = strings.TrimSpace(part.Prompt)
+	if part.Prompt == "" {
+		return protocol.MessagePart{}, fmt.Errorf("prompt is required")
+	}
+	if utf8.RuneCountInString(part.Prompt) > choicePromptMaxLen {
+		return protocol.MessagePart{}, fmt.Errorf("prompt is too long")
+	}
+	part.Layout = strings.TrimSpace(strings.ToLower(part.Layout))
+	switch part.Layout {
+	case protocol.ChoiceLayoutBinary, protocol.ChoiceLayoutList:
+	default:
+		return protocol.MessagePart{}, fmt.Errorf("layout must be binary or list")
+	}
+	if len(part.Options) < choiceMinOptions || len(part.Options) > choiceMaxOptions {
+		return protocol.MessagePart{}, fmt.Errorf("options must contain %d–%d items", choiceMinOptions, choiceMaxOptions)
+	}
+	if part.Layout == protocol.ChoiceLayoutBinary && len(part.Options) != 2 {
+		return protocol.MessagePart{}, fmt.Errorf("binary layout requires exactly 2 options")
+	}
+	seen := make(map[string]struct{}, len(part.Options))
+	outOpts := make([]protocol.ChoiceOption, 0, len(part.Options))
+	for i, opt := range part.Options {
+		id := strings.TrimSpace(opt.ID)
+		label := strings.TrimSpace(opt.Label)
+		desc := strings.TrimSpace(opt.Description)
+		if id == "" {
+			return protocol.MessagePart{}, fmt.Errorf("options[%d].id is required", i)
+		}
+		if utf8.RuneCountInString(id) > choiceIDMaxLen {
+			return protocol.MessagePart{}, fmt.Errorf("options[%d].id is too long", i)
+		}
+		if label == "" {
+			return protocol.MessagePart{}, fmt.Errorf("options[%d].label is required", i)
+		}
+		if utf8.RuneCountInString(label) > choiceLabelMaxLen {
+			return protocol.MessagePart{}, fmt.Errorf("options[%d].label is too long", i)
+		}
+		if utf8.RuneCountInString(desc) > choiceDescMaxLen {
+			return protocol.MessagePart{}, fmt.Errorf("options[%d].description is too long", i)
+		}
+		if _, dup := seen[id]; dup {
+			return protocol.MessagePart{}, fmt.Errorf("duplicate option id %q", id)
+		}
+		seen[id] = struct{}{}
+		outOpts = append(outOpts, protocol.ChoiceOption{ID: id, Label: label, Description: desc})
+	}
+	part.Options = outOpts
+	part.ExpiresAt = strings.TrimSpace(part.ExpiresAt)
+	part.SelectedOptionID = strings.TrimSpace(part.SelectedOptionID)
+	if part.SelectedOptionID != "" {
+		if _, ok := seen[part.SelectedOptionID]; !ok {
+			return protocol.MessagePart{}, fmt.Errorf("selected_option_id does not match an option")
+		}
+	}
+	// select_count: 0 unset, 1 first pick (one reselect left), 2 locked after reselect.
+	if part.SelectCount < 0 || part.SelectCount > 2 {
+		return protocol.MessagePart{}, fmt.Errorf("select_count must be 0–2")
+	}
+	if part.SelectedOptionID == "" {
+		part.SelectCount = 0
+	} else if part.SelectCount == 0 {
+		part.SelectCount = 1
+	}
+	part.OptionID = ""
+	return part, nil
+}
+
+func normalizeChoiceReplyPart(part protocol.MessagePart) (protocol.MessagePart, error) {
+	clearNonChoiceFields(&part)
+	part.ChoiceID = strings.TrimSpace(part.ChoiceID)
+	part.OptionID = strings.TrimSpace(part.OptionID)
+	part.Label = strings.TrimSpace(part.Label)
+	if part.ChoiceID == "" {
+		return protocol.MessagePart{}, fmt.Errorf("choice_id is required")
+	}
+	if part.OptionID == "" {
+		return protocol.MessagePart{}, fmt.Errorf("option_id is required")
+	}
+	if part.Label == "" {
+		return protocol.MessagePart{}, fmt.Errorf("label is required")
+	}
+	part.Options = nil
+	part.Prompt = ""
+	part.Layout = ""
+	part.AllowDismiss = nil
+	part.ExpiresAt = ""
+	part.SelectedOptionID = ""
+	part.SelectCount = 0
+	return part, nil
+}
+
+func clearNonChoiceFields(part *protocol.MessagePart) {
+	part.Text = ""
+	part.RefType = ""
+	part.RefSubType = ""
+	part.RefID = ""
+	part.Event = ""
+	part.EventParams = nil
+	part.ContentStartUTF16 = nil
+	part.ContentEndUTF16 = nil
+	part.PackID = ""
+	part.StickerID = ""
+	part.Alt = ""
+	part.AttachmentID = ""
+	part.Filename = ""
+	part.ContentType = ""
+	part.SizeBytes = 0
+	part.DurationMS = 0
+	part.TranscriptionStatus = ""
+	part.SynthesisStatus = ""
+}
+
+func scrubForeignPartFields(part protocol.MessagePart) protocol.MessagePart {
+	switch part.Type {
+	case protocol.MessagePartTypeChoice:
+		part.Label = ""
+		part.OptionID = ""
+	case protocol.MessagePartTypeChoiceReply:
+		part.Prompt = ""
+		part.Layout = ""
+		part.Options = nil
+		part.AllowDismiss = nil
+		part.ExpiresAt = ""
+		part.SelectedOptionID = ""
+		part.SelectCount = 0
+	default:
+		part.ChoiceID = ""
+		part.Prompt = ""
+		part.Layout = ""
+		part.Options = nil
+		part.AllowDismiss = nil
+		part.ExpiresAt = ""
+		part.SelectedOptionID = ""
+		part.SelectCount = 0
+		part.OptionID = ""
+	}
+	return part
 }
 
 func firstNonEmpty(values ...string) string {

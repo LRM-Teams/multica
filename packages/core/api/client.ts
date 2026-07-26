@@ -197,7 +197,13 @@ import type {
   GetVoiceCallResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
-import type { DMItem, CreateOrFindDMBody, AgentDMControl, AgentDMControlAction } from "../dm/types";
+import type {
+  DMItem,
+  CreateOrFindDMBody,
+  AgentDMControl,
+  AgentDMControlAction,
+  AgentDMGlobalControl,
+} from "../dm/types";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
@@ -2695,6 +2701,28 @@ export class ApiClient {
     return this.fetch(`/api/dm/channels/${channelId}/a2a-control`, {
       method: "POST",
       body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * #692 read the workspace-level agent↔agent DM control — the source of truth
+   * for the global pause (independent of any DM channel). Manageable only by a
+   * user who owns at least one non-archived agent (else the server 403s).
+   */
+  async getAgentDMGlobalControl(): Promise<AgentDMGlobalControl> {
+    return this.fetch("/api/dm/a2a-control");
+  }
+
+  /**
+   * #692 pause / resume ALL agent↔agent DMs in the workspace. Distinct from the
+   * per-channel control endpoint — global state lives here, not on a channel.
+   */
+  async postAgentDMGlobalControl(
+    action: "pause_global" | "resume_global",
+  ): Promise<AgentDMGlobalControl> {
+    return this.fetch("/api/dm/a2a-control", {
+      method: "POST",
+      body: JSON.stringify({ action }),
     });
   }
 

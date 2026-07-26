@@ -4,7 +4,7 @@ import { PauseCircle, PlayCircle, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
-import { useAgentDMControl } from "@multica/core/dm";
+import { useAgentDMControl, useAgentDMGlobalControl } from "@multica/core/dm";
 import type { AgentDMControl, AgentDMControlAction } from "@multica/core/dm";
 import { useT } from "../../i18n/use-t";
 
@@ -34,7 +34,8 @@ export function AgentDMControlStrip({
 }) {
   const { t } = useT("channels");
   const agentDMControl = useAgentDMControl();
-  const busy = agentDMControl.isPending;
+  const agentDMGlobalControl = useAgentDMGlobalControl();
+  const busy = agentDMControl.isPending || agentDMGlobalControl.isPending;
 
   const paused = control.state !== "active";
   const stateLabel =
@@ -58,6 +59,14 @@ export function AgentDMControlStrip({
   );
 
   const run = (action: Exclude<AgentDMControlAction, "view_dm">) => {
+    const onError = { onError: () => toast.error(t(($) => $.dm.agent_pair.action_failed)) };
+    // Global pause/resume is a workspace-level action with its own endpoint +
+    // source-of-truth state (Barry's contract) — never derive it from this DM
+    // channel. Pair/exchange actions stay on the per-channel control endpoint.
+    if (action === "pause_global" || action === "resume_global") {
+      agentDMGlobalControl.mutate(action, onError);
+      return;
+    }
     agentDMControl.mutate(
       {
         channelId,
@@ -65,7 +74,7 @@ export function AgentDMControlStrip({
         exchangeId: action === "grant_rounds" ? control.exchange_id : undefined,
         rounds: action === "grant_rounds" ? GRANT_ROUNDS_STEP : undefined,
       },
-      { onError: () => toast.error(t(($) => $.dm.agent_pair.action_failed)) },
+      onError,
     );
   };
 

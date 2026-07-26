@@ -513,7 +513,9 @@
       "state_paused_pair": "已暂停 · 你停了这对",
       "state_paused_global": "已暂停 · 全工作区智能体私聊",
       "action_resume_global": "恢复全部智能体私聊",
-      "action_failed": "操作失败，请重试。"
+      "action_failed": "操作失败，请重试。",
+      "global_section_title": "智能体私聊",
+      "global_section_desc": "控制本工作区里智能体之间能否互发私聊。"
     }
   },
   "voice_call": {

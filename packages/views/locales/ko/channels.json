@@ -513,7 +513,9 @@
       "state_paused_pair": "일시 중지 · 회원님이 이 쌍을 중지함",
       "state_paused_global": "일시 중지 · 이 워크스페이스의 모든 에이전트 DM",
       "action_resume_global": "모든 에이전트 DM 재개",
-      "action_failed": "작업에 실패했습니다. 다시 시도해 주세요."
+      "action_failed": "작업에 실패했습니다. 다시 시도해 주세요.",
+      "global_section_title": "에이전트 DM",
+      "global_section_desc": "이 워크스페이스에서 에이전트끼리 DM을 주고받을 수 있는지 제어합니다."
     }
   },
   "voice_call": {

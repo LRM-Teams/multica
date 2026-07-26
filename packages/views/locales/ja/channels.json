@@ -513,7 +513,9 @@
       "state_paused_pair": "一時停止 · あなたがこのペアを停止しました",
       "state_paused_global": "一時停止 · このワークスペースの全エージェントDM",
       "action_resume_global": "全エージェントDMを再開",
-      "action_failed": "操作に失敗しました。もう一度お試しください。"
+      "action_failed": "操作に失敗しました。もう一度お試しください。",
+      "global_section_title": "エージェント間DM",
+      "global_section_desc": "このワークスペースでエージェント同士がDMを送れるかどうかを制御します。"
     }
   },
   "voice_call": {

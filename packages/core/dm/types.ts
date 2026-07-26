@@ -46,6 +46,21 @@ export interface AgentDMControl {
   actions: AgentDMControlAction[];
 }
 
+/**
+ * Workspace-level agent↔agent DM control (#692). Read/written at the
+ * independent `/api/dm/a2a-control` endpoint (NOT derived from any single DM
+ * channel — a per-channel control's `can_pause_global`/`actions` are only a
+ * hint, this is the source of truth). Mirrors the server
+ * `AgentDMGlobalControlResponse`. Manageable only by a workspace user who owns
+ * at least one non-archived agent.
+ */
+export interface AgentDMGlobalControl {
+  state: "active" | "paused_global";
+  paused: boolean;
+  can_pause_global: boolean;
+  actions: Array<"pause_global" | "resume_global">;
+}
+
 /** The five A2A pause/resume system-event kinds — the `event` on a message's
  *  `system_event` part and the owner `agent_dm_paused` inbox item. */
 export type AgentDMSystemEvent =

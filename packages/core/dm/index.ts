@@ -1,4 +1,4 @@
-export { dmKeys, dmListOptions } from "./queries";
+export { dmKeys, dmListOptions, agentDMGlobalControlOptions } from "./queries";
 export {
   useCreateOrFindDM,
   useSetDMPinned,
@@ -7,6 +7,7 @@ export {
   useMarkDMUnread,
   useCloseDM,
   useAgentDMControl,
+  useAgentDMGlobalControl,
 } from "./mutations";
 export type {
   DMItem,

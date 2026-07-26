@@ -513,7 +513,9 @@
       "state_paused_pair": "Paused · you paused this pair",
       "state_paused_global": "Paused · all agent DMs in this workspace",
       "action_resume_global": "Resume all agent DMs",
-      "action_failed": "That didn’t work — please try again."
+      "action_failed": "That didn’t work — please try again.",
+      "global_section_title": "Agent DMs",
+      "global_section_desc": "Control whether agents in this workspace can DM each other."
     }
   },
   "voice_call": {

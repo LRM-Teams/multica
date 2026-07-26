@@ -118,3 +118,22 @@ export function useAgentDMControl() {
     onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
   });
 }
+
+/**
+ * #692 pause / resume ALL agent↔agent DMs in the workspace (owner-only). Hits
+ * the independent global endpoint, not a channel. On success invalidates both
+ * the global control query (source of truth for the settings toggle) and the DM
+ * list (per-pair rows may flip paused_global).
+ */
+export function useAgentDMGlobalControl() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (action: "pause_global" | "resume_global") =>
+      api.postAgentDMGlobalControl(action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dmKeys.a2aGlobal(wsId) });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
+  });
+}

@@ -30,7 +30,6 @@ func TestBuildPromptAssignmentSnapshotAvoidsRedundantReads(t *testing.T) {
 		"Frozen description",
 		"Ship the snapshot",
 		`"lane":"backend"`,
-		"No comments existed",
 		"Treat this as a stale assignment wake",
 		"do not reopen it",
 	} {
@@ -39,14 +38,55 @@ func TestBuildPromptAssignmentSnapshotAvoidsRedundantReads(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"Start by running `multica issue get",
-		"Run `multica issue metadata list",
-		"Read comments with `multica issue comment list issue-assignment-1 --output json`",
+		"multica issue get",
+		"multica issue metadata list",
+		"multica issue comment list",
 		"multica issue status issue-assignment-1 in_progress",
+		"multica issue comment add",
 	} {
 		if strings.Contains(out, forbidden) {
-			t.Errorf("zero-comment assignment prompt contains redundant read %q\n--- output ---\n%s", forbidden, out)
+			t.Errorf("terminal assignment prompt contains forbidden command %q\n--- output ---\n%s", forbidden, out)
 		}
+	}
+}
+
+func TestBuildPromptTerminalAssignmentNeverSuggestsIssueCommands(t *testing.T) {
+	for _, status := range []string{"done", "cancelled"} {
+		t.Run(status, func(t *testing.T) {
+			const issueID = "issue-terminal-comments"
+			out := BuildPrompt(Task{
+				IssueID: issueID,
+				AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+					Version:      1,
+					Title:        "Frozen terminal title",
+					Status:       status,
+					Metadata:     map[string]any{},
+					CommentCount: 7,
+				},
+			}, "claude", "")
+
+			for _, want := range []string{
+				"- Status: " + status,
+				"- Comment count: 7",
+				"Treat this as a stale assignment wake",
+				"stop after reporting the terminal state",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("terminal assignment prompt missing %q\n--- output ---\n%s", want, out)
+				}
+			}
+			for _, forbidden := range []string{
+				"multica issue get",
+				"multica issue metadata list",
+				"multica issue comment list",
+				"multica issue status",
+				"multica issue comment add",
+			} {
+				if strings.Contains(out, forbidden) {
+					t.Errorf("terminal assignment prompt contains forbidden command %q\n--- output ---\n%s", forbidden, out)
+				}
+			}
+		})
 	}
 }
 

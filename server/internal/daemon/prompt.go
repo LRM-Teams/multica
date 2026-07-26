@@ -88,10 +88,12 @@ func buildAssignmentPrompt(task Task) string {
 		metadata = []byte("{}")
 	}
 	fmt.Fprintf(&b, "- Metadata: %s\n\n", metadata)
-	b.WriteString("The title, description, acceptance criteria, metadata, and comment count were captured when the assignment wake was enqueued. The status above is current at claim time. Use this as the starting issue context; do not run `multica issue get` or `multica issue metadata list` merely to rediscover these fields.\n")
+	b.WriteString("The title, description, acceptance criteria, metadata, and comment count were captured when the assignment wake was enqueued. The status above is current at claim time.\n")
 	if snapshot.IsTerminal() {
 		fmt.Fprintf(&b, "The issue is already %s. Treat this as a stale assignment wake: do not reopen it, do not start issue work, and stop after reporting the terminal state.\n", snapshot.Status)
+		return b.String()
 	}
+	b.WriteString("Use this as the starting issue context; do not run `multica issue get` or `multica issue metadata list` merely to rediscover these fields.\n")
 	if snapshot.CommentCount > 0 {
 		fmt.Fprintf(&b, "Comment bodies are intentionally not copied into the snapshot. Read them through the existing cursor flow: `multica issue comment list %s --output json`; for a long issue use `--recent 20 --output json` and follow the `Next thread cursor:` with `--before` / `--before-id` until you have enough history.\n", task.IssueID)
 	} else {

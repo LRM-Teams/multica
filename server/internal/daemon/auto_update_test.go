@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -61,7 +62,20 @@ func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
 	d.updateObservation = newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	type updateReport struct {
+		path    string
+		payload map[string]any
+	}
+	reports := make(chan updateReport, 2)
+	var reportCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reportCalls.Add(1)
+		reports <- updateReport{path: r.URL.Path, payload: payload}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
@@ -96,6 +110,16 @@ func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
 		TargetVersion:        "v0.1.14",
 		SupportsReadyToApply: true,
 	})
+	if reportCalls.Load() != 1 {
+		t.Fatalf("server request terminal reports = %d, want exactly 1", reportCalls.Load())
+	}
+	report := <-reports
+	if report.path != "/api/daemon/runtimes/rt-1/update/upd-1/result" {
+		t.Fatalf("terminal report path = %q", report.path)
+	}
+	if report.payload["status"] != "failed" || report.payload["error"] != "update_already_in_progress" {
+		t.Fatalf("terminal report = %#v, want failed/update_already_in_progress", report.payload)
+	}
 	close(releaseFetch)
 	<-autoDone
 

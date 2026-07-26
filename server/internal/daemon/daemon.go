@@ -1895,7 +1895,15 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	// Prevent concurrent update attempts.
 	if !d.updating.CompareAndSwap(false, true) {
-		d.logger.Warn("update already in progress, ignoring", "runtime_id", runtimeID, "update_id", update.ID)
+		d.logger.Warn("update already in progress, refusing server request", "runtime_id", runtimeID, "update_id", update.ID)
+		// PopPending has already transitioned this request to running on the
+		// server. Terminate that canonical request without touching the
+		// current attempt owner's observation; otherwise an auto-update
+		// metadata fetch can strand the request until its running timeout.
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  "update_already_in_progress",
+		})
 		return
 	}
 	restartTriggered := false

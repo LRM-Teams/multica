@@ -15,27 +15,30 @@ export function ReplyFeedbackBar({
   messageId: string;
   initial?: ReplyFeedback | null;
 }) {
-  const [value, setValue] = React.useState<1 | -1 | null>(initial?.value ?? null);
+  const serverValue = initial?.value ?? null;
+  const [optimistic, setOptimistic] = React.useState<1 | -1 | null | undefined>(undefined);
   const [busy, setBusy] = React.useState(false);
 
-  React.useEffect(() => {
-    setValue(initial?.value ?? null);
-  }, [initial?.value, initial?.id]);
+  // Clear optimistic once the server snapshot catches up (adjust state while rendering).
+  if (optimistic !== undefined && optimistic === serverValue) {
+    setOptimistic(undefined);
+  }
+  const value = optimistic !== undefined ? optimistic : serverValue;
 
   const toggle = async (next: 1 | -1) => {
     if (busy) return;
     setBusy(true);
     const prev = value;
+    const nextValue: 1 | -1 | null = prev === next ? null : next;
+    setOptimistic(nextValue);
     try {
-      if (prev === next) {
-        setValue(null);
+      if (nextValue === null) {
         await api.deleteChannelReplyFeedback(channelId, messageId);
       } else {
-        setValue(next);
-        await api.upsertChannelReplyFeedback(channelId, messageId, next);
+        await api.upsertChannelReplyFeedback(channelId, messageId, nextValue);
       }
     } catch {
-      setValue(prev);
+      setOptimistic(prev);
     } finally {
       setBusy(false);
     }

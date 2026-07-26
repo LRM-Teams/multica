@@ -267,7 +267,7 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 		return agentDMSendReservation{}, fmt.Errorf("load workspace agent dm control: %w", err)
 	}
 	if globalPaused {
-		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, "paused_global", firstNonEmpty(globalPauseReason.String, "all agent direct messages are paused"))
+		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, "paused_global", firstNonEmpty(globalPauseReason.String, "an owner paused direct messages involving their agent"))
 	}
 	if pairState != "active" {
 		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, pairState, firstNonEmpty(pairPauseReason.String, "this agent pair is paused"))
@@ -1459,9 +1459,9 @@ func (h *Handler) insertAgentDMControlSystemEvent(
 	case agentDMSystemEventPausedGlobal:
 		params.PauseReason = "paused by owner"
 		params.Actions = []string{"view_dm", "resume_global"}
-		content = "你已暂停本工作区所有智能体私聊——所有智能体之间都不再互发，直到你恢复。"
+		content = "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。"
 	default:
-		content = "已恢复，智能体可以继续私聊了。"
+		content = "已恢复，你的智能体可以继续私聊了。"
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
@@ -1510,6 +1510,35 @@ func (h *Handler) agentDMPairForChannel(ctx context.Context, workspaceID, channe
 	return ids[0], ids[1], true
 }
 
+func agentDMControlActions(state string, exchangeExists, ownerPaused bool) []string {
+	actions := []string{"view_dm"}
+	if ownerPaused {
+		return append(actions, "resume_global")
+	}
+
+	switch firstNonEmpty(state, "active") {
+	case "active":
+		actions = append(actions, "pause_pair")
+	case "paused_budget":
+		if exchangeExists {
+			actions = append(actions, "grant_rounds")
+		}
+		actions = append(actions, "pause_pair")
+	case "paused_frequency", "paused_pair":
+		actions = append(actions, "resume_pair")
+	}
+	return append(actions, "pause_global")
+}
+
+func hasAgentDMControlAction(actions []string, action string) bool {
+	for _, candidate := range actions {
+		if candidate == action {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) agentDMControlForOwner(ctx context.Context, workspaceID, channelID, ownerID pgtype.UUID) (*AgentDMControlResponse, bool) {
 	lowID, highID, ok := h.agentDMPairForChannel(ctx, workspaceID, channelID)
 	if !ok {
@@ -1550,14 +1579,15 @@ func (h *Handler) agentDMControlForOwner(ctx context.Context, workspaceID, chann
 	if ownerPaused {
 		state = "paused_global"
 	}
+	actions := agentDMControlActions(state, exchangeID.Valid, ownerPaused)
 	response := &AgentDMControlResponse{
 		State:          state,
 		Round:          (turnCount + 1) / 2,
 		RoundLimit:     roundLimit + grantedRounds,
-		CanGrantRounds: exchangeID.Valid,
-		CanPausePair:   true,
-		CanPauseGlobal: true,
-		Actions:        []string{"view_dm", "pause_pair", "pause_global"},
+		CanGrantRounds: hasAgentDMControlAction(actions, "grant_rounds"),
+		CanPausePair:   hasAgentDMControlAction(actions, "pause_pair"),
+		CanPauseGlobal: hasAgentDMControlAction(actions, "pause_global"),
+		Actions:        actions,
 	}
 	if exchangeID.Valid {
 		value := uuidToString(exchangeID)
@@ -1570,9 +1600,6 @@ func (h *Handler) agentDMControlForOwner(ctx context.Context, workspaceID, chann
 	if pauseReason.Valid && strings.TrimSpace(pauseReason.String) != "" {
 		value := pauseReason.String
 		response.PauseReason = &value
-	}
-	if state != "active" {
-		response.Actions = append(response.Actions, "grant_rounds", "resume_pair")
 	}
 	return response, true
 }

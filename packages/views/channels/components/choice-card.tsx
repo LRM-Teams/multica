@@ -7,6 +7,15 @@ import { cn } from "@multica/ui/lib/utils";
 
 type ChoicePart = Extract<MessagePart, { type: "choice" }>;
 
+/** First pick + one reselect, then locked (matches server maxChoiceSelectCount). */
+const MAX_CHOICE_SELECT_COUNT = 2;
+
+function choiceSelectCount(part: ChoicePart): number {
+  if (!part.selected_option_id) return 0;
+  if (part.select_count && part.select_count > 0) return part.select_count;
+  return 1;
+}
+
 export function ChoiceCard({
   part,
   channelId,
@@ -18,17 +27,35 @@ export function ChoiceCard({
 }) {
   const [pendingOptionId, setPendingOptionId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const locked = Boolean(part.selected_option_id);
+  const [localSelected, setLocalSelected] = React.useState<string | undefined>(undefined);
+  const [localCount, setLocalCount] = React.useState<number | undefined>(undefined);
+
+  const serverCount = choiceSelectCount(part);
+  const selectedId = localSelected ?? part.selected_option_id;
+  const selectCount = localCount ?? serverCount;
+  const locked = selectCount >= MAX_CHOICE_SELECT_COUNT;
   const canChoose = Boolean(channelId && messageId) && !locked && !pendingOptionId;
 
   const onSelect = async (optionId: string) => {
     if (!canChoose || !channelId || !messageId) return;
+    if (optionId === selectedId) return;
     setPendingOptionId(optionId);
     setError(null);
     try {
-      await api.chooseChannelMessageOption(channelId, messageId, part.choice_id, optionId);
+      const res = await api.chooseChannelMessageOption(channelId, messageId, part.choice_id, optionId);
+      const nextPart = res.message?.parts?.find(
+        (p): p is ChoicePart => p.type === "choice" && p.choice_id === part.choice_id,
+      );
+      if (nextPart?.selected_option_id) {
+        setLocalSelected(nextPart.selected_option_id);
+        setLocalCount(choiceSelectCount(nextPart));
+      } else {
+        setLocalSelected(optionId);
+        setLocalCount(selectCount + 1);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "选择失败");
+    } finally {
       setPendingOptionId(null);
     }
   };
@@ -41,6 +68,7 @@ export function ChoiceCard({
       data-testid="choice-card"
       data-layout={part.layout}
       data-locked={locked ? "true" : "false"}
+      data-select-count={selectCount}
     >
       {part.prompt ? (
         <p className="mb-2 text-sm font-medium text-foreground">{part.prompt}</p>
@@ -52,13 +80,13 @@ export function ChoiceCard({
         )}
       >
         {part.options.map((opt) => {
-          const selected = part.selected_option_id === opt.id;
+          const selected = selectedId === opt.id;
           const pending = pendingOptionId === opt.id;
           return (
             <button
               key={opt.id}
               type="button"
-              disabled={!canChoose}
+              disabled={!canChoose || selected}
               aria-label={opt.label}
               aria-pressed={selected}
               onClick={() => void onSelect(opt.id)}
@@ -68,7 +96,8 @@ export function ChoiceCard({
                 selected
                   ? "border-primary bg-primary/10 text-foreground"
                   : "border-border bg-background hover:bg-accent/60",
-                !canChoose && !selected && "opacity-60",
+                (!canChoose || selected) && !selected && "opacity-60",
+                locked && !selected && "opacity-50",
                 pending && "opacity-80",
               )}
             >
@@ -80,15 +109,20 @@ export function ChoiceCard({
           );
         })}
       </div>
+      {selectCount === 1 && !locked ? (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">还可改选一次</p>
+      ) : null}
+      {locked ? (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">已锁定</p>
+      ) : null}
       {error ? <p className="mt-1.5 text-xs text-destructive">{error}</p> : null}
     </div>
   );
 }
 
-export function ChoiceReplyPart({ part }: { part: Extract<MessagePart, { type: "choice_reply" }> }) {
-  return (
-    <p className="text-sm text-muted-foreground" data-testid="choice-reply">
-      选择：{part.label}
-    </p>
-  );
+/** Structured-only for agent wake/context; human copy is the sibling text part. */
+export function ChoiceReplyPart(_props: {
+  part: Extract<MessagePart, { type: "choice_reply" }>;
+}) {
+  return null;
 }

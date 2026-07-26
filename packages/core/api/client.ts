@@ -3033,7 +3033,7 @@ export class ApiClient {
     messageId: string,
     choiceId: string,
     optionId: string,
-  ): Promise<{ message: ChannelMessage; reply: ChannelMessage }> {
+  ): Promise<{ message: ChannelMessage; reply?: ChannelMessage }> {
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/choice`, {
       method: "POST",
       body: JSON.stringify({ choice_id: choiceId, option_id: optionId }),

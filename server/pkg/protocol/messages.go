@@ -70,7 +70,8 @@ type MessagePart struct {
 	SynthesisStatus string `json:"synthesis_status,omitempty"`
 
 	// Choice card fields (type=choice). SelectedOptionID is set server-side
-	// after the user locks an answer (v1: select-once).
+	// after the user picks an answer. SelectCount tracks how many picks:
+	// 1 = first choice (one reselect still allowed), 2 = locked after reselect.
 	ChoiceID         string         `json:"choice_id,omitempty"`
 	Prompt           string         `json:"prompt,omitempty"`
 	Layout           string         `json:"layout,omitempty"`
@@ -78,6 +79,7 @@ type MessagePart struct {
 	AllowDismiss     *bool          `json:"allow_dismiss,omitempty"`
 	ExpiresAt        string         `json:"expires_at,omitempty"`
 	SelectedOptionID string         `json:"selected_option_id,omitempty"`
+	SelectCount      int            `json:"select_count,omitempty"`
 
 	// Choice reply fields (type=choice_reply) — user-visible answer after click.
 	OptionID string `json:"option_id,omitempty"`

@@ -104,9 +104,9 @@ multica chat ask-choice --prompt "…" --layout binary|list --option id=yes,labe
 
 用户点某一 option：
 
-1. 客户端 POST 选择（幂等：同 user + choice_id 只生效一次，或允许改选一次——v1 建议 **选定即锁定**）。
-2. 服务端插入一条 **user** 消息（或 channel message），内容为可读标签（如「选择：是」），并带结构化 part / metadata：`{ choice_id, option_id }`。
-3. 原 choice 卡片变为 selected 态（高亮已选项，禁用其它）。
+1. 客户端 POST 选择。v1：**允许改选一次**（`select_count`：1=首选仍可改，2=锁定）；同选项再点幂等不产生新回复。
+2. 服务端插入一条 **user** 消息，内容为「选择：…」或「改选：…」，并带 `choice_reply` part：`{ choice_id, option_id, label }`。
+3. 原 choice 卡片高亮当前选项；`select_count < 2` 时可点其它项，`>= 2` 后锁定。
 4. 按会话类型唤醒 agent（chat pending task / channel mention 同等现有唤醒路径）。
 
 与 freshness：点击产生的用户消息走正常消息管道；若 agent 仍在跑，遵循现有 freshness / 排队语义，不另造并行通道。
@@ -212,7 +212,7 @@ v1 可用独立表；不要把「训练标签」 silently 混进任意 🎉 反�
 - 群聊 choice 权限扩展。
 - 负反馈自动反思 task。
 - Feedback 进 training reward 实装（非仅落库）。
-- Choice dismiss / 改选 / 过期。
+- Choice dismiss / 过期（改选一次已在 v1）。
 
 ---
 
@@ -220,7 +220,7 @@ v1 可用独立表；不要把「训练标签」 silently 混进任意 🎉 反�
 
 1. **协议**：存在文档化的 `choice` part 与 `reply_feedback` 字段约定（本文或实现旁路 OpenAPI/类型），且不依赖 Claude 原生 AskUserQuestion。
 2. **跨运行时口径**：至少一条路径（`multica` CLI 或 MCP）能发出 choice；文档写明 Cursor/PI/Claude 均走该路径，而非各家私有 UI。
-3. **Choice UI**：binary 横排两键、list 纵排 2–4 项；手机触控 ≥32px；点选后卡片锁定并产生用户可见回复。
+3. **Choice UI**：binary 横排两键、list 纵排 2–4 项；手机触控 ≥32px；首次点选后可改一次，第二次改选后锁定并产生用户可见回复。
 4. **Choice 唤醒**：点选后 agent 能收到选项上下文并继续（chat/DM 至少一端验收）。
 5. **模型自判**：平台无「固定场景强制弹窗」硬编码；仅工具 + 提示指导。
 6. **Feedback UI**：agent 终答可见 👍/👎；可切换或取消；状态刷新正确。
@@ -229,13 +229,10 @@ v1 可用独立表；不要把「训练标签」 silently 混进任意 🎉 反�
 
 ---
 
-## Open questions (评审时拍板)
+## Open questions (已拍板 2026-07-26)
 
-1. Choice v1 是否允许「改选」一次，还是选定即死？
-2. 点彩是否独立第三值，还是 👍 皮肤？
-3. 群聊 channel agent 终答 v1 是否必须带 feedback，还是仅 chat/DM？
+1. Choice：**允许改选一次**（`select_count` 1→2 后锁定；同选项再点幂等）。
+2. 点赞点踩：👍 / 👎；**点彩 = 👍 皮肤**（仅 +1 / -1）。
+3. 群聊 agent 终答：**v1 一并带** `reply_feedback`（与 DM 同控件）。
 
-**已拍板（实现默认，可被产品否决后改）**：
-1. **选定即死**（锁定后不可改选）。
-2. **点彩 = 👍 皮肤**（v1 仅 +1 / -1 两态语义）。
-3. **Feedback 覆盖 channel/DM agent 终答**（本 PR 一并做）；独立 chat_session 路径可后置。
+**实现默认**：上列三条已锁定，不再使用「选定即死」。

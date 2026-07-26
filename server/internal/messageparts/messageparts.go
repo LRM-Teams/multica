@@ -544,9 +544,14 @@ func normalizeChoicePart(part protocol.MessagePart) (protocol.MessagePart, error
 			return protocol.MessagePart{}, fmt.Errorf("selected_option_id does not match an option")
 		}
 	}
-	// Agents must not pre-select; clients lock via the choose API.
-	if part.SelectedOptionID != "" {
-		// Allow round-trip of already-locked parts (message update / list).
+	// select_count: 0 unset, 1 first pick (one reselect left), 2 locked after reselect.
+	if part.SelectCount < 0 || part.SelectCount > 2 {
+		return protocol.MessagePart{}, fmt.Errorf("select_count must be 0–2")
+	}
+	if part.SelectedOptionID == "" {
+		part.SelectCount = 0
+	} else if part.SelectCount == 0 {
+		part.SelectCount = 1
 	}
 	part.OptionID = ""
 	return part, nil
@@ -572,6 +577,7 @@ func normalizeChoiceReplyPart(part protocol.MessagePart) (protocol.MessagePart, 
 	part.AllowDismiss = nil
 	part.ExpiresAt = ""
 	part.SelectedOptionID = ""
+	part.SelectCount = 0
 	return part, nil
 }
 
@@ -608,6 +614,7 @@ func scrubForeignPartFields(part protocol.MessagePart) protocol.MessagePart {
 		part.AllowDismiss = nil
 		part.ExpiresAt = ""
 		part.SelectedOptionID = ""
+		part.SelectCount = 0
 	default:
 		part.ChoiceID = ""
 		part.Prompt = ""
@@ -616,6 +623,7 @@ func scrubForeignPartFields(part protocol.MessagePart) protocol.MessagePart {
 		part.AllowDismiss = nil
 		part.ExpiresAt = ""
 		part.SelectedOptionID = ""
+		part.SelectCount = 0
 		part.OptionID = ""
 	}
 	return part

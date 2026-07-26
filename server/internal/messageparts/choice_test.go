@@ -65,6 +65,27 @@ func TestNormalizeChoiceReply(t *testing.T) {
 	}
 }
 
+func TestNormalizeChoicePreservesSelectCount(t *testing.T) {
+	_, parts, err := Normalize("", []protocol.MessagePart{{
+		Type:             protocol.MessagePartTypeChoice,
+		ChoiceID:         "c1",
+		Prompt:           "继续？",
+		Layout:           protocol.ChoiceLayoutBinary,
+		SelectedOptionID: "yes",
+		SelectCount:      2,
+		Options: []protocol.ChoiceOption{
+			{ID: "yes", Label: "是"},
+			{ID: "no", Label: "否"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if parts[0].SelectCount != 2 || parts[0].SelectedOptionID != "yes" {
+		t.Fatalf("select state = %+v", parts[0])
+	}
+}
+
 func TestNormalizeChoiceListMaxFour(t *testing.T) {
 	opts := make([]protocol.ChoiceOption, 5)
 	for i := range opts {

@@ -40,8 +40,9 @@ type upsertReplyFeedbackRequest struct {
 	Value int `json:"value"`
 }
 
-// ChooseChannelMessageOption locks a choice card and posts a user-visible reply
-// that wakes the agent (DM auto-wake; group via @mention of the choice author).
+// ChooseChannelMessageOption records a choice pick (first select or one reselect)
+// and posts a user-visible reply that wakes the agent (DM auto-wake; group via
+// @mention of the choice author).
 func (h *Handler) ChooseChannelMessageOption(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -102,16 +103,17 @@ func (h *Handler) ChooseChannelMessageOption(w http.ResponseWriter, r *http.Requ
 	}
 
 	updated := h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), result.UpdatedMessage)
-	reply := h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), result.ReplyMessage)
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessageUpdated, workspaceID, "member", userID, channelID, updated)
-	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, reply)
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"message": updated,
-		"reply":   reply,
-	})
-	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		h.dispatchHumanChannelMessageSideEffects(ctx, ch, reply, parseUUID(userID))
-	})
+	out := map[string]any{"message": updated}
+	if result.ReplyMessage.ID != "" {
+		reply := h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), result.ReplyMessage)
+		h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, reply)
+		out["reply"] = reply
+		h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+			h.dispatchHumanChannelMessageSideEffects(ctx, ch, reply, parseUUID(userID))
+		})
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 var (
@@ -120,6 +122,9 @@ var (
 	errChoiceOptionInvalid   = errors.New("invalid option")
 	errChoiceNotAuthorized   = errors.New("not authorized")
 )
+
+// maxChoiceSelectCount: first pick + one reselect, then locked.
+const maxChoiceSelectCount = 2
 
 type channelChoiceApplyResult struct {
 	UpdatedMessage ChannelMessageResponse
@@ -170,6 +175,7 @@ func (h *Handler) applyChannelChoiceSelection(
 	parts := messageparts.Decode(partsRaw)
 	choiceIdx := -1
 	var selectedLabel string
+	isReselect := false
 	for i := range parts {
 		if parts[i].Type != protocol.MessagePartTypeChoice {
 			continue
@@ -178,7 +184,32 @@ func (h *Handler) applyChannelChoiceSelection(
 			continue
 		}
 		choiceIdx = i
-		if parts[i].SelectedOptionID != "" {
+		prevSelected := strings.TrimSpace(parts[i].SelectedOptionID)
+		prevCount := parts[i].SelectCount
+		if prevSelected == "" {
+			prevCount = 0
+		} else if prevCount == 0 {
+			prevCount = 1
+		}
+		if prevSelected == optionID {
+			// Idempotent re-tap of the same option: no new reply.
+			if err := tx.Commit(ctx); err != nil {
+				return channelChoiceApplyResult{}, err
+			}
+			updatedMsg, found := h.getChannelMessage(ctx, workspaceID, channelID, messageID)
+			if !found {
+				updatedMsg = ChannelMessageResponse{
+					ID:          uuidToString(messageID),
+					ChannelID:   uuidToString(channelID),
+					WorkspaceID: workspaceID,
+					Content:     content,
+					Parts:       parts,
+					Type:        "agent",
+				}
+			}
+			return channelChoiceApplyResult{UpdatedMessage: updatedMsg}, nil
+		}
+		if prevCount >= maxChoiceSelectCount {
 			return channelChoiceApplyResult{}, errChoiceAlreadySelected
 		}
 		foundOpt := false
@@ -192,6 +223,7 @@ func (h *Handler) applyChannelChoiceSelection(
 		if !foundOpt {
 			return channelChoiceApplyResult{}, errChoiceOptionInvalid
 		}
+		isReselect = prevSelected != ""
 		break
 	}
 	if choiceIdx < 0 {
@@ -203,7 +235,12 @@ func (h *Handler) applyChannelChoiceSelection(
 	// who can write (same as reacting). Tightened later if needed.
 	_ = ch
 
+	nextCount := 1
+	if isReselect {
+		nextCount = maxChoiceSelectCount
+	}
 	parts[choiceIdx].SelectedOptionID = optionID
+	parts[choiceIdx].SelectCount = nextCount
 	normalizedContent, normalizedParts, err := messageparts.Normalize(content, parts)
 	if err != nil {
 		return channelChoiceApplyResult{}, err
@@ -216,7 +253,11 @@ func (h *Handler) applyChannelChoiceSelection(
 		return channelChoiceApplyResult{}, err
 	}
 
-	replyContent := "选择：" + selectedLabel
+	replyPrefix := "选择："
+	if isReselect {
+		replyPrefix = "改选："
+	}
+	replyContent := replyPrefix + selectedLabel
 	if ch.Kind != "dm" && authorID.Valid {
 		agentName := h.channelAgentAuthorName(ctx, authorID)
 		if agentName == "" {

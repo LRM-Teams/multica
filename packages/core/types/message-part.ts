@@ -69,8 +69,10 @@ export type MessagePart =
       }>;
       allow_dismiss?: boolean;
       expires_at?: string;
-      /** Set after the human locks an option (v1: select-once). */
+      /** Current pick after the human selects (v1: one reselect allowed). */
       selected_option_id?: string;
+      /** 1 = first pick (reselect left), 2 = locked after reselect. */
+      select_count?: number;
     }
   | {
       /** User-visible answer produced when a choice option is tapped. */

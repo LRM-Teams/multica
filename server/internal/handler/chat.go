@@ -204,11 +204,12 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 // bubble DMs and must be hidden from ListChatSessions and the agent bubble
 // history dropdown.
 //
-// Two sources:
+// Sources:
 //  1. Live channel_agent_session bindings (canonical).
 //  2. Orphan shells whose title is still "#channelName" after the binding
-//     row was deleted — otherwise they leak into the bubble as fake 1:1
-//     history (e.g. "#multica_jhp研发群").
+//     row was deleted.
+//  3. Any remaining "#token" title (no whitespace) — channel shells always
+//     use that shape; catches renamed/deleted channels that (2) misses.
 func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID string) (map[string]bool, error) {
 	wsUUID := parseUUID(workspaceID)
 	out := map[string]bool{}
@@ -236,10 +237,15 @@ func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID st
 	orphanRows, err := h.DB.Query(ctx, `
 		SELECT cs.id
 		FROM chat_session cs
-		JOIN channel ch
-		  ON ch.workspace_id = cs.workspace_id
-		 AND cs.title = ('#' || ch.name)
-		WHERE cs.workspace_id = $1`, wsUUID)
+		WHERE cs.workspace_id = $1
+		  AND (
+		    EXISTS (
+		      SELECT 1 FROM channel ch
+		      WHERE ch.workspace_id = cs.workspace_id
+		        AND cs.title = ('#' || ch.name)
+		    )
+		    OR cs.title ~ '^#[^[:space:]]+$'
+		  )`, wsUUID)
 	if err != nil {
 		return nil, err
 	}

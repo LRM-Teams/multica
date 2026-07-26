@@ -161,22 +161,24 @@ export function useBottomSettleScroll({
       // detach can't permanently kill the settle before the tail becomes
       // measurable. As rows render and scrollHeight grows, this re-pins to the true
       // bottom each frame (measurement-evolution safe); the browser clamps to max.
+      let pinnedThisFrame = false;
       if (handleAttachedRef.current) {
         scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
+        pinnedThisFrame = true;
       }
       frame += 1;
-      // Complete once the tail row is confirmed within the bottom band.
-      // `hasReached()` is TRUE only when we are ACTUALLY at the true bottom (the
-      // tail row's bottom edge sits within BOTTOM_BAND_PX of the container's bottom
-      // edge). That inherently implies an effective landing — either a pin that
-      // moved scrollTop to the max this-or-a-prior frame, or a warm mount that was
-      // already at the bottom. It is FALSE while the tail row is unmounted (the
-      // early cold-mount `sh === ch` window — the trace's false-complete frame) or
-      // still below the fold (scrollTop not yet pinned), so it never completes
-      // early. A no-op pin at a bottom already confirmed by tail geometry (warm /
-      // already-landed long content) still completes on the first frame — no
-      // spurious ~3s write loop or timeout warn.
-      if (hasReached()) {
+      // Complete ONLY in a frame where we actually pinned (the handle was attached
+      // this frame, so the direct write above ran) AND the tail row is confirmed
+      // within the bottom band. Gating on `pinnedThisFrame` is the successor
+      // contract's teeth: while the handle is DETACHED the settle must NEVER
+      // complete — a detach/remount can transiently put the tail in the ref map with
+      // a geometry that momentarily lands in the band (the untrustworthy
+      // measurement-evolution window), and settling there — on zero attached pin —
+      // would end the loop for good (reattach can't restart it, since
+      // `handleAttached` is no longer an effect dep). We do NOT require the pin to
+      // have MOVED scrollTop, so a warm mount already at the bottom (no-op write)
+      // still completes on frame one with no spurious ~3s write loop or timeout.
+      if (pinnedThisFrame && hasReached()) {
         settledChannelRef.current = channelId ?? null;
         return;
       }

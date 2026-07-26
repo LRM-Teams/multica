@@ -30,6 +30,7 @@
     "tools_other": "도구 {{count}}개",
     "tool_result_named": "{{tool}} 결과: ",
     "tool_result_unnamed": "결과: ",
+    "tool_no_args": "이 단계의 인자가 캡처되지 않았습니다",
     "process_steps_one": "단계 {{count}}개",
     "process_steps_other": "단계 {{count}}개",
     "process_steps_show_one": "실행 과정 보기 · {{count}}단계",

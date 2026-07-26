@@ -30,6 +30,7 @@
     "tools_other": "{{count}} tools",
     "tool_result_named": "{{tool}} result: ",
     "tool_result_unnamed": "result: ",
+    "tool_no_args": "No arguments captured for this step",
     "process_steps_one": "{{count}} step",
     "process_steps_other": "{{count}} steps",
     "process_steps_show_one": "Show process · {{count}} step",

@@ -28,6 +28,7 @@
     "tools_other": "{{count}} 个工具",
     "tool_result_named": "{{tool}} 结果：",
     "tool_result_unnamed": "结果：",
+    "tool_no_args": "此步骤未捕获到参数",
     "process_steps_other": "{{count}} 步",
     "process_steps_show_other": "查看执行过程 · {{count}} 步",
     "process_steps_hide_other": "收起执行过程 · {{count}} 步",

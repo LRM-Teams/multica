@@ -285,7 +285,9 @@ export function ChatMessageList({
         )}
       </div>
       {showScrollControls && (
-        <div className="pointer-events-none absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2 sm:right-4">
+        // Anchor bottom-right (not vertical center) so the FABs don't sit on
+        // top of the process-fold / tool rows on phone web.
+        <div className="pointer-events-none absolute bottom-20 right-3 z-10 flex flex-col gap-2 sm:bottom-24 sm:right-4">
           <Button
             type="button"
             variant="secondary"
@@ -734,7 +736,9 @@ function TimelineView({
       {middle.length > 0 && (
         <OuterProcessFold
           items={middle}
-          defaultOpen={!!isStreaming}
+          // Always start collapsed (product: tap to expand). Streaming still
+          // surfaces the active step on the collapsed header via activeSummary.
+          defaultOpen={false}
           attachments={attachments}
           enhanced={enhanced}
           isStreaming={isStreaming}
@@ -790,6 +794,7 @@ function OuterProcessFold({
             ? t(($) => $.message_list.process_steps_hide, { count: stepCount })
             : t(($) => $.message_list.process_steps_show, { count: stepCount })
         }
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
         <span className="shrink-0 font-medium">
@@ -919,27 +924,28 @@ function ToolCallRow({
   enhanced?: boolean;
   active?: boolean;
 }) {
+  const { t } = useT("chat");
   const [open, setOpen] = useState(false);
   const summary = enhanced ? bubbleToolSummary(item) : getToolSummary(item);
-  const hasInput = item.input && Object.keys(item.input).length > 0;
+  const hasInput = !!(item.input && Object.keys(item.input).length > 0);
   const label = enhanced ? friendlyBubbleToolLabel(item.tool) : item.tool;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger
-        disabled={!hasInput}
+        // Never disable: empty-args tool_use still needs a ≥32px tap target on
+        // phone web (disabled rows look like dead labels — "啥也点不了").
         className={cn(
-          // ≥32px touch target (matches OuterProcessFold / mobile a11y).
-          "flex min-h-8 w-full items-center gap-1.5 rounded-md px-1.5 -mx-1 py-1.5 text-xs transition-colors",
-          hasInput ? "hover:bg-accent/30" : "cursor-default",
+          "flex min-h-8 w-full items-center gap-1.5 rounded-md px-1.5 -mx-1 py-1.5 text-xs transition-colors hover:bg-accent/30",
           enhanced && active && "bg-accent/40",
         )}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         <ChevronRight
           className={cn(
             "size-3.5 shrink-0 text-muted-foreground transition-transform",
             open && "rotate-90",
-            !hasInput && "invisible",
           )}
         />
         <span
@@ -955,13 +961,17 @@ function ToolCallRow({
           <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">{summary}</span>
         ) : null}
       </CollapsibleTrigger>
-      {hasInput && (
-        <CollapsibleContent>
+      <CollapsibleContent>
+        {hasInput ? (
           <pre className={cn("ml-[18px] mt-0.5 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
             {JSON.stringify(item.input, null, 2)}
           </pre>
-        </CollapsibleContent>
-      )}
+        ) : (
+          <p className="ml-[18px] mt-0.5 px-1.5 py-1 text-xs text-muted-foreground">
+            {t(($) => $.message_list.tool_no_args)}
+          </p>
+        )}
+      </CollapsibleContent>
     </Collapsible>
   );
 }

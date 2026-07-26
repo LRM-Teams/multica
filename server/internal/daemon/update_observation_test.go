@@ -23,6 +23,14 @@ func newTestUpdateObservationCoordinator(t *testing.T, path string) *updateObser
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+func assertUpdateObservation(t *testing.T, coordinator *updateObservationCoordinator, phase, outcome string) {
+	t.Helper()
+	observation := coordinator.Snapshot()
+	if observation.Phase != phase || observation.LastOutcome != outcome {
+		t.Fatalf("update observation phase/outcome = %s/%s, want %s/%s: %+v", observation.Phase, observation.LastOutcome, phase, outcome, observation)
+	}
+}
+
 func TestUpdateObservationCoordinatorPersistsBeforePublishing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon-update-status.json")
 	coordinator := newTestUpdateObservationCoordinator(t, path)

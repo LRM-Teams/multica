@@ -1942,10 +1942,14 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	}
 
 	d.logger.Info("CLI update staged successfully", "output", output, "verified_version", verifiedVersion)
-	if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
+	// The binary is verified, but restart is not yet pending: the server may
+	// reject ready_to_apply or an older server may find the daemon busy. Keep
+	// the terminal attempt outcome durable without claiming a restart until
+	// the request acknowledgement and/or claim barrier actually permit one.
+	if !d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_succeeded", update.TargetVersion, "", "") {
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",
-			"error":  "failed_to_persist_restart_pending_observation",
+			"error":  "failed_to_persist_update_succeeded_observation",
 		})
 		return
 	}
@@ -1956,6 +1960,10 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 			"output": stagedOutput,
 		}); err != nil {
 			d.logger.Error("CLI update staged but ready-to-apply state was not durably acknowledged; refusing restart", "runtime_id", runtimeID, "update_id", update.ID, "error", err)
+			return
+		}
+		if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
+			d.logger.Error("CLI update is ready to apply but restart-pending observation was not durable; refusing restart", "runtime_id", runtimeID, "update_id", update.ID)
 			return
 		}
 		restartCtx := d.rootCtx
@@ -1983,6 +1991,14 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",
 			"error":  "update_ready_to_apply_but_server_does_not_support_deferred_restart",
+		})
+		return
+	}
+	if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
+		d.releaseClaimBarrier()
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  "failed_to_persist_restart_pending_observation",
 		})
 		return
 	}
@@ -2043,8 +2059,17 @@ func (d *Daemon) abortStagedRestartIfCanceled(
 	if barrierHeld {
 		d.releaseClaimBarrier()
 	}
+	d.finishUpdateObservationWithoutRestart()
 	d.logger.Warn("CLI update ready but restart wait ended before the daemon drained", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
 	return true
+}
+
+func (d *Daemon) finishUpdateObservationWithoutRestart() {
+	if d.updateObservation == nil {
+		return
+	}
+	current := d.updateObservation.Snapshot()
+	d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_succeeded", current.TargetVersion, "", "")
 }
 
 func (d *Daemon) waitForSafeRestartWithWindow(

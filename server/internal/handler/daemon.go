@@ -195,10 +195,16 @@ type DaemonRegisterRequest struct {
 	} `json:"runtimes"`
 }
 
-func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (string, time.Time, error) {
+type preparedDaemonRegisterToken struct {
+	raw       string
+	hash      string
+	expiresAt time.Time
+}
+
+func (h *Handler) prepareDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (preparedDaemonRegisterToken, error) {
 	rawToken, err := auth.GenerateDaemonToken()
 	if err != nil {
-		return "", time.Time{}, err
+		return preparedDaemonRegisterToken{}, err
 	}
 	expiresAt := time.Now().Add(daemonRegisterTokenTTL)
 	hash := auth.HashToken(rawToken)
@@ -208,13 +214,25 @@ func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgty
 		DaemonID:    daemonID,
 		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
-		return "", time.Time{}, err
+		return preparedDaemonRegisterToken{}, err
 	}
-	h.DaemonTokenCache.Set(ctx, hash, auth.DaemonTokenIdentity{
+	return preparedDaemonRegisterToken{raw: rawToken, hash: hash, expiresAt: expiresAt}, nil
+}
+
+func (h *Handler) cacheDaemonRegisterToken(ctx context.Context, token preparedDaemonRegisterToken, workspaceID pgtype.UUID, daemonID string) {
+	h.DaemonTokenCache.Set(ctx, token.hash, auth.DaemonTokenIdentity{
 		WorkspaceID: uuidToString(workspaceID),
 		DaemonID:    daemonID,
-	}, auth.TTLForExpiry(time.Now(), expiresAt))
-	return rawToken, expiresAt, nil
+	}, auth.TTLForExpiry(time.Now(), token.expiresAt))
+}
+
+func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (string, time.Time, error) {
+	token, err := h.prepareDaemonRegisterToken(ctx, workspaceID, daemonID)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	h.cacheDaemonRegisterToken(ctx, token, workspaceID, daemonID)
+	return token.raw, token.expiresAt, nil
 }
 
 type daemonWorkspaceReposResponse struct {
@@ -345,8 +363,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
 		return
 	}
+	registrationHandler := *h
+	registrationHandler.Queries = h.Queries.WithTx(registrationLock)
+	registrationHandler.DB = registrationLock
 
-	tombstoned, err := h.Queries.IsDaemonRegistrationTombstoned(r.Context(), db.IsDaemonRegistrationTombstonedParams{
+	tombstoned, err := registrationHandler.Queries.IsDaemonRegistrationTombstoned(r.Context(), db.IsDaemonRegistrationTombstonedParams{
 		WorkspaceID: wsUUID,
 		DaemonID:    strings.ToLower(req.DaemonID),
 	})
@@ -359,13 +380,13 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := h.Queries.GetWorkspace(r.Context(), wsUUID)
+	ws, err := registrationHandler.Queries.GetWorkspace(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
 	capabilities := normalizeDaemonCapabilities(req.Capabilities)
-	if err := h.registerDaemonUpdateObservation(r.Context(), wsUUID, req.DaemonID, req.UpdateObservation); err != nil {
+	if err := registrationHandler.registerDaemonUpdateObservation(r.Context(), wsUUID, req.DaemonID, req.UpdateObservation); err != nil {
 		if errors.Is(err, errDaemonUpdateObservationConflict) {
 			writeError(w, http.StatusConflict, "auto_update revision conflicts with stored payload")
 			return
@@ -380,6 +401,13 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
+	type registeredRuntime struct {
+		runtime  db.AgentRuntime
+		provider string
+		version  string
+		inserted bool
+	}
+	registeredRuntimes := make([]registeredRuntime, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
 		provider := strings.TrimSpace(runtime.Type)
 		if provider == "" {
@@ -416,7 +444,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		metadata, _ := json.Marshal(metadataMap)
 
-		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
+		row, err := registrationHandler.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
 			WorkspaceID: wsUUID,
 			DaemonID:    strToText(req.DaemonID),
 			Name:        name,
@@ -462,49 +490,24 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			LegacyDaemonID: row.LegacyDaemonID,
 		}
 
-		// Inserted is false for normal daemon reconnects/upserts, so
-		// runtime_ready is a first-ready-per-runtime-row signal.
-		if row.Inserted {
-			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
-				uuidToString(ownerID),
-				req.WorkspaceID,
-				uuidToString(registered.ID),
-				req.DaemonID,
-				provider,
-				runtime.Version,
-				req.CLIVersion,
-			))
-			if registered.Status == "online" {
-				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeReady(
-					uuidToString(ownerID),
-					req.WorkspaceID,
-					uuidToString(registered.ID),
-					req.DaemonID,
-					provider,
-					0,
-				))
-			}
-		}
-
 		// Seamless migration from the previous hostname-derived identity. The
 		// daemon sends every legacy daemon_id it may have registered under
 		// (e.g. "host.local", "host", "host-staging"); for each match we
 		// reassign agents + tasks onto the new UUID-keyed row, then delete
 		// the stale row so there's only ever one runtime per machine.
-		h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
-		h.completeRuntimeUpdateOnTargetRegister(r, registered, req.CLIVersion)
+		registrationHandler.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
 
-		resp = append(resp, h.runtimeToResponse(r.Context(), registered))
+		resp = append(resp, registrationHandler.runtimeToResponse(r.Context(), registered))
+		registeredRuntimes = append(registeredRuntimes, registeredRuntime{
+			runtime:  registered,
+			provider: provider,
+			version:  runtime.Version,
+			inserted: row.Inserted,
+		})
 	}
 
-	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
-
-	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
-		"runtimes": resp,
-	})
-
 	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
-	daemonToken, daemonTokenExpiresAt, err := h.issueDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
+	daemonToken, err := registrationHandler.prepareDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
 	if err != nil {
 		slog.Error("daemon register: issue daemon token failed",
 			append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)...)
@@ -517,13 +520,46 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.cacheDaemonRegisterToken(r.Context(), daemonToken, wsUUID, req.DaemonID)
+	for _, registered := range registeredRuntimes {
+		h.completeRuntimeUpdateOnTargetRegister(r, registered.runtime, req.CLIVersion)
+		// Inserted is false for normal daemon reconnects/upserts, so
+		// runtime_ready is a first-ready-per-runtime-row signal.
+		if registered.inserted {
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
+				uuidToString(ownerID),
+				req.WorkspaceID,
+				uuidToString(registered.runtime.ID),
+				req.DaemonID,
+				registered.provider,
+				registered.version,
+				req.CLIVersion,
+			))
+			if registered.runtime.Status == "online" {
+				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeReady(
+					uuidToString(ownerID),
+					req.WorkspaceID,
+					uuidToString(registered.runtime.ID),
+					req.DaemonID,
+					registered.provider,
+					0,
+				))
+			}
+		}
+	}
+
+	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
+	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
+		"runtimes": resp,
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"runtimes":                resp,
 		"repos":                   repoResp.Repos,
 		"repos_version":           repoResp.ReposVersion,
 		"settings":                repoResp.Settings,
-		"daemon_token":            daemonToken,
-		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
+		"daemon_token":            daemonToken.raw,
+		"daemon_token_expires_at": daemonToken.expiresAt.UTC().Format(time.RFC3339Nano),
 		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
 	})
 }

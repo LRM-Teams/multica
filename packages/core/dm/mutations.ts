@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { dmKeys } from "./queries";
-import type { CreateOrFindDMBody, DMItem } from "./types";
+import type { AgentDMControlAction, CreateOrFindDMBody, DMItem } from "./types";
 
 /**
  * Create-or-find a 1-on-1 DM with a peer (idempotent). On success the DM list
@@ -85,6 +85,36 @@ export function useMuteDM() {
   return useMutation({
     mutationFn: ({ source, id, muted }: DMRef & { muted: boolean }) =>
       muted ? api.muteDM(source, id) : api.unmuteDM(source, id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+  });
+}
+
+/**
+ * #692 owner control on a supervised agent_pair DM: pause/resume this pair,
+ * grant more rounds to the current exchange, or pause/resume ALL workspace
+ * agent↔agent DMs. The list is invalidated on success so the control banner and
+ * every affected agent_pair row reflect the fresh gate/round state.
+ */
+export function useAgentDMControl() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      action,
+      exchangeId,
+      rounds,
+    }: {
+      channelId: string;
+      action: Exclude<AgentDMControlAction, "view_dm">;
+      exchangeId?: string;
+      rounds?: number;
+    }) =>
+      api.postAgentDMControl(channelId, {
+        action,
+        exchange_id: exchangeId,
+        rounds,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
   });
 }

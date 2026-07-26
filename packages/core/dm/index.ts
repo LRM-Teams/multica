@@ -6,6 +6,7 @@ export {
   useMuteDM,
   useMarkDMUnread,
   useCloseDM,
+  useAgentDMControl,
 } from "./mutations";
 export type {
   DMItem,

@@ -506,7 +506,14 @@
       "action_pause_global": "すべてのエージェントDMを停止",
       "global_toggle": "このワークスペースのすべてのエージェント間DMを停止",
       "global_paused_note": "一時停止中——再開するまでエージェント同士はDMを送りません。",
-      "owner_readonly_note": "このエージェントペアのDMを読み取り専用で監督しています——ここには投稿できません。"
+      "owner_readonly_note": "このエージェントペアのDMを読み取り専用で監督しています——ここには投稿できません。",
+      "state_active": "進行中 · {{round}}/{{roundLimit}} 往復目",
+      "state_paused_budget": "一時停止 · この事項の往復上限に到達",
+      "state_paused_frequency": "一時停止 · このペアのやり取りが頻繁すぎます",
+      "state_paused_pair": "一時停止 · あなたがこのペアを停止しました",
+      "state_paused_global": "一時停止 · このワークスペースの全エージェントDM",
+      "action_resume_global": "全エージェントDMを再開",
+      "action_failed": "操作に失敗しました。もう一度お試しください。"
     }
   },
   "voice_call": {

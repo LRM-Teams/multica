@@ -72,6 +72,7 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
+import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { ThreadFollowButton } from "./thread-follow-button";
@@ -298,6 +299,24 @@ function DmHeader({
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
     [isMuted, t],
   );
+  // #692: the 「智能体私聊」pill sits alongside any muted badge. Memoized (like
+  // `mutedBadge`) so the JSX handed to ConversationHeader's `badges` prop keeps a
+  // stable identity; keyed on the primitive `isAgentPair`, not the per-render
+  // `agentPair` object, so the memo actually holds.
+  const isAgentPair = !!agentPair;
+  const headerBadges = useMemo(
+    () => (
+      <>
+        {isAgentPair && (
+          <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">
+            {t(($) => $.dm.agent_pair.pill)}
+          </span>
+        )}
+        {mutedBadge}
+      </>
+    ),
+    [isAgentPair, mutedBadge, t],
+  );
   const peerAvatar = (
     <ActorAvatar
       actorType={actorType}
@@ -380,16 +399,7 @@ function DmHeader({
       meta={headerMeta}
       // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
       status={headerStatus}
-      badges={
-        <>
-          {agentPair && (
-            <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">
-              {t(($) => $.dm.agent_pair.pill)}
-            </span>
-          )}
-          {mutedBadge}
-        </>
-      }
+      badges={headerBadges}
       actions={
         <>
           {voiceCallAction}
@@ -631,14 +641,14 @@ function DmChannelConversation({
   // composer becomes a quiet supervision banner (mirrors the archived-channel
   // read-only surface). `supervised` is set by the BE only for the owner view.
   const supervisedReadOnly = !!dm.supervised;
-  const supervisedReadOnlyContent = useMemo(
-    () => (
-      <>
-        <Eye className="size-4 shrink-0" />
-        <span className="flex-1">{t(($) => $.dm.agent_pair.owner_readonly_note)}</span>
-      </>
-    ),
-    [t],
+  // Plain const element (like `peerAvatar`), not a memo: a cheap leaf only
+  // consumed when `supervisedReadOnly` is true, so memoizing it would just add a
+  // JSX-returning hook before the effects' early-returns for no real saving.
+  const supervisedReadOnlyContent = (
+    <>
+      <Eye className="size-4 shrink-0" />
+      <span className="flex-1">{t(($) => $.dm.agent_pair.owner_readonly_note)}</span>
+    </>
   );
 
   const searchHitIds = useMemo(
@@ -1211,6 +1221,9 @@ function DmChannelConversation({
           />
         }
       />
+      {dm.mode === "agent_pair" && dm.a2a_control && (
+        <AgentDMControlStrip channelId={channelId} control={dm.a2a_control} />
+      )}
       {convSearch.open && (
         <div
           className={cn(

@@ -506,7 +506,14 @@
       "action_pause_global": "모든 에이전트 DM 중지",
       "global_toggle": "이 워크스페이스의 모든 에이전트 간 DM 중지",
       "global_paused_note": "일시 중지됨 — 재개할 때까지 에이전트끼리 DM을 보내지 않습니다.",
-      "owner_readonly_note": "이 에이전트 쌍의 DM을 읽기 전용으로 감독하고 있습니다 — 여기에 글을 쓸 수 없습니다."
+      "owner_readonly_note": "이 에이전트 쌍의 DM을 읽기 전용으로 감독하고 있습니다 — 여기에 글을 쓸 수 없습니다.",
+      "state_active": "진행 중 · {{round}}/{{roundLimit}} 라운드",
+      "state_paused_budget": "일시 중지 · 이 사안의 라운드 상한 도달",
+      "state_paused_frequency": "일시 중지 · 이 쌍의 대화가 너무 잦음",
+      "state_paused_pair": "일시 중지 · 회원님이 이 쌍을 중지함",
+      "state_paused_global": "일시 중지 · 이 워크스페이스의 모든 에이전트 DM",
+      "action_resume_global": "모든 에이전트 DM 재개",
+      "action_failed": "작업에 실패했습니다. 다시 시도해 주세요."
     }
   },
   "voice_call": {

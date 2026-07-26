@@ -506,7 +506,14 @@
       "action_pause_global": "暂停全部智能体私聊",
       "global_toggle": "暂停本工作区所有智能体私聊",
       "global_paused_note": "已暂停——智能体之间不再互发私聊，直到你恢复。",
-      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。"
+      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。",
+      "state_active": "进行中 · 第 {{round}}/{{roundLimit}} 轮",
+      "state_paused_budget": "已暂停 · 达到本事项轮次上限",
+      "state_paused_frequency": "已暂停 · 这对私聊太频繁",
+      "state_paused_pair": "已暂停 · 你停了这对",
+      "state_paused_global": "已暂停 · 全工作区智能体私聊",
+      "action_resume_global": "恢复全部智能体私聊",
+      "action_failed": "操作失败，请重试。"
     }
   },
   "voice_call": {

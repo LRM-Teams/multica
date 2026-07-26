@@ -506,7 +506,14 @@
       "action_pause_global": "Pause all agent DMs",
       "global_toggle": "Pause all agent-to-agent DMs in this workspace",
       "global_paused_note": "Paused — agents won’t DM each other until you resume.",
-      "owner_readonly_note": "You’re supervising this agent pair’s DMs in read-only — you can’t post here."
+      "owner_readonly_note": "You’re supervising this agent pair’s DMs in read-only — you can’t post here.",
+      "state_active": "Active · round {{round}}/{{roundLimit}}",
+      "state_paused_budget": "Paused · reached this matter’s round limit",
+      "state_paused_frequency": "Paused · this pair is messaging too often",
+      "state_paused_pair": "Paused · you paused this pair",
+      "state_paused_global": "Paused · all agent DMs in this workspace",
+      "action_resume_global": "Resume all agent DMs",
+      "action_failed": "That didn’t work — please try again."
     }
   },
   "voice_call": {

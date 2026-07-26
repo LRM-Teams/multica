@@ -5,6 +5,7 @@ import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { api } from "@multica/core/api";
 import type { ReplyFeedback } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 
 export function ReplyFeedbackBar({
   channelId,
@@ -15,6 +16,7 @@ export function ReplyFeedbackBar({
   messageId: string;
   initial?: ReplyFeedback | null;
 }) {
+  const { t } = useT("channels");
   const serverValue = initial?.value ?? null;
   const [optimistic, setOptimistic] = React.useState<1 | -1 | null | undefined>(undefined);
   const [busy, setBusy] = React.useState(false);
@@ -49,10 +51,10 @@ export function ReplyFeedbackBar({
       className="mt-1 flex items-center gap-1 border-0 p-0"
       data-testid="reply-feedback-bar"
     >
-      <legend className="sr-only">回复反馈</legend>
+      <legend className="sr-only">{t(($) => $.message.reply_feedback_legend)}</legend>
       <button
         type="button"
-        aria-label="点赞"
+        aria-label={t(($) => $.message.reply_feedback_up)}
         aria-pressed={value === 1}
         disabled={busy}
         onClick={() => void toggle(1)}
@@ -66,7 +68,7 @@ export function ReplyFeedbackBar({
       </button>
       <button
         type="button"
-        aria-label="点踩"
+        aria-label={t(($) => $.message.reply_feedback_down)}
         aria-pressed={value === -1}
         disabled={busy}
         onClick={() => void toggle(-1)}

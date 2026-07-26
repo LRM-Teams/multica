@@ -4,6 +4,7 @@ import * as React from "react";
 import { api } from "@multica/core/api";
 import type { MessagePart } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 
 type ChoicePart = Extract<MessagePart, { type: "choice" }>;
 
@@ -25,6 +26,7 @@ export function ChoiceCard({
   channelId?: string;
   messageId?: string;
 }) {
+  const { t } = useT("channels");
   const [pendingOptionId, setPendingOptionId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [localSelected, setLocalSelected] = React.useState<string | undefined>(undefined);
@@ -54,7 +56,7 @@ export function ChoiceCard({
         setLocalCount(selectCount + 1);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "选择失败");
+      setError(err instanceof Error ? err.message : t(($) => $.message.choice_failed));
     } finally {
       setPendingOptionId(null);
     }
@@ -110,10 +112,14 @@ export function ChoiceCard({
         })}
       </div>
       {selectCount === 1 && !locked ? (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">还可改选一次</p>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {t(($) => $.message.choice_reselect_hint)}
+        </p>
       ) : null}
       {locked ? (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">已锁定</p>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {t(($) => $.message.choice_locked)}
+        </p>
       ) : null}
       {error ? <p className="mt-1.5 text-xs text-destructive">{error}</p> : null}
     </div>

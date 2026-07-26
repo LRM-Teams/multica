@@ -432,6 +432,9 @@ type AgentTaskResponse struct {
 	// Empty when the runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
 
+	ReferencedEntities           []protocol.ReferencedEntitySnapshot `json:"referenced_entities,omitempty"`             // bounded, permission-filtered snapshots for canonical references in this turn
+	ReferencedEntityOmittedCount int                                 `json:"referenced_entity_omitted_count,omitempty"` // syntactically valid references beyond the hydration cap
+
 	// InboxEvent carries the canonical delivery lease. The daemon executes the
 	// projected task payload and reports lifecycle state through inbox endpoints.
 	InboxEvent *AgentInboxLeaseResponse `json:"inbox_event,omitempty"`

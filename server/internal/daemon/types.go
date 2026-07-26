@@ -136,6 +136,9 @@ type Task struct {
 	// guarantee an isolated, tool-free invocation.
 	ExecutionConfig *TaskExecutionConfig `json:"execution_config,omitempty"`
 
+	ReferencedEntities           []protocol.ReferencedEntitySnapshot `json:"referenced_entities,omitempty"`             // bounded, permission-filtered snapshots for canonical references in this turn
+	ReferencedEntityOmittedCount int                                 `json:"referenced_entity_omitted_count,omitempty"` // references beyond the hydration cap
+
 	// InboxEvent is present when this work item came from the raft-like
 	// agent inbox instead of legacy agent_inbox_event. Terminal callbacks must
 	// use the inbox lease endpoints and must not call task start/complete/fail.

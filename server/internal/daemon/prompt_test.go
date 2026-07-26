@@ -816,3 +816,55 @@ func TestWriteAgentRootSection(t *testing.T) {
 		}
 	}
 }
+
+func TestReferencedEntitySnapshotsAreSeparateFromExactTurnBody(t *testing.T) {
+	snapshots := []protocol.ReferencedEntitySnapshot{
+		{Type: "issue", ID: "issue-1", Content: "issue MUL-708: hydration / status: todo"},
+	}
+
+	t.Run("comment", func(t *testing.T) {
+		const body = "please inspect [MUL-708](mention://issue/11111111-1111-1111-1111-111111111111)"
+		out := buildCommentPrompt(Task{
+			IssueID:                      "issue-1",
+			TriggerCommentID:             "comment-1",
+			TriggerCommentContent:        body,
+			TriggerAuthorType:            "member",
+			ReferencedEntities:           snapshots,
+			ReferencedEntityOmittedCount: 1,
+		}, "codex")
+		if got := strings.Count(out, body); got != 1 {
+			t.Fatalf("comment body occurrence count = %d, want 1:\n%s", got, out)
+		}
+		for _, want := range []string{
+			"Referenced entity snapshots",
+			snapshots[0].Content,
+			"1 additional referenced entities were not expanded",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("comment prompt missing %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("direct chat", func(t *testing.T) {
+		const body = "compare the two references without rewriting this message"
+		out := buildChatPrompt(Task{
+			ChatSessionID:                "chat-1",
+			ChatMessage:                  body,
+			ReferencedEntities:           snapshots,
+			ReferencedEntityOmittedCount: 1,
+		}, "")
+		if got := strings.Count(out, body); got != 1 {
+			t.Fatalf("chat body occurrence count = %d, want 1:\n%s", got, out)
+		}
+		for _, want := range []string{
+			"Referenced entity snapshots",
+			snapshots[0].Content,
+			"1 additional referenced entities were not expanded",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("chat prompt missing %q:\n%s", want, out)
+			}
+		}
+	})
+}

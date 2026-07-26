@@ -2238,6 +2238,17 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 				}
 			}
 		}
+		if resp.TriggerCommentContent != "" {
+			references := h.hydrateReferencedEntities(
+				ctx,
+				resp.WorkspaceID,
+				resp.InitiatorType,
+				resp.InitiatorID,
+				referencedEntitySource{Content: resp.TriggerCommentContent},
+			)
+			resp.ReferencedEntities = references.Snapshots
+			resp.ReferencedEntityOmittedCount = references.OmittedCount
+		}
 		if !event.ForceFreshSession {
 			if prior, err := h.Queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
 				AgentID: event.AgentID,
@@ -2426,10 +2437,16 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 			return false
 		}
 		parts := make([]string, 0, len(promptMessages))
+		referenceSources := make([]referencedEntitySource, 0, len(promptMessages))
 		for _, m := range promptMessages {
 			if strings.TrimSpace(m.Content) != "" {
 				parts = append(parts, m.Content)
 			}
+			source := referencedEntitySource{Content: m.Content}
+			if len(m.Parts) > 0 {
+				_ = json.Unmarshal(m.Parts, &source.Parts)
+			}
+			referenceSources = append(referenceSources, source)
 			if atts, attErr := h.Queries.ListAttachmentsByChatMessage(ctx, db.ListAttachmentsByChatMessageParams{
 				ChatMessageID: m.ID,
 				WorkspaceID:   cs.WorkspaceID,
@@ -2443,7 +2460,35 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 		}
 		if len(msgs) > 0 {
 			totalTokens := h.chatSessionTokenTotal(ctx, cs.ID)
-			channelID := h.channelIDForChatSession(ctx, cs.ID)
+			channelID := resp.ChannelID
+			if channelID == "" {
+				var linkedChannelID pgtype.UUID
+				err := h.DB.QueryRow(ctx, `
+					SELECT channel_id
+					FROM channel_agent_session
+					WHERE chat_session_id = $1
+				`, cs.ID).Scan(&linkedChannelID)
+				switch {
+				case err == nil:
+					channelID = uuidToString(linkedChannelID)
+				case !errors.Is(err, pgx.ErrNoRows):
+					// An unknown session kind must not be treated as a direct
+					// chat, because that could re-parse a synthetic channel
+					// prompt and hydrate its member directory.
+					return false
+				}
+			}
+			if channelID == "" {
+				references := h.hydrateReferencedEntities(
+					ctx,
+					resp.WorkspaceID,
+					resp.InitiatorType,
+					resp.InitiatorID,
+					referenceSources...,
+				)
+				resp.ReferencedEntities = references.Snapshots
+				resp.ReferencedEntityOmittedCount = references.OmittedCount
+			}
 			threadRootID := h.threadRootIDForChatSession(ctx, cs.ID)
 			surface := buildConversationSurface(resp.WorkspaceID, uuidToString(event.AgentID), cs.ID, channelID, threadRootID, "")
 			if shouldIncludeChatContextSummary(msgs) {

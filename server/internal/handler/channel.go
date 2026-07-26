@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/messageparts"
+	"github.com/multica-ai/multica/server/internal/promptcontext"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -4037,7 +4038,21 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 			reason = "dm"
 		}
 	}
-	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, channelDirectedWakePriority)
+	actorType, actorID := channelPromptActor(trigger, initiatorUserID)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPromptForActor(ctx, ch, trigger, facilitatorState, actorType, actorID), "channel agent reply", true, reason, channelDirectedWakePriority)
+}
+
+func channelPromptActor(trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (string, string) {
+	if trigger.Type == "agent" && trigger.AuthorID != nil {
+		return "agent", *trigger.AuthorID
+	}
+	if initiatorUserID.Valid {
+		return "member", uuidToString(initiatorUserID)
+	}
+	if channelMessageIsHumanAuthored(trigger.Type) && trigger.AuthorID != nil {
+		return "member", *trigger.AuthorID
+	}
+	return "", ""
 }
 
 // dispatchChannelThreadContinuation wakes a thread participant for a non-@
@@ -5220,6 +5235,11 @@ func channelMentionPromptNeedsMemberDirectory(trigger ChannelMessageResponse) bo
 }
 
 func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, facilitatorState channelFacilitatorState) string {
+	actorType, actorID := channelPromptActor(trigger, pgtype.UUID{})
+	return h.buildChannelMentionPromptForActor(ctx, ch, trigger, facilitatorState, actorType, actorID)
+}
+
+func (h *Handler) buildChannelMentionPromptForActor(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, facilitatorState channelFacilitatorState, actorType, actorID string) string {
 	limit := channelContextMessageLimit
 	if trigger.Type == "agent" || trigger.ThreadRootMessageID != nil {
 		limit = channelAgentDirectedContextMessageLimit
@@ -5321,6 +5341,15 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
+	references := h.hydrateReferencedEntities(ctx, ch.WorkspaceID, actorType, actorID, referencedEntitySource{
+		Content: trigger.Content,
+		Parts:   trigger.Parts,
+	})
+	promptcontext.AppendReferencedEntitySnapshots(
+		&b,
+		references.Snapshots,
+		references.OmittedCount,
+	)
 	return b.String()
 }
 

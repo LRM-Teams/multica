@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/promptcontext"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -305,6 +306,7 @@ func buildCommentPrompt(task Task, provider string) string {
 		}
 		fmt.Fprintf(&b, "[NEW COMMENT] %s just left a new comment. Focus on THIS comment — do not confuse it with previous ones:\n\n", authorLabel)
 		fmt.Fprintf(&b, "> %s\n\n", task.TriggerCommentContent)
+		promptcontext.AppendReferencedEntitySnapshots(&b, task.ReferencedEntities, task.ReferencedEntityOmittedCount)
 		if task.TriggerAuthorType == "agent" {
 			b.WriteString("⚠️ The triggering comment was posted by another agent. Decide whether a reply is warranted. If you produced actual work this turn (investigated, fixed something, answered a real question), post the result as a normal reply — that is NOT a noise comment, and the standard rule that final results must be delivered via comment still applies. If the triggering comment was a pure acknowledgment, thanks, or sign-off AND you produced no work this turn, do NOT reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is the preferred way to end agent-to-agent threads. If you do reply, do not @mention the other agent as a sign-off (that re-triggers them and starts a loop).\n\n")
 		}
@@ -417,6 +419,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "User message:\n%s\n", task.ChatMessage)
+	promptcontext.AppendReferencedEntitySnapshots(&b, task.ReferencedEntities, task.ReferencedEntityOmittedCount)
 	// List attachments by id + filename so the agent can fetch them via
 	// the CLI. We deliberately do NOT inline the URL: chat attachments
 	// live behind a signed CDN with a short TTL, so by the time the agent

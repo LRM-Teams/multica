@@ -79,6 +79,7 @@ import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
+import { DmAgentWorkingCue } from "./dm-agent-working-cue";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -90,9 +91,10 @@ import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
  * ConversationAgentActivityLine (preparing / Thinking / Stop). Status
  * perception redesign is a separate issue.
  *
- * LRM-594 (Working 荐 A): agent DM header has no Working/Thinking chrome —
- * work state lives in Activity; Stop lives in AgentProfileActions (LRM-589).
- * 1:1 has no Stop all. Aligns with LRM-584 K=1/DM (no Working chrome).
+ * LRM-594 kept the heavy Working list / Stop chrome out of the 1:1 header
+ * (Stop stays in AgentProfileActions). We still show a bubble-style short
+ * cue (思考中 / Edit / Shell + breathe) so entering the DM is not silent
+ * while the agent works — no path/command details, no Working list.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -272,9 +274,17 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-594: agent DM header — name + presence dot only (no Working/Thinking).
-  // Work state → Activity; Stop → AgentProfileActions. Human peers keep "Human" meta.
+  // Agent DM: short bubble-style working cue (思考中 / Edit / Shell). Human
+  // peers keep the static "Human" meta. Stop stays in AgentProfileActions.
+  const workingCue = isAgentPeer ? (
+    <DmAgentWorkingCue agentId={peerId} />
+  ) : undefined;
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
+  // Mobile: put the cue under the name (meta line) — long agent names +
+  // back/avatar/actions leave too little room for same-row status.
+  // Desktop: Slack-style cue beside the name (status slot).
+  const headerStatus = isMobile ? undefined : workingCue;
+  const headerMeta = isMobile ? (workingCue ?? meta) : meta;
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
     [isMuted, t],
@@ -333,7 +343,9 @@ function DmHeader({
       title={wrapPeerTrigger(
         <span className="block truncate">{dm.peer.name}</span>,
       )}
-      meta={meta}
+      meta={headerMeta}
+      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
+      status={headerStatus}
       badges={mutedBadge}
       actions={
         <>

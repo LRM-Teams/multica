@@ -82,6 +82,12 @@ import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 import { DmAgentWorkingCue } from "./dm-agent-working-cue";
 
+// #692 finding 1: a supervised agent_pair owner is NOT a channel_member, so the
+// automatic member-only mark-read mutation 403s. Pass this no-op instead of the
+// real mark-read for the read-only supervision surface; the "N new" divider
+// still falls back to the entry cursor, no member-only request is fired.
+const noopMarkRead = () => {};
+
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
  *  - `dm_channel` — the DM IS a kind='dm' channel, so we reuse the exact
@@ -714,7 +720,11 @@ function DmChannelConversation({
   // Mark read on open — clears the badge — and expose the pre-advance read
   // cursor from the mark-read response for the race-free "N new messages"
   // divider (#303).
-  const dividerLastReadSeq = useEntryReadCursor(channelId, dm.last_read_seq, markChannelRead);
+  const dividerLastReadSeq = useEntryReadCursor(
+    channelId,
+    dm.last_read_seq,
+    supervisedReadOnly ? noopMarkRead : markChannelRead,
+  );
 
   useEffect(() => {
     dispatch({ type: "resetForChannel" });
@@ -758,8 +768,10 @@ function DmChannelConversation({
 
   useEffect(() => {
     if (!threadRoot) return;
+    // #692 finding 1: supervisor isn't a channel_member — thread mark-read 403s.
+    if (supervisedReadOnly) return;
     markThreadRead({ channelId, messageId: threadRoot.id });
-  }, [channelId, threadRoot, markThreadRead]);
+  }, [channelId, threadRoot, markThreadRead, supervisedReadOnly]);
 
   useEffect(() => {
     if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
@@ -779,7 +791,9 @@ function DmChannelConversation({
     const e = payload as { channel_id?: string };
     if (e.channel_id !== channelId) return;
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    markChannelRead(channelId);
+    // #692 finding 1: don't auto-mark-read on new messages for the read-only
+    // supervision surface — the supervisor isn't a member, so it would 403.
+    if (!supervisedReadOnly) markChannelRead(channelId);
   });
 
   useWSEvent("task:cancelled", () => {
@@ -798,7 +812,12 @@ function DmChannelConversation({
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
-  const publishTyping = (isTyping: boolean) => setTyping.mutate({ channelId, isTyping });
+  // #692 finding 1: a read-only supervisor never types — and typing is a
+  // member-only mutation that would 403 — so it's a no-op on that surface.
+  const publishTyping = (isTyping: boolean) => {
+    if (supervisedReadOnly) return;
+    setTyping.mutate({ channelId, isTyping });
+  };
 
   const scheduleTypingStop = () => {
     if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
@@ -1081,15 +1100,19 @@ function DmChannelConversation({
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader actions slot
           actions={
             <>
-              <ThreadFollowButton
-                followed={threadSurfaceRoot.thread_followed === true}
-                disabled={
-                  threadLoading ||
-                  (setThreadFollowed.isPending &&
-                    setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
-                }
-                onFollowChange={handleThreadFollowChange}
-              />
+              {/* #692 finding 1: thread-follow is a member-only mutation — hidden
+                  for the read-only supervisor (it would 403). */}
+              {!supervisedReadOnly && (
+                <ThreadFollowButton
+                  followed={threadSurfaceRoot.thread_followed === true}
+                  disabled={
+                    threadLoading ||
+                    (setThreadFollowed.isPending &&
+                      setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
+                  }
+                  onFollowChange={handleThreadFollowChange}
+                />
+              )}
               {/* LRM-572 — no Maximize2;「在对话中查看」lives in the subtitle meta. */}
               {!isMobile && (
                 <Button
@@ -1125,11 +1148,14 @@ function DmChannelConversation({
           loading={threadLoading}
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
-          onReact={handleReactToMessage}
-          onQuoteMessage={setThreadQuoteTarget}
-          onEditMessage={handleEditMessage}
-          onDeleteMessage={handleDeleteMessage}
-          onRetrySend={handleRetrySend}
+          // #692 finding 1: the read-only supervisor gets no message-mutation
+          // affordances — omitting these handlers makes ChannelMessageBubble drop
+          // its reaction / quote / edit / delete / retry controls entirely.
+          onReact={supervisedReadOnly ? undefined : handleReactToMessage}
+          onQuoteMessage={supervisedReadOnly ? undefined : setThreadQuoteTarget}
+          onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
+          onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
+          onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
         />
         <Composer
           surface="thread"
@@ -1214,11 +1240,16 @@ function DmChannelConversation({
         filesChannelId={channelId}
         onSearchOpen={() => dispatch({ type: "openSearch" })}
         voiceCallAction={
-          <DmAgentVoiceCall
-            workspaceId={wsId}
-            channelId={channelId}
-            peer={dm.peer}
-          />
+          // #692 finding 1: no voice call on the read-only supervision surface —
+          // the supervisor owns neither end's session and the projected `peer`
+          // is only one of the two agents.
+          supervisedReadOnly ? undefined : (
+            <DmAgentVoiceCall
+              workspaceId={wsId}
+              channelId={channelId}
+              peer={dm.peer}
+            />
+          )
         }
       />
       {dm.mode === "agent_pair" && dm.a2a_control && (
@@ -1322,11 +1353,14 @@ function DmChannelConversation({
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
         onOpenAgent={handleOpenAgentPanel}
-        onReact={handleReactToMessage}
-        onQuoteMessage={setQuoteTarget}
-        onEditMessage={handleEditMessage}
-        onDeleteMessage={handleDeleteMessage}
-        onRetrySend={handleRetrySend}
+        // #692 finding 1: read-only supervisor gets no message-mutation
+        // affordances — dropping these handlers removes the bubble's
+        // reaction / quote / edit / delete / retry controls.
+        onReact={supervisedReadOnly ? undefined : handleReactToMessage}
+        onQuoteMessage={supervisedReadOnly ? undefined : setQuoteTarget}
+        onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
+        onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
+        onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
       />
       <Composer
         surface="dm_channel"

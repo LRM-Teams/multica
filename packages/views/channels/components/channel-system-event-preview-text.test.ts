@@ -59,8 +59,8 @@ const TEMPLATES = {
         paused_budget: "他们就「{matter}」来回到了上限（{round}/{roundLimit} 轮），已暂停。",
         paused_frequency: "{agentA} 和 {agentB} 私聊太频繁、已暂停这对。",
         paused_pair: "你已暂停这对智能体的私聊——他们不再互发，直到你恢复。",
-        paused_global: "你已暂停本工作区所有智能体私聊——所有智能体之间都不再互发，直到你恢复。",
-        resumed: "已恢复，智能体可以继续私聊了。",
+        paused_global: "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。",
+        resumed: "已恢复，你的智能体可以继续私聊了。",
       },
     },
   },
@@ -325,14 +325,14 @@ describe("formatSystemEventPreviewText", () => {
   it("localizes an owner global-pause row (static copy)", () => {
     const message = systemMessage({ event: "agent_dm_paused_global", params: a2aParams });
     expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "你已暂停本工作区所有智能体私聊——所有智能体之间都不再互发，直到你恢复。",
+      "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。",
     );
   });
 
   it("localizes a resume row (static copy)", () => {
     const message = systemMessage({ event: "agent_dm_resumed", params: a2aParams });
     expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "已恢复，智能体可以继续私聊了。",
+      "已恢复，你的智能体可以继续私聊了。",
     );
   });
 });

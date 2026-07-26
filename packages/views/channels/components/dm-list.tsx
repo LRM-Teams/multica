@@ -617,40 +617,47 @@ export function DmConversationRow({
             </div>
           </div>
         </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                type="button"
-                aria-label={t(($) => $.dm.menu_aria)}
-                className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
-              >
-                <MoreHorizontal className="size-4" />
-              </button>
-            }
-          />
-          <DropdownMenuContent align="end">
-            <DmDropdownMenuItems
-              pinned={pinned}
-              isMuted={isMuted}
-              onMarkUnread={onMarkUnread}
-              onTogglePin={onTogglePin}
-              onToggleMute={onToggleMute}
-              onClose={onClose}
+        {/* #692 finding 1: a supervised agent_pair DM is read-only for the owner
+            — pin/unread/mute/close are member-conversation mutations that 403, so
+            the row exposes neither the ⋯ menu nor the right-click menu. */}
+        {!agentPair && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t(($) => $.dm.menu_aria)}
+                  className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                >
+                  <MoreHorizontal className="size-4" />
+                </button>
+              }
             />
-          </DropdownMenuContent>
-        </DropdownMenu>
+            <DropdownMenuContent align="end">
+              <DmDropdownMenuItems
+                pinned={pinned}
+                isMuted={isMuted}
+                onMarkUnread={onMarkUnread}
+                onTogglePin={onTogglePin}
+                onToggleMute={onToggleMute}
+                onClose={onClose}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </ContextMenuTrigger>
-      <ContextMenuContent>
-        <DmContextMenuItems
-          pinned={pinned}
-          isMuted={isMuted}
-          onMarkUnread={onMarkUnread}
-          onTogglePin={onTogglePin}
-          onToggleMute={onToggleMute}
-          onClose={onClose}
-        />
-      </ContextMenuContent>
+      {!agentPair && (
+        <ContextMenuContent>
+          <DmContextMenuItems
+            pinned={pinned}
+            isMuted={isMuted}
+            onMarkUnread={onMarkUnread}
+            onTogglePin={onTogglePin}
+            onToggleMute={onToggleMute}
+            onClose={onClose}
+          />
+        </ContextMenuContent>
+      )}
     </ContextMenu>
   );
 }

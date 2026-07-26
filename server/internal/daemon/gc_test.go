@@ -1417,3 +1417,49 @@ func TestShouldCleanTaskDir_LocalDirectoryFalsePreservesNormalClean(t *testing.T
 		t.Fatalf("expected gcActionClean for normal task, got %d", got)
 	}
 }
+
+func TestGCSkipWorkspaceRootName(t *testing.T) {
+	t.Parallel()
+	if !gcSkipWorkspaceRootName(".repos") {
+		t.Fatal("expected .repos to be skipped")
+	}
+	if !gcSkipWorkspaceRootName("projects") {
+		t.Fatal("expected projects to be skipped")
+	}
+	if gcSkipWorkspaceRootName("7beafc96-3c51-4fcc-9fe7-8c36ceb482ff") {
+		t.Fatal("workspace UUID roots must still be scanned")
+	}
+}
+
+// TestRunGC_SkipsManagedProjectsRoot ensures managed project workdirs under
+// WorkspacesRoot/projects/<id>/ are never treated as orphan task dirs.
+func TestRunGC_SkipsManagedProjectsRoot(t *testing.T) {
+	t.Parallel()
+	d := newGCTestDaemon(t, http.NewServeMux())
+	d.cfg.GCOrphanTTL = 0 // any no-meta dir would normally be reclaimed
+
+	projectDir := filepath.Join(d.cfg.WorkspacesRoot, "projects", "5932fd66-4e0a-4942-85e1-a4b9626b7835")
+	workdir := filepath.Join(projectDir, "workdir")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(workdir, "keep-me.txt")
+	if err := os.WriteFile(marker, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Control: a real workspace orphan without meta must still be cleaned.
+	orphan := createTaskDir(t, d.cfg.WorkspacesRoot, "ws-control", "orphan-task", nil)
+
+	d.runGC(context.Background())
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("managed projects workdir must survive GC, stat marker: %v", err)
+	}
+	if _, err := os.Stat(projectDir); err != nil {
+		t.Fatalf("managed project dir must survive GC: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("control orphan under a real workspace should still be removed, err=%v", err)
+	}
+}

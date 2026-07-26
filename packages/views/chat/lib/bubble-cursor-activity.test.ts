@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activeBubbleStepSummary,
+  bubbleToolSummary,
   classifyBubbleToolKind,
   deriveBubbleCursorPanels,
   extractTodoItems,
@@ -97,5 +98,24 @@ describe("friendlyBubbleToolLabel / activeBubbleStepSummary", () => {
       },
     ];
     expect(activeBubbleStepSummary(items)).toBe("Read · .../c/daemon.go");
+  });
+
+  it("summarizes shell cmd / target_file aliases", () => {
+    expect(
+      bubbleToolSummary({
+        seq: 1,
+        type: "tool_use",
+        tool: "shell",
+        input: { cmd: "pnpm test" },
+      }),
+    ).toBe("pnpm test");
+    expect(
+      bubbleToolSummary({
+        seq: 2,
+        type: "tool_use",
+        tool: "read_file",
+        input: { target_file: "/x/y/z/note.ts" },
+      }),
+    ).toBe(".../z/note.ts");
   });
 });

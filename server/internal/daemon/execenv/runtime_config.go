@@ -185,23 +185,23 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 // MaterializeCanonicalTurnContext writes Multica turn-scoped provider context
 // into a stable agent workspace (D6-1b turn.WorkDir).
 //
-// Tier A (stable): durable agent files outside Multica managed markers are left alone.
-// Tier B (refresh): managed AGENTS.md/CLAUDE.md block + skills + .agent_context for this turn.
-// Tier C (no residual): previous turn task sidecars under .agent_context and Multica-managed
-// skill dirs in the workspace are removed before rewrite so task A facts cannot leak into turn B.
+// Tier A (stable): durable agent files outside Multica managed markers are left alone —
+// including user/agent-owned provider-native skills under .grok/skills, .pi/skills, etc.
+// Tier B (refresh): managed AGENTS.md/CLAUDE.md block + Multica skills + .agent_context.
+// Tier C (no residual): previous-turn Multica task sidecars under .agent_context and
+// Multica-managed skill dirs (bearing managedSkillMarker) are removed before rewrite.
+// Never RemoveAll the whole provider skills parent — that would delete Tier A skills.
 func MaterializeCanonicalTurnContext(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	workDir = strings.TrimSpace(workDir)
 	if workDir == "" {
 		return "", errors.New("canonical turn workdir is required")
 	}
-	// Tier C first: drop prior-turn task sidecars before any rewrite.
+	// Tier C first: drop prior-turn Multica task sidecars before any rewrite.
 	if err := os.RemoveAll(filepath.Join(workDir, ".agent_context")); err != nil {
 		return "", fmt.Errorf("clear prior turn .agent_context: %w", err)
 	}
-	if skills := skillsDirPath(workDir, provider); skills != "" {
-		if err := os.RemoveAll(skills); err != nil {
-			return "", fmt.Errorf("clear prior turn skills dir: %w", err)
-		}
+	if err := removeManagedSkillDirs(workDir, provider); err != nil {
+		return "", fmt.Errorf("clear prior turn managed skills: %w", err)
 	}
 	// Tier B: refresh Multica-managed runtime brief (marker-idempotent) + task context/skills.
 	brief, err := InjectRuntimeConfig(workDir, provider, ctx)
@@ -212,6 +212,36 @@ func MaterializeCanonicalTurnContext(workDir, provider string, ctx TaskContextFo
 		return "", fmt.Errorf("write canonical turn context files: %w", err)
 	}
 	return brief, nil
+}
+
+// removeManagedSkillDirs removes only Multica-owned skill packages under the
+// provider-native skills parent (directories bearing managedSkillMarker).
+// Unmarked user/agent skill siblings are left intact (Tier A).
+func removeManagedSkillDirs(workDir, provider string) error {
+	skills := skillsDirPath(workDir, provider)
+	if skills == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(skills)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(skills, entry.Name())
+		if !isManagedSkillDir(dir) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove managed skill dir %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // runtimeConfigPath returns the absolute path to the runtime config file that

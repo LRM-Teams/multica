@@ -5,16 +5,32 @@ import { dmKeys } from "./queries";
 import type { AgentDMControlAction, CreateOrFindDMBody, DMItem } from "./types";
 
 /**
- * Create-or-find a 1-on-1 DM with a peer (idempotent). On success the DM list
- * is invalidated so a freshly created DM appears in the sidebar. The returned
- * `DMItem` is what callers select/open in the Messages view.
+ * Create-or-find a 1-on-1 DM with a peer (idempotent). The returned `DMItem`
+ * is what callers select/open in the Messages view.
+ *
+ * On success we SEED the returned DM into the list cache synchronously, THEN
+ * invalidate. The seed matters because `useOpenDM` navigates to
+ * `/channels/{dm.id}` immediately after this mutation resolves: `channels-page`
+ * resolves the active conversation via `dms.find(id)` and, when the id isn't in
+ * `dms`, falls back to the system #general channel. Invalidate alone only
+ * triggers an ASYNC refetch, so the sync navigation races it — for a
+ * freshly-created DM the id isn't in the cached list yet → the picker/hover
+ * "Send message" lands the user on #general instead of the new DM (a
+ * private→public misroute). Seeding makes the DM resolvable at nav time;
+ * invalidate still runs so the server's canonical row/ordering wins once it
+ * returns.
  */
 export function useCreateOrFindDM() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (body: CreateOrFindDMBody) => api.createOrFindDM(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+    onSuccess: (dm) => {
+      qc.setQueryData<DMItem[]>(dmKeys.list(wsId), (old) =>
+        old ? (old.some((d) => d.id === dm.id) ? old : [dm, ...old]) : [dm],
+      );
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
   });
 }
 

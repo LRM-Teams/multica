@@ -154,6 +154,9 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 // BEFORE trigger (Radar authorization guard) may suppress the row change with
 // RETURN NULL. In that case we must never INSERT a delivery. Permanently
 // unauthorized Radar heads are terminalized so they cannot livelock FIFO.
+// Any poison rows terminalized in this transaction are committed even when no
+// delivery is leased (poison-only / drained-to-empty / hit max), so cleanup is
+// durable across drain polls.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
@@ -172,6 +175,20 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 	// for another drain poll. Bound the loop so a pathological backlog cannot
 	// monopolize the drain request.
 	const maxPoisonTerminalizations = 8
+	terminalizedCount := 0
+	// commitNoDelivery makes any in-tx poison cleanup durable before reporting
+	// no leasable event. Without this, poison-only / empty-tail / max-cap paths
+	// would return ErrNoRows with defer Rollback and leave poisons pending.
+	commitNoDelivery := func() error {
+		if terminalizedCount == 0 {
+			return pgx.ErrNoRows
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return pgx.ErrNoRows
+	}
+
 	for attempt := 0; attempt <= maxPoisonTerminalizations; attempt++ {
 		var eventID, agentID pgtype.UUID
 		err = tx.QueryRow(ctx, `
@@ -202,6 +219,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
 			LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
 			return db.AgentEventDelivery{}, err
 		}
 		if err := tx.QueryRow(ctx, `
@@ -209,6 +229,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			FROM agent
 			WHERE id = $1
 			FOR UPDATE`, agentID).Scan(&agentID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
 			return db.AgentEventDelivery{}, err
 		}
 		err = tx.QueryRow(ctx, `
@@ -240,6 +263,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			  )
 			FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
 			return db.AgentEventDelivery{}, err
 		}
 
@@ -267,8 +293,14 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			if termErr != nil {
 				return db.AgentEventDelivery{}, termErr
 			}
-			if !terminalized || attempt == maxPoisonTerminalizations {
-				return db.AgentEventDelivery{}, pgx.ErrNoRows
+			if !terminalized {
+				// Race or non-Radar suppression: keep any prior cleanups durable.
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			terminalizedCount++
+			if attempt == maxPoisonTerminalizations {
+				// Cap reached after this durable cleanup; later polls continue.
+				return db.AgentEventDelivery{}, commitNoDelivery()
 			}
 			continue
 		}
@@ -309,7 +341,7 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		}
 		return delivery, nil
 	}
-	return db.AgentEventDelivery{}, pgx.ErrNoRows
+	return db.AgentEventDelivery{}, commitNoDelivery()
 }
 
 // terminalizeUnauthorizedRadarInboxEventTx permanently fails a still-pending

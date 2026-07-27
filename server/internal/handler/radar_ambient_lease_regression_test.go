@@ -200,6 +200,191 @@ func TestRadarAmbientEventAuthorizationAndLeaseGate(t *testing.T) {
 			t.Fatalf("second lease err=%v, want no rows while directed delivery active", err)
 		}
 	})
+
+	// Barry #778 CODE BLOCK: poison-only must commit terminalize, not defer-rollback.
+	t.Run("poison-only terminalize is durable without a following wake", func(t *testing.T) {
+		agentID, runtimeID, _ := createRuntimeGuardAgent(t, ctx)
+		channelID := seedChannelForTest(t, "radar-ambient-poison-only-"+uuid.NewString()[:8], testUserID)
+
+		run, poison, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
+			WorkspaceID:    parseUUID(testWorkspaceID),
+			AgentID:        parseUUID(agentID),
+			ChannelID:      parseUUID(channelID),
+			ContextMode:    "coordination",
+			TriggerKind:    "event",
+			TriggerRef:     "task-777-poison-only",
+			CooldownKey:    "wendy_ambient:" + channelID,
+			ContextSummary: "poison only",
+			ScheduledFor:   time.Now().Add(-time.Minute),
+			Prompt:         "poison only",
+		})
+		if err != nil {
+			t.Fatalf("enqueue poison-only ambient: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, poison.ID)
+		})
+
+		runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("load runtime: %v", err)
+		}
+		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("poison-only lease err=%v, want no rows", err)
+		}
+
+		var status, reason, runStatus string
+		var deliveries int
+		if err := testPool.QueryRow(ctx, `
+			SELECT status, COALESCE(failure_reason, '')
+			FROM agent_inbox_event WHERE id = $1
+		`, poison.ID).Scan(&status, &reason); err != nil {
+			t.Fatalf("read poison-only status: %v", err)
+		}
+		if status != "acked" || reason != "radar_unauthorized" {
+			t.Fatalf("poison-only status/reason=%s/%s, want acked/radar_unauthorized (must not rollback)", status, reason)
+		}
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*) FROM agent_event_delivery WHERE inbox_event_id = $1
+		`, poison.ID).Scan(&deliveries); err != nil {
+			t.Fatalf("count poison-only deliveries: %v", err)
+		}
+		if deliveries != 0 {
+			t.Fatalf("poison-only deliveries=%d, want 0", deliveries)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status FROM agent_radar_run WHERE id = $1`, run.ID).Scan(&runStatus); err != nil {
+			t.Fatalf("read poison-only run: %v", err)
+		}
+		if runStatus != "failed" {
+			t.Fatalf("poison-only run status=%q, want failed", runStatus)
+		}
+	})
+
+	// Cap is 8 loop steps (attempts 0..8 ⇒ up to 9 durable cleanups per drain).
+	// Seed more than one drain can clear; first poll must leave a durable partial
+	// batch, second poll finishes the rest — never whole-batch rollback.
+	t.Run("poison batch over cap is durable across polls", func(t *testing.T) {
+		const poisonCount = 12 // > maxPoisonTerminalizations+1 (9)
+		// One shared runtime, many agents (one active radar run per agent).
+		runtimeID := createClaimReclaimRuntime(t, ctx, "poison-cap-runtime-"+uuid.NewString()[:8])
+		type poisonRow struct {
+			taskID string
+			runID  string
+		}
+		poisons := make([]poisonRow, 0, poisonCount)
+		for i := 0; i < poisonCount; i++ {
+			var agentID string
+			if err := testPool.QueryRow(ctx, `
+				INSERT INTO agent (
+				  workspace_id, name, runtime_mode, runtime_config,
+				  runtime_id, visibility, max_concurrent_tasks, owner_id
+				)
+				VALUES ($1, $2, 'local', '{}'::jsonb, $3, 'workspace', 1, $4)
+				RETURNING id
+			`, testWorkspaceID, "Poison Cap Agent "+uuid.NewString()[:8], runtimeID, testUserID).Scan(&agentID); err != nil {
+				t.Fatalf("create poison agent %d: %v", i, err)
+			}
+			t.Cleanup(func() {
+				_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+			})
+			channelID := seedChannelForTest(t, "radar-poison-cap-"+uuid.NewString()[:8], testUserID)
+			run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
+				WorkspaceID:    parseUUID(testWorkspaceID),
+				AgentID:        parseUUID(agentID),
+				ChannelID:      parseUUID(channelID),
+				ContextMode:    "coordination",
+				TriggerKind:    "event",
+				TriggerRef:     "task-777-poison-cap",
+				CooldownKey:    "wendy_ambient:" + channelID,
+				ContextSummary: "poison cap",
+				ScheduledFor:   time.Now().Add(-time.Duration(poisonCount-i) * time.Second),
+				Prompt:         "poison cap",
+			})
+			if err != nil {
+				t.Fatalf("enqueue poison cap %d: %v", i, err)
+			}
+			// Force older created_at so FIFO ordering is deterministic across agents.
+			if _, err := testPool.Exec(ctx, `
+				UPDATE agent_inbox_event
+				SET created_at = now() - make_interval(secs => $2)
+				WHERE id = $1
+			`, task.ID, poisonCount-i); err != nil {
+				t.Fatalf("backdate poison %d: %v", i, err)
+			}
+			t.Cleanup(func() {
+				_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
+				_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID)
+			})
+			poisons = append(poisons, poisonRow{taskID: uuidToString(task.ID), runID: uuidToString(run.ID)})
+		}
+
+		runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("load runtime: %v", err)
+		}
+
+		countByStatus := func() (acked, pending int) {
+			t.Helper()
+			ids := make([]string, len(poisons))
+			for i, p := range poisons {
+				ids[i] = p.taskID
+			}
+			if err := testPool.QueryRow(ctx, `
+				SELECT
+				  count(*) FILTER (WHERE status = 'acked' AND failure_reason = 'radar_unauthorized'),
+				  count(*) FILTER (WHERE status IN ('pending', 'failed'))
+				FROM agent_inbox_event
+				WHERE id = ANY($1::uuid[])
+			`, ids).Scan(&acked, &pending); err != nil {
+				t.Fatalf("count poison statuses: %v", err)
+			}
+			return acked, pending
+		}
+
+		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("first over-cap lease err=%v, want no rows", err)
+		}
+		acked1, pending1 := countByStatus()
+		if acked1 == 0 || pending1 == 0 {
+			t.Fatalf("after first poll acked=%d pending=%d, want partial durable cleanup (acked>0 and pending>0)", acked1, pending1)
+		}
+		if acked1+pending1 != poisonCount {
+			t.Fatalf("after first poll acked+pending=%d, want %d", acked1+pending1, poisonCount)
+		}
+
+		// Subsequent polls must drain the remainder without re-pending first batch.
+		for poll := 0; poll < 4; poll++ {
+			if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("follow-up lease poll %d err=%v, want no rows", poll, err)
+			}
+			acked, pending := countByStatus()
+			if acked < acked1 {
+				t.Fatalf("poll %d acked=%d regressed below first-batch %d (rollback bug)", poll, acked, acked1)
+			}
+			if pending == 0 {
+				break
+			}
+		}
+		ackedFinal, pendingFinal := countByStatus()
+		if pendingFinal != 0 || ackedFinal != poisonCount {
+			t.Fatalf("final acked=%d pending=%d, want acked=%d pending=0", ackedFinal, pendingFinal, poisonCount)
+		}
+		var failedRuns int
+		runIDs := make([]string, len(poisons))
+		for i, p := range poisons {
+			runIDs[i] = p.runID
+		}
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*) FROM agent_radar_run
+			WHERE id = ANY($1::uuid[]) AND status = 'failed'
+		`, runIDs).Scan(&failedRuns); err != nil {
+			t.Fatalf("count failed runs: %v", err)
+		}
+		if failedRuns != poisonCount {
+			t.Fatalf("failed runs=%d, want %d", failedRuns, poisonCount)
+		}
+	})
 }
 
 // Compile-time guard that db.AgentEventDelivery stays the lease return type.

@@ -15,7 +15,12 @@ import {
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
 import { useWorkspacePaths } from "@multica/core/paths";
-import type { Agent, MemberRole } from "@multica/core/types";
+import type {
+  Agent,
+  MemberProfile,
+  MemberRole,
+  MemberWithUser,
+} from "@multica/core/types";
 import {
   agentListOptions,
   memberListOptions,
@@ -36,6 +41,9 @@ import { AppLink } from "../navigation";
 import { useT } from "../i18n/use-t";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
+
+/** Stable shell leading slot — avoid jsx-as-prop redraw (react-doctor). */
+const MEMBER_PANEL_LOADING_LEADING = <Skeleton className="h-5 w-28" />;
 
 interface MemberSidePanelProps {
   userId: string;
@@ -58,23 +66,116 @@ export function MemberSidePanel({
   const { t } = useT("members");
   const { t: tChannels } = useT("channels");
   const wsId = useWorkspaceId();
-  const paths = useWorkspacePaths();
-  const qc = useQueryClient();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
-  const setUser = useAuthStore((s) => s.setUser);
-  const openAgentFromContext = useOpenAgentPanel();
   const { data: members = [], isPending: membersPending } = useQuery(
     memberListOptions(wsId),
   );
   const { data: profile, isPending: profilePending } = useQuery(
     memberProfileOptions(wsId, "user", userId),
   );
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: runCounts = [] } = useQuery(agentRunCounts30dOptions(wsId));
 
   const member = members.find((m) => m.user_id === userId) ?? null;
-  const isSelf = !!currentUserId && currentUserId === userId;
   const isPending = (membersPending && !member) || (profilePending && !profile);
+  const closeAriaLabel = tChannels(($) => $.profile_popover.close_aria);
+  const unavailableLabel = t(($) => $.card.unavailable);
+
+  if (isPending) {
+    return (
+      <ConversationSidePanelShell
+        variant={variant}
+        onClose={onClose}
+        closeAriaLabel={closeAriaLabel}
+        leading={MEMBER_PANEL_LOADING_LEADING}
+      >
+        <div className="space-y-3 p-4" data-testid="member-side-panel-loading">
+          <Skeleton className="h-16 w-16 rounded-[10px]" />
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      </ConversationSidePanelShell>
+    );
+  }
+
+  if (!member && !profile) {
+    return (
+      <MemberUnavailablePanel
+        variant={variant}
+        onClose={onClose}
+        closeAriaLabel={closeAriaLabel}
+        label={unavailableLabel}
+      />
+    );
+  }
+
+  return (
+    <MemberSidePanelReady
+      userId={userId}
+      member={member}
+      profile={profile}
+      isSelf={!!currentUserId && currentUserId === userId}
+      onClose={onClose}
+      onMessage={onMessage}
+      variant={variant}
+      closeAriaLabel={closeAriaLabel}
+    />
+  );
+}
+
+function MemberUnavailablePanel({
+  variant,
+  onClose,
+  closeAriaLabel,
+  label,
+}: {
+  variant: "panel" | "page";
+  onClose: () => void;
+  closeAriaLabel: string;
+  label: string;
+}) {
+  const leading = useMemo(
+    () => <span className="text-sm text-muted-foreground">{label}</span>,
+    [label],
+  );
+  return (
+    <ConversationSidePanelShell
+      variant={variant}
+      onClose={onClose}
+      closeAriaLabel={closeAriaLabel}
+      leading={leading}
+    >
+      <div className="p-4 text-sm text-muted-foreground">{label}</div>
+    </ConversationSidePanelShell>
+  );
+}
+
+function MemberSidePanelReady({
+  userId,
+  member,
+  profile,
+  isSelf,
+  onClose,
+  onMessage,
+  variant,
+  closeAriaLabel,
+}: {
+  userId: string;
+  member: MemberWithUser | null;
+  profile: MemberProfile | null | undefined;
+  isSelf: boolean;
+  onClose: () => void;
+  onMessage?: (userId: string) => void;
+  variant: "panel" | "page";
+  closeAriaLabel: string;
+}) {
+  const { t } = useT("members");
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const qc = useQueryClient();
+  const setUser = useAuthStore((s) => s.setUser);
+  const openAgentFromContext = useOpenAgentPanel();
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: runCounts = [] } = useQuery(agentRunCounts30dOptions(wsId));
+  const messageAriaLabel = t(($) => $.panel.message_aria);
 
   const displayName = useMemo(() => {
     if (member) return resolveActorDisplayName(member, member.name);
@@ -83,16 +184,20 @@ export function MemberSidePanel({
         resolveActorIdentityPresentation(
           { name: profile.name, display_name: profile.display_name },
           "",
-        ).displayName || profile.display_name || profile.name
+        ).displayName ||
+        profile.display_name ||
+        profile.name
       );
     }
     return "";
   }, [member, profile]);
 
   const handle = useMemo(() => {
-    const identity = member ?? (profile
-      ? { name: profile.name, display_name: profile.display_name }
-      : null);
+    const identity =
+      member ??
+      (profile
+        ? { name: profile.name, display_name: profile.display_name }
+        : null);
     if (!identity) return null;
     return formatActorHandleLabel(resolveActorHandle(identity));
   }, [member, profile]);
@@ -100,7 +205,10 @@ export function MemberSidePanel({
   const handleRaw = member
     ? resolveActorHandle(member)
     : profile
-      ? resolveActorHandle({ name: profile.name, display_name: profile.display_name })
+      ? resolveActorHandle({
+          name: profile.name,
+          display_name: profile.display_name,
+        })
       : null;
   const showHandle =
     !!handle &&
@@ -112,6 +220,11 @@ export function MemberSidePanel({
   const role = (member?.role ?? profile?.role ?? "") as MemberRole | string;
   const email = member?.email?.trim() || "";
   const joinedAt = member?.created_at ?? null;
+  const avatarUrl = resolvePublicFileUrl(
+    member?.avatar_url ?? profile?.avatar_url ?? null,
+  );
+  const canMessage = !!onMessage && !isSelf;
+  const youSuffix = isSelf ? ` ${t(($) => $.panel.you_suffix)}` : "";
 
   const runCountById = useMemo(
     () => new Map(runCounts.map((r) => [r.agent_id, r.run_count])),
@@ -130,6 +243,49 @@ export function MemberSidePanel({
       });
   }, [agents, runCountById, userId]);
 
+  const identityLeading = useMemo(
+    () => (
+      <>
+        <ActorAvatarBase
+          name={displayName || "?"}
+          initials={avatarGlyph(displayName || "?")}
+          avatarUrl={avatarUrl}
+          size={22}
+          toneSeed={`member:${userId}`}
+          className="rounded-[5px]"
+        />
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="truncate text-[12.5px] font-semibold">
+            {displayName}
+          </div>
+          {showHandle && handle ? (
+            <div className="truncate font-mono text-[11px] text-muted-foreground">
+              {handle}
+            </div>
+          ) : null}
+        </div>
+      </>
+    ),
+    [avatarUrl, displayName, handle, showHandle, userId],
+  );
+
+  const messageActions = useMemo(
+    () =>
+      canMessage ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => onMessage?.(userId)}
+          aria-label={messageAriaLabel}
+          data-testid="member-side-panel-message"
+        >
+          <MessageSquare className="size-4" />
+        </Button>
+      ) : null,
+    [canMessage, messageAriaLabel, onMessage, userId],
+  );
+
   const saveDescription = async (next: string) => {
     const updated = await api.updateMe({ profile_description: next });
     setUser(updated);
@@ -142,89 +298,13 @@ export function MemberSidePanel({
     });
   };
 
-  if (isPending) {
-    return (
-      <ConversationSidePanelShell
-        variant={variant}
-        onClose={onClose}
-        closeAriaLabel={tChannels(($) => $.profile_popover.close_aria)}
-        leading={<Skeleton className="h-5 w-28" />}
-      >
-        <div className="space-y-3 p-4" data-testid="member-side-panel-loading">
-          <Skeleton className="h-16 w-16 rounded-[10px]" />
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-3 w-24" />
-        </div>
-      </ConversationSidePanelShell>
-    );
-  }
-
-  if (!member && !profile) {
-    return (
-      <ConversationSidePanelShell
-        variant={variant}
-        onClose={onClose}
-        closeAriaLabel={tChannels(($) => $.profile_popover.close_aria)}
-        leading={
-          <span className="text-sm text-muted-foreground">
-            {t(($) => $.card.unavailable)}
-          </span>
-        }
-      >
-        <div className="p-4 text-sm text-muted-foreground">
-          {t(($) => $.card.unavailable)}
-        </div>
-      </ConversationSidePanelShell>
-    );
-  }
-
-  const avatarUrl = resolvePublicFileUrl(
-    member?.avatar_url ?? profile?.avatar_url ?? null,
-  );
-  const canMessage = !!onMessage && !isSelf;
-  const youSuffix = isSelf ? ` ${t(($) => $.panel.you_suffix)}` : "";
-
-  const leading = (
-    <>
-      <ActorAvatarBase
-        name={displayName || "?"}
-        initials={avatarGlyph(displayName || "?")}
-        avatarUrl={avatarUrl}
-        size={22}
-        toneSeed={`member:${userId}`}
-        className="rounded-[5px]"
-      />
-      <div className="min-w-0 flex-1 leading-tight">
-        <div className="truncate text-[12.5px] font-semibold">{displayName}</div>
-        {showHandle && handle ? (
-          <div className="truncate font-mono text-[11px] text-muted-foreground">
-            {handle}
-          </div>
-        ) : null}
-      </div>
-    </>
-  );
-
-  const actions = canMessage ? (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={() => onMessage(userId)}
-      aria-label={t(($) => $.panel.message_aria)}
-      data-testid="member-side-panel-message"
-    >
-      <MessageSquare className="size-4" />
-    </Button>
-  ) : null;
-
   return (
     <ConversationSidePanelShell
       variant={variant}
       onClose={onClose}
-      closeAriaLabel={tChannels(($) => $.profile_popover.close_aria)}
-      leading={leading}
-      actions={actions}
+      closeAriaLabel={closeAriaLabel}
+      leading={identityLeading}
+      actions={messageActions}
     >
       <div
         className={cn(

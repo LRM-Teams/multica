@@ -8,12 +8,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-// tryCanonicalChatBackend activates the D6-1b production path when claim has
-// populated RuntimeStateGeneration (D6-1a) and the provider has a resident
-// adapter. It returns used=false so callers fall back to the legacy Grok/Pi
-// ChatSession-keyed pools when generation is absent (old server / soft-fail).
-//
-// Slot identity is agent×runtime via the canonical pool (no ChatSessionID).
+// tryCanonicalChatBackend is the sole D6-1b production path for full Grok/Pi
+// chat wakes. Slot identity is agent×runtime (no ChatSessionID). There is no
+// generation==0 fallback to the legacy ChatSession-keyed pools: D6-1a is
+// already served, so claim must carry RuntimeStateGeneration>0. Missing
+// generation fails closed (pairing error), not dual-path compatibility.
 // PriorSessionID still comes from legacy claim sources until D6-2.
 func (d *Daemon) tryCanonicalChatBackend(
 	task Task,
@@ -29,10 +28,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 	taskLog *slog.Logger,
 ) (backend agent.Backend, release func(bool), turn *agentRuntimeTurn, used bool, err error) {
 	if d == nil || d.agentRuntimeTurns == nil || d.canonicalRuntimes == nil {
-		return nil, nil, nil, false, nil
-	}
-	if task.RuntimeStateGeneration <= 0 {
-		return nil, nil, nil, false, nil
+		return nil, nil, nil, false, fmt.Errorf("canonical chat runtime is not configured")
 	}
 	if strings.TrimSpace(task.ChatSessionID) == "" || isRestrictedExecutionProfile(profile) {
 		return nil, nil, nil, false, nil
@@ -41,6 +37,14 @@ func (d *Daemon) tryCanonicalChatBackend(
 	case "grok", "pi":
 	default:
 		return nil, nil, nil, false, nil
+	}
+	if task.RuntimeStateGeneration <= 0 {
+		// Fail closed: do not re-enter ChatSession-keyed pools. Served D6-1a
+		// must attach generation; soft-fail/empty claim is a pairing bug.
+		return nil, nil, nil, false, fmt.Errorf(
+			"canonical chat requires runtime_state_generation>0 from D6-1a claim (got %d); refusing legacy ChatSession pool",
+			task.RuntimeStateGeneration,
+		)
 	}
 	if strings.TrimSpace(agentToken) == "" || strings.TrimSpace(selfBin) == "" {
 		return nil, nil, nil, false, nil

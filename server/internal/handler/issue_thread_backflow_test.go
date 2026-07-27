@@ -607,3 +607,72 @@ func TestIssueThreadBackflowAggregatesAssigneeAcrossIssues(t *testing.T) {
 		}
 	}
 }
+
+// LRM-638: an issue bound to a project must NOT have its system events fanned
+// out to every group channel that shares the project. Only the direct-source
+// channel (where the issue was anchored) should get the in-feed echo; sibling
+// project channels must stay clean. Queryability (Activity / issue detail) is
+// unaffected — this only restricts the in-feed projection.
+func TestIssueThreadBackflowDoesNotLeakAcrossProjectChannels(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	// Project P with two sibling group channels.
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		testWorkspaceID, "backflow-leak-proj-"+uuid.NewString()).Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
+	channelA := seedChannelForTest(t, "backflow-leak-A-"+uuid.NewString(), testUserID)
+	channelB := seedChannelForTest(t, "backflow-leak-B-"+uuid.NewString(), testUserID)
+	for _, ch := range []string{channelA, channelB} {
+		if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, ch); err != nil {
+			t.Fatalf("bind channel %s to project: %v", ch, err)
+		}
+	}
+
+	// Issue anchored ONLY in channelA, bound to project P.
+	issueNumber := 910000 + int(uuid.New().ID()%100000)
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position, project_id)
+		VALUES ($1, $2, 'todo', 'none', 'member', $3, $4, 0, $5)
+		RETURNING id`, testWorkspaceID, "leak guard issue", testUserID, issueNumber, projectID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+		VALUES ($1, $2, $3, NULL)`, issueID, testWorkspaceID, channelA); err != nil {
+		t.Fatalf("anchor issue to channelA: %v", err)
+	}
+
+	testHandler.emitIssueThreadBackflow(ctx, mustGetIssueForBackflowTest(t, issueID), "member", testUserID, issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
+
+	// channelA (direct source) must see the created system row.
+	aEvents := loadIssueChannelBackflowEvents(t, channelA)
+	var aCreated int
+	for _, e := range aEvents {
+		if e.Event == issueThreadCreatedEvent && e.Params.IssueID == issueID {
+			aCreated++
+		}
+	}
+	if aCreated != 1 {
+		t.Fatalf("channelA created events = %d (%+v), want 1", aCreated, aEvents)
+	}
+
+	// channelB (sibling project channel) must NOT see any system event for the
+	// issue — this is the regression that previously leaked via the project
+	// projection fan-out.
+	bEvents := loadIssueChannelBackflowEvents(t, channelB)
+	for _, e := range bEvents {
+		if e.Params.IssueID == issueID {
+			t.Fatalf("LRM-638 leak: channelB received issue %s event = %+v (project projection should be removed)", issueID, e)
+		}
+	}
+}

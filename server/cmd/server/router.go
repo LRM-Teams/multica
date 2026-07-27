@@ -814,6 +814,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/asr", h.TranscribeVoice)
 			})
 
+			// Workspace global search (Channels / DMs / Messages / People).
+			r.Get("/api/search", h.SearchGlobal)
+
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 			r.Get("/api/member-profiles/{memberType}/{memberId}", h.GetMemberProfile)

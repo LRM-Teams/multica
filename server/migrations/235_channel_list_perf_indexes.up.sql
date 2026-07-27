@@ -1,3 +1,8 @@
+-- Renumbered from 233_channel_list_perf_indexes (task #785).
+-- Collision: #1257/#1258 already used 233_restore / 234_kill for wendy_ambient.
+-- Semantics unchanged; statements stay idempotent for environments that already
+-- applied the old 233_channel_list_perf_indexes ledger name.
+
 -- LRM-632: keep GET /api/channels first-screen enrichments bounded.
 
 ALTER TABLE conversation_member

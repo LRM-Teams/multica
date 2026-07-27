@@ -76,22 +76,26 @@ export function ChannelAddPeopleDialog({
 }) {
   const { t } = useT("channels");
   const chipItems = allCandidates.filter((c) => selected.has(c.key));
+  const loadKey = open && loading && !error ? "active" : "inactive";
+  const [prevLoadKey, setPrevLoadKey] = useState(loadKey);
   const [loadSlow, setLoadSlow] = useState(false);
   const [loadTimedOut, setLoadTimedOut] = useState(false);
 
+  if (loadKey !== prevLoadKey) {
+    setPrevLoadKey(loadKey);
+    setLoadSlow(false);
+    setLoadTimedOut(false);
+  }
+
   useEffect(() => {
-    if (!open || !loading || error) {
-      setLoadSlow(false);
-      setLoadTimedOut(false);
-      return;
-    }
+    if (loadKey !== "active") return;
     const slowTimer = window.setTimeout(() => setLoadSlow(true), INVITE_SLOW_MS);
     const timeoutTimer = window.setTimeout(() => setLoadTimedOut(true), INVITE_TIMEOUT_MS);
     return () => {
       window.clearTimeout(slowTimer);
       window.clearTimeout(timeoutTimer);
     };
-  }, [open, loading, error]);
+  }, [loadKey]);
 
   const showTimeout = Boolean(loading && loadTimedOut && !error);
   const showError = Boolean(error) || showTimeout;

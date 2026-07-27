@@ -30,6 +30,15 @@ const apiMock = vi.hoisted(() => {
 });
 vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
+// This suite renders the FULL ChannelsPage with the real react-virtuoso message
+// list (intentionally unmocked, to exercise real sidebar/selection wiring). That
+// render is heavy in jsdom, so under full-suite PARALLEL CI load a single test's
+// `findByTestId("message-list")` can exceed vitest's 5s default and flake — this
+// has repeatedly reddened UNRELATED PRs (e.g. #1243, #1232, whose diffs don't
+// touch views). The tests are correct and pass in isolation; give the render
+// timeout headroom under load rather than mask a real failure.
+vi.setConfig({ testTimeout: 20000 });
+
 // The system channel is deliberately NOT first in this array — ordering
 // must come from `system_key`, never array/list position.
 const DEFAULT_CHANNELS = [

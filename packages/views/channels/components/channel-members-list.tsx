@@ -17,8 +17,8 @@ import { AgentCompactActivity } from "./agent-compact-activity";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
 
-/** LRM-650 / Frank: section headers stay EN SoT (People / Agents), not i18n. */
-function SectionHeader({ label, count }: { label: "People" | "Agents"; count: number }) {
+/** LRM-650 / Frank: section headers stay EN SoT (HUMANS / Agents), not i18n. */
+function SectionHeader({ label, count }: { label: "HUMANS" | "Agents"; count: number }) {
   return (
     <div
       className="px-4 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"
@@ -164,7 +164,7 @@ function MemberRow({
 
 /**
  * Shared Members list (LRM-211 / LRM-650) — dialog + Channel details 「成员」Tab.
- * LRM-650: People / Agents sections, no row hairlines, agent Compact Activity.
+ * LRM-650: HUMANS / Agents sections, no row hairlines, agent Compact Activity.
  */
 export function ChannelMembersList({
   members,
@@ -197,14 +197,14 @@ export function ChannelMembersList({
   dmPending?: boolean;
   className?: string;
 }) {
-  const { people, agents } = useMemo(() => {
-    const p: ChannelMember[] = [];
+  const { humans, agents } = useMemo(() => {
+    const h: ChannelMember[] = [];
     const a: ChannelMember[] = [];
     for (const m of members) {
       if (m.member_type === "agent") a.push(m);
-      else p.push(m);
+      else h.push(m);
     }
-    return { people: p, agents: a };
+    return { humans: h, agents: a };
   }, [members]);
 
   if (loading) {
@@ -250,11 +250,11 @@ export function ChannelMembersList({
       )}
       data-testid="channel-members-list"
     >
-      {people.length > 0 ? (
+      {humans.length > 0 ? (
         <>
-          <SectionHeader label="People" count={people.length} />
+          <SectionHeader label="HUMANS" count={humans.length} />
           <div className="px-1 pb-1">
-            {people.map((m) => (
+            {humans.map((m) => (
               <MemberRow
                 key={`${m.member_type}:${m.member_id}`}
                 m={m}

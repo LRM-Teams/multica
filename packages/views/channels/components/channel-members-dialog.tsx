@@ -22,7 +22,7 @@ import {
 
 /**
  * LRM-211 / LRM-650 — Slack-style centered Members dialog (~520).
- * Plan A+少字: Add secondary, footer Done only, People/Agents via list.
+ * Plan A+少字: Add secondary, footer Done only, HUMANS/Agents via list.
  * LRM-225 — mobile: bottom sheet + flex-1 list so the roster can scroll.
  */
 export function ChannelMembersDialog({

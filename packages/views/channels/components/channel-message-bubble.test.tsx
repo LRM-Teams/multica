@@ -301,9 +301,6 @@ vi.mock("../../i18n/use-t", () => ({
           choice_reselect_hint: string;
           choice_locked: string;
           choice_failed: string;
-          reply_feedback_legend: string;
-          reply_feedback_up: string;
-          reply_feedback_down: string;
           save_edit: string;
           cancel_edit: string;
           system_event: {
@@ -392,9 +389,6 @@ vi.mock("../../i18n/use-t", () => ({
           choice_reselect_hint: "You can change your answer once",
           choice_locked: "Locked",
           choice_failed: "Couldn't select option",
-          reply_feedback_legend: "Reply feedback",
-          reply_feedback_up: "Thumbs up",
-          reply_feedback_down: "Thumbs down",
           save_edit: "Save",
           cancel_edit: "Cancel",
           system_event: {

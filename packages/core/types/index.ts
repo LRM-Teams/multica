@@ -303,7 +303,6 @@ export type {
   MarkChannelReadResult,
   ChannelMessageReply,
   ChannelReaction,
-  ReplyFeedback,
   ChannelThreadMessagesCursor,
   ChannelThreadMessagesPage,
   ChannelMessageSearchResponse,

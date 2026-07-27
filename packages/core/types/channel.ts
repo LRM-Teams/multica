@@ -77,17 +77,6 @@ export interface ChannelReaction {
   created_at: string;
 }
 
-/** Message-level preference label (👍/👎), distinct from social reactions. */
-export interface ReplyFeedback {
-  id: string;
-  message_kind: "channel" | "chat";
-  message_id: string;
-  value: 1 | -1;
-  agent_id?: string | null;
-  task_id?: string | null;
-  updated_at: string;
-}
-
 export interface ChannelThreadParticipant {
   key: string;
   member_type: string;
@@ -146,8 +135,6 @@ export interface ChannelMessage {
   thread_id?: string | null;
   trigger_depth?: number;
   reactions?: ChannelReaction[];
-  /** Current member's 👍/👎 preference on this agent message (not a social reaction). */
-  my_reply_feedback?: ReplyFeedback | null;
   /**
    * File resources referenced by this message through the canonical
    * many-to-many association. Populated by ListChannelMessages. The bubble

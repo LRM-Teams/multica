@@ -1,7 +1,8 @@
 # Agent Choice Cards & Reply Feedback Spec
 
 Written: 2026-07-26  
-Status: draft for review  
+**Updated: 2026-07-27 (LRM-613)** — Reply feedback（消息下方独立 👍/👎）已移除；训练/标注改用消息 emoji reaction，SQL 过滤 `actor_type != 'agent'`。下文 Feature B 仅作历史记录。  
+Status: Choice 有效；Reply feedback **superseded**  
 Target branch: `LRM-Teams/multica` `dev`  
 Owner: Multica Dev 全栈工程师（实现）；产品口径见下方决策
 

@@ -3090,30 +3090,6 @@ export class ApiClient {
     });
   }
 
-  async upsertChannelReplyFeedback(
-    channelId: string,
-    messageId: string,
-    value: 1 | -1,
-  ): Promise<import("../types").ReplyFeedback> {
-    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reply-feedback`, {
-      method: "PUT",
-      body: JSON.stringify({ value }),
-    });
-  }
-
-  async deleteChannelReplyFeedback(channelId: string, messageId: string): Promise<void> {
-    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/reply-feedback`, {
-      method: "DELETE",
-    });
-  }
-
-  async listChannelReplyFeedback(
-    channelId: string,
-    messageId: string,
-  ): Promise<{ feedback: import("../types").ReplyFeedback[] }> {
-    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reply-feedback`);
-  }
-
   async sendChannelThreadMessage(
     channelId: string,
     messageId: string,

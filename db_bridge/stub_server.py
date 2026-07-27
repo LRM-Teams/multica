@@ -89,8 +89,9 @@ def _is_streaming_chat(channel: Channel, body: bytes) -> bool:
 
     The loopback stub relays buffered request/response bodies only; streaming
     is served exclusively by the multica public server (which owns the
-    bridge_stream_chunks relay). Rejecting ``stream: true`` here keeps the
-    shared rpc_chat_completions table's buffered path well-defined.
+    bridge_stream_chunks relay). ``stream: true`` requests are stripped of the
+    flag and relayed buffered, then re-emitted as SSE (fake streaming) so the
+    shared rpc_chat_completions table's buffered path stays well-defined.
     """
     if channel.name != "chat_completions":
         return False
@@ -99,6 +100,19 @@ def _is_streaming_chat(channel: Channel, body: bytes) -> bool:
     except json.JSONDecodeError:
         return False
     return isinstance(payload, dict) and bool(payload.get("stream"))
+
+
+def _is_responses_api(request: Request) -> bool:
+    """True when the caller used the OpenAI Responses API endpoint (/responses).
+
+    pi daemon (openai-responses api) POSTs to ``/responses`` and expects a
+    Responses-shaped reply (``object: "response"``; SSE ``response.*`` events
+    when streaming), not a chat.completion. The areal-side gateway converts the
+    request body (``input`` -> ``messages``) before forwarding upstream; the
+    stub converts the relayed chat.completion back (see
+    ``_responses_object_from_chat`` / ``_responses_sse_from_chat``).
+    """
+    return request.url.path.rstrip("/").endswith("/responses")
 
 
 def _strip_stream_flag(body: bytes) -> bytes:
@@ -165,6 +179,227 @@ def _sse_from_buffered(body: bytes, fallback_model: str | None) -> Response:
             "Connection": "close",
         },
     )
+
+
+def _responses_object_from_chat(payload: dict, fallback_model: str | None) -> dict:
+    """Convert a buffered OpenAI chat.completion into a Responses API object.
+
+    The upstream relay chain speaks chat.completions end-to-end, but pi daemon
+    (openai-responses api) parses only Responses-shaped replies; handing it a
+    chat.completion yields an empty assistant turn (observed as ``no_reply``).
+    """
+    choice = (payload.get("choices") or [{}])[0] or {}
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
+    tool_calls = message.get("tool_calls") or []
+    model = payload.get("model") or fallback_model or "areal-default"
+
+    output: list[dict] = []
+    if content or not tool_calls:
+        output.append(
+            {
+                "type": "message",
+                "id": f"msg_{uuid.uuid4().hex}",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": content, "annotations": []}
+                ],
+            }
+        )
+    for call in tool_calls:
+        fn = call.get("function") or {}
+        output.append(
+            {
+                "type": "function_call",
+                "id": f"fc_{uuid.uuid4().hex}",
+                "call_id": call.get("id") or "",
+                "name": fn.get("name") or "",
+                "arguments": fn.get("arguments") or "",
+                "status": "completed",
+            }
+        )
+
+    usage_raw = payload.get("usage") or {}
+    created = payload.get("created")
+    return {
+        "id": payload.get("id") or f"resp_{uuid.uuid4().hex}",
+        "object": "response",
+        "created_at": created if isinstance(created, int) else int(time.time()),
+        "status": "completed",
+        "model": model,
+        "output": output,
+        "usage": {
+            "input_tokens": usage_raw.get("prompt_tokens", 0),
+            "output_tokens": usage_raw.get("completion_tokens", 0),
+            "total_tokens": usage_raw.get("total_tokens", 0),
+        },
+    }
+
+
+def _responses_json_from_chat(body: bytes, fallback_model: str | None) -> JSONResponse:
+    """Return a buffered chat.completion body as a Responses API JSON reply."""
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return JSONResponse(_responses_object_from_chat(payload, fallback_model))
+
+
+def _responses_sse_from_chat(body: bytes, fallback_model: str | None) -> Response:
+    """Wrap a buffered chat.completion body as Responses API SSE events.
+
+    Emits the standard ``response.*`` event sequence (created -> output_item
+    -> text/function_call deltas -> done -> completed). Responses API streams
+    are not terminated by ``[DONE]``. Like ``_sse_from_buffered`` this is fake
+    streaming: the completed response is re-emitted as one event burst.
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    response_obj = _responses_object_from_chat(payload, fallback_model)
+
+    def _frame(event: str, data: dict) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+
+    frames: list[bytes] = [
+        _frame(
+            "response.created",
+            {
+                "type": "response.created",
+                "response": {**response_obj, "status": "in_progress", "output": []},
+            },
+        )
+    ]
+    for index, item in enumerate(response_obj["output"]):
+        frames.append(
+            _frame(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": index,
+                    "item": {**item, "status": "in_progress"},
+                },
+            )
+        )
+        if item["type"] == "message":
+            part = item["content"][0]
+            frames.append(
+                _frame(
+                    "response.content_part.added",
+                    {
+                        "type": "response.content_part.added",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": "", "annotations": []},
+                    },
+                )
+            )
+            frames.append(
+                _frame(
+                    "response.output_text.delta",
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "content_index": 0,
+                        "delta": part["text"],
+                    },
+                )
+            )
+            frames.append(
+                _frame(
+                    "response.output_text.done",
+                    {
+                        "type": "response.output_text.done",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "content_index": 0,
+                        "text": part["text"],
+                    },
+                )
+            )
+            frames.append(
+                _frame(
+                    "response.content_part.done",
+                    {
+                        "type": "response.content_part.done",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "content_index": 0,
+                        "part": part,
+                    },
+                )
+            )
+        elif item["type"] == "function_call":
+            frames.append(
+                _frame(
+                    "response.function_call_arguments.delta",
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "delta": item["arguments"],
+                    },
+                )
+            )
+            frames.append(
+                _frame(
+                    "response.function_call_arguments.done",
+                    {
+                        "type": "response.function_call_arguments.done",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "arguments": item["arguments"],
+                    },
+                )
+            )
+        frames.append(
+            _frame(
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "output_index": index,
+                    "item": item,
+                },
+            )
+        )
+    frames.append(
+        _frame(
+            "response.completed",
+            {"type": "response.completed", "response": response_obj},
+        )
+    )
+    return Response(
+        content=b"".join(frames),
+        status_code=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "close",
+        },
+    )
+
+
+def _chat_response_for_client(
+    body: bytes,
+    fallback_model: str | None,
+    *,
+    want_stream: bool,
+    responses_api: bool,
+) -> Response:
+    """Render a relayed chat.completion body in the shape the caller expects."""
+    if responses_api:
+        if want_stream:
+            return _responses_sse_from_chat(body, fallback_model)
+        return _responses_json_from_chat(body, fallback_model)
+    return _sse_from_buffered(body, fallback_model)
 
 
 def _build_direct_client() -> httpx.AsyncClient:
@@ -260,6 +495,7 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
             )
 
         want_stream = _is_streaming_chat(channel, body)
+        responses_api = _is_responses_api(request)
         if want_stream:
             # Fake-SSE: relay buffered (drop the stream flag), then re-emit the
             # completed response as a single SSE sequence so pi clients (which
@@ -301,8 +537,13 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
                     config,
                     body,
                 )
-                if want_stream and 200 <= bypass_resp.status_code < 300:
-                    return _sse_from_buffered(bypass_resp.body, _chat_model_name(body))
+                if (want_stream or responses_api) and 200 <= bypass_resp.status_code < 300:
+                    return _chat_response_for_client(
+                        bypass_resp.body,
+                        _chat_model_name(body),
+                        want_stream=want_stream,
+                        responses_api=responses_api,
+                    )
                 return bypass_resp
             except httpx.HTTPError as exc:
                 metrics.record_result(channel.name, "error")
@@ -397,8 +638,13 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
             len(result.body),
             (time.monotonic() - started) * 1000,
         )
-        if want_stream and 200 <= (result.response_status or 200) < 300:
-            return _sse_from_buffered(result.body, _chat_model_name(body))
+        if (want_stream or responses_api) and 200 <= (result.response_status or 200) < 300:
+            return _chat_response_for_client(
+                result.body,
+                _chat_model_name(body),
+                want_stream=want_stream,
+                responses_api=responses_api,
+            )
         return Response(
             content=result.body,
             status_code=result.response_status or 200,
@@ -480,10 +726,11 @@ def create_stub_app(
             methods=["POST"],
             name="stub_chat_completions_v1",
         )
-        # pi daemon v0.3.64 uses the Anthropic-compatible /responses
-        # endpoint with the responses API format.  Route it through the
-        # same chat_completions channel; the areal-side gateway forwards
-        # to DeepSeek's anthropic endpoint which understands both formats.
+        # pi daemon (openai-responses api) POSTs to /responses. Route it
+        # through the same chat_completions channel; the areal-side gateway
+        # converts the request body (input -> messages) before forwarding
+        # upstream, and the stub converts the relayed chat.completion back
+        # into Responses shape (JSON or response.* SSE) on the way out.
         app.add_api_route(
             "/responses",
             _handler,

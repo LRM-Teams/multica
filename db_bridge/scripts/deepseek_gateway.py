@@ -155,6 +155,87 @@ def _mock_export_trajectories(payload: dict) -> dict:
 # --- Anthropic → OpenAI body normalisation ---------------------------------
 
 
+def _responses_input_to_messages(inp: list) -> list:
+    """Convert Responses API ``input`` items into OpenAI chat messages.
+
+    Responses history items are not all chat messages: ``function_call`` and
+    ``function_call_output`` items have no ``role`` and DeepSeek rejects them
+    verbatim ("messages[N]: missing field `role`"). Map them to the OpenAI
+    tool-calling shapes; drop items with no chat equivalent (e.g. reasoning).
+    Consecutive ``function_call`` items are merged into a single assistant
+    message with parallel ``tool_calls`` — DeepSeek requires every tool_call
+    of an assistant message to be answered immediately by tool messages, so
+    one message per call breaks parallel tool use.
+    """
+    messages = []
+    pending_calls: list[dict] = []
+
+    def _flush_calls() -> None:
+        if not pending_calls:
+            return
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                # DeepSeek thinking models require reasoning_content to be
+                # echoed back on assistant tool-call messages; the bridge
+                # does not carry the original reasoning, so send an empty
+                # one to satisfy the validator.
+                "reasoning_content": "",
+                "tool_calls": list(pending_calls),
+            }
+        )
+        pending_calls.clear()
+
+    for item in inp:
+        if not isinstance(item, dict):
+            continue
+        itype = item.get("type")
+        if itype == "function_call":
+            pending_calls.append(
+                {
+                    "id": item.get("call_id") or item.get("id") or "",
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name") or "",
+                        "arguments": item.get("arguments") or "",
+                    },
+                }
+            )
+            continue
+        if itype == "function_call_output":
+            _flush_calls()
+            out = item.get("output")
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id") or "",
+                    "content": out
+                    if isinstance(out, str)
+                    else json.dumps(out, ensure_ascii=False),
+                }
+            )
+            continue
+        if itype in (None, "message"):
+            _flush_calls()
+            content = item.get("content")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in (
+                        "input_text",
+                        "output_text",
+                        "text",
+                    ):
+                        parts.append({"type": "text", "text": part.get("text") or ""})
+                    else:
+                        parts.append(part)
+                content = parts
+            messages.append({"role": item.get("role") or "user", "content": content})
+    _flush_calls()
+    return messages
+
+
 def _normalise_for_openai(payload: dict) -> None:
     """Convert Anthropic-isms in-place so DeepSeek's OpenAI endpoint accepts the body.
 
@@ -210,7 +291,7 @@ def _normalise_for_openai(payload: dict) -> None:
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict):
-                    if part.get("type") == "input_text":
+                    if part.get("type") in ("input_text", "output_text"):
                         part["type"] = "text"
         elif isinstance(content, str):
             pass
@@ -354,16 +435,17 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        # pi daemon v0.3.64 sends Anthropic Responses API format (POST /responses
-        # with "input") instead of OpenAI Chat Completions format (POST
-        # /chat/completions with "messages").  Convert "input" -> "messages" so
-        # the body is valid OpenAI format before forwarding.
+        # pi daemon (openai-responses api) POSTs Responses API format
+        # ("input" items) instead of chat.completions "messages". Convert
+        # input -> messages so the body is valid OpenAI format before
+        # forwarding; history items like function_call/function_call_output
+        # are mapped to OpenAI tool-calling shapes by the converter.
         if "input" in payload and "messages" not in payload:
             inp = payload["input"]
             if isinstance(inp, str):
                 payload["messages"] = [{"role": "user", "content": inp}]
             elif isinstance(inp, list):
-                payload["messages"] = inp
+                payload["messages"] = _responses_input_to_messages(inp)
 
         # Fix Anthropic-isms (content block types, tool shapes) so DeepSeek's
         # OpenAI-compatible endpoint accepts the body.

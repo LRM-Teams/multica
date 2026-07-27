@@ -714,9 +714,10 @@ $perm$;
 --       backend-requested cancellation. Returns NULL when ownership was lost.
 --
 --   * areal_shell_complete(id, runner_id, status, exit_code, stdout_tail,
---                          stderr_tail, log_bytes, error_message)
+--                          stderr_tail, log_bytes, error_message, metadata)
 --       Writes a terminal status (SUCCEEDED|FAILED|CANCELLED|TIMED_OUT), exit
 --       code, final logs and finished_at, only while the row is still owned.
+--       A non-null metadata object is merged into the existing metadata.
 --
 --   * areal_shell_sweep_stale(limit)
 --       Marks RUNNING/CANCEL_REQUESTED rows whose lease expired as STALE rather
@@ -969,7 +970,16 @@ $$;
 
 -- ----------------------------------------------------------------------------
 -- complete: write a terminal status, exit code, final logs and finished_at.
+--
+-- The pre-metadata 8-argument signature is dropped first: `create or replace`
+-- cannot change a function's argument list, so leaving it in place produces two
+-- overloads and PostgREST rejects every call with PGRST203 ("could not choose
+-- the best candidate function").
 -- ----------------------------------------------------------------------------
+drop function if exists public.areal_shell_complete(
+    uuid, text, text, integer, text, text, integer, text
+);
+
 create or replace function public.areal_shell_complete(
     p_id            uuid,
     p_runner_id     text,
@@ -978,7 +988,8 @@ create or replace function public.areal_shell_complete(
     p_stdout_tail   text    default null,
     p_stderr_tail   text    default null,
     p_log_bytes     integer default null,
-    p_error_message text    default null
+    p_error_message text    default null,
+    p_metadata      jsonb   default null
 )
 returns boolean
 language plpgsql
@@ -999,6 +1010,10 @@ begin
            stderr_tail      = coalesce(p_stderr_tail, stderr_tail),
            log_bytes        = coalesce(p_log_bytes, log_bytes),
            error_message    = p_error_message,
+           metadata         = case
+               when p_metadata is not null then metadata || p_metadata
+               else metadata
+           end,
            finished_at      = now(),
            lease_expires_at = null,
            updated_at       = now()
@@ -1151,7 +1166,7 @@ declare
         'public.areal_shell_claim_next(text, integer)',
         'public.areal_shell_mark_running(uuid, text, integer)',
         'public.areal_shell_heartbeat(uuid, text, integer, text, text, integer)',
-        'public.areal_shell_complete(uuid, text, text, integer, text, text, integer, text)',
+        'public.areal_shell_complete(uuid, text, text, integer, text, text, integer, text, jsonb)',
         'public.areal_shell_sweep_stale(integer)',
         'public.areal_shell_request_cancel(uuid, uuid)',
         'public.areal_shell_cleanup(integer, integer)'

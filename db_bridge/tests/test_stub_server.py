@@ -362,3 +362,119 @@ async def test_healthz_lists_channels():
     assert payload["side"] == "multica"
     assert "rl_set_reward" in payload["channels"]
     assert "chat_completions" in payload["channels"]
+
+
+async def test_responses_api_streaming_returns_responses_sse():
+    """POST /responses with stream=true gets response.* SSE, not chat chunks."""
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    app = create_stub_app(db, "multica", cfg)
+
+    # Shape of a real DeepSeek reply observed through the relay: empty content
+    # plus a tool call.
+    buffered = (
+        b'{"id":"cmpl-r1","model":"areal-default","created":1785125742,'
+        b'"choices":[{"index":0,'
+        b'"message":{"role":"assistant","content":"",'
+        b'"tool_calls":[{"index":0,"id":"call_00_abc",'
+        b'"function":{"name":"run_command","arguments":"{\\"cmd\\":\\"ls\\"}"}}]},'
+        b'"finish_reason":"tool_calls"}],'
+        b'"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}'
+    )
+    exec_task = asyncio.create_task(
+        _executor_complete_one(
+            db,
+            CHAT,
+            status=200,
+            headers={"content-type": "application/json"},
+            body=buffered,
+        )
+    )
+    async with _client(app) as client:
+        resp = await client.post(
+            "/responses",
+            headers={"X-Bridge-User-Id": USER_ID},
+            json={
+                "model": "areal-default",
+                "stream": True,
+                "input": [{"role": "user", "content": "hi"}],
+            },
+        )
+    claimed = await exec_task
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    text = resp.text
+    assert "chat.completion.chunk" not in text
+    assert "[DONE]" not in text
+    assert "event: response.created" in text
+    assert "event: response.function_call_arguments.done" in text
+    assert "event: response.completed" in text
+
+    events = {}
+    for block in text.strip().split("\n\n"):
+        for line in block.splitlines():
+            if line.startswith("data: "):
+                data = json.loads(line[len("data: ") :])
+                events[data["type"]] = data
+    completed = events["response.completed"]["response"]
+    assert completed["object"] == "response"
+    assert completed["status"] == "completed"
+    assert completed["model"] == "areal-default"
+    fc = completed["output"][0]
+    assert fc["type"] == "function_call"
+    assert fc["call_id"] == "call_00_abc"
+    assert fc["name"] == "run_command"
+    assert fc["arguments"] == '{"cmd":"ls"}'
+    assert completed["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15,
+    }
+
+    # The relayed request still took the buffered path (stream flag dropped).
+    relayed = json.loads(claimed.body)
+    assert "stream" not in relayed
+    assert relayed["input"] == [{"role": "user", "content": "hi"}]
+    assert claimed.path == "/responses"
+
+
+async def test_responses_api_non_stream_returns_responses_json():
+    """POST /responses without stream gets a Responses-shaped JSON body."""
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    app = create_stub_app(db, "multica", cfg)
+
+    buffered = (
+        b'{"id":"cmpl-r2","model":"areal-default",'
+        b'"choices":[{"index":0,'
+        b'"message":{"role":"assistant","content":"Hi there"},'
+        b'"finish_reason":"stop"}]}'
+    )
+    exec_task = asyncio.create_task(
+        _executor_complete_one(
+            db,
+            CHAT,
+            status=200,
+            headers={"content-type": "application/json"},
+            body=buffered,
+        )
+    )
+    async with _client(app) as client:
+        resp = await client.post(
+            "/responses",
+            headers={"X-Bridge-User-Id": USER_ID},
+            json={
+                "model": "areal-default",
+                "input": [{"role": "user", "content": "hi"}],
+            },
+        )
+    await exec_task
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["object"] == "response"
+    assert payload["status"] == "completed"
+    assert payload["output"][0]["type"] == "message"
+    assert payload["output"][0]["content"][0]["type"] == "output_text"
+    assert payload["output"][0]["content"][0]["text"] == "Hi there"

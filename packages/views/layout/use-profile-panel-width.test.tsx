@@ -17,7 +17,7 @@ describe("useProfilePanelWidth (LRM-481)", () => {
     window.localStorage.removeItem(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   });
 
-  it("defaults to 440 when nothing is stored", () => {
+  it("defaults to 520 when nothing is stored", () => {
     const { result } = renderHook(() => useProfilePanelWidth());
     expect(result.current.width).toBe(PROFILE_PANEL_WIDTH_DEFAULT);
   });
@@ -74,8 +74,8 @@ describe("useProfilePanelWidth (LRM-481)", () => {
       el.dispatchEvent(new PointerEvent("pointerup", { clientX: 900, bubbles: true }));
     });
 
-    expect(result.current.width).toBe(540);
-    expect(window.localStorage.getItem(PROFILE_PANEL_WIDTH_STORAGE_KEY)).toBe("540");
+    expect(result.current.width).toBe(620);
+    expect(window.localStorage.getItem(PROFILE_PANEL_WIDTH_STORAGE_KEY)).toBe("620");
     el.remove();
   });
 });

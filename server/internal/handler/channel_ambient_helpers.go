@@ -149,6 +149,14 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 // Candidate discovery may prioritize across different agents; after locking
 // the chosen agent, a second statement revalidates that agent's oldest event
 // and active-delivery predicates against a fresh READ COMMITTED snapshot.
+//
+// The pending→draining transition is hard-gated on UPDATE ... RETURNING: a
+// BEFORE trigger (Radar authorization guard) may suppress the row change with
+// RETURN NULL. In that case we must never INSERT a delivery. Permanently
+// unauthorized Radar heads are terminalized so they cannot livelock FIFO.
+// Any poison rows terminalized in this transaction are committed even when no
+// delivery is leased (poison-only / drained-to-empty / hit max), so cleanup is
+// durable across drain polls.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
@@ -162,118 +170,216 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		return db.AgentEventDelivery{}, err
 	}
 
-	var eventID, agentID pgtype.UUID
-	err = tx.QueryRow(ctx, `
-		SELECT event.id, event.agent_id
-		FROM agent_inbox_event event
-		JOIN agent_session session ON session.id = event.agent_session_id
-		WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
-		  AND session.status = 'active'
-		  AND event.status IN ('pending', 'failed')
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_inbox_event older_event
-		    JOIN agent_session older_session
-		      ON older_session.id = older_event.agent_session_id
-		    WHERE older_event.agent_id = event.agent_id
-		      AND older_session.status = 'active'
-		      AND older_event.status IN ('pending', 'failed')
-		      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_event_delivery active_delivery
-		    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
-		    WHERE active_session.agent_id = event.agent_id
-		      AND active_delivery.status IN ('leased', 'processing')
-		      AND active_delivery.lease_expires_at > now()
-		  )
-		ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
-		LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
-	if err != nil {
-		return db.AgentEventDelivery{}, err
+	// Clear up to a few unauthorized Radar poison heads in one transaction so
+	// a directed wake immediately behind them can be leased without waiting
+	// for another drain poll. Bound the loop so a pathological backlog cannot
+	// monopolize the drain request.
+	const maxPoisonTerminalizations = 8
+	terminalizedCount := 0
+	// commitNoDelivery makes any in-tx poison cleanup durable before reporting
+	// no leasable event. Without this, poison-only / empty-tail / max-cap paths
+	// would return ErrNoRows with defer Rollback and leave poisons pending.
+	commitNoDelivery := func() error {
+		if terminalizedCount == 0 {
+			return pgx.ErrNoRows
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return pgx.ErrNoRows
 	}
-	if err := tx.QueryRow(ctx, `
-		SELECT id
-		FROM agent
-		WHERE id = $1
-		FOR UPDATE`, agentID).Scan(&agentID); err != nil {
-		return db.AgentEventDelivery{}, err
-	}
-	err = tx.QueryRow(ctx, `
-		SELECT event.id
-		FROM agent_inbox_event event
-		JOIN agent_session session ON session.id = event.agent_session_id
-		WHERE event.id = $1
-		  AND event.agent_id = $2
-		  AND COALESCE(event.runtime_id, session.runtime_id) = $3
-		  AND session.status = 'active'
-		  AND event.status IN ('pending', 'failed')
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_inbox_event older_event
-		    JOIN agent_session older_session
-		      ON older_session.id = older_event.agent_session_id
-		    WHERE older_event.agent_id = event.agent_id
-		      AND older_session.status = 'active'
-		      AND older_event.status IN ('pending', 'failed')
-		      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_event_delivery active_delivery
-		    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
-		    WHERE active_session.agent_id = event.agent_id
-		      AND active_delivery.status IN ('leased', 'processing')
-		      AND active_delivery.lease_expires_at > now()
-		  )
-		FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
-	if err != nil {
-		return db.AgentEventDelivery{}, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'draining',
-		    claimed_at = now(),
-		    dispatched_at = now(),
-		    updated_at = now()
-		WHERE id = $1`, eventID); err != nil {
-		return db.AgentEventDelivery{}, err
-	}
-	var delivery db.AgentEventDelivery
-	err = tx.QueryRow(ctx, `
-		INSERT INTO agent_event_delivery (
-		  workspace_id, agent_session_id, inbox_event_id, runtime_id, status
+
+	for attempt := 0; attempt <= maxPoisonTerminalizations; attempt++ {
+		var eventID, agentID pgtype.UUID
+		err = tx.QueryRow(ctx, `
+			SELECT event.id, event.agent_id
+			FROM agent_inbox_event event
+			JOIN agent_session session ON session.id = event.agent_session_id
+			WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
+			  AND session.status = 'active'
+			  AND event.status IN ('pending', 'failed')
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM agent_inbox_event older_event
+			    JOIN agent_session older_session
+			      ON older_session.id = older_event.agent_session_id
+			    WHERE older_event.agent_id = event.agent_id
+			      AND older_session.status = 'active'
+			      AND older_event.status IN ('pending', 'failed')
+			      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM agent_event_delivery active_delivery
+			    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			    WHERE active_session.agent_id = event.agent_id
+			      AND active_delivery.status IN ('leased', 'processing')
+			      AND active_delivery.lease_expires_at > now()
+			  )
+			ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
+			LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			return db.AgentEventDelivery{}, err
+		}
+		if err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM agent
+			WHERE id = $1
+			FOR UPDATE`, agentID).Scan(&agentID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			return db.AgentEventDelivery{}, err
+		}
+		err = tx.QueryRow(ctx, `
+			SELECT event.id
+			FROM agent_inbox_event event
+			JOIN agent_session session ON session.id = event.agent_session_id
+			WHERE event.id = $1
+			  AND event.agent_id = $2
+			  AND COALESCE(event.runtime_id, session.runtime_id) = $3
+			  AND session.status = 'active'
+			  AND event.status IN ('pending', 'failed')
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM agent_inbox_event older_event
+			    JOIN agent_session older_session
+			      ON older_session.id = older_event.agent_session_id
+			    WHERE older_event.agent_id = event.agent_id
+			      AND older_session.status = 'active'
+			      AND older_event.status IN ('pending', 'failed')
+			      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM agent_event_delivery active_delivery
+			    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			    WHERE active_session.agent_id = event.agent_id
+			      AND active_delivery.status IN ('leased', 'processing')
+			      AND active_delivery.lease_expires_at > now()
+			  )
+			FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			return db.AgentEventDelivery{}, err
+		}
+
+		// Hard gate: only proceed to delivery INSERT when the row actually
+		// transitioned to draining. Radar's BEFORE UPDATE guard returns NULL
+		// when unauthorized; Exec would succeed with 0 rows and silently leak
+		// a delivery while the event stays pending (FIFO livelock).
+		err = tx.QueryRow(ctx, `
+			UPDATE agent_inbox_event
+			SET status = 'draining',
+			    claimed_at = now(),
+			    dispatched_at = now(),
+			    updated_at = now()
+			WHERE id = $1
+			  AND status IN ('pending', 'failed')
+			RETURNING id`, eventID).Scan(&eventID)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return db.AgentEventDelivery{}, err
+			}
+			// Transition suppressed (guard) or raced. Terminalize unauthorized
+			// Radar poison heads so they leave FIFO; then retry candidate
+			// selection for a later wake on the same runtime.
+			terminalized, termErr := terminalizeUnauthorizedRadarInboxEventTx(ctx, tx, eventID)
+			if termErr != nil {
+				return db.AgentEventDelivery{}, termErr
+			}
+			if !terminalized {
+				// Race or non-Radar suppression: keep any prior cleanups durable.
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			terminalizedCount++
+			if attempt == maxPoisonTerminalizations {
+				// Cap reached after this durable cleanup; later polls continue.
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			continue
+		}
+
+		var delivery db.AgentEventDelivery
+		err = tx.QueryRow(ctx, `
+			INSERT INTO agent_event_delivery (
+			  workspace_id, agent_session_id, inbox_event_id, runtime_id, status
+			)
+			SELECT workspace_id, agent_session_id, id, $2, 'leased'
+			FROM agent_inbox_event
+			WHERE id = $1
+			  AND status = 'draining'
+			RETURNING id, workspace_id, agent_session_id, inbox_event_id, runtime_id,
+			          status, lease_token, leased_at, lease_expires_at, acked_at,
+			          last_error, created_at, updated_at`, eventID, runtime.ID).Scan(
+			&delivery.ID, &delivery.WorkspaceID, &delivery.AgentSessionID, &delivery.InboxEventID,
+			&delivery.RuntimeID, &delivery.Status, &delivery.LeaseToken, &delivery.LeasedAt,
+			&delivery.LeaseExpiresAt, &delivery.AckedAt, &delivery.LastError,
+			&delivery.CreatedAt, &delivery.UpdatedAt,
 		)
-		SELECT workspace_id, agent_session_id, id, $2, 'leased'
-		FROM agent_inbox_event
-		WHERE id = $1
-		RETURNING id, workspace_id, agent_session_id, inbox_event_id, runtime_id,
-		          status, lease_token, leased_at, lease_expires_at, acked_at,
-		          last_error, created_at, updated_at`, eventID, runtime.ID).Scan(
-		&delivery.ID, &delivery.WorkspaceID, &delivery.AgentSessionID, &delivery.InboxEventID,
-		&delivery.RuntimeID, &delivery.Status, &delivery.LeaseToken, &delivery.LeasedAt,
-		&delivery.LeaseExpiresAt, &delivery.AckedAt, &delivery.LastError,
-		&delivery.CreatedAt, &delivery.UpdatedAt,
-	)
+		if err != nil {
+			return db.AgentEventDelivery{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE channel_agent_onboarding onboarding
+			SET status = 'claimed',
+			    claimed_at = COALESCE(onboarding.claimed_at, now()),
+			    updated_at = now()
+			FROM agent_inbox_event event
+			WHERE event.id = $1
+			  AND event.channel_onboarding_id = onboarding.id
+			  AND onboarding.status = 'pending'`, eventID); err != nil {
+			return db.AgentEventDelivery{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return db.AgentEventDelivery{}, err
+		}
+		return delivery, nil
+	}
+	return db.AgentEventDelivery{}, commitNoDelivery()
+}
+
+// terminalizeUnauthorizedRadarInboxEventTx permanently fails a still-pending
+// agent_radar event whose dispatch guard will never admit it. Returns true
+// when a row was terminalized so the caller may reselect a later FIFO head.
+func terminalizeUnauthorizedRadarInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID) (bool, error) {
+	var terminalizedID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		UPDATE agent_inbox_event e
+		SET status = 'acked',
+		    completed_at = now(),
+		    terminal_at = now(),
+		    acked_at = now(),
+		    terminal_outcome = 'failed',
+		    error = 'radar task not authorized for dispatch',
+		    failure_reason = 'radar_unauthorized',
+		    updated_at = now()
+		WHERE e.id = $1
+		  AND e.status IN ('pending', 'failed')
+		  AND e.context->>'type' = 'agent_radar'
+		  AND NOT workspace_radar_task_is_authorized(e.id)
+		RETURNING e.id`, eventID).Scan(&terminalizedID)
 	if err != nil {
-		return db.AgentEventDelivery{}, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE channel_agent_onboarding onboarding
-		SET status = 'claimed',
-		    claimed_at = COALESCE(onboarding.claimed_at, now()),
+		UPDATE agent_radar_run run
+		SET status = 'failed',
+		    finished_at = COALESCE(finished_at, now()),
 		    updated_at = now()
-		FROM agent_inbox_event event
-		WHERE event.id = $1
-		  AND event.channel_onboarding_id = onboarding.id
-		  AND onboarding.status = 'pending'`, eventID); err != nil {
-		return db.AgentEventDelivery{}, err
+		WHERE run.task_id = $1
+		  AND run.status IN ('planned', 'queued', 'running')`, eventID); err != nil {
+		return false, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.AgentEventDelivery{}, err
-	}
-	return delivery, nil
+	return true, nil
 }
 
 func (h *Handler) countReadyAgentInboxEventsForRuntime(ctx context.Context, runtime db.AgentRuntime) (int64, error) {

@@ -427,3 +427,43 @@ func TestMigration209SuppressesEnvDispatchChannelOnboarding(t *testing.T) {
 		}
 	}
 }
+
+func TestMigration233RestoresWendyAmbientRadarAuthorization(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "233_restore_wendy_ambient_radar_auth.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 233 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE OR REPLACE FUNCTION workspace_radar_task_is_authorized(candidate_task_id UUID)",
+		"FROM agent_inbox_event event",
+		"run.trigger_kind = 'manual'",
+		"run.trigger_kind = 'scheduled'",
+		"run.trigger_kind = 'event'",
+		"run.cooldown_key LIKE 'wendy_ambient:%'",
+		"CAST(substring(run.cooldown_key FROM 15) AS uuid)",
+		"cm.member_type = 'agent'",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 233 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "233_restore_wendy_ambient_radar_auth.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 233 down: %v", err)
+	}
+	downContents := string(down)
+	if !strings.Contains(downContents, "CREATE OR REPLACE FUNCTION workspace_radar_task_is_authorized") {
+		t.Error("migration 233 down missing function replace")
+	}
+	if strings.Contains(downContents, "wendy_ambient") {
+		t.Error("migration 233 down must not keep wendy_ambient branch")
+	}
+}

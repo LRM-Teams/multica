@@ -272,11 +272,13 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
 
-	// Context key change: dispose process AND force a fresh provider session.
-	// Never resume PriorSessionID from chat A when starting chat B ("换壳续旧脑").
+	// lastContextKey is the last *healthy* context only (committed on release(true)).
+	// Compare against it so a failed B turn does not drop the cross-chat fresh fence
+	// on retry (Barry: acquire must not optimistically commit B before healthy).
 	contextRotated := slot.lastContextKey != "" && slot.lastContextKey != contextKey
 	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
 	if contextRotated {
+		// Never resume PriorSessionID from chat A when starting chat B.
 		resumeSessionID = ""
 	}
 
@@ -285,9 +287,12 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	if configDrift || contextRotated {
 		slot.closeBackend()
 	}
+	// Process config may update optimistically for this attempt; context key
+	// identity for force-fresh stays on last healthy until release(true).
+	prevFingerprint := slot.fingerprint
+	prevMode := slot.mode
 	slot.fingerprint = fingerprint
 	slot.mode = request.Mode
-	slot.lastContextKey = contextKey
 	slot.running = true
 
 	var backend agent.Backend
@@ -303,10 +308,17 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		created, closeFn, err := request.Factory(config)
 		if err != nil {
 			slot.running = false
+			// Roll back optimistic process identity so a partial B does not
+			// look "already on B" for later drift decisions; lastContextKey
+			// was never advanced.
+			slot.fingerprint = prevFingerprint
+			slot.mode = prevMode
 			return nil, fmt.Errorf("create canonical runtime backend: %w", err)
 		}
 		if created == nil {
 			slot.running = false
+			slot.fingerprint = prevFingerprint
+			slot.mode = prevMode
 			if closeFn != nil {
 				closeFn()
 			}
@@ -325,10 +337,11 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		canonicalSessionID: resumeSessionID,
 	}
 	return &canonicalAgentRuntimeLease{
-		slot:      slot,
-		backend:   wrapped,
-		mode:      request.Mode,
-		turnClose: closeBackend,
+		slot:              slot,
+		backend:           wrapped,
+		mode:              request.Mode,
+		pendingContextKey: contextKey,
+		turnClose:         closeBackend,
 	}, nil
 }
 
@@ -343,11 +356,12 @@ func (b *canonicalSessionBackend) Execute(ctx context.Context, prompt string, op
 }
 
 type canonicalAgentRuntimeLease struct {
-	slot      *canonicalAgentRuntimeSlot
-	backend   agent.Backend
-	mode      canonicalRuntimeMode
-	turnClose func()
-	once      sync.Once
+	slot              *canonicalAgentRuntimeSlot
+	backend           agent.Backend
+	mode              canonicalRuntimeMode
+	pendingContextKey string // committed to slot.lastContextKey only on healthy release
+	turnClose         func()
+	once              sync.Once
 }
 
 func (l *canonicalAgentRuntimeLease) release(healthy bool) {
@@ -378,6 +392,13 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 			}
 		} else if !healthy {
 			l.slot.closeBackend()
+		}
+		// Commit context key only after a healthy turn — failed B leaves last
+		// healthy A so retry B still sees contextRotated and force-fresh.
+		if healthy {
+			if key := strings.TrimSpace(l.pendingContextKey); key != "" {
+				l.slot.lastContextKey = key
+			}
 		}
 		l.slot.running = false
 		l.slot.idleSince = now

@@ -215,6 +215,125 @@ func TestCanonicalAgentRuntimePoolRotatesFreshSessionOnContextKeyChange(t *testi
 	}
 }
 
+func TestCanonicalAgentRuntimePoolKeepsForceFreshAfterUnhealthyCrossChat(t *testing.T) {
+	// A healthy → B acquire force-fresh → B unhealthy → retry B with poisoned
+	// Prior must still force-fresh (lastContextKey stays A until B healthy).
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := func(turn string) map[string]string {
+		return map[string]string{
+			"PATH":                 "/usr/bin",
+			"MULTICA_SERVER_URL":   "https://multica.example",
+			"MULTICA_WORKSPACE_ID": "workspace-a",
+			"MULTICA_AGENT_ID":     "agent-a",
+			"MULTICA_TASK_ID":      turn,
+		}
+	}
+	a, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-A", env("turn-a")),
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("A acquire: %v", err)
+	}
+	a.release(true)
+
+	b1, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", env("turn-b1")),
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("B1 acquire: %v", err)
+	}
+	if _, err := b1.backend.Execute(context.Background(), "b1", agent.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b1.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("B1 resume = %q, want empty", got)
+	}
+	b1.release(false) // unhealthy — must NOT commit lastContextKey=B
+
+	b2, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", env("turn-b2")),
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A", // still poisoned claim
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("B2 acquire: %v", err)
+	}
+	defer b2.release(true)
+	if _, err := b2.backend.Execute(context.Background(), "b2", agent.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b2.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("B2 retry resume = %q, want empty (fresh fence must survive unhealthy B1)", got)
+	}
+}
+
+func TestCanonicalAgentRuntimePoolKeepsForceFreshAfterFactoryFailCrossChat(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := func(turn string) map[string]string {
+		return map[string]string{
+			"PATH":                 "/usr/bin",
+			"MULTICA_SERVER_URL":   "https://multica.example",
+			"MULTICA_WORKSPACE_ID": "workspace-a",
+			"MULTICA_AGENT_ID":     "agent-a",
+			"MULTICA_TASK_ID":      turn,
+		}
+	}
+	a, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-A", env("turn-a")),
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("A acquire: %v", err)
+	}
+	a.release(true)
+
+	failN := 0
+	failThenProbe := func(cfg agent.Config) (agent.Backend, func(), error) {
+		failN++
+		if failN == 1 {
+			return nil, nil, errors.New("simulated factory failure")
+		}
+		return probe.factory(cfg)
+	}
+	_, err = pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", env("turn-b-fail")),
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            failThenProbe,
+	})
+	if err == nil {
+		t.Fatal("expected factory failure on first B acquire")
+	}
+
+	b2, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", env("turn-b-retry")),
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("B retry acquire: %v", err)
+	}
+	defer b2.release(true)
+	if _, err := b2.backend.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b2.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("B after factory-fail resume = %q, want empty", got)
+	}
+}
+
 func TestCanonicalAgentRuntimePoolRestartsProcessKeepsPriorOnHardFieldDrift(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}

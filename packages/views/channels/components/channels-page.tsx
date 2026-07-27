@@ -166,6 +166,10 @@ import { PropRow } from "../../common/prop-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
+  ComposerSendErrorBar,
+  type ComposerSendErrorState,
+} from "./composer-send-error-bar";
+import {
   buildChatMessageParts,
   useComposerPendingAttachments,
 } from "../hooks/use-composer-pending-attachments";
@@ -659,6 +663,16 @@ export function ChannelsPage({
     threadTarget: QuoteTarget | null;
   }>({ channelId: null, target: null, threadRootId: null, threadTarget: null });
   const threadEditorRef = useRef<ContentEditorRef>(null);
+  // #772 send-failure → composer-restore state (channel main + channel thread).
+  const [channelSendError, setChannelSendError] =
+    useState<ComposerSendErrorState | null>(null);
+  const channelFailedContentRef = useRef<string>("");
+  const [channelRestoreNonce, setChannelRestoreNonce] = useState(0);
+  const [channelThreadSendError, setChannelThreadSendError] =
+    useState<ComposerSendErrorState | null>(null);
+  const channelThreadFailedContentRef = useRef<string>("");
+  const [channelThreadRestoreNonce, setChannelThreadRestoreNonce] = useState(0);
+  const [channelThreadRestoreText, setChannelThreadRestoreText] = useState("");
   const focusThreadComposerOnOpenRef = useRef(false);
   // #645 (Iris) — a true discriminated union: the type itself makes
   // thread+agent+details-simultaneously-true unrepresentable, instead of
@@ -1937,14 +1951,24 @@ export function ChannelsPage({
       mutate: sendMessage.mutate,
       // Composer clears on optimistic dispatch (LRM-222); onCommitted stays a
       // no-op safety net if a future path skips the early clear.
-      onCommitted: () => {},
-      // Conflict (409) needs a toast — the optimistic bubble is dropped. Retry
-      // failures keep the failed bubble with one-click retry (no toast noise).
-      onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+      onCommitted: () => setChannelSendError(null),
+      // #772: no permanent failed bubble. Restore the failed text into the
+      // composer (unless it already holds new text → keep + offer Restore) and
+      // show the inline error bar; bump the editor remount-nonce so it re-reads
+      // the restored draft.
+      onVisibleError: () => {
+        const currentText = editorRef.current?.getMarkdown()?.trim() ?? "";
+        const conflicted = currentText.length > 0 && currentText !== content;
+        channelFailedContentRef.current = content;
+        if (!conflicted && activeDraftKey) {
+          setConversationDraft(activeDraftKey, content);
+          setChannelRestoreNonce((n) => n + 1);
+        }
+        setChannelSendError({ conflicted });
       },
     });
     if (dispatched) {
+      setChannelSendError(null);
       prepareVoicePlayback(voicePlaybackScope(active.id));
       editorRef.current?.clearContent();
       channelPending.clear();
@@ -2012,12 +2036,23 @@ export function ChannelsPage({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => {},
-      onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+      onCommitted: () => setChannelThreadSendError(null),
+      onVisibleError: () => {
+        // #772 (channel thread): restore failed text into the thread composer
+        // (via editor defaultValue + remount) unless it holds new text; bar shown.
+        const currentText = threadEditorRef.current?.getMarkdown()?.trim() ?? "";
+        const conflicted = currentText.length > 0 && currentText !== content;
+        channelThreadFailedContentRef.current = content;
+        if (!conflicted) {
+          setChannelThreadRestoreText(content);
+          setChannelThreadRestoreNonce((n) => n + 1);
+        }
+        setChannelThreadSendError({ conflicted });
       },
     });
     if (dispatched) {
+      setChannelThreadSendError(null);
+      setChannelThreadRestoreText("");
       prepareVoicePlayback(voicePlaybackScope(active.id, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
@@ -2058,6 +2093,20 @@ export function ChannelsPage({
       setThreadDraftEmpty(true);
     }
     return dispatched;
+  };
+
+  // #772 restore-previous (conflicted case: composer held new text).
+  const handleRestorePrevious = () => {
+    if (!activeDraftKey) return;
+    setConversationDraft(activeDraftKey, channelFailedContentRef.current);
+    setChannelRestoreNonce((n) => n + 1);
+    setChannelSendError(null);
+  };
+
+  const handleRestoreChannelThreadPrevious = () => {
+    setChannelThreadRestoreText(channelThreadFailedContentRef.current);
+    setChannelThreadRestoreNonce((n) => n + 1);
+    setChannelThreadSendError(null);
   };
 
   const handleRetrySend = useCallback(
@@ -2787,10 +2836,13 @@ export function ChannelsPage({
         onOpenAgent={handleOpenAgentPanel}
         quoteTarget={threadQuoteTarget}
         onClearQuote={() => setThreadQuoteTarget(null)}
+        sendError={channelThreadSendError}
+        onRestorePrevious={handleRestoreChannelThreadPrevious}
         editor={
           <ContentEditor
-            key={`thread-editor:${threadSurfaceRoot.id}`}
+            key={`thread-editor:${threadSurfaceRoot.id}:${channelThreadRestoreNonce}`}
             ref={threadEditorRef}
+            defaultValue={channelThreadRestoreText}
             // Bare URLs stay plain text in the composer (#531/#542).
             plainUrls
             placeholder={t(($) => $.thread.composer_placeholder)}
@@ -3328,12 +3380,22 @@ export function ChannelsPage({
                     voiceDisabled={!activeDraftEmpty || channelPending.pending.length > 0}
                     onVoiceSend={handleVoiceSend}
                     isMobile={isMobile}
-                    prefix={quoteTarget ? (
-                      <ComposerQuotePreview
-                        quote={quoteTarget}
-                        onCancel={() => setQuoteTarget(null)}
-                        cancelLabel={t(($) => $.quote.cancel)}
-                      />
+                    // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
+                    prefix={channelSendError || quoteTarget ? (
+                      <>
+                        <ComposerSendErrorBar
+                          error={channelSendError}
+                          onRetry={handleSend}
+                          onRestore={handleRestorePrevious}
+                        />
+                        {quoteTarget ? (
+                          <ComposerQuotePreview
+                            quote={quoteTarget}
+                            onCancel={() => setQuoteTarget(null)}
+                            cancelLabel={t(($) => $.quote.cancel)}
+                          />
+                        ) : null}
+                      </>
                     ) : undefined}
                     // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
                     tray={
@@ -3346,7 +3408,7 @@ export function ChannelsPage({
                     }
                     editor={
                       <ContentEditor
-                        key={active.id}
+                        key={`${active.id}:${channelRestoreNonce}`}
                         ref={editorRef}
                         // Chat composer: typed/loaded bare URLs stay plain text
                         // (#531/#542) — made clickable on the read side, not here.

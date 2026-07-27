@@ -345,14 +345,37 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	}, nil
 }
 
+// canonicalSessionBackend is the only Execute wrapper on the canonical path.
+// Field audit (Parker): the sole unconditional override is ResumeSessionID ←
+// canonicalSessionID. Prompt, Cwd, Model, SystemPrompt, MCP, ExtraArgs, and
+// all other ExecOptions pass through unchanged. Upstream runTask stale-session
+// fallback clears ResumeSessionID on opts AND must call ClearCanonicalResume
+// or the wrapper would re-apply the stale Prior on retry.
 type canonicalSessionBackend struct {
 	backend            agent.Backend
 	canonicalSessionID string
 }
 
+// ClearCanonicalResume drops the wrapper-owned resume id so a same-turn fresh
+// retry (runTask after failed+empty SessionID) is not re-forced onto Prior.
+func (b *canonicalSessionBackend) ClearCanonicalResume() {
+	if b == nil {
+		return
+	}
+	b.canonicalSessionID = ""
+}
+
 func (b *canonicalSessionBackend) Execute(ctx context.Context, prompt string, options agent.ExecOptions) (*agent.Session, error) {
+	// Only ResumeSessionID is forced from lease state; see type comment audit.
 	options.ResumeSessionID = b.canonicalSessionID
 	return b.backend.Execute(ctx, prompt, options)
+}
+
+// clearCanonicalResumeIfPresent is the runTask hook for stale-session fallback.
+func clearCanonicalResumeIfPresent(backend agent.Backend) {
+	if clearer, ok := backend.(interface{ ClearCanonicalResume() }); ok {
+		clearer.ClearCanonicalResume()
+	}
 }
 
 type canonicalAgentRuntimeLease struct {

@@ -50,12 +50,30 @@ func (h *Handler) rewindChannelRead(w http.ResponseWriter, r *http.Request, work
 	}
 
 	_, err = tx.Exec(r.Context(), `
-		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, followed_at, updated_at)
-		SELECT conv.id, conv.workspace_id, 'user', $2, $3, now(), now()
-		FROM conversation conv
-		WHERE conv.channel_id = $1
+		WITH conv AS (
+		  SELECT id, workspace_id
+		  FROM conversation
+		  WHERE channel_id = $1
+		),
+		unread_counts AS (
+		  SELECT conv.id AS conversation_id, count(m.id)::bigint AS main_unread_count
+		  FROM conv
+		  JOIN channel_message m ON m.channel_id = $1
+		   AND m.seq > $3
+		   AND m.author_type <> 'system'
+		   AND NOT (m.author_type = 'user' AND m.author_id = $2)
+		   AND m.thread_root_message_id IS NULL
+		   AND m.deleted_at IS NULL
+		  GROUP BY conv.id
+		)
+		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, main_unread_count, followed_at, updated_at)
+		SELECT conv.id, conv.workspace_id, 'user', $2, $3, COALESCE(uc.main_unread_count, 0), now(), now()
+		FROM conv
+		LEFT JOIN unread_counts uc ON uc.conversation_id = conv.id
 		ON CONFLICT (conversation_id, member_type, member_id)
-		DO UPDATE SET last_read_seq = $3, updated_at = now()`,
+		DO UPDATE SET last_read_seq = $3,
+		              main_unread_count = EXCLUDED.main_unread_count,
+		              updated_at = now()`,
 		channelID, userID, toSeq)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update conversation_member")

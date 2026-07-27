@@ -47,6 +47,7 @@ export interface Channel {
   muted_at?: string | null;
   muted?: boolean;
   last_message?: ChannelLastMessage | null;
+  /** Bounded avatar stack for list rows; full roster loads via the channel-members query. */
   members?: ChannelMemberBrief[];
   /** #642 — server-owned identity for an immutable system channel (e.g.
    *  "general"). Absent/unknown values must degrade to a normal channel,

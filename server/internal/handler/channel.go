@@ -38,6 +38,7 @@ const channelUserTypingExpiresInMS = 5000
 const channelAgentTypingExpiresInMS = 10 * 60 * 1000
 const channelMessagesDefaultLimit = 50
 const channelMessagesMaxLimit = 100
+const channelListMemberAvatarLimit = 5
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
@@ -405,8 +406,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.project_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind, ch.system_key,
 		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
-		       COALESCE(uc.cnt, 0),
-		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
+		       COALESCE(vcm.main_unread_count, 0)::int,
+		       GREATEST(COALESCE(vcm.main_unread_count, 0)::int, CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
 		       COALESCE(vcm.mention_unread_count, 0),
 		       NULLIF(COALESCE(vcm.last_read_seq, cr.last_read_seq, 0), 0)::bigint
 		FROM channel ch
@@ -420,20 +421,12 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			SELECT author_type, author_name, content, parts, created_at
 			FROM channel_message m
 			WHERE m.channel_id = ch.id
+			  AND m.workspace_id = $1
 			  AND m.thread_root_message_id IS NULL
 			  AND m.deleted_at IS NULL
 			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
 		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
-		LEFT JOIN LATERAL (
-			SELECT count(*) AS cnt FROM channel_message m
-			WHERE m.channel_id = ch.id
-			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
-			  AND m.author_type <> 'system'
-			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
-			  AND m.thread_root_message_id IS NULL
-			  AND m.deleted_at IS NULL
-		) uc ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
 		ORDER BY CASE WHEN $3 THEN ch.archived_at ELSE cm.pinned_at END DESC NULLS LAST, ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid, archivedOnly)
@@ -478,15 +471,21 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	// Second pass: members for the avatar stack, grouped by channel.
 	if len(channelIDs) > 0 {
 		memberRows, err := h.DB.Query(r.Context(), `
-			SELECT cm.channel_id, cm.member_type, cm.member_id,
+			SELECT limited.channel_id, limited.member_type, limited.member_id,
 			       COALESCE(u.name, a.name, ''),
 			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
-			       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
-			FROM channel_member cm
-			LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
-			LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
-			WHERE cm.channel_id = ANY($1::uuid[]) AND cm.workspace_id = $2
-			ORDER BY cm.created_at ASC`, channelIDs, parseUUID(workspaceID))
+			       CASE WHEN limited.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
+			FROM unnest($1::uuid[]) AS selected(channel_id)
+			JOIN LATERAL (
+				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at
+				FROM channel_member cm
+				WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
+				ORDER BY cm.created_at ASC
+				LIMIT $3
+			) limited ON true
+			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
+			LEFT JOIN agent a ON limited.member_type = 'agent' AND a.id = limited.member_id
+			ORDER BY selected.channel_id, limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
 		if err == nil {
 			defer memberRows.Close()
 			grouped := map[string][]ChannelMemberBrief{}
@@ -586,6 +585,17 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		  DO UPDATE SET last_read_at = now(), last_read_seq = GREATEST(channel_read.last_read_seq, EXCLUDED.last_read_seq)
 		  RETURNING channel_id, user_id, last_read_seq
 		),
+		unread_counts AS (
+		  SELECT ns.conversation_id, count(m.id)::bigint AS main_unread_count
+		  FROM new_state ns
+		  JOIN channel_message m ON m.channel_id = $1
+		   AND m.seq > ns.last_read_seq
+		   AND m.author_type <> 'system'
+		   AND NOT (m.author_type = 'user' AND m.author_id = $2)
+		   AND m.thread_root_message_id IS NULL
+		   AND m.deleted_at IS NULL
+		  GROUP BY ns.conversation_id
+		),
 		mention_counts AS (
 		  SELECT ns.conversation_id, count(m.id)::bigint AS mention_unread_count
 		  FROM new_state ns
@@ -603,14 +613,19 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		   )
 		  GROUP BY ns.conversation_id
 		)
-		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, mention_unread_count, followed_at, updated_at)
+		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, main_unread_count, mention_unread_count, followed_at, updated_at)
 		SELECT ns.conversation_id, ns.workspace_id, 'user', $2, ns.last_read_seq,
-		       COALESCE(mc.mention_unread_count, 0), now(), now()
+		       COALESCE(uc.main_unread_count, 0), COALESCE(mc.mention_unread_count, 0), now(), now()
 		FROM new_state ns
+		LEFT JOIN unread_counts uc ON uc.conversation_id = ns.conversation_id
 		LEFT JOIN mention_counts mc ON mc.conversation_id = ns.conversation_id
 		ON CONFLICT (conversation_id, member_type, member_id)
 		DO UPDATE SET
 		  last_read_seq = GREATEST(conversation_member.last_read_seq, EXCLUDED.last_read_seq),
+		  main_unread_count = CASE
+		    WHEN EXCLUDED.last_read_seq >= conversation_member.last_read_seq THEN EXCLUDED.main_unread_count
+		    ELSE conversation_member.main_unread_count
+		  END,
 		  mention_unread_count = CASE
 		    WHEN EXCLUDED.last_read_seq >= conversation_member.last_read_seq THEN EXCLUDED.mention_unread_count
 		    ELSE conversation_member.mention_unread_count
@@ -2963,9 +2978,9 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 	var oldPartsRaw []byte
 	var oldSeq int64
 	var oldAuthorType string
-	var oldAuthorID pgtype.UUID
+	var oldAuthorID, oldThreadRootMessageID pgtype.UUID
 	if err := tx.QueryRow(r.Context(), `
-		SELECT content, parts, seq, author_type, author_id
+		SELECT content, parts, seq, author_type, author_id, thread_root_message_id
 		FROM channel_message
 		WHERE id = $1
 		  AND channel_id = $2
@@ -2973,7 +2988,7 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		  AND author_type = 'user'
 		  AND author_id = $4
 		  AND deleted_at IS NULL
-		FOR UPDATE`, messageID, channelID, parseUUID(workspaceID), parseUUID(userID)).Scan(&oldContent, &oldPartsRaw, &oldSeq, &oldAuthorType, &oldAuthorID); err != nil {
+		FOR UPDATE`, messageID, channelID, parseUUID(workspaceID), parseUUID(userID)).Scan(&oldContent, &oldPartsRaw, &oldSeq, &oldAuthorType, &oldAuthorID, &oldThreadRootMessageID); err != nil {
 		_ = tx.Rollback(r.Context())
 		if errorsIsNoRows(err) {
 			writeError(w, http.StatusNotFound, "message not found")
@@ -3006,6 +3021,11 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		DELETE FROM channel_message_reaction
 		WHERE channel_message_id = $1 AND workspace_id = $2`,
 		messageID, parseUUID(workspaceID)); err != nil {
+		_ = tx.Rollback(r.Context())
+		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
+		return
+	}
+	if err := decrementChannelMainUnreadCounters(r.Context(), tx, channelID, oldAuthorType, oldAuthorID, oldSeq, oldThreadRootMessageID); err != nil {
 		_ = tx.Rollback(r.Context())
 		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
 		return
@@ -6673,6 +6693,9 @@ func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, cha
 	if err != nil {
 		return channelMessageInsertResult{}, err
 	}
+	if err := incrementChannelMainUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, threadRootMessageID); err != nil {
+		return channelMessageInsertResult{}, err
+	}
 	if err := incrementChannelMentionUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, content, parts); err != nil {
 		return channelMessageInsertResult{}, err
 	}
@@ -6681,6 +6704,44 @@ func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, cha
 		return channelMessageInsertResult{}, err
 	}
 	return channelMessageInsertResult{Message: msg, RearmedManagedPatrol: rearmed}, nil
+}
+
+func incrementChannelMainUnreadCounters(ctx context.Context, exec dbExecutor, channelID pgtype.UUID, authorType string, authorID pgtype.UUID, seq int64, threadRootMessageID pgtype.UUID) error {
+	if authorType == "system" || threadRootMessageID.Valid {
+		return nil
+	}
+	_, err := exec.Exec(ctx, `
+		WITH conv AS (
+		  SELECT id FROM conversation WHERE channel_id = $1
+		)
+		UPDATE conversation_member cm
+		SET main_unread_count = main_unread_count + 1,
+		    updated_at = now()
+		FROM conv
+		WHERE cm.conversation_id = conv.id
+		  AND cm.member_type = 'user'
+		  AND cm.last_read_seq < $2
+		  AND ($3 <> 'user' OR cm.member_id <> $4)`, channelID, seq, authorType, authorID)
+	return err
+}
+
+func decrementChannelMainUnreadCounters(ctx context.Context, exec dbExecutor, channelID pgtype.UUID, authorType string, authorID pgtype.UUID, seq int64, threadRootMessageID pgtype.UUID) error {
+	if authorType == "system" || threadRootMessageID.Valid {
+		return nil
+	}
+	_, err := exec.Exec(ctx, `
+		WITH conv AS (
+		  SELECT id FROM conversation WHERE channel_id = $1
+		)
+		UPDATE conversation_member cm
+		SET main_unread_count = GREATEST(main_unread_count - 1, 0),
+		    updated_at = now()
+		FROM conv
+		WHERE cm.conversation_id = conv.id
+		  AND cm.member_type = 'user'
+		  AND cm.last_read_seq < $2
+		  AND ($3 <> 'user' OR cm.member_id <> $4)`, channelID, seq, authorType, authorID)
+	return err
 }
 
 func channelMentionedMemberIDs(content string, parts []protocol.MessagePart, authorType string, authorID pgtype.UUID) []pgtype.UUID {

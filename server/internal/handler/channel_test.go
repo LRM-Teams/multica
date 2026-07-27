@@ -3649,6 +3649,69 @@ func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {
 	}
 }
 
+func TestListChannelsBoundsMemberAvatarStack(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	members := []string{testUserID}
+	for i := 0; i < channelListMemberAvatarLimit+2; i++ {
+		members = append(members, createChannelPlainMember(t))
+	}
+	channelID := seedChannelForTest(t, "member-stack-bound-"+uuid.NewString(), members...)
+
+	listed := listedChannelForUser(t, channelID, testUserID)
+	if listed == nil {
+		t.Fatal("seeded channel missing from list")
+	}
+	if len(listed.Members) != channelListMemberAvatarLimit {
+		t.Fatalf("listed members = %d, want capped stack %d", len(listed.Members), channelListMemberAvatarLimit)
+	}
+	if listed.Members[0].MemberID != testUserID {
+		t.Fatalf("first avatar member = %s, want channel's first member %s", listed.Members[0].MemberID, testUserID)
+	}
+}
+
+func TestListChannelsUsesMaintainedMainUnreadCount(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	otherID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "main-unread-count-"+uuid.NewString(), testUserID, otherID)
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherID), "Other", "unread one", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert first unread message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherID), "Other", "unread two", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert second unread message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "own message ignored", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert own message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", "system ignored", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert system message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherID), "Other", "thread reply ignored", "multica", nil, pgtype.UUID{}, parseUUID(first.ID), first.ThreadID, 0); err != nil {
+		t.Fatalf("insert thread reply: %v", err)
+	}
+
+	listed := listedChannelForUser(t, channelID, testUserID)
+	if listed == nil {
+		t.Fatal("seeded channel missing from list")
+	}
+	if listed.RealUnreadCount != 2 || listed.UnreadCount != 2 {
+		t.Fatalf("unread counts = real:%d display:%d, want 2", listed.RealUnreadCount, listed.UnreadCount)
+	}
+
+	markChannelReadForTest(t, channelID, testUserID)
+	listed = listedChannelForUser(t, channelID, testUserID)
+	if listed == nil || listed.RealUnreadCount != 0 || listed.UnreadCount != 0 {
+		t.Fatalf("unread counts after read = %+v, want zero", listed)
+	}
+}
+
 func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

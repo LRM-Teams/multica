@@ -23,13 +23,12 @@ export function ChannelFilesPanel({ channelId }: { channelId: string }) {
   const { data, isPending, isError, refetch, isFetching } = useQuery(
     channelAttachmentsOptions(channelId),
   );
-  const attachments = data ?? [];
   const sorted = useMemo(
     () =>
-      [...attachments].sort(
+      (data ?? []).toSorted(
         (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
       ),
-    [attachments],
+    [data],
   );
   const preview = useAttachmentPreview();
   const download = useDownloadAttachment();

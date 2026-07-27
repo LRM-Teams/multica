@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { ActorIdentityPresentation } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
@@ -27,10 +28,15 @@ export type InviteCandidate = {
   presentation: ActorIdentityPresentation;
 };
 
+/** Soft hint after first-paint SLA; hard timeout UI after this (LRM-621). */
+const INVITE_SLOW_MS = 2_000;
+const INVITE_TIMEOUT_MS = 8_000;
+
 /**
  * LRM-211 — Slack-style Add people dialog (chips + checklist + Cancel/Add).
  * Opened from header Invite or Members dialog 「Add people」.
  * LRM-225 — mobile bottom sheet + flex-1 scrollable suggestions list.
+ * LRM-623 — first-screen skeleton / explicit error·timeout (no silent empty).
  */
 export function ChannelAddPeopleDialog({
   open,
@@ -39,6 +45,8 @@ export function ChannelAddPeopleDialog({
   candidates,
   allCandidates,
   loading,
+  error,
+  onRetry,
   query,
   onQueryChange,
   selected,
@@ -55,6 +63,9 @@ export function ChannelAddPeopleDialog({
   /** Unfiltered pool used to render selected chips. */
   allCandidates: InviteCandidate[];
   loading?: boolean;
+  /** Fetch failed — never treat as empty list (LRM-238). */
+  error?: boolean;
+  onRetry?: () => void;
   query: string;
   onQueryChange: (q: string) => void;
   selected: Set<string>;
@@ -65,6 +76,26 @@ export function ChannelAddPeopleDialog({
 }) {
   const { t } = useT("channels");
   const chipItems = allCandidates.filter((c) => selected.has(c.key));
+  const [loadSlow, setLoadSlow] = useState(false);
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (!open || !loading || error) {
+      setLoadSlow(false);
+      setLoadTimedOut(false);
+      return;
+    }
+    const slowTimer = window.setTimeout(() => setLoadSlow(true), INVITE_SLOW_MS);
+    const timeoutTimer = window.setTimeout(() => setLoadTimedOut(true), INVITE_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(slowTimer);
+      window.clearTimeout(timeoutTimer);
+    };
+  }, [open, loading, error]);
+
+  const showTimeout = Boolean(loading && loadTimedOut && !error);
+  const showError = Boolean(error) || showTimeout;
+  const showSkeleton = Boolean(loading && !showError);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -94,6 +125,7 @@ export function ChannelAddPeopleDialog({
               onChange={(e) => onQueryChange(e.target.value)}
               placeholder={t(($) => $.members.search)}
               className="h-10 rounded-lg border-input bg-muted/40 pl-9"
+              disabled={showError}
             />
           </div>
         </div>
@@ -131,9 +163,32 @@ export function ChannelAddPeopleDialog({
         </p>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] pb-2">
-          {loading ? (
-            <div className="space-y-2 px-5 py-3" aria-busy="true">
-              {Array.from({ length: 4 }).map((_, i) => (
+          {showError ? (
+            <div
+              className="mx-5 my-6 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-6 text-center text-sm text-destructive"
+              data-testid="add-people-error"
+              role="alert"
+            >
+              <p>
+                {showTimeout
+                  ? t(($) => $.members.candidates_timeout)
+                  : t(($) => $.members.candidates_error)}
+              </p>
+              {onRetry && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 h-8 border-destructive/30 text-destructive"
+                  onClick={onRetry}
+                >
+                  {t(($) => $.members.candidates_retry)}
+                </Button>
+              )}
+            </div>
+          ) : showSkeleton ? (
+            <div className="space-y-2 px-5 py-3" aria-busy="true" data-testid="add-people-loading">
+              {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3">
                   <Skeleton className="size-4 rounded" />
                   <Skeleton className="size-9 shrink-0 rounded-full" />
@@ -143,9 +198,17 @@ export function ChannelAddPeopleDialog({
                   </div>
                 </div>
               ))}
+              {loadSlow && (
+                <p className="pt-2 text-center text-xs text-muted-foreground">
+                  {t(($) => $.members.candidates_slow)}
+                </p>
+              )}
             </div>
           ) : candidates.length === 0 ? (
-            <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+            <p
+              className="px-5 py-10 text-center text-sm text-muted-foreground"
+              data-testid="add-people-empty"
+            >
               {query.trim()
                 ? t(($) => $.members.no_results)
                 : t(($) => $.members.no_candidates)}
@@ -195,7 +258,7 @@ export function ChannelAddPeopleDialog({
           <Button
             type="button"
             className="rounded-lg bg-success font-bold text-white hover:bg-success/90"
-            disabled={selected.size === 0 || submitting}
+            disabled={selected.size === 0 || submitting || showError || showSkeleton}
             onClick={onSubmit}
           >
             {t(($) => $.members.add)}

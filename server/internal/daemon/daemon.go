@@ -4080,7 +4080,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task) {
 		cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
-			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, &execOpts, taskLog,
+			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, &execOpts, taskCtx, taskLog,
 		)
 		if cErr != nil {
 			return TaskResult{}, cErr

@@ -182,6 +182,38 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 	return content, writeRuntimeConfigFile(path, content)
 }
 
+// MaterializeCanonicalTurnContext writes Multica turn-scoped provider context
+// into a stable agent workspace (D6-1b turn.WorkDir).
+//
+// Tier A (stable): durable agent files outside Multica managed markers are left alone.
+// Tier B (refresh): managed AGENTS.md/CLAUDE.md block + skills + .agent_context for this turn.
+// Tier C (no residual): previous turn task sidecars under .agent_context and Multica-managed
+// skill dirs in the workspace are removed before rewrite so task A facts cannot leak into turn B.
+func MaterializeCanonicalTurnContext(workDir, provider string, ctx TaskContextForEnv) (string, error) {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return "", errors.New("canonical turn workdir is required")
+	}
+	// Tier C first: drop prior-turn task sidecars before any rewrite.
+	if err := os.RemoveAll(filepath.Join(workDir, ".agent_context")); err != nil {
+		return "", fmt.Errorf("clear prior turn .agent_context: %w", err)
+	}
+	if skills := skillsDirPath(workDir, provider); skills != "" {
+		if err := os.RemoveAll(skills); err != nil {
+			return "", fmt.Errorf("clear prior turn skills dir: %w", err)
+		}
+	}
+	// Tier B: refresh Multica-managed runtime brief (marker-idempotent) + task context/skills.
+	brief, err := InjectRuntimeConfig(workDir, provider, ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := writeContextFiles(workDir, provider, ctx, nil); err != nil {
+		return "", fmt.Errorf("write canonical turn context files: %w", err)
+	}
+	return brief, nil
+}
+
 // runtimeConfigPath returns the absolute path to the runtime config file that
 // InjectRuntimeConfig writes for the given provider, or "" when the provider
 // has no file-based config target. Centralising the mapping keeps Inject /

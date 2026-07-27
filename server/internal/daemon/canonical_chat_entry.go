@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -29,6 +30,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 	entry AgentEntry,
 	backendCfg agent.Config,
 	execOpts *agent.ExecOptions,
+	taskCtx execenv.TaskContextForEnv,
 	taskLog *slog.Logger,
 ) (backend agent.Backend, release func(bool), turn *agentRuntimeTurn, used bool, err error) {
 	if d == nil || d.agentRuntimeTurns == nil || d.canonicalRuntimes == nil {
@@ -87,6 +89,13 @@ func (d *Daemon) tryCanonicalChatBackend(
 		return nil, nil, nil, false, fmt.Errorf("canonical turn workdir is empty")
 	}
 	execOpts.Cwd = workDir
+
+	// Materialize Multica runtime brief + task context + skills into the
+	// stable cwd. Per-task env.WorkDir still got an inject earlier for
+	// non-resident paths; resident Grok/Pi only see turn.WorkDir.
+	if _, err := execenv.MaterializeCanonicalTurnContext(workDir, provider, taskCtx); err != nil {
+		return nil, nil, nil, false, fmt.Errorf("materialize canonical turn context: %w", err)
+	}
 
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:      agentID,

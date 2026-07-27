@@ -240,6 +240,13 @@
 - 配置来源、运行资格、当前 phase、最近 outcome 是四个独立 typed 轴，禁止用一个字符串混写。`observed_at` 只在 daemon 语义变化时更新，server 另记 `received_at`；错误只允许有限枚举 code 与长度受限、去空白的安全摘要，不得上传原始命令输出、环境变量或凭据。runtime API 对新 daemon 返回 typed `auto_update`，对旧/未知/非法未来枚举返回 `null`，不能因此丢掉 runtime 行。
 - **物**：migration 231 `daemon_update_status`、register/heartbeat session-revision CAS、`daemon-update-status.json` atomic snapshot、HTTP+WS change wake、runtime typed projection、old-daemon clear、duplicate-zero-write / stale-session / conflicting-revision / interrupted-replay / malformed-future-enum regressions。此阶段只增加观测，不改变 host default、claim barrier、supervisor 激活或 UI。
 
+### 4.13 Daemon 每个 profile 只能有一个 supervisor 拥有 worker generation — `可执行`（② typed state + ③单一 supervisor + ⑤真实进程回归；owner: @Barry）
+- supervisor 必须在整个生命周期持有每个 profile 唯一的 OS advisory lock，并且是唯一调用 worker `Start`、`Wait`、终止和重启的进程。锁冲突必须在 worker 启动前 fail closed；不能依赖 stale PID 文件判断唯一性，也不能把 child `Process.Release` 后失去退出事实。
+- worker 正常退出是 terminal clean stop，绝不自动拉起；启动失败或异常退出按 typed exit kind 记录并使用有上限的指数 backoff，稳定运行窗口后重置 backoff。停止必须把终止信号转发给整组 worker 并等待，超时才强杀；停止期间或 backoff 期间收到 context cancel 都不得再启动一代。显式 restart 立即终止当前 worker、清零 crash backoff 并只推进一个 generation；并发重复请求可合并但不能并发启动 worker。
+- Phase B 只提供 dormant supervisor foundation，不接 `daemon start`、setup、updater、VersionStore activation 或 claim barrier。后续 cutover 前必须先在 Phase C 加入跨 generation 的 claim-disabled barrier，以及 health + exact version + register grace 的 commit/rollback；当前 public foreground worker 和 self-successor 路径不得提前双写或并行启用。
+- **物**：`server/internal/daemon/supervisor` 的 `Run/RequestRestart/Snapshot`、Unix `flock + process-group SIGTERM/SIGKILL`、Windows `LockFileEx + CREATE_NEW_PROCESS_GROUP/CTRL_BREAK` adapter；真实 subprocess 回归覆盖 clean-no-restart、crash-backoff-cap、cancel-no-resurrection、explicit generation restart、second-instance fail-closed。
+- **已见红**：Phase B 测试在实现前因 supervisor state/API 全部不存在而 compile-fail；实现后 focused/race suite、Go vet、Windows amd64 cross-compile 与 diff-check 必须通过。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

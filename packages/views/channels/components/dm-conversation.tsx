@@ -645,8 +645,15 @@ function DmChannelConversation({
   // #692: the owner of a supervised agent_pair DM reads it read-only — the
   // server rejects any send/edit/delete/reaction from the supervisor, so the
   // composer becomes a quiet supervision banner (mirrors the archived-channel
-  // read-only surface). `supervised` is set by the BE only for the owner view.
-  const supervisedReadOnly = !!dm.supervised;
+  // read-only surface).
+  //
+  // #692 walkthrough finding: key read-only on `mode === "agent_pair"`, NOT only
+  // on the `supervised` flag. A human viewing an agent-pair DM is ALWAYS a
+  // read-only supervisor — the two members are the agents, a human can never be
+  // a writer here — so an agent_pair view must be read-only even if the BE
+  // omitted `supervised` (observed when one owner owns both ends). `supervised`
+  // is kept as a redundant signal.
+  const supervisedReadOnly = dm.mode === "agent_pair" || !!dm.supervised;
   // Plain const element (like `peerAvatar`), not a memo: a cheap leaf only
   // consumed when `supervisedReadOnly` is true, so memoizing it would just add a
   // JSX-returning hook before the effects' early-returns for no real saving.
@@ -1351,7 +1358,11 @@ function DmChannelConversation({
         loadErrorLabel={messagesError ? t(($) => $.message_loading.load_failed_retry) : undefined}
         onRetry={() => refetchMessages()}
         emptyLabel={t(($) => $.dm.thread_empty)}
-        onOpenThread={handleOpenThread}
+        // #692 walkthrough finding: opening a thread to reply is a write entry
+        // too — the read-only supervisor gets no "reply in thread" affordance
+        // (the thread's own composer is already read-only, so the button led
+        // nowhere). Dropping the handler removes the bubble's thread-reply control.
+        onOpenThread={supervisedReadOnly ? undefined : handleOpenThread}
         onOpenAgent={handleOpenAgentPanel}
         // #692 finding 1: read-only supervisor gets no message-mutation
         // affordances — dropping these handlers removes the bubble's

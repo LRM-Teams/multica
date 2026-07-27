@@ -3099,8 +3099,7 @@ func (q *Queries) ListTasksByIssue(ctx context.Context, issueID pgtype.UUID) ([]
 
 const listWorkspaceAgentTaskSnapshot = `-- name: ListWorkspaceAgentTaskSnapshot :many
 SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id FROM agent_inbox_event atq
-JOIN agent a ON a.id = atq.agent_id
-WHERE a.workspace_id = $1
+WHERE atq.workspace_id = $1
   AND atq.status IN ('pending', 'draining', 'failed')
   AND (
     atq.issue_id IS NOT NULL
@@ -3114,11 +3113,12 @@ WHERE a.workspace_id = $1
 
 UNION ALL
 
-SELECT t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id FROM (
-  SELECT DISTINCT ON (atq.agent_id) atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
+SELECT latest.id, latest.workspace_id, latest.agent_session_id, latest.conversation_id, latest.channel_id, latest.chat_session_id, latest.agent_id, latest.source_message_id, latest.reason, latest.requires_wake, latest.status, latest.priority, latest.seq_from, latest.seq_to, latest.attempt, latest.last_error, latest.claimed_at, latest.acked_at, latest.created_at, latest.updated_at, latest.terminal_outcome, latest.terminal_delivery_id, latest.retryable, latest.terminal_at, latest.runtime_id, latest.execution_config, latest.delivery_mode, latest.response_mode, latest.channel_onboarding_id, latest.issue_id, latest.source_chat_message_id, latest.context, latest.dispatched_at, latest.started_at, latest.completed_at, latest.result, latest.error, latest.session_id, latest.work_dir, latest.trigger_comment_id, latest.autopilot_run_id, latest.max_attempts, latest.parent_task_id, latest.failure_reason, latest.trigger_summary, latest.force_fresh_session, latest.is_leader_task, latest.wait_reason, latest.initiator_user_id FROM agent a
+JOIN LATERAL (
+  SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
   FROM agent_inbox_event atq
-  JOIN agent a ON a.id = atq.agent_id
-  WHERE a.workspace_id = $1
+  WHERE atq.workspace_id = $1
+    AND atq.agent_id = a.id
     AND atq.status = 'acked'
     AND atq.terminal_outcome IN ('completed', 'failed')
     AND (
@@ -3130,8 +3130,10 @@ SELECT t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id
         AND atq.context->>'workspace_id' = $1::text
       )
     )
-  ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST
-) t
+  ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST, atq.id DESC
+  LIMIT 1
+) latest ON TRUE
+WHERE a.workspace_id = $1
 `
 
 // Returns the tasks needed to derive each agent's current presence:
@@ -3150,8 +3152,10 @@ SELECT t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id
 // clears it.
 //
 // No UI windows in SQL: stickiness is decided by "is the latest outcome a
-// failure?", not a 2-minute clock. JOINs agent because agent_inbox_event has
-// no workspace_id column.
+// failure?", not a 2-minute clock. Active events filter directly by their
+// workspace_id. Latest outcomes enumerate the workspace's agents and do one
+// ordered index probe per agent, so history growth does not turn this hot
+// snapshot into a full-history scan.
 func (q *Queries) ListWorkspaceAgentTaskSnapshot(ctx context.Context, workspaceID pgtype.UUID) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, listWorkspaceAgentTaskSnapshot, workspaceID)
 	if err != nil {

@@ -682,17 +682,25 @@ func (q *Queries) LockCurrentAgentInboxDelivery(ctx context.Context, arg LockCur
 }
 
 const reclaimExpiredAgentInboxDeliveriesForRuntime = `-- name: ReclaimExpiredAgentInboxDeliveriesForRuntime :exec
-WITH expired_delivery AS (
+WITH runtime_event AS MATERIALIZED (
+  SELECT e.id, e.agent_session_id
+  FROM agent_inbox_event e
+  JOIN agent_session s ON s.id = e.agent_session_id
+  WHERE e.status = 'draining'
+    AND s.status = 'active'
+    AND (
+      e.runtime_id = $1
+      OR (e.runtime_id IS NULL AND s.runtime_id = $1)
+    )
+),
+expired_delivery AS (
   UPDATE agent_event_delivery d
   SET status = 'expired',
       last_error = 'delivery lease expired',
       updated_at = now()
-  FROM agent_session s, agent_inbox_event e
-  WHERE d.agent_session_id = s.id
+  FROM runtime_event e
+  WHERE d.agent_session_id = e.agent_session_id
     AND d.inbox_event_id = e.id
-    AND COALESCE(e.runtime_id, s.runtime_id) = $1
-    AND s.status = 'active'
-    AND e.status = 'draining'
     AND d.status IN ('leased', 'processing')
     AND d.lease_expires_at <= now()
   RETURNING d.inbox_event_id

@@ -38,6 +38,7 @@ export function ChannelMembersList({
   currentUserId,
   onOpenDm,
   onOpenAgent,
+  onOpenMember,
   onRemove,
   dmPending,
   className,
@@ -52,6 +53,7 @@ export function ChannelMembersList({
   currentUserId: string;
   onOpenDm?: (member: ChannelMember) => void;
   onOpenAgent?: OpenAgentPanelFn;
+  onOpenMember?: (userId: string) => void;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
   className?: string;
@@ -125,6 +127,12 @@ export function ChannelMembersList({
                 });
               }
             : undefined;
+        const openMemberCapture =
+          !isAgent && onOpenMember
+            ? () => {
+                onOpenMember(m.member_id);
+              }
+            : undefined;
 
         return (
           <div
@@ -137,7 +145,7 @@ export function ChannelMembersList({
               side="left"
               sideOffset={8}
               className="min-w-0 flex-1 items-center gap-3"
-              onClickCapture={openAgentCapture}
+              onClickCapture={openAgentCapture ?? openMemberCapture}
             >
               <ActorAvatar
                 actorType={actorType}

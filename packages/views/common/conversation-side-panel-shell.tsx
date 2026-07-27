@@ -22,6 +22,8 @@ export function ConversationSidePanelShell({
   variant = "panel",
   closeAriaLabel,
   doneLabel,
+  /** Optional controls before Close (e.g. Message on human profile — LRM-619). */
+  actions,
   children,
 }: {
   leading: ReactNode;
@@ -30,6 +32,7 @@ export function ConversationSidePanelShell({
   closeAriaLabel: string;
   /** When set with `variant="page"`, renders a text Done control. */
   doneLabel?: string;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -41,28 +44,31 @@ export function ConversationSidePanelShell({
     >
       <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">{leading}</div>
-        {variant === "panel" ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            aria-label={closeAriaLabel}
-          >
-            <X className="size-4" />
-          </Button>
-        ) : doneLabel ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            className="shrink-0 px-2 font-semibold text-primary"
-            data-testid="channel-details-done"
-          >
-            {doneLabel}
-          </Button>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {actions}
+          {variant === "panel" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              aria-label={closeAriaLabel}
+            >
+              <X className="size-4" />
+            </Button>
+          ) : doneLabel ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              className="shrink-0 px-2 font-semibold text-primary"
+              data-testid="channel-details-done"
+            >
+              {doneLabel}
+            </Button>
+          ) : null}
+        </div>
       </div>
       {children}
     </aside>

@@ -1,0 +1,223 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemberSidePanel } from "./member-side-panel";
+
+const memberListMock = vi.fn();
+const profileMock = vi.fn();
+const agentsMock = vi.fn();
+const runCountsMock = vi.fn();
+
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
+    "@tanstack/react-query",
+  );
+  return {
+    ...actual,
+    useQuery: (options: { queryKey?: unknown[] }) => {
+      const key = options.queryKey ?? [];
+      if (key.includes("members") && !String(key).includes("member-profiles")) {
+        return memberListMock();
+      }
+      if (key.includes("member-profiles")) {
+        return profileMock();
+      }
+      if (key.includes("agents")) {
+        return agentsMock();
+      }
+      if (String(key).includes("run-counts") || key.includes("runCounts")) {
+        return runCountsMock();
+      }
+      return { data: undefined, isPending: false };
+    },
+  };
+});
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (sel: (s: { user: { id: string } | null; setUser: () => void }) => unknown) =>
+    sel({ user: { id: "u-self" }, setUser: vi.fn() }),
+}));
+
+vi.mock("@multica/core/paths", () => ({
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/agents/${id}`,
+    actorProfile: (type: string, id: string) => `/profile/${type}/${id}`,
+  }),
+}));
+
+vi.mock("../navigation", () => ({
+  AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => (
+    <a href={href}>{children}</a>
+  ),
+}));
+
+vi.mock("../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <div data-testid={`avatar-${actorId}`} />
+  ),
+}));
+
+vi.mock("../common/agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
+}));
+
+vi.mock("../agents/components/inline-field-editor", () => ({
+  InlineFieldEditor: ({ value, emptyLabel }: { value: string; emptyLabel?: string }) => (
+    <div data-testid="member-profile-description-trigger">
+      {value || emptyLabel}
+    </div>
+  ),
+}));
+
+vi.mock("../i18n/use-t", () => ({
+  useT: () => ({
+    t: (fn: (keys: Record<string, unknown>) => string) =>
+      fn({
+        card: { unavailable: "unavailable" },
+        role: { owner: "Owner", admin: "Admin", member: "Member" },
+        panel: {
+          description: "Description",
+          no_description: "No description",
+          description_placeholder: "Add…",
+          info: "Info",
+          role: "Role",
+          email: "Email",
+          joined: "Joined",
+          created_agents: "Created agents",
+          no_agents: "No agents created yet",
+          message_aria: "Send message",
+          you_suffix: "(you)",
+        },
+        profile_popover: { close_aria: "Close" },
+      } as never),
+  }),
+}));
+
+function renderPanel(userId: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemberSidePanel userId={userId} onClose={vi.fn()} onMessage={vi.fn()} />
+    </QueryClientProvider>,
+  );
+}
+
+describe("MemberSidePanel (LRM-619 lock A)", () => {
+  beforeEach(() => {
+    memberListMock.mockReturnValue({
+      data: [
+        {
+          id: "m1",
+          workspace_id: "ws-1",
+          user_id: "u-frank",
+          role: "owner",
+          created_at: "2026-06-11T00:00:00Z",
+          name: "frank-an",
+          display_name: "Frank An",
+          email: "me@example.com",
+          avatar_url: null,
+          profile_description: "",
+        },
+      ],
+      isPending: false,
+    });
+    profileMock.mockReturnValue({
+      data: {
+        member_type: "user",
+        member_id: "u-frank",
+        name: "frank-an",
+        display_name: "Frank An",
+        avatar_url: null,
+        description: "",
+        role: "owner",
+        status: null,
+        recent_activity: [],
+        profile_access: "full",
+      },
+      isPending: false,
+    });
+    agentsMock.mockReturnValue({
+      data: [
+        {
+          id: "a1",
+          owner_id: "u-frank",
+          name: "ui-designer",
+          display_name: "UI Designer",
+          description: "Designer",
+          avatar_url: null,
+          archived_at: null,
+          model: "Claude Code",
+          runtime_mode: "local",
+          runtime_name: null,
+        },
+        {
+          id: "a2",
+          owner_id: "u-frank",
+          name: "beckham",
+          display_name: "贝克汉姆",
+          description: "Channel Manager",
+          avatar_url: null,
+          archived_at: null,
+          model: "Cursor Agent",
+          runtime_mode: "local",
+          runtime_name: null,
+        },
+      ],
+      isPending: false,
+    });
+    runCountsMock.mockReturnValue({ data: [], isPending: false });
+  });
+
+  it("renders DESCRIPTION / INFO / full CREATED AGENTS list", () => {
+    renderPanel("u-frank");
+    expect(screen.getByTestId("member-side-panel")).toBeTruthy();
+    expect(screen.getByText("No description")).toBeTruthy();
+    expect(screen.getByTestId("member-role-soft-pill").textContent).toContain("Owner");
+    expect(screen.getByText("me@example.com")).toBeTruthy();
+    expect(screen.getAllByTestId("member-created-agent-row")).toHaveLength(2);
+  });
+
+  it("hides Message for self and shows (you)", () => {
+    memberListMock.mockReturnValue({
+      data: [
+        {
+          id: "m-self",
+          workspace_id: "ws-1",
+          user_id: "u-self",
+          role: "member",
+          created_at: "2026-06-11T00:00:00Z",
+          name: "me",
+          display_name: "Me",
+          email: "self@example.com",
+          avatar_url: null,
+          profile_description: "Hello",
+        },
+      ],
+      isPending: false,
+    });
+    profileMock.mockReturnValue({
+      data: {
+        member_type: "user",
+        member_id: "u-self",
+        name: "me",
+        display_name: "Me",
+        avatar_url: null,
+        description: "Hello",
+        role: "member",
+        status: null,
+        recent_activity: [],
+        profile_access: "full",
+      },
+      isPending: false,
+    });
+    agentsMock.mockReturnValue({ data: [], isPending: false });
+    renderPanel("u-self");
+    expect(screen.queryByTestId("member-side-panel-message")).toBeNull();
+    expect(screen.getByText(/\(you\)/)).toBeTruthy();
+    expect(screen.getByText("No agents created yet")).toBeTruthy();
+  });
+});

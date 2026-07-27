@@ -9,6 +9,7 @@ import { DashboardGuard } from "./dashboard-guard";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 import { GlobalAgentPanel } from "./global-agent-panel";
+import { GlobalMemberPanel } from "./global-member-panel";
 import { AgentMemoryXpListener } from "../agents/components/agent-memory-xp-listener";
 
 interface DashboardLayoutProps {
@@ -51,6 +52,7 @@ export function DashboardLayout({
           <ModalRegistry />
           <SourceBackfillModal />
           <GlobalAgentPanel />
+          <GlobalMemberPanel />
           {extra}
         </SidebarInset>
       </SidebarProvider>

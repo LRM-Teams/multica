@@ -112,21 +112,16 @@ function RoleBadge({ role }: { role: MemberRole }) {
 
 function OwnedAgentsSection({ agents }: { agents: Agent[] }) {
   const { t } = useT("members");
-  // Top-2 by frequency (parent already sorted), each row links to the agent
-  // detail page. The presence dot is overlaid on the avatar via ActorAvatar's
-  // showStatusDot — `enableHoverCard` deliberately omitted to avoid
-  // popover-in-popover nesting; the click-through covers "want to know more".
-  // AppLink uses the platform navigation adapter so this works on web (Next
-  // router) and desktop (react-router-dom) without per-app branching.
+  // Full list (LRM-619 lock A) — each row links to the agent detail page.
+  // Presence via ActorAvatar showStatusDot; enableHoverCard omitted to avoid
+  // popover-in-popover. AppLink works on web + desktop without per-app branching.
   const p = useWorkspacePaths();
-  const visible = agents.slice(0, 2);
-  const overflow = agents.length - visible.length;
 
   return (
     <div className="flex flex-col gap-1.5 text-xs">
       <span className="text-muted-foreground">{t(($) => $.card.agents_section, { count: agents.length })}</span>
       <div className="flex flex-col gap-0.5">
-        {visible.map((a) => (
+        {agents.map((a) => (
           <AppLink
             key={a.id}
             href={p.agentDetail(a.id)}
@@ -155,11 +150,6 @@ function OwnedAgentsSection({ agents }: { agents: Agent[] }) {
             </span>
           </AppLink>
         ))}
-        {overflow > 0 && (
-          <span className="text-muted-foreground">
-            {t(($) => $.card.more_agents, { count: overflow })}
-          </span>
-        )}
       </div>
     </div>
   );

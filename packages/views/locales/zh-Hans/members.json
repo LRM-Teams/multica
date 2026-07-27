@@ -10,6 +10,19 @@
     "detail_link": "详情 →",
     "more_agents_other": "另有 {{count}} 个智能体"
   },
+  "panel": {
+    "description": "简介",
+    "no_description": "暂无简介",
+    "description_placeholder": "写一段简短介绍…",
+    "info": "信息",
+    "role": "角色",
+    "email": "邮箱",
+    "joined": "加入",
+    "created_agents": "创建的智能体",
+    "no_agents": "尚未创建智能体",
+    "message_aria": "发送消息",
+    "you_suffix": "(你)"
+  },
   "detail": {
     "workspace_fallback": "工作区",
     "members_breadcrumb": "成员",

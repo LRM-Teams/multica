@@ -3384,9 +3384,9 @@ export function ChannelsPage({
   // Desktop detail (LRM-400 + LRM-481): flex row — conversation always
   // flex-1 full width (no lone ResizablePanel / persisted %-layout blank
   // half). Side dock is an optional pixel-width column with left-edge drag
-  // (360–640, default 440; persists separately from the global overlay).
-  // Opening/closing the dock does not remount the conversation tree.
-  // Mobile: no drag — full-screen profile/page route instead.
+  // (360–640, default 520 for Thread/details; persists separately from the
+  // global overlay's 440). Opening/closing the dock does not remount the
+  // conversation tree. Mobile: no drag — full-screen profile/page route instead.
   const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="channel-detail-row">

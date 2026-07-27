@@ -1,6 +1,11 @@
 "use client";
 
-import { ProjectsPage } from "@multica/views/projects/components";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const ProjectsPage = lazyNamedRoute(
+  () => import("@multica/views/projects/components"),
+  "ProjectsPage",
+);
 
 export default function Page() {
   return <ProjectsPage />;

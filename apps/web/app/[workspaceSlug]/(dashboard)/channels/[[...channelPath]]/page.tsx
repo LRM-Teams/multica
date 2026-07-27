@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { ChannelsPage } from "@multica/views/channels";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const ChannelsPage = lazyNamedRoute(
+  () => import("@multica/views/channels"),
+  "ChannelsPage",
+);
 
 /**
  * Optional catch-all so `/channels` (list) and `/channels/[id]` (selected

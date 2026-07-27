@@ -1,8 +1,13 @@
 "use client";
 
 import { use } from "react";
-import { IssueDetail } from "@multica/views/issues/components";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const IssueDetail = lazyNamedRoute(
+  () => import("@multica/views/issues/components"),
+  "IssueDetail",
+);
 
 export default function IssueDetailPage({
   params,

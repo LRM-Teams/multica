@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { RuntimeDetailPage } from "@multica/views/runtimes";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const RuntimeDetailPage = lazyNamedRoute(
+  () => import("@multica/views/runtimes"),
+  "RuntimeDetailPage",
+);
 
 export default function RuntimeDetailRoute({
   params,

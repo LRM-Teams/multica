@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { ProjectDetail } from "@multica/views/projects/components";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const ProjectDetail = lazyNamedRoute(
+  () => import("@multica/views/projects/components"),
+  "ProjectDetail",
+);
 
 export default function ProjectDetailPage({
   params,

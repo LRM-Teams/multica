@@ -1,4 +1,11 @@
-import { AgentsPage } from "@multica/views/agents";
+"use client";
+
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const AgentsPage = lazyNamedRoute(
+  () => import("@multica/views/agents"),
+  "AgentsPage",
+);
 
 // Web has no bundled daemon, so the runtime filter always groups
 // local-mode runtimes under "Remote" (buildRuntimeMachines has no

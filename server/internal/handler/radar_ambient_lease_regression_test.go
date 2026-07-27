@@ -12,21 +12,19 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// #774 / #777: migration 223 dropped the event+wendy_ambient authorization
-// branch; lease ignored UPDATE row-count and leaked deliveries that livelocked
-// per-agent FIFO. These real-PG cases prove:
-//  1) authorized ambient Radar drains to draining + one delivery
-//  2) unauthorized ambient Radar never inserts a delivery, is terminalized,
-//     and unblocks a later directed wake on the same agent.
+// #777 follow-up (product kill after #1257 merged pre-kill head):
+// migration 234 strips wendy_ambient authorization; lease hard gate + durable
+// poison terminalize remain. Real-PG cases prove ambient stays unauthorized
+// even for channel members, never inserts a delivery, and unblocks later wakes.
 func TestRadarAmbientEventAuthorizationAndLeaseGate(t *testing.T) {
 	if testHandler == nil || testPool == nil || testHandler.TaskService == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 
-	t.Run("authorized ambient radar leases", func(t *testing.T) {
+	t.Run("channel-member ambient stays unauthorized and terminalizes under kill path", func(t *testing.T) {
 		agentID, runtimeID, _ := createRuntimeGuardAgent(t, ctx)
-		channelID := seedChannelForTest(t, "radar-ambient-auth-"+uuid.NewString()[:8], testUserID)
+		channelID := seedChannelForTest(t, "radar-ambient-kill-"+uuid.NewString()[:8], testUserID)
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 			VALUES ($1, $2, 'agent', $3)
@@ -40,14 +38,14 @@ func TestRadarAmbientEventAuthorizationAndLeaseGate(t *testing.T) {
 			ChannelID:      parseUUID(channelID),
 			ContextMode:    "coordination",
 			TriggerKind:    "event",
-			TriggerRef:     "task-777-authorized-ambient",
+			TriggerRef:     "task-777-kill-ambient",
 			CooldownKey:    "wendy_ambient:" + channelID,
-			ContextSummary: "authorized ambient radar",
+			ContextSummary: "kill-path ambient radar",
 			ScheduledFor:   time.Now(),
 			Prompt:         "ambient review",
 		})
 		if err != nil {
-			t.Fatalf("enqueue authorized ambient radar: %v", err)
+			t.Fatalf("enqueue ambient radar: %v", err)
 		}
 		t.Cleanup(func() {
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
@@ -58,37 +56,36 @@ func TestRadarAmbientEventAuthorizationAndLeaseGate(t *testing.T) {
 		if err := testPool.QueryRow(ctx, `SELECT workspace_radar_task_is_authorized($1)`, task.ID).Scan(&authorized); err != nil {
 			t.Fatalf("authorization probe: %v", err)
 		}
-		if !authorized {
-			t.Fatal("expected authorized ambient radar after migration 233 restore")
+		if authorized {
+			t.Fatal("kill path: event ambient must stay unauthorized after migration 234")
 		}
 
 		runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
 		if err != nil {
 			t.Fatalf("load runtime: %v", err)
 		}
-		delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
-		if err != nil {
-			t.Fatalf("lease authorized ambient: %v", err)
-		}
-		if uuidToString(delivery.InboxEventID) != uuidToString(task.ID) {
-			t.Fatalf("leased event=%s, want ambient task %s", uuidToString(delivery.InboxEventID), uuidToString(task.ID))
+		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("member ambient lease err=%v, want no rows (terminalize, no delivery)", err)
 		}
 
-		var status string
-		var deliveryCount int
-		if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, task.ID).Scan(&status); err != nil {
+		var status, reason string
+		var deliveries int
+		if err := testPool.QueryRow(ctx, `
+			SELECT status, COALESCE(failure_reason, '')
+			FROM agent_inbox_event WHERE id = $1
+		`, task.ID).Scan(&status, &reason); err != nil {
 			t.Fatalf("read ambient status: %v", err)
 		}
-		if status != "draining" {
-			t.Fatalf("ambient status=%q, want draining", status)
+		if status != "acked" || reason != "radar_unauthorized" {
+			t.Fatalf("ambient status/reason=%s/%s, want acked/radar_unauthorized", status, reason)
 		}
 		if err := testPool.QueryRow(ctx, `
 			SELECT count(*) FROM agent_event_delivery WHERE inbox_event_id = $1
-		`, task.ID).Scan(&deliveryCount); err != nil {
+		`, task.ID).Scan(&deliveries); err != nil {
 			t.Fatalf("count deliveries: %v", err)
 		}
-		if deliveryCount != 1 {
-			t.Fatalf("delivery count=%d, want 1", deliveryCount)
+		if deliveries != 0 {
+			t.Fatalf("delivery count=%d, want 0", deliveries)
 		}
 	})
 

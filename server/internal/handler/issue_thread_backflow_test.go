@@ -676,3 +676,89 @@ func TestIssueThreadBackflowDoesNotLeakAcrossProjectChannels(t *testing.T) {
 		}
 	}
 }
+
+// LRM-638 (end-to-end via the public API): drive issue transitions through the
+// real UpdateIssue HTTP handler and assert that no system event lands in a
+// sibling project channel. This complements the direct emitIssueThreadBackflow
+// test above by exercising the same scope computation through the path Frank
+// actually observed leaking (issue status/assignment events echoing into other
+// groups' feeds). Queryability via Activity / issue detail is untouched.
+func TestIssueThreadBackflowHTTPPathDoesNotLeakAcrossProjectChannels(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	// Project P shared by two sibling group channels. channelA anchors the issue;
+	// channelB is the sibling that previously received the project projection.
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		testWorkspaceID, "backflow-leak-http-proj-"+uuid.NewString()).Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
+	channelA := seedChannelForTest(t, "backflow-leak-http-A-"+uuid.NewString(), testUserID)
+	channelB := seedChannelForTest(t, "backflow-leak-http-B-"+uuid.NewString(), testUserID)
+	for _, ch := range []string{channelA, channelB} {
+		if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, ch); err != nil {
+			t.Fatalf("bind channel %s to project: %v", ch, err)
+		}
+	}
+
+	// Real source root message in channelA so the thread-backflow path is live.
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelA), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Track this discussion as an issue", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("backflow-leak-http-root-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert source root: %v", err)
+	}
+
+	assigneeID := createHandlerTestAgent(t, "Backflow Leak HTTP Assignee", nil)
+
+	// Issue anchored ONLY in channelA, bound to project P (shared with channelB).
+	issueNumber := 920000 + int(uuid.New().ID()%100000)
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position, project_id)
+		VALUES ($1, $2, 'todo', 'none', 'member', $3, $4, 0, $5)
+		RETURNING id`, testWorkspaceID, "leak guard http issue", testUserID, issueNumber, projectID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+		VALUES ($1, $2, $3, $4)`, issueID, testWorkspaceID, channelA, root.ID); err != nil {
+		t.Fatalf("anchor issue to channelA: %v", err)
+	}
+
+	// Drive the transitions a user/PM would through the public API. Each
+	// UpdateIssue call invokes emitIssueThreadBackflow internally.
+	updateIssueForBackflowTest(t, issueID, map[string]any{"assignee_type": "agent", "assignee_id": assigneeID})
+	updateIssueForBackflowTest(t, issueID, map[string]any{"status": "in_progress"})
+	updateIssueForBackflowTest(t, issueID, map[string]any{"status": "done"})
+
+	// channelA (direct source thread) must have accumulated the system rows.
+	aThreadEvents := loadIssueThreadBackflowEvents(t, channelA, root.ID)
+	if len(aThreadEvents) == 0 {
+		t.Fatalf("channelA thread has no system events for issue %s", issueID)
+	}
+	for _, e := range aThreadEvents {
+		if e.Params.IssueID != issueID {
+			t.Fatalf("channelA thread event tied to wrong issue: %+v", e)
+		}
+	}
+
+	// channelB (sibling project channel) must remain clean across every event
+	// type and both projection surfaces (thread + channel timeline). This is the
+	// LRM-638 regression guard through the real HTTP path.
+	for _, e := range loadIssueThreadBackflowEvents(t, channelB, root.ID) {
+		if e.Params.IssueID == issueID {
+			t.Fatalf("LRM-638 HTTP leak: channelB thread received issue %s event = %+v", issueID, e)
+		}
+	}
+	for _, e := range loadIssueChannelBackflowEvents(t, channelB) {
+		if e.Params.IssueID == issueID {
+			t.Fatalf("LRM-638 HTTP leak: channelB timeline received issue %s event = %+v", issueID, e)
+		}
+	}
+}

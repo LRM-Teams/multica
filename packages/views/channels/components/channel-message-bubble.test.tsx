@@ -1793,9 +1793,11 @@ describe("ChannelMessageBubble", () => {
     // server anchored it.
     const systemRow = screen.getByTestId("system-message-row");
     expect(within(systemRow).getByText("MUL-7").closest("a")).not.toBeNull();
-    // LRM-561 v1: side rules present; row itself is not a rounded-full chip.
-    expect(within(systemRow).getAllByTestId("system-message-rule")).toHaveLength(2);
-    expect(systemRow.className).toContain("text-[11.5px]");
+    // LRM-564/561: left-align + light icon; no side hairlines; row is not a capsule.
+    expect(within(systemRow).getByTestId("system-message-icon")).toBeInTheDocument();
+    expect(within(systemRow).queryByTestId("system-message-rule")).toBeNull();
+    expect(systemRow.className).toContain("pl-10");
+    expect(systemRow.className).toContain("text-xs");
     expect(systemRow.className).not.toMatch(/rounded-full/);
   });
 
@@ -1903,7 +1905,9 @@ describe("ChannelMessageBubble", () => {
     const fullTime = systemRow.getAttribute("title");
     expect(fullTime).toBeTruthy();
     expect(systemRow).toHaveTextContent(fullTime!);
-    expect(within(systemRow).getAllByTestId("system-message-rule")).toHaveLength(2);
+    expect(within(systemRow).getByTestId("system-message-icon")).toBeInTheDocument();
+    expect(within(systemRow).queryByTestId("system-message-rule")).toBeNull();
+    expect(systemRow.className).toContain("pl-10");
     expect(systemRow.className).toContain("text-muted-foreground/85");
     expect(screen.queryByTestId("message-bubble")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add reaction" })).not.toBeInTheDocument();

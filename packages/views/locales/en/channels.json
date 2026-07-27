@@ -167,7 +167,12 @@
     "preview_error": "Failed to load file content",
     "preview_empty": "(empty file)",
     "preview_too_large": "File too large to preview",
-    "preview_close_aria": "Close preview"
+    "preview_close_aria": "Close preview",
+    "empty_title": "No uploads yet",
+    "empty_hint": "Files uploaded in this channel will show up here.",
+    "retry": "Retry",
+    "open": "Open",
+    "download": "Download"
   },
   "settings": {
     "title": "Group settings",

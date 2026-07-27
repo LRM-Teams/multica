@@ -182,14 +182,16 @@ function IssueEventSubject({
   title?: string;
   sourceMessageId?: string;
 }): ReactNode {
-  const trimmedTitle = title?.trim();
-  const primary = trimmedTitle || identifier;
+  // LRM-564 lock: system/issue rows use a brand chip (▶ + key). Title stays in
+  // the issue peek — do not face the chip with title-primary (prose LRM-508).
+  const chipText = identifier.trim() || title?.trim() || issueId.slice(0, 8);
   return (
     <IssueRefLink
       issueId={issueId}
-      text={primary}
+      text={chipText}
       source="anchor"
       sourceMessageId={sourceMessageId}
+      appearance="systemChip"
     />
   );
 }
@@ -423,7 +425,7 @@ export function IssueAggregateSystemEventContent({
 
   const visibleItems = event.items.slice(0, previewCount);
   const issuesNode = (
-    <span className="inline-flex max-w-full flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5">
+    <span className="inline-flex max-w-full flex-wrap items-baseline justify-start gap-x-1.5 gap-y-0.5">
       {visibleItems.map((item, index) => (
         <Fragment key={item.issueId}>
           {index > 0 ? <span className="text-muted-foreground/60">·</span> : null}
@@ -462,8 +464,8 @@ export function IssueAggregateSystemEventContent({
   );
 
   return (
-    <span className="inline-flex max-w-full flex-col items-center gap-1">
-      <span className="inline-flex flex-wrap items-baseline justify-center gap-x-1">
+    <span className="inline-flex max-w-full flex-col items-start gap-1">
+      <span className="inline-flex flex-wrap items-baseline justify-start gap-x-1">
         {interpolateAggregateSlots(summaryTemplate, {
           actor,
           issues: issuesNode,
@@ -472,7 +474,7 @@ export function IssueAggregateSystemEventContent({
       {foldRest && expanded ? (
         <ul
           data-testid="issue-aggregate-items"
-          className="m-0 flex list-none flex-col items-center gap-0.5 p-0 text-xs"
+          className="m-0 flex list-none flex-col items-start gap-0.5 p-0 text-xs"
         >
           {event.items.slice(1).map((item) => (
             <li key={item.issueId} className="min-w-0">

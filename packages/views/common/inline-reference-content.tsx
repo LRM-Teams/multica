@@ -28,6 +28,7 @@ export function InlineReferenceContent({
   highlightQuery,
   className,
   sourceMessageId,
+  issueAppearance = "inline",
 }: {
   content: string | null | undefined;
   parts: readonly MessagePart[] | null | undefined;
@@ -36,6 +37,8 @@ export function InlineReferenceContent({
   className?: string;
   /** The Messages row that owns these references, for a precise return target. */
   sourceMessageId?: string;
+  /** LRM-561 system rows: brand chip issue refs (▶ + key). */
+  issueAppearance?: "inline" | "systemChip";
 }): React.JSX.Element {
   // Key each run by its character offset in the body (stable across renders,
   // never the array index) so React reconciles the same run/token cleanly.
@@ -67,6 +70,7 @@ export function InlineReferenceContent({
             highlightQuery={highlightQuery}
             sourceMessageId={sourceMessageId}
             emphasis={seg.emphasis}
+            issueAppearance={issueAppearance}
           />
         ),
       )}
@@ -123,6 +127,7 @@ function ReferenceToken({
   highlightQuery,
   sourceMessageId,
   emphasis,
+  issueAppearance,
 }: {
   reference: ReferencePart;
   text: string;
@@ -130,8 +135,16 @@ function ReferenceToken({
   highlightQuery?: string;
   sourceMessageId?: string;
   emphasis?: "strong" | "em";
+  issueAppearance: "inline" | "systemChip";
 }): React.JSX.Element {
-  const token = renderReferenceToken({ reference, text, interactive, highlightQuery, sourceMessageId });
+  const token = renderReferenceToken({
+    reference,
+    text,
+    interactive,
+    highlightQuery,
+    sourceMessageId,
+    issueAppearance,
+  });
   if (emphasis === "strong") return <strong>{token}</strong>;
   if (emphasis === "em") return <em>{token}</em>;
   return token;
@@ -143,12 +156,14 @@ function renderReferenceToken({
   interactive,
   highlightQuery,
   sourceMessageId,
+  issueAppearance,
 }: {
   reference: ReferencePart;
   text: string;
   interactive: boolean;
   highlightQuery?: string;
   sourceMessageId?: string;
+  issueAppearance: "inline" | "systemChip";
 }): React.JSX.Element {
   if (reference.ref_type === "mention") {
     // Non-interactive surfaces (e.g. the excerpt row, itself a link) render the
@@ -184,7 +199,14 @@ function renderReferenceToken({
   if (!interactive) {
     return <span className="text-brand">{text}</span>;
   }
-  return <IssueRefToken reference={reference} text={text} sourceMessageId={sourceMessageId} />;
+  return (
+    <IssueRefToken
+      reference={reference}
+      text={text}
+      sourceMessageId={sourceMessageId}
+      appearance={issueAppearance}
+    />
+  );
 }
 
 type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
@@ -227,10 +249,12 @@ function IssueRefToken({
   reference,
   text,
   sourceMessageId,
+  appearance = "inline",
 }: {
   reference: IssueRefPart;
   text: string;
   sourceMessageId?: string;
+  appearance?: "inline" | "systemChip";
 }): React.JSX.Element {
   return (
     <IssueRefLink
@@ -238,6 +262,7 @@ function IssueRefToken({
       text={text}
       source="anchor"
       sourceMessageId={sourceMessageId}
+      appearance={appearance}
     />
   );
 }

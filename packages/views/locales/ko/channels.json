@@ -167,7 +167,12 @@
     "preview_error": "파일 내용을 불러오지 못했습니다",
     "preview_empty": "(빈 파일)",
     "preview_too_large": "파일이 너무 커서 미리볼 수 없습니다",
-    "preview_close_aria": "미리보기 닫기"
+    "preview_close_aria": "미리보기 닫기",
+    "empty_title": "업로드된 파일이 없습니다",
+    "empty_hint": "이 채널에 업로드한 파일이 여기에 표시됩니다.",
+    "retry": "다시 시도",
+    "open": "열기",
+    "download": "다운로드"
   },
   "settings": {
     "title": "그룹 설정",

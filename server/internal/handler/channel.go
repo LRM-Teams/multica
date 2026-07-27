@@ -1308,6 +1308,9 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelAgentCallerMember(w, r, workspaceID, channelID, userID) {
+		return
+	}
 	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
 		return
 	}
@@ -6827,6 +6830,24 @@ func (h *Handler) requireChannelAgentMember(w http.ResponseWriter, ctx context.C
 	}
 	if !h.channelHasAgentMember(ctx, parseUUID(workspaceID), channelID, agentID) {
 		writeError(w, http.StatusForbidden, "not a channel member")
+		return false
+	}
+	return true
+}
+
+// requireChannelAgentCallerMember prevents an agent process from borrowing its
+// credential owner's channel membership after the agent itself was removed.
+// Machine credentials are server-stamped with the bound X-Agent-ID, so this
+// check cannot be bypassed by omitting or forging the agent identity. Human
+// requests keep their existing authorization path.
+func (h *Handler) requireChannelAgentCallerMember(w http.ResponseWriter, r *http.Request, workspaceID string, channelID pgtype.UUID, userID string) bool {
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType != "agent" {
+		return true
+	}
+	agentID, err := util.ParseUUID(actorID)
+	if err != nil || !h.channelHasAgentMember(r.Context(), parseUUID(workspaceID), channelID, agentID) {
+		writeError(w, http.StatusForbidden, "agent caller is not a channel member")
 		return false
 	}
 	return true

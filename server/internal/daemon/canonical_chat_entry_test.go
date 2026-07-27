@@ -130,8 +130,9 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 
 	issueA := "issue-marker-task-A-" + uuid.NewString()
 	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, sharedChat, issueA, "provider-session-shared", true)
-	poison := filepath.Join(stableWorkDir, ".agent_context", "poison_task_A.md")
-	if err := os.WriteFile(poison, []byte("TASK_A_SECRET_SHOULD_NOT_LEAK"), 0o644); err != nil {
+	// User-owned sibling under .agent_context must survive ledger cleanup (Tier A).
+	userSibling := filepath.Join(stableWorkDir, ".agent_context", "user_notes.md")
+	if err := os.WriteFile(userSibling, []byte("USER_OWNED_NOTES"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backendA.Execute(context.Background(), "first", agent.ExecOptions{}); err != nil {
@@ -162,8 +163,8 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		t.Fatalf("factory counts created=%d closed=%d, want 1/0 (no recreate)", created, closed)
 	}
 
-	if _, err := os.Stat(poison); !os.IsNotExist(err) {
-		t.Fatalf("task A poison residual still present under stable cwd: %v", err)
+	if raw, err := os.ReadFile(userSibling); err != nil || string(raw) != "USER_OWNED_NOTES" {
+		t.Fatalf("user-owned .agent_context sibling not preserved: %v %q", err, raw)
 	}
 	ctxB, err := os.ReadFile(filepath.Join(stableWorkDir, ".agent_context", "issue_context.md"))
 	if err != nil {
@@ -171,13 +172,10 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 	}
 	ctxText := string(ctxB)
 	if strings.Contains(ctxText, issueA) {
-		t.Fatalf("task A issue marker still present after turn B materialize:\n%s", ctxText)
+		t.Fatalf("task A Multica issue marker still present after turn B:\n%s", ctxText)
 	}
 	if !strings.Contains(ctxText, issueB) {
 		t.Fatalf("task B issue marker missing after turn B materialize:\n%s", ctxText)
-	}
-	if strings.Contains(ctxText, "TASK_A_SECRET_SHOULD_NOT_LEAK") {
-		t.Fatal("task A secret leaked into issue_context after turn B")
 	}
 	agentsRaw, err := os.ReadFile(filepath.Join(stableWorkDir, "AGENTS.md"))
 	if err != nil {

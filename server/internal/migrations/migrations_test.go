@@ -467,3 +467,51 @@ func TestMigration233RestoresWendyAmbientRadarAuthorization(t *testing.T) {
 		t.Error("migration 233 down must not keep wendy_ambient branch")
 	}
 }
+
+func TestMigration234KillsWendyAmbientRadarAuthorization(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "234_kill_wendy_ambient_radar_auth.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 234 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE OR REPLACE FUNCTION workspace_radar_task_is_authorized(candidate_task_id UUID)",
+		"FROM agent_inbox_event event",
+		"run.trigger_kind = 'manual'",
+		"run.trigger_kind = 'scheduled'",
+		"wendy_ambient product kill",
+		"failure_reason = 'radar_unauthorized'",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 234 up missing %q", required)
+		}
+	}
+	// Auth function body must not re-authorize event ambient.
+	fnStart := strings.Index(contents, "CREATE OR REPLACE FUNCTION workspace_radar_task_is_authorized")
+	fnEnd := strings.Index(contents[fnStart:], "$$;")
+	if fnStart < 0 || fnEnd < 0 {
+		t.Fatal("could not isolate auth function in migration 234 up")
+	}
+	fnBody := contents[fnStart : fnStart+fnEnd]
+	if strings.Contains(fnBody, "run.trigger_kind = 'event'") {
+		t.Error("migration 234 auth function must not authorize trigger_kind=event")
+	}
+	if strings.Contains(fnBody, "wendy_ambient:%") {
+		t.Error("migration 234 auth function must not reference wendy_ambient cooldown")
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "234_kill_wendy_ambient_radar_auth.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 234 down: %v", err)
+	}
+	if !strings.Contains(string(down), "wendy_ambient:%") {
+		t.Error("migration 234 down should restore ambient branch for emergency rollback only")
+	}
+}
+

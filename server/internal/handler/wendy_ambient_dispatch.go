@@ -20,9 +20,17 @@ import (
 const (
 	wendyAmbientDispatchLimit      = int32(5)
 	beckhamContextModeCoordination = "coordination"
+	// Product kill (Frank/Barry after #1257): stop enqueueing wendy_ambient
+	// event Radar runs. Authorization is stripped by migration 234; full
+	// module/schema removal is task #780. Keep the producer as a no-op until
+	// that cleanup lands so the scheduler job does not need a same-PR rewrite.
+	wendyAmbientProductEnabled = false
 )
 
 func (h *Handler) DispatchDueWendyAmbientReviews(ctx context.Context, limit int32) (int, error) {
+	if !wendyAmbientProductEnabled {
+		return 0, nil
+	}
 	if h.WorkGraph == nil || h.TaskService == nil || limit <= 0 {
 		return 0, nil
 	}

@@ -3258,8 +3258,11 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			taskLog.Error("task is missing its canonical inbox lease")
 			return
 		}
-		err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
+		receipt, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
+			if receipt.ResumeUnsafe {
+				d.evictPersistentChatRuntime(task)
+			}
 			if result.Status == "completed" {
 				d.maybeAppendDailyCloseoutStub(task, result)
 				d.reportAgentMemoryWrites(ctx, task)
@@ -4459,6 +4462,12 @@ func runtimeStatsFromUsage(provider string, usage map[string]agent.TokenUsage) *
 }
 
 func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger) string {
+	if failureReason, ok := classifyResumeUnsafeToolFailure(provider, errMsg); ok {
+		taskLog.Warn("agent failed with resume-unsafe tool permission error, classifying as blocked",
+			"failure_reason", failureReason,
+		)
+		return failureReason
+	}
 	if failureReason, ok := classifyResumeUnsafeTimeout(provider, errMsg); ok {
 		taskLog.Warn("agent failed with resume-unsafe no-progress error, classifying as blocked",
 			"failure_reason", failureReason,

@@ -185,6 +185,27 @@ func TestClassifyAgentRunFailureReasonPrioritizesResumeUnsafe(t *testing.T) {
 	}
 }
 
+func TestClassifyResumeUnsafeGrokToolPermissionFailure(t *testing.T) {
+	const raw = "Failed to request permission from user: unknown permission option for tool `run_terminal_command`"
+	reason, ok := classifyResumeUnsafeToolFailure("grok", raw)
+	if !ok || reason != FailureReasonGrokToolPermission {
+		t.Fatalf("classification = (%q, %v), want (%q, true)", reason, ok, FailureReasonGrokToolPermission)
+	}
+	if got := classifyAgentRunFailureReason(
+		"grok",
+		raw,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	); got != FailureReasonGrokToolPermission {
+		t.Fatalf("agent run classification = %q, want %q", got, FailureReasonGrokToolPermission)
+	}
+	if _, ok := classifyResumeUnsafeToolFailure("hermes", raw); ok {
+		t.Fatal("non-Grok provider was classified as a poisoned Grok session")
+	}
+	if _, ok := classifyResumeUnsafeToolFailure("grok", "tool returned status 400"); ok {
+		t.Fatal("ordinary Grok tool error was classified as resume-unsafe")
+	}
+}
+
 func TestClassifyResumeUnsafeTimeout(t *testing.T) {
 	cases := []struct {
 		name       string

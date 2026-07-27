@@ -142,7 +142,7 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 			t.Fatalf("decode body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{"ok":true,"acked_seq":42,"terminal_outcome":"failed","resume_unsafe":true}`))
 	}))
 	defer srv.Close()
 
@@ -151,8 +151,12 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	lease := AgentInboxLease{ID: "event-1", DeliveryID: "delivery-1", LeaseToken: "lease-1"}
 	internal := json.RawMessage(`{"decision":"SILENT","confidence":0.1}`)
 	usage := []TaskUsageEntry{{Provider: "openai", Model: "gpt-5", InputTokens: 7, OutputTokens: 2}}
-	if err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{ExecutionID: "execution-1", InternalOutput: internal, Usage: usage}); err != nil {
+	receipt, err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{ExecutionID: "execution-1", InternalOutput: internal, Usage: usage})
+	if err != nil {
 		t.Fatalf("CompleteAgentInboxEvent: %v", err)
+	}
+	if !receipt.OK || receipt.AckedSeq != 42 || receipt.TerminalOutcome != "failed" || !receipt.ResumeUnsafe {
+		t.Fatalf("completion receipt = %+v", receipt)
 	}
 	if got := string(body["internal_output"]); got != string(internal) {
 		t.Fatalf("internal_output = %s, want %s", got, internal)
@@ -183,7 +187,7 @@ func TestClient_CompleteAgentInboxEventSendsTypedChannelOnboardingDecision(t *te
 	c := NewClient(srv.URL)
 	c.SetToken("profile-token")
 	lease := AgentInboxLease{ID: "onboarding-event", DeliveryID: "delivery-1", LeaseToken: "lease-1"}
-	if err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{
+	if _, err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{
 		ChannelOnboardingDecision: protocol.ChannelOnboardingDecisionSkipped,
 	}); err != nil {
 		t.Fatalf("CompleteAgentInboxEvent: %v", err)

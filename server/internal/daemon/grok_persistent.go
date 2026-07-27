@@ -65,6 +65,7 @@ func (i persistentRuntimeIdentity) key() string {
 // runtime. The pool deliberately knows no provider protocol.
 type persistentRuntimeSession struct {
 	key       string
+	identity  persistentRuntimeIdentity
 	running   bool
 	idleSince time.Time
 	backend   agent.GrokACPBackend
@@ -92,7 +93,7 @@ func (p *persistentRuntimePool) acquire(identity persistentRuntimeIdentity, now 
 		current.running = true
 		return &persistentRuntimeLease{pool: p, session: current}, nil
 	}
-	s := &persistentRuntimeSession{key: key, running: true, idleSince: now}
+	s := &persistentRuntimeSession{key: key, identity: identity, running: true, idleSince: now}
 	p.sessions[key] = s
 	return &persistentRuntimeLease{pool: p, session: s}, nil
 }
@@ -157,9 +158,44 @@ func (p *persistentRuntimePool) closeAll() {
 	}
 }
 
+func (p *persistentRuntimePool) evictChat(agentID, runtimeID, chatSessionID string) int {
+	p.mu.Lock()
+	backends := make([]agent.GrokACPBackend, 0)
+	removed := 0
+	for key, session := range p.sessions {
+		identity := session.identity
+		if identity.AgentID != agentID || identity.RuntimeID != runtimeID || identity.ChatSessionID != chatSessionID {
+			continue
+		}
+		delete(p.sessions, key)
+		if session.backend != nil {
+			backends = append(backends, session.backend)
+		}
+		removed++
+	}
+	p.mu.Unlock()
+	for _, backend := range backends {
+		backend.Close()
+	}
+	return removed
+}
+
 func (d *Daemon) closePersistentRuntimes() {
 	if d.persistentRuntimes != nil {
 		d.persistentRuntimes.closeAll()
+	}
+}
+
+func (d *Daemon) evictPersistentChatRuntime(task Task) {
+	if task.ChatSessionID == "" {
+		return
+	}
+	agentID := resolvedTaskAgentID(task)
+	if d.persistentRuntimes != nil {
+		d.persistentRuntimes.evictChat(agentID, task.RuntimeID, task.ChatSessionID)
+	}
+	if d.piPersistentRuntimes != nil {
+		d.piPersistentRuntimes.evictChat(agentID, task.RuntimeID, task.ChatSessionID)
 	}
 }
 

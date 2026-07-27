@@ -1473,6 +1473,16 @@ func TestChannelAgentInboxCompletionInfersAbandonedFreshnessDraft(t *testing.T) 
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete held inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
+	var completionReceipt struct {
+		TerminalOutcome string `json:"terminal_outcome"`
+		ResumeUnsafe    bool   `json:"resume_unsafe"`
+	}
+	if err := json.Unmarshal(completeRec.Body.Bytes(), &completionReceipt); err != nil {
+		t.Fatalf("decode held completion receipt: %v body=%s", err, completeRec.Body.String())
+	}
+	if completionReceipt.TerminalOutcome != "no_reply" || completionReceipt.ResumeUnsafe {
+		t.Fatalf("held completion receipt = %+v, want no_reply and resume_unsafe=false", completionReceipt)
+	}
 
 	var terminalOutcome string
 	if err := testPool.QueryRow(ctx, `SELECT COALESCE(terminal_outcome, '') FROM agent_inbox_event WHERE id = $1`, got.ID).Scan(&terminalOutcome); err != nil {

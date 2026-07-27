@@ -100,6 +100,76 @@ func TestPersistentRuntimePoolDoesNotShareAcrossChatSessions(t *testing.T) {
 	second.release(false, now)
 }
 
+func TestPersistentRuntimePoolEvictsMatchingChatAfterUnsafeCompletion(t *testing.T) {
+	now := time.Date(2026, 7, 16, 6, 0, 0, 0, time.UTC)
+	p := newPersistentRuntimePool()
+	target := persistentRuntimeIdentity{AgentID: "agent", RuntimeID: "runtime", ChatSessionID: "chat-a"}
+	kept := persistentRuntimeIdentity{AgentID: "agent", RuntimeID: "runtime", ChatSessionID: "chat-b"}
+
+	targetLease, _ := p.acquire(target, now)
+	targetSession := targetLease.session
+	targetLease.release(true, now)
+	keptLease, _ := p.acquire(kept, now)
+	keptSession := keptLease.session
+	keptLease.release(true, now)
+
+	if got := p.evictChat("agent", "runtime", "chat-a"); got != 1 {
+		t.Fatalf("evicted matching chat sessions = %d, want 1", got)
+	}
+	reacquiredTarget, err := p.acquire(target, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("reacquire evicted target: %v", err)
+	}
+	if reacquiredTarget.session == targetSession {
+		t.Fatal("resume-unsafe target session was retained")
+	}
+	reacquiredTarget.release(false, now)
+
+	reacquiredKept, err := p.acquire(kept, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("reacquire unrelated chat: %v", err)
+	}
+	if reacquiredKept.session != keptSession {
+		t.Fatal("unrelated chat session was evicted")
+	}
+	reacquiredKept.release(false, now)
+}
+
+func TestPiPersistentRuntimePoolEvictsMatchingChatAfterUnsafeCompletion(t *testing.T) {
+	now := time.Date(2026, 7, 16, 6, 0, 0, 0, time.UTC)
+	p := newPiPersistentPool()
+	target := piPersistentIdentity{AgentID: "agent", RuntimeID: "runtime", ChatSessionID: "chat-a"}
+	kept := piPersistentIdentity{AgentID: "agent", RuntimeID: "runtime", ChatSessionID: "chat-b"}
+
+	targetLease, _ := p.acquire(target, now)
+	targetSession := targetLease.session
+	targetLease.release(true, now)
+	keptLease, _ := p.acquire(kept, now)
+	keptSession := keptLease.session
+	keptLease.release(true, now)
+
+	if got := p.evictChat("agent", "runtime", "chat-a"); got != 1 {
+		t.Fatalf("evicted matching chat sessions = %d, want 1", got)
+	}
+	reacquiredTarget, err := p.acquire(target, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("reacquire evicted target: %v", err)
+	}
+	if reacquiredTarget.session == targetSession {
+		t.Fatal("resume-unsafe target session was retained")
+	}
+	reacquiredTarget.release(false, now)
+
+	reacquiredKept, err := p.acquire(kept, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("reacquire unrelated chat: %v", err)
+	}
+	if reacquiredKept.session != keptSession {
+		t.Fatal("unrelated chat session was evicted")
+	}
+	reacquiredKept.release(false, now)
+}
+
 func TestUsesPersistentGrokChatRuntime(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

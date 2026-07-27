@@ -550,6 +550,18 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.MustReplyFailure && !h.inboxEventHasAgentTransportFreshnessHold(r.Context(), event.ID) {
+		const (
+			errText       = "directed agent run completed without a visible transport receipt"
+			failureReason = "missing_transport_receipt"
+		)
+		h.completeFailedAgentInboxEvent(
+			w, r, event, deliveryID, leaseToken,
+			errText, failureReason, failureReason,
+			req.SessionID, req.WorkDir, false, 0,
+		)
+		return
+	}
 	result, err := json.Marshal(req.TaskCompleteRequest)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
@@ -801,7 +813,12 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		lifecycleStatus = terminalOutcome
 	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, lifecycleStatus)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": ackedSeq})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"acked_seq":        ackedSeq,
+		"terminal_outcome": terminalOutcome,
+		"resume_unsafe":    false,
+	})
 }
 
 func persistAgentInboxCompletionTx(
@@ -1141,8 +1158,9 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE agent_inbox_event
 		SET last_error = $2,
+		    failure_reason = NULLIF($3, ''),
 		    updated_at = now()
-		WHERE id = $1`, event.ID, errText); err != nil {
+		WHERE id = $1`, event.ID, errText, failureReason); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure")
 		return
 	}
@@ -1240,7 +1258,16 @@ func (h *Handler) finishFailedAgentInboxEvent(
 		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": ackedSeq})
+	terminalOutcome := "failed"
+	if alreadyReplied {
+		terminalOutcome = "replied"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"acked_seq":        ackedSeq,
+		"terminal_outcome": terminalOutcome,
+		"resume_unsafe":    !alreadyReplied && chatFailureResumeUnsafe(failureReason),
+	})
 }
 
 var errAgentInboxEventNotCancellable = errors.New("agent inbox event is not cancellable")

@@ -475,6 +475,9 @@ type hermesClient struct {
 	toolMu       sync.Mutex
 	pendingTools map[string]*pendingToolCall
 
+	toolFailureMu sync.Mutex
+	toolFailure   *acpToolCallFailure
+
 	usageMu sync.Mutex
 	usage   TokenUsage
 }
@@ -486,6 +489,20 @@ type pendingToolCall struct {
 	input    map[string]any // from rawInput when the agent sends it up front (hermes)
 	argsText string         // accumulated `content[].text` args (kimi, cumulative)
 	emitted  bool           // whether we've already sent MessageToolUse
+}
+
+// acpToolCallFailure preserves the provider's canonical failed-tool frame.
+// Some ACP runtimes still answer session/prompt successfully after emitting
+// one of these frames, so the prompt response alone is not a truthful turn
+// outcome.
+type acpToolCallFailure struct {
+	ToolCallID string
+	ToolName   string
+	Message    string
+}
+
+func (e *acpToolCallFailure) Error() string {
+	return e.Message
 }
 
 // writeLine serialises concurrent JSON-RPC writes so request() (main
@@ -1007,7 +1024,25 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 	// Mid-stream: only buffer updates. Kimi emits many of these per
 	// tool call, each carrying the cumulative args JSON so far.
 	if msg.Status != "completed" && msg.Status != "failed" {
-		if pending := c.getPendingTool(msg.ToolCallID); pending != nil && !pending.emitted {
+		pending := c.getPendingTool(msg.ToolCallID)
+		if pending == nil {
+			toolName := hermesToolNameFromTitle(title, msg.Kind)
+			pending = &pendingToolCall{
+				toolName: toolName,
+				input:    rawInput,
+				argsText: extractACPToolCallText(msg.Content),
+				emitted:  rawInput != nil,
+			}
+			c.trackTool(msg.ToolCallID, pending)
+			if pending.emitted && c.onMessage != nil {
+				c.onMessage(Message{
+					Type:   MessageToolUse,
+					Tool:   toolName,
+					CallID: msg.ToolCallID,
+					Input:  rawInput,
+				})
+			}
+		} else if !pending.emitted {
 			if text := extractACPToolCallText(msg.Content); text != "" {
 				// kimi streams the full cumulative args on every frame;
 				// overwrite rather than concatenate.
@@ -1028,6 +1063,21 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 	if output == "" {
 		output = extractACPToolCallText(msg.Content)
 	}
+	if msg.Status == "failed" {
+		toolName := hermesToolNameFromTitle(title, msg.Kind)
+		if pending != nil && pending.toolName != "" {
+			toolName = pending.toolName
+		}
+		failureText := strings.TrimSpace(output)
+		if failureText == "" {
+			failureText = "tool call failed"
+		}
+		c.recordToolCallFailure(&acpToolCallFailure{
+			ToolCallID: msg.ToolCallID,
+			ToolName:   toolName,
+			Message:    failureText,
+		})
+	}
 	if c.onMessage != nil {
 		c.onMessage(Message{
 			Type:   MessageToolResult,
@@ -1035,6 +1085,31 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 			Output: output,
 		})
 	}
+}
+
+func (c *hermesClient) resetToolCallFailure() {
+	c.toolFailureMu.Lock()
+	c.toolFailure = nil
+	c.toolFailureMu.Unlock()
+}
+
+func (c *hermesClient) recordToolCallFailure(failure *acpToolCallFailure) {
+	if failure == nil {
+		return
+	}
+	c.toolFailureMu.Lock()
+	defer c.toolFailureMu.Unlock()
+	if c.toolFailure == nil {
+		c.toolFailure = failure
+	}
+}
+
+func (c *hermesClient) takeToolCallFailure() *acpToolCallFailure {
+	c.toolFailureMu.Lock()
+	defer c.toolFailureMu.Unlock()
+	failure := c.toolFailure
+	c.toolFailure = nil
+	return failure
 }
 
 // trackTool stores pending-tool state for a given callID. Lazy-inits

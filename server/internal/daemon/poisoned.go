@@ -39,6 +39,7 @@ const (
 	FailureReasonAPIInvalidRequest       = string(taskfailure.ReasonAPIInvalidRequest)
 	FailureReasonCodexSemanticInactivity = "codex_semantic_inactivity"
 	FailureReasonGrokFirstTurnNoProgress = "grok_first_turn_no_progress"
+	FailureReasonGrokToolPermission      = "grok_tool_permission_failure"
 )
 
 // poisonedOutputMaxLen caps how long an output can be and still be
@@ -140,6 +141,23 @@ func classifyResumeUnsafeTimeout(provider, errMsg string) (string, bool) {
 			strings.Contains(lowered, strings.ToLower(agent.GrokNoStreamingJSONEventsMarker)) {
 			return FailureReasonGrokFirstTurnNoProgress, true
 		}
+	}
+	return "", false
+}
+
+// classifyResumeUnsafeToolFailure recognizes the narrow Grok failure where a
+// retained provider session still references an obsolete permission/tool
+// schema. Replaying that session deterministically fails before the shell or
+// Multica transport command starts, so both the in-process backend and the
+// persisted resume pointer must be discarded.
+func classifyResumeUnsafeToolFailure(provider, errMsg string) (string, bool) {
+	if strings.ToLower(strings.TrimSpace(provider)) != "grok" {
+		return "", false
+	}
+	lowered := strings.ToLower(strings.TrimSpace(errMsg))
+	if strings.Contains(lowered, "failed to request permission from user") &&
+		strings.Contains(lowered, "unknown permission option for tool") {
+		return FailureReasonGrokToolPermission, true
 	}
 	return "", false
 }

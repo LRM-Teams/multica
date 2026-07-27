@@ -254,6 +254,7 @@ func TestSplitEnvironmentSeparatesReusableProcessFromTurn(t *testing.T) {
 		"MULTICA_TASK_ID":                     "task-1",
 		"MULTICA_AGENT_INBOX_DELIVERY_ID":     "delivery-1",
 		"MULTICA_QUICK_CREATE_ATTACHMENT_IDS": `["attachment-1"]`,
+		AttemptPathEnv:                        "/tmp/runtime/transport-attempt",
 		"CODEX_HOME":                          "/stable/codex-home",
 	})
 	if err != nil {
@@ -273,6 +274,12 @@ func TestSplitEnvironmentSeparatesReusableProcessFromTurn(t *testing.T) {
 	}
 	if got := turn["MULTICA_QUICK_CREATE_ATTACHMENT_IDS"]; got != `["attachment-1"]` {
 		t.Fatalf("turn attachments = %q", got)
+	}
+	if got := turn[AttemptPathEnv]; got != "/tmp/runtime/transport-attempt" {
+		t.Fatalf("turn transport attempt path = %q", got)
+	}
+	if _, ok := stable[AttemptPathEnv]; ok {
+		t.Fatal("stable process env contains transport attempt path")
 	}
 
 	for _, key := range []string{"MULTICA_TOKEN", "MULTICA_TOKEN_FILE", EnvelopePathEnv} {
@@ -296,6 +303,30 @@ func TestBindRejectsEnvironmentOutsideExplicitAllowlist(t *testing.T) {
 	}
 	if _, err := os.Stat(transport.CurrentEnvelopePath()); !os.IsNotExist(err) {
 		t.Fatalf("current envelope after rejected bind error = %v, want not exist", err)
+	}
+}
+
+func TestRecordAttemptFromEnvironmentWritesPrivateMarker(t *testing.T) {
+	path := AttemptPath(t.TempDir())
+	t.Setenv(AttemptPathEnv, path)
+
+	if err := RecordAttemptFromEnvironment(); err != nil {
+		t.Fatalf("RecordAttemptFromEnvironment: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(attempt marker): %v", err)
+	}
+	if got := string(body); got != "attempted\n" {
+		t.Fatalf("attempt marker = %q, want attempted newline", got)
+	}
+	assertPrivateFile(t, path, 0o600)
+}
+
+func TestRecordAttemptFromEnvironmentRejectsUnexpectedPath(t *testing.T) {
+	t.Setenv(AttemptPathEnv, filepath.Join(t.TempDir(), "other-name"))
+	if err := RecordAttemptFromEnvironment(); err == nil {
+		t.Fatal("RecordAttemptFromEnvironment accepted unexpected marker basename")
 	}
 }
 

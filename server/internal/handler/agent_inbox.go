@@ -550,6 +550,15 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	req.MustReplyFailure = h.isChannelAgentTask(r.Context(), task) &&
+		task.Priority >= 2 &&
+		req.TransportAttempted &&
+		!h.chatTaskHasAgentTransportVisibleOutput(r.Context(), task)
+	result, err := json.Marshal(req.TaskCompleteRequest)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
+		return
+	}
 	if req.MustReplyFailure && !h.inboxEventHasAgentTransportFreshnessHold(r.Context(), event.ID) {
 		const (
 			errText       = "directed agent run completed without a visible transport receipt"
@@ -558,13 +567,8 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.completeFailedAgentInboxEvent(
 			w, r, event, deliveryID, leaseToken,
 			errText, failureReason, failureReason,
-			req.SessionID, req.WorkDir, false, 0,
+			req.SessionID, req.WorkDir, result, false, 0,
 		)
-		return
-	}
-	result, err := json.Marshal(req.TaskCompleteRequest)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
 		return
 	}
 	var executionID pgtype.UUID
@@ -954,7 +958,7 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.completeFailedAgentInboxEvent(
-			w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir, false, 0,
+			w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir, nil, false, 0,
 		)
 		return
 	}
@@ -1126,7 +1130,7 @@ func (h *Handler) completeFailedNonChatAgentInboxEvent(
 	)
 }
 
-func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID, errText, failureReason, reasonCode, sessionID, workDir string, deliveryAlreadyAcked bool, ackedSeq int64) {
+func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID, errText, failureReason, reasonCode, sessionID, workDir string, completionResult []byte, deliveryAlreadyAcked bool, ackedSeq int64) {
 	if h.TxStarter == nil {
 		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
 		return
@@ -1157,10 +1161,11 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE agent_inbox_event
-		SET last_error = $2,
+		SET result = CASE WHEN $4::jsonb IS NULL THEN result ELSE $4::jsonb END,
+		    last_error = $2,
 		    failure_reason = NULLIF($3, ''),
 		    updated_at = now()
-		WHERE id = $1`, event.ID, errText, failureReason); err != nil {
+		WHERE id = $1`, event.ID, errText, failureReason, completionResult); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure")
 		return
 	}

@@ -1464,7 +1464,8 @@ func TestChannelAgentInboxCompletionInfersAbandonedFreshnessDraft(t *testing.T) 
 		DeliveryID: got.DeliveryID,
 		LeaseToken: got.LeaseToken,
 		TaskCompleteRequest: TaskCompleteRequest{
-			Output: "suppressed final after freshness hold",
+			Output:             "suppressed final after freshness hold",
+			TransportAttempted: true,
 		},
 	}, testWorkspaceID, "agent-inbox-held-daemon")
 	completeReq = withURLParam(completeReq, "eventId", got.ID)

@@ -151,7 +151,7 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	lease := AgentInboxLease{ID: "event-1", DeliveryID: "delivery-1", LeaseToken: "lease-1"}
 	internal := json.RawMessage(`{"decision":"SILENT","confidence":0.1}`)
 	usage := []TaskUsageEntry{{Provider: "openai", Model: "gpt-5", InputTokens: 7, OutputTokens: 2}}
-	receipt, err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{ExecutionID: "execution-1", InternalOutput: internal, Usage: usage})
+	receipt, err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{ExecutionID: "execution-1", InternalOutput: internal, Usage: usage, TransportAttempted: true})
 	if err != nil {
 		t.Fatalf("CompleteAgentInboxEvent: %v", err)
 	}
@@ -163,6 +163,9 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	}
 	if got := string(body["execution_id"]); got != `"execution-1"` {
 		t.Fatalf("execution_id = %s", got)
+	}
+	if got := string(body["transport_attempted"]); got != `true` {
+		t.Fatalf("transport_attempted = %s, want true", got)
 	}
 	var gotUsage []TaskUsageEntry
 	if err := json.Unmarshal(body["usage"], &gotUsage); err != nil {

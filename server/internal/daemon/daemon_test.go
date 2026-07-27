@@ -45,6 +45,19 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	}
 }
 
+func TestTransportAttemptWasRecorded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transport-attempt")
+	if attempted, err := transportAttemptWasRecorded(path); err != nil || attempted {
+		t.Fatalf("missing marker = attempted:%v err:%v, want false/nil", attempted, err)
+	}
+	if err := os.WriteFile(path, []byte("attempted\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(marker): %v", err)
+	}
+	if attempted, err := transportAttemptWasRecorded(path); err != nil || !attempted {
+		t.Fatalf("regular marker = attempted:%v err:%v, want true/nil", attempted, err)
+	}
+}
+
 func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T) {
 	oldDetect := detectAgentVersion
 	oldCheck := checkAgentMinVersion

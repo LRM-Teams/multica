@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -111,6 +114,29 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "here's the file"})
 	assertPartMap(t, rawParts[1], map[string]any{"type": "attachment", "attachment_id": "att-a"})
 	assertPartMap(t, rawParts[2], map[string]any{"type": "attachment", "attachment_id": "att-b"})
+}
+
+func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "transport down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	attemptPath := filepath.Join(t.TempDir(), "transport-attempt")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv(turntransport.AttemptPathEnv, attemptPath)
+
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("message", "attempted reply")
+	if err := runAgentMessageSend(cmd, nil); err == nil {
+		t.Fatal("runAgentMessageSend succeeded against failing transport")
+	}
+	if _, err := os.Stat(attemptPath); err != nil {
+		t.Fatalf("transport attempt marker missing after HTTP failure: %v", err)
+	}
 }
 
 func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {

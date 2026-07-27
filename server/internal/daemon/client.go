@@ -421,6 +421,9 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	if result.ChannelOnboardingDecision != "" {
 		body["channel_onboarding_decision"] = result.ChannelOnboardingDecision
 	}
+	if result.TransportAttempted {
+		body["transport_attempted"] = true
+	}
 	if result.RuntimeStats != nil {
 		body["runtime_stats"] = result.RuntimeStats
 	}

@@ -3553,7 +3553,7 @@ func TestCompleteTask_CLICapableRunRequiresAgentTransportForExplicitMessageSend(
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
-func TestCompleteTask_DirectedCLICapableRunWithoutTransportFails(t *testing.T) {
+func TestCompleteTask_DirectedCLICapableRunAfterTransportAttemptWithoutReceiptFails(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3567,7 +3567,10 @@ func TestCompleteTask_DirectedCLICapableRunWithoutTransportFails(t *testing.T) {
 	rawOutput := "I tried to send this through the chat transport; here is the final answer fallback."
 	seedPoisonedChatResumeForTask(t, taskID)
 
-	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"output":              rawOutput,
+		"transport_attempted": true,
+	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -3576,20 +3579,21 @@ func TestCompleteTask_DirectedCLICapableRunWithoutTransportFails(t *testing.T) {
 	assertMissingTransportReceiptFailure(t, taskID, w)
 }
 
-func TestCompleteTask_DirectedNoReplyRunWithoutTransportFails(t *testing.T) {
+func TestCompleteTask_DirectedNoReplyRunAfterTransportAttemptWithoutReceiptFails(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
-	// Non-CLI-capable directed run (Pi scenario): agent returns explicit
-	// no_reply action with no CLI-sent message → must-reply failure.
-	// This verifies #308's standalone check (outside #295 suppression).
+	// Directed run attempted the visible transport but received no durable
+	// receipt, then completed with no_reply: the attempt fact makes this a
+	// retryable missing-receipt failure rather than deliberate silence.
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	seedPoisonedChatResumeForTask(t, taskID)
 
 	w := completeTaskForTest(t, taskID, map[string]any{
-		"action": protocol.ChatOutputActionNoReply,
-		"output": "",
+		"action":              protocol.ChatOutputActionNoReply,
+		"output":              "",
+		"transport_attempted": true,
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -3610,6 +3614,62 @@ func TestCompleteTask_DirectedNoReplyRunWithoutTransportFails(t *testing.T) {
 	assertMissingTransportReceiptFailure(t, taskID, w)
 }
 
+func TestCompleteTask_DirectedNoReplyWithoutTransportAttemptRemainsNoReply(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": protocol.ChatOutputActionNoReply,
+		"output": "",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var receipt struct {
+		OK              bool   `json:"ok"`
+		TerminalOutcome string `json:"terminal_outcome"`
+		ResumeUnsafe    bool   `json:"resume_unsafe"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
+		t.Fatalf("decode completion receipt: %v body=%s", err, w.Body.String())
+	}
+	if !receipt.OK || receipt.TerminalOutcome != "no_reply" || receipt.ResumeUnsafe {
+		t.Fatalf("completion receipt = %+v, want ok=true terminal_outcome=no_reply resume_unsafe=false", receipt)
+	}
+
+	var messageCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'
+	`, channelID).Scan(&messageCount); err != nil {
+		t.Fatalf("count channel messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("channel message count = %d, want 0", messageCount)
+	}
+
+	var status, terminalOutcome, failureReason string
+	var retryable bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status,
+		       COALESCE(terminal_outcome, ''),
+		       retryable,
+		       COALESCE(failure_reason, '')
+		FROM agent_inbox_event
+		WHERE id = $1
+	`, taskID).Scan(&status, &terminalOutcome, &retryable, &failureReason); err != nil {
+		t.Fatalf("load deliberate no-reply outcome: %v", err)
+	}
+	if status != "acked" || terminalOutcome != "no_reply" || retryable || failureReason != "" {
+		t.Fatalf("deliberate no-reply outcome = status:%q terminal:%q retryable:%v failure_reason:%q",
+			status, terminalOutcome, retryable, failureReason)
+	}
+}
+
 func assertMissingTransportReceiptFailure(t *testing.T, taskID string, w *httptest.ResponseRecorder) {
 	t.Helper()
 
@@ -3627,15 +3687,17 @@ func assertMissingTransportReceiptFailure(t *testing.T, taskID string, w *httpte
 
 	var status, terminalOutcome, failureReason, lastError string
 	var retryable bool
+	var result []byte
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT status,
 		       COALESCE(terminal_outcome, ''),
 		       retryable,
 		       COALESCE(failure_reason, ''),
-		       COALESCE(last_error, '')
+		       COALESCE(last_error, ''),
+		       result
 		FROM agent_inbox_event
 		WHERE id = $1`, taskID).Scan(
-		&status, &terminalOutcome, &retryable, &failureReason, &lastError,
+		&status, &terminalOutcome, &retryable, &failureReason, &lastError, &result,
 	); err != nil {
 		t.Fatalf("load failed task outcome: %v", err)
 	}
@@ -3647,6 +3709,13 @@ func assertMissingTransportReceiptFailure(t *testing.T, taskID string, w *httpte
 	}
 	if lastError != "directed agent run completed without a visible transport receipt" {
 		t.Fatalf("last_error = %q", lastError)
+	}
+	var persisted TaskCompleteRequest
+	if err := json.Unmarshal(result, &persisted); err != nil {
+		t.Fatalf("decode persisted failed completion: %v result=%s", err, result)
+	}
+	if !persisted.TransportAttempted || !persisted.MustReplyFailure {
+		t.Fatalf("persisted failed completion = %+v, want transport_attempted and must_reply_failure", persisted)
 	}
 
 	var resumeState string

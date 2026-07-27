@@ -79,9 +79,19 @@ type Supervisor struct {
 	config    Config
 	restartCh chan struct{}
 
-	mu       sync.Mutex
-	active   bool
-	snapshot Snapshot
+	mu sync.Mutex
+	// runActive prevents concurrent Run calls on one Supervisor value. It is
+	// deliberately separate from profileOwned: Run must reserve the value
+	// before attempting the OS lock, while restart requests are only valid
+	// after that lock has actually been acquired.
+	runActive bool
+	// profileOwned is true only while this Run owns the OS profile lock.
+	// restartable becomes false as soon as Run commits to a terminal exit,
+	// before the lock is released.
+	profileOwned   bool
+	restartable    bool
+	restartPending bool
+	snapshot       Snapshot
 }
 
 func New(config Config) (*Supervisor, error) {
@@ -143,9 +153,13 @@ func (s *Supervisor) Snapshot() Snapshot {
 func (s *Supervisor) RequestRestart() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.active {
+	if !s.runActive || !s.profileOwned || !s.restartable {
 		return ErrNotRunning
 	}
+	if s.restartPending {
+		return nil
+	}
+	s.restartPending = true
 	select {
 	case s.restartCh <- struct{}{}:
 	default:
@@ -165,7 +179,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer lock.release()
+	s.beginProfileOwnership()
+	defer func() {
+		s.endProfileOwnership()
+		lock.release()
+	}()
 
 	backoff := s.config.InitialBackoff
 	for {
@@ -206,13 +224,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 
 		startedAt := time.Now()
-		s.updateSnapshot(func(snapshot *Snapshot) {
-			snapshot.State = StateRunning
-			snapshot.Generation++
-			snapshot.WorkerPID = cmd.Process.Pid
-			snapshot.WorkerStarted = startedAt
-			snapshot.NextBackoff = 0
-		})
+		s.establishGeneration(cmd.Process.Pid, startedAt)
 
 		waitCh := make(chan error, 1)
 		go func() {
@@ -225,8 +237,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				s.transitionStopped(ExitStopped)
 				return nil
 			}
+			if s.commitWorkerExit(waitErr == nil) {
+				backoff = s.config.InitialBackoff
+				continue
+			}
 			if waitErr == nil {
-				s.transitionStopped(ExitClean)
 				return nil
 			}
 			if time.Since(startedAt) >= s.config.StableRunWindow {
@@ -294,23 +309,107 @@ func (s *Supervisor) workerCommand() *exec.Cmd {
 func (s *Supervisor) beginRun() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active {
+	if s.runActive {
 		return ErrAlreadyRunning
 	}
-	for {
-		select {
-		case <-s.restartCh:
-		default:
-			s.active = true
-			return nil
-		}
-	}
+	s.drainRestartSignalLocked()
+	s.runActive = true
+	s.profileOwned = false
+	s.restartable = false
+	s.restartPending = false
+	return nil
 }
 
 func (s *Supervisor) finishRun() {
 	s.mu.Lock()
-	s.active = false
+	s.runActive = false
+	s.profileOwned = false
+	s.restartable = false
+	s.restartPending = false
+	s.drainRestartSignalLocked()
 	s.mu.Unlock()
+}
+
+func (s *Supervisor) beginProfileOwnership() {
+	s.mu.Lock()
+	s.profileOwned = true
+	s.restartable = true
+	s.mu.Unlock()
+}
+
+func (s *Supervisor) endProfileOwnership() {
+	s.mu.Lock()
+	s.profileOwned = false
+	s.restartable = false
+	s.restartPending = false
+	s.drainRestartSignalLocked()
+	s.mu.Unlock()
+}
+
+func (s *Supervisor) establishGeneration(pid int, startedAt time.Time) {
+	s.mu.Lock()
+	previousState := s.snapshot.State
+	s.snapshot.State = StateRunning
+	s.snapshot.Generation++
+	s.snapshot.WorkerPID = pid
+	s.snapshot.WorkerStarted = startedAt
+	s.snapshot.NextBackoff = 0
+	// A requested replacement is not fulfilled until the new process has
+	// started. Keep the intent owned across stopping/backoff/starting, then
+	// clear it atomically with publishing the replacement generation.
+	s.restartPending = false
+	s.drainRestartSignalLocked()
+	if s.snapshot.State != previousState {
+		s.snapshot.StateChangedAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+func (s *Supervisor) commitWorkerExit(clean bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restartPending {
+		previousState := s.snapshot.State
+		s.snapshot.State = StateStarting
+		s.snapshot.WorkerPID = 0
+		s.snapshot.LastExit = ExitRestarted
+		s.snapshot.NextBackoff = 0
+		s.snapshot.RestartCount++
+		if s.snapshot.State != previousState {
+			s.snapshot.StateChangedAt = time.Now()
+		}
+		return true
+	}
+	if !clean {
+		return false
+	}
+
+	// Clean worker exit is terminal unless a restart was already pending.
+	// This is the same mutex/linearization point used by RequestRestart, so a
+	// request cannot report success in the gap between observing the clean exit
+	// and committing StateStopped.
+	previousState := s.snapshot.State
+	s.snapshot.State = StateStopped
+	s.snapshot.WorkerPID = 0
+	s.snapshot.LastExit = ExitClean
+	s.snapshot.NextBackoff = 0
+	s.restartable = false
+	s.restartPending = false
+	s.drainRestartSignalLocked()
+	if s.snapshot.State != previousState {
+		s.snapshot.StateChangedAt = time.Now()
+	}
+	return false
+}
+
+func (s *Supervisor) drainRestartSignalLocked() {
+	for {
+		select {
+		case <-s.restartCh:
+		default:
+			return
+		}
+	}
 }
 
 func (s *Supervisor) updateSnapshot(update func(*Snapshot)) {
@@ -338,12 +437,22 @@ func (s *Supervisor) markRestartRequested() {
 }
 
 func (s *Supervisor) transitionStopped(exit ExitKind) {
-	s.updateSnapshot(func(snapshot *Snapshot) {
-		snapshot.State = StateStopped
-		snapshot.WorkerPID = 0
-		snapshot.LastExit = exit
-		snapshot.NextBackoff = 0
-	})
+	s.mu.Lock()
+	previousState := s.snapshot.State
+	s.snapshot.State = StateStopped
+	s.snapshot.WorkerPID = 0
+	s.snapshot.LastExit = exit
+	s.snapshot.NextBackoff = 0
+	// Linearization point for terminal exit: no restart request may report
+	// success after the supervisor has committed to stopping, even though a
+	// small amount of lock-release cleanup still follows.
+	s.restartable = false
+	s.restartPending = false
+	s.drainRestartSignalLocked()
+	if s.snapshot.State != previousState {
+		s.snapshot.StateChangedAt = time.Now()
+	}
+	s.mu.Unlock()
 }
 
 func (s *Supervisor) waitBeforeRestart(

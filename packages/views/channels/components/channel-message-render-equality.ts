@@ -27,7 +27,6 @@ export function channelMessageRenderEqual(
   if (prev.thread_last_reply_at !== next.thread_last_reply_at) return false;
   if (stableJson(prev.parts) !== stableJson(next.parts)) return false;
   if (stableJson(prev.reactions) !== stableJson(next.reactions)) return false;
-  if (stableJson(prev.my_reply_feedback) !== stableJson(next.my_reply_feedback)) return false;
   if (stableJson(prev.attachments) !== stableJson(next.attachments)) return false;
   if (stableJson(prev.quote) !== stableJson(next.quote)) return false;
   if (stableJson(prev.reply_to) !== stableJson(next.reply_to)) return false;

@@ -9,11 +9,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-// tryCanonicalChatBackend is the sole D6-1b production path for full Grok/Pi
-// chat wakes. Slot identity is agent×runtime. Context key is ChatSessionID
+// tryCanonicalChatBackend is the sole D6-1b production path for full Grok/Pi/
+// Cursor chat wakes. Slot identity is agent×runtime. Context key is ChatSessionID
 // (never task.ID): same key may reuse the resident process; key change
 // disposes the process and forces a fresh provider session (no PriorSessionID).
 // There is no generation==0 fallback to legacy ChatSession-keyed pools.
+// #702 PR B: Cursor uses this same entry (no third ChatSession pool).
 //
 // Resident process cwd/identity WorkDir is always the stable agent workspace
 // from Begin (turn.WorkDir), never the per-task cloud env workdir.
@@ -40,7 +41,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		return nil, nil, nil, false, nil
 	}
 	switch provider {
-	case "grok", "pi":
+	case "grok", "pi", "cursor":
 	default:
 		return nil, nil, nil, false, nil
 	}

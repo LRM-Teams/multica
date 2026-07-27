@@ -722,7 +722,7 @@ func TestCanonicalRuntimeResultHealthIsFailClosed(t *testing.T) {
 	}
 }
 
-func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiAndGrok(t *testing.T) {
+func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiGrokAndCursor(t *testing.T) {
 	for _, tc := range []struct {
 		provider string
 		profile  string
@@ -731,7 +731,8 @@ func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiAndGrok(t *testing.T) {
 	}{
 		{provider: "pi", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "grok", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeOneShot},
+		// #702 PR B: Cursor is resident on the shared D6-1b seam (not one-shot).
+		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "claude", profile: executionProfileFull, want: canonicalRuntimeOneShot},
 		{provider: "codex", profile: executionProfileFull, want: canonicalRuntimeOneShot},
 		{provider: "pi", profile: executionProfileProtocolTurn, wantErr: true},
@@ -754,7 +755,8 @@ func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiAndGrok(t *testing.T) {
 	}
 }
 
-func TestCanonicalCursorUsesOneShotAdapterAndResumesPerAgentSession(t *testing.T) {
+// #702 PR B: Cursor resident reuse under stable ContextKey (ChatSessionID).
+func TestCanonicalCursorResidentReusesOneBackendAcrossTurns(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
 	identity := canonicalRuntimeIdentityForTest(t, "cursor-model", map[string]string{
@@ -770,11 +772,11 @@ func TestCanonicalCursorUsesOneShotAdapterAndResumesPerAgentSession(t *testing.T
 	if err != nil {
 		t.Fatalf("canonicalRuntimeModeFor cursor: %v", err)
 	}
-	if mode != canonicalRuntimeOneShot {
-		t.Fatalf("cursor mode = %q, want %q", mode, canonicalRuntimeOneShot)
+	if mode != canonicalRuntimeResident {
+		t.Fatalf("cursor mode = %q, want %q", mode, canonicalRuntimeResident)
 	}
 
-	for turn, surfaceSessionID := range []string{"group-session", "dm-session"} {
+	for turn := 0; turn < 2; turn++ {
 		lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 			Identity:           identity,
 			Mode:               mode,
@@ -784,14 +786,8 @@ func TestCanonicalCursorUsesOneShotAdapterAndResumesPerAgentSession(t *testing.T
 		if err != nil {
 			t.Fatalf("turn %d acquire: %v", turn+1, err)
 		}
-		rawBackend := lease.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend)
-		if _, err := lease.backend.Execute(context.Background(), "turn", agent.ExecOptions{
-			ResumeSessionID: surfaceSessionID,
-		}); err != nil {
+		if _, err := lease.backend.Execute(context.Background(), "turn", agent.ExecOptions{}); err != nil {
 			t.Fatalf("turn %d Execute: %v", turn+1, err)
-		}
-		if got := rawBackend.lastResumeSessionID(); got != "cursor-agent-session" {
-			t.Fatalf("turn %d resume session = %q, want canonical Cursor agent session", turn+1, got)
 		}
 		lease.releaseForResult("completed", nil)
 	}
@@ -800,13 +796,27 @@ func TestCanonicalCursorUsesOneShotAdapterAndResumesPerAgentSession(t *testing.T
 		t.Fatalf("slot count = %d, want one agent×runtime slot", got)
 	}
 	created, closed := probe.counts()
-	if created != 2 || closed != 2 {
-		t.Fatalf("factory counts = created %d closed %d, want 2/2", created, closed)
+	if created != 1 || closed != 0 {
+		t.Fatalf("factory counts = created %d closed %d, want 1/0 (resident reuse)", created, closed)
+	}
+}
+
+func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
+	chatTask := Task{ChatSessionID: "chat-1"}
+	issueTask := Task{ChatSessionID: ""}
+	if !usesCanonicalResidentChatRuntime("cursor", chatTask) {
+		t.Fatal("cursor full chat should enter canonical resident path")
+	}
+	if usesCanonicalResidentChatRuntime("cursor", issueTask) {
+		t.Fatal("cursor without ChatSessionID must stay one-shot")
+	}
+	if !usesCanonicalResidentChatRuntime("grok", chatTask) {
+		t.Fatal("grok full chat should enter canonical path")
 	}
 }
 
 func TestCanonicalRuntimeDefaultFactoriesMatchProviderMode(t *testing.T) {
-	for _, provider := range []string{"pi", "grok"} {
+	for _, provider := range []string{"pi", "grok", "cursor"} {
 		factory := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
 		backend, closeBackend, err := factory(agent.Config{ExecutablePath: "/nonexistent/" + provider})
 		if err != nil {

@@ -4057,16 +4057,17 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	var backend agent.Backend
 	var releasePersistentRuntime func(bool)
-	// D6-1b: full Grok/Pi chat uses only the canonical agent×runtime pool.
+	// D6-1b: full Grok/Pi/Cursor chat uses only the canonical agent×runtime pool.
 	// No generation==0 dual path to ChatSession-keyed pools (Frank: no permanent
 	// compat). D6-1a is served; missing generation fails closed inside the entry.
+	// #702 PR B: Cursor enters here — never a third ChatSession-keyed pool.
 	selfBinForCanonical := ""
 	if resolveExecutable != nil {
 		if bin, binErr := resolveExecutable(); binErr == nil {
 			selfBinForCanonical = bin
 		}
 	}
-	if usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task) {
+	if usesCanonicalResidentChatRuntime(provider, task) {
 		cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
 			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, &execOpts, taskCtx, taskLog,
 		)

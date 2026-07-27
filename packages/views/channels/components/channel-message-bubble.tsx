@@ -11,7 +11,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { ClipboardList, Copy, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -170,19 +170,15 @@ function ChannelSystemMessageRow({
       className={cn(
         // LRM-561 / LRM-564 lock: left-align into the message body column
         // (avatar 28 + gap ≈ pl-10), no side hairlines, no full-row capsule.
-        // Issue refs are brand chips (▶ + key) — not muted bare links.
-        "group flex items-start gap-1.5 px-2 py-1 pl-10 outline-none transition-colors duration-1000",
+        // LRM-609 SoT A': no ClipboardList; issue refs are unfilled brand text
+        // links (title-primary) — not filled ▶ chips / LRM keys.
+        "group flex items-baseline px-2 py-1 pl-10 outline-none transition-colors duration-1000",
         "text-xs leading-snug text-muted-foreground/85",
         "[&_.mention]:bg-transparent [&_.mention]:px-0 [&_.mention]:font-medium [&_.mention]:text-inherit [&_.mention]:hover:bg-transparent [&_.mention]:focus-visible:bg-transparent",
         "[&_a:not([data-system-issue-chip])]:text-inherit [&_a:not([data-system-issue-chip])]:font-medium [&_a:not([data-system-issue-chip])]:no-underline hover:[&_a:not([data-system-issue-chip])]:underline",
         highlighted && "rounded-md bg-primary/10 ring-1 ring-primary/25 duration-0",
       )}
     >
-      <ClipboardList
-        aria-hidden
-        data-testid="system-message-icon"
-        className="mt-0.5 size-3 shrink-0 opacity-55"
-      />
       <div className="flex min-w-0 flex-1 flex-wrap items-baseline justify-start gap-x-1.5 gap-y-0.5 text-left">
         <span className="min-w-0 break-words">
           {issueAggregateEvent ? (
@@ -218,14 +214,14 @@ function ChannelSystemMessageRow({
         {showIssueTime ? (
           // Simple, always-visible time — "· 10:16" (item #7口径), the bucketed
           // inline clock the rest of the list uses, never a full timestamp.
-          <span className="shrink-0 tabular-nums text-muted-foreground/60">
+          <span className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground/60">
             {"· "}
             {messageTime.format(message.created_at)}
           </span>
         ) : (
           <span
             aria-hidden
-            className="shrink-0 tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+            className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
           >
             {messageTime.full(message.created_at)}
           </span>

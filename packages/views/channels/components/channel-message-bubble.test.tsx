@@ -1787,8 +1787,8 @@ describe("ChannelMessageBubble", () => {
     // server anchored it.
     const systemRow = screen.getByTestId("system-message-row");
     expect(within(systemRow).getByText("MUL-7").closest("a")).not.toBeNull();
-    // LRM-564/561: left-align + light icon; no side hairlines; row is not a capsule.
-    expect(within(systemRow).getByTestId("system-message-icon")).toBeInTheDocument();
+    // LRM-609 SoT A': left-align, no ClipboardList, no side hairlines, no capsule.
+    expect(within(systemRow).queryByTestId("system-message-icon")).toBeNull();
     expect(within(systemRow).queryByTestId("system-message-rule")).toBeNull();
     expect(systemRow.className).toContain("pl-10");
     expect(systemRow.className).toContain("text-xs");
@@ -1854,7 +1854,7 @@ describe("ChannelMessageBubble", () => {
       "user-1",
     );
 
-    // The issue identifier is the sole link in the row.
+    // No issue_title on the event → honest interim identifier as the sole link.
     const links = within(systemRow).getAllByRole("link");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-137");
@@ -1899,7 +1899,7 @@ describe("ChannelMessageBubble", () => {
     const fullTime = systemRow.getAttribute("title");
     expect(fullTime).toBeTruthy();
     expect(systemRow).toHaveTextContent(fullTime!);
-    expect(within(systemRow).getByTestId("system-message-icon")).toBeInTheDocument();
+    expect(within(systemRow).queryByTestId("system-message-icon")).toBeNull();
     expect(within(systemRow).queryByTestId("system-message-rule")).toBeNull();
     expect(systemRow.className).toContain("pl-10");
     expect(systemRow.className).toContain("text-muted-foreground/85");

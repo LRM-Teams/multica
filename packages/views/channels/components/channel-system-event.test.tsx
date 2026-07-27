@@ -742,11 +742,11 @@ describe("IssueAggregateSystemEventContent", () => {
       />,
     );
     expect(document.body.textContent).toContain("@前端工程师 完成了");
-    // LRM-564 system chip face is ▶ + identifier (title stays in peek).
-    expect(document.body.textContent).toContain("LRM-360");
-    expect(document.body.textContent).toContain("LRM-357");
-    expect(document.body.textContent).toContain("LRM-353");
-    expect(document.body.textContent).not.toContain("Fix contrast");
+    // LRM-609 SoT A': title-primary unfilled brand text (identifier in peek only).
+    expect(document.body.textContent).toContain("Fix contrast");
+    expect(document.body.textContent).toContain("Empty tokens");
+    expect(document.body.textContent).toContain("Composer density");
+    expect(document.body.textContent).not.toContain("LRM-360");
     expect(document.body.textContent).not.toMatch(/3 个 Issue/);
     expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
   });
@@ -767,15 +767,15 @@ describe("IssueAggregateSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toContain("LRM-360");
-    expect(document.body.textContent).not.toContain("A");
-    expect(document.body.textContent).not.toContain("LRM-357");
+    expect(document.body.textContent).toContain("A");
+    expect(document.body.textContent).not.toContain("LRM-360");
+    expect(document.body.textContent).not.toContain("B");
     expect(screen.getByTestId("issue-aggregate-expand").textContent).toContain("+3");
     fireEvent.click(screen.getByTestId("issue-aggregate-expand"));
     const list = screen.getByTestId("issue-aggregate-items");
-    expect(list.textContent).toContain("LRM-357");
-    expect(list.textContent).toContain("LRM-353");
-    expect(list.textContent).toContain("LRM-350");
+    expect(list.textContent).toContain("B");
+    expect(list.textContent).toContain("C");
+    expect(list.textContent).toContain("D");
   });
 
   it("hides the expand control for a single-item aggregate", () => {
@@ -798,8 +798,8 @@ describe("IssueAggregateSystemEventContent", () => {
     );
     expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
     expect(document.body.textContent).toContain("@前端工程师 完成了");
-    expect(document.body.textContent).toContain("LRM-360");
-    expect(document.body.textContent).not.toContain("Solo title");
+    expect(document.body.textContent).toContain("Solo title");
+    expect(document.body.textContent).not.toContain("LRM-360");
     expect(document.body.textContent).not.toMatch(/1 个 Issue/);
   });
 });
@@ -1166,6 +1166,22 @@ describe("IssueSystemEventContent", () => {
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-200");
+  });
+
+  it("uses title-primary on the main row when issueTitle is stamped (LRM-609 A')", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          ...inProgressEvent,
+          issueTitle: "Soft system rows",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@后端工程师 开始了 Soft system rows");
+    const links = document.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("Soft system rows");
+    expect(links[0]).not.toHaveTextContent("LRM-137");
   });
 });
 

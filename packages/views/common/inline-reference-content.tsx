@@ -37,7 +37,7 @@ export function InlineReferenceContent({
   className?: string;
   /** The Messages row that owns these references, for a precise return target. */
   sourceMessageId?: string;
-  /** LRM-561 system rows: brand chip issue refs (▶ + key). */
+  /** LRM-609 A' system rows: unfilled brand text link (title-primary). */
   issueAppearance?: "inline" | "systemChip";
 }): React.JSX.Element {
   // Key each run by its character offset in the body (stable across renders,

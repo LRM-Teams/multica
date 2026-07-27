@@ -113,8 +113,9 @@ export function IssueRefLink({
   /** Source row id when this reference is rendered inside a Messages timeline. */
   sourceMessageId?: string;
   /**
-   * LRM-564 / LRM-561 system rows: brand chip with ▶ + identifier (not title
-   * rewrite). Prose / message-body refs stay `inline` (LRM-508 title-primary).
+   * LRM-609 SoT A' (softens LRM-564 chip): system rows use an unfilled brand
+   * text link with **title-primary** face (Frank: 别显示 LRM，显示 name).
+   * Identifier stays in peek only. Prose refs stay `inline` (same title rule).
    */
   appearance?: "inline" | "systemChip";
 }): React.JSX.Element {
@@ -138,14 +139,14 @@ export function IssueRefLink({
   const title = issue?.title?.trim() || undefined;
   const identifier = issue?.identifier?.trim() || undefined;
   const systemChip = appearance === "systemChip";
-  // LRM-508 / tightened LRM-423: main-line ink is title only once resolved.
-  // Author `text` (often LRM-xxx) is interim until then; identifier stays in
-  // the peek eyebrow, not beside the link.
-  // System SoT chip is the exception: face is ▶ + key (design lock), title in peek.
-  const primaryLabel = systemChip ? identifier || text : title || text;
-  // SoT LRM-564: desktop chip stays compact; coarse pointers need ≥32px hit area.
+  // LRM-508 / LRM-609 A' / tightened LRM-423: main-line ink is title only once
+  // resolved (system rows + prose). Author `text` (often LRM-xxx) is interim
+  // until then; identifier stays in the peek eyebrow, not beside the link.
+  // LRM-609 also drops ▶ / chip fill — styling only via `systemChip`.
+  const primaryLabel = title || text;
+  // LRM-609 A': brand text link, no chip fill / ▶. Coarse pointers keep ≥32px hit.
   const linkClassName = systemChip
-    ? "inline-flex min-h-[22px] items-center gap-1 rounded-md bg-brand/12 px-1.5 py-0.5 text-[11.5px] font-semibold text-brand no-underline hover:bg-brand/18 hover:no-underline [@media(pointer:coarse)]:min-h-8"
+    ? "inline text-xs font-semibold text-brand no-underline hover:underline [@media(pointer:coarse)]:inline-flex [@media(pointer:coarse)]:min-h-8 [@media(pointer:coarse)]:items-center"
     : "text-brand hover:underline";
 
   const linkProps = {
@@ -164,18 +165,10 @@ export function IssueRefLink({
     // test even asserted the class was GONE — green, and wrong.
     "data-issue-ref": "",
     "data-ref-source": source,
+    // Keeps system issue links on brand (parent muted inherit skips this attr).
     ...(systemChip ? { "data-system-issue-chip": "" } : {}),
   };
-  const linkChildren = systemChip ? (
-    <>
-      <span className="text-[9px] leading-none opacity-90" aria-hidden>
-        ▶
-      </span>
-      <span className="min-w-0 truncate">{primaryLabel}</span>
-    </>
-  ) : (
-    primaryLabel
-  );
+  const linkChildren = primaryLabel;
   const link = navigation ? (
     <AppLink {...linkProps}>{linkChildren}</AppLink>
   ) : (

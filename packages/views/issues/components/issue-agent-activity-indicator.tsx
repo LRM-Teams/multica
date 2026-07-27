@@ -13,7 +13,7 @@ import type { AgentTask } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { AgentActivityHoverContent } from "../../agents/components/agent-activity-hover-content";
-import { useT } from "../../i18n";
+import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
 
 interface IssueAgentActivityIndicatorProps {
   issueId: string;
@@ -28,9 +28,11 @@ interface IssueAgentActivityIndicatorProps {
  * in the top-right of board cards and right after the identifier in list
  * rows. Derives state from the workspace-wide agent task snapshot:
  *
- *   - has ≥1 running task  → tiny avatar stack + shimmering "Working"
- *   - 0 running, ≥1 queued → half-opacity stack + muted "Queued"
+ *   - has ≥1 running task  → tiny avatar stack + shimmering "Thinking"
+ *   - 0 running, ≥1 queued → half-opacity stack + muted "Waiting"
  *   - nothing               → return null (no chrome, no placeholder)
+ *
+ * Labels stay on EN Activity SoT (LRM-650) — never i18n Working/Queued.
  *
  * The shimmer reuses chat's `animate-chat-text-shimmer` utility (defined
  * in packages/ui/styles/base.css). Earlier iterations layered a brand
@@ -50,7 +52,6 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
   issueId,
   size = 12,
 }: IssueAgentActivityIndicatorProps) {
-  const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
@@ -110,9 +111,8 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
               : "text-muted-foreground",
           )}
         >
-          {isRunning
-            ? t(($) => $.agent_activity.status_running)
-            : t(($) => $.agent_activity.status_queued)}
+          {/* LRM-650: EN Activity projection words — not i18n Working/Queued. */}
+          {isRunning ? ACTIVITY_LABEL_EN.thinking : ACTIVITY_LABEL_EN.waiting}
         </span>
       </HoverCardTrigger>
       <HoverCardContent align="end" className="w-72">

@@ -21,8 +21,8 @@ import {
 } from "./channel-members-list";
 
 /**
- * LRM-211 — Slack-style centered Members dialog (~520).
- * Opened from the header avatar stack / member count.
+ * LRM-211 / LRM-650 — Slack-style centered Members dialog (~520).
+ * Plan A+少字: Add secondary, footer Done only, HUMANS/AGENTS via list.
  * LRM-225 — mobile: bottom sheet + flex-1 list so the roster can scroll.
  */
 export function ChannelMembersDialog({
@@ -67,7 +67,6 @@ export function ChannelMembersDialog({
   dmPending?: boolean;
 }) {
   const { t } = useT("channels");
-  const total = memberCount + agentCount;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -95,30 +94,27 @@ export function ChannelMembersDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex shrink-0 items-center gap-2.5 px-5 pb-3">
+        <div className="flex shrink-0 items-center gap-2 px-4 pb-2.5">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
               placeholder={t(($) => $.members.find_members)}
-              className="h-10 rounded-lg border-input bg-muted/40 pl-9"
+              className="h-9 rounded-lg border-input bg-background pl-9"
             />
           </div>
           {canManage && onAddPeople && (
             <Button
               type="button"
-              className="h-9 shrink-0 rounded-lg bg-brand px-3.5 text-sm font-semibold text-brand-foreground hover:bg-brand/90"
+              variant="outline"
+              className="h-9 shrink-0 rounded-lg px-3 text-sm font-semibold"
               onClick={onAddPeople}
             >
-              {t(($) => $.members.add_people)}
+              {t(($) => $.members.add)}
             </Button>
           )}
         </div>
-
-        <p className="shrink-0 px-5 pb-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-          {t(($) => $.members.in_channel, { count: total })}
-        </p>
 
         <ChannelMembersList
           members={members}
@@ -141,11 +137,13 @@ export function ChannelMembersDialog({
           className="min-h-0 flex-1"
         />
 
-        <DialogFooter className="mx-0 mb-0 mt-0 shrink-0 flex-row items-center justify-between gap-2 rounded-none border-t border-border bg-muted/30 px-5 py-3 sm:justify-between max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <span className="text-xs text-muted-foreground">
-            {t(($) => $.members.footer_count, { count: total })}
-          </span>
-          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="mx-0 mb-0 mt-0 shrink-0 flex-row items-center justify-end gap-2 rounded-none border-t border-border px-4 py-2 sm:justify-end max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <Button
+            type="button"
+            variant="ghost"
+            className="font-semibold text-brand hover:bg-transparent hover:text-brand/90"
+            onClick={() => onOpenChange(false)}
+          >
             {t(($) => $.members.done)}
           </Button>
         </DialogFooter>

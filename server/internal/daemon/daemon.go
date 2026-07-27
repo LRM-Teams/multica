@@ -223,6 +223,9 @@ type Daemon struct {
 	// canonicalRuntimes is the D4 provider pool; D6-1b acquires resident
 	// Grok/Pi backends so one agent×runtime shares one provider session slot.
 	canonicalRuntimes *canonicalAgentRuntimePool
+	// canonicalChatFactoryOverride is test-only; production uses
+	// defaultCanonicalRuntimeFactory for grok/pi resident adapters.
+	canonicalChatFactoryOverride canonicalRuntimeBackendFactory
 }
 
 // New creates a new Daemon instance.
@@ -4077,7 +4080,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task) {
 		cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
-			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, execOpts, taskLog,
+			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, &execOpts, taskLog,
 		)
 		if cErr != nil {
 			return TaskResult{}, cErr

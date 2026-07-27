@@ -13,6 +13,10 @@ import (
 // generation==0 fallback to the legacy ChatSession-keyed pools: D6-1a is
 // already served, so claim must carry RuntimeStateGeneration>0. Missing
 // generation fails closed (pairing error), not dual-path compatibility.
+//
+// Resident process cwd/identity WorkDir is always the stable agent workspace
+// from Begin (turn.WorkDir), never the per-task cloud env workdir — otherwise
+// each turn fingerprints as config drift and recreates the resident backend.
 // PriorSessionID still comes from legacy claim sources until D6-2.
 func (d *Daemon) tryCanonicalChatBackend(
 	task Task,
@@ -24,7 +28,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 	agentEnv map[string]string,
 	entry AgentEntry,
 	backendCfg agent.Config,
-	execOpts agent.ExecOptions,
+	execOpts *agent.ExecOptions,
 	taskLog *slog.Logger,
 ) (backend agent.Backend, release func(bool), turn *agentRuntimeTurn, used bool, err error) {
 	if d == nil || d.agentRuntimeTurns == nil || d.canonicalRuntimes == nil {
@@ -52,6 +56,9 @@ func (d *Daemon) tryCanonicalChatBackend(
 	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(task.RuntimeID) == "" {
 		return nil, nil, nil, false, nil
 	}
+	if execOpts == nil {
+		return nil, nil, nil, false, fmt.Errorf("canonical chat requires exec options")
+	}
 
 	turn, err = d.agentRuntimeTurns.Begin(agentRuntimeTurnRequest{
 		WorkspaceID:            task.WorkspaceID,
@@ -74,13 +81,12 @@ func (d *Daemon) tryCanonicalChatBackend(
 		}
 	}()
 
-	// Prefer the task execution cwd for the fingerprint when already prepared;
-	// fall back to the agent-scoped workspace from Begin. Slot key remains
-	// agent×runtime; workdir drift restarts the resident backend in-place.
-	workDir := strings.TrimSpace(execOpts.Cwd)
+	// Stable agent workspace only — not per-task {ws}/{shortTask}/workdir.
+	workDir := strings.TrimSpace(turn.WorkDir)
 	if workDir == "" {
-		workDir = turn.WorkDir
+		return nil, nil, nil, false, fmt.Errorf("canonical turn workdir is empty")
 	}
+	execOpts.Cwd = workDir
 
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:      agentID,
@@ -99,12 +105,14 @@ func (d *Daemon) tryCanonicalChatBackend(
 		return nil, nil, nil, false, fmt.Errorf("canonical identity: %w", err)
 	}
 
-	lease, err := d.canonicalRuntimes.acquireCanonicalAgentRuntime(
-		identity,
-		task.PriorSessionID,
-		profile,
-		backendCfg,
-	)
+	factory := d.canonicalChatFactory(provider, profile)
+	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           identity,
+		Mode:               mustCanonicalRuntimeMode(provider, profile),
+		CanonicalSessionID: task.PriorSessionID,
+		BackendConfig:      backendCfg,
+		Factory:            factory,
+	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("acquire canonical runtime: %w", err)
 	}
@@ -117,6 +125,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 			"prior_session", task.PriorSessionID != "",
 			"slot_agent", agentID,
 			"slot_runtime", task.RuntimeID,
+			"work_dir", workDir,
 		)
 	}
 	return lease.backend, func(healthy bool) {
@@ -127,4 +136,25 @@ func (d *Daemon) tryCanonicalChatBackend(
 		}
 		_ = turn.Close()
 	}, turn, true, nil
+}
+
+func (d *Daemon) canonicalChatFactory(provider, profile string) canonicalRuntimeBackendFactory {
+	if d != nil && d.canonicalChatFactoryOverride != nil {
+		return d.canonicalChatFactoryOverride
+	}
+	mode, err := canonicalRuntimeModeFor(provider, profile)
+	if err != nil {
+		return func(agent.Config) (agent.Backend, func(), error) {
+			return nil, nil, err
+		}
+	}
+	return defaultCanonicalRuntimeFactory(provider, mode)
+}
+
+func mustCanonicalRuntimeMode(provider, profile string) canonicalRuntimeMode {
+	mode, err := canonicalRuntimeModeFor(provider, profile)
+	if err != nil {
+		return canonicalRuntimeOneShot
+	}
+	return mode
 }

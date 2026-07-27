@@ -792,19 +792,11 @@ func TestCanonicalAgentRuntimeSlotIdleTimestampAdvances(t *testing.T) {
 }
 
 func TestCanonicalAgentRuntimePoolIsActivatedForD6(t *testing.T) {
+	// Behavioral proof of reuse is TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs.
+	// This only pins the runTask call site so the entry is not left unhooked.
 	raw, err := os.ReadFile("daemon.go")
 	if err != nil {
 		t.Fatalf("read daemon.go: %v", err)
-	}
-	// D6-1b: production path must route through tryCanonicalChatBackend, which
-	// calls acquireCanonicalAgentRuntime. Presence of the helper call site is
-	// the activation gate (dormant gate inverted).
-	entryRaw, err := os.ReadFile("canonical_chat_entry.go")
-	if err != nil {
-		t.Fatalf("read canonical_chat_entry.go: %v", err)
-	}
-	if !strings.Contains(string(entryRaw), ".acquireCanonicalAgentRuntime(") {
-		t.Fatal("D6-1b must call acquireCanonicalAgentRuntime from the production chat entry")
 	}
 	if !strings.Contains(string(raw), "tryCanonicalChatBackend(") {
 		t.Fatal("D6-1b must invoke tryCanonicalChatBackend from runTask")

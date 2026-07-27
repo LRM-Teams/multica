@@ -8,8 +8,8 @@ import { memberListOptions } from "@multica/core/workspace/queries";
 import { PageHeader } from "../layout/page-header";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
-import { ActorProfileContent } from "./actor-profile-popover";
 import { ResolvedAgentSidePanel } from "./resolved-agent-side-panel";
+import { MemberSidePanel } from "../members/member-side-panel";
 
 /**
  * Mobile full-page host for the actor profile (#586). On mobile, tapping an
@@ -49,14 +49,8 @@ export function ActorProfilePage({
           {t(($) => $.profile_popover.back)}
         </button>
       </PageHeader>
-      <div className={isAgent ? "flex min-h-0 flex-1" : "min-h-0 flex-1 overflow-y-auto"}>
-        <div
-          className={
-            isAgent
-              ? "mx-auto flex min-h-0 w-full max-w-2xl flex-1"
-              : "mx-auto w-full max-w-2xl"
-          }
-        >
+      <div className="flex min-h-0 flex-1">
+        <div className="mx-auto flex min-h-0 w-full max-w-2xl flex-1">
           {isAgent ? (
             <ResolvedAgentSidePanel
               agentId={memberId}
@@ -66,7 +60,11 @@ export function ActorProfilePage({
               variant="page"
             />
           ) : (
-            <ActorProfileContent memberType={memberType} memberId={memberId} />
+            <MemberSidePanel
+              userId={memberId}
+              onClose={() => navigation.back()}
+              variant="page"
+            />
           )}
         </div>
       </div>

@@ -42,6 +42,7 @@ export function ChannelMembersDialog({
   onAddPeople,
   onOpenDm,
   onOpenAgent,
+  onOpenMember,
   onRemove,
   dmPending,
 }: {
@@ -61,6 +62,7 @@ export function ChannelMembersDialog({
   onAddPeople?: () => void;
   onOpenDm?: (member: ChannelMember) => void;
   onOpenAgent?: OpenAgentPanelFn;
+  onOpenMember?: (userId: string) => void;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
 }) {
@@ -133,6 +135,7 @@ export function ChannelMembersDialog({
           currentUserId={currentUserId}
           onOpenDm={onOpenDm}
           onOpenAgent={onOpenAgent}
+          onOpenMember={onOpenMember}
           onRemove={onRemove}
           dmPending={dmPending}
           className="min-h-0 flex-1"

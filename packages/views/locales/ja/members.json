@@ -10,6 +10,19 @@
     "detail_link": "詳細 →",
     "more_agents_other": "他 {{count}} 件のエージェント"
   },
+  "panel": {
+    "description": "説明",
+    "no_description": "説明なし",
+    "description_placeholder": "短い自己紹介を追加…",
+    "info": "情報",
+    "role": "役割",
+    "email": "メール",
+    "joined": "参加日",
+    "created_agents": "作成したエージェント",
+    "no_agents": "まだエージェントがありません",
+    "message_aria": "メッセージを送る",
+    "you_suffix": "(あなた)"
+  },
   "detail": {
     "workspace_fallback": "ワークスペース",
     "members_breadcrumb": "メンバー",

@@ -11,6 +11,19 @@
     "more_agents_one": "외 에이전트 {{count}}개",
     "more_agents_other": "외 에이전트 {{count}}개"
   },
+  "panel": {
+    "description": "소개",
+    "no_description": "소개 없음",
+    "description_placeholder": "짧은 소개를 추가…",
+    "info": "정보",
+    "role": "역할",
+    "email": "이메일",
+    "joined": "가입일",
+    "created_agents": "생성한 에이전트",
+    "no_agents": "아직 생성한 에이전트가 없습니다",
+    "message_aria": "메시지 보내기",
+    "you_suffix": "(나)"
+  },
   "detail": {
     "workspace_fallback": "워크스페이스",
     "members_breadcrumb": "멤버",

@@ -49,6 +49,9 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
+import { MemberPanelProvider } from "../../common/member-panel-context";
+import { MemberSidePanel } from "../../members/member-side-panel";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
@@ -70,7 +73,6 @@ import {
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
@@ -480,14 +482,22 @@ function DmChannelConversation({
   const [selectedAgentPanelId, setSelectedAgentPanelId] = useState<string | null>(null);
   const [selectedAgentPanelSnapshot, setSelectedAgentPanelSnapshot] =
     useState<AgentPanelIdentitySnapshot | null>(null);
+  const [selectedMemberPanelId, setSelectedMemberPanelId] = useState<string | null>(null);
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
+    setSelectedMemberPanelId(null);
     setSelectedAgentPanelId(agentId);
     setSelectedAgentPanelSnapshot(snapshot ?? null);
   }, []);
+  const handleOpenMemberPanel = useCallback((userId: string) => {
+    dispatch({ type: "closeThread" });
+    setSelectedAgentPanelId(null);
+    setSelectedAgentPanelSnapshot(null);
+    setSelectedMemberPanelId(userId);
+  }, []);
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
-    enabled: !!selectedAgentPanelId,
+    enabled: !!selectedAgentPanelId || !!selectedMemberPanelId,
   });
   const setQuoteTarget = useCallback((message: QuoteTarget | null) => {
     dispatch({ type: "setQuote", message });
@@ -1057,6 +1067,7 @@ function DmChannelConversation({
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
     setSelectedAgentPanelId(null);
+    setSelectedMemberPanelId(null);
     dispatch({ type: "openThread", message });
   };
 
@@ -1482,10 +1493,21 @@ function DmChannelConversation({
         }}
       />
     ) : null;
-  const detailPanel = threadPanel ?? agentPanel;
+  const memberPanel =
+    selectedMemberPanelId ? (
+      <MemberSidePanel
+        userId={selectedMemberPanelId}
+        onClose={() => setSelectedMemberPanelId(null)}
+      />
+    ) : null;
+  const detailPanel = threadPanel ?? agentPanel ?? memberPanel;
 
   const withProvider = (node: React.ReactNode) => (
-    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>{node}</AgentPanelProvider>
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+      <MemberPanelProvider onOpenMember={handleOpenMemberPanel}>
+        {node}
+      </MemberPanelProvider>
+    </AgentPanelProvider>
   );
 
   if (!isMobile) {

@@ -45,27 +45,25 @@ vi.mock("./resolved-agent-side-panel", () => ({
   ),
 }));
 
+vi.mock("../members/member-side-panel", () => ({
+  MemberSidePanel: ({
+    userId,
+    variant,
+  }: {
+    userId: string;
+    variant?: string;
+  }) => (
+    <div data-testid="member-side-panel-page" data-user-id={userId}>
+      {variant}
+    </div>
+  ),
+}));
+
 vi.mock("../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (r: { profile_popover: { back: string } }) => string) =>
       selector({ profile_popover: { back: "Back" } }),
   }),
-}));
-
-// Users retain the generic profile fallback. Stub it to echo props so we can
-// assert that fallback forwards memberType/memberId.
-vi.mock("./actor-profile-popover", () => ({
-  ActorProfileContent: ({
-    memberType,
-    memberId,
-  }: {
-    memberType: string;
-    memberId: string;
-  }) => (
-    <div data-testid="actor-profile-content">
-      {memberType}:{memberId}
-    </div>
-  ),
 }));
 
 describe("ActorProfilePage (#586 mobile full page)", () => {
@@ -90,12 +88,14 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
     expect(agentTabs.parentElement?.parentElement).not.toHaveClass("overflow-y-auto");
   });
 
-  it("keeps the generic profile fallback as the page scroll owner", () => {
+  it("renders human member Profile page via MemberSidePanel (LRM-619)", () => {
     render(<ActorProfilePage memberType="user" memberId="u1" />);
 
-    expect(screen.getByTestId("actor-profile-content").parentElement?.parentElement).toHaveClass(
-      "overflow-y-auto",
-    );
+    const panel = screen.getByTestId("member-side-panel-page");
+    expect(panel).toHaveAttribute("data-user-id", "u1");
+    expect(panel).toHaveTextContent("page");
+    expect(panel.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
+    expect(panel.parentElement?.parentElement).not.toHaveClass("overflow-y-auto");
   });
 
   it("renders a Back button that calls navigation.back()", () => {

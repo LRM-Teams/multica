@@ -177,4 +177,5 @@ monitoring:
     additionalLabels: {}
     samplerQueryErrorsFor: 5m
     samplerQueryLatencyFor: 10m
+    freshnessHoldResolutionFor: 0m
     severity: warning

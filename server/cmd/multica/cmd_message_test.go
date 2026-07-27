@@ -282,12 +282,36 @@ func TestRunAgentMessageSendDraftRejectsContentFlags(t *testing.T) {
 }
 
 func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
-	got := agentMessageSendTextFallback(map[string]any{"state": "held"})
+	got := agentMessageSendTextFallback(map[string]any{
+		"state": "held",
+		"contextWindow": map[string]any{
+			"olderBoundary": "No older.",
+			"newerBoundary": "No newer.",
+		},
+		"decisionCommands": map[string]any{
+			"revisedSend": "multica message send --target \"#multica\" --message-stdin --seen-up-to-seq 42 --client-message-id \"freshness-revised:fact\"",
+			"sendDraft":   "multica message send --send-draft --target \"#multica\"",
+		},
+	})
 	if !strings.Contains(got, "Message held by freshness check") {
 		t.Fatalf("fallback = %q, want held freshness text", got)
 	}
 	if !strings.Contains(got, "exits non-zero") || !strings.Contains(got, "same turn") {
 		t.Fatalf("fallback = %q, want non-zero exit + same-turn decision guidance", got)
+	}
+	for _, want := range []string{
+		"No older.",
+		"No newer.",
+		"multica message send --target \"#multica\" --message-stdin --seen-up-to-seq 42 --client-message-id \"freshness-revised:fact\"",
+		"multica message send --send-draft --target \"#multica\"",
+		"Do not send: choose not to send anything.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback = %q, want %q", got, want)
+		}
+	}
+	if strings.Contains(got, "--abandon-draft") {
+		t.Fatalf("fallback = %q, must not invent an abandon command", got)
 	}
 	got = agentMessageSendTextFallback(map[string]any{"created": true})
 	if got != "Message sent." {

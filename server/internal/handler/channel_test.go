@@ -1386,7 +1386,7 @@ func TestChannelAgentInboxCompleteDirectedMentionAfterNoPublicOutputObserveRecor
 	}
 }
 
-func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
+func TestChannelAgentInboxCompletionInfersAbandonedFreshnessDraft(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1428,16 +1428,36 @@ func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
 	}
 	got := drainResp.Events[0]
 
-	// This is the persisted audit produced by the real transport hold path.
-	// The dedicated transport suite separately proves that it also saves the
-	// draft; completion must preserve the distinct held outcome rather than
-	// collapsing it into a no_reply terminal state.
+	target := "#" + channelNameForTransportTest(t, channelID)
+	producerFactID := "freshness_decision_fact:" + uuid.NewString()[:8]
+	holdContext, err := json.Marshal(map[string]any{
+		"held":             true,
+		"subtype":          "freshness",
+		"decision":         "local_hold",
+		"producer_fact_id": producerFactID,
+		"seen_up_to_seq":   1,
+		"latest_seq":       2,
+	})
+	if err != nil {
+		t.Fatalf("encode freshness hold context: %v", err)
+	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_task_transport_audit (
-			workspace_id, inbox_event_id, agent_id, action, target, context_pack
-		) VALUES ($1, $2, $3, 'message_send', $4, $5::jsonb)`,
-		testWorkspaceID, got.ID, agentID, "#"+channelNameForTransportTest(t, channelID), `{"held":true,"subtype":"freshness","decision":"local_hold"}`); err != nil {
+			workspace_id, inbox_event_id, agent_id, action, target, channel_id,
+			client_message_id, context_pack, created_at
+		) VALUES ($1, $2, $3, 'message_send', $4, $5, 'held-client', $6::jsonb, now() - interval '2 seconds')`,
+		testWorkspaceID, got.ID, agentID, target, channelID, holdContext); err != nil {
 		t.Fatalf("record freshness hold audit: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_transport_draft (
+			workspace_id, agent_id, inbox_event_id, decision_fact_id,
+			target, channel_id, content, parts, client_message_id,
+			seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq
+		) VALUES ($1, $2, $3, $4, $5, $6, 'saved but deliberately not sent', '[]'::jsonb,
+		          'held-client', 1, 2, 2, 2, 2)`,
+		testWorkspaceID, agentID, got.ID, producerFactID, target, channelID); err != nil {
+		t.Fatalf("record freshness draft: %v", err)
 	}
 
 	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
@@ -1456,10 +1476,53 @@ func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
 
 	var terminalOutcome string
 	if err := testPool.QueryRow(ctx, `SELECT COALESCE(terminal_outcome, '') FROM agent_inbox_event WHERE id = $1`, got.ID).Scan(&terminalOutcome); err != nil {
-		t.Fatalf("load held inbox terminal outcome: %v", err)
+		t.Fatalf("load abandoned inbox terminal outcome: %v", err)
 	}
-	if terminalOutcome != "held" {
-		t.Fatalf("held inbox terminal outcome = %q, want held", terminalOutcome)
+	if terminalOutcome != "no_reply" {
+		t.Fatalf("abandoned inbox terminal outcome = %q, want no_reply", terminalOutcome)
+	}
+
+	var draftExists, unresolvedHold bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM agent_transport_draft
+			WHERE inbox_event_id = $1 AND target = $2
+		)`, got.ID, target).Scan(&draftExists); err != nil {
+		t.Fatalf("check abandoned draft: %v", err)
+	}
+	unresolvedHold = testHandler.inboxEventHasAgentTransportFreshnessHold(ctx, parseUUID(got.ID))
+	if draftExists || unresolvedHold {
+		t.Fatalf("abandoned draft state = exists:%v unresolved_hold:%v, want false/false", draftExists, unresolvedHold)
+	}
+
+	var resolutionAudits, resolutionActivities int
+	var resolutionSeconds float64
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(max((context_pack->>'freshness_hold_resolution_seconds')::double precision), 0)
+		FROM agent_task_transport_audit
+		WHERE inbox_event_id = $1
+		  AND action = 'message_send'
+		  AND channel_message_id IS NULL
+		  AND context_pack->>'freshness_resolution' = 'true'
+		  AND context_pack->>'producer_fact_id' = $2
+		  AND context_pack->>'outcome' = 'abandoned'`,
+		got.ID, producerFactID).Scan(&resolutionAudits, &resolutionSeconds); err != nil {
+		t.Fatalf("load abandoned resolution audit: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'send_freshness_resolved'
+		  AND details->>'producer_fact_id' = $3
+		  AND details->>'outcome' = 'abandoned'
+		  AND NOT (details ? 'message_id')`,
+		testWorkspaceID, agentID, producerFactID).Scan(&resolutionActivities); err != nil {
+		t.Fatalf("load abandoned resolution activity: %v", err)
+	}
+	if resolutionAudits != 1 || resolutionActivities != 1 || resolutionSeconds < 2 {
+		t.Fatalf("abandoned resolution = audits:%d activities:%d seconds:%f, want 1/1/>=2", resolutionAudits, resolutionActivities, resolutionSeconds)
 	}
 
 	var failureCount int
@@ -1467,10 +1530,10 @@ func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
 		SELECT count(*) FROM agent_activity_event
 		WHERE workspace_id = $1 AND agent_id = $2 AND event_type = 'agent_inbox_failed'
 		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&failureCount); err != nil {
-		t.Fatalf("count held inbox failures: %v", err)
+		t.Fatalf("count abandoned inbox failures: %v", err)
 	}
 	if failureCount != 0 {
-		t.Fatalf("held inbox failure activity = %d, want 0", failureCount)
+		t.Fatalf("abandoned inbox failure activity = %d, want 0", failureCount)
 	}
 }
 

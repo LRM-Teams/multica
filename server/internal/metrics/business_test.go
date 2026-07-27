@@ -127,6 +127,34 @@ func TestBusinessMetricsChannelFullExecutionWakesAndBoundedLabels(t *testing.T) 
 	}
 }
 
+func TestBusinessMetricsFreshnessHoldResolutionUsesThreeBoundedOutcomes(t *testing.T) {
+	m := NewBusinessMetrics()
+	m.ObserveFreshnessHoldResolution("send_draft", 1)
+	m.ObserveFreshnessHoldResolution("revised_send", 2)
+	m.ObserveFreshnessHoldResolution("abandoned", 31)
+	m.ObserveFreshnessHoldResolution("invalid", 99)
+
+	family := GatherForTest(t, m)["multica_freshness_hold_resolution_seconds"]
+	if family == nil {
+		t.Fatal("freshness hold resolution metric family missing")
+	}
+	if got := len(family.Metric); got != 3 {
+		t.Fatalf("freshness outcome series=%d, want exactly 3", got)
+	}
+	got := map[string]uint64{}
+	for _, metric := range family.Metric {
+		if len(metric.Label) != 1 || metric.Label[0].GetName() != "outcome" {
+			t.Fatalf("freshness metric labels=%+v, want outcome only", metric.Label)
+		}
+		got[metric.Label[0].GetValue()] = metric.GetHistogram().GetSampleCount()
+	}
+	for _, outcome := range []string{"send_draft", "revised_send", "abandoned"} {
+		if got[outcome] != 1 {
+			t.Fatalf("freshness outcome %s count=%d, want 1; all=%+v", outcome, got[outcome], got)
+		}
+	}
+}
+
 func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewBusinessMetrics()
@@ -143,6 +171,7 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.RecordChannelOutputSuppressed("legacy_protocol_output")
 	m.RecordChannelFullExecutionWake("legacy_full")
 	m.SetChannelFullExecutionAmplificationRatio(0.25)
+	m.ObserveFreshnessHoldResolution("send_draft", 1)
 	m.RecordLLMUsage("issue", "local", "codex", "gpt-5.4", 1, 1, 1, 1)
 	m.RecordLLMUsage("issue", "local", "custom-provider", "custom-model", 1, 0, 0, 0)
 

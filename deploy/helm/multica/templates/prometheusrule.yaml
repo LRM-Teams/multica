@@ -40,4 +40,21 @@ spec:
           annotations:
             summary: "Business sampler query p95 is high"
             description: "Business sampler query {{ "{{ $labels.name }}" }} p95 is above 300ms, leaving little headroom before the 500ms statement_timeout."
+        - alert: MulticaFreshnessHoldResolutionSlow
+          expr: |
+            (
+              sum by (outcome) (
+                increase(multica_freshness_hold_resolution_seconds_count[5m])
+              )
+              -
+              sum by (outcome) (
+                increase(multica_freshness_hold_resolution_seconds_bucket{le="30"}[5m])
+              )
+            ) > 0
+          for: {{ .Values.monitoring.prometheusRule.freshnessHoldResolutionFor | quote }}
+          labels:
+            severity: {{ .Values.monitoring.prometheusRule.severity | quote }}
+          annotations:
+            summary: "Freshness hold resolution exceeded 30 seconds"
+            description: "A freshness hold resolved after more than 30 seconds with outcome {{ "{{ $labels.outcome }}" }}."
 {{- end }}

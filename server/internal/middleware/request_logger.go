@@ -3,9 +3,11 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -161,21 +163,146 @@ func RequestLogger(next http.Handler) http.Handler {
 			}
 		}
 
+		// Decide the level for this request, preserving the soft-404 downgrade
+		// (lifecycle 404 — runtime/task deleted server-side — is signal, not a
+		// bug; the daemon catches the same body and self-heals).
+		level := slog.LevelInfo
 		switch {
 		case status >= 500:
-			slog.Error("http request", attrs...)
+			level = slog.LevelError
 		case status == http.StatusNotFound && isSoftNotFound(bodyPrefix.Bytes()):
-			// Lifecycle 404 — runtime/task was deleted server-side. The daemon
-			// catches this exact body and triggers its own self-heal, so it is
-			// neither noise nor a bug; logging at Info keeps the signal in
-			// structured logs without flooding the warn channel.
-			slog.Info("http request", attrs...)
+			level = slog.LevelInfo
 		case status >= 400:
-			slog.Warn("http request", attrs...)
-		default:
-			slog.Info("http request", attrs...)
+			level = slog.LevelWarn
+		}
+
+		// Coalesce repeated identical 4xx request logs so a single runaway
+		// client (e.g. a script hammering one endpoint with the same malformed
+		// body — LRM-640's empty-content env-dispatch loop at ~1k req/min) cannot
+		// turn the warn channel into a multi-thousand-line-per-hour flood. The
+		// FIRST occurrence in each window still logs at its real level; later
+		// duplicates are counted and summarized in one INFO line when the window
+		// rolls over. The HTTP 4xx response itself is unaffected — the client
+		// still receives it every time (we dedupe the log line, never the error).
+		// 5xx is intentionally excluded: server faults stay loud.
+		emit := true
+		if status >= 400 && status < 500 {
+			key := clientErrKey{
+				method: r.Method,
+				path:   redactWebhookPath(r.URL.Path),
+				status: status,
+				userID: r.Header.Get("X-User-ID"),
+				code:   errorCodeFromBody(bodyPrefix.Bytes()),
+			}
+			logFirst, summary := repeatedClientErrCoalescer.observe(key, start)
+			summary.log()
+			emit = logFirst
+		}
+		if emit {
+			slog.Default().Log(context.Background(), level, "http request", attrs...)
 		}
 	})
+}
+
+// repeatedClientErrWindow is the dedup window for repeated identical 4xx
+// request-log lines. Within one window only the first occurrence of a given
+// fingerprint is logged at its real level; the rest are counted and reported
+// in a single summary when the window rolls. Short enough that a transient
+// burst still yields a few WARN signals, long enough that a sustained ~18
+// req/s loop collapses from ~18k lines/min to a handful.
+const repeatedClientErrWindow = 10 * time.Second
+
+// repeatedClientErrCap bounds the fingerprint map so a caller that spins
+// distinct fingerprints cannot grow it unbounded. Real floods are one
+// fingerprint repeated, not thousands of distinct ones, so on overflow we
+// simply reset the whole map.
+const repeatedClientErrCap = 4096
+
+type clientErrKey struct {
+	method string
+	path   string
+	status int
+	userID string
+	code   string // response body "error" code, best-effort; "" when unparseable
+}
+
+type clientErrEntry struct {
+	windowStart time.Time
+	count       int // occurrences in this window, including the first (logged) one
+}
+
+// clientErrSummary describes a just-closed window of repeated 4xx logs so the
+// caller can emit one audit line after releasing the coalescer lock.
+type clientErrSummary struct {
+	key       clientErrKey
+	count     int
+	windowDur time.Duration
+}
+
+func (s *clientErrSummary) log() {
+	if s == nil || s.count <= 1 {
+		return
+	}
+	slog.Info("http request repeated",
+		"method", s.key.method,
+		"path", s.key.path,
+		"status", s.key.status,
+		"user_id", s.key.userID,
+		"error_code", s.key.code,
+		"count", s.count,
+		"window", s.windowDur.Round(time.Millisecond).String(),
+		"note", "identical 4xx repeated within window; only the first was logged at its real level",
+	)
+}
+
+type repeatedClientErrCoalescerT struct {
+	mu    sync.Mutex
+	items map[clientErrKey]*clientErrEntry
+}
+
+var repeatedClientErrCoalescer = &repeatedClientErrCoalescerT{
+	items: make(map[clientErrKey]*clientErrEntry),
+}
+
+// observe records a 4xx occurrence and decides whether it should be logged.
+// Returns logFirst=true when this is the first occurrence of a fresh window
+// (the caller logs it at the real level). Returns logFirst=false when it is a
+// duplicate within the current window (the caller skips the per-request line).
+// When a prior window just closed, a non-nil summary is returned for the caller
+// to emit AFTER releasing the lock, so we never do I/O under the lock.
+func (c *repeatedClientErrCoalescerT) observe(key clientErrKey, now time.Time) (logFirst bool, summary *clientErrSummary) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.items[key]
+	if !ok || now.Sub(e.windowStart) >= repeatedClientErrWindow {
+		if ok && e.count > 1 {
+			summary = &clientErrSummary{key: key, count: e.count, windowDur: now.Sub(e.windowStart)}
+		}
+		if len(c.items) >= repeatedClientErrCap {
+			c.items = make(map[clientErrKey]*clientErrEntry)
+		}
+		c.items[key] = &clientErrEntry{windowStart: now, count: 1}
+		return true, summary
+	}
+	e.count++
+	return false, nil
+}
+
+// errorCodeFromBody extracts the response "error" code (e.g.
+// "validation_failed", "not_found") from a captured 4xx body prefix, for use
+// as part of the coalesce fingerprint. Returns "" when the body is empty or
+// not the expected JSON shape — the fingerprint still works, just coarser.
+func errorCodeFromBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var v struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &v) != nil {
+		return ""
+	}
+	return v.Error
 }
 
 // isSoftNotFound reports whether the captured response body matches one of

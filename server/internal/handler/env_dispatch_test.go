@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -72,6 +74,39 @@ func TestWriteEnvDispatchError_TracebackFromAdapterStack(t *testing.T) {
 	tb, _ := body["traceback"].(string)
 	if !strings.Contains(tb, "TestWriteEnvDispatchError_TracebackFromAdapterStack") {
 		t.Fatalf("traceback missing the capturing test frame:\n%s", tb)
+	}
+}
+
+// TestWriteEnvDispatchError_ValidationFailureNotLoggedAtError pins LRM-640: a
+// 4xx client-validation failure (the caller sent a malformed body, e.g. an
+// empty message.content) must NOT be logged at Error level — the traceback is
+// the server's stack, which is meaningless when the server did nothing wrong,
+// and a per-request Error line is what turned one runaway client into a
+// multi-thousand-line log flood. The 400 response + body are still returned so
+// the caller sees the reason; the RequestLogger still records the 4xx as WARN.
+func TestWriteEnvDispatchError_ValidationFailureNotLoggedAtError(t *testing.T) {
+	// Capture slog output for the duration of the call.
+	buf := &bytes.Buffer{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	err := fmt.Errorf("validation_failed: message.content required")
+	w := httptest.NewRecorder()
+	writeEnvDispatchError(w, err, service.EnvDispatchResult{})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	var body map[string]any
+	if decErr := json.NewDecoder(w.Body).Decode(&body); decErr != nil {
+		t.Fatalf("decode body: %v", decErr)
+	}
+	if body["error"] != "validation_failed" {
+		t.Fatalf("error = %v, want validation_failed", body["error"])
+	}
+	if out := buf.String(); strings.Contains(out, "level=ERROR") || strings.Contains(out, "env_dispatch failed") {
+		t.Fatalf("validation_failed (client error) must not be logged at Error; got:\n%s", out)
 	}
 }
 

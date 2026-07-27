@@ -112,7 +112,7 @@ describe("GlobalAgentPanel", () => {
     expect(panel).toHaveAttribute("data-agent-id", "group-manager-1");
   });
 
-  it("defaults to the docked panel width (440px) with a left-edge resize handle (LRM-481)", () => {
+  it("defaults to the docked panel width (520px) with a left-edge resize handle (LRM-481)", () => {
     selectedAgentId = "agent-1";
     render(<GlobalAgentPanel />);
 

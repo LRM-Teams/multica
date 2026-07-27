@@ -28,12 +28,12 @@ import { useT } from "../i18n/use-t";
  *
  * Visual parity (Iris #447 finalization): this must read as the SAME profile
  * panel as the docked one in channels/DM, not a distinct modal drawer. So it
- * slides in from the right at the docked panel's width (ResizablePanel
- * `defaultSize=440` in channels-page), reuses the same AgentSidePanel
+ * slides in from the right at the docked panel's width (520, matching the
+ * channel/DM side dock), reuses the same AgentSidePanel
  * header+tabs, and uses a TRANSPARENT backdrop (click-outside dismiss, no
  * dimming scrim) so the "overlay vs push" difference stays invisible.
  *
- * LRM-481: left-edge drag resizes (360–640, default 440); width persists in
+ * LRM-481: left-edge drag resizes (360–640, default 520); width persists in
  * localStorage. Mobile profile uses the page route — no drag here.
  *
  * LRM-292: opens on selectedAgentId; panel body always from GetAgent via

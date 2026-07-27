@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
-/** Align with docked channel/DM side-dock defaults (LRM-481). */
-export const PROFILE_PANEL_WIDTH_DEFAULT = 440;
+/** Global Profile overlay default width (LRM-611 锁 A: 440→520). */
+export const PROFILE_PANEL_WIDTH_DEFAULT = 520;
 export const PROFILE_PANEL_WIDTH_MIN = 360;
 export const PROFILE_PANEL_WIDTH_MAX = 640;
 export const PROFILE_PANEL_WIDTH_STORAGE_KEY = "multica_profile_panel_width";
@@ -11,7 +11,9 @@ export const PROFILE_PANEL_WIDTH_STORAGE_KEY = "multica_profile_panel_width";
 export const CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY = "multica_channel_detail_side_width";
 /**
  * Default width for the in-channel Thread / agent / details side dock.
- * Wider than the global profile overlay (440) — Frank: Thread 默认偏窄.
+ * Matches the global profile overlay default (520, LRM-611 锁 A); kept as a
+ * separate constant + storage key so a user's dragged dock width stays
+ * independent from the global overlay (LRM-400 / #1236).
  */
 export const CHANNEL_DETAIL_SIDE_WIDTH_DEFAULT = 520;
 

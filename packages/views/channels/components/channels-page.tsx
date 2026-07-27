@@ -3385,7 +3385,7 @@ export function ChannelsPage({
   // flex-1 full width (no lone ResizablePanel / persisted %-layout blank
   // half). Side dock is an optional pixel-width column with left-edge drag
   // (360–640, default 520 for Thread/details; persists separately from the
-  // global overlay's 440). Opening/closing the dock does not remount the
+  // global overlay's 520). Opening/closing the dock does not remount the
   // conversation tree. Mobile: no drag — full-screen profile/page route instead.
   const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (

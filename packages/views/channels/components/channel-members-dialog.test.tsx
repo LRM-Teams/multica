@@ -10,7 +10,7 @@ vi.mock("../../i18n/use-t", () => ({
       const resources = {
         members: {
           dialog_title: "Members",
-          dialog_subtitle: "#{{name}} · {{members}} humans · {{agents}} agents",
+          dialog_subtitle: "#{{name}} · {{members}} people · {{agents}} agents",
           find_members: "Find members",
           add_people: "Add people",
           add: "Add",
@@ -192,7 +192,7 @@ describe("ChannelMembersDialog (LRM-650)", () => {
 });
 
 describe("ChannelMembersList (LRM-650)", () => {
-  it("groups HUMANS / AGENTS without row hairlines", () => {
+  it("groups People / Agents without row hairlines", () => {
     render(
       <ChannelMembersList
         members={[
@@ -213,11 +213,11 @@ describe("ChannelMembersList (LRM-650)", () => {
       />,
     );
 
-    expect(screen.getByTestId("channel-members-section-humans")).toHaveTextContent(
-      "HUMANS · 2",
+    expect(screen.getByTestId("channel-members-section-people")).toHaveTextContent(
+      "People · 2",
     );
     expect(screen.getByTestId("channel-members-section-agents")).toHaveTextContent(
-      "AGENTS · 1",
+      "Agents · 1",
     );
     expect(screen.getByTestId("agent-compact-activity")).toHaveTextContent("a1");
     expect(screen.getByTestId("member-role-label")).toHaveTextContent("Owner");

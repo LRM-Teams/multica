@@ -17,8 +17,8 @@ import { AgentCompactActivity } from "./agent-compact-activity";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
 
-/** LRM-650 / Frank: section headers stay EN SoT (HUMANS / AGENTS), not i18n. */
-function SectionHeader({ label, count }: { label: "HUMANS" | "AGENTS"; count: number }) {
+/** LRM-650 / Frank: section headers stay EN SoT (People / Agents), not i18n. */
+function SectionHeader({ label, count }: { label: "People" | "Agents"; count: number }) {
   return (
     <div
       className="px-4 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"
@@ -164,7 +164,7 @@ function MemberRow({
 
 /**
  * Shared Members list (LRM-211 / LRM-650) — dialog + Channel details 「成员」Tab.
- * LRM-650: HUMANS / AGENTS sections, no row hairlines, agent Compact Activity.
+ * LRM-650: People / Agents sections, no row hairlines, agent Compact Activity.
  */
 export function ChannelMembersList({
   members,
@@ -197,14 +197,14 @@ export function ChannelMembersList({
   dmPending?: boolean;
   className?: string;
 }) {
-  const { humans, agents } = useMemo(() => {
-    const h: ChannelMember[] = [];
+  const { people, agents } = useMemo(() => {
+    const p: ChannelMember[] = [];
     const a: ChannelMember[] = [];
     for (const m of members) {
       if (m.member_type === "agent") a.push(m);
-      else h.push(m);
+      else p.push(m);
     }
-    return { humans: h, agents: a };
+    return { people: p, agents: a };
   }, [members]);
 
   if (loading) {
@@ -250,11 +250,11 @@ export function ChannelMembersList({
       )}
       data-testid="channel-members-list"
     >
-      {humans.length > 0 ? (
+      {people.length > 0 ? (
         <>
-          <SectionHeader label="HUMANS" count={humans.length} />
+          <SectionHeader label="People" count={people.length} />
           <div className="px-1 pb-1">
-            {humans.map((m) => (
+            {people.map((m) => (
               <MemberRow
                 key={`${m.member_type}:${m.member_id}`}
                 m={m}
@@ -274,7 +274,7 @@ export function ChannelMembersList({
       ) : null}
       {agents.length > 0 ? (
         <>
-          <SectionHeader label="AGENTS" count={agents.length} />
+          <SectionHeader label="Agents" count={agents.length} />
           <div className="px-1 pb-1">
             {agents.map((m) => (
               <MemberRow

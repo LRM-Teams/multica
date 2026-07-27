@@ -1733,7 +1733,43 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		)
 		return nil
 	}
+	// D6-1a: put canonical runtime-state generation on every wake claim so the
+	// daemon can later fence agentRuntimeTurnCoordinator.Begin. Soft-fail keeps
+	// legacy resume (PriorSessionID from chat_session/issue) working if Ensure
+	// cannot create/return a row (wrong binding, migration lag, etc.).
+	h.attachCanonicalRuntimeState(ctx, event.AgentID, resp.RuntimeID, &resp)
 	return &resp
+}
+
+// attachCanonicalRuntimeState ensures the agent×runtime row exists and copies
+// generation + pending fresh-session notice onto the claim response. It does
+// not change PriorSessionID/PriorWorkDir (that is D6-2 resume cutover).
+func (h *Handler) attachCanonicalRuntimeState(ctx context.Context, agentID pgtype.UUID, runtimeID string, resp *AgentTaskResponse) {
+	if h == nil || resp == nil || !agentID.Valid || strings.TrimSpace(runtimeID) == "" {
+		return
+	}
+	runtimeUUID := parseUUID(runtimeID)
+	if !runtimeUUID.Valid {
+		return
+	}
+	state, err := h.Queries.EnsureAgentRuntimeState(ctx, db.EnsureAgentRuntimeStateParams{
+		AgentID:   agentID,
+		RuntimeID: runtimeUUID,
+	})
+	if err != nil {
+		slog.Warn("agent inbox claim: ensure agent_runtime_state failed",
+			"agent_id", uuidToString(agentID),
+			"runtime_id", runtimeID,
+			"error", err,
+		)
+		return
+	}
+	if state.Generation > 0 {
+		resp.RuntimeStateGeneration = state.Generation
+	}
+	if state.FreshSessionNoticeReason.Valid {
+		resp.FreshSessionNoticeReason = state.FreshSessionNoticeReason.String
+	}
 }
 
 func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db.AgentInboxEvent {

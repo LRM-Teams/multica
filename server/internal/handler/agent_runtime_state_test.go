@@ -10,6 +10,47 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+func TestAttachCanonicalRuntimeStateFillsGenerationAndNotice(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB unavailable")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Runtime State Attach Agent", nil)
+	runtimeID := handlerTestRuntimeID(t)
+
+	// First attach ensures the row (new agents get generation without cutover).
+	resp := AgentTaskResponse{RuntimeID: runtimeID}
+	testHandler.attachCanonicalRuntimeState(ctx, parseUUID(agentID), runtimeID, &resp)
+	if resp.RuntimeStateGeneration <= 0 {
+		t.Fatalf("RuntimeStateGeneration = %d, want > 0 after ensure", resp.RuntimeStateGeneration)
+	}
+	if resp.FreshSessionNoticeReason != "" {
+		t.Fatalf("new agent notice = %q, want empty", resp.FreshSessionNoticeReason)
+	}
+
+	// Production migration A left many agents with an explicit cutover notice.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime_state
+		SET fresh_session_notice_reason = 'cutover'
+		WHERE agent_id = $1 AND runtime_id = $2
+	`, parseUUID(agentID), parseUUID(runtimeID)); err != nil {
+		t.Fatalf("seed cutover notice: %v", err)
+	}
+	resp2 := AgentTaskResponse{RuntimeID: runtimeID}
+	testHandler.attachCanonicalRuntimeState(ctx, parseUUID(agentID), runtimeID, &resp2)
+	if resp2.RuntimeStateGeneration != resp.RuntimeStateGeneration {
+		t.Fatalf("generation churned on re-ensure: %d -> %d", resp.RuntimeStateGeneration, resp2.RuntimeStateGeneration)
+	}
+	if resp2.FreshSessionNoticeReason != "cutover" {
+		t.Fatalf("FreshSessionNoticeReason = %q, want cutover", resp2.FreshSessionNoticeReason)
+	}
+	// D6-1a must not invent resume identity.
+	if resp2.PriorSessionID != "" || resp2.PriorWorkDir != "" {
+		t.Fatalf("attach must not set legacy resume fields: session=%q workdir=%q",
+			resp2.PriorSessionID, resp2.PriorWorkDir)
+	}
+}
+
 func TestAgentRuntimeStateCASPreservesCanonicalSessionBoundary(t *testing.T) {
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "Runtime State CAS Agent", nil)

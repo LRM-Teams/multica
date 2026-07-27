@@ -118,6 +118,7 @@ import type {
   Channel,
   ChannelActiveTask,
   ChannelMember,
+  ChannelInviteCandidatesResponse,
   ChannelMessage,
   ChannelMessagesPage,
   MarkChannelReadResult,
@@ -2789,6 +2790,19 @@ export class ApiClient {
 
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
     return this.fetch(`/api/channels/${channelId}/members`);
+  }
+
+  /** LRM-622 — single invite-picker pool (users + agents), server-filtered. */
+  async listChannelInviteCandidates(
+    channelId: string,
+    params?: { q?: string; limit?: number },
+  ): Promise<ChannelInviteCandidatesResponse> {
+    const search = new URLSearchParams();
+    const q = params?.q?.trim();
+    if (q) search.set("q", q);
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    return this.fetch(`/api/channels/${channelId}/invite-candidates${suffix}`);
   }
 
   // Group-local Tasks projection. The channel is a discussion context, not an

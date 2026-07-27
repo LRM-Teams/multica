@@ -427,6 +427,7 @@ export function useAddChannelMember() {
       api.addChannelMember(channelId, { member_type: memberType, member_id: memberId }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       // Refresh the list so channel member briefs stay current after roster changes.
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
@@ -446,6 +447,7 @@ export function useAddChannelMembers() {
     }) => api.addChannelMembers(channelId, members),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
   });
@@ -459,6 +461,7 @@ export function useRemoveChannelMember() {
       api.removeChannelMember(channelId, memberType, memberId),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
   });

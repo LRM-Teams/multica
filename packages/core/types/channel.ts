@@ -67,6 +67,21 @@ export interface ChannelMember {
   created_at: string;
 }
 
+/** LRM-622 — invite picker row from GET /api/channels/:id/invite-candidates. */
+export interface ChannelInviteCandidate {
+  member_type: "user" | "agent";
+  member_id: string;
+  name: string;
+  display_name: string;
+  email?: string;
+  avatar_url?: string | null;
+  role?: string;
+}
+
+export interface ChannelInviteCandidatesResponse {
+  candidates: ChannelInviteCandidate[];
+}
+
 export interface ChannelReaction {
   id: string;
   channel_id: string;

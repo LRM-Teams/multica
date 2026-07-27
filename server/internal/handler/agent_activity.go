@@ -59,6 +59,15 @@ var agentActivityTimelinePublicDetailKeys = map[string][]string{
 		"reason",
 		"recommended_action",
 	},
+	"send_freshness_resolved": {
+		"target",
+		"producer_fact_id",
+		"outcome",
+		"freshness_hold_resolution_seconds",
+		"resolution_ms",
+		"transport_id",
+		"message_id",
+	},
 }
 
 type AgentActivityCursor struct {

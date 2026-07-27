@@ -571,6 +571,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	var chatDonePayload *protocol.ChatDonePayload
 	terminalOutcome := ""
 	var collaborationWakes []channelAgentWake
+	var freshnessResolutionPublications []agentTransportFreshnessResolutionPublication
 	if !event.ChatSessionID.Valid {
 		workCompletion, err = h.TaskService.CompleteDaemonInboxTaskWithFinalization(
 			r.Context(),
@@ -584,21 +585,26 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			req.WorkDir,
 			service.AgentInboxCompleteTxHooks{
 				Before: func(_ *db.Queries, tx pgx.Tx) error {
-					if !isChannelOnboarding {
-						return nil
+					if isChannelOnboarding {
+						onboardingID, err = channelOnboardingIDForInboxEventTx(r.Context(), tx, event.ID)
+						if err != nil {
+							return fmt.Errorf("load channel onboarding: %w", err)
+						}
+						if !onboardingID.Valid {
+							return errors.New("channel onboarding inbox event is missing its canonical event")
+						}
+						// Eligibility must be locked before the delivery row. The
+						// membership DELETE trigger owns membership first and then
+						// expires deliveries, so the reverse order can deadlock.
+						channelOnboardingActive, err = channelOnboardingGenerationActiveTx(
+							r.Context(), tx, onboardingID, event.ChannelID, event.AgentID, true,
+						)
+						if err != nil {
+							return err
+						}
 					}
-					onboardingID, err = channelOnboardingIDForInboxEventTx(r.Context(), tx, event.ID)
-					if err != nil {
-						return fmt.Errorf("load channel onboarding: %w", err)
-					}
-					if !onboardingID.Valid {
-						return errors.New("channel onboarding inbox event is missing its canonical event")
-					}
-					// Eligibility must be locked before the delivery row. The
-					// membership DELETE trigger owns membership first and then
-					// expires deliveries, so the reverse order can deadlock.
-					channelOnboardingActive, err = channelOnboardingGenerationActiveTx(
-						r.Context(), tx, onboardingID, event.ChannelID, event.AgentID, true,
+					freshnessResolutionPublications, err = h.abandonAgentTransportFreshnessDraftsWithExec(
+						r.Context(), tx, event, task.RuntimeID,
 					)
 					return err
 				},
@@ -625,6 +631,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 					terminalOutcome = h.agentInboxCompletionOutcomeAfterMustReplyFailure(
 						r.Context(), event, terminalOutcome, isChannelOnboarding, req.MustReplyFailure,
 					)
+					if len(freshnessResolutionPublications) > 0 {
+						terminalOutcome = "no_reply"
+					}
 					if err := setAgentInboxCompletionFinalizationTx(
 						r.Context(), qtx, tx, event, deliveryID, executionID, result, terminalOutcome,
 					); err != nil {
@@ -676,6 +685,14 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 				writeError(w, http.StatusInternalServerError, "failed to lock channel onboarding eligibility")
 				return
 			}
+		}
+
+		freshnessResolutionPublications, err = h.abandonAgentTransportFreshnessDraftsWithExec(
+			r.Context(), tx, event, task.RuntimeID,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to resolve inbox freshness draft")
+			return
 		}
 
 		acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
@@ -736,6 +753,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		terminalOutcome = h.agentInboxCompletionOutcomeAfterMustReplyFailure(
 			r.Context(), event, terminalOutcome, isChannelOnboarding, req.MustReplyFailure,
 		)
+		if len(freshnessResolutionPublications) > 0 {
+			terminalOutcome = "no_reply"
+		}
 		if err := setAgentInboxCompletionFinalizationTx(
 			r.Context(), qtx, tx, event, deliveryID, executionID, result, terminalOutcome,
 		); err != nil {
@@ -756,6 +776,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	h.publishAgentTransportFreshnessResolutions(r.Context(), freshnessResolutionPublications)
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	if workCompletion != nil && workCompletion.CompletedNow {
 		h.emitIssueExecutedOnFirstCompletion(r, &workCompletion.Task)
@@ -772,9 +793,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
-	// A held draft, explicit no-reply, onboarding sent/skipped/expired, and a
-	// completed transport reply are separate observable outcomes. None is a
-	// delivery failure.
+	// An explicit no-reply (including a source-completion abandoned draft),
+	// onboarding sent/skipped/expired, and a completed transport reply are
+	// separate observable outcomes. None is a delivery failure.
 	lifecycleStatus := "completed"
 	if terminalOutcome == "held" || terminalOutcome == "no_reply" || isChannelOnboarding {
 		lifecycleStatus = terminalOutcome

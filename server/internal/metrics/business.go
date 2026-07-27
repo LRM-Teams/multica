@@ -9,6 +9,7 @@ import (
 )
 
 var taskDurationBuckets = []float64{1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1200, 3600, 7200}
+var freshnessHoldResolutionBuckets = []float64{0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300}
 
 type activeTaskLabels struct {
 	source      string
@@ -38,6 +39,7 @@ type BusinessMetrics struct {
 	channelOutputSuppressed                *prometheus.CounterVec
 	channelFullExecutionWakes              *prometheus.CounterVec
 	channelFullExecutionAmplificationRatio *prometheus.GaugeVec
+	freshnessHoldResolution                *prometheus.HistogramVec
 
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
@@ -174,6 +176,11 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "full_execution_amplification_ratio",
 			Help:      "Ratio of full-execution wakes to human no-mention channel messages.",
 		}, metricLabels("multica_channel_full_execution_amplification_ratio")),
+		freshnessHoldResolution: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "multica_freshness_hold_resolution_seconds",
+			Help:    "Time from a freshness decision fact to its decisive same-target resolution.",
+			Buckets: freshnessHoldResolutionBuckets,
+		}, metricLabels("multica_freshness_hold_resolution_seconds")),
 		activeTasks: map[string]activeTaskLabels{},
 		events:      newBusinessEventMetrics(),
 	}
@@ -203,6 +210,7 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.channelOutputSuppressed,
 		m.channelFullExecutionWakes,
 		m.channelFullExecutionAmplificationRatio,
+		m.freshnessHoldResolution,
 	}, m.events.collectors()...)
 }
 
@@ -242,6 +250,16 @@ func (m *BusinessMetrics) SetChannelFullExecutionAmplificationRatio(ratio float6
 		return
 	}
 	m.channelFullExecutionAmplificationRatio.WithLabelValues().Set(ratio)
+}
+
+func (m *BusinessMetrics) ObserveFreshnessHoldResolution(outcome string, seconds float64) {
+	if m == nil || seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return
+	}
+	switch outcome {
+	case "send_draft", "revised_send", "abandoned":
+		m.freshnessHoldResolution.WithLabelValues(outcome).Observe(seconds)
+	}
 }
 
 func (m *BusinessMetrics) RecordTaskDispatched(taskID, source, runtimeMode string, queueWaitSeconds float64) {

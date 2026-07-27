@@ -456,6 +456,60 @@ func TestAgentActivityEvents_ExposesHeldFreshnessDetails(t *testing.T) {
 	}
 }
 
+func TestAgentActivityEvents_ExposesFreshnessResolutionDetails(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-freshness-resolution-agent")
+	channelID, _ := createActivityChannelSession(t, agentID, testUserID)
+	ctx := context.Background()
+	details := `{
+		"producer_fact_id": "freshness:producer:resolved",
+		"outcome": "revised_send",
+		"freshness_hold_resolution_seconds": 1.25,
+		"resolution_ms": 1250,
+		"transport_id": "transport-resolved",
+		"message_id": "message-resolved",
+		"target": "#multica:test",
+		"input": {"secret": "sk_agent_should_not_leak"}
+	}`
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, target_slug, message, details, visibility
+		)
+		VALUES (
+			$1, $2, 'text', 'send_freshness_resolved', 'info',
+			'channel', $3, '#multica:test', 'Freshness hold resolved', $4::jsonb, 'user_facing'
+		)
+		RETURNING id
+	`, testWorkspaceID, agentID, channelID, details).Scan(&eventID); err != nil {
+		t.Fatalf("insert freshness resolution event: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE id = $1`, eventID)
+	})
+
+	events := listAgentActivityEventsForUser(t, testUserID, agentID, "")
+	event := requireActivityTimelineEvent(t, events, eventID)
+	for key, want := range map[string]any{
+		"producer_fact_id":                  "freshness:producer:resolved",
+		"outcome":                           "revised_send",
+		"freshness_hold_resolution_seconds": float64(1.25),
+		"resolution_ms":                     float64(1250),
+		"transport_id":                      "transport-resolved",
+		"message_id":                        "message-resolved",
+		"target":                            "#multica:test",
+	} {
+		assertActivityTimelineDetail(t, event, key, want)
+	}
+	if _, ok := event.Details["input"]; ok || strings.Contains(events.raw, "sk_agent_should_not_leak") {
+		t.Fatalf("freshness resolution leaked raw input details: %+v raw=%s", event.Details, events.raw)
+	}
+}
+
 func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

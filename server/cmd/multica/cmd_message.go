@@ -15,9 +15,9 @@ import (
 )
 
 // errAgentMessageHeld is returned after a successful HTTP freshness hold so the
-// process exits non-zero. Agents must treat held as "not delivered" and decide
-// --send-draft or revise in the same turn; the JSON body is still printed first.
-var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); review heldMessages, then either `multica message send --send-draft --target <target>` or a revised normal send")
+// process exits non-zero. Agents must treat held as "not delivered" and make
+// one explicit decision in the same turn; the JSON body is still printed first.
+var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); review heldMessages, then execute one returned decisionCommands entry or choose not to send")
 
 func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -312,7 +312,44 @@ func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 
 
 func agentMessageSendTextFallback(out map[string]any) string {
 	if agentTransportOutputIsHeld(out) {
-		return "Message held by freshness check (not delivered; CLI exits non-zero). Review heldMessages, then in this same turn either rerun with --send-draft to send the saved draft unchanged, or send revised content with a normal message send."
+		var b strings.Builder
+		b.WriteString("Message held by freshness check (not delivered; CLI exits non-zero). Review heldMessages in this same turn.")
+		if window, ok := out["contextWindow"].(map[string]any); ok {
+			older := strings.TrimSpace(fmt.Sprint(window["olderBoundary"]))
+			newer := strings.TrimSpace(fmt.Sprint(window["newerBoundary"]))
+			if older != "" || newer != "" {
+				b.WriteString("\nBounded context:")
+				if older != "" {
+					b.WriteString(" ")
+					b.WriteString(older)
+				}
+				if newer != "" {
+					b.WriteString(" ")
+					b.WriteString(newer)
+				}
+			}
+		}
+		if commands, ok := out["decisionCommands"].(map[string]any); ok {
+			b.WriteString("\nChoose exactly one decision:")
+			for _, option := range []struct {
+				label string
+				key   string
+			}{
+				{label: "Revise and send", key: "revisedSend"},
+				{label: "Send saved draft unchanged", key: "sendDraft"},
+			} {
+				command := strings.TrimSpace(fmt.Sprint(commands[option.key]))
+				if command == "" || command == "<nil>" {
+					continue
+				}
+				b.WriteString("\n- ")
+				b.WriteString(option.label)
+				b.WriteString(": ")
+				b.WriteString(command)
+			}
+			b.WriteString("\n- Do not send: choose not to send anything.")
+		}
+		return b.String()
 	}
 	return "Message sent."
 }

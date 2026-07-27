@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { ActorProfilePage } from "@multica/views/common/actor-profile-page";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const ActorProfilePage = lazyNamedRoute(
+  () => import("@multica/views/common/actor-profile-page"),
+  "ActorProfilePage",
+);
 
 export default function ActorProfileRoute({
   params,

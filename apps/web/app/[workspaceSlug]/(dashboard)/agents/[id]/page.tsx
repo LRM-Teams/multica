@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { AgentDetailPage } from "@multica/views/agents";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const AgentDetailPage = lazyNamedRoute(
+  () => import("@multica/views/agents"),
+  "AgentDetailPage",
+);
 
 export default function AgentDetailRoute({
   params,

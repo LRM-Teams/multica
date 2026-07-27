@@ -1,4 +1,11 @@
-import { RuntimesPage } from "@multica/views/runtimes";
+"use client";
+
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const RuntimesPage = lazyNamedRoute(
+  () => import("@multica/views/runtimes"),
+  "RuntimesPage",
+);
 
 const cloudRuntimeEnabled =
   process.env.NEXT_PUBLIC_ENABLE_CLOUD_RUNTIME === "true";

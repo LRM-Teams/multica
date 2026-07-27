@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { SandboxDetailPage } from "@multica/views/sandboxes";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const SandboxDetailPage = lazyNamedRoute(
+  () => import("@multica/views/sandboxes"),
+  "SandboxDetailPage",
+);
 
 export default function SandboxDetailRoute({
   params,

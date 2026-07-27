@@ -1,4 +1,11 @@
-import { BillingTestPage } from "@multica/views/billing";
+"use client";
+
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const BillingTestPage = lazyNamedRoute(
+  () => import("@multica/views/billing"),
+  "BillingTestPage",
+);
 
 // Account-level test page for the cloud-billing API surface. Despite
 // living under [workspaceSlug] — that's where the dashboard layout

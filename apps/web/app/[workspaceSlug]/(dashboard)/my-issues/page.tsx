@@ -1,6 +1,11 @@
 "use client";
 
-import { MyIssuesPage } from "@multica/views/my-issues";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const MyIssuesPage = lazyNamedRoute(
+  () => import("@multica/views/my-issues"),
+  "MyIssuesPage",
+);
 
 export default function Page() {
   return <MyIssuesPage />;

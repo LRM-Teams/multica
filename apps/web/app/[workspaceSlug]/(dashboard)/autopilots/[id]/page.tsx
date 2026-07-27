@@ -1,7 +1,12 @@
 "use client";
 
 import { use } from "react";
-import { AutopilotDetailPage } from "@multica/views/autopilots/components";
+import { lazyNamedRoute } from "@/lib/lazy-route";
+
+const AutopilotDetailPage = lazyNamedRoute(
+  () => import("@multica/views/autopilots/components"),
+  "AutopilotDetailPage",
+);
 
 export default function Page({
   params,

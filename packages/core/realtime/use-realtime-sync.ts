@@ -646,6 +646,17 @@ export function useRealtimeSync(
     };
 
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    // Per-prefix debounce windows. The `task` prefix fans out the heaviest
+    // refresh — a whole-workspace agent-task-snapshot refetch plus activity /
+    // run-count / squad-status / trigger-preview invalidations — on EVERY task
+    // lifecycle event. With many concurrent agents (and every connected client
+    // doing the same), a 100ms window still let sustained task activity storm
+    // those endpoints (agent-task-snapshot ran ~2.7s under that load). Coalesce
+    // `task` over a longer window so a burst collapses to one refetch; presence
+    // is not latency-critical to ~2s. Other prefixes stay snappy at 100ms.
+    // (Immediate mitigation; the durable fix is WS-delta in-place snapshot
+    // updates instead of event→full-refetch.)
+    const DEBOUNCE_MS_BY_PREFIX: Record<string, number> = { task: 2000 };
     const debouncedRefresh = (prefix: string, fn: () => void) => {
       const existing = timers.get(prefix);
       if (existing) clearTimeout(existing);
@@ -654,7 +665,7 @@ export function useRealtimeSync(
         setTimeout(() => {
           timers.delete(prefix);
           fn();
-        }, 100),
+        }, DEBOUNCE_MS_BY_PREFIX[prefix] ?? 100),
       );
     };
 

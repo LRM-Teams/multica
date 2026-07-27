@@ -4125,6 +4125,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
+		// Canonical wrapper re-applies ResumeSessionID on every Execute; opts
+		// alone are not enough — clear the lease-owned id before the retry.
+		clearCanonicalResumeIfPresent(backend)
 		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start", "error", retryErr)

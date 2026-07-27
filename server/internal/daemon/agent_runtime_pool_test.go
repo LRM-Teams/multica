@@ -334,6 +334,28 @@ func TestCanonicalAgentRuntimePoolKeepsForceFreshAfterFactoryFailCrossChat(t *te
 	}
 }
 
+func TestCanonicalSessionBackendStaleResumeFallbackClearsWrapper(t *testing.T) {
+	// runTask sets opts.ResumeSessionID="" on stale resume; wrapper must also
+	// drop its forced id or retry keeps the bad Prior (Barry activation BLOCK).
+	inner := &canonicalRuntimeTestBackend{}
+	wrapped := &canonicalSessionBackend{backend: inner, canonicalSessionID: "stale-prior"}
+	if _, err := wrapped.Execute(context.Background(), "first", agent.ExecOptions{ResumeSessionID: "ignored"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := inner.lastResumeSessionID(); got != "stale-prior" {
+		t.Fatalf("first resume = %q, want stale-prior", got)
+	}
+	// Simulate runTask fallback: clear opts is insufficient without ClearCanonicalResume.
+	opts := agent.ExecOptions{ResumeSessionID: ""}
+	clearCanonicalResumeIfPresent(wrapped)
+	if _, err := wrapped.Execute(context.Background(), "retry", opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := inner.lastResumeSessionID(); got != "" {
+		t.Fatalf("retry resume = %q, want empty after ClearCanonicalResume", got)
+	}
+}
+
 func TestCanonicalAgentRuntimePoolRestartsProcessKeepsPriorOnHardFieldDrift(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}

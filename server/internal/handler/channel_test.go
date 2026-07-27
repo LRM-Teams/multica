@@ -5137,6 +5137,81 @@ func TestSearchChannelMessagesReturnsStableResults(t *testing.T) {
 	}
 }
 
+func TestSearchGlobalScopesAndPermissions(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	token := "globalsearch" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	otherUserID := createChannelWorkspaceMemberWithRole(t, "member")
+	if _, err := testPool.Exec(ctx, `UPDATE "user" SET display_name = $1 WHERE id = $2`, "Search Person "+token, otherUserID); err != nil {
+		t.Fatalf("seed searchable person: %v", err)
+	}
+
+	channelID := seedChannelForTest(t, "Search Channel "+token, testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "visible message "+token, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("global-visible"), 0); err != nil {
+		t.Fatalf("seed visible message: %v", err)
+	}
+	hiddenChannelID := seedChannelForTest(t, "Hidden Channel "+token, otherUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(hiddenChannelID), parseUUID(testWorkspaceID), "user", parseUUID(otherUserID), "Other", "hidden message "+token, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("global-hidden"), 0); err != nil {
+		t.Fatalf("seed hidden message: %v", err)
+	}
+	dmID := seedChannelForTest(t, "Search DM "+token, testUserID)
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET kind = 'dm', description = $1 WHERE id = $2`, "dm "+token, dmID); err != nil {
+		t.Fatalf("seed dm channel: %v", err)
+	}
+
+	req := newRequest(http.MethodGet, "/api/search?q="+token+"&scope=all&limit=10", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.SearchGlobal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("global search: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp GlobalSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode global search: %v", err)
+	}
+	if resp.Counts.Messages != 1 || len(resp.Messages) != 1 || resp.Messages[0].MessageID == "" {
+		t.Fatalf("message search leaked or missed results: counts=%+v messages=%+v", resp.Counts, resp.Messages)
+	}
+	if resp.Messages[0].Snippet == "" || len(resp.Messages[0].HighlightRanges) != 1 {
+		t.Fatalf("message search missing snippet/highlight: %+v", resp.Messages[0])
+	}
+	if resp.Counts.Channels != 1 || len(resp.Channels) != 1 || resp.Channels[0].ChannelID != channelID {
+		t.Fatalf("channel search leaked or missed results: counts=%+v channels=%+v", resp.Counts, resp.Channels)
+	}
+	if resp.Counts.DMs != 1 || len(resp.DMs) != 1 || resp.DMs[0].ChannelID != dmID {
+		t.Fatalf("dm search response = counts=%+v dms=%+v, want seeded dm only", resp.Counts, resp.DMs)
+	}
+	if resp.Counts.People != 1 || len(resp.People) != 1 || resp.People[0].ActorID != otherUserID {
+		t.Fatalf("people search response = counts=%+v people=%+v, want seeded workspace member", resp.Counts, resp.People)
+	}
+
+	req = newRequest(http.MethodGet, "/api/search?q="+token+"&scope=messages&limit=10", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec = httptest.NewRecorder()
+	testHandler.SearchGlobal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message-scope global search: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode message-scope global search: %v", err)
+	}
+	if len(resp.Messages) != 1 || len(resp.Channels) != 0 || len(resp.DMs) != 0 || len(resp.People) != 0 {
+		t.Fatalf("scope=messages populated wrong buckets: %+v", resp)
+	}
+
+	req = newRequest(http.MethodGet, "/api/search?q="+token+"&scope=bad", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec = httptest.NewRecorder()
+	testHandler.SearchGlobal(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_search_scope") {
+		t.Fatalf("invalid scope response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestChannelArchiveHidesFromListFreezesWritesAndRestores(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

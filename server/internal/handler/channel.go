@@ -89,6 +89,60 @@ type ChannelResponse struct {
 	Members            []ChannelMemberBrief `json:"members,omitempty"`
 }
 
+type GlobalSearchCounts struct {
+	Messages int `json:"messages"`
+	Channels int `json:"channels"`
+	DMs      int `json:"dms"`
+	People   int `json:"people"`
+}
+
+type GlobalSearchHighlightRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+type GlobalSearchMessageResult struct {
+	ResultType          string                       `json:"result_type"`
+	MessageID           string                       `json:"message_id"`
+	ChannelID           string                       `json:"channel_id"`
+	ChannelName         string                       `json:"channel_name"`
+	ChannelKind         string                       `json:"channel_kind"`
+	ThreadRootMessageID *string                      `json:"thread_root_message_id,omitempty"`
+	HitCount            int                          `json:"hit_count"`
+	AuthorType          string                       `json:"author_type"`
+	AuthorID            *string                      `json:"author_id"`
+	AuthorName          string                       `json:"author_name"`
+	Content             string                       `json:"content"`
+	Snippet             string                       `json:"snippet"`
+	HighlightRanges     []GlobalSearchHighlightRange `json:"highlight_ranges"`
+	CreatedAt           string                       `json:"created_at"`
+}
+
+type GlobalSearchChannelResult struct {
+	ChannelID   string  `json:"channel_id"`
+	Name        string  `json:"name"`
+	Kind        string  `json:"kind"`
+	Description *string `json:"description,omitempty"`
+}
+
+type GlobalSearchPersonResult struct {
+	ActorType   string  `json:"actor_type"`
+	ActorID     string  `json:"actor_id"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	AvatarURL   *string `json:"avatar_url,omitempty"`
+}
+
+type GlobalSearchResponse struct {
+	Query    string                      `json:"query"`
+	Scope    string                      `json:"scope"`
+	Counts   GlobalSearchCounts          `json:"counts"`
+	Messages []GlobalSearchMessageResult `json:"messages"`
+	Channels []GlobalSearchChannelResult `json:"channels"`
+	DMs      []GlobalSearchChannelResult `json:"dms"`
+	People   []GlobalSearchPersonResult  `json:"people"`
+}
+
 type ChannelLastMessage struct {
 	Type       string                 `json:"type"`
 	AuthorName string                 `json:"author_name"`
@@ -1504,6 +1558,317 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		AfterCursor:  afterCursor,
 		UnreadTotal:  unreadTotal,
 	})
+}
+
+func (h *Handler) SearchGlobal(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found"); !ok {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
+	if scope == "" {
+		scope = "all"
+	}
+	switch scope {
+	case "all", "messages", "channels", "dms", "people":
+	default:
+		writeCodedError(w, http.StatusBadRequest, "invalid_search_scope", "invalid search scope")
+		return
+	}
+	limit := boundedQueryInt(r, "limit", 20, 50)
+	resp := GlobalSearchResponse{
+		Query:    query,
+		Scope:    scope,
+		Messages: []GlobalSearchMessageResult{},
+		Channels: []GlobalSearchChannelResult{},
+		DMs:      []GlobalSearchChannelResult{},
+		People:   []GlobalSearchPersonResult{},
+	}
+	if query == "" {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	pattern := "%" + escapeLike(query) + "%"
+	wsID := parseUUID(workspaceID)
+	uid := parseUUID(userID)
+
+	if scope == "all" || scope == "messages" {
+		if !h.globalSearchMessages(w, r, wsID, uid, pattern, query, limit, &resp) {
+			return
+		}
+	}
+	if scope == "all" || scope == "channels" {
+		if !h.globalSearchChannels(w, r, wsID, uid, pattern, "group", limit, &resp) {
+			return
+		}
+	}
+	if scope == "all" || scope == "dms" {
+		if !h.globalSearchChannels(w, r, wsID, uid, pattern, "dm", limit, &resp) {
+			return
+		}
+	}
+	if scope == "all" || scope == "people" {
+		if !h.globalSearchPeople(w, r, wsID, uid, pattern, limit, &resp) {
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, pattern, query string, limit int, resp *GlobalSearchResponse) bool {
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM channel_message m
+		JOIN channel ch ON ch.id = m.channel_id AND ch.workspace_id = m.workspace_id
+		JOIN channel_member viewer ON viewer.channel_id = ch.id
+		 AND viewer.workspace_id = ch.workspace_id
+		 AND viewer.member_type = 'user'
+		 AND viewer.member_id = $2
+		WHERE m.workspace_id = $1
+		  AND m.author_type <> 'system'
+		  AND m.deleted_at IS NULL
+		  AND m.content ILIKE $3 ESCAPE '\'`, workspaceID, userID, pattern).Scan(&resp.Counts.Messages); err != nil {
+		writeCodedError(w, http.StatusInternalServerError, "global_search_message_count_failed", "failed to count global message search results")
+		return false
+	}
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT m.id, m.channel_id, ch.name, ch.kind, m.thread_root_message_id,
+		       m.author_type, m.author_id, m.author_name, m.content, m.created_at,
+		       count(*) OVER (PARTITION BY COALESCE(m.thread_root_message_id, m.id))::int AS hit_count
+		FROM channel_message m
+		JOIN channel ch ON ch.id = m.channel_id AND ch.workspace_id = m.workspace_id
+		JOIN channel_member viewer ON viewer.channel_id = ch.id
+		 AND viewer.workspace_id = ch.workspace_id
+		 AND viewer.member_type = 'user'
+		 AND viewer.member_id = $2
+		WHERE m.workspace_id = $1
+		  AND m.author_type <> 'system'
+		  AND m.deleted_at IS NULL
+		  AND m.content ILIKE $3 ESCAPE '\'
+		ORDER BY m.created_at DESC, m.id DESC
+		LIMIT $4`, workspaceID, userID, pattern, limit)
+	if err != nil {
+		writeCodedError(w, http.StatusInternalServerError, "global_search_messages_failed", "failed to search messages")
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, chID, threadRootID, authorID pgtype.UUID
+		var channelName, channelKind, authorType, authorName, content string
+		var createdAt pgtype.Timestamptz
+		var hitCount int
+		if err := rows.Scan(&id, &chID, &channelName, &channelKind, &threadRootID, &authorType, &authorID, &authorName, &content, &createdAt, &hitCount); err != nil {
+			writeCodedError(w, http.StatusInternalServerError, "global_search_message_read_failed", "failed to read message search results")
+			return false
+		}
+		resp.Messages = append(resp.Messages, GlobalSearchMessageResult{
+			ResultType:          "message",
+			MessageID:           uuidToString(id),
+			ChannelID:           uuidToString(chID),
+			ChannelName:         channelName,
+			ChannelKind:         channelKind,
+			ThreadRootMessageID: uuidToPtr(threadRootID),
+			HitCount:            hitCount,
+			AuthorType:          authorType,
+			AuthorID:            uuidToPtr(authorID),
+			AuthorName:          authorName,
+			Content:             content,
+			Snippet:             searchSnippet(content, query),
+			HighlightRanges:     searchHighlightRanges(content, query),
+			CreatedAt:           timestampToString(createdAt),
+		})
+	}
+	return true
+}
+
+func (h *Handler) globalSearchChannels(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, pattern, kind string, limit int, resp *GlobalSearchResponse) bool {
+	countTarget := &resp.Counts.Channels
+	if kind == "dm" {
+		countTarget = &resp.Counts.DMs
+	}
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM channel ch
+		JOIN channel_member viewer ON viewer.channel_id = ch.id
+		 AND viewer.workspace_id = ch.workspace_id
+		 AND viewer.member_type = 'user'
+		 AND viewer.member_id = $2
+		WHERE ch.workspace_id = $1
+		  AND ch.kind = $3
+		  AND ch.archived_at IS NULL
+		  AND (ch.name ILIKE $4 ESCAPE '\' OR COALESCE(ch.description, '') ILIKE $4 ESCAPE '\')`, workspaceID, userID, kind, pattern).Scan(countTarget); err != nil {
+		writeCodedError(w, http.StatusInternalServerError, "global_search_channel_count_failed", "failed to count channel search results")
+		return false
+	}
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT ch.id, ch.name, ch.kind, ch.description
+		FROM channel ch
+		JOIN channel_member viewer ON viewer.channel_id = ch.id
+		 AND viewer.workspace_id = ch.workspace_id
+		 AND viewer.member_type = 'user'
+		 AND viewer.member_id = $2
+		WHERE ch.workspace_id = $1
+		  AND ch.kind = $3
+		  AND ch.archived_at IS NULL
+		  AND (ch.name ILIKE $4 ESCAPE '\' OR COALESCE(ch.description, '') ILIKE $4 ESCAPE '\')
+		ORDER BY ch.updated_at DESC, ch.name ASC
+		LIMIT $5`, workspaceID, userID, kind, pattern, limit)
+	if err != nil {
+		writeCodedError(w, http.StatusInternalServerError, "global_search_channels_failed", "failed to search channels")
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		var name, rowKind string
+		var description pgtype.Text
+		if err := rows.Scan(&id, &name, &rowKind, &description); err != nil {
+			writeCodedError(w, http.StatusInternalServerError, "global_search_channel_read_failed", "failed to read channel search results")
+			return false
+		}
+		item := GlobalSearchChannelResult{ChannelID: uuidToString(id), Name: name, Kind: rowKind, Description: textToPtr(description)}
+		if kind == "dm" {
+			resp.DMs = append(resp.DMs, item)
+		} else {
+			resp.Channels = append(resp.Channels, item)
+		}
+	}
+	return true
+}
+
+func (h *Handler) globalSearchPeople(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, pattern string, limit int, resp *GlobalSearchResponse) bool {
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*) FROM (
+			SELECT u.id
+			FROM member m
+			JOIN "user" u ON u.id = m.user_id
+			WHERE m.workspace_id = $1
+			  AND (u.name ILIKE $2 ESCAPE '\' OR COALESCE(u.display_name, '') ILIKE $2 ESCAPE '\' OR u.email ILIKE $2 ESCAPE '\')
+			UNION ALL
+			SELECT a.id
+			FROM agent a
+			WHERE a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			  AND (a.visibility = 'workspace' OR a.owner_id = $3)
+			  AND (a.name ILIKE $2 ESCAPE '\' OR COALESCE(a.display_name, '') ILIKE $2 ESCAPE '\')
+		) people`, workspaceID, pattern, userID).Scan(&resp.Counts.People); err != nil {
+		writeCodedError(w, http.StatusInternalServerError, "global_search_people_count_failed", "failed to count people search results")
+		return false
+	}
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT actor_type, actor_id, name, display_name, avatar_url
+		FROM (
+			SELECT 'user'::text AS actor_type, u.id AS actor_id, u.name, COALESCE(NULLIF(u.display_name, ''), u.name, u.email) AS display_name, u.avatar_url, u.updated_at AS sort_at
+			FROM member m
+			JOIN "user" u ON u.id = m.user_id
+			WHERE m.workspace_id = $1
+			  AND (u.name ILIKE $2 ESCAPE '\' OR COALESCE(u.display_name, '') ILIKE $2 ESCAPE '\' OR u.email ILIKE $2 ESCAPE '\')
+			UNION ALL
+			SELECT 'agent'::text AS actor_type, a.id AS actor_id, a.name, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name, a.avatar_url, a.updated_at AS sort_at
+			FROM agent a
+			WHERE a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			  AND (a.visibility = 'workspace' OR a.owner_id = $3)
+			  AND (a.name ILIKE $2 ESCAPE '\' OR COALESCE(a.display_name, '') ILIKE $2 ESCAPE '\')
+		) people
+		ORDER BY sort_at DESC, display_name ASC
+		LIMIT $4`, workspaceID, pattern, userID, limit)
+	if err != nil {
+		writeCodedError(w, http.StatusInternalServerError, "global_search_people_failed", "failed to search people")
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var actorType, name, displayName string
+		var actorID pgtype.UUID
+		var avatarURL pgtype.Text
+		if err := rows.Scan(&actorType, &actorID, &name, &displayName, &avatarURL); err != nil {
+			writeCodedError(w, http.StatusInternalServerError, "global_search_people_read_failed", "failed to read people search results")
+			return false
+		}
+		resp.People = append(resp.People, GlobalSearchPersonResult{ActorType: actorType, ActorID: uuidToString(actorID), Name: name, DisplayName: displayName, AvatarURL: textToPtr(avatarURL)})
+	}
+	return true
+}
+
+func searchSnippet(content, query string) string {
+	content = strings.TrimSpace(content)
+	query = strings.TrimSpace(query)
+	if content == "" || query == "" {
+		return content
+	}
+	contentRunes := []rune(content)
+	lowerContent := []rune(strings.ToLower(content))
+	lowerQuery := []rune(strings.ToLower(query))
+	matchStart := indexRunes(lowerContent, lowerQuery, 0)
+	if matchStart < 0 {
+		if len(contentRunes) <= 160 {
+			return content
+		}
+		return string(contentRunes[:160]) + "…"
+	}
+	matchEnd := matchStart + len(lowerQuery)
+	start := matchStart - 60
+	if start < 0 {
+		start = 0
+	}
+	end := matchEnd + 60
+	if end > len(contentRunes) {
+		end = len(contentRunes)
+	}
+	snippet := strings.TrimSpace(string(contentRunes[start:end]))
+	if start > 0 {
+		snippet = "…" + snippet
+	}
+	if end < len(contentRunes) {
+		snippet += "…"
+	}
+	return snippet
+}
+
+func searchHighlightRanges(content, query string) []GlobalSearchHighlightRange {
+	content = strings.TrimSpace(content)
+	query = strings.TrimSpace(query)
+	if content == "" || query == "" {
+		return []GlobalSearchHighlightRange{}
+	}
+	lowerContent := []rune(strings.ToLower(content))
+	lowerQuery := []rune(strings.ToLower(query))
+	ranges := []GlobalSearchHighlightRange{}
+	for offset := 0; offset < len(lowerContent); {
+		idx := indexRunes(lowerContent, lowerQuery, offset)
+		if idx < 0 {
+			break
+		}
+		end := idx + len(lowerQuery)
+		ranges = append(ranges, GlobalSearchHighlightRange{Start: idx, End: end})
+		offset = end
+	}
+	return ranges
+}
+
+func indexRunes(haystack, needle []rune, offset int) int {
+	if len(needle) == 0 || len(haystack) < len(needle) || offset > len(haystack)-len(needle) {
+		return -1
+	}
+	for i := offset; i <= len(haystack)-len(needle); i++ {
+		matched := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
 }
 
 func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) {

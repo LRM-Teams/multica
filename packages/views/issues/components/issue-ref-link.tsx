@@ -100,6 +100,7 @@ export function IssueRefLink({
   text,
   source = "anchor",
   sourceMessageId,
+  appearance = "inline",
 }: {
   issueId: string;
   /**
@@ -111,6 +112,11 @@ export function IssueRefLink({
   source?: IssueRefSource;
   /** Source row id when this reference is rendered inside a Messages timeline. */
   sourceMessageId?: string;
+  /**
+   * LRM-564 / LRM-561 system rows: brand chip with ▶ + identifier (not title
+   * rewrite). Prose / message-body refs stay `inline` (LRM-508 title-primary).
+   */
+  appearance?: "inline" | "systemChip";
 }): React.JSX.Element {
   const paths = useWorkspacePaths();
   const navigation = useOptionalNavigation();
@@ -131,14 +137,19 @@ export function IssueRefLink({
 
   const title = issue?.title?.trim() || undefined;
   const identifier = issue?.identifier?.trim() || undefined;
+  const systemChip = appearance === "systemChip";
   // LRM-508 / tightened LRM-423: main-line ink is title only once resolved.
   // Author `text` (often LRM-xxx) is interim until then; identifier stays in
   // the peek eyebrow, not beside the link.
-  const primaryLabel = title || text;
+  // System SoT chip is the exception: face is ▶ + key (design lock), title in peek.
+  const primaryLabel = systemChip ? identifier || text : title || text;
+  const linkClassName = systemChip
+    ? "inline-flex min-h-[22px] items-center gap-1 rounded-md bg-brand/12 px-1.5 py-0.5 text-[11.5px] font-semibold text-brand no-underline hover:bg-brand/18 hover:no-underline"
+    : "text-brand hover:underline";
 
   const linkProps = {
     href,
-    className: "text-brand hover:underline",
+    className: linkClassName,
     // Declares "this link is an issue reference and owns its own hover card", so
     // generic link affordances (the editor's URL preview) stand down instead of
     // stacking a second popup on the peek — see link-hover-card.tsx.
@@ -152,11 +163,22 @@ export function IssueRefLink({
     // test even asserted the class was GONE — green, and wrong.
     "data-issue-ref": "",
     "data-ref-source": source,
+    ...(systemChip ? { "data-system-issue-chip": "" } : {}),
   };
-  const link = navigation ? (
-    <AppLink {...linkProps}>{primaryLabel}</AppLink>
+  const linkChildren = systemChip ? (
+    <>
+      <span className="text-[9px] leading-none opacity-90" aria-hidden>
+        ▶
+      </span>
+      <span className="min-w-0 truncate">{primaryLabel}</span>
+    </>
   ) : (
-    <a {...linkProps}>{primaryLabel}</a>
+    primaryLabel
+  );
+  const link = navigation ? (
+    <AppLink {...linkProps}>{linkChildren}</AppLink>
+  ) : (
+    <a {...linkProps}>{linkChildren}</a>
   );
 
   // Nothing resolved (loading / deleted / other workspace / no permission) → plain

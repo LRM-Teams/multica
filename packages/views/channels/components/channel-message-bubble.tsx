@@ -11,7 +11,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
+import { ClipboardList, Copy, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -169,23 +169,22 @@ function ChannelSystemMessageRow({
       // NEVER a full timestamp, so they opt out of the hover-full treatment.
       title={showIssueTime ? undefined : messageTime.full(message.created_at)}
       className={cn(
-        // LRM-561 / LRM-555 v1: centered ceremonial system row with thin side
-        // rules (Frank: 居中好看; keep v1 分隔节奏). NOT a chip/capsule (v3-A
-        // rejected). Nested @ / issue tokens inherit muted ink — no brand wash
-        // — so the row stays quiet against the reading flow.
-        "group mx-auto flex max-w-[min(720px,100%)] items-center gap-3 px-2 py-1 outline-none transition-colors duration-1000",
-        "text-[11.5px] leading-snug text-muted-foreground/85",
+        // LRM-561 / LRM-564 lock: left-align into the message body column
+        // (avatar 28 + gap ≈ pl-10), no side hairlines, no full-row capsule.
+        // Issue refs are brand chips (▶ + key) — not muted bare links.
+        "group flex items-start gap-1.5 px-2 py-1 pl-10 outline-none transition-colors duration-1000",
+        "text-xs leading-snug text-muted-foreground/85",
         "[&_.mention]:bg-transparent [&_.mention]:px-0 [&_.mention]:font-medium [&_.mention]:text-inherit [&_.mention]:hover:bg-transparent [&_.mention]:focus-visible:bg-transparent",
-        "[&_a]:text-inherit [&_a]:font-medium [&_a]:no-underline hover:[&_a]:underline",
+        "[&_a:not([data-system-issue-chip])]:text-inherit [&_a:not([data-system-issue-chip])]:font-medium [&_a:not([data-system-issue-chip])]:no-underline hover:[&_a:not([data-system-issue-chip])]:underline",
         highlighted && "rounded-md bg-primary/10 ring-1 ring-primary/25 duration-0",
       )}
     >
-      <div
+      <ClipboardList
         aria-hidden
-        data-testid="system-message-rule"
-        className="h-px min-w-4 flex-1 bg-border/70"
+        data-testid="system-message-icon"
+        className="mt-0.5 size-3 shrink-0 opacity-55"
       />
-      <div className="flex min-w-0 max-w-[min(520px,85%)] flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 text-center">
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline justify-start gap-x-1.5 gap-y-0.5 text-left">
         <span className="min-w-0 break-words">
           {issueAggregateEvent ? (
             <IssueAggregateSystemEventContent
@@ -211,6 +210,7 @@ function ChannelSystemMessageRow({
               content={message.content}
               parts={message.parts}
               sourceMessageId={message.id}
+              issueAppearance="systemChip"
             />
           ) : (
             systemText
@@ -232,11 +232,6 @@ function ChannelSystemMessageRow({
           </span>
         )}
       </div>
-      <div
-        aria-hidden
-        data-testid="system-message-rule"
-        className="h-px min-w-4 flex-1 bg-border/70"
-      />
     </div>
   );
 }

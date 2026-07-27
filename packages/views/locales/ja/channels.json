@@ -167,7 +167,12 @@
     "preview_error": "ファイル内容の読み込みに失敗しました",
     "preview_empty": "（空のファイル）",
     "preview_too_large": "ファイルが大きすぎてプレビューできません",
-    "preview_close_aria": "プレビューを閉じる"
+    "preview_close_aria": "プレビューを閉じる",
+    "empty_title": "まだアップロードがありません",
+    "empty_hint": "このチャンネルにアップロードしたファイルがここに表示されます。",
+    "retry": "再試行",
+    "open": "開く",
+    "download": "ダウンロード"
   },
   "settings": {
     "title": "グループ設定",

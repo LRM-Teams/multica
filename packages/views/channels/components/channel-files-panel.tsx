@@ -1,205 +1,162 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
-import { channelProjectFilesOptions } from "@multica/core/channels";
-import { api } from "@multica/core/api";
-import { CodeBlock } from "@multica/ui/markdown";
+import { channelAttachmentsOptions } from "@multica/core/channels";
+import { useActorName } from "@multica/core/workspace/hooks";
+import type { Attachment } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@multica/ui/components/ui/dialog";
+import { cn } from "@multica/ui/lib/utils";
+import { useAttachmentPreview, useDownloadAttachment } from "../../editor";
+import { formatFileSize, getFileExtension } from "../../editor/utils/file-meta";
 import { useT } from "../../i18n";
-import { FileTree } from "./file-tree";
-import { buildFileTree, fileLanguage } from "./file-tree-utils";
-
-// Modal preview of one file's content. Fetches lazily when `path` is set.
-function CenteredNote({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex h-full items-center justify-center p-6 text-center text-xs text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
-function FilePreviewDialog({
-  channelId,
-  path,
-  onClose,
-}: {
-  channelId: string;
-  path: string | null;
-  onClose: () => void;
-}) {
-  const { t } = useT("channels");
-  const { data, isPending, isError } = useQuery({
-    queryKey: ["channel-project-file", channelId, path],
-    queryFn: () => api.getChannelProjectFile(channelId, path ?? ""),
-    enabled: !!path,
-  });
-  const name = path ? path.slice(path.lastIndexOf("/") + 1) : "";
-  const lang = fileLanguage(name);
-
-  // Media files arrive base64-encoded; decode into a blob object URL so
-  // <img>/<video>/<audio> can render them without an authenticated <img src>.
-  const blobUrl = useMemo(() => {
-    if (data?.encoding !== "base64" || !data.content) return null;
-    try {
-      const bytes = Uint8Array.from(atob(data.content), (c) => c.charCodeAt(0));
-      return URL.createObjectURL(new Blob([bytes], { type: data.mime_type || "application/octet-stream" }));
-    } catch {
-      return null;
-    }
-  }, [data?.encoding, data?.content, data?.mime_type]);
-  useEffect(() => () => {
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-  }, [blobUrl]);
-
-  const mime = data?.mime_type ?? "";
-  const renderBody = () => {
-    if (isPending) {
-      return (
-        <div className="space-y-1.5 p-4">
-          <Skeleton className="h-4" />
-          <Skeleton className="h-4" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
-      );
-    }
-    if (isError) return <CenteredNote>{t(($) => $.files.preview_error)}</CenteredNote>;
-    if (data?.too_large) return <CenteredNote>{t(($) => $.files.preview_too_large)}</CenteredNote>;
-    if (blobUrl && mime.startsWith("image/")) {
-      return (
-        <div className="flex h-full items-center justify-center p-4">
-          <img src={blobUrl} alt={name} className="max-h-full max-w-full object-contain" />
-        </div>
-      );
-    }
-    if (blobUrl && mime.startsWith("video/")) {
-      return (
-        <div className="flex h-full items-center justify-center p-4">
-          <video src={blobUrl} controls className="max-h-full max-w-full" />
-        </div>
-      );
-    }
-    if (blobUrl && mime.startsWith("audio/")) {
-      return (
-        <div className="flex h-full items-center justify-center p-4">
-          <audio src={blobUrl} controls className="w-full max-w-lg" />
-        </div>
-      );
-    }
-    if (blobUrl && mime === "application/pdf") {
-      return <iframe src={blobUrl} title={name} className="h-full w-full border-0" />;
-    }
-    if (data?.binary) return <CenteredNote>{t(($) => $.files.preview_binary)}</CenteredNote>;
-    if (!data?.content) return <CenteredNote>{t(($) => $.files.preview_empty)}</CenteredNote>;
-    // Text → syntax-highlighted code (shiki), like a VSCode file view.
-    return (
-      <div className="p-3">
-        <CodeBlock code={data.content} language={lang} mode="full" className="text-xs" />
-        {data.truncated && (
-          <p className="mt-2 text-[11px] text-muted-foreground">{t(($) => $.files.preview_truncated)}</p>
-        )}
-      </div>
-    );
-  };
-
-  // LRM-453: DialogContent defaults to an absolute corner ✕ that stacks on the
-  // header chrome (double close). Keep one close in the preview header; Esc +
-  // overlay still dismiss via onOpenChange.
-  return (
-    <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex h-[85vh] w-[92vw] max-w-[1400px] sm:max-w-[1400px] flex-col gap-0 overflow-hidden p-0"
-      >
-        <DialogHeader className="flex shrink-0 flex-row items-center gap-2 space-y-0 border-b px-4 py-3">
-          <DialogTitle className="min-w-0 flex-1 truncate font-mono text-sm">
-            {name}
-          </DialogTitle>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label={t(($) => $.files.preview_close_aria)}
-            onClick={onClose}
-          >
-            <X className="size-4" />
-          </Button>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-auto">{path ? renderBody() : null}</div>
-      </DialogContent>
-    </Dialog>
-  );
-}
+import { useMessageTime } from "../../i18n/use-message-time";
 
 /**
- * Shows the channel's bound project working directory as a collapsible,
- * VSCode-style file tree (directories first, file-type icons/colors). The
- * files live on a daemon machine, so the data comes from a server→daemon RPC;
- * the panel renders the per-status empty states the endpoint reports.
+ * Channel settings Files tab (LRM-461 lock A / LRM-607): list message
+ * attachments uploaded in this channel via GET /api/channels/{id}/attachments.
+ * Never falls back to project-files / GitHub tree (LRM-238).
  */
 export function ChannelFilesPanel({ channelId }: { channelId: string }) {
   const { t } = useT("channels");
-  const { data, isPending } = useQuery(channelProjectFilesOptions(channelId));
-  const tree = useMemo(() => buildFileTree(data?.nodes ?? []), [data?.nodes]);
-  // Track collapsed (not expanded) dirs so the default is fully expanded and a
-  // user's collapses survive refetches (paths are stable).
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<string | null>(null);
-  const toggle = (path: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+  const { data, isPending, isError, refetch, isFetching } = useQuery(
+    channelAttachmentsOptions(channelId),
+  );
+  const attachments = data ?? [];
+  const sorted = useMemo(
+    () =>
+      [...attachments].sort(
+        (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
+      ),
+    [attachments],
+  );
+  const preview = useAttachmentPreview();
+  const download = useDownloadAttachment();
 
   if (isPending) {
     return (
-      <div className="space-y-1.5">
-        <Skeleton className="h-5" />
-        <Skeleton className="h-5" />
-        <Skeleton className="h-5" />
+      <div className="space-y-2" data-testid="channel-files-loading">
+        <Skeleton className="h-10" />
+        <Skeleton className="h-10" />
+        <Skeleton className="h-10" />
       </div>
     );
   }
 
-  const status = data?.status ?? "error";
-  if (status !== "ok") {
-    const msg =
-      status === "no_project"
-        ? t(($) => $.files.no_project)
-        : status === "offline"
-          ? t(($) => $.files.offline)
-          : status === "missing"
-            ? t(($) => $.files.missing)
-            : status === "github_unlinked"
-              ? t(($) => $.files.github_unlinked)
-              : t(($) => $.files.error);
-    return <p className="py-6 text-center text-xs text-muted-foreground">{msg}</p>;
+  if (isError) {
+    return (
+      <div
+        className="mx-1 my-4 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-4 text-center text-xs text-destructive"
+        data-testid="channel-files-error"
+      >
+        <p>{t(($) => $.files.error)}</p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-2 h-7 border-destructive/30 text-destructive"
+          disabled={isFetching}
+          onClick={() => void refetch()}
+        >
+          {t(($) => $.files.retry)}
+        </Button>
+      </div>
+    );
   }
 
-  if (tree.length === 0) {
-    return <p className="py-6 text-center text-xs text-muted-foreground">{t(($) => $.files.empty)}</p>;
+  if (sorted.length === 0) {
+    return (
+      <div
+        className="px-3 py-9 text-center text-xs leading-relaxed text-muted-foreground"
+        data-testid="channel-files-empty"
+      >
+        <strong className="mb-1 block text-[13px] font-semibold text-foreground">
+          {t(($) => $.files.empty_title)}
+        </strong>
+        {t(($) => $.files.empty_hint)}
+      </div>
+    );
   }
 
   return (
     <>
-      <div className="max-h-80 overflow-auto">
-        <FileTree tree={tree} collapsed={collapsed} onToggle={toggle} onOpenFile={setSelected} />
-        {data?.truncated && (
-          <p className="mt-1 px-2 py-1 text-[11px] text-muted-foreground">{t(($) => $.files.truncated)}</p>
-        )}
-      </div>
-      <FilePreviewDialog channelId={channelId} path={selected} onClose={() => setSelected(null)} />
+      <ul className="max-h-80 list-none space-y-0 overflow-auto p-0" data-testid="channel-files-list">
+        {sorted.map((att) => (
+          <ChannelAttachmentRow
+            key={att.id}
+            attachment={att}
+            onOpen={() => {
+              const opened = preview.tryOpen({ kind: "full", attachment: att });
+              if (!opened) void download(att.id);
+            }}
+            onDownload={() => void download(att.id)}
+          />
+        ))}
+      </ul>
+      {preview.modal}
     </>
+  );
+}
+
+function ChannelAttachmentRow({
+  attachment,
+  onOpen,
+  onDownload,
+}: {
+  attachment: Attachment;
+  onOpen: () => void;
+  onDownload: () => void;
+}) {
+  const { t } = useT("channels");
+  const messageTime = useMessageTime();
+  const { getMemberName, getAgentName } = useActorName();
+  const uploader =
+    attachment.uploader_type === "agent"
+      ? getAgentName(attachment.uploader_id)
+      : getMemberName(attachment.uploader_id);
+  const ext = getFileExtension(attachment.filename).toUpperCase() || "FILE";
+  const size = formatFileSize(attachment.size_bytes);
+  const when = messageTime.format(attachment.created_at);
+  const meta = [uploader, when, size].filter(Boolean).join(" · ");
+
+  return (
+    <li
+      className="flex items-center gap-2.5 border-b border-border/70 px-1 py-2 last:border-b-0"
+      data-testid="channel-file-row"
+    >
+      <div
+        className="grid size-8 shrink-0 place-items-center rounded-lg bg-brand/10 text-[10px] font-bold text-brand"
+        aria-hidden
+      >
+        {ext.slice(0, 4)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-semibold text-foreground">
+          {attachment.filename}
+        </div>
+        <div className="truncate text-[11px] text-muted-foreground">{meta}</div>
+      </div>
+      <div className="flex shrink-0 gap-1.5">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn("h-7 px-2 text-[11px] text-brand")}
+          onClick={onOpen}
+        >
+          {t(($) => $.files.open)}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-[11px]"
+          onClick={onDownload}
+        >
+          {t(($) => $.files.download)}
+        </Button>
+      </div>
+    </li>
   );
 }

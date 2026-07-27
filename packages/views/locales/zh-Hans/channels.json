@@ -167,7 +167,12 @@
     "preview_error": "加载文件内容失败",
     "preview_empty": "（空文件）",
     "preview_too_large": "文件过大，无法预览",
-    "preview_close_aria": "关闭预览"
+    "preview_close_aria": "关闭预览",
+    "empty_title": "还没有上传文件",
+    "empty_hint": "本群聊里上传的文件会出现在这里。",
+    "retry": "重试",
+    "open": "打开",
+    "download": "下载"
   },
   "settings": {
     "title": "群设置",

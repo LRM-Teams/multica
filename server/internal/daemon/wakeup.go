@@ -39,6 +39,8 @@ func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWake
 	for {
 		runtimeIDs := d.allRuntimeIDs()
 		if len(runtimeIDs) == 0 {
+			// No local runtimes: not connected and not in retry backoff.
+			d.setWSConnState("closed")
 			if err := sleepWithContextOrRuntimeChange(ctx, 5*time.Second, runtimeSetCh); err != nil {
 				return
 			}
@@ -56,12 +58,18 @@ func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWake
 		}
 		if err != nil {
 			d.setWSConnState("backoff")
-			d.logger.Debug("task wakeup websocket unavailable; polling fallback remains active",
+			// PR A only stamps the watchdog sentinel by name. Other failures
+			// keep a neutral log field — PR B owns planned/transient/terminal
+			// classification and must not inherit a premature "transient" label.
+			logArgs := []any{
 				"error", err,
 				"retry_in", backoff,
 				"conn_state", "backoff",
-				"reason", wakeupErrorReason(err),
-			)
+			}
+			if errors.Is(err, errInboundWatchdogTimeout) {
+				logArgs = append(logArgs, "reason", "watchdog_timeout")
+			}
+			d.logger.Debug("task wakeup websocket unavailable; polling fallback remains active", logArgs...)
 		}
 
 		if err := sleepWithContextOrRuntimeChange(ctx, jitterDuration(backoff), runtimeSetCh); err != nil {
@@ -74,16 +82,6 @@ func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWake
 			}
 		}
 	}
-}
-
-func wakeupErrorReason(err error) string {
-	if errors.Is(err, errInboundWatchdogTimeout) {
-		return "watchdog_timeout"
-	}
-	if err == nil {
-		return ""
-	}
-	return "transient"
 }
 
 func jitterDuration(d time.Duration) time.Duration {

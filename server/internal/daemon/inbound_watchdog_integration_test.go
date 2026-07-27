@@ -314,3 +314,45 @@ func TestTaskWakeupLoopBackoffObservableDuringRetrySleep(t *testing.T) {
 		t.Fatalf("after loop exit conn_state = %q, want closed", got)
 	}
 }
+
+// TestTaskWakeupLoopZeroRuntimeStaysClosed locks: with no registered runtimes
+// the loop is idle, not connected and not in retry backoff.
+func TestTaskWakeupLoopZeroRuntimeStaysClosed(t *testing.T) {
+	d := New(Config{
+		ServerBaseURL:     "http://127.0.0.1:1",
+		HeartbeatInterval: time.Hour,
+		InboundWatchdog:   time.Hour,
+		WorkspacesRoot:    t.TempDir(),
+	}, testDiscardLogger())
+	// Explicit empty workspace set.
+	d.mu.Lock()
+	d.workspaces = map[string]*workspaceState{}
+	d.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	taskWakeups := make(chan taskWakeup, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.taskWakeupLoop(ctx, taskWakeups)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.getWSConnState() == "closed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := d.getWSConnState(); got != "closed" {
+		cancel()
+		<-done
+		t.Fatalf("zero-runtime idle conn_state = %q, want closed", got)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskWakeupLoop did not exit after cancel")
+	}
+}

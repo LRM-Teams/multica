@@ -34,8 +34,12 @@ ENV_GATEWAY_STUB_PORT: Final = "BRIDGE_GATEWAY_STUB_PORT"
 ENV_LEAGENT_STUB_PORT: Final = "BRIDGE_LEAGENT_STUB_PORT"
 ENV_STUB_HOST: Final = "BRIDGE_STUB_HOST"
 
-# Executor upstreams (real local services, reached over loopback)
+# Executor upstreams (real local services, reached over loopback).
+# Plural forms (URLS) hold a comma-separated list for multi-port failover;
+# singular forms (URL) are accepted as a single-element fallback.
+ENV_GATEWAY_UPSTREAMS: Final = "BRIDGE_GATEWAY_UPSTREAM_URLS"
 ENV_GATEWAY_UPSTREAM: Final = "BRIDGE_GATEWAY_UPSTREAM_URL"
+ENV_LEAGENT_UPSTREAMS: Final = "BRIDGE_LEAGENT_UPSTREAM_URLS"
 ENV_LEAGENT_UPSTREAM: Final = "BRIDGE_LEAGENT_UPSTREAM_URL"
 ENV_MULTICA_UPSTREAM: Final = "BRIDGE_MULTICA_UPSTREAM_URL"
 
@@ -59,7 +63,7 @@ ENV_STREAM_FLUSH_INTERVAL: Final = "BRIDGE_STREAM_FLUSH_INTERVAL"
 ENV_STREAM_SWEEP_INTERVAL: Final = "BRIDGE_STREAM_SWEEP_INTERVAL"
 ENV_STREAM_CHUNK_RETENTION_SECONDS: Final = "BRIDGE_STREAM_CHUNK_RETENTION_SECONDS"
 
-_DEFAULT_POLL_INTERVAL: Final = 1.0
+_DEFAULT_POLL_INTERVAL: Final = 0.075
 _DEFAULT_STALE_SECONDS: Final = 300
 _DEFAULT_CODEC_THRESHOLD: Final = 2048
 _DEFAULT_MAX_BODY_BYTES: Final = 64 * 1024 * 1024  # 64 MiB
@@ -93,6 +97,27 @@ _DEFAULT_STREAM_CHUNK_RETENTION_SECONDS: Final = 24 * 60 * 60
 def _get(src: Mapping[str, str], name: str) -> str | None:
     val = src.get(name)
     return val if val is not None and val.strip() else None
+
+
+def _parse_upstream_urls(
+    src: Mapping[str, str],
+    plural_name: str,
+    singular_name: str,
+    default: str,
+) -> tuple[str, ...]:
+    """Parse a comma-separated list of upstream URLs.
+
+    Reads the plural env var (e.g. ``BRIDGE_GATEWAY_UPSTREAM_URLS``) first,
+    falling back to the singular form (``BRIDGE_GATEWAY_UPSTREAM_URL``) for
+    backward compatibility, then to *default*. Trailing slashes and blank
+    entries are stripped; the result is always non-empty.
+    """
+    raw = _get(src, plural_name) or _get(src, singular_name) or default
+    urls = tuple(u.strip().rstrip("/") for u in raw.split(","))
+    urls = tuple(u for u in urls if u)
+    if not urls:
+        return (default.rstrip("/"),)
+    return urls
 
 
 def _env_float(src: Mapping[str, str], name: str, default: float) -> float:
@@ -156,7 +181,9 @@ class BridgeConfig:
     gateway_stub_port: int = _DEFAULT_GATEWAY_STUB_PORT
     leagent_stub_port: int = _DEFAULT_LEAGENT_STUB_PORT
     gateway_upstream_url: str = _DEFAULT_GATEWAY_UPSTREAM
+    gateway_upstream_urls: tuple[str, ...] = (_DEFAULT_GATEWAY_UPSTREAM,)
     leagent_upstream_url: str = _DEFAULT_LEAGENT_UPSTREAM
+    leagent_upstream_urls: tuple[str, ...] = (_DEFAULT_LEAGENT_UPSTREAM,)
     multica_upstream_url: str = _DEFAULT_MULTICA_UPSTREAM
     redact_tokens_after_complete: bool = False
     header_encryption_key: str | None = None
@@ -274,6 +301,13 @@ class BridgeConfig:
             ENV_STREAM_CHUNK_RETENTION_SECONDS, stream_chunk_retention_seconds
         )
 
+        gateway_urls = _parse_upstream_urls(
+            src, ENV_GATEWAY_UPSTREAMS, ENV_GATEWAY_UPSTREAM, _DEFAULT_GATEWAY_UPSTREAM
+        )
+        leagent_urls = _parse_upstream_urls(
+            src, ENV_LEAGENT_UPSTREAMS, ENV_LEAGENT_UPSTREAM, _DEFAULT_LEAGENT_UPSTREAM
+        )
+
         return cls(
             supabase_url=supabase_url,
             supabase_key=supabase_key,
@@ -284,12 +318,10 @@ class BridgeConfig:
             stub_host=_get(src, ENV_STUB_HOST) or _DEFAULT_STUB_HOST,
             gateway_stub_port=gateway_stub_port,
             leagent_stub_port=leagent_stub_port,
-            gateway_upstream_url=(
-                _get(src, ENV_GATEWAY_UPSTREAM) or _DEFAULT_GATEWAY_UPSTREAM
-            ).rstrip("/"),
-            leagent_upstream_url=(
-                _get(src, ENV_LEAGENT_UPSTREAM) or _DEFAULT_LEAGENT_UPSTREAM
-            ).rstrip("/"),
+            gateway_upstream_url=gateway_urls[0],
+            gateway_upstream_urls=gateway_urls,
+            leagent_upstream_url=leagent_urls[0],
+            leagent_upstream_urls=leagent_urls,
             multica_upstream_url=(
                 _get(src, ENV_MULTICA_UPSTREAM) or _DEFAULT_MULTICA_UPSTREAM
             ).rstrip("/"),

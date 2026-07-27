@@ -220,22 +220,10 @@ exit "$status"
 
 **AReaL host**
 ```bash
-cd db_bridge && set -a && source .env.areal && set +a
-pids=()
-cleanup() {
-  trap - INT TERM EXIT
-  kill "${pids[@]}" 2>/dev/null || true
-  wait "${pids[@]}" 2>/dev/null || true
-}
-trap cleanup INT TERM EXIT
+cd multica/db_bridge && set -a && source .env.areal && set +a
+# uv run python -m db_bridge.run_stub     --side areal   # serves /api/agent/* on 127.0.0.1:9101
+uv run python -m db_bridge.run_executor --side areal # forwards /rl/*, /chat/completions to the real gateway
 
-uv run python -m db_bridge.run_stub     --side areal & pids+=("$!")     # serves /api/agent/* on 127.0.0.1:9101
-uv run python -m db_bridge.run_executor --side areal & pids+=("$!")     # forwards /rl/*, /chat/completions to the real gateway
-
-wait -n "${pids[@]}"
-status=$?
-cleanup
-exit "$status"
 ```
 
 Stub servers bind to `127.0.0.1` only; the local application is the sole caller.

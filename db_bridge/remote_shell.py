@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -199,20 +200,24 @@ class RemoteShellDB:
         stderr_tail: str | None = None,
         log_bytes: int | None = None,
         error_message: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         err = error_message[:8000] if error_message else None
+        rpc_body: dict[str, Any] = {
+            "p_id": command_id,
+            "p_runner_id": runner_id,
+            "p_status": status,
+            "p_exit_code": exit_code,
+            "p_stdout_tail": stdout_tail,
+            "p_stderr_tail": stderr_tail,
+            "p_log_bytes": log_bytes,
+            "p_error_message": err,
+        }
+        if metadata is not None:
+            rpc_body["p_metadata"] = metadata
         res = await self.client.rpc(
             "areal_shell_complete",
-            {
-                "p_id": command_id,
-                "p_runner_id": runner_id,
-                "p_status": status,
-                "p_exit_code": exit_code,
-                "p_stdout_tail": stdout_tail,
-                "p_stderr_tail": stderr_tail,
-                "p_log_bytes": log_bytes,
-                "p_error_message": err,
-            },
+            rpc_body,
         ).execute()
         return bool(getattr(res, "data", None))
 
@@ -241,6 +246,101 @@ class RemoteShellDB:
 
 def _decode_tail(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
+
+
+def _extract_log_metadata(command: str, cwd: str | None) -> dict[str, Any] | None:
+    """Extract log file path from the command and parse AReaL training results.
+
+    Parses the ``tee training_<run_id>.log`` pattern from the command, reads the
+    log file, and attempts to extract structured training results using
+    ``parse_areal_log`` (if available on this host). Returns metadata including
+    log_file, log_path, and any parsed training results.
+    """
+    import re
+
+    m = re.search(r"\|\s*tee\s+(\S+\.log)\s*$", command)
+    if not m:
+        return None
+    log_name = m.group(1)
+    log_path = os.path.join(cwd or "", log_name) if cwd else log_name
+    meta: dict[str, Any] = {"log_file": log_name, "log_path": log_path}
+
+    # Try to parse the log file for structured training results.
+    # parse_areal_log lives in the AReaL repo; it may not be on sys.path here.
+    try:
+        result = _parse_areal_log_result(log_path)
+        if result is not None:
+            meta["train_id"] = result.get("train_id")
+            meta["starting_time"] = result.get("starting_time")
+            meta["completion"] = result.get("completion")
+            meta["n_steps"] = result.get("n_steps")
+            meta["n_errors"] = result.get("n_errors")
+            meta["total_train_steps"] = result.get("total_train_steps")
+            meta["completed_train_steps"] = result.get("completed_train_steps")
+            meta["flat_stats"] = result.get("flat_stats")
+            meta["save_events"] = result.get("save_events")
+            meta["save_events_completed"] = result.get("save_events_completed")
+            meta["save_events_count"] = result.get("save_events_count")
+            meta["recover_paths"] = result.get("recover_paths")
+            meta["recover_info_path"] = result.get("recover_info_path")
+    except Exception:
+        # Parsing is best-effort; never let it break finalization.
+        logger.debug("failed to parse log file %s", log_path, exc_info=True)
+
+    return meta
+
+
+def _parse_areal_log_result(log_path: str) -> dict[str, Any] | None:
+    """Parse an AReaL training log file and return a summary dict.
+
+    Tries to import ``parse_areal_log`` from the AReaL repo. Returns ``None``
+    when the module is unavailable or the file cannot be read.
+    """
+    if not os.path.isfile(log_path):
+        return None
+
+    # Ensure the AReaL repo root (where the log file lives) is on sys.path
+    # so that ``parse_areal_log`` can be imported.  The runner process is
+    # started from the rivercoaching project and does not include the AReaL
+    # checkout in its default sys.path.
+    import sys
+
+    log_dir = os.path.dirname(os.path.abspath(log_path))
+    if log_dir and log_dir not in sys.path:
+        sys.path.insert(0, log_dir)
+
+    # Attempt to import parse_areal_log from the AReaL repo.
+    # It may be in the repo root or in a scripts/ subdirectory.
+    parse_fn = None
+    for candidate in (
+        "parse_areal_log",
+        "scripts.parse_areal_log",
+    ):
+        try:
+            mod = __import__(candidate, fromlist=["parse_areal_log"])
+            parse_fn = getattr(mod, "parse_areal_log", None)
+            if parse_fn is not None:
+                break
+        except ImportError:
+            continue
+
+    if parse_fn is None:
+        return None
+
+    result = parse_fn(log_path)
+    from dataclasses import asdict
+
+    d = asdict(result)
+    # Include flat_stats and metadata for convenience.
+    d["flat_stats"] = result.flat_stats()
+    d["n_steps"] = len(d.get("steps", []))
+    d["n_errors"] = len(d.get("errors", []))
+    d["total_train_steps"] = result.total_train_steps
+    d["completed_train_steps"] = result.completed_train_steps
+    meta = result.to_metadata()
+    d["save_events_completed"] = meta.get("save_events_completed")
+    d["save_events_count"] = meta.get("save_events_count")
+    return d
 
 
 class RemoteShellRunner:
@@ -367,6 +467,7 @@ class RemoteShellRunner:
         *,
         error_message: str | None = None,
     ) -> None:
+        metadata = _extract_log_metadata(cmd.command, cmd.cwd or self._config.default_cwd)
         ok = await self._db.complete(
             cmd.id,
             self._config.runner_id,
@@ -376,6 +477,7 @@ class RemoteShellRunner:
             stderr_tail=_decode_tail(capture.stderr_tail),
             log_bytes=capture.log_bytes,
             error_message=error_message,
+            metadata=metadata,
         )
         if not ok:
             logger.info(
@@ -385,10 +487,11 @@ class RemoteShellRunner:
             )
         else:
             logger.info(
-                "shell command finalized id=%s status=%s exit=%s",
+                "shell command finalized id=%s status=%s exit=%s metadata=%s",
                 cmd.id,
                 status,
                 capture.exit_code,
+                metadata,
             )
 
     async def _safe_terminate(self, session: str) -> None:

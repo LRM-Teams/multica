@@ -967,6 +967,216 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
 }
 
+func TestAgentTransportRevisedSendRequiresFullReadyCommandProof(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(
+		ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester",
+		"seen before proof "+uuid.NewString(), "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0,
+	)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(
+		ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester",
+		"newer before proof "+uuid.NewString(), "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0,
+	); err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+
+	draftContent := "proof-held draft " + uuid.NewString()
+	heldRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           draftContent,
+		"client_message_id": "proof-held-" + uuid.NewString(),
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if heldRec.Code != http.StatusOK {
+		t.Fatalf("freshness hold: status=%d body=%s", heldRec.Code, heldRec.Body.String())
+	}
+	var held AgentTransportSendHeldResponse
+	if err := json.Unmarshal(heldRec.Body.Bytes(), &held); err != nil {
+		t.Fatalf("decode held response: %v", err)
+	}
+
+	wrongContent := "wrong reconstructed revision " + uuid.NewString()
+	wrongRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           wrongContent,
+		"client_message_id": "wrong-proof-" + uuid.NewString(),
+		"seen_up_to_seq":    held.LatestSeq,
+	})
+	if wrongRec.Code != http.StatusConflict ||
+		!strings.Contains(wrongRec.Body.String(), errAgentTransportFreshnessDecisionProof.Error()) {
+		t.Fatalf("boundary-only wrong-key send: status=%d body=%s, want proof conflict", wrongRec.Code, wrongRec.Body.String())
+	}
+	assertNoChannelMessageContent(t, channelID, wrongContent)
+	assertAgentTransportDraftContent(t, agentID, target, draftContent)
+	assertAgentTransportVisibleOutputAuditCount(t, taskID, 0)
+
+	revisedContent := "ready-command revision " + uuid.NewString()
+	revisedRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           revisedContent,
+		"client_message_id": agentTransportFreshnessRevisedClientMessageID(held.ProducerFactID),
+		"seen_up_to_seq":    held.LatestSeq,
+	})
+	if revisedRec.Code != http.StatusCreated {
+		t.Fatalf("ready-command revision: status=%d body=%s", revisedRec.Code, revisedRec.Body.String())
+	}
+	assertAgentTransportDraftMissing(t, agentID, target)
+	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
+	assertAgentTransportFreshnessResolutionActivity(t, taskID, target, held.ProducerFactID, "revised_send")
+
+	retryWrongContent := "post-resolution wrong-key retry " + uuid.NewString()
+	retryWrongRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           retryWrongContent,
+		"client_message_id": "retry-wrong-proof-" + uuid.NewString(),
+		"seen_up_to_seq":    held.LatestSeq,
+	})
+	if retryWrongRec.Code != http.StatusConflict ||
+		!strings.Contains(retryWrongRec.Body.String(), errAgentTransportFreshnessDecisionProof.Error()) {
+		t.Fatalf("post-resolution wrong-key retry: status=%d body=%s, want proof conflict", retryWrongRec.Code, retryWrongRec.Body.String())
+	}
+	assertNoChannelMessageContent(t, channelID, retryWrongContent)
+	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
+	assertAgentTransportFreshnessResolutionActivity(t, taskID, target, held.ProducerFactID, "revised_send")
+}
+
+func TestAgentTransportFirstFreshnessHoldCannotCrossSourceCompletionFence(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(
+		ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester",
+		"seen before source fence "+uuid.NewString(), "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0,
+	)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(
+		ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester",
+		"newer before source fence "+uuid.NewString(), "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0,
+	); err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+	event, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+	if err != nil {
+		t.Fatalf("load source event: %v", err)
+	}
+
+	completionTx, err := testHandler.TxStarter.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin completion fence transaction: %v", err)
+	}
+	defer completionTx.Rollback(ctx)
+	publications, err := testHandler.abandonAgentTransportFreshnessDraftsWithExec(
+		ctx, completionTx, event, event.RuntimeID,
+	)
+	if err != nil {
+		t.Fatalf("enumerate empty completion drafts: %v", err)
+	}
+	if len(publications) != 0 {
+		t.Fatalf("empty completion publications=%d, want 0", len(publications))
+	}
+
+	draftContent := "must not hold after completion scan " + uuid.NewString()
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/send", taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           draftContent,
+		"client_message_id": "source-fence-" + uuid.NewString(),
+		"seen_up_to_seq":    seen.Seq,
+	})
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		testHandler.AgentTransportSendMessage(rec, req)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case <-done:
+			t.Fatalf("freshness send completed before completion released the source fence: status=%d body=%s", rec.Code, rec.Body.String())
+		default:
+		}
+		var waiting bool
+		if err := testPool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND wait_event_type = 'Lock'
+				  AND lower(COALESCE(wait_event, '')) = 'advisory'
+				  AND query LIKE '%agent_transport_source%'
+			)`).Scan(&waiting); err != nil {
+			t.Fatalf("inspect source-fence waiter: %v", err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for freshness send on source-wide advisory lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := completionTx.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'no_reply', updated_at = now()
+		WHERE id = $1`, parseUUID(taskID)); err != nil {
+		t.Fatalf("terminalize source under completion fence: %v", err)
+	}
+	if err := completionTx.Commit(ctx); err != nil {
+		t.Fatalf("commit source completion: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("freshness send did not finish after completion committed")
+	}
+	if rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), errAgentTransportSourceNotActive.Error()) {
+		t.Fatalf("post-completion first hold: status=%d body=%s, want inactive-source conflict", rec.Code, rec.Body.String())
+	}
+	assertNoChannelMessageContent(t, channelID, draftContent)
+	assertAgentTransportDraftMissing(t, agentID, target)
+	var holdAudits int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_transport_audit
+		WHERE task_id = $1
+		  AND action = 'message_send'
+		  AND context_pack->>'held' = 'true'`,
+		parseUUID(taskID)).Scan(&holdAudits); err != nil {
+		t.Fatalf("count post-completion hold audits: %v", err)
+	}
+	if holdAudits != 0 {
+		t.Fatalf("post-completion hold audits=%d, want 0", holdAudits)
+	}
+}
+
 func TestAgentTransportHeldResponseMakesBoundedWindowEdgesExplicit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeAgentTransportHeldResponse(rec, agentTransportTarget{raw: "#multica"}, agentTransportFreshnessDecision{

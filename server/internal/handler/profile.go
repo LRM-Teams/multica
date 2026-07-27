@@ -26,11 +26,15 @@ type MemberProfileResponse struct {
 }
 
 type AgentRecentActivityItem struct {
-	ID         string `json:"id"`
-	Kind       string `json:"kind"`
-	Label      string `json:"label"`
-	OccurredAt string `json:"occurred_at"`
-	Status     string `json:"status"`
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Label        string `json:"label"`
+	DisplayLabel string `json:"display_label"`
+	LabelKey     string `json:"label_key"`
+	ActivityKind string `json:"activity_kind"`
+	DetailKind   string `json:"detail_kind"`
+	OccurredAt   string `json:"occurred_at"`
+	Status       string `json:"status"`
 }
 
 func (h *Handler) GetMemberProfile(w http.ResponseWriter, r *http.Request) {
@@ -174,11 +178,15 @@ func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, l
 			continue
 		}
 		items = append(items, AgentRecentActivityItem{
-			ID:         uuidToString(taskID),
-			Kind:       recentActivityFallbackKind(status),
-			Label:      recentActivityFallbackLabel(status),
-			OccurredAt: timestampToString(occurredAt),
-			Status:     status,
+			ID:           uuidToString(taskID),
+			Kind:         recentActivityFallbackKind(status),
+			Label:        recentActivityFallbackLabel(status),
+			DisplayLabel: recentActivityFallbackDisplayLabel(status),
+			LabelKey:     recentActivityFallbackLabelKey(status),
+			ActivityKind: recentActivityFallbackActivityKind(status),
+			DetailKind:   recentActivityFallbackDetailKind(status),
+			OccurredAt:   timestampToString(occurredAt),
+			Status:       status,
 		})
 		h.attachRecentExecutionActivity(ctx, taskID, status, &items[len(items)-1])
 	}
@@ -273,15 +281,19 @@ func (h *Handler) listRecentTaskActivityMessages(ctx context.Context, taskID pgt
 
 func projectToolUseActivity(msg recentTaskActivityMessage, status string) (AgentRecentActivityItem, bool) {
 	tool := strings.ToLower(strings.TrimSpace(msg.Tool.String))
-	label, kind := toolActivityLabel(tool, status)
+	label, displayLabel, labelKey, kind := toolActivityLabel(tool, status)
 	if label == "" {
 		return AgentRecentActivityItem{}, false
 	}
 
 	return AgentRecentActivityItem{
-		Kind:       kind,
-		Label:      label,
-		OccurredAt: timestampToString(msg.CreatedAt),
+		Kind:         kind,
+		Label:        label,
+		DisplayLabel: displayLabel,
+		LabelKey:     labelKey,
+		ActivityKind: "tool_call",
+		DetailKind:   "tool_use",
+		OccurredAt:   timestampToString(msg.CreatedAt),
 	}, true
 }
 
@@ -290,35 +302,39 @@ func projectTextActivity(msg recentTaskActivityMessage, status string) (AgentRec
 		return AgentRecentActivityItem{}, false
 	}
 	return AgentRecentActivityItem{
-		Kind:       "text",
-		Label:      textActivityLabel(status),
-		OccurredAt: timestampToString(msg.CreatedAt),
+		Kind:         "text",
+		Label:        textActivityLabel(status),
+		DisplayLabel: "Output",
+		LabelKey:     "output",
+		ActivityKind: "text",
+		DetailKind:   "text",
+		OccurredAt:   timestampToString(msg.CreatedAt),
 	}, true
 }
 
-func toolActivityLabel(tool, status string) (label string, kind string) {
+func toolActivityLabel(tool, status string) (label string, displayLabel string, labelKey string, kind string) {
 	active := isActiveTaskStatus(status)
 	switch {
 	case isCommandTool(tool):
-		return activeActivityLabel("Running command…", active), "command"
+		return activeActivityLabel("Running command…", active), "Running command", "running_command", "command"
 	case strings.Contains(tool, "send_message"):
-		return activeActivityLabel("Sending message…", active), "tool_use"
+		return activeActivityLabel("Sending message…", active), "Sending message", "sending_message", "tool_use"
 	case strings.Contains(tool, "write"):
-		return activeActivityLabel("Writing file…", active), "tool_use"
+		return activeActivityLabel("Writing file…", active), "Writing file", "writing_file", "tool_use"
 	case isFileEditTool(tool):
-		return activeActivityLabel("Editing file…", active), "tool_use"
+		return activeActivityLabel("Editing file…", active), "Editing file", "editing_file", "tool_use"
 	case strings.Contains(tool, "web_search") || strings.Contains(tool, "websearch"):
-		return activeActivityLabel("Searching web…", active), "tool_use"
+		return activeActivityLabel("Searching web…", active), "Searching web", "searching_web", "tool_use"
 	case strings.Contains(tool, "glob"):
-		return activeActivityLabel("Searching files…", active), "tool_use"
+		return activeActivityLabel("Searching files…", active), "Searching files", "searching_files", "tool_use"
 	case isSearchTool(tool):
-		return activeActivityLabel("Searching code…", active), "tool_use"
+		return activeActivityLabel("Searching code…", active), "Searching code", "searching_code", "tool_use"
 	case isFileReadTool(tool):
-		return activeActivityLabel("Reading file…", active), "tool_use"
+		return activeActivityLabel("Reading file…", active), "Reading file", "reading_file", "tool_use"
 	case tool != "":
-		return activeActivityLabel("Working…", active), "tool_use"
+		return activeActivityLabel("Working…", active), "Working", "working", "tool_use"
 	default:
-		return "", ""
+		return "", "", "", ""
 	}
 }
 
@@ -393,6 +409,49 @@ func recentActivityFallbackLabel(status string) string {
 		return "Cancelled"
 	default:
 		return "Output"
+	}
+}
+
+func recentActivityFallbackDisplayLabel(status string) string {
+	return recentActivityFallbackLabel(status)
+}
+
+func recentActivityFallbackLabelKey(status string) string {
+	switch status {
+	case "pending", "draining":
+		return "thinking"
+	case "failed":
+		return "failed"
+	case "suppressed":
+		return "cancelled"
+	default:
+		return "output"
+	}
+}
+
+func recentActivityFallbackActivityKind(status string) string {
+	switch status {
+	case "pending", "draining":
+		return "thinking"
+	case "failed":
+		return "error"
+	case "suppressed":
+		return "turn_end"
+	default:
+		return "text"
+	}
+}
+
+func recentActivityFallbackDetailKind(status string) string {
+	switch status {
+	case "pending", "draining":
+		return "runtime_phase"
+	case "failed":
+		return "agent_inbox_failed"
+	case "suppressed":
+		return "cancelled"
+	default:
+		return "output"
 	}
 }
 

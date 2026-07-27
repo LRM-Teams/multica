@@ -307,6 +307,9 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	if tool.Status == nil || *tool.Status != "running" {
 		t.Fatalf("tool event status = %+v, want running", tool.Status)
 	}
+	if tool.DisplayLabel != "Running command" || tool.LabelKey != "running_command" {
+		t.Fatalf("tool display label/key = %q/%q, want Running command/running_command", tool.DisplayLabel, tool.LabelKey)
+	}
 	if len(tool.Entries) != 1 || tool.Entries[0].Tool == nil || *tool.Entries[0].Tool != "bash" || tool.Entries[0].Command == nil {
 		t.Fatalf("tool entries missing canonical tool + full redacted command: %+v", tool.Entries)
 	}

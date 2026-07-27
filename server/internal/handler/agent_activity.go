@@ -146,6 +146,8 @@ type AgentActivityTimelineEvent struct {
 	EventType    string                   `json:"-"`
 	ActivityKind string                   `json:"activity_kind"`
 	DetailKind   string                   `json:"detail_kind"`
+	DisplayLabel string                   `json:"display_label"`
+	LabelKey     string                   `json:"label_key"`
 	OccurredAt   string                   `json:"occurred_at"`
 	Visibility   string                   `json:"-"`
 	Text         *string                  `json:"text,omitempty"`
@@ -1804,6 +1806,7 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		reasonCode = ""
 		entries = nil
 	}
+	labelKey := agentActivityDisplayLabelKey(row, detailKind, tool, entries)
 	return AgentActivityTimelineEvent{
 		ID:           uuidToString(row.ID),
 		AgentID:      uuidToString(row.AgentID),
@@ -1813,6 +1816,8 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		EventType:    detailKind,
 		ActivityKind: row.Kind,
 		DetailKind:   detailKind,
+		DisplayLabel: agentActivityDisplayLabel(labelKey),
+		LabelKey:     labelKey,
 		OccurredAt:   timestampToString(row.CreatedAt),
 		Visibility:   textOrDefault(row.Visibility, "user_facing"),
 		Text:         text,
@@ -1825,6 +1830,188 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		TargetRef:    targetRef,
 		SourceRefs:   agentActivitySourceRefs(row),
 	}
+}
+
+func agentActivityDisplayLabelKey(row agentActivityRawRow, detailKind string, tool *string, entries []AgentActivityEntry) string {
+	if row.Kind == activityKindToolCall {
+		return agentActivityToolDisplayLabelKey(tool, entries)
+	}
+	if row.Kind == activityKindCustom {
+		switch detailKind {
+		case agentInboxStatusChangedEventType:
+			if textOrDefault(row.Status, "") == agentInboxStatusActivityIdle {
+				return "idle"
+			}
+			return "working"
+		case "radar_action_failed":
+			return "failed"
+		case "radar_action_executed":
+			return "radar_executed"
+		default:
+			return "working"
+		}
+	}
+	switch row.Kind {
+	case activityKindThinking:
+		return "thinking"
+	case activityKindText:
+		if detailKind == "send_freshness_hold_detail" {
+			return "send_held_by_freshness"
+		}
+		return "output"
+	case activityKindWakeAttempt:
+		return "working"
+	case activityKindError:
+		return "failed"
+	case activityKindBlocked:
+		if detailKind == "send_freshness_hold" {
+			return "send_held_by_freshness"
+		}
+		return "waiting"
+	case activityKindTurnEnd, activityKindSessionInit, activityKindCompactionStarted, activityKindCompactionFinished:
+		return "working"
+	default:
+		return "working"
+	}
+}
+
+func agentActivityToolDisplayLabelKey(tool *string, entries []AgentActivityEntry) string {
+	if tool == nil || strings.TrimSpace(*tool) == "" {
+		return "performing_action"
+	}
+	for _, entry := range entries {
+		if entry.Command != nil && strings.TrimSpace(*entry.Command) != "" {
+			return "running_command"
+		}
+	}
+	switch agentActivityCanonicalToolName(*tool) {
+	case "bash":
+		return "running_command"
+	case "write_file":
+		return "writing_file"
+	case "edit_file":
+		return "editing_file"
+	case "read_file":
+		return "reading_file"
+	case "glob":
+		return "searching_files"
+	case "grep":
+		return "searching_code"
+	case "web_search":
+		return "searching_web"
+	case "check_messages", "receive_message":
+		return "checking_messages"
+	case "wait_for_message":
+		return "waiting_for_message"
+	case "read_history":
+		return "reading_history"
+	case "search_messages":
+		return "searching_messages"
+	case "list_server":
+		return "listing_server"
+	case "list_tasks":
+		return "listing_tasks"
+	case "create_tasks":
+		return "creating_tasks"
+	case "claim_tasks":
+		return "claiming_task"
+	case "unclaim_task":
+		return "unclaiming_task"
+	case "update_task_status":
+		return "updating_task_status"
+	case "add_channel_member":
+		return "adding_channel_member"
+	case "join_channel":
+		return "joining_channel"
+	case "leave_channel":
+		return "leaving_channel"
+	case "upload_file":
+		return "uploading_file"
+	case "view_file":
+		return "viewing_file"
+	case "list_issues":
+		return "listing_issues"
+	case "get_issue":
+		return "getting_issue"
+	case "search_issues":
+		return "searching_issues"
+	case "list_issue_comments":
+		return "listing_issue_comments"
+	case "comment_issue":
+		return "commenting_issue"
+	case "delete_issue_comment":
+		return "deleting_issue_comment"
+	case "todo_write":
+		return "updating_tasks"
+	case "schedule_reminder":
+		return "scheduling_reminder"
+	case "list_reminders":
+		return "listing_reminders"
+	case "cancel_reminder":
+		return "canceling_reminder"
+	case "collab_tool_call":
+		return "collaborating"
+	case "web_fetch":
+		return "fetching_url"
+	default:
+		return "performing_action"
+	}
+}
+
+func agentActivityDisplayLabel(labelKey string) string {
+	if label, ok := agentActivityDisplayLabels[labelKey]; ok {
+		return label
+	}
+	return agentActivityDisplayLabels["working"]
+}
+
+var agentActivityDisplayLabels = map[string]string{
+	"thinking":               "Thinking",
+	"output":                 "Output",
+	"completed":              "Completed",
+	"radar_executed":         "Radar",
+	"working":                "Working",
+	"idle":                   "Idle",
+	"failed":                 "Failed",
+	"waiting":                "Waiting",
+	"cancelled":              "Cancelled",
+	"running_command":        "Running command",
+	"writing_file":           "Writing file",
+	"editing_file":           "Editing file",
+	"reading_file":           "Reading file",
+	"searching_files":        "Searching files",
+	"searching_code":         "Searching code",
+	"searching_web":          "Searching web",
+	"sending_message":        "Sending message",
+	"send_held_by_freshness": "Send held by freshness check",
+	"checking_messages":      "Checking messages",
+	"waiting_for_message":    "Waiting for message",
+	"reading_history":        "Reading history",
+	"searching_messages":     "Searching messages",
+	"listing_server":         "Listing server",
+	"listing_tasks":          "Listing tasks",
+	"creating_tasks":         "Creating tasks",
+	"claiming_task":          "Claiming task",
+	"unclaiming_task":        "Unclaiming task",
+	"updating_task_status":   "Updating task status",
+	"adding_channel_member":  "Adding channel member",
+	"joining_channel":        "Joining channel",
+	"leaving_channel":        "Leaving channel",
+	"uploading_file":         "Uploading file",
+	"viewing_file":           "Viewing file",
+	"listing_issues":         "Listing issues",
+	"getting_issue":          "Getting issue",
+	"searching_issues":       "Searching issues",
+	"listing_issue_comments": "Listing issue comments",
+	"commenting_issue":       "Commenting on issue",
+	"deleting_issue_comment": "Deleting issue comment",
+	"updating_tasks":         "Updating tasks",
+	"scheduling_reminder":    "Scheduling reminder",
+	"listing_reminders":      "Listing reminders",
+	"canceling_reminder":     "Canceling reminder",
+	"collaborating":          "Collaborating",
+	"fetching_url":           "Fetching URL",
+	"performing_action":      "Performing an action",
 }
 
 func agentActivityTimelinePublicDetails(detailKind string, details map[string]any) map[string]any {

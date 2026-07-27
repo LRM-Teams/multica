@@ -318,6 +318,10 @@ export interface AgentActivityTimelineEvent {
   // `visibility` flag.
   activity_kind: AgentActivityKind;
   detail_kind: string;
+  /** Backend canonical EN label for compact/list surfaces; no raw command detail. */
+  display_label?: string;
+  /** Stable key for display_label, matching the Activity EN label contract. */
+  label_key?: string;
   occurred_at: string;
   text?: string;
   tool?: string;

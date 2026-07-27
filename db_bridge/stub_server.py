@@ -33,7 +33,10 @@ logger = logging.getLogger("db_bridge.stub")
 # Above this body size, skip detailed multipart parsing for audit metadata to
 # avoid spooling huge uploads to disk just to record file names/sizes.
 _MULTIPART_META_MAX_BYTES = 16 * 1024 * 1024
-_AREAL_MODEL_PREFIX = "areal/"
+# Models routed through the AReaL db-bridge relay. pi's areal provider registers
+# ids like "areal-default", "areal-distill" and "areal/<vendor>/<model>", so match
+# both the "areal/" namespace and the "areal-" alias family (not just "areal/").
+_AREAL_MODEL_PREFIXES = ("areal/", "areal-")
 _BRIDGE_USER_HEADER = "x-bridge-user-id"
 
 
@@ -63,11 +66,22 @@ def _chat_model_name(body: bytes) -> str | None:
     return model if isinstance(model, str) else None
 
 
+def _is_areal_model(model: str | None) -> bool:
+    """True when the model id targets the AReaL bridge relay (areal/ or areal-)."""
+    if not model:
+        return False
+    m = model.strip().lower()
+    return m == "areal" or m.startswith(_AREAL_MODEL_PREFIXES)
+
+
 def _should_bypass_chat_completions(channel: Channel, body: bytes) -> bool:
     if channel.name != "chat_completions":
         return False
     model = _chat_model_name(body)
-    return bool(model and not model.strip().lower().startswith(_AREAL_MODEL_PREFIX))
+    # Bypass (direct forward) only for non-areal models. All areal-* / areal/*
+    # ids must take the DB-bridge relay path (Supabase -> executor -> gateway).
+    # A missing model name is not bypassed (relayed), matching prior behavior.
+    return bool(model) and not _is_areal_model(model)
 
 
 def _is_streaming_chat(channel: Channel, body: bytes) -> bool:
@@ -85,6 +99,72 @@ def _is_streaming_chat(channel: Channel, body: bytes) -> bool:
     except json.JSONDecodeError:
         return False
     return isinstance(payload, dict) and bool(payload.get("stream"))
+
+
+def _strip_stream_flag(body: bytes) -> bytes:
+    """Drop stream/stream_options so the request takes the buffered relay path.
+
+    pi clients always send ``stream: true``. The stub has no token-streaming
+    channel, so it relays the request buffered and re-emits the completed
+    response as SSE (see ``_sse_from_buffered``). Stripping the flag here keeps
+    the shared ``rpc_chat_completions`` buffered path well-defined.
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body
+    if isinstance(payload, dict) and ("stream" in payload or "stream_options" in payload):
+        payload.pop("stream", None)
+        payload.pop("stream_options", None)
+        return json.dumps(payload).encode()
+    return body
+
+
+def _sse_from_buffered(body: bytes, fallback_model: str | None) -> Response:
+    """Wrap a buffered OpenAI chat-completion JSON body as an SSE event-stream.
+
+    Emits the OpenAI streaming chunk shape (role delta -> content delta ->
+    finish_reason) terminated by ``[DONE]``. This is fake streaming (a single
+    content chunk), which is sufficient for pi clients that require an SSE
+    response but do not depend on true incremental token delivery.
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    choice = (payload.get("choices") or [{}])[0] or {}
+    content = (choice.get("message") or {}).get("content") or ""
+    cid = payload.get("id") or "chatcmpl-stub"
+    model = payload.get("model") or fallback_model or "areal-default"
+
+    def _chunk(delta: dict, finish: str | None) -> dict:
+        return {
+            "id": cid,
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+
+    frames = [
+        _chunk({"role": "assistant", "content": ""}, None),
+        _chunk({"content": content}, None),
+        _chunk({}, choice.get("finish_reason") or "stop"),
+    ]
+    sse = b"".join(
+        f"data: {json.dumps(frame, ensure_ascii=False)}\n\n".encode() for frame in frames
+    )
+    sse += b"data: [DONE]\n\n"
+    return Response(
+        content=sse,
+        status_code=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "close",
+        },
+    )
 
 
 def _build_direct_client() -> httpx.AsyncClient:
@@ -179,22 +259,18 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
                 },
             )
 
-        if _is_streaming_chat(channel, body):
+        want_stream = _is_streaming_chat(channel, body)
+        if want_stream:
+            # Fake-SSE: relay buffered (drop the stream flag), then re-emit the
+            # completed response as a single SSE sequence so pi clients (which
+            # always send stream=true) receive a valid event-stream instead of a
+            # 400. See _strip_stream_flag / _sse_from_buffered.
             logger.info(
-                "stub rejecting streaming chat completion channel=%s path=%s",
+                "stub wrapping streaming chat completion as SSE channel=%s path=%s",
                 channel.name,
                 _full_path(request),
             )
-            metrics.record_result(channel.name, "error")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "detail": (
-                        "streaming responses are not supported on the loopback "
-                        "stub; use the multica server for stream=true"
-                    )
-                },
-            )
+            body = _strip_stream_flag(body)
 
         user_id = _resolve_user_id(request, config)
         if user_id is None:
@@ -219,12 +295,15 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
                 len(body),
             )
             try:
-                return await _forward_direct_chat_completion(
+                bypass_resp = await _forward_direct_chat_completion(
                     request,
                     channel,
                     config,
                     body,
                 )
+                if want_stream and 200 <= bypass_resp.status_code < 300:
+                    return _sse_from_buffered(bypass_resp.body, _chat_model_name(body))
+                return bypass_resp
             except httpx.HTTPError as exc:
                 metrics.record_result(channel.name, "error")
                 return JSONResponse(
@@ -318,6 +397,8 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
             len(result.body),
             (time.monotonic() - started) * 1000,
         )
+        if want_stream and 200 <= (result.response_status or 200) < 300:
+            return _sse_from_buffered(result.body, _chat_model_name(body))
         return Response(
             content=result.body,
             status_code=result.response_status or 200,
@@ -386,6 +467,28 @@ def create_stub_app(
             _make_handler(db, channel, config, cipher),
             methods=[channel.method],
             name=f"stub_{channel.name}",
+        )
+
+    # pi / OpenAI SDKs append /v1/chat/completions to baseUrl, but the
+    # stub's canonical path is /chat/completions.  Add an alias so both work.
+    _cc = {c.name: c for c in channels}.get("chat_completions")
+    if _cc is not None:
+        _handler = _make_handler(db, _cc, config, cipher)
+        app.add_api_route(
+            "/v1/chat/completions",
+            _handler,
+            methods=["POST"],
+            name="stub_chat_completions_v1",
+        )
+        # pi daemon v0.3.64 uses the Anthropic-compatible /responses
+        # endpoint with the responses API format.  Route it through the
+        # same chat_completions channel; the areal-side gateway forwards
+        # to DeepSeek's anthropic endpoint which understands both formats.
+        app.add_api_route(
+            "/responses",
+            _handler,
+            methods=["POST"],
+            name="stub_chat_completions_responses",
         )
 
     @app.get("/healthz")

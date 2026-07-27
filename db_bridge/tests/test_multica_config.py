@@ -38,7 +38,7 @@ def test_streaming_defaults():
     cfg = MulticaConfig.from_env(_env())
     assert cfg.stream_first_chunk_timeout_s == pytest.approx(60.0)
     assert cfg.stream_inter_chunk_timeout_s == pytest.approx(120.0)
-    assert cfg.stream_poll_interval_s == pytest.approx(0.05)
+    assert cfg.stream_poll_interval_s == pytest.approx(1.0)
 
 
 def test_streaming_overrides_and_validation():

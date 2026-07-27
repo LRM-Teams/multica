@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 
@@ -14,6 +15,7 @@ from db_bridge.stub_server import create_stub_app
 from _fakes import FakeSupabaseClient
 
 SET_REWARD = CHANNELS_BY_NAME["rl_set_reward"]
+CHAT = CHANNELS_BY_NAME["chat_completions"]
 USER_ID = "00000000-0000-0000-0000-00000000000a"
 
 
@@ -202,6 +204,151 @@ async def test_relay_error_returns_502():
     await task
     assert resp.status_code == 502
     assert resp.json()["detail"] == "connection refused"
+
+
+async def test_streaming_chat_relayed_buffered_and_returned_as_sse():
+    """stream=true is relayed buffered, then re-emitted as an SSE event-stream."""
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    app = create_stub_app(db, "multica", cfg)
+
+    buffered = (
+        b'{"id":"cmpl-9","model":"areal/qwen3",'
+        b'"choices":[{"index":0,'
+        b'"message":{"role":"assistant","content":"Hello world"},'
+        b'"finish_reason":"stop"}]}'
+    )
+    exec_task = asyncio.create_task(
+        _executor_complete_one(
+            db,
+            CHAT,
+            status=200,
+            headers={"content-type": "application/json"},
+            body=buffered,
+        )
+    )
+    async with _client(app) as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers={"X-Bridge-User-Id": USER_ID},
+            json={
+                "model": "areal/qwen3",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    claimed = await exec_task
+
+    # Client sees a valid SSE stream terminated by [DONE], content preserved.
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    text = resp.text
+    assert text.count("data: ") == 4  # role + content + finish + [DONE]
+    assert text.strip().endswith("data: [DONE]")
+    assert "Hello world" in text
+    frames = [
+        line[len("data: ") :]
+        for line in text.splitlines()
+        if line.startswith("data: ") and "[DONE]" not in line
+    ]
+    objs = [json.loads(f) for f in frames]
+    assert objs[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert objs[1]["choices"][0]["delta"]["content"] == "Hello world"
+    assert objs[2]["choices"][0]["finish_reason"] == "stop"
+    assert all(o["object"] == "chat.completion.chunk" for o in objs)
+
+    # The relayed (enqueued) request took the buffered path: stream flags dropped.
+    relayed = json.loads(claimed.body)
+    assert "stream" not in relayed
+    assert "stream_options" not in relayed
+    assert relayed["model"] == "areal/qwen3"
+    assert relayed["messages"] == [{"role": "user", "content": "hi"}]
+
+
+async def test_non_streaming_chat_returns_plain_json():
+    """A buffered (stream=false) request is returned verbatim, not wrapped."""
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    app = create_stub_app(db, "multica", cfg)
+
+    buffered = (
+        b'{"id":"cmpl-1","model":"areal/qwen3",'
+        b'"choices":[{"index":0,'
+        b'"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}'
+    )
+    exec_task = asyncio.create_task(
+        _executor_complete_one(
+            db,
+            CHAT,
+            status=200,
+            headers={"content-type": "application/json"},
+            body=buffered,
+        )
+    )
+    async with _client(app) as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers={"X-Bridge-User-Id": USER_ID},
+            json={
+                "model": "areal/qwen3",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    await exec_task
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["choices"][0]["message"]["content"] == "Hi"
+
+
+async def test_areal_default_model_takes_relay_not_bypass():
+    """model=areal-default must be relayed via the DB (not direct-forwarded)."""
+    from db_bridge.stub_server import (
+        _is_areal_model,
+        _should_bypass_chat_completions,
+    )
+
+    assert _is_areal_model("areal-default") is True
+    assert _is_areal_model("areal-distill") is True
+    assert _is_areal_model("areal/qwen/qwen3_5-9b") is True
+    assert _is_areal_model("gpt-4o") is False
+    assert _is_areal_model(None) is False
+
+    body = json.dumps({"model": "areal-default", "messages": []}).encode()
+    # relayed (not bypassed) -> reaches the DB-bridge path
+    assert _should_bypass_chat_completions(CHAT, body) is False
+    # a plain openai model still bypasses (direct forward)
+    body_openai = json.dumps({"model": "gpt-4o", "messages": []}).encode()
+    assert _should_bypass_chat_completions(CHAT, body_openai) is True
+
+    # End-to-end via the relay: executor completes the enqueued areal-default row.
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    app = create_stub_app(db, "multica", cfg)
+    exec_task = asyncio.create_task(
+        _executor_complete_one(
+            db,
+            CHAT,
+            status=200,
+            headers={"content-type": "application/json"},
+            body=b'{"id":"c1","model":"areal-default",'
+            b'"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},'
+            b'"finish_reason":"stop"}]}',
+        )
+    )
+    async with _client(app) as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers={"X-Bridge-User-Id": USER_ID},
+            json={"model": "areal-default", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    claimed = await exec_task
+    assert resp.status_code == 200
+    assert resp.json()["choices"][0]["message"]["content"] == "ok"
+    # Proof it went through the DB relay (row enqueued), not a direct forward.
+    assert db.client.tables.get(CHAT.table, {}) != {}
+    assert claimed.path == "/chat/completions"
 
 
 async def test_healthz_lists_channels():

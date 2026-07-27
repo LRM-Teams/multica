@@ -77,11 +77,13 @@ _DEFAULT_CLEANUP_INTERVAL: Final = 300.0
 _DEFAULT_ROW_RETENTION_SECONDS: Final = 24 * 60 * 60
 _DEFAULT_CLEANUP_BATCH_LIMIT: Final = 1000
 
-# Streaming defaults. Small poll/flush intervals keep per-chunk latency low;
-# FLUSH_BYTES=0 flushes on every complete SSE event boundary.
+# Streaming defaults. A 1s poll interval caps DB read load per active stream
+# (~1 QPS instead of ~20 QPS at 50ms); FLUSH_BYTES=0 flushes on every complete
+# SSE event boundary, and FLUSH_INTERVAL stays small so write-side latency is
+# unaffected.
 _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT: Final = 60.0
 _DEFAULT_STREAM_INTER_CHUNK_TIMEOUT: Final = 120.0
-_DEFAULT_STREAM_POLL_INTERVAL: Final = 0.05
+_DEFAULT_STREAM_POLL_INTERVAL: Final = 1.0
 _DEFAULT_STREAM_FLUSH_BYTES: Final = 0
 _DEFAULT_STREAM_FLUSH_INTERVAL: Final = 0.05
 _DEFAULT_STREAM_SWEEP_INTERVAL: Final = 30.0

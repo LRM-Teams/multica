@@ -32,7 +32,7 @@ def test_streaming_defaults():
     cfg = BridgeConfig.from_env(_MINIMAL)
     assert cfg.stream_first_chunk_timeout_s == pytest.approx(60.0)
     assert cfg.stream_inter_chunk_timeout_s == pytest.approx(120.0)
-    assert cfg.stream_poll_interval_s == pytest.approx(0.05)
+    assert cfg.stream_poll_interval_s == pytest.approx(1.0)
     assert cfg.stream_flush_bytes == 0
     assert cfg.stream_flush_interval_s == pytest.approx(0.05)
     assert cfg.stream_sweep_interval_s == pytest.approx(30.0)

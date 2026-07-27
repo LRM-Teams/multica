@@ -878,6 +878,13 @@ function DmChannelConversation({
   };
 
   const handleSend = () => {
+    // #692 supervised read-only contract: an agent_pair supervisor must NEVER
+    // write to the pair. Reject every submit path at the handler layer (Enter /
+    // submitOnEnter / onSubmit / voice / retry), not only by hiding the composer
+    // — the composer's readOnly banner (editor not mounted) is defense-in-depth,
+    // this handler gate is the contract-level enforcement. (Iris walkthrough
+    // finding; Parker: 定性 fix, mandatory.)
+    if (supervisedReadOnly) return;
     // Empty-payload early-return before the send lock: after a send succeeds the
     // editor/tray are cleared, so a still-held Enter grabs empty content and stops here.
     if (dmPending.hasUploading) return;
@@ -919,6 +926,7 @@ function DmChannelConversation({
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
+    if (supervisedReadOnly) return false; // read-only supervisor: no voice send
     if (!draftEmpty || dmPending.pending.length > 0) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
@@ -949,6 +957,7 @@ function DmChannelConversation({
   };
 
   const handleThreadSend = () => {
+    if (supervisedReadOnly) return; // read-only supervisor: no thread send
     if (!threadRoot) return;
     if (threadPending.hasUploading) return;
     const content = threadEditorRef.current?.getMarkdown()?.trim() ?? "";
@@ -988,6 +997,7 @@ function DmChannelConversation({
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
+    if (supervisedReadOnly) return false; // read-only supervisor: no thread voice send
     if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
@@ -1020,6 +1030,7 @@ function DmChannelConversation({
 
   const handleRetrySend = useCallback(
     (message: ChannelMessage) => {
+      if (supervisedReadOnly) return; // read-only supervisor: no retry-send
       if (!message.client_message_id || message.local_send_status !== "failed") return;
       if (message.thread_root_message_id) {
         sendThreadMessage.mutate({
@@ -1040,7 +1051,7 @@ function DmChannelConversation({
         clientMessageId: message.client_message_id,
       });
     },
-    [channelId, sendMessage, sendThreadMessage],
+    [channelId, sendMessage, sendThreadMessage, supervisedReadOnly],
   );
 
   const handleOpenThread = (message: ChannelMessage) => {

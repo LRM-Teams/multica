@@ -143,8 +143,9 @@ export function IssueRefLink({
   // the peek eyebrow, not beside the link.
   // System SoT chip is the exception: face is ▶ + key (design lock), title in peek.
   const primaryLabel = systemChip ? identifier || text : title || text;
+  // SoT LRM-564: desktop chip stays compact; coarse pointers need ≥32px hit area.
   const linkClassName = systemChip
-    ? "inline-flex min-h-[22px] items-center gap-1 rounded-md bg-brand/12 px-1.5 py-0.5 text-[11.5px] font-semibold text-brand no-underline hover:bg-brand/18 hover:no-underline"
+    ? "inline-flex min-h-[22px] items-center gap-1 rounded-md bg-brand/12 px-1.5 py-0.5 text-[11.5px] font-semibold text-brand no-underline hover:bg-brand/18 hover:no-underline [@media(pointer:coarse)]:min-h-8"
     : "text-brand hover:underline";
 
   const linkProps = {

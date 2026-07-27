@@ -43,9 +43,9 @@ function DatePill({ label }: { label: string }) {
   );
 }
 
-// Inserted before the first message of each local day. Side rules keep the same
-// v1 separator rhythm as system event rows (LRM-561) without looking like a
-// system chip — the pill alone marks "calendar day".
+// Inserted before the first message of each local day. Date dividers keep
+// centered pill + side rules (LRM-564); system event rows are a separate track
+// (left-aligned, no hairlines).
 function DateDivider({ label }: { label: string }) {
   return (
     <div

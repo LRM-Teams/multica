@@ -16,5 +16,22 @@
     "breadcrumb_fallback": "メンバー",
     "not_found_title": "メンバーが見つかりません",
     "not_found_description": "このメンバーはワークスペースから退出した可能性があります。"
+  },
+  "side_panel": {
+    "description": "説明",
+    "description_placeholder": "説明を追加",
+    "no_description": "No description",
+    "info": "情報",
+    "role": "ロール",
+    "email": "メール",
+    "joined": "参加日",
+    "created_agents": "作成したエージェント",
+    "no_agents": "No agents created yet",
+    "you_suffix": "(you)",
+    "message_aria": "メッセージを送る",
+    "close_aria": "プロフィールを閉じる",
+    "unavailable": "メンバーを利用できません",
+    "unknown": "不明",
+    "resize_aria": "プロフィールパネルの幅を変更"
   }
 }

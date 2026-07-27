@@ -6,6 +6,7 @@ import {
 } from "@multica/core/identity";
 import type { ChannelMember } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
+import type { OpenMemberPanelFn } from "@multica/core/members";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
@@ -25,7 +26,7 @@ export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
  * agents show the presence status dot on this directory surface.
  * LRM-288 — row identity is clickable: agents open the agent panel (including
  * channel-only / group-manager agents absent from ListAgents); humans open
- * the shared profile trigger.
+ * the LRM-619 human member profile panel (Lock A).
  */
 export function ChannelMembersList({
   members,
@@ -38,6 +39,7 @@ export function ChannelMembersList({
   currentUserId,
   onOpenDm,
   onOpenAgent,
+  onOpenMember,
   onRemove,
   dmPending,
   className,
@@ -52,6 +54,7 @@ export function ChannelMembersList({
   currentUserId: string;
   onOpenDm?: (member: ChannelMember) => void;
   onOpenAgent?: OpenAgentPanelFn;
+  onOpenMember?: OpenMemberPanelFn;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
   className?: string;
@@ -125,6 +128,16 @@ export function ChannelMembersList({
                 });
               }
             : undefined;
+        const openMemberCapture =
+          !isAgent && onOpenMember
+            ? () => {
+                onOpenMember(m.member_id, {
+                  name: m.name,
+                  display_name: m.display_name,
+                  avatar_url: m.avatar_url ?? null,
+                });
+              }
+            : undefined;
 
         return (
           <div
@@ -137,7 +150,7 @@ export function ChannelMembersList({
               side="left"
               sideOffset={8}
               className="min-w-0 flex-1 items-center gap-3"
-              onClickCapture={openAgentCapture}
+              onClickCapture={openAgentCapture ?? openMemberCapture}
             >
               <ActorAvatar
                 actorType={actorType}

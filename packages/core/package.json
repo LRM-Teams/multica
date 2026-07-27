@@ -77,6 +77,8 @@
     "./agents/use-agent-presence": "./agents/use-agent-presence.ts",
     "./agents/visibility-label": "./agents/visibility-label.ts",
     "./agents/stores": "./agents/stores/index.ts",
+    "./members": "./members/index.ts",
+    "./members/stores": "./members/stores/index.ts",
     "./permissions": "./permissions/index.ts",
     "./projects": "./projects/index.ts",
     "./projects/queries": "./projects/queries.ts",

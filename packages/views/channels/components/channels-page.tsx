@@ -221,6 +221,12 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
+import { MemberPanelProvider } from "../../common/member-panel-context";
+import { HumanMemberSidePanel } from "../../members/human-member-side-panel";
+import type {
+  MemberPanelIdentitySnapshot,
+  OpenMemberPanelFn,
+} from "@multica/core/members";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
@@ -671,6 +677,11 @@ export function ChannelsPage({
         agentId: string;
         snapshot?: AgentPanelIdentitySnapshot;
       }
+    | {
+        kind: "member";
+        userId: string;
+        snapshot?: MemberPanelIdentitySnapshot;
+      }
     | { kind: "channel-details"; tab: ChannelDetailsTab }
   >({ kind: "none" });
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
@@ -678,6 +689,7 @@ export function ChannelsPage({
   const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
   const selectedAgentPanelSnapshot =
     sidePanel.kind === "agent" ? (sidePanel.snapshot ?? null) : null;
+  const selectedMemberPanelId = sidePanel.kind === "member" ? sidePanel.userId : null;
   const channelDetailsOpen = sidePanel.kind === "channel-details";
   const channelDetailsTab =
     sidePanel.kind === "channel-details" ? sidePanel.tab : "about";
@@ -686,6 +698,9 @@ export function ChannelsPage({
   }, []);
   const setSelectedAgentPanelId = useCallback((next: string | null) => {
     setSidePanel(next ? { kind: "agent", agentId: next } : { kind: "none" });
+  }, []);
+  const setSelectedMemberPanelId = useCallback((next: string | null) => {
+    setSidePanel(next ? { kind: "member", userId: next } : { kind: "none" });
   }, []);
   const openChannelDetails = useCallback(
     (tab: ChannelDetailsTab = "about") => {
@@ -2100,6 +2115,10 @@ export function ChannelsPage({
     setSidePanel({ kind: "agent", agentId, snapshot });
   }, []);
 
+  const handleOpenMemberPanel: OpenMemberPanelFn = useCallback((userId, snapshot) => {
+    setSidePanel({ kind: "member", userId, snapshot });
+  }, []);
+
   // #645 — toggles the same exclusive slot; opening it always wins over
   // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.
   // Desktop title click collapses the dock whenever it is open (any tab) —
@@ -2229,6 +2248,7 @@ export function ChannelsPage({
         currentUserId={currentUserId ?? ""}
         onOpenDm={openDmWithMember}
         onOpenAgent={handleOpenAgentPanel}
+        onOpenMember={handleOpenMemberPanel}
         onRemove={handleRemoveMemberClick}
         dmPending={createOrFindDm.isPending}
         className="min-h-0 flex-1"
@@ -2859,6 +2879,13 @@ export function ChannelsPage({
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;
+  const memberPanel =
+    active && selectedMemberPanelId ? (
+      <HumanMemberSidePanel
+        userId={selectedMemberPanelId}
+        onClose={() => setSelectedMemberPanelId(null)}
+      />
+    ) : null;
   // LRM-210 — Channel details panel (About|Members|Files|Settings). System
   // #general still opens About/Members/Files (read-only roster) but hides
   // the Settings tab — same defense-in-depth as the old settings gate.
@@ -3387,7 +3414,7 @@ export function ChannelsPage({
   // (360–640, default 520 for Thread/details; persists separately from the
   // global overlay's 520). Opening/closing the dock does not remount the
   // conversation tree. Mobile: no drag — full-screen profile/page route instead.
-  const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
+  const desktopSidePanel = threadPanel ?? agentPanel ?? memberPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="channel-detail-row">
       <div
@@ -3403,7 +3430,9 @@ export function ChannelsPage({
               ? "thread-side-slot"
               : agentPanel
                 ? "agent-side-slot"
-                : "channel-details-side-slot"
+                : memberPanel
+                  ? "member-side-slot"
+                  : "channel-details-side-slot"
           }
           className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
           style={{ width: detailSideWidth }}
@@ -3488,6 +3517,7 @@ export function ChannelsPage({
   if (embedded) {
     return (
       <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+        <MemberPanelProvider onOpenMember={handleOpenMemberPanel}>
         <div
           className="flex h-full min-h-0 flex-col"
           data-testid="channels-page-embedded"
@@ -3503,12 +3533,14 @@ export function ChannelsPage({
             detailSurface
           )}
         </div>
+        </MemberPanelProvider>
       </AgentPanelProvider>
     );
   }
 
   return (
     <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+    <MemberPanelProvider onOpenMember={handleOpenMemberPanel}>
     <div className="flex h-full min-h-0 flex-col">
       {isMobile ? (
         // Mobile: single full-width column — the list, or (when a conversation
@@ -3732,6 +3764,7 @@ export function ChannelsPage({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </MemberPanelProvider>
     </AgentPanelProvider>
   );
 }

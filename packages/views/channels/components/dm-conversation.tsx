@@ -31,6 +31,7 @@ import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
 } from "@multica/core/agents";
+import type { OpenMemberPanelFn } from "@multica/core/members";
 import { useWSEvent } from "@multica/core/realtime";
 import type {
   ChannelMessage,
@@ -49,6 +50,8 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
+import { MemberPanelProvider } from "../../common/member-panel-context";
+import { HumanMemberSidePanel } from "../../members/human-member-side-panel";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
@@ -474,20 +477,27 @@ function DmChannelConversation({
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const appliedDeepLinkMessageRef = useRef<string | null>(null);
   const appliedThreadDeepLinkRef = useRef<string | null>(null);
-  // #349 agent side panel — same slot as the thread panel (mutually
-  // exclusive), matching channels-page.tsx's inline-panel pattern per
-  // Frank's direction (replace the slot, don't route away).
+  // #349 / LRM-619 — agent + human member panels share the thread-panel
+  // slot (mutually exclusive), matching channels-page.tsx.
   const [selectedAgentPanelId, setSelectedAgentPanelId] = useState<string | null>(null);
   const [selectedAgentPanelSnapshot, setSelectedAgentPanelSnapshot] =
     useState<AgentPanelIdentitySnapshot | null>(null);
+  const [selectedMemberPanelId, setSelectedMemberPanelId] = useState<string | null>(null);
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
+    setSelectedMemberPanelId(null);
     setSelectedAgentPanelId(agentId);
     setSelectedAgentPanelSnapshot(snapshot ?? null);
   }, []);
+  const handleOpenMemberPanel = useCallback<OpenMemberPanelFn>((userId) => {
+    dispatch({ type: "closeThread" });
+    setSelectedAgentPanelId(null);
+    setSelectedAgentPanelSnapshot(null);
+    setSelectedMemberPanelId(userId);
+  }, []);
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
-    enabled: !!selectedAgentPanelId,
+    enabled: !!selectedAgentPanelId || !!selectedMemberPanelId,
   });
   const setQuoteTarget = useCallback((message: QuoteTarget | null) => {
     dispatch({ type: "setQuote", message });
@@ -1467,8 +1477,7 @@ function DmChannelConversation({
     </main>
   );
 
-  // #349: the agent side panel shares the thread-panel slot (opening one
-  // closes the other — see handleOpenThread / handleOpenAgentPanel).
+  // #349 / LRM-619: agent + human member panels share the thread-panel slot.
   const agentPanel =
     selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
@@ -1482,10 +1491,21 @@ function DmChannelConversation({
         }}
       />
     ) : null;
-  const detailPanel = threadPanel ?? agentPanel;
+  const memberPanel =
+    selectedMemberPanelId ? (
+      <HumanMemberSidePanel
+        userId={selectedMemberPanelId}
+        onClose={() => setSelectedMemberPanelId(null)}
+      />
+    ) : null;
+  const detailPanel = threadPanel ?? agentPanel ?? memberPanel;
 
   const withProvider = (node: React.ReactNode) => (
-    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>{node}</AgentPanelProvider>
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+      <MemberPanelProvider onOpenMember={handleOpenMemberPanel}>
+        {node}
+      </MemberPanelProvider>
+    </AgentPanelProvider>
   );
 
   if (!isMobile) {

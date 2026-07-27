@@ -29,10 +29,12 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
+import { useMemberPanelStore } from "@multica/core/members/stores";
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
 import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
+import { useOpenMemberPanel } from "./member-panel-context";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
 
@@ -65,6 +67,9 @@ export function ActorProfileTrigger({
   onClickCapture,
 }: ActorProfileTriggerProps) {
   const isMobile = useIsMobile();
+  const openMemberFromContext = useOpenMemberPanel();
+  const openMemberFromStore = useMemberPanelStore((s) => s.open);
+  const openMember = openMemberFromContext ?? openMemberFromStore;
   if (!memberId) return <>{children}</>;
 
   const content = <ActorProfileContent memberType={memberType} memberId={memberId} />;
@@ -78,6 +83,16 @@ export function ActorProfileTrigger({
   const triggerRender = triggerElement === "span"
     ? <span />
     : <button type="button" />;
+
+  // LRM-619: human click opens the full Lock A profile panel (inline in
+  // channels/DM via MemberPanelProvider, otherwise GlobalMemberPanel).
+  // Parent onClickCapture (e.g. agent panel) still runs first.
+  const handleClickCapture: React.MouseEventHandler = (event) => {
+    onClickCapture?.(event);
+    if (memberType === "user") {
+      openMember(memberId);
+    }
+  };
 
   // Mobile: a Drawer caps at 80dvh, so a long Recent-activity list gets cut off
   // and can't be reached (#586). Navigate to a real full-page profile route
@@ -103,7 +118,7 @@ export function ActorProfileTrigger({
       <HoverCardTrigger
         render={triggerRender}
         className={triggerClassName}
-        onClickCapture={onClickCapture}
+        onClickCapture={handleClickCapture}
       >
         {children}
       </HoverCardTrigger>
@@ -113,6 +128,7 @@ export function ActorProfileTrigger({
         sideOffset={sideOffset}
         // IM-density profile peek: one shared size for author + @mention.
         // ~300px is closer to Slack/Discord hover cards than a 360 panel.
+        // Humans still get a lightweight peek; Lock A full panel opens on click.
         className="w-[300px] p-0"
       >
         {content}

@@ -10,6 +10,7 @@ import {
   useAgentPanelStore,
 } from "@multica/core/agents/stores";
 import type { AgentPanelIdentitySnapshot } from "@multica/core/agents";
+import { useMemberPanelStore } from "@multica/core/members/stores";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
 import { useNavigation } from "../navigation";
 import { useProfilePanelWidth } from "./use-profile-panel-width";
@@ -47,6 +48,7 @@ export function GlobalAgentPanel() {
   const selectedAgentId = useAgentPanelStore((s) => s.selectedAgentId);
   const identitySnapshot = useAgentPanelStore((s) => s.identitySnapshot);
   const close = useAgentPanelStore((s) => s.close);
+  const closeMember = useMemberPanelStore((s) => s.close);
   const { width, onResizePointerDown } = useProfilePanelWidth();
   const { data: members = [] } = useQuery({
     ...memberListOptions(wsId),
@@ -61,6 +63,11 @@ export function GlobalAgentPanel() {
   useEffect(() => {
     close();
   }, [pathname, close]);
+
+  // Mutual exclusion with the human member overlay.
+  useEffect(() => {
+    if (selectedAgentId) closeMember();
+  }, [selectedAgentId, closeMember]);
 
   // Latch the selected id + snapshot so content survives the slide-out exit
   // animation: `close()` clears selectedAgentId immediately, so without the

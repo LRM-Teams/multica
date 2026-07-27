@@ -16,5 +16,22 @@
     "breadcrumb_fallback": "成员",
     "not_found_title": "未找到该成员",
     "not_found_description": "该成员可能已经离开工作区。"
+  },
+  "side_panel": {
+    "description": "简介",
+    "description_placeholder": "添加简介",
+    "no_description": "No description",
+    "info": "信息",
+    "role": "角色",
+    "email": "邮箱",
+    "joined": "加入时间",
+    "created_agents": "创建的智能体",
+    "no_agents": "No agents created yet",
+    "you_suffix": "(you)",
+    "message_aria": "发私信",
+    "close_aria": "关闭资料",
+    "unavailable": "成员信息不可用",
+    "unknown": "未知",
+    "resize_aria": "调整资料面板宽度"
   }
 }

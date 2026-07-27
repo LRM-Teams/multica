@@ -17,6 +17,7 @@ import {
 } from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
+import { useMemberPanelStore } from "@multica/core/members/stores";
 import { resolveHealthDotClass } from "../agents/health";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
@@ -24,6 +25,7 @@ import { MemberProfileCard } from "../members/member-profile-card";
 import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
+import { useOpenMemberPanel } from "./member-panel-context";
 import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
 import { AgentXpBurst } from "../agents/components/agent-xp-burst";
 import {
@@ -92,27 +94,8 @@ interface ActorAvatarProps {
 }
 
 
-/** Isolated so message bubbles / agent dots never call useWorkspacePaths. */
-function ActorAvatarWorkspaceProfileLink({
-  actorType,
-  actorId,
-  children,
-}: {
-  actorType: "member" | string;
-  actorId: string;
-  children: React.ReactNode;
-}) {
-  const workspacePaths = useWorkspacePaths();
-  const href =
-    actorType === "member"
-      ? workspacePaths.memberDetail(actorId)
-      : null;
-  return href ? (
-    <ActorAvatarProfileLink href={href}>{children}</ActorAvatarProfileLink>
-  ) : (
-    <>{children}</>
-  );
-}
+
+
 
 const FOCUSABLE_ANCESTOR_SELECTOR =
   'a[href], button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"])';
@@ -195,16 +178,17 @@ export function ActorAvatar({
   // Agents open the #349 side panel (inline in channels/DM via
   // AgentPanelProvider, a global overlay everywhere else via the fallback
   // store — see agent-panel-context.tsx / panel-store.ts) instead of routing
-  // to the full agent detail page. Members route to their profile page.
+  // to the full agent detail page. Members open the LRM-619 human profile
+  // panel the same way (MemberPanelProvider / GlobalMemberPanel).
   const content = !shouldLinkToProfile
     ? withXpBurst
     : actorType === "agent"
       ? <ActorAvatarPanelTrigger agentId={actorId}>{withXpBurst}</ActorAvatarPanelTrigger>
       : actorType === "member"
         ? (
-            <ActorAvatarWorkspaceProfileLink actorType={actorType} actorId={actorId}>
+            <ActorAvatarMemberPanelTrigger userId={actorId}>
               {withXpBurst}
-            </ActorAvatarWorkspaceProfileLink>
+            </ActorAvatarMemberPanelTrigger>
           )
         : withXpBurst;
 
@@ -224,51 +208,6 @@ export function ActorAvatar({
   return content;
 }
 
-function ActorAvatarProfileLink({
-  href,
-  children,
-}: {
-  href: string;
-  children: React.ReactNode;
-}) {
-  const { push, openInNewTab } = useNavigation();
-
-  const navigate = (event: React.MouseEvent | React.KeyboardEvent) => {
-    const controlAncestor = event.currentTarget.parentElement?.closest(
-      PROFILE_LINK_CONTROL_SELECTOR,
-    );
-    if (controlAncestor) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    if (
-      "metaKey" in event &&
-      (event.metaKey || event.ctrlKey || event.shiftKey) &&
-      openInNewTab
-    ) {
-      openInNewTab(href);
-      return;
-    }
-    push(href);
-  };
-
-  return (
-    <span
-      role="link"
-      tabIndex={-1}
-      className="inline-flex cursor-pointer rounded-full"
-      onClick={navigate}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          navigate(event);
-        }
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
 /**
  * Opens the #349 agent side panel on click. Prefers the local
  * `AgentPanelProvider` (channels/DM — panel renders inline, replacing the
@@ -278,9 +217,8 @@ function ActorAvatarProfileLink({
  * mechanisms never both fire for the same click since the global store is
  * only reachable when the local context is absent.
  *
- * Same nested-clickable guard as `ActorAvatarProfileLink`: a picker row or
- * menu item that owns its own click keeps that behavior instead of opening
- * the panel underneath it.
+ * Same nested-clickable guard as before: a picker row or menu item that owns
+ * its own click keeps that behavior instead of opening the panel underneath.
  */
 function ActorAvatarPanelTrigger({
   agentId,
@@ -324,6 +262,62 @@ function ActorAvatarPanelTrigger({
     // sibling `ActorAvatarProfileLink` uses (`role="link"` on a span). The
     // control-ancestor guard above defers to the outer interactive when present.
     // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- span+role avoids invalid nested-interactive DOM (see comment)
+    <span
+      role="button"
+      tabIndex={-1}
+      className="inline-flex cursor-pointer rounded-full"
+      onClick={handleOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          handleOpen(event);
+        }
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * LRM-619 — open the human member Lock A profile panel on click.
+ * Prefers MemberPanelProvider (channels/DM inline slot); falls back to
+ * useMemberPanelStore (GlobalMemberPanel overlay). ⌘-click still opens
+ * the legacy member detail page in a new tab.
+ */
+function ActorAvatarMemberPanelTrigger({
+  userId,
+  children,
+}: {
+  userId: string;
+  children: React.ReactNode;
+}) {
+  const paths = useWorkspacePaths();
+  const { openInNewTab } = useNavigation();
+  const openFromContext = useOpenMemberPanel();
+  const openFromStore = useMemberPanelStore((s) => s.open);
+  const open = openFromContext ?? openFromStore;
+
+  const handleOpen = (event: React.MouseEvent | React.KeyboardEvent) => {
+    const controlAncestor = event.currentTarget.parentElement?.closest(
+      PROFILE_LINK_CONTROL_SELECTOR,
+    );
+    if (controlAncestor) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      "metaKey" in event &&
+      (event.metaKey || event.ctrlKey || event.shiftKey) &&
+      openInNewTab
+    ) {
+      openInNewTab(paths.memberDetail(userId));
+      return;
+    }
+    open(userId);
+  };
+
+  return (
+    // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- span+role avoids invalid nested-interactive DOM
     <span
       role="button"
       tabIndex={-1}

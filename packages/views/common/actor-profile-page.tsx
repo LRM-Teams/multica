@@ -8,20 +8,17 @@ import { memberListOptions } from "@multica/core/workspace/queries";
 import { PageHeader } from "../layout/page-header";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
-import { ActorProfileContent } from "./actor-profile-popover";
 import { ResolvedAgentSidePanel } from "./resolved-agent-side-panel";
+import { HumanMemberSidePanel } from "../members/human-member-side-panel";
 
 /**
  * Mobile full-page host for the actor profile (#586). On mobile, tapping an
  * author/agent avatar routes here instead of opening an 80dvh Drawer that
  * clipped the Recent-activity list. Agents reuse the same owner-gated
  * Profile / Activity / Files tab surface as the conversation side panel
- * (resolved by id via GetAgent — LRM-292); users and unavailable agents
- * retain the generic profile fallback. The agent page keeps the Back/header
- * chrome outside the tab body's scroll container.
- *
- * This is intentionally NOT the agent management page (`AgentDetailPage`): it is
- * the lightweight, actor-generic profile for both agents and users.
+ * (resolved by id via GetAgent — LRM-292); humans use the LRM-619 Lock A
+ * five-section profile. The agent page keeps the Back/header chrome outside
+ * the tab body's scroll container.
  */
 export function ActorProfilePage({
   memberType,
@@ -49,12 +46,12 @@ export function ActorProfilePage({
           {t(($) => $.profile_popover.back)}
         </button>
       </PageHeader>
-      <div className={isAgent ? "flex min-h-0 flex-1" : "min-h-0 flex-1 overflow-y-auto"}>
+      <div className={isAgent ? "flex min-h-0 flex-1" : "min-h-0 flex-1 overflow-hidden"}>
         <div
           className={
             isAgent
               ? "mx-auto flex min-h-0 w-full max-w-2xl flex-1"
-              : "mx-auto w-full max-w-2xl"
+              : "mx-auto flex min-h-0 w-full max-w-2xl flex-1"
           }
         >
           {isAgent ? (
@@ -66,7 +63,11 @@ export function ActorProfilePage({
               variant="page"
             />
           ) : (
-            <ActorProfileContent memberType={memberType} memberId={memberId} />
+            <HumanMemberSidePanel
+              userId={memberId}
+              onClose={() => navigation.back()}
+              variant="page"
+            />
           )}
         </div>
       </div>

@@ -182,34 +182,55 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 	return content, writeRuntimeConfigFile(path, content)
 }
 
+// canonicalTurnLedgerRoot is the durable ledger directory under the stable
+// agent workspace. CleanupSidecars reads sidecarManifestFile from here to
+// delete only paths Multica recorded on the previous materialize.
+func canonicalTurnLedgerRoot(workDir string) string {
+	return filepath.Join(workDir, ".multica", "canonical_turn_ledger")
+}
+
 // MaterializeCanonicalTurnContext writes Multica turn-scoped provider context
 // into a stable agent workspace (D6-1b turn.WorkDir).
 //
-// Tier A (stable): durable agent files outside Multica managed markers are left alone —
-// including user/agent-owned provider-native skills under .grok/skills, .pi/skills, etc.
-// Tier B (refresh): managed AGENTS.md/CLAUDE.md block + Multica skills + .agent_context.
-// Tier C (no residual): previous-turn Multica task sidecars under .agent_context and
-// Multica-managed skill dirs (bearing managedSkillMarker) are removed before rewrite.
-// Never RemoveAll the whole provider skills parent — that would delete Tier A skills.
+// Tier A (stable): durable agent files outside Multica-owned writes are left alone
+// (MEMORY, user provider skills, user .agent_context siblings, pre-existing targets).
+// Tier B (refresh): Multica-managed AGENTS.md block + Multica skills + Multica
+// sidecars, written through a non-nil sidecarManifest (refuse-to-clobber).
+// Tier C (no residual): previous Multica writes are reclaimed only via the
+// ledger (CleanupSidecars) + managedSkillMarker skill dirs — never RemoveAll on
+// shared parents (.agent_context, .grok/skills, …).
 func MaterializeCanonicalTurnContext(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	workDir = strings.TrimSpace(workDir)
 	if workDir == "" {
 		return "", errors.New("canonical turn workdir is required")
 	}
-	// Tier C first: drop prior-turn Multica task sidecars before any rewrite.
-	if err := os.RemoveAll(filepath.Join(workDir, ".agent_context")); err != nil {
-		return "", fmt.Errorf("clear prior turn .agent_context: %w", err)
+	ledgerRoot := canonicalTurnLedgerRoot(workDir)
+	if err := os.MkdirAll(ledgerRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create canonical turn ledger: %w", err)
 	}
+	// Tier C: reclaim only what the previous materialize recorded.
+	if err := CleanupSidecars(ledgerRoot); err != nil {
+		return "", fmt.Errorf("cleanup prior canonical turn sidecars: %w", err)
+	}
+	// Defense for upgrade path / partial writes: Multica-managed skill dirs
+	// bearing the marker but not on the ledger.
 	if err := removeManagedSkillDirs(workDir, provider); err != nil {
-		return "", fmt.Errorf("clear prior turn managed skills: %w", err)
+		return "", fmt.Errorf("clear prior managed skills: %w", err)
 	}
-	// Tier B: refresh Multica-managed runtime brief (marker-idempotent) + task context/skills.
+
+	// Tier B: standing-style Multica brief (marker-idempotent, preserves user AGENTS body).
 	brief, err := InjectRuntimeConfig(workDir, provider, ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := writeContextFiles(workDir, provider, ctx, nil); err != nil {
+	// Non-nil manifest: refuse-to-clobber + ledger for next turn's precise reclaim.
+	// nil would collapse to os.WriteFile and destroy durable workspace content.
+	manifest := &sidecarManifest{}
+	if err := writeContextFiles(workDir, provider, ctx, manifest); err != nil {
 		return "", fmt.Errorf("write canonical turn context files: %w", err)
+	}
+	if err := writeSidecarManifest(ledgerRoot, manifest); err != nil {
+		return "", fmt.Errorf("write canonical turn ledger: %w", err)
 	}
 	return brief, nil
 }

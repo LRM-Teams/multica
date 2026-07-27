@@ -147,7 +147,11 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 		return nil, err
 	}
 
-	cmd := exec.Command(execPath, "agent", "stdio")
+	// Keep the daemon-owned ACP process isolated from Grok's optional shared
+	// leader and suppress interactive permission requests. A shared leader can
+	// retain an older tool/permission schema across daemon sessions, while this
+	// backend owns the complete lifecycle of its child.
+	cmd := exec.Command(execPath, "agent", "--no-leader", "--always-approve", "stdio")
 	hideAgentWindow(cmd)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd

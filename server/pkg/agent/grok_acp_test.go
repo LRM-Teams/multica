@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,9 @@ import (
 func fakeGrokACPProcessScript() string {
 	return `#!/bin/sh
 printf x >> "$GROK_TEST_STARTS"
+if [ -n "$GROK_TEST_ARGS" ]; then
+  printf '%s\n' "$@" > "$GROK_TEST_ARGS"
+fi
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
@@ -21,6 +25,36 @@ while IFS= read -r line; do
   esac
 done
 `
+}
+
+func TestGrokACPBackendStartsIsolatedAlwaysApprovedProcess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grok")
+	writeTestExecutable(t, path, []byte(fakeGrokACPProcessScript()))
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(dir, "args")
+	b := newGrokACPBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"GROK_HOME": dir, "GROK_TEST_STARTS": filepath.Join(dir, "starts"), "GROK_TEST_ARGS": argsPath,
+	}})
+	t.Cleanup(b.Close)
+
+	s, err := b.Execute(context.Background(), "first", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := <-s.Result; got.Status != "completed" {
+		t.Fatalf("result = %+v", got)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Fields(string(data)), []string{"agent", "--no-leader", "--always-approve", "stdio"}; !slices.Equal(got, want) {
+		t.Fatalf("grok argv = %v, want %v", got, want)
+	}
 }
 
 func TestGrokACPBackendReusesOneChildForCompatibleTurns(t *testing.T) {

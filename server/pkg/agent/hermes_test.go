@@ -578,13 +578,79 @@ func (b *bufferWriter) String() string {
 	return b.buf.String()
 }
 
-// TestHermesClientAutoApprovesPermissionRequest asserts that when an
-// ACP agent sends us `session/request_permission` (kimi does this on
-// every Shell / file-mutating tool call), the client replies with
-// `approve_for_session` — without this the agent blocks 300s and the
-// task hangs. The id in the reply must match the agent's request id
-// so its in-flight future resolves.
+// TestHermesClientAutoApprovesPermissionRequest asserts that the ACP
+// client selects an actual allow option offered by each provider. ACP
+// standardizes option kinds but not option IDs: Kimi calls its
+// session-scoped option `approve_for_session`, while Grok uses
+// `allow_always`.
 func TestHermesClientAutoApprovesPermissionRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		request      string
+		wantOptionID string
+	}{
+		{
+			name:         "kimi",
+			request:      `{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"sessionId":"ses_1","options":[{"optionId":"approve","name":"Approve once","kind":"allow_once"},{"optionId":"approve_for_session","name":"Approve for this session","kind":"allow_always"},{"optionId":"reject","name":"Reject","kind":"reject_once"}],"toolCall":{"toolCallId":"tc_1","title":"Shell","content":[]}}}`,
+			wantOptionID: "approve_for_session",
+		},
+		{
+			name:         "grok",
+			request:      `{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"sessionId":"ses_1","options":[{"optionId":"allow_once","name":"Allow once","kind":"allow_once"},{"optionId":"allow_always","name":"Always allow","kind":"allow_always"},{"optionId":"reject_once","name":"Reject once","kind":"reject_once"}],"toolCall":{"toolCallId":"tc_1","title":"Shell","content":[]}}}`,
+			wantOptionID: "allow_always",
+		},
+		{
+			name:         "one-shot fallback",
+			request:      `{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"sessionId":"ses_1","options":[{"optionId":"permit-this-call","name":"Allow once","kind":"allow_once"},{"optionId":"deny-this-call","name":"Reject once","kind":"reject_once"}]}}`,
+			wantOptionID: "permit-this-call",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := &bufferWriter{}
+			c := &hermesClient{
+				cfg:     Config{Logger: slog.Default()},
+				stdin:   w,
+				pending: make(map[int]*pendingRPC),
+			}
+			c.handleLine(tt.request)
+
+			got := w.String()
+			var resp struct {
+				JSONRPC string `json:"jsonrpc"`
+				ID      int    `json:"id"`
+				Result  struct {
+					Outcome struct {
+						Outcome  string `json:"outcome"`
+						OptionID string `json:"optionId"`
+					} `json:"outcome"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &resp); err != nil {
+				t.Fatalf("reply is not valid JSON: %q err=%v", got, err)
+			}
+			if resp.JSONRPC != "2.0" {
+				t.Errorf("jsonrpc: got %q, want 2.0", resp.JSONRPC)
+			}
+			if resp.ID != 42 {
+				t.Errorf("id: got %d, want 42 (must echo agent's request id)", resp.ID)
+			}
+			if resp.Result.Outcome.Outcome != "selected" {
+				t.Errorf("outcome.outcome: got %q, want %q", resp.Result.Outcome.Outcome, "selected")
+			}
+			if resp.Result.Outcome.OptionID != tt.wantOptionID {
+				t.Errorf("outcome.optionId: got %q, want %q", resp.Result.Outcome.OptionID, tt.wantOptionID)
+			}
+		})
+	}
+}
+
+func TestHermesClientRejectsPermissionRequestWithoutAllowOption(t *testing.T) {
 	t.Parallel()
 
 	w := &bufferWriter{}
@@ -593,34 +659,27 @@ func TestHermesClientAutoApprovesPermissionRequest(t *testing.T) {
 		stdin:   w,
 		pending: make(map[int]*pendingRPC),
 	}
-
-	c.handleLine(`{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"sessionId":"ses_1","options":[{"optionId":"approve","name":"Approve once","kind":"allow_once"},{"optionId":"approve_for_session","name":"Approve for this session","kind":"allow_always"},{"optionId":"reject","name":"Reject","kind":"reject_once"}],"toolCall":{"toolCallId":"tc_1","title":"Shell","content":[]}}}`)
+	c.handleLine(`{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"options":[{"optionId":"reject_once","name":"Reject once","kind":"reject_once"}]}}`)
 
 	got := w.String()
 	var resp struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      int    `json:"id"`
-		Result  struct {
-			Outcome struct {
-				Outcome  string `json:"outcome"`
-				OptionID string `json:"optionId"`
-			} `json:"outcome"`
-		} `json:"result"`
+		ID    int `json:"id"`
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &resp); err != nil {
 		t.Fatalf("reply is not valid JSON: %q err=%v", got, err)
 	}
-	if resp.JSONRPC != "2.0" {
-		t.Errorf("jsonrpc: got %q, want 2.0", resp.JSONRPC)
-	}
 	if resp.ID != 42 {
-		t.Errorf("id: got %d, want 42 (must echo agent's request id)", resp.ID)
+		t.Errorf("id: got %d, want 42", resp.ID)
 	}
-	if resp.Result.Outcome.Outcome != "selected" {
-		t.Errorf("outcome.outcome: got %q, want %q", resp.Result.Outcome.Outcome, "selected")
+	if resp.Error.Code != -32602 {
+		t.Errorf("error code: got %d, want -32602", resp.Error.Code)
 	}
-	if resp.Result.Outcome.OptionID != "approve_for_session" {
-		t.Errorf("outcome.optionId: got %q, want %q", resp.Result.Outcome.OptionID, "approve_for_session")
+	if !strings.Contains(resp.Error.Message, "no supported allow option") {
+		t.Errorf("error should explain missing allow option, got %q", resp.Error.Message)
 	}
 }
 

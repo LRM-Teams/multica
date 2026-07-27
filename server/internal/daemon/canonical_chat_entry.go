@@ -10,15 +10,15 @@ import (
 )
 
 // tryCanonicalChatBackend is the sole D6-1b production path for full Grok/Pi
-// chat wakes. Slot identity is agent×runtime (no ChatSessionID). There is no
-// generation==0 fallback to the legacy ChatSession-keyed pools: D6-1a is
-// already served, so claim must carry RuntimeStateGeneration>0. Missing
-// generation fails closed (pairing error), not dual-path compatibility.
+// chat wakes. Slot identity is agent×runtime. Context key is ChatSessionID
+// (never task.ID): same key may reuse the resident process; key change
+// disposes the process and forces a fresh provider session (no PriorSessionID).
+// There is no generation==0 fallback to legacy ChatSession-keyed pools.
 //
 // Resident process cwd/identity WorkDir is always the stable agent workspace
-// from Begin (turn.WorkDir), never the per-task cloud env workdir — otherwise
-// each turn fingerprints as config drift and recreates the resident backend.
-// PriorSessionID still comes from legacy claim sources until D6-2.
+// from Begin (turn.WorkDir), never the per-task cloud env workdir.
+// Materialize refreshes disk context before Execute; process restart (fingerprint
+// / context rotate) is what makes Pi/Grok re-read it.
 func (d *Daemon) tryCanonicalChatBackend(
 	task Task,
 	provider string,
@@ -98,23 +98,32 @@ func (d *Daemon) tryCanonicalChatBackend(
 	}
 
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
-		AgentID:      agentID,
-		RuntimeID:    task.RuntimeID,
-		Provider:     provider,
-		Executable:   entry.Path,
-		Model:        execOpts.Model,
-		Thinking:     execOpts.ThinkingLevel,
-		WorkDir:      workDir,
-		SystemPrompt: execOpts.SystemPrompt,
-		MCP:          string(execOpts.McpConfig),
-		CustomArgs:   append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
-		Environment:  turn.StableEnvironment,
+		AgentID:           agentID,
+		RuntimeID:         task.RuntimeID,
+		Provider:          provider,
+		Executable:        entry.Path,
+		Model:             execOpts.Model,
+		Thinking:          execOpts.ThinkingLevel,
+		WorkDir:           workDir,
+		SystemPrompt:      execOpts.SystemPrompt,
+		MCP:               string(execOpts.McpConfig),
+		CustomArgs:        append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
+		Environment:       turn.StableEnvironment,
+		ContextKey:        task.ChatSessionID,
+		WorkspaceID:       task.WorkspaceID,
+		Directed:          taskCtx.Directed,
+		ManagedRole:       taskCtx.ManagedRole,
+		AgentInstructions: taskCtx.AgentInstructions,
+		WorkspaceContext:  task.WorkspaceContext,
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical identity: %w", err)
 	}
 
 	factory := d.canonicalChatFactory(provider, profile)
+	// Pool clears CanonicalSessionID when ContextKey rotates (defense in depth
+	// vs claim PriorSessionID from the wrong chat). Same-key hard-field drift
+	// restarts the process but may keep PriorSessionID for chat continuity.
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
 		Mode:               mustCanonicalRuntimeMode(provider, profile),
@@ -128,10 +137,16 @@ func (d *Daemon) tryCanonicalChatBackend(
 
 	releaseTurn = false
 	if taskLog != nil {
+		resumeID := ""
+		if wrapped, ok := lease.backend.(*canonicalSessionBackend); ok {
+			resumeID = wrapped.canonicalSessionID
+		}
 		taskLog.Info("canonical chat runtime acquired",
 			"provider", provider,
 			"generation", task.RuntimeStateGeneration,
-			"prior_session", task.PriorSessionID != "",
+			"context_key", task.ChatSessionID,
+			"prior_session_claim", task.PriorSessionID != "",
+			"resume_session", resumeID != "",
 			"slot_agent", agentID,
 			"slot_runtime", task.RuntimeID,
 			"work_dir", workDir,

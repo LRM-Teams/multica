@@ -56,16 +56,17 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		}
 	}
 
-	// issueMarker is task-scoped and appears as a literal in
-	// .agent_context/issue_context.md (ChatSessionID does not appear in AGENTS.md).
-	runTurn := func(turnID, taskWorkDir, chatSessionID, issueMarker string) (backend agent.Backend, release func(bool), workDir string) {
+	// Same ChatSessionID across turns → resident reuse. Different task workdirs
+	// must not enter fingerprint. issueMarker is task-scoped residual proof.
+	sharedChat := uuid.NewString()
+	runTurn := func(turnID, taskWorkDir, chatSessionID, issueMarker, priorSession string, directed bool) (backend agent.Backend, release func(bool), workDir string) {
 		t.Helper()
 		task := Task{
 			ID:                     turnID,
 			WorkspaceID:            workspaceID,
 			RuntimeID:              runtimeID,
 			ChatSessionID:          chatSessionID,
-			PriorSessionID:         "provider-session-shared",
+			PriorSessionID:         priorSession,
 			RuntimeStateGeneration: 3,
 			AuthToken:              "token-a",
 		}
@@ -78,9 +79,9 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 			AgentID:       agentID,
 			AgentName:     "agent-a",
 			ChatSessionID: chatSessionID,
-			ChannelID:     "channel-" + turnID[:8],
+			ChannelID:     "channel-shared",
 			IssueID:       issueMarker,
-			Directed:      true,
+			Directed:      directed,
 		}
 		backend, release, turn, used, err := d.tryCanonicalChatBackend(
 			task,
@@ -108,7 +109,6 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		if execOpts.Cwd == taskWorkDir {
 			t.Fatalf("exec cwd still per-task path %q", taskWorkDir)
 		}
-		// Tier B: provider-readable runtime brief on stable cwd.
 		agentsPath := filepath.Join(turn.WorkDir, "AGENTS.md")
 		raw, readErr := os.ReadFile(agentsPath)
 		if readErr != nil {
@@ -117,7 +117,6 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		if !strings.Contains(string(raw), "BEGIN MULTICA-RUNTIME") {
 			t.Fatalf("AGENTS.md missing Multica runtime block:\n%s", raw)
 		}
-		// Tier B: task-scoped sidecar with this turn's marker.
 		ctxPath := filepath.Join(turn.WorkDir, ".agent_context", "issue_context.md")
 		ctxRaw, ctxErr := os.ReadFile(ctxPath)
 		if ctxErr != nil {
@@ -130,9 +129,7 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 	}
 
 	issueA := "issue-marker-task-A-" + uuid.NewString()
-	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, uuid.NewString(), issueA)
-	// Stamp a poison residual that must not survive into turn B if materialize
-	// only appended without clearing .agent_context (Tier C).
+	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, sharedChat, issueA, "provider-session-shared", true)
 	poison := filepath.Join(stableWorkDir, ".agent_context", "poison_task_A.md")
 	if err := os.WriteFile(poison, []byte("TASK_A_SECRET_SHOULD_NOT_LEAK"), 0o644); err != nil {
 		t.Fatal(err)
@@ -140,10 +137,13 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 	if _, err := backendA.Execute(context.Background(), "first", agent.ExecOptions{}); err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
+	if got := backendA.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-shared" {
+		t.Fatalf("same-chat resume = %q, want provider-session-shared", got)
+	}
 	releaseA(true)
 
 	issueB := "issue-marker-task-B-" + uuid.NewString()
-	backendB, releaseB, stableWorkDirB := runTurn(uuid.NewString(), taskWorkDirB, uuid.NewString(), issueB)
+	backendB, releaseB, stableWorkDirB := runTurn(uuid.NewString(), taskWorkDirB, sharedChat, issueB, "provider-session-shared", true)
 	defer releaseB(true)
 
 	if stableWorkDirB != stableWorkDir {
@@ -152,7 +152,7 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 	innerA := backendA.(*canonicalSessionBackend).backend
 	innerB := backendB.(*canonicalSessionBackend).backend
 	if innerA != innerB {
-		t.Fatal("second turn recreated resident backend despite same agent×runtime and stable turn.WorkDir")
+		t.Fatal("second turn recreated resident backend despite same ChatSessionID context key")
 	}
 	if got := d.canonicalRuntimes.slotCount(); got != 1 {
 		t.Fatalf("slot count = %d, want 1", got)
@@ -162,7 +162,6 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		t.Fatalf("factory counts created=%d closed=%d, want 1/0 (no recreate)", created, closed)
 	}
 
-	// Tier C residual clear: poison + task A facts gone; task B facts present.
 	if _, err := os.Stat(poison); !os.IsNotExist(err) {
 		t.Fatalf("task A poison residual still present under stable cwd: %v", err)
 	}
@@ -186,6 +185,90 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 	}
 	if !strings.Contains(string(agentsRaw), "BEGIN MULTICA-RUNTIME") {
 		t.Fatal("turn B AGENTS.md missing Multica runtime block")
+	}
+}
+
+func TestTryCanonicalChatBackendRotatesFreshSessionAcrossChatSessions(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin", "multica")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspaceID := uuid.NewString()
+	agentID := uuid.NewString()
+	runtimeID := uuid.NewString()
+	probe := &canonicalRuntimeFactoryProbe{}
+	d := &Daemon{
+		cfg:                          Config{WorkspacesRoot: root},
+		logger:                       agentRuntimeTurnTestLogger(),
+		agentRuntimeTurns:            newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger()),
+		canonicalRuntimes:            newCanonicalAgentRuntimePool(),
+		canonicalChatFactoryOverride: probe.factory,
+	}
+	baseEnv := func(turnID string) map[string]string {
+		return map[string]string{
+			"MULTICA_SERVER_URL":              "https://example.test",
+			"MULTICA_WORKSPACE_ID":            workspaceID,
+			"MULTICA_AGENT_ID":                agentID,
+			"MULTICA_AGENT_NAME":              "agent-a",
+			"MULTICA_TASK_ID":                 turnID,
+			"MULTICA_RUN_ID":                  turnID,
+			"MULTICA_AGENT_INBOX_LEASE_TOKEN": "lease-a",
+			"PATH":                            "/usr/bin",
+		}
+	}
+	run := func(chatID, prior string) (agent.Backend, func(bool)) {
+		t.Helper()
+		task := Task{
+			ID:                     uuid.NewString(),
+			WorkspaceID:            workspaceID,
+			RuntimeID:              runtimeID,
+			ChatSessionID:          chatID,
+			PriorSessionID:         prior,
+			RuntimeStateGeneration: 3,
+			AuthToken:              "token-a",
+		}
+		execOpts := agent.ExecOptions{Cwd: filepath.Join(root, "task-work"), Model: "model-a", ThinkingLevel: "low"}
+		taskCtx := execenv.TaskContextForEnv{
+			AgentID: agentID, AgentName: "agent-a", ChatSessionID: chatID, Directed: true,
+		}
+		backend, release, _, used, err := d.tryCanonicalChatBackend(
+			task, "grok", executionProfileFull, agentID, "token-a", bin, baseEnv(task.ID),
+			AgentEntry{Path: bin}, agent.Config{}, &execOpts, taskCtx, agentRuntimeTurnTestLogger(),
+		)
+		if err != nil || !used {
+			t.Fatalf("tryCanonicalChatBackend used=%v err=%v", used, err)
+		}
+		return backend, release
+	}
+
+	backendA, releaseA := run("chat-A", "provider-session-A")
+	if _, err := backendA.Execute(context.Background(), "a", agent.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := backendA.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-A" {
+		t.Fatalf("A resume = %q", got)
+	}
+	releaseA(true)
+
+	// Poisoned claim still carries session A while context key is chat B.
+	backendB, releaseB := run("chat-B", "provider-session-A")
+	defer releaseB(true)
+	if _, err := backendB.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := backendB.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("B resume = %q, want empty fresh after ContextKey rotate", got)
+	}
+	created, closed := probe.counts()
+	if created != 2 || closed != 1 {
+		t.Fatalf("created=%d closed=%d, want 2/1", created, closed)
+	}
+	if backendA.(*canonicalSessionBackend).backend == backendB.(*canonicalSessionBackend).backend {
+		t.Fatal("cross-chat reused resident backend")
 	}
 }
 

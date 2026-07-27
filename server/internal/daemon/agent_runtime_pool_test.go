@@ -64,6 +64,11 @@ func (p *canonicalRuntimeFactoryProbe) counts() (created, closed int) {
 
 func canonicalRuntimeIdentityForTest(t *testing.T, model string, environment map[string]string) canonicalAgentRuntimeIdentity {
 	t.Helper()
+	return canonicalRuntimeIdentityForTestWithContext(t, model, "chat-session-a", environment)
+}
+
+func canonicalRuntimeIdentityForTestWithContext(t *testing.T, model, contextKey string, environment map[string]string) canonicalAgentRuntimeIdentity {
+	t.Helper()
 	stable, currentTurn, err := splitAgentProcessEnvironment(environment)
 	if err != nil {
 		t.Fatalf("splitAgentProcessEnvironment: %v", err)
@@ -80,6 +85,9 @@ func canonicalRuntimeIdentityForTest(t *testing.T, model string, environment map
 		MCP:          `{"servers":[]}`,
 		CustomArgs:   []string{"--flag"},
 		Environment:  stable,
+		ContextKey:   contextKey,
+		WorkspaceID:  "workspace-a",
+		Directed:     true,
 	})
 	if err != nil {
 		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
@@ -134,11 +142,126 @@ func TestCanonicalAgentRuntimeIdentityFailsClosedOnCredentialOrUnknownMulticaEnv
 			Provider:    "pi",
 			Executable:  "/usr/local/bin/pi",
 			WorkDir:     "/var/lib/multica/agent-a/workspace",
+			ContextKey:  "chat-session-a",
 			Environment: map[string]string{key: "secret-or-unknown"},
 		})
 		if err == nil {
 			t.Fatalf("%s was accepted into canonical process identity", key)
 		}
+	}
+}
+
+func TestCanonicalAgentRuntimePoolRotatesFreshSessionOnContextKeyChange(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	}
+	firstIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-A", env)
+	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           firstIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if _, err := first.backend.Execute(context.Background(), "a", agent.ExecOptions{}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	if got := first.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-A" {
+		t.Fatalf("turn A resume = %q, want provider-session-A", got)
+	}
+	first.release(true)
+
+	// Cross-chat claim still carries a prior session id (wrong or stale) — must force fresh.
+	envB := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-b",
+	}
+	secondIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", envB)
+	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           secondIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A", // poisoned claim
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	defer second.release(true)
+	if _, err := second.backend.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if got := second.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("turn B resume = %q, want empty fresh session after context key rotate", got)
+	}
+	created, closed := probe.counts()
+	if created != 2 || closed != 1 {
+		t.Fatalf("factory created=%d closed=%d, want 2/1 (dispose on context key change)", created, closed)
+	}
+	innerA := first.backend.(*canonicalSessionBackend).backend
+	innerB := second.backend.(*canonicalSessionBackend).backend
+	if innerA == innerB {
+		t.Fatal("context key change reused resident backend")
+	}
+}
+
+func TestCanonicalAgentRuntimePoolRestartsProcessKeepsPriorOnHardFieldDrift(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	}
+	firstIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-same", env)
+	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           firstIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-chat",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	first.release(true)
+
+	// Same ContextKey, Directed flips → fingerprint drift → new process, keep Prior.
+	secondIdentity := firstIdentity
+	secondIdentity.Directed = false
+	if firstIdentity.fingerprint() == secondIdentity.fingerprint() {
+		t.Fatal("Directed change must alter fingerprint")
+	}
+	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           secondIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-chat",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	defer second.release(true)
+	if _, err := second.backend.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if got := second.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-chat" {
+		t.Fatalf("same-chat hard-field restart resume = %q, want provider-session-chat", got)
+	}
+	created, closed := probe.counts()
+	if created != 2 || closed != 1 {
+		t.Fatalf("factory created=%d closed=%d, want 2/1", created, closed)
 	}
 }
 

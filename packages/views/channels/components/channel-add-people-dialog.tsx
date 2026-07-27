@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActorIdentityPresentation } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
@@ -77,12 +77,12 @@ export function ChannelAddPeopleDialog({
   const { t } = useT("channels");
   const chipItems = allCandidates.filter((c) => selected.has(c.key));
   const loadKey = open && loading && !error ? "active" : "inactive";
-  const [prevLoadKey, setPrevLoadKey] = useState(loadKey);
+  const prevLoadKeyRef = useRef(loadKey);
   const [loadSlow, setLoadSlow] = useState(false);
   const [loadTimedOut, setLoadTimedOut] = useState(false);
 
-  if (loadKey !== prevLoadKey) {
-    setPrevLoadKey(loadKey);
+  if (loadKey !== prevLoadKeyRef.current) {
+    prevLoadKeyRef.current = loadKey;
     setLoadSlow(false);
     setLoadTimedOut(false);
   }

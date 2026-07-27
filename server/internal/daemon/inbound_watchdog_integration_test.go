@@ -105,9 +105,10 @@ func TestInboundWatchdogProbeAndTerminateViaConnection(t *testing.T) {
 	if !errors.Is(err, errInboundWatchdogTimeout) {
 		t.Fatalf("err = %v, want errInboundWatchdogTimeout", err)
 	}
-	if got := d.getWSConnState(); got != "closed" {
-		// defer sets closed after return path set backoff
-		t.Fatalf("final conn_state = %q, want closed", got)
+	// Outer loop owns backoff across the retry sleep (connection does not).
+	d.setWSConnState("backoff")
+	if got := d.getWSConnState(); got != "backoff" {
+		t.Fatalf("after watchdog error + outer assign, conn_state = %q, want backoff", got)
 	}
 
 	mu.Lock()
@@ -229,14 +230,15 @@ func TestInboundWatchdogRuntimeSetChangeCleansUp(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for runtime-set reconnect")
 	}
-	if got := d.getWSConnState(); got != "closed" {
-		t.Fatalf("final conn_state = %q, want closed", got)
+	// runtime-set is fast re-dial: outer loop must NOT stamp backoff.
+	if got := d.getWSConnState(); got == "backoff" {
+		t.Fatalf("runtime-set reconnect stamped backoff; want no fake backoff sleep state")
 	}
 }
 
-func TestLoadConfigInboundWatchdogDefaultAndDisable(t *testing.T) {
-	// Avoid full agent discovery: exercise durationFromEnv path via a thin
-	// wrapper equivalent to LoadConfig's inbound field resolution.
+func TestDurationFromEnvInboundWatchdogDefaultAndDisable(t *testing.T) {
+	// LoadConfig also resolves agents from PATH; this locks the same
+	// durationFromEnv wiring used for MULTICA_DAEMON_INBOUND_WATCHDOG.
 	t.Setenv("MULTICA_DAEMON_INBOUND_WATCHDOG", "")
 	got, err := durationFromEnv("MULTICA_DAEMON_INBOUND_WATCHDOG", DefaultInboundWatchdog)
 	if err != nil {
@@ -253,5 +255,62 @@ func TestLoadConfigInboundWatchdogDefaultAndDisable(t *testing.T) {
 	}
 	if got != 0 {
 		t.Fatalf("disabled = %v, want 0", got)
+	}
+}
+
+// TestTaskWakeupLoopBackoffObservableDuringRetrySleep locks loop-level ownership:
+// after a transient connection failure the state stays backoff for the whole
+// retry sleep, then becomes closed when the loop context is cancelled.
+func TestTaskWakeupLoopBackoffObservableDuringRetrySleep(t *testing.T) {
+	// No server → dial fails immediately (transient).
+	d := New(Config{
+		ServerBaseURL:     "http://127.0.0.1:1", // nothing listening
+		HeartbeatInterval: time.Hour,
+		InboundWatchdog:   time.Hour,
+		WorkspacesRoot:    t.TempDir(),
+	}, testDiscardLogger())
+	d.mu.Lock()
+	d.runtimeIndex["rt-1"] = Runtime{ID: "rt-1", WorkspaceID: "ws-1"}
+	d.workspaces["ws-1"] = &workspaceState{workspaceID: "ws-1", runtimeIDs: []string{"rt-1"}}
+	d.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	taskWakeups := make(chan taskWakeup, 4)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.taskWakeupLoop(ctx, taskWakeups)
+	}()
+
+	// Wait until outer loop stamps backoff after the failed dial.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.getWSConnState() == "backoff" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := d.getWSConnState(); got != "backoff" {
+		cancel()
+		<-done
+		t.Fatalf("during retry window conn_state = %q, want backoff", got)
+	}
+	// Hold briefly to prove backoff persists across the sleep window (first
+	// retry is ~1s ± jitter; sample mid-window).
+	time.Sleep(200 * time.Millisecond)
+	if got := d.getWSConnState(); got != "backoff" {
+		cancel()
+		<-done
+		t.Fatalf("still in retry sleep conn_state = %q, want backoff", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskWakeupLoop did not exit after cancel")
+	}
+	if got := d.getWSConnState(); got != "closed" {
+		t.Fatalf("after loop exit conn_state = %q, want closed", got)
 	}
 }

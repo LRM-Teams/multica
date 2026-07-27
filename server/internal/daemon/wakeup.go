@@ -31,6 +31,10 @@ func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWake
 	backoff := time.Second
 	runtimeSetCh, unsub := d.runtimeSet.Subscribe()
 	defer unsub()
+	// Loop owns backoff/closed visibility: connection only reports connecting/open
+	// (and closed after its local resources are torn down). Transient errors set
+	// backoff for the entire sleep window; loop exit is the only durable closed.
+	defer d.setWSConnState("closed")
 
 	for {
 		runtimeIDs := d.allRuntimeIDs()
@@ -46,11 +50,18 @@ func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWake
 			return
 		}
 		if errors.Is(err, errRuntimeSetChanged) {
+			// Fast re-dial: no backoff sleep, no fake backoff state.
 			backoff = time.Second
 			continue
 		}
 		if err != nil {
-			d.logger.Debug("task wakeup websocket unavailable; polling fallback remains active", "error", err, "retry_in", backoff)
+			d.setWSConnState("backoff")
+			d.logger.Debug("task wakeup websocket unavailable; polling fallback remains active",
+				"error", err,
+				"retry_in", backoff,
+				"conn_state", "backoff",
+				"reason", wakeupErrorReason(err),
+			)
 		}
 
 		if err := sleepWithContextOrRuntimeChange(ctx, jitterDuration(backoff), runtimeSetCh); err != nil {
@@ -63,6 +74,16 @@ func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWake
 			}
 		}
 	}
+}
+
+func wakeupErrorReason(err error) string {
+	if errors.Is(err, errInboundWatchdogTimeout) {
+		return "watchdog_timeout"
+	}
+	if err == nil {
+		return ""
+	}
+	return "transient"
 }
 
 func jitterDuration(d time.Duration) time.Duration {
@@ -78,14 +99,14 @@ func jitterDuration(d time.Duration) time.Duration {
 }
 
 func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []string, taskWakeups chan<- taskWakeup, runtimeSetCh <-chan struct{}) error {
+	// Connection owns connecting/open only. Outer taskWakeupLoop owns backoff
+	// across retry sleep and final closed on loop exit.
 	d.setWSConnState("connecting")
 	if err := d.reconcileReminderRuntimeSet(runtimeIDs); err != nil {
-		d.setWSConnState("backoff")
 		return fmt.Errorf("reconcile reminder runtime set: %w", err)
 	}
 	wsURL, err := taskWakeupURL(d.cfg.ServerBaseURL, runtimeIDs)
 	if err != nil {
-		d.setWSConnState("backoff")
 		return err
 	}
 
@@ -106,7 +127,6 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
-		d.setWSConnState("backoff")
 		return err
 	}
 	// HTTP heartbeats resume the moment WS detaches so the freshness window
@@ -114,7 +134,6 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	defer func() {
 		_ = conn.Close()
 		d.clearWSHeartbeatAcks()
-		d.setWSConnState("closed")
 	}()
 
 	d.setWSConnState("open")
@@ -193,28 +212,20 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 
 	select {
 	case <-ctx.Done():
-		d.setWSConnState("backoff")
 		return ctx.Err()
 	case <-runtimeSetCh:
-		d.setWSConnState("backoff")
 		return errRuntimeSetChanged
 	case err := <-watchdogErrCh:
-		d.setWSConnState("backoff")
 		return err
 	case err := <-errCh:
 		// Prefer watchdog sentinel when Close raced the reader.
 		if watchdogTimedOut.Load() {
-			d.setWSConnState("backoff")
 			return errInboundWatchdogTimeout
 		}
 		select {
 		case wdErr := <-watchdogErrCh:
-			d.setWSConnState("backoff")
 			return wdErr
 		default:
-		}
-		if err != nil {
-			d.setWSConnState("backoff")
 		}
 		return err
 	}

@@ -5,7 +5,7 @@ import "testing"
 func TestConvertSkillsForEnvFillsDescriptionFromFrontmatter(t *testing.T) {
 	t.Parallel()
 	skills := convertSkillsForEnv([]SkillData{{
-		Name:    "demo",
+		Name: "demo",
 		Content: "---\nname: demo\ndescription: Use when verifying progressive skill loading.\n---\n\n# Demo\n",
 	}})
 	if len(skills) != 1 {

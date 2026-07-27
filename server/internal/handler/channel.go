@@ -344,6 +344,20 @@ type AddChannelMemberRequest struct {
 	MemberID   string `json:"member_id"`
 }
 
+type ChannelInviteCandidateResponse struct {
+	MemberType  string  `json:"member_type"`
+	MemberID    string  `json:"member_id"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	Email       string  `json:"email,omitempty"`
+	AvatarURL   *string `json:"avatar_url"`
+	Role        string  `json:"role,omitempty"`
+}
+
+type ChannelInviteCandidatesResponse struct {
+	Candidates []ChannelInviteCandidateResponse `json:"candidates"`
+}
+
 type SendChannelMessageRequest struct {
 	Content             string                 `json:"content"`
 	Parts               []protocol.MessagePart `json:"parts"`
@@ -1096,6 +1110,125 @@ func (h *Handler) archiveChannel(w http.ResponseWriter, r *http.Request, workspa
 	// Archived while other tabs thought it was gone).
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", uuidToString(userID), ch)
 	return ch, true
+}
+
+func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	qLower := strings.ToLower(q)
+	qLike := "%" + qLower + "%"
+	includeAll := qLower == ""
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike, actorType, parseUUID(actorID), h.channelInviteRequesterRole(r.Context(), userID, workspaceID)}
+	limitClause := ""
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		limit := boundedQueryInt(r, "limit", 200, 500)
+		args = append(args, limit)
+		limitClause = " LIMIT $8"
+	}
+
+	query := `
+		WITH visible_agents AS (
+			SELECT a.id, a.name, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name,
+			       a.avatar_url, a.created_at
+			FROM agent a
+			WHERE a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			  AND COALESCE(a.managed_role, '') <> 'group_manager'
+			  AND (a.visibility <> 'channel' OR a.home_channel_id = $2)
+			  AND NOT EXISTS (
+				SELECT 1 FROM channel_member cm
+				WHERE cm.channel_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
+			  )
+			  AND (
+				$5::text = 'agent'
+				OR a.owner_id = $6::uuid
+				OR (
+					COALESCE(NULLIF(a.display_name, ''), a.name) NOT IN ('Wendy', 'Windy', 'Joe')
+					AND (a.visibility <> 'private' OR $7::text IN ('owner', 'admin'))
+				)
+			  )
+			  AND (
+				$3::boolean
+				OR lower(a.name) LIKE $4
+				OR lower(COALESCE(NULLIF(a.display_name, ''), a.name)) LIKE $4
+			  )
+		), candidates AS (
+			SELECT 'user'::text AS member_type, m.user_id AS member_id,
+			       u.name, COALESCE(NULLIF(u.display_name, ''), u.name, u.email) AS display_name,
+			       u.email, u.avatar_url, m.role, m.created_at
+			FROM member m
+			JOIN "user" u ON u.id = m.user_id
+			WHERE m.workspace_id = $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM channel_member cm
+				WHERE cm.channel_id = $2 AND cm.member_type = 'user' AND cm.member_id = m.user_id
+			  )
+			  AND (
+				$3::boolean
+				OR lower(u.name) LIKE $4
+				OR lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email)) LIKE $4
+				OR lower(u.email) LIKE $4
+			  )
+			UNION ALL
+			SELECT 'agent'::text AS member_type, va.id AS member_id,
+			       va.name, va.display_name, ''::text AS email, va.avatar_url, ''::text AS role, va.created_at
+			FROM visible_agents va
+		)
+		SELECT member_type, member_id, name, display_name, email, avatar_url, role
+		FROM candidates
+		ORDER BY lower(display_name), lower(name), member_id` + limitClause
+	rows, err := h.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel invite candidates")
+		return
+	}
+	defer rows.Close()
+
+	out := []ChannelInviteCandidateResponse{}
+	for rows.Next() {
+		var c ChannelInviteCandidateResponse
+		var id pgtype.UUID
+		var avatar pgtype.Text
+		if err := rows.Scan(&c.MemberType, &id, &c.Name, &c.DisplayName, &c.Email, &avatar, &c.Role); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read channel invite candidates")
+			return
+		}
+		c.MemberID = uuidToString(id)
+		c.AvatarURL = textToPtr(avatar)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read channel invite candidates")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, ChannelInviteCandidatesResponse{Candidates: out})
+}
+
+func (h *Handler) channelInviteRequesterRole(ctx context.Context, userID, workspaceID string) string {
+	if member, err := h.getWorkspaceMember(ctx, userID, workspaceID); err == nil {
+		return member.Role
+	}
+	return "member"
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {

@@ -4054,63 +4054,28 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	var backend agent.Backend
 	var releasePersistentRuntime func(bool)
-	// D6-1b: generation>0 Grok/Pi chat uses canonical agent×runtime pool.
-	// generation==0 keeps the legacy ChatSession-keyed pools (old servers).
+	// D6-1b: full Grok/Pi chat uses only the canonical agent×runtime pool.
+	// No generation==0 dual path to ChatSession-keyed pools (Frank: no permanent
+	// compat). D6-1a is served; missing generation fails closed inside the entry.
 	selfBinForCanonical := ""
 	if resolveExecutable != nil {
 		if bin, binErr := resolveExecutable(); binErr == nil {
 			selfBinForCanonical = bin
 		}
 	}
-	if backend == nil {
-		if cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
+	if usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task) {
+		cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
 			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, execOpts, taskLog,
-		); cErr != nil {
+		)
+		if cErr != nil {
 			return TaskResult{}, cErr
-		} else if cUsed {
-			backend = cBackend
-			releasePersistentRuntime = cRelease
 		}
-	}
-	if backend == nil && usesPersistentGrokChatRuntime(provider, task) {
-		identity := persistentRuntimeIdentity{
-			AgentID:       resolvedTaskAgentID(task),
-			RuntimeID:     task.RuntimeID,
-			ChatSessionID: task.ChatSessionID,
-			Executable:    entry.Path,
-			Model:         execOpts.Model,
-			Thinking:      execOpts.ThinkingLevel,
-			WorkDir:       execOpts.Cwd,
-			SystemPrompt:  execOpts.SystemPrompt,
-			MCP:           string(execOpts.McpConfig),
-			CustomArgs:    append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
-			Environment:   agentEnv,
+		if !cUsed {
+			return TaskResult{}, fmt.Errorf("canonical chat entry required for %s full chat (no legacy ChatSession pool)", provider)
 		}
-		var persistentErr error
-		backend, releasePersistentRuntime, persistentErr = d.acquireGrokChatACPBackend(identity, backendCfg)
-		if persistentErr != nil {
-			return TaskResult{}, fmt.Errorf("acquire persistent runtime backend: %w", persistentErr)
-		}
-	} else if backend == nil && usesPersistentPiChatRuntime(provider, task) {
-		identity := piPersistentIdentity{
-			AgentID:       resolvedTaskAgentID(task),
-			RuntimeID:     task.RuntimeID,
-			ChatSessionID: task.ChatSessionID,
-			Executable:    entry.Path,
-			Model:         execOpts.Model,
-			Thinking:      execOpts.ThinkingLevel,
-			WorkDir:       execOpts.Cwd,
-			SystemPrompt:  execOpts.SystemPrompt,
-			MCP:           string(execOpts.McpConfig),
-			CustomArgs:    append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
-			Environment:   agentEnv,
-		}
-		var persistentErr error
-		backend, releasePersistentRuntime, persistentErr = d.acquirePiChatRPCBackend(identity, backendCfg)
-		if persistentErr != nil {
-			return TaskResult{}, fmt.Errorf("acquire persistent Pi runtime backend: %w", persistentErr)
-		}
-	} else if backend == nil {
+		backend = cBackend
+		releasePersistentRuntime = cRelease
+	} else {
 		var createErr error
 		backend, createErr = agent.New(provider, backendCfg)
 		if createErr != nil {

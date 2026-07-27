@@ -253,13 +253,13 @@ func TestAgentRuntimeTurnCoordinatorConcurrentBeginHasSingleWinner(t *testing.T)
 	}
 }
 
-func TestD4AgentRuntimeTurnSeamRemainsDormantUntilD6(t *testing.T) {
-	raw, err := os.ReadFile("daemon.go")
+func TestD4AgentRuntimeTurnSeamIsActivatedForD6(t *testing.T) {
+	entryRaw, err := os.ReadFile("canonical_chat_entry.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), ".agentRuntimeTurns.Begin(") {
-		t.Fatal("daemon.go activates D4 agent runtime turn seam before D6")
+	if !strings.Contains(string(entryRaw), ".agentRuntimeTurns.Begin(") {
+		t.Fatal("D6-1b must call agentRuntimeTurns.Begin from the production chat entry")
 	}
 }
 

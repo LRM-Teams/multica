@@ -96,20 +96,26 @@ type GlobalSearchCounts struct {
 	People   int `json:"people"`
 }
 
+type GlobalSearchHighlightRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
 type GlobalSearchMessageResult struct {
-	ResultType          string  `json:"result_type"`
-	MessageID           string  `json:"message_id"`
-	ChannelID           string  `json:"channel_id"`
-	ChannelName         string  `json:"channel_name"`
-	ChannelKind         string  `json:"channel_kind"`
-	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
-	HitCount            int     `json:"hit_count"`
-	AuthorType          string  `json:"author_type"`
-	AuthorID            *string `json:"author_id"`
-	AuthorName          string  `json:"author_name"`
-	Content             string  `json:"content"`
-	Snippet             string  `json:"snippet"`
-	CreatedAt           string  `json:"created_at"`
+	ResultType          string                       `json:"result_type"`
+	MessageID           string                       `json:"message_id"`
+	ChannelID           string                       `json:"channel_id"`
+	ChannelName         string                       `json:"channel_name"`
+	ChannelKind         string                       `json:"channel_kind"`
+	ThreadRootMessageID *string                      `json:"thread_root_message_id,omitempty"`
+	HitCount            int                          `json:"hit_count"`
+	AuthorType          string                       `json:"author_type"`
+	AuthorID            *string                      `json:"author_id"`
+	AuthorName          string                       `json:"author_name"`
+	Content             string                       `json:"content"`
+	Snippet             string                       `json:"snippet"`
+	HighlightRanges     []GlobalSearchHighlightRange `json:"highlight_ranges"`
+	CreatedAt           string                       `json:"created_at"`
 }
 
 type GlobalSearchChannelResult struct {
@@ -1571,7 +1577,7 @@ func (h *Handler) SearchGlobal(w http.ResponseWriter, r *http.Request) {
 	switch scope {
 	case "all", "messages", "channels", "dms", "people":
 	default:
-		writeError(w, http.StatusBadRequest, "invalid search scope")
+		writeCodedError(w, http.StatusBadRequest, "invalid_search_scope", "invalid search scope")
 		return
 	}
 	limit := boundedQueryInt(r, "limit", 20, 50)
@@ -1627,7 +1633,7 @@ func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, w
 		  AND m.author_type <> 'system'
 		  AND m.deleted_at IS NULL
 		  AND m.content ILIKE $3 ESCAPE '\'`, workspaceID, userID, pattern).Scan(&resp.Counts.Messages); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to count global message search results")
+		writeCodedError(w, http.StatusInternalServerError, "global_search_message_count_failed", "failed to count global message search results")
 		return false
 	}
 	rows, err := h.DB.Query(r.Context(), `
@@ -1647,7 +1653,7 @@ func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, w
 		ORDER BY m.created_at DESC, m.id DESC
 		LIMIT $4`, workspaceID, userID, pattern, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to search messages")
+		writeCodedError(w, http.StatusInternalServerError, "global_search_messages_failed", "failed to search messages")
 		return false
 	}
 	defer rows.Close()
@@ -1657,7 +1663,7 @@ func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, w
 		var createdAt pgtype.Timestamptz
 		var hitCount int
 		if err := rows.Scan(&id, &chID, &channelName, &channelKind, &threadRootID, &authorType, &authorID, &authorName, &content, &createdAt, &hitCount); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read message search results")
+			writeCodedError(w, http.StatusInternalServerError, "global_search_message_read_failed", "failed to read message search results")
 			return false
 		}
 		resp.Messages = append(resp.Messages, GlobalSearchMessageResult{
@@ -1673,6 +1679,7 @@ func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, w
 			AuthorName:          authorName,
 			Content:             content,
 			Snippet:             searchSnippet(content, query),
+			HighlightRanges:     searchHighlightRanges(content, query),
 			CreatedAt:           timestampToString(createdAt),
 		})
 	}
@@ -1695,7 +1702,7 @@ func (h *Handler) globalSearchChannels(w http.ResponseWriter, r *http.Request, w
 		  AND ch.kind = $3
 		  AND ch.archived_at IS NULL
 		  AND (ch.name ILIKE $4 ESCAPE '\' OR COALESCE(ch.description, '') ILIKE $4 ESCAPE '\')`, workspaceID, userID, kind, pattern).Scan(countTarget); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to count channel search results")
+		writeCodedError(w, http.StatusInternalServerError, "global_search_channel_count_failed", "failed to count channel search results")
 		return false
 	}
 	rows, err := h.DB.Query(r.Context(), `
@@ -1712,7 +1719,7 @@ func (h *Handler) globalSearchChannels(w http.ResponseWriter, r *http.Request, w
 		ORDER BY ch.updated_at DESC, ch.name ASC
 		LIMIT $5`, workspaceID, userID, kind, pattern, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to search channels")
+		writeCodedError(w, http.StatusInternalServerError, "global_search_channels_failed", "failed to search channels")
 		return false
 	}
 	defer rows.Close()
@@ -1721,7 +1728,7 @@ func (h *Handler) globalSearchChannels(w http.ResponseWriter, r *http.Request, w
 		var name, rowKind string
 		var description pgtype.Text
 		if err := rows.Scan(&id, &name, &rowKind, &description); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read channel search results")
+			writeCodedError(w, http.StatusInternalServerError, "global_search_channel_read_failed", "failed to read channel search results")
 			return false
 		}
 		item := GlobalSearchChannelResult{ChannelID: uuidToString(id), Name: name, Kind: rowKind, Description: textToPtr(description)}
@@ -1750,7 +1757,7 @@ func (h *Handler) globalSearchPeople(w http.ResponseWriter, r *http.Request, wor
 			  AND (a.visibility = 'workspace' OR a.owner_id = $3)
 			  AND (a.name ILIKE $2 ESCAPE '\' OR COALESCE(a.display_name, '') ILIKE $2 ESCAPE '\')
 		) people`, workspaceID, pattern, userID).Scan(&resp.Counts.People); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to count people search results")
+		writeCodedError(w, http.StatusInternalServerError, "global_search_people_count_failed", "failed to count people search results")
 		return false
 	}
 	rows, err := h.DB.Query(r.Context(), `
@@ -1772,7 +1779,7 @@ func (h *Handler) globalSearchPeople(w http.ResponseWriter, r *http.Request, wor
 		ORDER BY sort_at DESC, display_name ASC
 		LIMIT $4`, workspaceID, pattern, userID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to search people")
+		writeCodedError(w, http.StatusInternalServerError, "global_search_people_failed", "failed to search people")
 		return false
 	}
 	defer rows.Close()
@@ -1781,7 +1788,7 @@ func (h *Handler) globalSearchPeople(w http.ResponseWriter, r *http.Request, wor
 		var actorID pgtype.UUID
 		var avatarURL pgtype.Text
 		if err := rows.Scan(&actorType, &actorID, &name, &displayName, &avatarURL); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read people search results")
+			writeCodedError(w, http.StatusInternalServerError, "global_search_people_read_failed", "failed to read people search results")
 			return false
 		}
 		resp.People = append(resp.People, GlobalSearchPersonResult{ActorType: actorType, ActorID: uuidToString(actorID), Name: name, DisplayName: displayName, AvatarURL: textToPtr(avatarURL)})
@@ -1795,31 +1802,73 @@ func searchSnippet(content, query string) string {
 	if content == "" || query == "" {
 		return content
 	}
-	lowerContent := strings.ToLower(content)
-	lowerQuery := strings.ToLower(query)
-	idx := strings.Index(lowerContent, lowerQuery)
-	if idx < 0 {
-		if len([]rune(content)) <= 160 {
+	contentRunes := []rune(content)
+	lowerContent := []rune(strings.ToLower(content))
+	lowerQuery := []rune(strings.ToLower(query))
+	matchStart := indexRunes(lowerContent, lowerQuery, 0)
+	if matchStart < 0 {
+		if len(contentRunes) <= 160 {
 			return content
 		}
-		return string([]rune(content)[:160]) + "…"
+		return string(contentRunes[:160]) + "…"
 	}
-	start := idx - 60
+	matchEnd := matchStart + len(lowerQuery)
+	start := matchStart - 60
 	if start < 0 {
 		start = 0
 	}
-	end := idx + len(query) + 60
-	if end > len(content) {
-		end = len(content)
+	end := matchEnd + 60
+	if end > len(contentRunes) {
+		end = len(contentRunes)
 	}
-	snippet := strings.TrimSpace(content[start:end])
+	snippet := strings.TrimSpace(string(contentRunes[start:end]))
 	if start > 0 {
 		snippet = "…" + snippet
 	}
-	if end < len(content) {
+	if end < len(contentRunes) {
 		snippet += "…"
 	}
 	return snippet
+}
+
+func searchHighlightRanges(content, query string) []GlobalSearchHighlightRange {
+	content = strings.TrimSpace(content)
+	query = strings.TrimSpace(query)
+	if content == "" || query == "" {
+		return []GlobalSearchHighlightRange{}
+	}
+	lowerContent := []rune(strings.ToLower(content))
+	lowerQuery := []rune(strings.ToLower(query))
+	ranges := []GlobalSearchHighlightRange{}
+	for offset := 0; offset < len(lowerContent); {
+		idx := indexRunes(lowerContent, lowerQuery, offset)
+		if idx < 0 {
+			break
+		}
+		end := idx + len(lowerQuery)
+		ranges = append(ranges, GlobalSearchHighlightRange{Start: idx, End: end})
+		offset = end
+	}
+	return ranges
+}
+
+func indexRunes(haystack, needle []rune, offset int) int {
+	if len(needle) == 0 || len(haystack) < len(needle) || offset > len(haystack)-len(needle) {
+		return -1
+	}
+	for i := offset; i <= len(haystack)-len(needle); i++ {
+		matched := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
 }
 
 func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) {

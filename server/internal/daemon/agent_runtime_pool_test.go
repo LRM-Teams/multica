@@ -791,12 +791,22 @@ func TestCanonicalAgentRuntimeSlotIdleTimestampAdvances(t *testing.T) {
 	}
 }
 
-func TestCanonicalAgentRuntimePoolRemainsDormantUntilD6(t *testing.T) {
+func TestCanonicalAgentRuntimePoolIsActivatedForD6(t *testing.T) {
 	raw, err := os.ReadFile("daemon.go")
 	if err != nil {
 		t.Fatalf("read daemon.go: %v", err)
 	}
-	if strings.Contains(string(raw), ".acquireCanonicalAgentRuntime(") {
-		t.Fatal("D4 provider pool is live before D5/D6 wake serialization and caller cutover")
+	// D6-1b: production path must route through tryCanonicalChatBackend, which
+	// calls acquireCanonicalAgentRuntime. Presence of the helper call site is
+	// the activation gate (dormant gate inverted).
+	entryRaw, err := os.ReadFile("canonical_chat_entry.go")
+	if err != nil {
+		t.Fatalf("read canonical_chat_entry.go: %v", err)
+	}
+	if !strings.Contains(string(entryRaw), ".acquireCanonicalAgentRuntime(") {
+		t.Fatal("D6-1b must call acquireCanonicalAgentRuntime from the production chat entry")
+	}
+	if !strings.Contains(string(raw), "tryCanonicalChatBackend(") {
+		t.Fatal("D6-1b must invoke tryCanonicalChatBackend from runTask")
 	}
 }

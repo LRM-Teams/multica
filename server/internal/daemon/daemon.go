@@ -212,16 +212,17 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
-	// persistentRuntimes owns Grok ACP chat sessions. Issue work stays one-shot.
-	// Full execution identity keeps unrelated chat agents and prompts isolated.
+	// persistentRuntimes owns Grok ACP chat for generation=0 legacy path.
+	// D6-1b routes generation>0 chat through canonicalRuntimes (agent×runtime).
 	persistentRuntimes *persistentRuntimePool
-	// piPersistentRuntimes owns native Pi RPC chat sessions. Issue work stays
-	// on the existing one-shot Pi path.
+	// piPersistentRuntimes owns Pi RPC chat for generation=0 legacy path.
 	piPersistentRuntimes *piPersistentPool
-	// agentRuntimeTurns is the dormant D4a handoff from canonical runtime
-	// state/workspace/current-turn transport into the provider-neutral D4
-	// pool. D6 activates Begin after server and daemon serialization are live.
+	// agentRuntimeTurns is the D4a handoff. D6-1b activates Begin for
+	// generation>0 Grok/Pi chat wakes.
 	agentRuntimeTurns *agentRuntimeTurnCoordinator
+	// canonicalRuntimes is the D4 provider pool; D6-1b acquires resident
+	// Grok/Pi backends so one agent×runtime shares one provider session slot.
+	canonicalRuntimes *canonicalAgentRuntimePool
 }
 
 // New creates a new Daemon instance.
@@ -253,6 +254,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeCurationRuns:        make(map[string]string),
 		persistentRuntimes:        newPersistentRuntimePool(),
 		piPersistentRuntimes:      newPiPersistentPool(),
+		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 	}
 	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
 	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
@@ -4052,7 +4054,25 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	var backend agent.Backend
 	var releasePersistentRuntime func(bool)
-	if usesPersistentGrokChatRuntime(provider, task) {
+	// D6-1b: generation>0 Grok/Pi chat uses canonical agent×runtime pool.
+	// generation==0 keeps the legacy ChatSession-keyed pools (old servers).
+	selfBinForCanonical := ""
+	if resolveExecutable != nil {
+		if bin, binErr := resolveExecutable(); binErr == nil {
+			selfBinForCanonical = bin
+		}
+	}
+	if backend == nil {
+		if cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
+			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, execOpts, taskLog,
+		); cErr != nil {
+			return TaskResult{}, cErr
+		} else if cUsed {
+			backend = cBackend
+			releasePersistentRuntime = cRelease
+		}
+	}
+	if backend == nil && usesPersistentGrokChatRuntime(provider, task) {
 		identity := persistentRuntimeIdentity{
 			AgentID:       resolvedTaskAgentID(task),
 			RuntimeID:     task.RuntimeID,
@@ -4071,7 +4091,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if persistentErr != nil {
 			return TaskResult{}, fmt.Errorf("acquire persistent runtime backend: %w", persistentErr)
 		}
-	} else if usesPersistentPiChatRuntime(provider, task) {
+	} else if backend == nil && usesPersistentPiChatRuntime(provider, task) {
 		identity := piPersistentIdentity{
 			AgentID:       resolvedTaskAgentID(task),
 			RuntimeID:     task.RuntimeID,
@@ -4090,7 +4110,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if persistentErr != nil {
 			return TaskResult{}, fmt.Errorf("acquire persistent Pi runtime backend: %w", persistentErr)
 		}
-	} else {
+	} else if backend == nil {
 		var createErr error
 		backend, createErr = agent.New(provider, backendCfg)
 		if createErr != nil {

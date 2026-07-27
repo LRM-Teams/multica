@@ -3,7 +3,7 @@
 import { useWorkspaceId } from "@multica/core/hooks";
 import { cn } from "@multica/ui/lib/utils";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
-import { isCompactActivityLabel } from "./agent-compact-activity";
+import { isCompactActivityLabel } from "./is-compact-activity-label";
 
 /**
  * LRM-650 / LRM-647 — DM header Compact under the peer name.

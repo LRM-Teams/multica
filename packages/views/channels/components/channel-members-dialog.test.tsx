@@ -83,7 +83,6 @@ vi.mock("./agent-compact-activity", () => ({
   AgentCompactActivity: ({ agentId }: { agentId: string }) => (
     <span data-testid="agent-compact-activity">{agentId}</span>
   ),
-  isCompactActivityLabel: () => true,
 }));
 
 function member(

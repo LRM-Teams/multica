@@ -31,7 +31,7 @@ import { formatDuration } from "../../agents/components/agent-activity-hover-con
 import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { useT } from "../../i18n";
-import { isCompactActivityLabel } from "./agent-compact-activity";
+import { isCompactActivityLabel } from "./is-compact-activity-label";
 import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 
 /**

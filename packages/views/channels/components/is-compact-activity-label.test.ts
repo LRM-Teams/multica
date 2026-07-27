@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
-import { isCompactActivityLabel } from "./agent-compact-activity";
+import { isCompactActivityLabel } from "./is-compact-activity-label";
 
 describe("isCompactActivityLabel (LRM-650)", () => {
   it("accepts concrete EN activity types", () => {

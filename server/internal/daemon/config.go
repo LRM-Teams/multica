@@ -65,6 +65,7 @@ const (
 	DefaultMemoryCurationL3ReviewTimeout = 10 * time.Minute
 	DefaultGrokPersistentIdleTTL         = 15 * time.Minute
 	DefaultPiPersistentIdleTTL           = 15 * time.Minute
+	// DefaultInboundWatchdog: see inbound_watchdog.go (Raft-aligned 70s).
 )
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
@@ -77,38 +78,41 @@ var DefaultGCArtifactPatterns = []string{"node_modules", ".next", ".turbo"}
 
 // Config holds all daemon configuration.
 type Config struct {
-	ServerBaseURL                  string
-	DaemonID                       string
-	LegacyDaemonIDs                []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
-	DeviceName                     string
-	RuntimeName                    string
-	CLIVersion                     string                // multica CLI version (e.g. "0.1.13")
-	LaunchedBy                     string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile                        string                // profile name (empty = default)
-	Agents                         map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
-	WorkspacesRoot                 string                // base path for execution envs (default: ~/multica_workspaces)
-	KeepEnvAfterTask               bool                  // preserve env after task for debugging
-	HealthPort                     int                   // local HTTP port for health checks (default: 19514)
-	MaxConcurrentTasks             int                   // max tasks running in parallel (default: 20)
-	GCEnabled                      bool                  // enable periodic workspace garbage collection (default: true)
-	GCInterval                     time.Duration         // how often the GC loop runs (default: 1h)
-	GCTTL                          time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
-	GCOrphanTTL                    time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
-	GCArtifactTTL                  time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
-	GCArtifactPatterns             []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
-	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
-	AutoUpdateConfigSource         string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
-	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
-	UpdateObservationPath          string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
-	SharedSkillsDir                string                // optional global override; when empty each provider uses its own shared root
-	SharedSkillsSyncInterval       time.Duration         // how often to scan and sync SharedSkillsDir
-	MemoryCurationL3ReviewEnabled  bool                  // run the local Pi L3 reviewer during daemon-side curation
-	MemoryCurationL3ReviewTimeout  time.Duration         // per-agent L3 reviewer timeout
-	MemoryCurationRunTimeout       time.Duration         // wall-clock timeout for one daemon-claimed curation run
-	GrokPersistentIdleTTL          time.Duration         // 0 disables idle chat-session eviction
-	PiPersistentIdleTTL            time.Duration         // 0 disables idle Pi chat-session eviction
-	PollInterval                   time.Duration
-	HeartbeatInterval              time.Duration
+	ServerBaseURL                 string
+	DaemonID                      string
+	LegacyDaemonIDs               []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+	DeviceName                    string
+	RuntimeName                   string
+	CLIVersion                    string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy                    string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile                       string                // profile name (empty = default)
+	Agents                        map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
+	WorkspacesRoot                string                // base path for execution envs (default: ~/multica_workspaces)
+	KeepEnvAfterTask              bool                  // preserve env after task for debugging
+	HealthPort                    int                   // local HTTP port for health checks (default: 19514)
+	MaxConcurrentTasks            int                   // max tasks running in parallel (default: 20)
+	GCEnabled                     bool                  // enable periodic workspace garbage collection (default: true)
+	GCInterval                    time.Duration         // how often the GC loop runs (default: 1h)
+	GCTTL                         time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
+	GCOrphanTTL                   time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
+	GCArtifactTTL                 time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
+	GCArtifactPatterns            []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
+	AutoUpdateEnabled             bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
+	AutoUpdateConfigSource        string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
+	AutoUpdateCheckInterval       time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	UpdateObservationPath         string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
+	SharedSkillsDir               string                // optional global override; when empty each provider uses its own shared root
+	SharedSkillsSyncInterval      time.Duration         // how often to scan and sync SharedSkillsDir
+	MemoryCurationL3ReviewEnabled bool                  // run the local Pi L3 reviewer during daemon-side curation
+	MemoryCurationL3ReviewTimeout time.Duration         // per-agent L3 reviewer timeout
+	MemoryCurationRunTimeout      time.Duration         // wall-clock timeout for one daemon-claimed curation run
+	GrokPersistentIdleTTL         time.Duration         // 0 disables idle chat-session eviction
+	PiPersistentIdleTTL           time.Duration         // 0 disables idle Pi chat-session eviction
+	PollInterval                  time.Duration
+	HeartbeatInterval             time.Duration
+	// InboundWatchdog is the daemon-ws silence threshold for probe→terminate
+	// reconnect (default 70s). 0 disables. Override: MULTICA_DAEMON_INBOUND_WATCHDOG.
+	InboundWatchdog                time.Duration
 	AgentTimeout                   time.Duration
 	CodexSemanticInactivityTimeout time.Duration
 	AgentIdleWatchdog              time.Duration // probe a silent runtime after this long; live children are not stopped (0 = disabled)
@@ -332,6 +336,13 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 	if overrides.HeartbeatInterval > 0 {
 		heartbeatInterval = overrides.HeartbeatInterval
+	}
+
+	// MULTICA_DAEMON_INBOUND_WATCHDOG=0 disables the WS inbound probe/terminate
+	// path; any positive duration overrides DefaultInboundWatchdog (70s).
+	inboundWatchdog, err := durationFromEnv("MULTICA_DAEMON_INBOUND_WATCHDOG", DefaultInboundWatchdog)
+	if err != nil {
+		return Config{}, err
 	}
 
 	agentTimeout, err := durationFromEnv("MULTICA_AGENT_TIMEOUT", DefaultAgentTimeout)
@@ -580,6 +591,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MaxConcurrentTasks:             maxConcurrentTasks,
 		PollInterval:                   pollInterval,
 		HeartbeatInterval:              heartbeatInterval,
+		InboundWatchdog:                inboundWatchdog,
 		AgentTimeout:                   agentTimeout,
 		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
 		AgentIdleWatchdog:              agentIdleWatchdog,

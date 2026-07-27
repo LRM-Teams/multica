@@ -515,3 +515,53 @@ func TestMigration234KillsWendyAmbientRadarAuthorization(t *testing.T) {
 	}
 }
 
+
+func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	if _, err := os.Stat(filepath.Join(migrationsDir, "233_channel_list_perf_indexes.up.sql")); err == nil {
+		t.Fatal("stale 233_channel_list_perf_indexes.up.sql must not remain after #785 renumber")
+	}
+	if _, err := os.Stat(filepath.Join(migrationsDir, "233_restore_wendy_ambient_radar_auth.up.sql")); err != nil {
+		t.Fatal("233_restore_wendy_ambient_radar_auth.up.sql must remain unchanged")
+	}
+	if _, err := os.Stat(filepath.Join(migrationsDir, "234_kill_wendy_ambient_radar_auth.up.sql")); err != nil {
+		t.Fatal("234_kill_wendy_ambient_radar_auth.up.sql must remain unchanged")
+	}
+	upPath := filepath.Join(migrationsDir, "235_channel_list_perf_indexes.up.sql")
+	up, err := os.ReadFile(upPath)
+	if err != nil {
+		t.Fatalf("read 235 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"main_unread_count",
+		"idx_channel_message_list_main_seq",
+		"idx_channel_member_avatar_stack",
+		"ADD COLUMN IF NOT EXISTS",
+		"CREATE INDEX IF NOT EXISTS",
+		"Renumbered from 233_channel_list_perf_indexes",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("235 up missing %q", required)
+		}
+	}
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "235_channel_list_perf_indexes.down.sql"))
+	if err != nil {
+		t.Fatalf("read 235 down: %v", err)
+	}
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS idx_channel_member_avatar_stack",
+		"DROP INDEX IF EXISTS idx_channel_message_list_main_seq",
+		"DROP COLUMN IF EXISTS main_unread_count",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("235 down missing %q", required)
+		}
+	}
+}
+

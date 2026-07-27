@@ -368,14 +368,22 @@ func denseCover(dag service.AssembledDag) bool {
 func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDispatchResult) {
 	msg := err.Error()
 	tb := string(stackerr.StackOf(err))
-	// Always log the full chain + origin stack server-side (gap #3): the
-	// traceback also rides in the response body, but the log survives even when
-	// the caller discards the body.
-	slog.Error("env_dispatch failed",
-		"error", msg,
-		"traceback", tb,
-		"project_id", res.ProjectID,
-	)
+	// Log only genuine server-side failures at Error (gap #3). The traceback is
+	// the SERVER's origin stack, which is meaningless for a 4xx client error —
+	// the server did nothing wrong, the caller sent a malformed request. The
+	// RequestLogger already records every 4xx as a WARN with path+user_id, and
+	// the response body carries the reason, so an extra per-request Error plus
+	// traceback for validation failures only turns one runaway client into a
+	// log flood (LRM-640: ~1k empty-content env-dispatch 400s/min). Reserve
+	// Error for the cases where the server is actually at fault.
+	isClientError := strings.Contains(msg, "validation_failed") || strings.Contains(msg, "not_implemented")
+	if !isClientError {
+		slog.Error("env_dispatch failed",
+			"error", msg,
+			"traceback", tb,
+			"project_id", res.ProjectID,
+		)
+	}
 	switch {
 	case errors.Is(err, service.ErrAllDispatchFailed):
 		// Top-level error is a bare sentinel (no single origin); each rollout

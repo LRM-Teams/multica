@@ -641,6 +641,9 @@ export function ChannelsPage({
   const [addPeopleDialogOpen, setAddPeopleDialogOpen] = useState(false);
   const [membersQuery, setMembersQuery] = useState("");
   const [inviteQuery, setInviteQuery] = useState("");
+  // LRM-623 — debounce filter only; input stays live. Same candidate pool /
+  // API path — never re-fetch the full invite lists on each keystroke.
+  const [debouncedInviteQuery, setDebouncedInviteQuery] = useState("");
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -737,8 +740,18 @@ export function ChannelsPage({
     isSuccess: channelsLoaded,
   } = useQuery(channelsOptions(wsId));
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
-  const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const {
+    data: workspaceMembers = [],
+    isPending: workspaceMembersPending,
+    isError: workspaceMembersError,
+    refetch: refetchWorkspaceMembers,
+  } = useQuery(memberListOptions(wsId));
+  const {
+    data: agents = [],
+    isPending: agentsPending,
+    isError: agentsError,
+    refetch: refetchAgents,
+  } = useQuery(agentListOptions(wsId));
   // #576 — resolves the create-popover's selected project title, same query the
   // group-settings Project section (ChannelProjectSettingsPanel) uses. Keep it
   // dormant while the popover is closed: the project list is not rendered or
@@ -856,11 +869,18 @@ export function ChannelsPage({
   }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
   // Invite / discovery for a group must pass channel_id so channel-visibility
   // agents from OTHER homes stay out (LRM-399; mirrors ListAgents filter).
+  // LRM-623 — fetch only while Add people is open so the panel owns first-screen
+  // loading (skeleton) instead of a background full ListAgents on every channel.
   const inviteDiscoverChannelId =
     active?.kind === "group" && !active.archived_at ? active.id : null;
-  const { data: channelInviteAgents = [] } = useQuery({
+  const {
+    data: channelInviteAgents = [],
+    isPending: channelInviteAgentsPending,
+    isError: channelInviteAgentsError,
+    refetch: refetchChannelInviteAgents,
+  } = useQuery({
     ...agentListOptions(wsId, { channelId: inviteDiscoverChannelId }),
-    enabled: !!wsId && !!inviteDiscoverChannelId,
+    enabled: !!wsId && !!inviteDiscoverChannelId && addPeopleDialogOpen,
   });
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
@@ -1153,8 +1173,13 @@ export function ChannelsPage({
     ];
     return list;
   }, [availableMembers, availableAgents]);
+  // Debounced filter over the same in-memory pool (no second full fetch).
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedInviteQuery(inviteQuery), 200);
+    return () => window.clearTimeout(handle);
+  }, [inviteQuery]);
   const inviteCandidates = useMemo(() => {
-    const q = inviteQuery.trim();
+    const q = debouncedInviteQuery.trim();
     return q
       ? allInviteCandidates.filter((c) =>
           matchesActorIdentitySearch(
@@ -1165,7 +1190,25 @@ export function ChannelsPage({
           ),
         )
       : allInviteCandidates;
-  }, [allInviteCandidates, inviteQuery]);
+  }, [allInviteCandidates, debouncedInviteQuery]);
+  const inviteCandidatesLoading =
+    addPeopleDialogOpen &&
+    (workspaceMembersPending ||
+      (inviteDiscoverChannelId ? channelInviteAgentsPending : agentsPending));
+  const inviteCandidatesError =
+    addPeopleDialogOpen &&
+    (workspaceMembersError ||
+      (inviteDiscoverChannelId ? channelInviteAgentsError : agentsError));
+  const retryInviteCandidates = useCallback(() => {
+    void refetchWorkspaceMembers();
+    if (inviteDiscoverChannelId) void refetchChannelInviteAgents();
+    else void refetchAgents();
+  }, [
+    inviteDiscoverChannelId,
+    refetchAgents,
+    refetchChannelInviteAgents,
+    refetchWorkspaceMembers,
+  ]);
   const filteredMembers = useMemo(() => {
     const q = membersQuery.trim();
     return q
@@ -2180,6 +2223,7 @@ export function ChannelsPage({
 
   const openAddPeopleDialog = useCallback(() => {
     setInviteQuery("");
+    setDebouncedInviteQuery("");
     setSelectedInvites(new Set());
     setAddPeopleDialogOpen(true);
   }, []);
@@ -3649,12 +3693,16 @@ export function ChannelsPage({
             setAddPeopleDialogOpen(open);
             if (!open) {
               setInviteQuery("");
+              setDebouncedInviteQuery("");
               setSelectedInvites(new Set());
             }
           }}
           channelName={active.name}
           candidates={inviteCandidates}
           allCandidates={allInviteCandidates}
+          loading={inviteCandidatesLoading}
+          error={inviteCandidatesError}
+          onRetry={retryInviteCandidates}
           query={inviteQuery}
           onQueryChange={setInviteQuery}
           selected={selectedInvites}

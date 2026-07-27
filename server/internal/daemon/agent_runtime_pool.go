@@ -27,6 +27,11 @@ const (
 // canonicalAgentRuntimeIdentity contains only process-stable configuration.
 // The logical slot is always agent×runtime. The fingerprint decides whether
 // that slot's provider backend must restart; it never creates another slot.
+//
+// ContextKey is Multica ChatSessionID (not task.ID). When it changes the
+// resident process must dispose and start a fresh provider session — Pi/Grok
+// load AGENTS/context at process start only, so cross-chat file rewrite alone
+// leaves the old task's in-memory context (Parker/Barry real-Pi proof).
 type canonicalAgentRuntimeIdentity struct {
 	AgentID      string
 	RuntimeID    string
@@ -39,6 +44,15 @@ type canonicalAgentRuntimeIdentity struct {
 	MCP          string
 	CustomArgs   []string
 	Environment  map[string]string
+
+	// Hard-instruction / context boundary fields (fingerprint). Prefer rotate
+	// when unsure; never put task.ID or per-turn lease metadata here.
+	ContextKey        string // ChatSessionID
+	WorkspaceID       string
+	Directed          bool
+	ManagedRole       string
+	AgentInstructions string
+	WorkspaceContext  string
 }
 
 type canonicalAgentRuntimeIdentityParams canonicalAgentRuntimeIdentity
@@ -71,17 +85,26 @@ func newCanonicalAgentRuntimeIdentity(params canonicalAgentRuntimeIdentityParams
 		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime identity contains current-turn environment")
 	}
 	identity := canonicalAgentRuntimeIdentity{
-		AgentID:      strings.TrimSpace(params.AgentID),
-		RuntimeID:    strings.TrimSpace(params.RuntimeID),
-		Provider:     strings.TrimSpace(params.Provider),
-		Executable:   strings.TrimSpace(params.Executable),
-		Model:        strings.TrimSpace(params.Model),
-		Thinking:     strings.TrimSpace(params.Thinking),
-		WorkDir:      strings.TrimSpace(params.WorkDir),
-		SystemPrompt: params.SystemPrompt,
-		MCP:          params.MCP,
-		CustomArgs:   append([]string(nil), params.CustomArgs...),
-		Environment:  cloneStringMap(stable),
+		AgentID:           strings.TrimSpace(params.AgentID),
+		RuntimeID:         strings.TrimSpace(params.RuntimeID),
+		Provider:          strings.TrimSpace(params.Provider),
+		Executable:        strings.TrimSpace(params.Executable),
+		Model:             strings.TrimSpace(params.Model),
+		Thinking:          strings.TrimSpace(params.Thinking),
+		WorkDir:           strings.TrimSpace(params.WorkDir),
+		SystemPrompt:      params.SystemPrompt,
+		MCP:               params.MCP,
+		CustomArgs:        append([]string(nil), params.CustomArgs...),
+		Environment:       cloneStringMap(stable),
+		ContextKey:        strings.TrimSpace(params.ContextKey),
+		WorkspaceID:       strings.TrimSpace(params.WorkspaceID),
+		Directed:          params.Directed,
+		ManagedRole:       strings.TrimSpace(params.ManagedRole),
+		AgentInstructions: params.AgentInstructions,
+		WorkspaceContext:  params.WorkspaceContext,
+	}
+	if identity.ContextKey == "" {
+		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime context_key (chat_session_id) is required")
 	}
 	return identity, nil
 }
@@ -92,15 +115,21 @@ func (i canonicalAgentRuntimeIdentity) slotKey() string {
 
 func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 	type canonical struct {
-		Provider     string      `json:"provider"`
-		Executable   string      `json:"executable"`
-		Model        string      `json:"model"`
-		Thinking     string      `json:"thinking"`
-		WorkDir      string      `json:"work_dir"`
-		SystemPrompt string      `json:"system_prompt"`
-		MCP          string      `json:"mcp"`
-		CustomArgs   []string    `json:"custom_args"`
-		Environment  [][2]string `json:"environment"`
+		Provider          string      `json:"provider"`
+		Executable        string      `json:"executable"`
+		Model             string      `json:"model"`
+		Thinking          string      `json:"thinking"`
+		WorkDir           string      `json:"work_dir"`
+		SystemPrompt      string      `json:"system_prompt"`
+		MCP               string      `json:"mcp"`
+		CustomArgs        []string    `json:"custom_args"`
+		Environment       [][2]string `json:"environment"`
+		ContextKey        string      `json:"context_key"`
+		WorkspaceID       string      `json:"workspace_id"`
+		Directed          bool        `json:"directed"`
+		ManagedRole       string      `json:"managed_role"`
+		AgentInstructions string      `json:"agent_instructions"`
+		WorkspaceContext  string      `json:"workspace_context"`
 	}
 	keys := make([]string, 0, len(i.Environment))
 	for key := range i.Environment {
@@ -112,15 +141,21 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		environment = append(environment, [2]string{key, i.Environment[key]})
 	}
 	payload, _ := json.Marshal(canonical{
-		Provider:     i.Provider,
-		Executable:   i.Executable,
-		Model:        i.Model,
-		Thinking:     i.Thinking,
-		WorkDir:      i.WorkDir,
-		SystemPrompt: i.SystemPrompt,
-		MCP:          i.MCP,
-		CustomArgs:   append([]string(nil), i.CustomArgs...),
-		Environment:  environment,
+		Provider:          i.Provider,
+		Executable:        i.Executable,
+		Model:             i.Model,
+		Thinking:          i.Thinking,
+		WorkDir:           i.WorkDir,
+		SystemPrompt:      i.SystemPrompt,
+		MCP:               i.MCP,
+		CustomArgs:        append([]string(nil), i.CustomArgs...),
+		Environment:       environment,
+		ContextKey:        i.ContextKey,
+		WorkspaceID:       i.WorkspaceID,
+		Directed:          i.Directed,
+		ManagedRole:       i.ManagedRole,
+		AgentInstructions: i.AgentInstructions,
+		WorkspaceContext:  i.WorkspaceContext,
 	})
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -168,13 +203,14 @@ type canonicalAgentRuntimePool struct {
 }
 
 type canonicalAgentRuntimeSlot struct {
-	mu          sync.Mutex
-	fingerprint string
-	mode        canonicalRuntimeMode
-	running     bool
-	idleSince   time.Time
-	backend     agent.Backend
-	close       func()
+	mu             sync.Mutex
+	fingerprint    string
+	mode           canonicalRuntimeMode
+	lastContextKey string // last ChatSessionID bound to this resident process
+	running        bool
+	idleSince      time.Time
+	backend        agent.Backend
+	close          func()
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -216,6 +252,7 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, errors.New("canonical runtime provider, executable, and work_dir are required")
 	}
 	fingerprint := request.Identity.fingerprint()
+	contextKey := strings.TrimSpace(request.Identity.ContextKey)
 	now := request.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -235,18 +272,28 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
 
+	// Context key change: dispose process AND force a fresh provider session.
+	// Never resume PriorSessionID from chat A when starting chat B ("换壳续旧脑").
+	contextRotated := slot.lastContextKey != "" && slot.lastContextKey != contextKey
+	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
+	if contextRotated {
+		resumeSessionID = ""
+	}
+
 	configDrift := slot.fingerprint != "" &&
 		(slot.fingerprint != fingerprint || slot.mode != request.Mode)
-	if configDrift {
+	if configDrift || contextRotated {
 		slot.closeBackend()
 	}
 	slot.fingerprint = fingerprint
 	slot.mode = request.Mode
+	slot.lastContextKey = contextKey
 	slot.running = true
 
 	var backend agent.Backend
 	var closeBackend func()
-	if request.Mode == canonicalRuntimeResident && !configDrift && slot.backend != nil {
+	reused := request.Mode == canonicalRuntimeResident && !configDrift && !contextRotated && slot.backend != nil
+	if reused {
 		backend = slot.backend
 		closeBackend = slot.close
 	} else {
@@ -275,7 +322,7 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 
 	wrapped := &canonicalSessionBackend{
 		backend:            backend,
-		canonicalSessionID: strings.TrimSpace(request.CanonicalSessionID),
+		canonicalSessionID: resumeSessionID,
 	}
 	return &canonicalAgentRuntimeLease{
 		slot:      slot,
@@ -383,6 +430,7 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 	slot.closeBackend()
 	slot.fingerprint = ""
 	slot.mode = ""
+	slot.lastContextKey = ""
 	slot.idleSince = time.Time{}
 	return nil
 }

@@ -112,6 +112,11 @@ type Daemon struct {
 	wsHBMu      sync.RWMutex         // guards wsHBLastAck
 	wsHBLastAck map[string]time.Time // runtime_id -> last successful WS heartbeat ack timestamp
 
+	// wsConnState is the task-wakeup WebSocket lifecycle label for internal
+	// observability (connecting|open|backoff|closed). Not user-facing Activity.
+	wsConnStateMu sync.RWMutex
+	wsConnState   string
+
 	reminderCache                    *reminderCache
 	reminderAgents                   *reminderAgentManager
 	reminderWSMu                     sync.RWMutex

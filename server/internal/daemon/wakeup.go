@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -77,11 +78,14 @@ func jitterDuration(d time.Duration) time.Duration {
 }
 
 func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []string, taskWakeups chan<- taskWakeup, runtimeSetCh <-chan struct{}) error {
+	d.setWSConnState("connecting")
 	if err := d.reconcileReminderRuntimeSet(runtimeIDs); err != nil {
+		d.setWSConnState("backoff")
 		return fmt.Errorf("reconcile reminder runtime set: %w", err)
 	}
 	wsURL, err := taskWakeupURL(d.cfg.ServerBaseURL, runtimeIDs)
 	if err != nil {
+		d.setWSConnState("backoff")
 		return err
 	}
 
@@ -102,16 +106,21 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
+		d.setWSConnState("backoff")
 		return err
 	}
-	defer conn.Close()
 	// HTTP heartbeats resume the moment WS detaches so the freshness window
 	// from a previous connection cannot keep them silenced past disconnect.
-	defer d.clearWSHeartbeatAcks()
+	defer func() {
+		_ = conn.Close()
+		d.clearWSHeartbeatAcks()
+		d.setWSConnState("closed")
+	}()
 
+	d.setWSConnState("open")
 	d.logger.Info("task wakeup websocket connected",
 		"runtimes", len(runtimeIDs),
-		"conn_state", "open",
+		"conn_state", d.getWSConnState(),
 		"inbound_watchdog", d.inboundWatchdogInterval(),
 	)
 	signalTaskWakeup(taskWakeups, "")
@@ -141,11 +150,20 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	}()
 
 	watchdog := newInboundWatchdogState(time.Now())
+	var watchdogTimedOut atomic.Bool
 	watchdogCtx, cancelWatchdog := context.WithCancel(ctx)
 	wdDone := make(chan struct{})
+	watchdogErrCh := make(chan error, 1)
 	go func() {
 		defer close(wdDone)
-		d.runInboundWatchdog(watchdogCtx, conn, watchdog, runtimeIDs, writes)
+		if err := d.runInboundWatchdog(watchdogCtx, conn, watchdog, runtimeIDs, writes, &watchdogTimedOut); err != nil {
+			// One-shot result so the outer select can return the sentinel
+			// instead of treating a side-effect Close as a generic network error.
+			select {
+			case watchdogErrCh <- err:
+			default:
+			}
+		}
 	}()
 
 	errCh := make(chan error, 1)
@@ -175,12 +193,53 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 
 	select {
 	case <-ctx.Done():
+		d.setWSConnState("backoff")
 		return ctx.Err()
 	case <-runtimeSetCh:
+		d.setWSConnState("backoff")
 		return errRuntimeSetChanged
+	case err := <-watchdogErrCh:
+		d.setWSConnState("backoff")
+		return err
 	case err := <-errCh:
+		// Prefer watchdog sentinel when Close raced the reader.
+		if watchdogTimedOut.Load() {
+			d.setWSConnState("backoff")
+			return errInboundWatchdogTimeout
+		}
+		select {
+		case wdErr := <-watchdogErrCh:
+			d.setWSConnState("backoff")
+			return wdErr
+		default:
+		}
+		if err != nil {
+			d.setWSConnState("backoff")
+		}
 		return err
 	}
+}
+
+func (d *Daemon) setWSConnState(state string) {
+	if d == nil {
+		return
+	}
+	d.wsConnStateMu.Lock()
+	prev := d.wsConnState
+	d.wsConnState = state
+	d.wsConnStateMu.Unlock()
+	if prev != state && d.logger != nil {
+		d.logger.Info("task wakeup conn state", "conn_state", state, "prev_conn_state", prev)
+	}
+}
+
+func (d *Daemon) getWSConnState() string {
+	if d == nil {
+		return ""
+	}
+	d.wsConnStateMu.RLock()
+	defer d.wsConnStateMu.RUnlock()
+	return d.wsConnState
 }
 
 func (d *Daemon) inboundWatchdogInterval() time.Duration {
@@ -197,14 +256,16 @@ func (d *Daemon) inboundWatchdogInterval() time.Duration {
 // runInboundWatchdog implements Raft-aligned two-phase silence detection on
 // the task-wakeup WebSocket: probe after one interval of no inbound frames,
 // terminate (force reconnect) after a second full interval still silent.
-func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, state *inboundWatchdogState, runtimeIDs []string, writes chan<- []byte) {
+// On terminate it closes conn and returns errInboundWatchdogTimeout so the
+// connection loop can surface the cause (not a bare network close error).
+func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, state *inboundWatchdogState, runtimeIDs []string, writes chan<- []byte, timedOut *atomic.Bool) error {
 	interval := d.cfg.InboundWatchdog
 	if interval < 0 {
 		interval = DefaultInboundWatchdog
 	}
 	if interval == 0 {
 		<-ctx.Done()
-		return
+		return nil
 	}
 	// Tick frequently enough that we fire within ~1s of the threshold in tests
 	// with shortened intervals, without busy-looping in production.
@@ -212,22 +273,22 @@ func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, s
 	if tickEvery > time.Second {
 		tickEvery = time.Second
 	}
-	if tickEvery < 50*time.Millisecond {
-		tickEvery = 50 * time.Millisecond
+	if tickEvery < 20*time.Millisecond {
+		tickEvery = 20 * time.Millisecond
 	}
 	ticker := time.NewTicker(tickEvery)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			switch state.tick(time.Now(), interval) {
 			case inboundWatchdogProbe:
 				d.logger.Info("task wakeup inbound probe sent",
 					"reason", "inbound_probe",
 					"inbound_watchdog", interval,
-					"conn_state", "open",
+					"conn_state", d.getWSConnState(),
 				)
 				// Reuse the existing heartbeat frame as the liveness probe so
 				// upgraded servers reply with daemon:heartbeat_ack (marks inbound).
@@ -238,8 +299,12 @@ func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, s
 					"inbound_watchdog", interval,
 					"conn_state", "backoff",
 				)
+				// Mark before Close so a racing reader maps closed-network to the sentinel.
+				if timedOut != nil {
+					timedOut.Store(true)
+				}
 				_ = conn.Close()
-				return
+				return errInboundWatchdogTimeout
 			}
 		}
 	}

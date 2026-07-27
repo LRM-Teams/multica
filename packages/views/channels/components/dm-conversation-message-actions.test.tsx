@@ -283,7 +283,12 @@ const supervisedDm: DMItem = {
   updated_at: "2026-06-17T09:00:00Z",
 };
 
-function renderSupervisedDm() {
+// #692 walkthrough finding: the SAME agent_pair DM but the BE omitted the
+// `supervised` flag (observed when one owner owns both ends). The read-only
+// surface must still hold, keyed on `mode === "agent_pair"`.
+const agentPairNoFlagDm: DMItem = { ...supervisedDm, supervised: undefined };
+
+function renderSupervisedDm(dmItem: DMItem = supervisedDm) {
   const qc = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -293,7 +298,7 @@ function renderSupervisedDm() {
   return render(
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
-        <DmConversation dm={supervisedDm} onBack={() => {}} />
+        <DmConversation dm={dmItem} onBack={() => {}} />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -459,8 +464,7 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     markReadSpy.mockClear();
   });
 
-  it("read-only composer + NO auto member-only mark-read + NO thread-follow affordance", async () => {
-    const user = userEvent.setup();
+  it("read-only surface: no editable composer, NO reply-in-thread affordance, NO auto member-only mark-read", async () => {
     renderSupervisedDm();
     await screen.findByTestId("message-bubble");
 
@@ -469,15 +473,20 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     // The supervisor isn't a channel_member — opening must NOT auto mark-read
     // (that member-only mutation 403s). This is the core of finding 1.
     expect(markReadSpy).not.toHaveBeenCalled();
+    // #692 walkthrough finding: reply-in-thread is a write ENTRY and must be
+    // gone too — previously it leaked (the bubble showed "Reply in thread" on a
+    // supervised surface even though the thread composer was read-only).
+    expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
+  });
 
-    // Open a thread → the close button confirms the panel is open, and neither
-    // the (member-only) follow affordance nor a writable composer appears.
-    const replyButtons = await screen.findAllByRole("button", { name: "Reply in thread" });
-    await user.click(replyButtons[0]!);
-    await screen.findByRole("button", { name: "Close thread" });
-    expect(screen.queryByRole("button", { name: "Unfollow thread" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Follow thread" })).not.toBeInTheDocument();
+  it("keys read-only on mode=agent_pair even when the BE omits `supervised` (walkthrough scenario)", async () => {
+    // The exact walkthrough case: mode is agent_pair (pill renders) but the BE
+    // returned no `supervised` flag; the surface MUST still be read-only.
+    renderSupervisedDm(agentPairNoFlagDm);
+    await screen.findByTestId("message-bubble");
     expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
+    expect(markReadSpy).not.toHaveBeenCalled();
   });
 
   it("baseline: a NON-supervised DM DOES auto mark-read on open (proves the guard suppresses it)", async () => {

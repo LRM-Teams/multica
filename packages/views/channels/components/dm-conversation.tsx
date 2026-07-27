@@ -60,10 +60,8 @@ import { useT } from "../../i18n/use-t";
 import { DmAgentVoiceCall } from "../../voice-calls";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
-import {
-  ComposerSendErrorBar,
-  type ComposerSendErrorState,
-} from "./composer-send-error-bar";
+import { useComposerSendRestore } from "../hooks/use-composer-send-restore";
+import { ComposerSendErrorBar } from "./composer-send-error-bar";
 import {
   buildChatMessageParts,
   useComposerPendingAttachments,
@@ -615,21 +613,14 @@ function DmChannelConversation({
 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
-  // #772 send-failure → composer-restore state (main + thread composers). The
-  // failed text is restored into the composer (or kept-back when the composer
-  // already holds new text) and an inline bar is shown; the editor is remounted
-  // via a nonce bump so it re-reads the restored draft (ContentEditor reads
-  // `defaultValue` only on mount).
-  const [sendError, setSendError] = useState<ComposerSendErrorState | null>(null);
-  const failedContentRef = useRef<string>("");
-  const [restoreNonce, setRestoreNonce] = useState(0);
-  const [threadSendError, setThreadSendError] =
-    useState<ComposerSendErrorState | null>(null);
-  const threadFailedContentRef = useRef<string>("");
-  const [threadRestoreNonce, setThreadRestoreNonce] = useState(0);
-  // Thread composer has no persistent draft (unlike the main composer), so its
-  // restored text is held here and fed to the thread editor's `defaultValue`.
-  const [threadRestoreText, setThreadRestoreText] = useState("");
+  // #772 send-failure → composer-restore (main + thread composers). The failed
+  // text is restored into the composer (or kept-back when the composer already
+  // holds new text) and an inline bar is shown; the editor is remounted via a
+  // nonce bump so it re-reads the restored text. The main composer restores via
+  // the persistent draft store; the thread composer has no persistent draft so
+  // it restores via the hook-owned `restoreText` → editor `defaultValue`.
+  const restore = useComposerSendRestore(onDraftChange);
+  const threadRestore = useComposerSendRestore();
   const focusThreadComposerOnOpenRef = useRef(false);
   const draftEmpty = !draft.trim();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -933,24 +924,16 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
-      onCommitted: () => setSendError(null),
+      onCommitted: () => restore.clear(),
       onVisibleError: () => {
         // #772: no permanent failed bubble. Restore the failed text into the
-        // composer (unless the composer already holds DIFFERENT new text — then
-        // keep it + offer Restore-previous) and show the inline error bar. The
-        // editor reads `defaultValue` only on mount, so bump the remount-nonce.
-        const currentText = editorRef.current?.getMarkdown()?.trim() ?? "";
-        const conflicted = currentText.length > 0 && currentText !== content;
-        failedContentRef.current = content;
-        if (!conflicted) {
-          onDraftChange?.(content);
-          setRestoreNonce((n) => n + 1);
-        }
-        setSendError({ conflicted });
+        // composer (unless it already holds DIFFERENT new text — then keep it +
+        // offer Restore-previous) and show the inline error bar.
+        restore.onFailed(content, editorRef.current?.getMarkdown()?.trim() ?? "");
       },
     });
     if (dispatched) {
-      setSendError(null);
+      restore.clear();
       prepareVoicePlayback(voicePlaybackScope(channelId));
       editorRef.current?.clearContent();
       dmPending.clear();
@@ -961,20 +944,6 @@ function DmChannelConversation({
         publishTyping(false);
       }
     }
-  };
-
-  // #772: bring the kept-back failed text into the composer (conflicted case,
-  // where the composer held new text so we didn't auto-restore).
-  const handleRestorePrevious = () => {
-    onDraftChange?.(failedContentRef.current);
-    setRestoreNonce((n) => n + 1);
-    setSendError(null);
-  };
-
-  const handleRestoreThreadPrevious = () => {
-    setThreadRestoreText(threadFailedContentRef.current);
-    setThreadRestoreNonce((n) => n + 1);
-    setThreadSendError(null);
   };
 
   const handleVoiceSend = (
@@ -1034,24 +1003,19 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => setThreadSendError(null),
+      onCommitted: () => threadRestore.clear(),
       onVisibleError: () => {
         // #772 (thread): restore the failed text into the thread composer (via
         // the editor's `defaultValue` + remount) unless it already holds new
         // text; show the inline error bar.
-        const currentText = threadEditorRef.current?.getMarkdown()?.trim() ?? "";
-        const conflicted = currentText.length > 0 && currentText !== content;
-        threadFailedContentRef.current = content;
-        if (!conflicted) {
-          setThreadRestoreText(content);
-          setThreadRestoreNonce((n) => n + 1);
-        }
-        setThreadSendError({ conflicted });
+        threadRestore.onFailed(
+          content,
+          threadEditorRef.current?.getMarkdown()?.trim() ?? "",
+        );
       },
     });
     if (dispatched) {
-      setThreadSendError(null);
-      setThreadRestoreText("");
+      threadRestore.reset();
       prepareVoicePlayback(voicePlaybackScope(channelId, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
@@ -1260,12 +1224,12 @@ function DmChannelConversation({
           onVoiceSend={handleThreadVoiceSend}
           isMobile={isMobile}
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-          prefix={threadSendError || threadQuoteTarget ? (
+          prefix={threadRestore.error || threadQuoteTarget ? (
             <>
               <ComposerSendErrorBar
-                error={threadSendError}
+                error={threadRestore.error}
                 onRetry={handleThreadSend}
-                onRestore={handleRestoreThreadPrevious}
+                onRestore={threadRestore.restorePrevious}
               />
               {threadQuoteTarget ? (
                 <ComposerQuotePreview
@@ -1287,9 +1251,9 @@ function DmChannelConversation({
           }
           editor={
             <ContentEditor
-              key={`dm-thread-editor:${threadSurfaceRoot.id}:${threadRestoreNonce}`}
+              key={`dm-thread-editor:${threadSurfaceRoot.id}:${threadRestore.nonce}`}
               ref={threadEditorRef}
-              defaultValue={threadRestoreText}
+              defaultValue={threadRestore.restoreText}
               // Bare URLs stay plain text in the composer (#531/#542).
               plainUrls
               placeholder={t(($) => $.thread.composer_placeholder)}
@@ -1480,12 +1444,12 @@ function DmChannelConversation({
         onVoiceSend={handleVoiceSend}
         isMobile={isMobile}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-        prefix={sendError || quoteTarget ? (
+        prefix={restore.error || quoteTarget ? (
           <>
             <ComposerSendErrorBar
-              error={sendError}
+              error={restore.error}
               onRetry={handleSend}
-              onRestore={handleRestorePrevious}
+              onRestore={restore.restorePrevious}
             />
             {quoteTarget ? (
               <ComposerQuotePreview
@@ -1507,7 +1471,7 @@ function DmChannelConversation({
         }
         editor={
             <ContentEditor
-              key={`${channelId}:${restoreNonce}`}
+              key={`${channelId}:${restore.nonce}`}
               ref={editorRef}
               // Chat composer: typed/loaded bare URLs stay plain text
               // (#531/#542) — made clickable on the read side, not here.

@@ -94,6 +94,12 @@ export interface MemberProfileActivityItem {
   id: string;
   kind: "command" | "tool_use" | "text" | "queued" | "working" | "failed" | "cancelled" | "task";
   label: string;
+  /** Backend canonical EN label for compact/list surfaces; no raw command detail. */
+  display_label: string;
+  /** Stable key for display_label, matching the Activity EN label contract. */
+  label_key: string;
+  activity_kind: string;
+  detail_kind: string;
   occurred_at: string;
   status: "queued" | "dispatched" | "waiting_local_directory" | "running" | "completed" | "failed" | "cancelled";
 }

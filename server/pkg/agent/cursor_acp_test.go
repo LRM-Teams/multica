@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -127,20 +128,69 @@ func TestCursorACPBackendReusesOneChildForCompatibleTurns(t *testing.T) {
 	}))
 	t.Cleanup(b.Close)
 
-	for _, prompt := range []string{"first", "second"} {
-		s, err := b.Execute(context.Background(), prompt, ExecOptions{Cwd: dir})
-		if err != nil {
-			t.Fatalf("Execute(%q): %v", prompt, err)
-		}
-		select {
-		case got := <-s.Result:
-			if got.Status != "completed" || got.SessionID != "cursor-session-1" {
-				t.Fatalf("result = %+v", got)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("timeout")
-		}
+	// Pin release-before-publish: hold the first turn's publisher after Result
+	// is sent so an immediate second Execute cannot race a late running=false.
+	published := make(chan struct{})
+	releasePublisher := make(chan struct{})
+	var firstPublish sync.Once
+	b.afterResultPublishForTest = func() {
+		firstPublish.Do(func() {
+			close(published)
+			<-releasePublisher
+		})
 	}
+
+	first, err := b.Execute(context.Background(), "first", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatalf("Execute(first): %v", err)
+	}
+	select {
+	case got := <-first.Result:
+		if got.Status != "completed" || got.SessionID != "cursor-session-1" {
+			t.Fatalf("first result = %+v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for first result")
+	}
+	<-published
+	if b.running.Load() {
+		close(releasePublisher)
+		t.Fatal("terminal result published before cursor ACP turn admission was released")
+	}
+
+	// Immediate synchronous follow-up — must not get ErrCursorACPTurnBusy.
+	second, err := b.Execute(context.Background(), "second", ExecOptions{Cwd: dir})
+	if err != nil {
+		close(releasePublisher)
+		t.Fatalf("Execute(second) immediately after terminal result: %v", err)
+	}
+
+	// First turn's deferred release must be inert after explicit pre-publish release.
+	close(releasePublisher)
+	select {
+	case _, ok := <-first.Result:
+		if ok {
+			t.Fatal("unexpected second terminal result from first turn")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first turn publisher to exit")
+	}
+	if !b.running.Load() {
+		t.Fatal("first turn deferred release clobbered active second-turn admission")
+	}
+	if _, err := b.Execute(context.Background(), "third", ExecOptions{Cwd: dir}); err == nil || !strings.Contains(err.Error(), ErrCursorACPTurnBusy.Error()) {
+		t.Fatalf("overlapping third Execute error = %v, want busy", err)
+	}
+
+	select {
+	case got := <-second.Result:
+		if got.Status != "completed" || got.SessionID != "cursor-session-1" {
+			t.Fatalf("second result = %+v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for second result")
+	}
+
 	data, err := os.ReadFile(starts)
 	if err != nil {
 		t.Fatal(err)

@@ -12,14 +12,13 @@ import { RouteChunkFallback } from "./route-chunk-fallback";
  * Loader modules may mix components with helpers (barrels); we only require
  * the named export to be a component at runtime — missing export throws
  * (no silent whole-bundle fallback, LRM-238).
+ *
+ * Props vary per view export; callers keep normal JSX checking at use sites
+ * via the concrete props they pass (dynamic() erases named-export generics).
  */
-// Props vary per view export; callers keep normal JSX checking at use sites
-// via the concrete props they pass (dynamic() erases named-export generics).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function lazyNamedRoute(
   loader: () => Promise<Record<string, unknown>>,
   exportName: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): ComponentType<any> {
   return dynamic(
     () =>
@@ -30,7 +29,6 @@ export function lazyNamedRoute(
             `lazyNamedRoute: "${exportName}" missing from module — no silent whole-bundle fallback`,
           );
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return { default: Comp as ComponentType<any> };
       }),
     { loading: RouteChunkFallback },

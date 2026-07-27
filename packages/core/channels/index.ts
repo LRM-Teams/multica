@@ -13,6 +13,7 @@ export {
   channelMessageThreadOptions,
   channelMessageSearchOptions,
   channelMembersOptions,
+  channelInviteCandidatesOptions,
   channelAttachmentsOptions,
   channelStatsOptions,
   channelProjectFilesOptions,

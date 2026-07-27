@@ -293,6 +293,8 @@ export type {
 export type {
   Channel,
   ChannelMember,
+  ChannelInviteCandidate,
+  ChannelInviteCandidatesResponse,
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,

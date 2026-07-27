@@ -19,6 +19,7 @@ export const channelKeys = {
   messageThread: (channelId: string, messageId: string) => ["channel-message-thread", channelId, messageId] as const,
   messageSearch: (channelId: string, query: string, limit?: number) => ["channel-message-search", channelId, query, limit] as const,
   members: (channelId: string) => ["channel-members", channelId] as const,
+  inviteCandidates: (channelId: string) => ["channel-invite-candidates", channelId] as const,
   attachments: (channelId: string) => ["channel-attachments", channelId] as const,
   stats: (channelId: string) => ["channel-stats", channelId] as const,
   projectFiles: (channelId: string) => ["channel-project-files", channelId] as const,
@@ -454,6 +455,18 @@ export function channelMembersOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.members(channelId),
     queryFn: () => api.listChannelMembers(channelId),
+    enabled: !!channelId,
+  });
+}
+
+/** LRM-622/623 — invite picker pool; enable only while Add people is open. */
+export function channelInviteCandidatesOptions(channelId: string) {
+  return queryOptions({
+    queryKey: channelKeys.inviteCandidates(channelId),
+    queryFn: async () => {
+      const res = await api.listChannelInviteCandidates(channelId);
+      return res.candidates;
+    },
     enabled: !!channelId,
   });
 }

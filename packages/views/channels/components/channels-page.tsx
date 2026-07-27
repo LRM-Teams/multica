@@ -36,6 +36,7 @@ import {
   channelsOptions,
   archivedChannelsOptions,
   channelMembersOptions,
+  channelInviteCandidatesOptions,
   channelProjectOptions,
   useSetChannelProject,
   useAddChannelMembers,
@@ -79,17 +80,16 @@ import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
 } from "@multica/core/agents";
-import { isAgentDiscoverableInChannelContext } from "@multica/core/agents";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
   resolveActorHandle,
   resolveActorIdentityPresentation,
-  type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type {
   Channel,
   ChannelActiveTask,
+  ChannelInviteCandidate,
   ChannelMember,
   ChannelMessage,
   ChannelMessageSearchResult,
@@ -740,18 +740,8 @@ export function ChannelsPage({
     isSuccess: channelsLoaded,
   } = useQuery(channelsOptions(wsId));
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
-  const {
-    data: workspaceMembers = [],
-    isPending: workspaceMembersPending,
-    isError: workspaceMembersError,
-    refetch: refetchWorkspaceMembers,
-  } = useQuery(memberListOptions(wsId));
-  const {
-    data: agents = [],
-    isPending: agentsPending,
-    isError: agentsError,
-    refetch: refetchAgents,
-  } = useQuery(agentListOptions(wsId));
+  const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
   // #576 — resolves the create-popover's selected project title, same query the
   // group-settings Project section (ChannelProjectSettingsPanel) uses. Keep it
   // dormant while the popover is closed: the project list is not rendered or
@@ -867,20 +857,19 @@ export function ChannelsPage({
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
-  // Invite / discovery for a group must pass channel_id so channel-visibility
-  // agents from OTHER homes stay out (LRM-399; mirrors ListAgents filter).
-  // LRM-623 — fetch only while Add people is open so the panel owns first-screen
-  // loading (skeleton) instead of a background full ListAgents on every channel.
+  // LRM-622/623 — single invite-candidates fetch while Add people is open
+  // (server filters existing members / private agents). Search stays on this
+  // in-memory pool with debounce — no second full ListMembers+ListAgents.
   const inviteDiscoverChannelId =
     active?.kind === "group" && !active.archived_at ? active.id : null;
   const {
-    data: channelInviteAgents = [],
-    isPending: channelInviteAgentsPending,
-    isError: channelInviteAgentsError,
-    refetch: refetchChannelInviteAgents,
+    data: inviteCandidateRows = [],
+    isPending: inviteCandidatesPending,
+    isError: inviteCandidatesError,
+    refetch: refetchInviteCandidates,
   } = useQuery({
-    ...agentListOptions(wsId, { channelId: inviteDiscoverChannelId }),
-    enabled: !!wsId && !!inviteDiscoverChannelId && addPeopleDialogOpen,
+    ...channelInviteCandidatesOptions(inviteDiscoverChannelId ?? ""),
+    enabled: !!inviteDiscoverChannelId && addPeopleDialogOpen,
   });
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
@@ -1128,51 +1117,22 @@ export function ChannelsPage({
       : (active?.id ?? null),
   });
 
-  const memberIds = useMemo(
-    () => new Set(channelMembers.filter((m) => m.member_type === "user").map((m) => m.member_id)),
-    [channelMembers],
-  );
-  const agentIds = useMemo(
-    () => new Set(channelMembers.filter((m) => m.member_type === "agent").map((m) => m.member_id)),
-    [channelMembers],
-  );
-  const availableMembers = workspaceMembers.filter((m) => !memberIds.has(m.user_id));
-  // Prefer channel-scoped ListAgents for group invite. Defense-in-depth: also
-  // drop channel agents whose home is not this group (LRM-238: no silent keep).
-  const inviteAgentPool = inviteDiscoverChannelId ? channelInviteAgents : agents;
-  const availableAgents = inviteAgentPool.filter(
-    (a) =>
-      !agentIds.has(a.id) &&
-      !a.archived_at &&
-      isAgentDiscoverableInChannelContext(a, inviteDiscoverChannelId),
-  );
   // Flat candidate list (users + agents) for Add people; chips use the
-  // unfiltered pool so selections survive search.
+  // unfiltered pool so selections survive search. Pool comes from LRM-622
+  // invite-candidates (already excludes channel members).
   const allInviteCandidates = useMemo(() => {
-    const list: Array<{
-      key: string;
-      type: "user" | "agent";
-      id: string;
-      avatarUrl?: string | null;
-      presentation: ActorIdentityPresentation;
-    }> = [
-      ...availableMembers.map((m) => ({
-        key: `user:${m.user_id}`,
-        type: "user" as const,
-        id: m.user_id,
-        avatarUrl: m.avatar_url,
-        presentation: resolveActorIdentityPresentation(m, m.email),
-      })),
-      ...availableAgents.map((a) => ({
-        key: `agent:${a.id}`,
-        type: "agent" as const,
-        id: a.id,
-        avatarUrl: a.avatar_url,
-        presentation: resolveActorIdentityPresentation(a, "Agent"),
-      })),
-    ];
-    return list;
-  }, [availableMembers, availableAgents]);
+    const mapRow = (c: ChannelInviteCandidate) => ({
+      key: `${c.member_type}:${c.member_id}`,
+      type: c.member_type,
+      id: c.member_id,
+      avatarUrl: c.avatar_url,
+      presentation: resolveActorIdentityPresentation(
+        { name: c.name, display_name: c.display_name },
+        c.member_type === "agent" ? "Agent" : c.email?.trim() || "Member",
+      ),
+    });
+    return inviteCandidateRows.map(mapRow);
+  }, [inviteCandidateRows]);
   // Debounced filter over the same in-memory pool (no second full fetch).
   useEffect(() => {
     const handle = window.setTimeout(() => setDebouncedInviteQuery(inviteQuery), 200);
@@ -1191,24 +1151,11 @@ export function ChannelsPage({
         )
       : allInviteCandidates;
   }, [allInviteCandidates, debouncedInviteQuery]);
-  const inviteCandidatesLoading =
-    addPeopleDialogOpen &&
-    (workspaceMembersPending ||
-      (inviteDiscoverChannelId ? channelInviteAgentsPending : agentsPending));
-  const inviteCandidatesError =
-    addPeopleDialogOpen &&
-    (workspaceMembersError ||
-      (inviteDiscoverChannelId ? channelInviteAgentsError : agentsError));
+  const inviteCandidatesLoading = addPeopleDialogOpen && inviteCandidatesPending;
+  const inviteCandidatesErrorFlag = addPeopleDialogOpen && inviteCandidatesError;
   const retryInviteCandidates = useCallback(() => {
-    void refetchWorkspaceMembers();
-    if (inviteDiscoverChannelId) void refetchChannelInviteAgents();
-    else void refetchAgents();
-  }, [
-    inviteDiscoverChannelId,
-    refetchAgents,
-    refetchChannelInviteAgents,
-    refetchWorkspaceMembers,
-  ]);
+    void refetchInviteCandidates();
+  }, [refetchInviteCandidates]);
   const filteredMembers = useMemo(() => {
     const q = membersQuery.trim();
     return q
@@ -3701,7 +3648,7 @@ export function ChannelsPage({
           candidates={inviteCandidates}
           allCandidates={allInviteCandidates}
           loading={inviteCandidatesLoading}
-          error={inviteCandidatesError}
+          error={inviteCandidatesErrorFlag}
           onRetry={retryInviteCandidates}
           query={inviteQuery}
           onQueryChange={setInviteQuery}

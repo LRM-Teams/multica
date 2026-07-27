@@ -166,8 +166,8 @@ function interpolateIssueSlots(
 }
 
 /**
- * LRM-423 / LRM-508 — main-line ink is **title only** (clickable). Identifier
- * stays out of the row (Frank: 编号分不清 / 主行不说 LRM-xxx); peek still
+ * LRM-423 / LRM-508 / LRM-609 A' — main-line ink is **title only** (clickable).
+ * Identifier stays out of the row (Frank: 别显示 LRM，显示 name); peek still
  * shows it. Missing title → identifier alone as honest interim (never invent
  * a title; LRM-238).
  */
@@ -182,9 +182,8 @@ function IssueEventSubject({
   title?: string;
   sourceMessageId?: string;
 }): ReactNode {
-  // LRM-564 lock: system/issue rows use a brand chip (▶ + key). Title stays in
-  // the issue peek — do not face the chip with title-primary (prose LRM-508).
-  const chipText = identifier.trim() || title?.trim() || issueId.slice(0, 8);
+  // LRM-609 SoT A': unfilled brand text + title-primary (no ▶ / fill / icon).
+  const chipText = title?.trim() || identifier.trim() || issueId.slice(0, 8);
   return (
     <IssueRefLink
       issueId={issueId}

@@ -187,9 +187,22 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
 // The agent-DM floating bubble reads the app chat store (registered at boot);
 // stub it so the agent_pair render path doesn't require chat-store bootstrap.
-vi.mock("../../chat/components/dm-agent-bubble", () => ({
-  DmAgentBubble: () => null,
-}));
+// #692 gate②: render a VISIBLE stand-in (not null) so page-level composer/bubble
+// assertions can actually SEE this second agent-chat surface. The null mock is
+// exactly why #1243's "composer=0" test was blind to the DmAgentBubble leak —
+// its ChatWindow mounts an independent, ungated ProseMirror composer beside the
+// supervision banner.
+vi.mock("../../chat/components/dm-agent-bubble", async () => {
+  const React = await import("react");
+  return {
+    DmAgentBubble: () => React.createElement("div", { "data-testid": "dm-agent-bubble" }),
+  };
+});
+
+// The working cue mounts for a non-agent_pair agent peer and reads agent
+// presence/health via useQuery; it's not under test here, so stub it so the
+// normal single-agent DM render path doesn't require that query wiring.
+vi.mock("./dm-agent-working-cue", () => ({ DmAgentWorkingCue: () => null }));
 
 // Expose `plainUrls` so a test can assert the DM composer opts into plain-text
 // URLs (#542) — same miss-surface regression guard as the channel composer.
@@ -287,6 +300,15 @@ const supervisedDm: DMItem = {
 // `supervised` flag (observed when one owner owns both ends). The read-only
 // surface must still hold, keyed on `mode === "agent_pair"`.
 const agentPairNoFlagDm: DMItem = { ...supervisedDm, supervised: undefined };
+
+// A NORMAL single-agent DM (not a supervised pair): DmAgentBubble SHOULD mount
+// here — the supervised gate must not regress legitimate independent agent chat.
+const agentDirectDm: DMItem = {
+  ...supervisedDm,
+  mode: "direct",
+  supervised: undefined,
+  participants: undefined,
+};
 
 function renderSupervisedDm(dmItem: DMItem = supervisedDm) {
   const qc = new QueryClient({
@@ -473,6 +495,10 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     // editor leaking back onto the supervised surface.
     expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    // #692 gate②: the SECOND agent-chat surface — DmAgentBubble → ChatWindow's
+    // own ungated ProseMirror composer — must NOT mount on a supervised pair.
+    // This is the exact leak the null-mocked #1243 test was blind to.
+    expect(screen.queryByTestId("dm-agent-bubble")).not.toBeInTheDocument();
     expect(
       screen.getByText(/supervising this agent pair.*read-only/i),
     ).toBeInTheDocument();
@@ -491,8 +517,17 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     renderSupervisedDm(agentPairNoFlagDm);
     await screen.findByTestId("message-bubble");
     expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dm-agent-bubble")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
     expect(markReadSpy).not.toHaveBeenCalled();
+  });
+
+  it("mounts the single-agent chat bubble on a NORMAL agent DM (gate must not regress legit chat)", async () => {
+    // Non-supervised single-agent DM: the independent agent-chat bubble is
+    // legitimate and MUST still mount — the gate only removes it on agent_pair.
+    renderSupervisedDm(agentDirectDm);
+    await screen.findByTestId("message-bubble");
+    expect(screen.getByTestId("dm-agent-bubble")).toBeInTheDocument();
   });
 
   it("baseline: a NON-supervised DM DOES auto mark-read on open (proves the guard suppresses it)", async () => {

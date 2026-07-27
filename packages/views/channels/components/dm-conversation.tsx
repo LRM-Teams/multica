@@ -1472,7 +1472,15 @@ function DmChannelConversation({
           </>
         }
       />
-      {dm.peer.type === "agent" ? (
+      {/* #692 gate②: DmAgentBubble mounts a SECOND, independent agent-chat
+          surface (ChatWindow → its own ProseMirror composer) keyed only on
+          peer.type. An agent_pair's projected peer is also "agent", so the
+          read-only supervision surface was mounting a live, editable editor
+          beside the "can't post here" banner — a write surface the Composer
+          readOnly banner never covered. Gate it on !supervisedReadOnly: a
+          supervised agent_pair has no semantically-correct single peer, so no
+          single-agent bubble belongs here. (Composer/handler gates unchanged.) */}
+      {dm.peer.type === "agent" && !supervisedReadOnly ? (
         <DmAgentBubble agentId={dm.peer.id} agentName={dm.peer.name} />
       ) : null}
     </main>

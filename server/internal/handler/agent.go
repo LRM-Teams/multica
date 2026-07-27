@@ -352,10 +352,12 @@ type AgentTaskResponse struct {
 	CreatedAt               string `json:"created_at"`
 	PriorSessionID          string `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
 	PriorWorkDir            string `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
-	// RuntimeStateGeneration + FreshSessionNoticeReason are the D6-1a wire
-	// contract from agent_runtime_state. Inbox claim ensures the row and fills
-	// generation/notice; PriorSessionID still comes from legacy chat/issue
-	// sources until D6-2 resume cutover. omitempty keeps older daemons happy.
+	// RuntimeStateGeneration is the D6-1a wire contract from agent_runtime_state:
+	// inbox claim ensures the row and fills generation only. FreshSessionNoticeReason
+	// stays empty on the claim path until D6-2 completes canonical archive/read-switch
+	// (shipping cutover/reset notice while PriorSessionID still resumes legacy chat/issue
+	// sessions would inject a false "brand new / history archived" brief). omitempty
+	// keeps older daemons happy.
 	RuntimeStateGeneration   int64  `json:"runtime_state_generation,omitempty"`
 	FreshSessionNoticeReason string `json:"fresh_session_notice_reason,omitempty"`
 	WorkDir                  string `json:"work_dir,omitempty"` // local working directory pinned for this task; populated once the daemon reports it

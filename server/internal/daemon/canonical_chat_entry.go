@@ -91,9 +91,10 @@ func (d *Daemon) tryCanonicalChatBackend(
 	execOpts.Cwd = workDir
 
 	// Materialize Multica runtime brief + task context + skills into the
-	// stable cwd. Per-task env.WorkDir still got an inject earlier for
-	// non-resident paths; resident Grok/Pi only see turn.WorkDir.
-	if _, err := execenv.MaterializeCanonicalTurnContext(workDir, provider, taskCtx); err != nil {
+	// stable cwd. Ledger is daemon-owned under agent RootDir (sibling of
+	// WorkDir) — never inside provider-writable CWD.
+	ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
+	if _, err := execenv.MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider, taskCtx); err != nil {
 		return nil, nil, nil, false, fmt.Errorf("materialize canonical turn context: %w", err)
 	}
 

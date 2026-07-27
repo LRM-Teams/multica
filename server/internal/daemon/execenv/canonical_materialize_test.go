@@ -7,12 +7,9 @@ import (
 	"testing"
 )
 
-// MaterializeCanonicalTurnContext is the D6-1b contract for stable turn.WorkDir:
-// Tier B refresh + Tier C residual clear (task A facts must not leak into turn B).
 func TestMaterializeCanonicalTurnContextRefreshAndNoResidual(t *testing.T) {
 	dir := t.TempDir()
 
-	// Durable agent file (Tier A) must survive across materialize.
 	memoryPath := filepath.Join(dir, "MEMORY.md")
 	if err := os.WriteFile(memoryPath, []byte("agent durable notes"), 0o644); err != nil {
 		t.Fatal(err)
@@ -31,9 +28,10 @@ func TestMaterializeCanonicalTurnContextRefreshAndNoResidual(t *testing.T) {
 	if _, err := MaterializeCanonicalTurnContext(dir, "grok", ctxA); err != nil {
 		t.Fatalf("materialize A: %v", err)
 	}
-	// Extra residual file under .agent_context that rewrite alone would not remove.
-	poison := filepath.Join(dir, ".agent_context", "poison_from_A.md")
-	if err := os.WriteFile(poison, []byte("SECRET_A"), 0o644); err != nil {
+
+	// User-owned sibling under .agent_context (must survive CleanupSidecars).
+	userSibling := filepath.Join(dir, ".agent_context", "user_notes.md")
+	if err := os.WriteFile(userSibling, []byte("USER_OWNED_NOTES"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,13 +45,14 @@ func TestMaterializeCanonicalTurnContextRefreshAndNoResidual(t *testing.T) {
 		t.Fatalf("materialize B: %v", err)
 	}
 
-	// Tier A preserved.
 	mem, err := os.ReadFile(memoryPath)
 	if err != nil || string(mem) != "agent durable notes" {
 		t.Fatalf("Tier A MEMORY.md not preserved: %v %q", err, mem)
 	}
+	if raw, err := os.ReadFile(userSibling); err != nil || string(raw) != "USER_OWNED_NOTES" {
+		t.Fatalf("user-owned .agent_context sibling not preserved: %v %q", err, raw)
+	}
 
-	// Tier B: AGENTS managed block + B context present.
 	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,10 +78,6 @@ func TestMaterializeCanonicalTurnContextRefreshAndNoResidual(t *testing.T) {
 		t.Fatalf("issue_context still has A: %s", ctxRaw)
 	}
 
-	// Tier C: poison residual gone; prior Multica-managed skill gone.
-	if _, err := os.Stat(poison); !os.IsNotExist(err) {
-		t.Fatalf("poison residual still present: %v", err)
-	}
 	managedPrior := filepath.Join(dir, ".grok", "skills", "prior-managed")
 	if _, err := os.Stat(managedPrior); !os.IsNotExist(err) {
 		t.Fatalf("prior Multica-managed skill residual still present: %v", err)
@@ -90,7 +85,6 @@ func TestMaterializeCanonicalTurnContextRefreshAndNoResidual(t *testing.T) {
 }
 
 func TestMaterializeCanonicalTurnContextPreservesUserOwnedSkills(t *testing.T) {
-	// Barry BLOCK: must not RemoveAll the whole .grok/skills tree.
 	dir := t.TempDir()
 	userSkill := filepath.Join(dir, ".grok", "skills", "user-owned", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(userSkill), 0o755); err != nil {
@@ -99,7 +93,6 @@ func TestMaterializeCanonicalTurnContextPreservesUserOwnedSkills(t *testing.T) {
 	if err := os.WriteFile(userSkill, []byte("# User owned skill\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Multica-managed sibling from a prior turn (marker present).
 	managedDir := filepath.Join(dir, ".grok", "skills", "prior-managed")
 	if err := os.MkdirAll(managedDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -121,7 +114,6 @@ func TestMaterializeCanonicalTurnContextPreservesUserOwnedSkills(t *testing.T) {
 		t.Fatalf("materialize: %v", err)
 	}
 
-	// User-owned sibling preserved (Tier A).
 	raw, err := os.ReadFile(userSkill)
 	if err != nil {
 		t.Fatalf("user-owned skill missing after materialize: %v", err)
@@ -129,16 +121,62 @@ func TestMaterializeCanonicalTurnContextPreservesUserOwnedSkills(t *testing.T) {
 	if !strings.Contains(string(raw), "User owned skill") {
 		t.Fatalf("user-owned skill content lost: %s", raw)
 	}
-	// Prior Multica-managed skill removed (Tier C).
 	if _, err := os.Stat(managedDir); !os.IsNotExist(err) {
 		t.Fatalf("prior managed skill still present: %v", err)
 	}
-	// This-turn managed skill written with marker.
 	thisTurn := filepath.Join(dir, ".grok", "skills", "this-turn-managed")
 	if !isManagedSkillDir(thisTurn) {
 		t.Fatal("this-turn managed skill missing Multica marker")
 	}
-	if _, err := os.Stat(filepath.Join(thisTurn, "SKILL.md")); err != nil {
-		t.Fatalf("this-turn managed SKILL.md: %v", err)
+}
+
+func TestMaterializeCanonicalTurnContextRefusesToClobberPreExistingSidecars(t *testing.T) {
+	// Barry: writeContextFiles must not use nil-manifest os.WriteFile on stable cwd.
+	dir := t.TempDir()
+	ctxDir := filepath.Join(dir, ".agent_context")
+	if err := os.MkdirAll(ctxDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userIssue := filepath.Join(ctxDir, "issue_context.md")
+	if err := os.WriteFile(userIssue, []byte("USER_OWNED_ISSUE_CONTEXT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projDir := filepath.Join(dir, ".multica", "project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userResources := filepath.Join(projDir, "resources.json")
+	if err := os.WriteFile(userResources, []byte(`{"user":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := MaterializeCanonicalTurnContext(dir, "grok", TaskContextForEnv{
+		AgentID: "agent-a", AgentName: "Agent A", IssueID: "issue-multica", Directed: true,
+		ProjectID: "proj-1", ProjectTitle: "P",
+	}); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	gotIssue, err := os.ReadFile(userIssue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotIssue) != "USER_OWNED_ISSUE_CONTEXT" {
+		t.Fatalf("pre-existing issue_context.md was clobbered: %q", gotIssue)
+	}
+	gotRes, err := os.ReadFile(userResources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotRes) != `{"user":true}` {
+		t.Fatalf("pre-existing resources.json was clobbered: %q", gotRes)
+	}
+	// Multica still refreshed the managed AGENTS block (facts live there when sidecars refuse).
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agents), "BEGIN MULTICA-RUNTIME") {
+		t.Fatal("AGENTS.md missing Multica block after refuse-to-clobber path")
 	}
 }

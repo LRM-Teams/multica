@@ -240,6 +240,33 @@ func TestSupervisorCancellationStopsWorkerWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestSupervisorCancellationRejectsRestartDuringWorkerStop(t *testing.T) {
+	countPath := filepath.Join(t.TempDir(), "starts")
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	s := newTestSupervisor(t, "term-delay", countPath, 0, nil)
+	s.config.WorkerEnv = append(
+		s.config.WorkerEnv,
+		workerHelperTermEnv+"=150",
+		workerHelperReadyEnv+"="+readyPath,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	waitForWorkerCount(t, countPath, 1)
+	waitForWorkerReady(t, readyPath)
+	cancel()
+	waitForSupervisorState(t, s, StateStopping)
+	if err := s.RequestRestart(); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("RequestRestart during terminal worker stop = %v, want ErrNotRunning", err)
+	}
+	if err := waitForRun(t, errCh); err != nil {
+		t.Fatalf("Run after cancellation: %v", err)
+	}
+}
+
 func TestSupervisorCancellationDuringBackoffDoesNotRestart(t *testing.T) {
 	countPath := filepath.Join(t.TempDir(), "starts")
 	sleepEntered := make(chan struct{}, 1)
@@ -270,6 +297,69 @@ func TestSupervisorCancellationDuringBackoffDoesNotRestart(t *testing.T) {
 	snapshot := s.Snapshot()
 	if snapshot.Generation != 1 || snapshot.RestartCount != 0 {
 		t.Fatalf("snapshot = %+v, want one generation and no restart", snapshot)
+	}
+}
+
+func TestSupervisorCancellationRejectsRestartDuringBackoffCleanup(t *testing.T) {
+	countPath := filepath.Join(t.TempDir(), "starts")
+	sleepEntered := make(chan struct{}, 1)
+	sleepCanceled := make(chan struct{}, 1)
+	releaseSleep := make(chan struct{})
+	sleep := func(ctx context.Context, _ time.Duration) error {
+		sleepEntered <- struct{}{}
+		<-ctx.Done()
+		sleepCanceled <- struct{}{}
+		<-releaseSleep
+		return ctx.Err()
+	}
+	s := newTestSupervisor(t, "crash", countPath, 1, sleep)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	select {
+	case <-sleepEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for supervisor backoff")
+	}
+	cancel()
+	select {
+	case <-sleepCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for canceled backoff cleanup")
+	}
+	waitForSupervisorState(t, s, StateStopping)
+	if err := s.RequestRestart(); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("RequestRestart during terminal backoff cleanup = %v, want ErrNotRunning", err)
+	}
+	close(releaseSleep)
+	if err := waitForRun(t, errCh); err != nil {
+		t.Fatalf("Run after backoff cancellation: %v", err)
+	}
+}
+
+func TestSupervisorBackoffSleepFailureCommitsTerminalState(t *testing.T) {
+	countPath := filepath.Join(t.TempDir(), "starts")
+	sleepErr := errors.New("sleep failed")
+	sleep := func(context.Context, time.Duration) error {
+		return sleepErr
+	}
+	s := newTestSupervisor(t, "crash", countPath, 1, sleep)
+
+	err := s.Run(context.Background())
+	if !errors.Is(err, sleepErr) {
+		t.Fatalf("Run error = %v, want %v", err, sleepErr)
+	}
+	snapshot := s.Snapshot()
+	if snapshot.State != StateStopped ||
+		snapshot.LastExit != ExitCrashed ||
+		snapshot.WorkerPID != 0 {
+		t.Fatalf("snapshot after backoff failure = %+v, want terminal crashed state", snapshot)
+	}
+	if err := s.RequestRestart(); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("RequestRestart after backoff failure = %v, want ErrNotRunning", err)
 	}
 }
 

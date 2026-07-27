@@ -270,10 +270,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 
 		case <-ctx.Done():
-			s.updateSnapshot(func(snapshot *Snapshot) {
-				snapshot.State = StateStopping
-				snapshot.NextBackoff = 0
-			})
+			s.beginTerminalStop()
 			stopWorker(cmd, waitCh, s.config.GracefulStopWait)
 			s.transitionStopped(ExitStopped)
 			return nil
@@ -393,9 +390,7 @@ func (s *Supervisor) commitWorkerExit(clean bool) bool {
 	s.snapshot.WorkerPID = 0
 	s.snapshot.LastExit = ExitClean
 	s.snapshot.NextBackoff = 0
-	s.restartable = false
-	s.restartPending = false
-	s.drainRestartSignalLocked()
+	s.disableRestartLocked()
 	if s.snapshot.State != previousState {
 		s.snapshot.StateChangedAt = time.Now()
 	}
@@ -436,6 +431,18 @@ func (s *Supervisor) markRestartRequested() {
 	})
 }
 
+func (s *Supervisor) beginTerminalStop() {
+	s.mu.Lock()
+	previousState := s.snapshot.State
+	s.snapshot.State = StateStopping
+	s.snapshot.NextBackoff = 0
+	s.disableRestartLocked()
+	if s.snapshot.State != previousState {
+		s.snapshot.StateChangedAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
 func (s *Supervisor) transitionStopped(exit ExitKind) {
 	s.mu.Lock()
 	previousState := s.snapshot.State
@@ -443,16 +450,33 @@ func (s *Supervisor) transitionStopped(exit ExitKind) {
 	s.snapshot.WorkerPID = 0
 	s.snapshot.LastExit = exit
 	s.snapshot.NextBackoff = 0
-	// Linearization point for terminal exit: no restart request may report
-	// success after the supervisor has committed to stopping, even though a
-	// small amount of lock-release cleanup still follows.
-	s.restartable = false
-	s.restartPending = false
-	s.drainRestartSignalLocked()
+	s.disableRestartLocked()
 	if s.snapshot.State != previousState {
 		s.snapshot.StateChangedAt = time.Now()
 	}
 	s.mu.Unlock()
+}
+
+func (s *Supervisor) transitionStoppedPreservingExit() {
+	s.mu.Lock()
+	previousState := s.snapshot.State
+	s.snapshot.State = StateStopped
+	s.snapshot.WorkerPID = 0
+	s.snapshot.NextBackoff = 0
+	s.disableRestartLocked()
+	if s.snapshot.State != previousState {
+		s.snapshot.StateChangedAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+func (s *Supervisor) disableRestartLocked() {
+	// Linearization point for terminal exit: no restart request may report
+	// success after the supervisor has committed to stopping, even when worker
+	// or backoff cleanup still has to finish before Run returns.
+	s.restartable = false
+	s.restartPending = false
+	s.drainRestartSignalLocked()
 }
 
 func (s *Supervisor) waitBeforeRestart(
@@ -469,6 +493,11 @@ func (s *Supervisor) waitBeforeRestart(
 	select {
 	case err := <-sleepCh:
 		if err != nil {
+			if ctx.Err() != nil {
+				s.beginTerminalStop()
+			} else {
+				s.transitionStoppedPreservingExit()
+			}
 			return false, fmt.Errorf("supervisor backoff: %w", err)
 		}
 		return false, nil
@@ -477,6 +506,7 @@ func (s *Supervisor) waitBeforeRestart(
 		<-sleepCh
 		return true, nil
 	case <-ctx.Done():
+		s.beginTerminalStop()
 		cancel()
 		<-sleepCh
 		return false, fmt.Errorf("supervisor backoff: %w", ctx.Err())

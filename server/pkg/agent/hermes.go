@@ -583,10 +583,9 @@ func (c *hermesClient) handleLine(line string) {
 // handleAgentRequest replies to JSON-RPC requests the agent sends
 // us (agent → client direction). The only one we care about today is
 // `session/request_permission`: the daemon is headless and cannot
-// actually prompt a user, so we auto-approve every action. Using
-// `approve_for_session` rather than `approve` means subsequent
-// identical actions (every Shell invocation, every file write) don't
-// round-trip through us — the agent remembers them locally.
+// actually prompt a user, so we auto-approve every action. ACP
+// providers choose their own option IDs, so the reply must echo an
+// allow option from the request rather than inventing an ID.
 func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 	var method string
 	_ = json.Unmarshal(raw["method"], &method)
@@ -599,17 +598,30 @@ func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 	var resp map[string]any
 	switch method {
 	case "session/request_permission":
-		resp = map[string]any{
-			"jsonrpc": "2.0",
-			"id":      json.RawMessage(rawID),
-			"result": map[string]any{
-				"outcome": map[string]any{
-					"outcome":  "selected",
-					"optionId": "approve_for_session",
+		optionID, err := selectACPPermissionOption(raw["params"])
+		if err != nil {
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      json.RawMessage(rawID),
+				"error": map[string]any{
+					"code":    -32602,
+					"message": err.Error(),
 				},
-			},
+			}
+			c.cfg.Logger.Warn("rejecting invalid agent permission request", "method", method, "error", err)
+		} else {
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      json.RawMessage(rawID),
+				"result": map[string]any{
+					"outcome": map[string]any{
+						"outcome":  "selected",
+						"optionId": optionID,
+					},
+				},
+			}
+			c.cfg.Logger.Debug("auto-approved agent permission request", "method", method, "option_id", optionID)
 		}
-		c.cfg.Logger.Debug("auto-approved agent permission request", "method", method)
 	default:
 		// Unknown agent→client method — reply with standard "method
 		// not found" so the agent doesn't block waiting for us. Better
@@ -634,6 +646,33 @@ func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 	if err := c.writeLine(data); err != nil {
 		c.cfg.Logger.Warn("write agent-request response", "method", method, "error", err)
 	}
+}
+
+type acpPermissionRequestParams struct {
+	Options []struct {
+		OptionID string `json:"optionId"`
+		Kind     string `json:"kind"`
+	} `json:"options"`
+}
+
+// selectACPPermissionOption returns an actual option ID offered by the
+// provider. Prefer a session-scoped approval to avoid repeated prompts,
+// then fall back to one-shot approval. If the provider offers no typed
+// allow option, fail closed instead of guessing a provider-private ID or
+// accidentally selecting a rejection.
+func selectACPPermissionOption(raw json.RawMessage) (string, error) {
+	var params acpPermissionRequestParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return "", fmt.Errorf("invalid session/request_permission params")
+	}
+	for _, kind := range []string{"allow_always", "allow_once"} {
+		for _, option := range params.Options {
+			if option.Kind == kind && option.OptionID != "" {
+				return option.OptionID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("session/request_permission has no supported allow option")
 }
 
 // acpRPCError is a JSON-RPC error frame returned by the agent process.

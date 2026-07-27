@@ -28,8 +28,10 @@ import {
 import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
+import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { useT } from "../../i18n";
+import { isCompactActivityLabel } from "./is-compact-activity-label";
 import { isTerminalChannelActiveTask } from "./conversation-activity-tasks";
 
 /**
@@ -124,7 +126,8 @@ function useWorkingRowActivityVerb(
       ? formatDuration(new Date(firstSeen).toISOString(), now)
       : "";
 
-  if (projection) {
+  // LRM-650: Compact verbs stay EN Activity SoT — never i18n Working/Queued.
+  if (projection && isCompactActivityLabel(projection.label)) {
     const verb = duration
       ? t(($) => $.header.working_verb_with_duration, {
           verb: projection.label,
@@ -141,8 +144,8 @@ function useWorkingRowActivityVerb(
 
   const base =
     task.status === "running"
-      ? t(($) => $.agent_status.running)
-      : t(($) => $.agent_status.queued);
+      ? ACTIVITY_LABEL_EN.thinking
+      : ACTIVITY_LABEL_EN.waiting;
   const verb = duration
     ? t(($) => $.header.working_verb_with_duration, { verb: base, duration })
     : base;

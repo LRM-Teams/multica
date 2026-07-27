@@ -110,7 +110,7 @@
     "search": "Search by name or handle",
     "no_results": "No matching people",
     "dialog_title": "Members",
-    "dialog_subtitle": "#{{name}} · {{members}} members · {{agents}} agents",
+    "dialog_subtitle": "#{{name}} · {{members}} humans · {{agents}} agents",
     "find_members": "Find members",
     "add_people": "Add people",
     "add_people_title": "Add people to #{{name}}",

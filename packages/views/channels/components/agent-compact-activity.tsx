@@ -6,11 +6,11 @@ import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "./is-compact-activity-label";
 
 /**
- * LRM-650 / LRM-647 — DM header Compact under the peer name.
- * EN Activity projection only (dot + type); no Online/Working words, no
- * command/path details, no composer-strip duplicate.
+ * LRM-650 / LRM-647 — Compact Activity under an agent name.
+ * EN state type only (Thinking / Running command…); never "Working", never
+ * command/path/log detail. Idle → null (presence stays on the avatar dot).
  */
-export function DmAgentWorkingCue({
+export function AgentCompactActivity({
   agentId,
   className,
 }: {
@@ -24,10 +24,10 @@ export function DmAgentWorkingCue({
   return (
     <span
       className={cn(
-        "inline-flex min-h-0 max-w-[14rem] items-center gap-1.5 text-xs font-medium text-muted-foreground",
+        "mt-0.5 flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground",
         className,
       )}
-      data-testid="dm-agent-working-cue"
+      data-testid="agent-compact-activity"
       aria-live="polite"
     >
       <span

@@ -259,17 +259,14 @@ describe("ActivityTimeline", () => {
     expect(screen.getByTitle(full)).toBeInTheDocument();
   });
 
-  it("compact mode also gives a long file path the basename-preserving treatment (#385/#383)", () => {
-    // Profile Recent (compact) shares the row, so a long path there must not
-    // right-truncate the basename either — same head-truncate + tail-visible.
+  it("compact mode shows state type only — no path/command detail (LRM-650)", () => {
+    // Profile Recent compact: EN label only; path/command stay on Expanded.
     render(<ActivityTimeline events={[WRITE_LONGPATH]} compact />);
-    expect(screen.getByText("/pathcheck.txt")).toBeInTheDocument();
+    expect(screen.getByText("Writing file")).toBeInTheDocument();
+    expect(screen.queryByText("/pathcheck.txt")).toBeNull();
     expect(
-      screen.getByText("/Users/frank/multica_workspaces/7373de75/workdir"),
-    ).toHaveClass("truncate");
-    expect(
-      screen.getByTitle("/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt"),
-    ).toBeInTheDocument();
+      screen.queryByTitle("/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt"),
+    ).toBeNull();
   });
 
   it("projects Raft-style wake and reply labels without leaking old presentation copy", () => {
@@ -391,8 +388,7 @@ describe("ActivityTimeline", () => {
   });
 
   it("compact mode: shows only the most recent N narrative rows, never a click-to-expand", () => {
-    // Profile Recent (#383): same projection, layout-only delta — last N rows,
-    // single-line truncated subtext, no expand.
+    // Profile Recent (#383 / LRM-650): last N rows, label-only (no reply body).
     const many: ActivityEvent[] = Array.from({ length: 7 }, (_, i) => ({
       id: `m${i}`,
       agent_id: "agent-1",
@@ -405,8 +401,8 @@ describe("ActivityTimeline", () => {
     render(<ActivityTimeline events={many} compact />);
     expect(screen.getAllByTestId("activity-row")).toHaveLength(5);
     expect(screen.queryByRole("button")).toBeNull();
-    // most recent rows kept (m6 present, oldest m0/m1 trimmed)
-    expect(screen.getByText("Reply 6")).toBeInTheDocument();
+    expect(screen.getAllByText("Output")).toHaveLength(5);
+    expect(screen.queryByText("Reply 6")).toBeNull();
     expect(screen.queryByText("Reply 0")).toBeNull();
   });
 
@@ -509,7 +505,7 @@ describe("ActivityTimeline", () => {
     expect(screen.getByRole("button", { name: /Copy|Copied/ })).toBeInTheDocument();
   });
 
-  it("compact mode drops the command expand/copy affordance (title-only, non-interactive) (#v0)", () => {
+  it("compact mode drops command detail — state type only, non-interactive (LRM-650)", () => {
     const CMD: ActivityEvent = {
       id: "cmd2",
       agent_id: "agent-1",
@@ -523,7 +519,8 @@ describe("ActivityTimeline", () => {
       target_ref: { kind: "agent", id: "agent-1" },
     };
     render(<ActivityTimeline events={[CMD]} compact />);
-    expect(screen.getByText("ls /a/b")).toBeInTheDocument();
+    expect(screen.getByText("Running command")).toBeInTheDocument();
+    expect(screen.queryByText("ls /a/b")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
   });
 });

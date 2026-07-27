@@ -378,13 +378,12 @@ function ActivityRow({
       <span className={cn("flex shrink-0 justify-center self-start", SPINE_COL)}>
         <ActivitySpineDot tone={presentation.tone} />
       </span>
-      {presentation.subtextKind === "command" && compact ? (
-        // Compact Profile Recent: clamp + no expand / copy (title-only).
-        <div className="flex min-w-0 flex-1 items-start gap-2">
-          <div className="min-w-0 flex-1 line-clamp-2 break-words text-[13.5px] font-semibold leading-[1.45] text-foreground">
-            <span>{label} </span>
-            <span className="font-mono text-[12px] font-normal text-muted-foreground">{subtext}</span>
-          </div>
+      {compact ? (
+        // LRM-650: Profile compact = state type only — suppress command/path detail.
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="min-w-0 truncate text-[13.5px] font-semibold text-foreground">
+            {label}
+          </span>
           <span className={timestampClass}>{time}</span>
         </div>
       ) : (

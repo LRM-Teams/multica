@@ -9,23 +9,162 @@ import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
+import { useMemo } from "react";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n";
+import { AgentCompactActivity } from "./agent-compact-activity";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
 
+/** LRM-650 / Frank: section headers stay EN SoT (HUMANS / Agents), not i18n. */
+function SectionHeader({ label, count }: { label: "HUMANS" | "Agents"; count: number }) {
+  return (
+    <div
+      className="px-4 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"
+      data-testid={`channel-members-section-${label.toLowerCase()}`}
+    >
+      {label} · {count}
+    </div>
+  );
+}
+
+function MemberRow({
+  m,
+  roleForMember,
+  canRemove,
+  isMobile,
+  currentUserId,
+  onOpenDm,
+  onOpenAgent,
+  onOpenMember,
+  onRemove,
+  dmPending,
+}: {
+  m: ChannelMember;
+  roleForMember: (member: ChannelMember) => MemberRoleLabel;
+  canRemove: boolean;
+  isMobile: boolean;
+  currentUserId: string;
+  onOpenDm?: (member: ChannelMember) => void;
+  onOpenAgent?: OpenAgentPanelFn;
+  onOpenMember?: (userId: string) => void;
+  onRemove?: (member: ChannelMember) => void;
+  dmPending?: boolean;
+}) {
+  const { t } = useT("channels");
+  const isAgent = m.member_type === "agent";
+  const presentation: ActorIdentityPresentation = resolveActorIdentityPresentation(
+    m,
+    isAgent ? t(($) => $.message.agent_badge) : t(($) => $.members.title),
+  );
+  const roleKey = roleForMember(m);
+  const showMutedRole = !isAgent && (roleKey === "owner" || roleKey === "admin");
+  const mutedRoleLabel = showMutedRole
+    ? t(($) => $.profile_popover.role[roleKey])
+    : null;
+  const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
+  const actorType = isAgent ? "agent" : "member";
+  const profileMemberType = isAgent ? "agent" : "user";
+  const openAgentCapture =
+    isAgent && onOpenAgent
+      ? () => {
+          onOpenAgent(m.member_id, {
+            name: m.name,
+            display_name: m.display_name,
+            avatar_url: m.avatar_url ?? null,
+          });
+        }
+      : undefined;
+  const openMemberCapture =
+    !isAgent && onOpenMember
+      ? () => {
+          onOpenMember(m.member_id);
+        }
+      : undefined;
+
+  return (
+    <div
+      className="group flex min-h-[52px] items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-hover"
+      data-testid="channel-members-row"
+      data-member-type={m.member_type}
+    >
+      <ActorProfileTrigger
+        memberType={profileMemberType}
+        memberId={m.member_id}
+        side="left"
+        sideOffset={8}
+        className="min-w-0 flex-1 items-center gap-2.5"
+        onClickCapture={openAgentCapture ?? openMemberCapture}
+      >
+        <ActorAvatar
+          actorType={actorType}
+          actorId={m.member_id}
+          avatarUrlHint={m.avatar_url}
+          size={36}
+          showStatusDot
+          profileLink={false}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            <span className="truncate text-sm font-semibold text-ink">
+              {presentation.displayName}
+            </span>
+            {mutedRoleLabel ? (
+              <span
+                data-testid="member-role-label"
+                className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
+              >
+                {mutedRoleLabel}
+              </span>
+            ) : null}
+          </div>
+          {isAgent ? (
+            <AgentCompactActivity agentId={m.member_id} />
+          ) : presentation.showHandleLabel && presentation.handleLabel ? (
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              {presentation.handleLabel}
+            </div>
+          ) : null}
+        </div>
+      </ActorProfileTrigger>
+      {canDm && (
+        <button
+          type="button"
+          onClick={() => onOpenDm?.(m)}
+          disabled={dmPending}
+          aria-label={t(($) => $.dm.send_message)}
+          title={t(($) => $.dm.send_message)}
+          className={cn(
+            "rounded p-1.5 text-muted-foreground transition hover:text-foreground disabled:opacity-50",
+            isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+          )}
+        >
+          <MessageSquare className="size-3.5" />
+        </button>
+      )}
+      {canRemove && onRemove && (
+        <button
+          type="button"
+          onClick={() => onRemove(m)}
+          aria-label={t(($) => $.members.remove_aria)}
+          className={cn(
+            "shrink-0 font-semibold text-destructive transition",
+            isMobile
+              ? "min-h-11 px-2 py-2.5 text-sm opacity-100"
+              : "px-1.5 py-1 text-sm opacity-0 group-hover:opacity-100",
+          )}
+        >
+          {t(($) => $.members.remove)}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
- * Shared Members list (LRM-211) — used by the Members dialog and the
- * Channel details 「成员」Tab so there is one list IA, not two.
- * LRM-225 — scroll via flex-1 min-h-0 (dialog) or parent overflow (details);
- * drop the old fixed max-h that clipped the roster on mobile.
- *
- * Avatars are identity-first (LRM-224 Option B): actor id → shared Avatar;
- * agents show the presence status dot on this directory surface.
- * LRM-288 — row identity is clickable: agents open the agent panel (including
- * channel-only / group-manager agents absent from ListAgents); humans open
- * the shared profile trigger.
+ * Shared Members list (LRM-211 / LRM-650) — dialog + Channel details 「成员」Tab.
+ * LRM-650: HUMANS / Agents sections, no row hairlines, agent Compact Activity.
  */
 export function ChannelMembersList({
   members,
@@ -58,7 +197,15 @@ export function ChannelMembersList({
   dmPending?: boolean;
   className?: string;
 }) {
-  const { t } = useT("channels");
+  const { humans, agents } = useMemo(() => {
+    const h: ChannelMember[] = [];
+    const a: ChannelMember[] = [];
+    for (const m of members) {
+      if (m.member_type === "agent") a.push(m);
+      else h.push(m);
+    }
+    return { humans: h, agents: a };
+  }, [members]);
 
   if (loading) {
     return (
@@ -98,117 +245,55 @@ export function ChannelMembersList({
   return (
     <div
       className={cn(
-        "min-h-0 overflow-y-auto overscroll-contain pb-2 [-webkit-overflow-scrolling:touch]",
+        "min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 [-webkit-overflow-scrolling:touch]",
         className,
       )}
       data-testid="channel-members-list"
     >
-      {members.map((m) => {
-        const isAgent = m.member_type === "agent";
-        const presentation: ActorIdentityPresentation = resolveActorIdentityPresentation(
-          m,
-          isAgent ? t(($) => $.message.agent_badge) : t(($) => $.members.title),
-        );
-        const roleKey = roleForMember(m);
-        const showMutedRole = !isAgent && (roleKey === "owner" || roleKey === "admin");
-        const mutedRoleLabel = showMutedRole
-          ? t(($) => $.profile_popover.role[roleKey])
-          : null;
-        const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
-        const actorType = isAgent ? "agent" : "member";
-        const profileMemberType = isAgent ? "agent" : "user";
-        const openAgentCapture =
-          isAgent && onOpenAgent
-            ? () => {
-                onOpenAgent(m.member_id, {
-                  name: m.name,
-                  display_name: m.display_name,
-                  avatar_url: m.avatar_url ?? null,
-                });
-              }
-            : undefined;
-        const openMemberCapture =
-          !isAgent && onOpenMember
-            ? () => {
-                onOpenMember(m.member_id);
-              }
-            : undefined;
-
-        return (
-          <div
-            key={`${m.member_type}:${m.member_id}`}
-            className="group flex min-h-[52px] items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0 hover:bg-hover"
-          >
-            <ActorProfileTrigger
-              memberType={profileMemberType}
-              memberId={m.member_id}
-              side="left"
-              sideOffset={8}
-              className="min-w-0 flex-1 items-center gap-3"
-              onClickCapture={openAgentCapture ?? openMemberCapture}
-            >
-              <ActorAvatar
-                actorType={actorType}
-                actorId={m.member_id}
-                avatarUrlHint={m.avatar_url}
-                size={36}
-                showStatusDot
-                profileLink={false}
+      {humans.length > 0 ? (
+        <>
+          <SectionHeader label="HUMANS" count={humans.length} />
+          <div className="px-1 pb-1">
+            {humans.map((m) => (
+              <MemberRow
+                key={`${m.member_type}:${m.member_id}`}
+                m={m}
+                roleForMember={roleForMember}
+                canRemove={canRemove}
+                isMobile={isMobile}
+                currentUserId={currentUserId}
+                onOpenDm={onOpenDm}
+                onOpenAgent={onOpenAgent}
+                onOpenMember={onOpenMember}
+                onRemove={onRemove}
+                dmPending={dmPending}
               />
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-baseline gap-1.5">
-                  <span className="truncate text-sm font-semibold text-ink">
-                    {presentation.displayName}
-                  </span>
-                  {presentation.showHandleLabel && presentation.handleLabel ? (
-                    <span className="truncate text-xs font-normal text-ink-2">
-                      {presentation.handleLabel}
-                    </span>
-                  ) : null}
-                  {mutedRoleLabel ? (
-                    <span
-                      data-testid="member-role-label"
-                      className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
-                    >
-                      {mutedRoleLabel}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            </ActorProfileTrigger>
-            {canDm && (
-              <button
-                type="button"
-                onClick={() => onOpenDm?.(m)}
-                disabled={dmPending}
-                aria-label={t(($) => $.dm.send_message)}
-                title={t(($) => $.dm.send_message)}
-                className={cn(
-                  "rounded p-1.5 text-muted-foreground transition hover:text-foreground disabled:opacity-50",
-                  isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-                )}
-              >
-                <MessageSquare className="size-3.5" />
-              </button>
-            )}
-            {canRemove && onRemove && (
-              <button
-                type="button"
-                onClick={() => onRemove(m)}
-                aria-label={t(($) => $.members.remove_aria)}
-                className={cn(
-                  "shrink-0 font-semibold text-destructive transition",
-                  isMobile
-                    ? "min-h-11 px-2 py-2.5 text-sm opacity-100"
-                    : "px-1.5 py-1 text-sm opacity-0 group-hover:opacity-100",
-                )}
-              >
-                {t(($) => $.members.remove)}
-              </button>
-            )}
+            ))}
           </div>
-        );
-      })}
+        </>
+      ) : null}
+      {agents.length > 0 ? (
+        <>
+          <SectionHeader label="Agents" count={agents.length} />
+          <div className="px-1 pb-1">
+            {agents.map((m) => (
+              <MemberRow
+                key={`${m.member_type}:${m.member_id}`}
+                m={m}
+                roleForMember={roleForMember}
+                canRemove={canRemove}
+                isMobile={isMobile}
+                currentUserId={currentUserId}
+                onOpenDm={onOpenDm}
+                onOpenAgent={onOpenAgent}
+                onOpenMember={onOpenMember}
+                onRemove={onRemove}
+                dmPending={dmPending}
+              />
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

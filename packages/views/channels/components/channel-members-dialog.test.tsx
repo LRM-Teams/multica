@@ -13,6 +13,7 @@ vi.mock("../../i18n/use-t", () => ({
           dialog_subtitle: "#{{name}} · {{members}} humans · {{agents}} agents",
           find_members: "Find members",
           add_people: "Add people",
+          add: "Add",
           in_channel: "In this channel · {{count}}",
           footer_count: "{{count}} people",
           done: "Done",
@@ -62,11 +63,25 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
-// LRM-224: ChannelMembersList renders identity ActorAvatar (useActorName /
-// QueryClient). Layout tests only care about scroll/chrome classes.
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => (
     <span data-testid="actor-avatar">{actorId}</span>
+  ),
+}));
+
+vi.mock("../../common/actor-profile-popover", () => ({
+  ActorProfileTrigger: ({
+    children,
+    className,
+  }: {
+    children: React.ReactNode;
+    className?: string;
+  }) => <div className={className}>{children}</div>,
+}));
+
+vi.mock("./agent-compact-activity", () => ({
+  AgentCompactActivity: ({ agentId }: { agentId: string }) => (
+    <span data-testid="agent-compact-activity">{agentId}</span>
   ),
 }));
 
@@ -89,7 +104,7 @@ const manyMembers = Array.from({ length: 16 }, (_, i) =>
   member(`m-${i}`, `Person ${i}`, i % 3 === 0 ? "agent" : "user"),
 );
 
-describe("ChannelMembersDialog (LRM-225)", () => {
+describe("ChannelMembersDialog (LRM-650)", () => {
   it("uses a flex-1 scrollable list so a long roster can reach the bottom", () => {
     render(
       <ChannelMembersDialog
@@ -116,12 +131,11 @@ describe("ChannelMembersDialog (LRM-225)", () => {
     expect(list.className).toMatch(/min-h-0/);
     expect(list.className).toMatch(/overflow-y-auto/);
     expect(list.className).toMatch(/overscroll-contain/);
-    // Old fixed cap that clipped mobile scrolling must be gone.
     expect(list.className).not.toMatch(/max-h-\[min\(280px/);
     expect(screen.getByText("Person 15")).toBeInTheDocument();
   });
 
-  it("uses brand / surface tokens instead of raw hex on Add people chrome", () => {
+  it("uses outline Add + Done-only footer (Plan A+少字)", () => {
     render(
       <ChannelMembersDialog
         open
@@ -140,9 +154,11 @@ describe("ChannelMembersDialog (LRM-225)", () => {
       />,
     );
 
-    const addPeople = screen.getByRole("button", { name: /add people/i });
-    expect(addPeople.className).toMatch(/bg-brand/);
-    expect(addPeople.className).not.toMatch(/#1264a3/);
+    const add = screen.getByRole("button", { name: /^add$/i });
+    expect(add.className).not.toMatch(/bg-brand/);
+    expect(screen.getByRole("button", { name: /done/i })).toBeInTheDocument();
+    expect(screen.queryByText(/6 people/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/in this channel/i)).not.toBeInTheDocument();
     const popup = document.querySelector('[data-slot="dialog-content"]');
     expect(popup!.className).toMatch(/bg-card/);
   });
@@ -174,8 +190,8 @@ describe("ChannelMembersDialog (LRM-225)", () => {
   });
 });
 
-describe("ChannelMembersList (LRM-225)", () => {
-  it("shows muted owner/admin role inline and drops bordered role pills (LRM-232)", () => {
+describe("ChannelMembersList (LRM-650)", () => {
+  it("groups HUMANS / Agents without row hairlines", () => {
     render(
       <ChannelMembersList
         members={[
@@ -196,11 +212,17 @@ describe("ChannelMembersList (LRM-225)", () => {
       />,
     );
 
+    expect(screen.getByTestId("channel-members-section-humans")).toHaveTextContent(
+      "HUMANS · 2",
+    );
+    expect(screen.getByTestId("channel-members-section-agents")).toHaveTextContent(
+      "Agents · 1",
+    );
+    expect(screen.getByTestId("agent-compact-activity")).toHaveTextContent("a1");
     expect(screen.getByTestId("member-role-label")).toHaveTextContent("Owner");
-    expect(screen.queryAllByTestId("member-role-label")).toHaveLength(1);
-    expect(document.querySelector(".rounded-full.border")).toBeNull();
-    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
-    expect(screen.queryByText("Member")).not.toBeInTheDocument();
+    for (const row of screen.getAllByTestId("channel-members-row")) {
+      expect(row.className).not.toMatch(/border-b/);
+    }
   });
 
   it("always shows Remove at ≥44px hit target on mobile", () => {

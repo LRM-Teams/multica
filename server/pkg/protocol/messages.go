@@ -522,6 +522,30 @@ type DaemonRegisterPayload struct {
 	Runtimes []RuntimeInfo `json:"runtimes"`
 }
 
+// DaemonUpdateObservation is daemon-resolved update truth shared by register,
+// HTTP heartbeat, and WebSocket heartbeat. SessionID changes for every daemon
+// process. Revision starts at one and advances only when the semantic payload
+// changes, so the server can ignore duplicate and out-of-order transports
+// without writing on the ordinary heartbeat path.
+type DaemonUpdateObservation struct {
+	SessionID                  string  `json:"session_id"`
+	Revision                   int64   `json:"revision"`
+	ObservedAt                 string  `json:"observed_at"`
+	AutoUpdateEffectiveEnabled bool    `json:"auto_update_effective_enabled"`
+	ConfigSource               string  `json:"config_source"`
+	IneligibleReason           string  `json:"ineligible_reason,omitempty"`
+	CheckIntervalSeconds       int64   `json:"check_interval_seconds"`
+	Phase                      string  `json:"phase"`
+	AttemptSource              string  `json:"attempt_source,omitempty"`
+	LastAttemptAt              string  `json:"last_attempt_at,omitempty"`
+	LastOutcome                string  `json:"last_outcome"`
+	TargetVersion              string  `json:"target_version,omitempty"`
+	ErrorCode                  string  `json:"error_code,omitempty"`
+	ErrorMessage               string  `json:"error_message,omitempty"`
+	StagedVersion              string  `json:"staged_version,omitempty"`
+	ActivationGeneration       *uint64 `json:"activation_generation,omitempty"`
+}
+
 // RuntimeInfo describes an available agent runtime on the daemon's machine.
 type RuntimeInfo struct {
 	Type    string `json:"type"`
@@ -598,10 +622,11 @@ type ChannelTypingPayload struct {
 // Mirrors the body of POST /api/daemon/heartbeat so both transports share
 // identical semantics.
 type DaemonHeartbeatRequestPayload struct {
-	RuntimeID                 string `json:"runtime_id"`
-	SupportsBatchImport       bool   `json:"supports_batch_import,omitempty"`
-	SupportsMemoryCuration    bool   `json:"supports_memory_curation,omitempty"`
-	ActiveMemoryCurationRunID string `json:"active_memory_curation_run_id,omitempty"`
+	RuntimeID                 string                   `json:"runtime_id"`
+	SupportsBatchImport       bool                     `json:"supports_batch_import,omitempty"`
+	SupportsMemoryCuration    bool                     `json:"supports_memory_curation,omitempty"`
+	ActiveMemoryCurationRunID string                   `json:"active_memory_curation_run_id,omitempty"`
+	UpdateObservation         *DaemonUpdateObservation `json:"auto_update,omitempty"`
 }
 
 // DaemonHeartbeatAckPayload is the server's reply to DaemonHeartbeatRequestPayload.

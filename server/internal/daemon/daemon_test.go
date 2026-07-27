@@ -340,9 +340,11 @@ func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		client: NewClient(srv.URL),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
 		runUpdateFn: func(target string) (string, error) {
 			if target != "v0.3.36" {
 				t.Fatalf("target = %q, want v0.3.36", target)
@@ -379,6 +381,7 @@ func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 			t.Fatalf("error = %q, want substring %q", errMsg, want)
 		}
 	}
+	assertUpdateObservation(t, observation, "waiting", "verification_failed")
 }
 
 func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
@@ -400,9 +403,11 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		client: NewClient(srv.URL),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
 		runUpdateFn: func(target string) (string, error) {
 			if target != "v0.3.36" {
 				t.Fatalf("target = %q, want v0.3.36", target)
@@ -441,6 +446,7 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 	if got := reports[1]["status"]; got != "ready_to_apply" {
 		t.Fatalf("second status = %v, want ready_to_apply", got)
 	}
+	assertUpdateObservation(t, observation, "restart_pending", "update_succeeded")
 }
 
 func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *testing.T) {
@@ -463,9 +469,11 @@ func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *tes
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		client: NewClient(srv.URL),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
 		runUpdateFn: func(string) (string, error) {
 			return "updated", nil
 		},
@@ -497,6 +505,7 @@ func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *tes
 			t.Fatalf("retry %d status = %v, want ready_to_apply", i+1, report["status"])
 		}
 	}
+	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
 }
 
 func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t *testing.T) {
@@ -519,9 +528,11 @@ func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		client: NewClient(srv.URL),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
 		runUpdateFn: func(string) (string, error) {
 			return "updated", nil
 		},
@@ -548,6 +559,7 @@ func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t
 	if reports[0]["status"] != "running" || reports[1]["status"] != "ready_to_apply" {
 		t.Fatalf("report statuses = %#v, want running then ready_to_apply", reports)
 	}
+	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
 }
 
 func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
@@ -571,10 +583,12 @@ func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		client:  NewClient(srv.URL),
-		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		rootCtx: rootCtx,
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		rootCtx:           rootCtx,
+		updateObservation: observation,
 		runUpdateFn: func(string) (string, error) {
 			return "updated", nil
 		},
@@ -599,6 +613,7 @@ func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
 		t.Fatalf("restart calls after root cancellation = %d, want 0", restartCalls.Load())
 	}
 	waitForClaimBarrierState(t, d, false)
+	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
 }
 
 func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testing.T) {
@@ -617,9 +632,11 @@ func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testin
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		client: NewClient(srv.URL),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
 		runUpdateFn: func(string) (string, error) {
 			return "updated", nil
 		},
@@ -648,6 +665,54 @@ func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testin
 	if got := reports[1]["status"]; got != "completed" {
 		t.Fatalf("second status = %v, want completed", got)
 	}
+	assertUpdateObservation(t, observation, "restart_pending", "update_succeeded")
+}
+
+func TestHandleUpdateOldServerBusyDoesNotClaimRestartPending(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+	d := &Daemon{
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	d.activeTasks.Store(1)
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:            "upd-1",
+		TargetVersion: "v0.3.36",
+	})
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls = %d, want 0 while busy", restartCalls.Load())
+	}
+	if len(reports) != 2 || reports[0]["status"] != "running" || reports[1]["status"] != "failed" {
+		t.Fatalf("report statuses = %#v, want running then failed", reports)
+	}
+	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
 }
 
 func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T) {
@@ -668,13 +733,15 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 	rootCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var restartCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
 		cfg: Config{
 			PollInterval: time.Millisecond,
 		},
-		client:  NewClient(srv.URL),
-		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		rootCtx: rootCtx,
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		rootCtx:           rootCtx,
+		updateObservation: observation,
 		runUpdateFn: func(string) (string, error) {
 			return "updated", nil
 		},
@@ -705,6 +772,7 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 	if got := reports[1]["status"]; got != "ready_to_apply" {
 		t.Fatalf("second status = %v, want ready_to_apply", got)
 	}
+	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
 }
 
 func TestWaitForSafeRestartAllowsClaimsBeforeDeadlineThenStopsAndDrains(t *testing.T) {

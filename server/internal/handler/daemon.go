@@ -180,12 +180,13 @@ type DaemonRegisterRequest struct {
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
 	// and tasks keep working without manual intervention.
-	LegacyDaemonIDs   []string `json:"legacy_daemon_ids"`
-	DeviceName        string   `json:"device_name"`
-	CLIVersion        string   `json:"cli_version"` // multica CLI version
-	LaunchedBy        string   `json:"launched_by"` // "desktop" when spawned by the Electron app
-	Capabilities      []string `json:"capabilities"`
-	SandboxInstanceID string   `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	LegacyDaemonIDs   []string                          `json:"legacy_daemon_ids"`
+	DeviceName        string                            `json:"device_name"`
+	CLIVersion        string                            `json:"cli_version"` // multica CLI version
+	LaunchedBy        string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities      []string                          `json:"capabilities"`
+	SandboxInstanceID string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	UpdateObservation *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
 	Runtimes          []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
@@ -194,10 +195,16 @@ type DaemonRegisterRequest struct {
 	} `json:"runtimes"`
 }
 
-func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (string, time.Time, error) {
+type preparedDaemonRegisterToken struct {
+	raw       string
+	hash      string
+	expiresAt time.Time
+}
+
+func (h *Handler) prepareDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (preparedDaemonRegisterToken, error) {
 	rawToken, err := auth.GenerateDaemonToken()
 	if err != nil {
-		return "", time.Time{}, err
+		return preparedDaemonRegisterToken{}, err
 	}
 	expiresAt := time.Now().Add(daemonRegisterTokenTTL)
 	hash := auth.HashToken(rawToken)
@@ -207,13 +214,25 @@ func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgty
 		DaemonID:    daemonID,
 		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
-		return "", time.Time{}, err
+		return preparedDaemonRegisterToken{}, err
 	}
-	h.DaemonTokenCache.Set(ctx, hash, auth.DaemonTokenIdentity{
+	return preparedDaemonRegisterToken{raw: rawToken, hash: hash, expiresAt: expiresAt}, nil
+}
+
+func (h *Handler) cacheDaemonRegisterToken(ctx context.Context, token preparedDaemonRegisterToken, workspaceID pgtype.UUID, daemonID string) {
+	h.DaemonTokenCache.Set(ctx, token.hash, auth.DaemonTokenIdentity{
 		WorkspaceID: uuidToString(workspaceID),
 		DaemonID:    daemonID,
-	}, auth.TTLForExpiry(time.Now(), expiresAt))
-	return rawToken, expiresAt, nil
+	}, auth.TTLForExpiry(time.Now(), token.expiresAt))
+}
+
+func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (string, time.Time, error) {
+	token, err := h.prepareDaemonRegisterToken(ctx, workspaceID, daemonID)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	h.cacheDaemonRegisterToken(ctx, token, workspaceID, daemonID)
+	return token.raw, token.expiresAt, nil
 }
 
 type daemonWorkspaceReposResponse struct {
@@ -344,8 +363,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
 		return
 	}
+	registrationHandler := *h
+	registrationHandler.Queries = h.Queries.WithTx(registrationLock)
+	registrationHandler.DB = registrationLock
 
-	tombstoned, err := h.Queries.IsDaemonRegistrationTombstoned(r.Context(), db.IsDaemonRegistrationTombstonedParams{
+	tombstoned, err := registrationHandler.Queries.IsDaemonRegistrationTombstoned(r.Context(), db.IsDaemonRegistrationTombstonedParams{
 		WorkspaceID: wsUUID,
 		DaemonID:    strings.ToLower(req.DaemonID),
 	})
@@ -358,14 +380,34 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := h.Queries.GetWorkspace(r.Context(), wsUUID)
+	ws, err := registrationHandler.Queries.GetWorkspace(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
 	capabilities := normalizeDaemonCapabilities(req.Capabilities)
+	if err := registrationHandler.registerDaemonUpdateObservation(r.Context(), wsUUID, req.DaemonID, req.UpdateObservation); err != nil {
+		if errors.Is(err, errDaemonUpdateObservationConflict) {
+			writeError(w, http.StatusConflict, "auto_update revision conflicts with stored payload")
+			return
+		}
+		var validationErr *daemonUpdateObservationValidationError
+		if errors.As(err, &validationErr) {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to persist auto-update observation")
+		return
+	}
 
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
+	type registeredRuntime struct {
+		runtime  db.AgentRuntime
+		provider string
+		version  string
+		inserted bool
+	}
+	registeredRuntimes := make([]registeredRuntime, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
 		provider := strings.TrimSpace(runtime.Type)
 		if provider == "" {
@@ -402,7 +444,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		metadata, _ := json.Marshal(metadataMap)
 
-		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
+		row, err := registrationHandler.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
 			WorkspaceID: wsUUID,
 			DaemonID:    strToText(req.DaemonID),
 			Name:        name,
@@ -448,49 +490,24 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			LegacyDaemonID: row.LegacyDaemonID,
 		}
 
-		// Inserted is false for normal daemon reconnects/upserts, so
-		// runtime_ready is a first-ready-per-runtime-row signal.
-		if row.Inserted {
-			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
-				uuidToString(ownerID),
-				req.WorkspaceID,
-				uuidToString(registered.ID),
-				req.DaemonID,
-				provider,
-				runtime.Version,
-				req.CLIVersion,
-			))
-			if registered.Status == "online" {
-				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeReady(
-					uuidToString(ownerID),
-					req.WorkspaceID,
-					uuidToString(registered.ID),
-					req.DaemonID,
-					provider,
-					0,
-				))
-			}
-		}
-
 		// Seamless migration from the previous hostname-derived identity. The
 		// daemon sends every legacy daemon_id it may have registered under
 		// (e.g. "host.local", "host", "host-staging"); for each match we
 		// reassign agents + tasks onto the new UUID-keyed row, then delete
 		// the stale row so there's only ever one runtime per machine.
-		h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
-		h.completeRuntimeUpdateOnTargetRegister(r, registered, req.CLIVersion)
+		registrationHandler.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
 
-		resp = append(resp, h.runtimeToResponse(r.Context(), registered))
+		resp = append(resp, registrationHandler.runtimeToResponse(r.Context(), registered))
+		registeredRuntimes = append(registeredRuntimes, registeredRuntime{
+			runtime:  registered,
+			provider: provider,
+			version:  runtime.Version,
+			inserted: row.Inserted,
+		})
 	}
 
-	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
-
-	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
-		"runtimes": resp,
-	})
-
 	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
-	daemonToken, daemonTokenExpiresAt, err := h.issueDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
+	daemonToken, err := registrationHandler.prepareDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
 	if err != nil {
 		slog.Error("daemon register: issue daemon token failed",
 			append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)...)
@@ -503,13 +520,46 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.cacheDaemonRegisterToken(r.Context(), daemonToken, wsUUID, req.DaemonID)
+	for _, registered := range registeredRuntimes {
+		h.completeRuntimeUpdateOnTargetRegister(r, registered.runtime, req.CLIVersion)
+		// Inserted is false for normal daemon reconnects/upserts, so
+		// runtime_ready is a first-ready-per-runtime-row signal.
+		if registered.inserted {
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
+				uuidToString(ownerID),
+				req.WorkspaceID,
+				uuidToString(registered.runtime.ID),
+				req.DaemonID,
+				registered.provider,
+				registered.version,
+				req.CLIVersion,
+			))
+			if registered.runtime.Status == "online" {
+				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeReady(
+					uuidToString(ownerID),
+					req.WorkspaceID,
+					uuidToString(registered.runtime.ID),
+					req.DaemonID,
+					registered.provider,
+					0,
+				))
+			}
+		}
+	}
+
+	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
+	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
+		"runtimes": resp,
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"runtimes":                resp,
 		"repos":                   repoResp.Repos,
 		"repos_version":           repoResp.ReposVersion,
 		"settings":                repoResp.Settings,
-		"daemon_token":            daemonToken,
-		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
+		"daemon_token":            daemonToken.raw,
+		"daemon_token_expires_at": daemonToken.expiresAt.UTC().Format(time.RFC3339Nano),
 		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
 	})
 }
@@ -745,10 +795,11 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 }
 
 type DaemonHeartbeatRequest struct {
-	RuntimeID                 string `json:"runtime_id"`
-	SupportsBatchImport       bool   `json:"supports_batch_import,omitempty"`
-	SupportsMemoryCuration    bool   `json:"supports_memory_curation,omitempty"`
-	ActiveMemoryCurationRunID string `json:"active_memory_curation_run_id,omitempty"`
+	RuntimeID                 string                            `json:"runtime_id"`
+	SupportsBatchImport       bool                              `json:"supports_batch_import,omitempty"`
+	SupportsMemoryCuration    bool                              `json:"supports_memory_curation,omitempty"`
+	ActiveMemoryCurationRunID string                            `json:"active_memory_curation_run_id,omitempty"`
+	UpdateObservation         *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
 }
 
 // heartbeatHasPendingTimeout bounds the cheap HasPending probe on the
@@ -879,7 +930,7 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	authMs = time.Since(start).Milliseconds()
 
-	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID)
+	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID, req.UpdateObservation)
 	updateMs = m.UpdateMs
 	probeModelMs = m.ProbeModelMs
 	popModelMs = m.PopModelMs
@@ -956,7 +1007,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	if identity.WorkspaceID != "" && identity.WorkspaceID != uuidToString(rt.WorkspaceID) {
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
-	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID)
+	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID, payload.UpdateObservation)
 	return ack, err
 }
 
@@ -1029,7 +1080,13 @@ type heartbeatMetrics struct {
 // the WebSocket daemon:heartbeat path: records liveness and pulls any pending
 // actions queued for the runtime. Auth and request decoding live in the
 // caller because they differ between transports.
-func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supportsBatchImport, supportsMemoryCuration bool, activeMemoryCurationRunID string) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
+func (h *Handler) processHeartbeat(
+	ctx context.Context,
+	rt db.AgentRuntime,
+	supportsBatchImport, supportsMemoryCuration bool,
+	activeMemoryCurationRunID string,
+	updateObservation *protocol.DaemonUpdateObservation,
+) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
 	var m heartbeatMetrics
 	runtimeID := uuidToString(rt.ID)
 
@@ -1039,6 +1096,7 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 		return nil, m, err
 	}
 	m.UpdateMs = time.Since(updateStart).Milliseconds()
+	h.advanceDaemonUpdateObservation(ctx, rt, updateObservation)
 
 	slog.Debug("daemon heartbeat", "runtime_id", runtimeID)
 

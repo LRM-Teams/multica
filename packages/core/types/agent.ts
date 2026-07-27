@@ -34,6 +34,64 @@ export type RuntimeHealthState =
 // "private" so the strictest behavior is the fallback.
 export type RuntimeVisibility = "private" | "public";
 
+export type DaemonUpdateConfigSource =
+  | "official_host_default"
+  | "self_host_default"
+  | "env_enabled"
+  | "env_disabled"
+  | "cli_disabled";
+
+export type DaemonUpdateIneligibleReason =
+  | "desktop_managed"
+  | "non_release_build";
+
+export type DaemonUpdatePhase =
+  | "disabled"
+  | "waiting"
+  | "checking"
+  | "updating"
+  | "restart_pending";
+
+export type DaemonUpdateAttemptSource = "auto" | "server";
+
+export type DaemonUpdateOutcome =
+  | "never_checked"
+  | "up_to_date"
+  | "busy"
+  | "fetch_failed"
+  | "update_failed"
+  | "verification_failed"
+  | "update_succeeded"
+  | "interrupted";
+
+export type DaemonUpdateErrorCode =
+  | "daemon_restarted_during_update"
+  | "release_fetch_failed"
+  | "download_update_failed"
+  | "updated_binary_verification_failed"
+  | "desktop_managed";
+
+export interface DaemonUpdateStatus {
+  session_id: string;
+  revision: number;
+  observed_at: string;
+  auto_update_effective_enabled: boolean;
+  config_source: DaemonUpdateConfigSource;
+  ineligible_reason: DaemonUpdateIneligibleReason | null;
+  check_interval_seconds: number;
+  phase: DaemonUpdatePhase;
+  attempt_source: DaemonUpdateAttemptSource | null;
+  last_attempt_at: string | null;
+  last_outcome: DaemonUpdateOutcome;
+  target_version: string | null;
+  error_code: DaemonUpdateErrorCode | null;
+  error_message: string | null;
+  staged_version: string | null;
+  activation_generation: number | null;
+  received_at: string;
+  updated_at: string;
+}
+
 export interface RuntimeDevice {
   id: string;
   workspace_id: string;
@@ -56,6 +114,8 @@ export interface RuntimeDevice {
   update_state: RuntimeUpdateState;
   runtime_health: RuntimeHealthState;
   update_error?: string | null;
+  /** Daemon-resolved update truth. Null/absent means an older daemon. */
+  auto_update?: DaemonUpdateStatus | null;
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;

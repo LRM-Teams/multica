@@ -262,6 +262,9 @@ func TestLoadConfig_AutoUpdateDefault_SelfHostOff(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true for self-host (localhost) server, want false")
 	}
+	if cfg.AutoUpdateConfigSource != "self_host_default" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want self_host_default", cfg.AutoUpdateConfigSource)
+	}
 }
 
 // TestLoadConfig_AutoUpdateDefault_CloudOn confirms the symmetric case: a
@@ -281,6 +284,9 @@ func TestLoadConfig_AutoUpdateDefault_CloudOn(t *testing.T) {
 	if !cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = false for Multica Cloud server, want true")
 	}
+	if cfg.AutoUpdateConfigSource != "official_host_default" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want official_host_default", cfg.AutoUpdateConfigSource)
+	}
 }
 
 // TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost lets a self-host operator
@@ -298,6 +304,9 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost(t *testing.T) {
 	if !cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = false after explicit MULTICA_DAEMON_AUTO_UPDATE=true, want true")
 	}
+	if cfg.AutoUpdateConfigSource != "env_enabled" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want env_enabled", cfg.AutoUpdateConfigSource)
+	}
 }
 
 // TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud covers the inverse: a cloud
@@ -314,6 +323,9 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud(t *testing.T) {
 	}
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true after explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
+	}
+	if cfg.AutoUpdateConfigSource != "env_disabled" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want env_disabled", cfg.AutoUpdateConfigSource)
 	}
 }
 
@@ -333,6 +345,9 @@ func TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault(t *testing.T) {
 	}
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true with --no-auto-update set; flag must win")
+	}
+	if cfg.AutoUpdateConfigSource != "cli_disabled" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want cli_disabled", cfg.AutoUpdateConfigSource)
 	}
 }
 

@@ -952,6 +952,10 @@ func TestDaemonRegister_RejectsReminderCapabilityDowngradeWithActiveDefinition(t
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $2, provider = 'pi' WHERE id = $1`, fixture.runtimeIDs[0], daemonID); err != nil {
 		t.Fatal(err)
 	}
+	updateObservation := testDaemonUpdateObservation(uuid.NewString(), 1)
+	if err := fixture.handler.registerDaemonUpdateObservation(context.Background(), parseUUID(testWorkspaceID), daemonID, &updateObservation); err != nil {
+		t.Fatalf("seed daemon update observation: %v", err)
+	}
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
 		"workspace_id": testWorkspaceID,
@@ -968,6 +972,17 @@ func TestDaemonRegister_RejectsReminderCapabilityDowngradeWithActiveDefinition(t
 	var capable bool
 	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false) FROM agent_runtime WHERE id = $1`, fixture.runtimeIDs[0]).Scan(&capable); err != nil || !capable {
 		t.Fatalf("rejected registration mutated capability=%v err=%v", capable, err)
+	}
+	var observationCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM daemon_update_status
+		WHERE workspace_id = $1 AND daemon_id = $2
+	`, testWorkspaceID, daemonID).Scan(&observationCount); err != nil {
+		t.Fatal(err)
+	}
+	if observationCount != 1 {
+		t.Fatalf("rejected old-daemon registration cleared update observation outside runtime transaction: count=%d", observationCount)
 	}
 	recovery := httptest.NewRecorder()
 	recoveryReq := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{

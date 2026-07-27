@@ -135,12 +135,13 @@ type Daemon struct {
 	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
 	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
 
-	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
-	rootCtx       context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
-	restartBinary string             // non-empty after a successful update; path to the new binary
-	updating      atomic.Bool        // prevents concurrent update attempts
-	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
-	ready         atomic.Bool        // false until preflight completes; gates /health status (starting -> running)
+	cancelFunc        context.CancelFunc            // set by Run(); called by triggerRestart
+	rootCtx           context.Context               // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
+	restartBinary     string                        // non-empty after a successful update; path to the new binary
+	updating          atomic.Bool                   // prevents concurrent update attempts
+	activeTasks       atomic.Int64                  // number of tasks currently in handleTask; exposed via /health
+	ready             atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
+	updateObservation *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
 
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
@@ -247,6 +248,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		persistentRuntimes:        newPersistentRuntimePool(),
 		piPersistentRuntimes:      newPiPersistentPool(),
 	}
+	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
 	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
@@ -922,6 +924,11 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
 		"runtimes":          runtimes,
 	}
+	if d.updateObservation != nil {
+		if snapshot := d.updateObservation.PublishedSnapshot(); snapshot != nil {
+			req["auto_update"] = snapshot
+		}
+	}
 	// MULTICA_SANDBOX_INSTANCE_ID is set by mintSandboxRuntimeEnv for daemon-
 	// enabled env-dispatch sandboxes. Forwarding it lets the server record
 	// sandbox_instance_id on the registered runtime so env-dispatch can discover
@@ -1528,6 +1535,13 @@ func (d *Daemon) runRuntimeHeartbeat(ctx context.Context, rid string) {
 		}
 	}
 
+	var updateChanged <-chan struct{}
+	unsubscribe := func() {}
+	if d.updateObservation != nil {
+		updateChanged, unsubscribe = d.updateObservation.Subscribe()
+	}
+	defer unsubscribe()
+
 	d.runHeartbeatTick(ctx, rid)
 
 	ticker := time.NewTicker(interval)
@@ -1536,6 +1550,8 @@ func (d *Daemon) runRuntimeHeartbeat(ctx context.Context, rid string) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-updateChanged:
+			d.runHeartbeatTick(ctx, rid)
 		case <-ticker.C:
 			d.runHeartbeatTick(ctx, rid)
 		}
@@ -1554,7 +1570,11 @@ func (d *Daemon) runHeartbeatTick(ctx context.Context, rid string) {
 		return
 	}
 	d.logger.Debug("heartbeat: HTTP tick", "runtime_id", rid)
-	resp, err := d.client.SendHeartbeat(ctx, rid, d.activeMemoryCurationRun(rid))
+	var observation *protocol.DaemonUpdateObservation
+	if d.updateObservation != nil {
+		observation = d.updateObservation.PublishedSnapshot()
+	}
+	resp, err := d.client.SendHeartbeat(ctx, rid, d.activeMemoryCurationRun(rid), observation)
 	if err != nil {
 		if ctx.Err() == nil {
 			if isRuntimeNotFoundError(err) {
@@ -1863,6 +1883,9 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	// could brick the embedded binary mid-update. Refuse cleanly.
 	if d.cfg.LaunchedBy == "desktop" {
 		d.logger.Info("refusing CLI self-update: daemon is managed by Desktop", "runtime_id", runtimeID, "update_id", update.ID)
+		if d.beginUpdateObservation("server", "disabled", update.TargetVersion) {
+			d.finishUpdateObservation("disabled", "update_failed", update.TargetVersion, "desktop_managed", "The CLI is managed by Multica Desktop.")
+		}
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",
 			"error":  "CLI is managed by Multica Desktop — update the Desktop app to upgrade the CLI",
@@ -1872,7 +1895,15 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	// Prevent concurrent update attempts.
 	if !d.updating.CompareAndSwap(false, true) {
-		d.logger.Warn("update already in progress, ignoring", "runtime_id", runtimeID, "update_id", update.ID)
+		d.logger.Warn("update already in progress, refusing server request", "runtime_id", runtimeID, "update_id", update.ID)
+		// PopPending has already transitioned this request to running on the
+		// server. Terminate that canonical request without touching the
+		// current attempt owner's observation; otherwise an auto-update
+		// metadata fetch can strand the request until its running timeout.
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  "update_already_in_progress",
+		})
 		return
 	}
 	restartTriggered := false
@@ -1883,6 +1914,13 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	}()
 
 	d.logger.Info("CLI update requested", "runtime_id", runtimeID, "update_id", update.ID, "target_version", update.TargetVersion)
+	if !d.beginUpdateObservation("server", "updating", update.TargetVersion) {
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  "failed_to_persist_update_observation",
+		})
+		return
+	}
 
 	// Report running status.
 	d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
@@ -1892,6 +1930,7 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	output, err := d.runUpdateFn(update.TargetVersion)
 	if err != nil {
 		d.logger.Error("CLI update failed", "error", err, "output", output)
+		d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_failed", update.TargetVersion, "download_update_failed", "The release download update failed.")
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",
 			"error":  err.Error(),
@@ -1902,6 +1941,7 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	verifiedVersion, err := d.verifyUpdatedBinaryVersion(update.TargetVersion, output)
 	if err != nil {
 		d.logger.Error("CLI update verification failed", "error", err, "output", output)
+		d.finishUpdateObservation(d.idleUpdateObservationPhase(), "verification_failed", update.TargetVersion, "updated_binary_verification_failed", "The updated CLI version could not be verified.")
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",
 			"error":  err.Error(),
@@ -1910,6 +1950,17 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	}
 
 	d.logger.Info("CLI update staged successfully", "output", output, "verified_version", verifiedVersion)
+	// The binary is verified, but restart is not yet pending: the server may
+	// reject ready_to_apply or an older server may find the daemon busy. Keep
+	// the terminal attempt outcome durable without claiming a restart until
+	// the request acknowledgement and/or claim barrier actually permit one.
+	if !d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_succeeded", update.TargetVersion, "", "") {
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  "failed_to_persist_update_succeeded_observation",
+		})
+		return
+	}
 	stagedOutput := fmt.Sprintf("Staged %s (verified stable binary %s)", update.TargetVersion, verifiedVersion)
 	if update.SupportsReadyToApply {
 		if err := d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
@@ -1917,6 +1968,10 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 			"output": stagedOutput,
 		}); err != nil {
 			d.logger.Error("CLI update staged but ready-to-apply state was not durably acknowledged; refusing restart", "runtime_id", runtimeID, "update_id", update.ID, "error", err)
+			return
+		}
+		if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
+			d.logger.Error("CLI update is ready to apply but restart-pending observation was not durable; refusing restart", "runtime_id", runtimeID, "update_id", update.ID)
 			return
 		}
 		restartCtx := d.rootCtx
@@ -1944,6 +1999,14 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",
 			"error":  "update_ready_to_apply_but_server_does_not_support_deferred_restart",
+		})
+		return
+	}
+	if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
+		d.releaseClaimBarrier()
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  "failed_to_persist_restart_pending_observation",
 		})
 		return
 	}
@@ -2004,8 +2067,17 @@ func (d *Daemon) abortStagedRestartIfCanceled(
 	if barrierHeld {
 		d.releaseClaimBarrier()
 	}
+	d.finishUpdateObservationWithoutRestart()
 	d.logger.Warn("CLI update ready but restart wait ended before the daemon drained", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
 	return true
+}
+
+func (d *Daemon) finishUpdateObservationWithoutRestart() {
+	if d.updateObservation == nil {
+		return
+	}
+	current := d.updateObservation.Snapshot()
+	d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_succeeded", current.TargetVersion, "", "")
 }
 
 func (d *Daemon) waitForSafeRestartWithWindow(

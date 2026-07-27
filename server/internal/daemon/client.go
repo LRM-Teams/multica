@@ -531,13 +531,18 @@ type (
 	PendingMemoryCuration   = protocol.DaemonHeartbeatPendingMemoryCuration
 )
 
-func (c *Client) SendHeartbeat(ctx context.Context, runtimeID, activeMemoryCurationRunID string) (*HeartbeatResponse, error) {
+func (c *Client) SendHeartbeat(
+	ctx context.Context,
+	runtimeID, activeMemoryCurationRunID string,
+	updateObservation *protocol.DaemonUpdateObservation,
+) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.postJSONWithToken(ctx, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id":                    runtimeID,
 		"supports_batch_import":         true,
 		"supports_memory_curation":      true,
 		"active_memory_curation_run_id": activeMemoryCurationRunID,
+		"auto_update":                   updateObservation,
 	}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}

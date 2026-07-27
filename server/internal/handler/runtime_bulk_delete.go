@@ -307,6 +307,13 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to cancel active work")
 		return
 	}
+	if err := qtx.DeleteDaemonUpdateStatus(r.Context(), db.DeleteDaemonUpdateStatusParams{
+		WorkspaceID: parseUUID(workspaceID),
+		DaemonID:    daemonID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete computer update status")
+		return
+	}
 
 	deletedIDs := make([]string, 0, len(runtimes))
 	for _, runtimeID := range runtimeIDs {

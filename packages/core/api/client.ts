@@ -234,6 +234,7 @@ import {
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_AGENT_RADAR_RUNS_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
+  EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -253,6 +254,7 @@ import {
   AgentFilesResponseSchema,
   AgentRadarRunsResponseSchema,
   AgentHealthResponseSchema,
+  AgentRuntimeListSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
@@ -1172,7 +1174,13 @@ export class ApiClient {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.owner) search.set("owner", params.owner);
-    return this.fetch(`/api/runtimes?${search}`);
+    const raw = await this.fetch<unknown>(`/api/runtimes?${search}`);
+    return parseWithFallback(
+      raw,
+      AgentRuntimeListSchema,
+      EMPTY_AGENT_RUNTIME_LIST,
+      { endpoint: "GET /api/runtimes" },
+    );
   }
 
   async listCloudRuntimeNodes(

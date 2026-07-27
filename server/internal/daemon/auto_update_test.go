@@ -2,8 +2,12 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -51,6 +55,83 @@ func TestTryAutoUpdate_SkipsWhenUpdating(t *testing.T) {
 
 	if restartCalls.Load() != 0 {
 		t.Fatalf("triggerRestart called while another update was in progress")
+	}
+}
+
+func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
+	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
+	d.updateObservation = newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+
+	type updateReport struct {
+		path    string
+		payload map[string]any
+	}
+	reports := make(chan updateReport, 2)
+	var reportCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reportCalls.Add(1)
+		reports <- updateReport{path: r.URL.Path, payload: payload}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+	d.client = NewClient(srv.URL)
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	previousFetchLatestRelease := fetchLatestRelease
+	fetchLatestRelease = func() (*cli.GitHubRelease, error) {
+		close(fetchStarted)
+		<-releaseFetch
+		return nil, errors.New("network down")
+	}
+	t.Cleanup(func() { fetchLatestRelease = previousFetchLatestRelease })
+
+	var updateCalls atomic.Int32
+	d.runUpdateFn = func(string) (string, error) {
+		updateCalls.Add(1)
+		return "updated", nil
+	}
+
+	autoDone := make(chan struct{})
+	go func() {
+		defer close(autoDone)
+		d.tryAutoUpdate(context.Background())
+	}()
+	<-fetchStarted
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.1.14",
+		SupportsReadyToApply: true,
+	})
+	if reportCalls.Load() != 1 {
+		t.Fatalf("server request terminal reports = %d, want exactly 1", reportCalls.Load())
+	}
+	report := <-reports
+	if report.path != "/api/daemon/runtimes/rt-1/update/upd-1/result" {
+		t.Fatalf("terminal report path = %q", report.path)
+	}
+	if report.payload["status"] != "failed" || report.payload["error"] != "update_already_in_progress" {
+		t.Fatalf("terminal report = %#v, want failed/update_already_in_progress", report.payload)
+	}
+	close(releaseFetch)
+	<-autoDone
+
+	if updateCalls.Load() != 0 {
+		t.Fatalf("server update entered while auto check owned the attempt: calls=%d", updateCalls.Load())
+	}
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart triggered while auto check owned the attempt: calls=%d", restartCalls.Load())
+	}
+	observation := d.updateObservation.Snapshot()
+	if observation.AttemptSource != "auto" || observation.Phase != "waiting" || observation.LastOutcome != "fetch_failed" {
+		t.Fatalf("observation = %+v, want auto waiting/fetch_failed without server overwrite", observation)
 	}
 }
 

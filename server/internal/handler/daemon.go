@@ -1387,7 +1387,7 @@ func isAssistantFollowupPrompt(m db.ChatMessage) bool {
 
 func chatFailureResumeUnsafe(reason string) bool {
 	switch reason {
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", "agent_error.context_overflow":
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", "grok_tool_permission_failure", "missing_transport_receipt", "agent_error.context_overflow":
 		return true
 	default:
 		return false
@@ -1553,6 +1553,7 @@ type TaskCompleteRequest struct {
 	Reaction                  *protocol.ChatReactionPayload `json:"reaction"`
 	OutputSuppressedReason    string                        `json:"output_suppressed_reason,omitempty"`
 	MustReplyFailure          bool                          `json:"must_reply_failure,omitempty"`
+	TransportAttempted        bool                          `json:"transport_attempted,omitempty"`
 	SessionID                 string                        `json:"session_id"` // Claude session ID for future resumption
 	WorkDir                   string                        `json:"work_dir"`   // working directory used during execution
 	RuntimeStats              *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
@@ -1718,9 +1719,6 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	// particular, neither a plain final string nor completion-level
 	// message_send/message_react may be bridged into the channel.
 	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) {
-		if task.Priority >= 2 {
-			req.MustReplyFailure = true
-		}
 		slog.Warn("complete task: suppressing channel output without agent transport send", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 		return nil
@@ -1738,20 +1736,6 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		slog.Warn("complete task: suppressing invalid channel message react action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
 		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
 		return nil
-	}
-	// Directed runs must use the transport for a visible reply. An explicit
-	// no_reply or empty completion without a transport message is observable as
-	// a no_reply terminal outcome; ordinary final text was already suppressed above.
-	if channelTask && task.Priority >= 2 && !req.MustReplyFailure {
-		hasCLIOutput := h.chatTaskHasAgentTransportVisibleOutput(ctx, task)
-		isNoReply := req.Action == protocol.ChatOutputActionNoReply
-		isEmptyMessage := req.Action == "" && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0
-		if !hasCLIOutput && (isNoReply || isEmptyMessage) {
-			req.MustReplyFailure = true
-			slog.Warn("complete task: directed run completed without a visible transport reply",
-				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID),
-				"action", req.Action, "type", outputType, "priority", task.Priority)
-		}
 	}
 	req.Output = output
 	req.Type = outputType
@@ -1841,14 +1825,10 @@ func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason st
 	}
 }
 
-// suppressChannelTaskCompleteOutput keeps directed channel tasks truthful even
-// when normalization returns early. A completion payload never creates visible
-// chat output; without a successful transport write, a directed task must
-// retain its no-reply signal regardless of why the payload was suppressed.
-func (h *Handler) suppressChannelTaskCompleteOutput(ctx context.Context, task db.AgentInboxEvent, req *TaskCompleteRequest, reason string) {
-	if task.Priority >= 2 && !h.chatTaskHasAgentTransportVisibleOutput(ctx, task) {
-		req.MustReplyFailure = true
-	}
+// suppressChannelTaskCompleteOutput normalizes completion-only channel output
+// to no_reply. Missing-receipt failure is derived separately from the daemon's
+// explicit transport-attempt signal, never from suppressed completion text.
+func (h *Handler) suppressChannelTaskCompleteOutput(_ context.Context, _ db.AgentInboxEvent, req *TaskCompleteRequest, reason string) {
 	h.suppressTaskCompleteOutput(req, reason)
 }
 

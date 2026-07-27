@@ -375,7 +375,14 @@ func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxL
 	}, nil, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLease, result TaskResult) error {
+type AgentInboxCompletionReceipt struct {
+	OK              bool   `json:"ok"`
+	AckedSeq        int64  `json:"acked_seq"`
+	TerminalOutcome string `json:"terminal_outcome"`
+	ResumeUnsafe    bool   `json:"resume_unsafe"`
+}
+
+func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLease, result TaskResult) (AgentInboxCompletionReceipt, error) {
 	body := map[string]any{
 		"delivery_id": lease.DeliveryID,
 		"lease_token": lease.LeaseToken,
@@ -414,13 +421,18 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	if result.ChannelOnboardingDecision != "" {
 		body["channel_onboarding_decision"] = result.ChannelOnboardingDecision
 	}
+	if result.TransportAttempted {
+		body["transport_attempted"] = true
+	}
 	if result.RuntimeStats != nil {
 		body["runtime_stats"] = result.RuntimeStats
 	}
 	if len(result.InternalOutput) > 0 {
 		body["internal_output"] = result.InternalOutput
 	}
-	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
+	var receipt AgentInboxCompletionReceipt
+	err := c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, &receipt, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
+	return receipt, err
 }
 
 // StartAgentInboxExecution persists the daemon-minted provider-run UUID before

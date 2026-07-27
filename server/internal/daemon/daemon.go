@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
+	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
@@ -3258,8 +3259,11 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			taskLog.Error("task is missing its canonical inbox lease")
 			return
 		}
-		err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
+		receipt, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
+			if receipt.ResumeUnsafe {
+				d.evictPersistentChatRuntime(task)
+			}
 			if result.Status == "completed" {
 				d.maybeAppendDailyCloseoutStub(task, result)
 				d.reportAgentMemoryWrites(ctx, task)
@@ -3686,6 +3690,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
+	transportAttemptPath := ""
 	resolveExecutable := d.resolveExecutable
 	if resolveExecutable == nil {
 		resolveExecutable = os.Executable
@@ -3720,6 +3725,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				}
 				cliWrapperDir = wrapperDir
 				cliTokenFile = tokenFile
+				transportAttemptPath = turntransport.AttemptPath(wrapperDir)
+				if err := os.Remove(transportAttemptPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return TaskResult{}, fmt.Errorf("clear stale transport attempt marker: %w", err)
+				}
 				taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
 				if durableAgentToken {
 					defer func() {
@@ -3804,6 +3813,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if task.InboxEvent.SeqTo > 0 {
 			agentEnv["MULTICA_AGENT_INBOX_SEQ_TO"] = strconv.FormatInt(task.InboxEvent.SeqTo, 10)
 		}
+	}
+	if transportAttemptPath != "" {
+		agentEnv[turntransport.AttemptPathEnv] = transportAttemptPath
 	}
 	if task.InitiatorType == "member" {
 		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID
@@ -4163,6 +4175,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if runtimeStats == nil {
 		runtimeStats = runtimeStatsFromUsage(provider, result.Usage)
 	}
+	transportAttempted, attemptErr := transportAttemptWasRecorded(transportAttemptPath)
+	if attemptErr != nil {
+		taskLog.Warn("failed to inspect transport attempt marker", "path", transportAttemptPath, "error", attemptErr)
+	}
 
 	output := result.Output
 	var internalOutput json.RawMessage
@@ -4221,6 +4237,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				EnvRoot:                   env.RootDir,
 				Usage:                     usageEntries,
 				RuntimeStats:              runtimeStats,
+				TransportAttempted:        transportAttempted,
 			}, nil
 		}
 		if output == "" && len(parts) == 0 && reaction == nil {
@@ -4230,29 +4247,31 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// a normal completion so the task is not incorrectly marked as
 			// blocked.
 			return TaskResult{
-				Status:       "completed",
-				Comment:      "",
-				Action:       protocol.ChatOutputActionNoReply,
-				Type:         protocol.ChatOutputKindNoReply,
-				SessionID:    result.SessionID,
-				WorkDir:      env.WorkDir,
-				EnvRoot:      env.RootDir,
-				Usage:        usageEntries,
-				RuntimeStats: runtimeStats,
+				Status:             "completed",
+				Comment:            "",
+				Action:             protocol.ChatOutputActionNoReply,
+				Type:               protocol.ChatOutputKindNoReply,
+				SessionID:          result.SessionID,
+				WorkDir:            env.WorkDir,
+				EnvRoot:            env.RootDir,
+				Usage:              usageEntries,
+				RuntimeStats:       runtimeStats,
+				TransportAttempted: transportAttempted,
 			}, nil
 		}
 		if len(parts) == 0 && reaction == nil && isSilentNoReplyOutput(output) {
 			taskLog.Info("agent produced silent no-reply status output; completing as structured no_reply")
 			return TaskResult{
-				Status:       "completed",
-				Comment:      "",
-				Action:       protocol.ChatOutputActionNoReply,
-				Type:         protocol.ChatOutputKindNoReply,
-				SessionID:    result.SessionID,
-				WorkDir:      env.WorkDir,
-				EnvRoot:      env.RootDir,
-				Usage:        usageEntries,
-				RuntimeStats: runtimeStats,
+				Status:             "completed",
+				Comment:            "",
+				Action:             protocol.ChatOutputActionNoReply,
+				Type:               protocol.ChatOutputKindNoReply,
+				SessionID:          result.SessionID,
+				WorkDir:            env.WorkDir,
+				EnvRoot:            env.RootDir,
+				Usage:              usageEntries,
+				RuntimeStats:       runtimeStats,
+				TransportAttempted: transportAttempted,
 			}, nil
 		}
 		// Detect "poisoned" terminal output: the agent didn't reach a real
@@ -4278,19 +4297,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}, nil
 		}
 		return TaskResult{
-			Status:         "completed",
-			Comment:        output,
-			Action:         outputAction,
-			Target:         outputTarget,
-			Type:           outputType,
-			Parts:          parts,
-			Reaction:       reaction,
-			SessionID:      result.SessionID,
-			WorkDir:        env.WorkDir,
-			EnvRoot:        env.RootDir,
-			Usage:          usageEntries,
-			RuntimeStats:   runtimeStats,
-			InternalOutput: internalOutput,
+			Status:             "completed",
+			Comment:            output,
+			Action:             outputAction,
+			Target:             outputTarget,
+			Type:               outputType,
+			Parts:              parts,
+			Reaction:           reaction,
+			SessionID:          result.SessionID,
+			WorkDir:            env.WorkDir,
+			EnvRoot:            env.RootDir,
+			Usage:              usageEntries,
+			RuntimeStats:       runtimeStats,
+			InternalOutput:     internalOutput,
+			TransportAttempted: transportAttempted,
 		}, nil
 	case "timeout":
 		// Surface session_id/work_dir so the chat resume pointer is kept
@@ -4386,6 +4406,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 }
 
+func transportAttemptWasRecorded(path string) (bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false, nil
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("transport attempt marker is not a regular file")
+	}
+	return true, nil
+}
+
 func transportUnavailableResult(stage string, err error) TaskResult {
 	comment := "transport_unavailable: " + stage
 	if err != nil {
@@ -4459,6 +4497,12 @@ func runtimeStatsFromUsage(provider string, usage map[string]agent.TokenUsage) *
 }
 
 func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger) string {
+	if failureReason, ok := classifyResumeUnsafeToolFailure(provider, errMsg); ok {
+		taskLog.Warn("agent failed with resume-unsafe tool permission error, classifying as blocked",
+			"failure_reason", failureReason,
+		)
+		return failureReason
+	}
 	if failureReason, ok := classifyResumeUnsafeTimeout(provider, errMsg); ok {
 		taskLog.Warn("agent failed with resume-unsafe no-progress error, classifying as blocked",
 			"failure_reason", failureReason,

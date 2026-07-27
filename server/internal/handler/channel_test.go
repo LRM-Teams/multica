@@ -1464,7 +1464,8 @@ func TestChannelAgentInboxCompletionInfersAbandonedFreshnessDraft(t *testing.T) 
 		DeliveryID: got.DeliveryID,
 		LeaseToken: got.LeaseToken,
 		TaskCompleteRequest: TaskCompleteRequest{
-			Output: "suppressed final after freshness hold",
+			Output:             "suppressed final after freshness hold",
+			TransportAttempted: true,
 		},
 	}, testWorkspaceID, "agent-inbox-held-daemon")
 	completeReq = withURLParam(completeReq, "eventId", got.ID)
@@ -1472,6 +1473,16 @@ func TestChannelAgentInboxCompletionInfersAbandonedFreshnessDraft(t *testing.T) 
 	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete held inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
+	}
+	var completionReceipt struct {
+		TerminalOutcome string `json:"terminal_outcome"`
+		ResumeUnsafe    bool   `json:"resume_unsafe"`
+	}
+	if err := json.Unmarshal(completeRec.Body.Bytes(), &completionReceipt); err != nil {
+		t.Fatalf("decode held completion receipt: %v body=%s", err, completeRec.Body.String())
+	}
+	if completionReceipt.TerminalOutcome != "no_reply" || completionReceipt.ResumeUnsafe {
+		t.Fatalf("held completion receipt = %+v, want no_reply and resume_unsafe=false", completionReceipt)
 	}
 
 	var terminalOutcome string

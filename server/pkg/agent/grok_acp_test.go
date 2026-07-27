@@ -102,6 +102,50 @@ func TestGrokACPBackendRejectsConcurrentTurn(t *testing.T) {
 	}
 }
 
+func TestGrokACPBackendFailedToolFrameFailsTurnAndDisposesProcess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grok")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{}}}}\n' "$id" ;;
+    *'"session/new"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"poisoned-session"}}\n' "$id" ;;
+    *'"session/prompt"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"poisoned-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","status":"pending","kind":"execute","title":"terminal: pwd","rawInput":{"command":"pwd"}}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"poisoned-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","status":"failed","content":[{"type":"content","content":{"type":"text","text":"Failed to request permission from user: unknown permission option for tool ` + "`run_terminal_command`" + `"}}]},"_meta":{"updateParams":{"toolCallId":"tool-1","status":"Failed"}}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id"
+      ;;
+  esac
+done
+`
+	writeTestExecutable(t, path, []byte(script))
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := newGrokACPBackend(Config{ExecutablePath: path, Env: map[string]string{"GROK_HOME": dir}})
+	t.Cleanup(b.Close)
+
+	session, err := b.Execute(context.Background(), "run pwd", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	result := <-session.Result
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed (result=%+v)", result.Status, result)
+	}
+	const original = "Failed to request permission from user: unknown permission option for tool `run_terminal_command`"
+	if result.Error != original {
+		t.Fatalf("error = %q, want exact original provider error %q", result.Error, original)
+	}
+	if result.SessionID != "poisoned-session" {
+		t.Fatalf("session id = %q, want poisoned-session", result.SessionID)
+	}
+	if b.process != nil {
+		t.Fatal("failed tool turn retained poisoned Grok process")
+	}
+}
+
 // TestGrokACPBackendLiveTwoTurns is an opt-in provider proof. It is kept out
 // of normal CI because it consumes the authenticated Grok account; run it only
 // with explicit operator approval via MULTICA_RUN_GROK_ACP_LIVE=1.

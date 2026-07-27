@@ -337,4 +337,5 @@ type TaskResult struct {
 	InternalOutput            json.RawMessage `json:"-"`
 	OutputSuppressedReason    string          `json:"-"`
 	ChannelOnboardingDecision string          `json:"-"`
+	TransportAttempted        bool            `json:"-"`
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -245,6 +246,9 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 		defer cancel()
 		var out map[string]any
+		if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
+			return err
+		}
 		if err := client.PostJSON(ctx, "/api/agent/messages/send", map[string]any{
 			"target":     target,
 			"send_draft": true,
@@ -297,6 +301,9 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		body["parts"] = parts
 	}
 	var out map[string]any
+	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
+		return err
+	}
 	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
@@ -407,6 +414,9 @@ func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
 		"client_message_id": clientMessageIDFlag(cmd),
 	}
 	var out map[string]any
+	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
+		return err
+	}
 	if err := postAgentTransport(cmd, "/api/agent/messages/react", body, &out); err != nil {
 		return fmt.Errorf("react to message: %w", err)
 	}
@@ -478,6 +488,9 @@ func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()
 	var out map[string]any
+	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
+		return err
+	}
 	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {
 		return fmt.Errorf("ask choice: %w", err)
 	}

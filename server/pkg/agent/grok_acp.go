@@ -104,6 +104,7 @@ func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts Ex
 	}
 	p.stateMu.Unlock()
 
+	p.client.resetToolCallFailure()
 	_, err = p.client.request(ctx, "session/prompt", map[string]any{
 		"sessionId": p.sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": prompt}},
@@ -111,6 +112,18 @@ func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts Ex
 	p.stateMu.Lock()
 	p.message = nil
 	p.stateMu.Unlock()
+	if toolFailure := p.client.takeToolCallFailure(); toolFailure != nil {
+		// Grok may return a successful session/prompt response after a failed
+		// tool frame. The native turn is not reusable: preserve the provider's
+		// original error and force both the child and the daemon pool slot out.
+		b.disposeProcess(p)
+		return Result{
+			Status:    "failed",
+			Output:    output.String(),
+			Error:     toolFailure.Error(),
+			SessionID: p.sessionID,
+		}
+	}
 	if err != nil {
 		// A cancelled/failed request leaves the native turn state unknown. Do
 		// not reuse it; the persistent-pool lease will replace this backend.

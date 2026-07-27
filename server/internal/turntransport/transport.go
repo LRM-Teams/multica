@@ -26,9 +26,15 @@ const (
 	// EnvelopePathEnv is set only by the fixed daemon-managed CLI wrapper.
 	// The provider process itself must not receive this variable.
 	EnvelopePathEnv = "MULTICA_CURRENT_TURN_ENVELOPE"
+	// AttemptPathEnv points the task-scoped CLI at the daemon-owned marker
+	// used to distinguish an actual visible-transport attempt from a deliberate
+	// no-reply completion. It belongs to the current turn, never the reusable
+	// provider process identity.
+	AttemptPathEnv = "MULTICA_TRANSPORT_ATTEMPT_PATH"
 
 	envelopeVersion = 1
 	envelopeName    = "current-turn.json"
+	attemptName     = "transport-attempt"
 	maxEnvelopeSize = 64 << 10
 )
 
@@ -52,6 +58,7 @@ var turnEnvironmentKeys = map[string]struct{}{
 	"MULTICA_QUICK_CREATE_ATTACHMENT_IDS":    {},
 	"MULTICA_QUICK_CREATE_SOURCE_CHANNEL_ID": {},
 	"MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID": {},
+	AttemptPathEnv:                           {},
 }
 
 var stableMulticaEnvironmentKeys = map[string]struct{}{
@@ -315,6 +322,30 @@ func SplitEnvironment(environment map[string]string) (stable, currentTurn map[st
 func IsTurnEnvironmentKey(key string) bool {
 	_, ok := turnEnvironmentKeys[key]
 	return ok
+}
+
+// AttemptPath returns the task-scoped marker path under a prepared per-run
+// transport directory.
+func AttemptPath(root string) string {
+	return filepath.Join(root, attemptName)
+}
+
+// RecordAttemptFromEnvironment durably records that the agent invoked a
+// visible message transport command. The marker is written before the HTTP
+// request, so connection failures and server errors remain distinguishable
+// from an intentional no-reply completion.
+func RecordAttemptFromEnvironment() error {
+	path := filepath.Clean(strings.TrimSpace(os.Getenv(AttemptPathEnv)))
+	if path == "." || !filepath.IsAbs(path) || filepath.Base(path) != attemptName {
+		if strings.TrimSpace(os.Getenv(AttemptPathEnv)) == "" {
+			return nil
+		}
+		return fmt.Errorf("invalid transport attempt path")
+	}
+	if err := writeFileAtomic(path, []byte("attempted\n"), 0o600); err != nil {
+		return fmt.Errorf("record transport attempt: %w", err)
+	}
+	return nil
 }
 
 // ApplyFromEnvironment loads the envelope selected by the fixed wrapper and

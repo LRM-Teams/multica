@@ -49,6 +49,7 @@ func (i piPersistentIdentity) key() string {
 
 type piPersistentSession struct {
 	key       string
+	identity  piPersistentIdentity
 	running   bool
 	idleSince time.Time
 	backend   agent.PiRPCBackend
@@ -74,7 +75,7 @@ func (p *piPersistentPool) acquire(identity piPersistentIdentity, now time.Time)
 		session.running = true
 		return &piPersistentLease{pool: p, session: session}, nil
 	}
-	session := &piPersistentSession{key: key, running: true, idleSince: now}
+	session := &piPersistentSession{key: key, identity: identity, running: true, idleSince: now}
 	p.sessions[key] = session
 	return &piPersistentLease{pool: p, session: session}, nil
 }
@@ -131,6 +132,28 @@ func (p *piPersistentPool) closeAll() {
 	for _, backend := range backends {
 		backend.Close()
 	}
+}
+
+func (p *piPersistentPool) evictChat(agentID, runtimeID, chatSessionID string) int {
+	p.mu.Lock()
+	backends := make([]agent.PiRPCBackend, 0)
+	removed := 0
+	for key, session := range p.sessions {
+		identity := session.identity
+		if identity.AgentID != agentID || identity.RuntimeID != runtimeID || identity.ChatSessionID != chatSessionID {
+			continue
+		}
+		delete(p.sessions, key)
+		if session.backend != nil {
+			backends = append(backends, session.backend)
+		}
+		removed++
+	}
+	p.mu.Unlock()
+	for _, backend := range backends {
+		backend.Close()
+	}
+	return removed
 }
 
 func usesPersistentPiChatRuntime(provider string, task Task) bool {

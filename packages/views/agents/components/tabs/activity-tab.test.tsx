@@ -46,15 +46,6 @@ vi.mock("./activity-timeline", () => ({
   ),
 }));
 
-vi.mock("../../../common/actor-avatar", () => ({
-  ActorAvatar: () => <div data-testid="agent-avatar" />,
-}));
-
-vi.mock("@multica/core/identity", () => ({
-  resolveActorDisplayName: (agent: { id: string; display_name?: string }) =>
-    agent.display_name ?? agent.id,
-}));
-
 vi.mock("../../../i18n", () => ({
   useT: () => ({
     t: (select: (dict: { tab_body: { activity: { jump_to_latest: string } } }) => ReactNode) =>
@@ -205,13 +196,20 @@ describe("ActivityTab older-page loading (#620)", () => {
   });
 });
 
-describe("ActivityTab header + four states (LRM-563)", () => {
-  it("renders the agent header with display name", () => {
+describe("ActivityTab no page header + four states (LRM-618 / LRM-571 lock C)", () => {
+  it("does not render the Activity page header row (avatar + name + status)", () => {
     mockEvents.current = [ev(1)];
+    mockPaging.latest = {
+      id: "e1",
+      occurred_at: new Date().toISOString(),
+      activity_kind: "task_completed",
+    };
     render(<ActivityTab agent={agent} />);
-    expect(screen.getByTestId("activity-tab-header")).toBeInTheDocument();
-    expect(screen.getByText("Beckham")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-avatar")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-tab")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-tab-header")).toBeNull();
+    expect(screen.queryByTestId("activity-tab-latest-status")).toBeNull();
+    expect(screen.queryByText("Beckham")).toBeNull();
+    expect(screen.getByTestId("timeline")).toBeInTheDocument();
   });
 
   it("passes loading to the timeline on first paint with no rows", () => {

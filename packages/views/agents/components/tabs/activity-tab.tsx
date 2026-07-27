@@ -1,21 +1,11 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import type { Agent } from "@multica/core/types";
-import { resolveActorDisplayName } from "@multica/core/identity";
-import { cn } from "@multica/ui/lib/utils";
-import { ActorAvatar } from "../../../common/actor-avatar";
 import { ActivityTimeline } from "./activity-timeline";
 import { useAgentActivityEvents } from "./use-agent-activity-events";
-import {
-  ACTIVITY_CHROME_EN,
-  ACTIVITY_LABEL_EN,
-  ACTIVITY_TONE_DOT_CLASS,
-  activityPresentation,
-  formatActivityRelativeTime,
-  type ActivityEvent,
-} from "./activity-event";
+import { ACTIVITY_CHROME_EN } from "./activity-event";
 
 interface ActivityTabProps {
   agent: Agent;
@@ -114,79 +104,6 @@ function getScrollParent(node: HTMLElement | null): HTMLElement | null {
 }
 
 /**
- * LRM-563 page header: agent face + name + latest-status line (tone dot +
- * action word + relative time from `projectLatestActivity`).
- */
-function ActivityTabHeader({
-  agent,
-  latest,
-  isLoading,
-}: {
-  agent: Agent;
-  latest: ActivityEvent | null;
-  isLoading: boolean;
-}) {
-  const displayName = resolveActorDisplayName(agent, agent.id);
-
-  let status: ReactNode = null;
-  if (isLoading && !latest) {
-    status = (
-      <span className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-        <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden />
-        <span className="truncate">{ACTIVITY_CHROME_EN.loading}</span>
-      </span>
-    );
-  } else if (latest) {
-    const presentation = activityPresentation(latest);
-    const label = ACTIVITY_LABEL_EN[presentation.labelKey];
-    status = (
-      <span
-        className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground"
-        data-testid="activity-tab-latest-status"
-      >
-        <span
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            ACTIVITY_TONE_DOT_CLASS[presentation.tone],
-          )}
-          aria-hidden
-        />
-        <span className="truncate">
-          {label}
-          <span className="text-muted-foreground/70">
-            {" · "}
-            {formatActivityRelativeTime(latest.occurred_at)}
-          </span>
-        </span>
-      </span>
-    );
-  }
-
-  return (
-    <header
-      className="mb-5 flex items-center gap-3"
-      data-testid="activity-tab-header"
-    >
-      <ActorAvatar
-        actorType="agent"
-        actorId={agent.id}
-        size={36}
-        name={displayName}
-        avatarUrlHint={agent.avatar_url}
-        profileLink={false}
-        showStatusDot
-      />
-      <div className="min-w-0 flex-1">
-        <h2 className="truncate text-[15px] font-semibold leading-tight text-foreground">
-          {displayName}
-        </h2>
-        {status}
-      </div>
-    </header>
-  );
-}
-
-/**
  * Agent Activity tab (#351) — a single, raft-aligned, time-ordered event
  * stream: `time · status dot · human label · optional detail`, newest work
  * flowing down the column. It replaces the old Now / Last-30-days / Recent-work
@@ -215,13 +132,14 @@ function ActivityTabHeader({
  * bottom one to trigger the fetch, and the added height is compensated against
  * the scroll container so the reader's viewport stays anchored (no jump).
  *
- * Full-page chrome (LRM-563 / LRM-558 P2): agent header + four states
+ * Full-page chrome (LRM-618 / LRM-571 lock C): no Activity page header row —
+ * open straight into the timeline. Four states remain on the timeline
  * (loading skeleton without spine / empty / error+retry / populated spine).
+ * Profile shell avatar / identity stay outside this tab.
  */
 export function ActivityTab({ agent }: ActivityTabProps) {
   const {
     events,
-    latest,
     isLoading,
     isError,
     refetch,
@@ -318,8 +236,7 @@ export function ActivityTab({ agent }: ActivityTabProps) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
 
   return (
-    <div ref={rootRef} className="p-6">
-      <ActivityTabHeader agent={agent} latest={latest} isLoading={showLoading} />
+    <div ref={rootRef} className="p-6" data-testid="activity-tab">
       <StreamTopAnchor anchorRef={topRef} onReachedChange={handleTopReached} />
       <ActivityTimeline
         events={events}

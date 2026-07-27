@@ -406,6 +406,110 @@ func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *t
 	}
 }
 
+func TestAgentCredentialTransportA2AReplyKeepsInheritedExchange(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	fixture := seedAgentCredentialTransportFixture(t)
+	peerDisplayName := "Agent Credential A2A Peer " + uuid.NewString()[:8]
+	peerID := createHandlerTestAgent(t, peerDisplayName, nil)
+	channel := createAgentAgentDMChannelForTest(t, fixture.agentID, peerID)
+	lowID, highID, ok := normalizedAgentDMPair(parseUUID(fixture.agentID), parseUUID(peerID))
+	if !ok {
+		t.Fatal("normalize agent credential A2A pair failed")
+	}
+
+	var peerHandle string
+	if err := testPool.QueryRow(ctx, `
+		SELECT name
+		FROM agent
+		WHERE id = $1`, peerID).Scan(&peerHandle); err != nil {
+		t.Fatalf("load peer handle: %v", err)
+	}
+
+	var exchangeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_dm_exchange (
+		  workspace_id, channel_id, agent_low_id, agent_high_id,
+		  next_sender_agent_id, matter_id, turn_count
+		)
+		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), 1)
+		RETURNING id`,
+		testWorkspaceID, channel.ID, lowID, highID, fixture.agentID,
+	).Scan(&exchangeID); err != nil {
+		t.Fatalf("seed inherited agent credential exchange: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET agent_dm_exchange_id = $2,
+		    agent_dm_turn = 1
+		WHERE id = $1`, fixture.event.ID, exchangeID); err != nil {
+		t.Fatalf("bind agent credential inbox event to exchange: %v", err)
+	}
+
+	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, parseUUID(fixture.event.ID))
+	if err != nil {
+		t.Fatalf("load bound agent credential inbox event: %v", err)
+	}
+	synthetic := agentInboxSyntheticTask(event, parseUUID(handlerTestRuntimeID(t)))
+	if uuidToString(synthetic.AgentDmExchangeID) != exchangeID {
+		t.Fatalf("synthetic exchange_id = %q, want %q", uuidToString(synthetic.AgentDmExchangeID), exchangeID)
+	}
+	if !synthetic.AgentDmTurn.Valid || synthetic.AgentDmTurn.Int32 != 1 {
+		t.Fatalf("synthetic agent_dm_turn = %+v, want 1", synthetic.AgentDmTurn)
+	}
+
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
+	})
+	clientID := "agent-credential-a2a-" + uuid.NewString()
+	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target":            "dm:@" + peerHandle,
+		"content":           "automatic A2A reply",
+		"client_message_id": clientID,
+	})
+	sendReq.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
+	sendReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	sendReq.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
+	sendReq.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
+	sendReq.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
+	sendRec := httptest.NewRecorder()
+	router.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("agent credential A2A send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	var exchangeCount, turnCount int
+	var state, latestMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_dm_exchange
+		WHERE workspace_id = $1
+		  AND agent_low_id = $2
+		  AND agent_high_id = $3`,
+		testWorkspaceID, lowID, highID,
+	).Scan(&exchangeCount); err != nil {
+		t.Fatalf("count agent credential A2A exchanges: %v", err)
+	}
+	if exchangeCount != 1 {
+		t.Fatalf("agent credential A2A exchanges = %d, want inherited exchange only", exchangeCount)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT turn_count, state, latest_message_id
+		FROM agent_dm_exchange
+		WHERE id = $1`, exchangeID).Scan(&turnCount, &state, &latestMessageID); err != nil {
+		t.Fatalf("load inherited agent credential exchange: %v", err)
+	}
+	if turnCount != 2 || state != "active" || latestMessageID == "" {
+		t.Fatalf("inherited exchange turn_count=%d state=%q latest_message_id=%q, want 2/active/non-empty", turnCount, state, latestMessageID)
+	}
+}
+
 func TestAgentCredentialTransportRejectsInvalidFreshness(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

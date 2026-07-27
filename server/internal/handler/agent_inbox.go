@@ -1744,6 +1744,8 @@ func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db
 		Attempt:           event.Attempt,
 		MaxAttempts:       event.MaxAttempts,
 		ParentTaskID:      event.ParentTaskID,
+		AgentDmExchangeID: event.AgentDmExchangeID,
+		AgentDmTurn:       event.AgentDmTurn,
 		CreatedAt:         event.CreatedAt,
 	}
 }

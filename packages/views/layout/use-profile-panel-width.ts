@@ -9,6 +9,11 @@ export const PROFILE_PANEL_WIDTH_MAX = 640;
 export const PROFILE_PANEL_WIDTH_STORAGE_KEY = "multica_profile_panel_width";
 /** Channel/DM thread·profile·details dock — separate from the global overlay panel. */
 export const CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY = "multica_channel_detail_side_width";
+/**
+ * Default width for the in-channel Thread / agent / details side dock.
+ * Wider than the global profile overlay (440) — Frank: Thread 默认偏窄.
+ */
+export const CHANNEL_DETAIL_SIDE_WIDTH_DEFAULT = 520;
 
 function clampWidth(value: number): number {
   return Math.min(
@@ -17,15 +22,22 @@ function clampWidth(value: number): number {
   );
 }
 
+function defaultWidthFor(storageKey: string): number {
+  return storageKey === CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY
+    ? CHANNEL_DETAIL_SIDE_WIDTH_DEFAULT
+    : PROFILE_PANEL_WIDTH_DEFAULT;
+}
+
 function readStoredWidth(storageKey: string): number {
-  if (typeof window === "undefined") return PROFILE_PANEL_WIDTH_DEFAULT;
+  const fallback = defaultWidthFor(storageKey);
+  if (typeof window === "undefined") return fallback;
   try {
     const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return PROFILE_PANEL_WIDTH_DEFAULT;
+    if (!raw) return fallback;
     const parsed = Number(raw);
-    return Number.isFinite(parsed) ? clampWidth(parsed) : PROFILE_PANEL_WIDTH_DEFAULT;
+    return Number.isFinite(parsed) ? clampWidth(parsed) : fallback;
   } catch {
-    return PROFILE_PANEL_WIDTH_DEFAULT;
+    return fallback;
   }
 }
 
@@ -40,7 +52,7 @@ function readStoredWidth(storageKey: string): number {
 export function useProfilePanelWidth(
   storageKey: string = PROFILE_PANEL_WIDTH_STORAGE_KEY,
 ) {
-  const [width, setWidth] = useState(PROFILE_PANEL_WIDTH_DEFAULT);
+  const [width, setWidth] = useState(() => defaultWidthFor(storageKey));
   const widthRef = useRef(width);
   widthRef.current = width;
 

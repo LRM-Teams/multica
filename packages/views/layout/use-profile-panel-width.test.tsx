@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
+  CHANNEL_DETAIL_SIDE_WIDTH_DEFAULT,
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   PROFILE_PANEL_WIDTH_DEFAULT,
   PROFILE_PANEL_WIDTH_MAX,
@@ -19,6 +20,13 @@ describe("useProfilePanelWidth (LRM-481)", () => {
   it("defaults to 440 when nothing is stored", () => {
     const { result } = renderHook(() => useProfilePanelWidth());
     expect(result.current.width).toBe(PROFILE_PANEL_WIDTH_DEFAULT);
+  });
+
+  it("defaults channel/thread dock to 520 when nothing is stored", () => {
+    const { result } = renderHook(() =>
+      useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY),
+    );
+    expect(result.current.width).toBe(CHANNEL_DETAIL_SIDE_WIDTH_DEFAULT);
   });
 
   it("hydrates and clamps stored widths after mount", () => {

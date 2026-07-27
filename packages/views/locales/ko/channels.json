@@ -116,6 +116,8 @@
     "add_people_title": "#{{name}}에 멤버 추가",
     "add_people_subtitle": "워크스페이스에서 멤버 또는 에이전트 선택",
     "in_channel": "이 채널 · {{count}}",
+    "people_section": "People · {{count}}",
+    "agents_section": "Agents · {{count}}",
     "suggestions": "추천",
     "candidates_error": "초대할 사람을 불러오지 못했습니다",
     "candidates_retry": "다시 시도",

@@ -289,20 +289,18 @@ function DmHeader({
   const [pairA, pairB] = dm.participants ?? [];
   const agentPair =
     dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
-  // Ordinary agent DM: short bubble-style working cue (思考中 / Edit / Shell). A
-  // supervised agent_pair is NOT one working agent, so it never shows the
-  // single-agent cue — its header is the dual-avatar/pill supervision chrome
-  // instead. Human peers keep the static "Human" meta; Stop stays in
-  // AgentProfileActions.
+  // Ordinary agent DM: Compact Activity under the name (EN state type only —
+  // LRM-647 / LRM-650). A supervised agent_pair is NOT one working agent, so it
+  // never shows the single-agent cue — its header is the dual-avatar/pill
+  // supervision chrome instead. Human peers keep the static "Human" meta;
+  // Stop stays in AgentProfileActions. Never paint Activity beside the name or
+  // above the composer (one status, one place).
   const workingCue = isAgentPeer && !agentPair ? (
     <DmAgentWorkingCue agentId={peerId} />
   ) : undefined;
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
-  // Mobile: put the cue under the name (meta line) — long agent names +
-  // back/avatar/actions leave too little room for same-row status.
-  // Desktop: Slack-style cue beside the name (status slot).
-  const headerStatus = isMobile ? undefined : workingCue;
-  const headerMeta = isMobile ? (workingCue ?? meta) : meta;
+  // LRM-647: Compact under the name only (never beside name / never above composer).
+  const headerMeta = workingCue ?? meta;
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
     [isMuted, t],
@@ -405,8 +403,7 @@ function DmHeader({
         )
       }
       meta={headerMeta}
-      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
-      status={headerStatus}
+      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader meta slot; live cue is not memo-sensitive
       badges={headerBadges}
       actions={
         <>

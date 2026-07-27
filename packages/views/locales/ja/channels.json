@@ -116,6 +116,8 @@
     "add_people_title": "#{{name}} にメンバーを追加",
     "add_people_subtitle": "ワークスペースからメンバーまたはエージェントを選択",
     "in_channel": "このチャンネル · {{count}}",
+    "people_section": "People · {{count}}",
+    "agents_section": "Agents · {{count}}",
     "suggestions": "候補",
     "candidates_error": "招待候補を読み込めませんでした",
     "candidates_retry": "再試行",

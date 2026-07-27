@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import type { ActivityEvent } from "../../agents/components/tabs/activity-event";
-import { resolveDmShortWorkingLabel } from "./dm-agent-working-label";
+import { resolveAgentActivityProjection } from "../../agents/resolve-agent-live-status";
 
 function presence(over: Partial<AgentPresenceDetail> = {}): AgentPresenceDetail {
   return {
@@ -44,100 +44,67 @@ function activity(
   } as ActivityEvent;
 }
 
-describe("resolveDmShortWorkingLabel", () => {
-  const labels = {
-    thinkingLabel: "思考中",
-    queuedLabel: "排队中",
-    startingLabel: "处理中",
-  };
-
+/**
+ * LRM-650 — DM Compact Activity must use the shared EN Activity projection
+ * (ACTIVITY_LABEL_EN), never i18n bubble short labels or command details.
+ */
+describe("DM Compact Activity projection (LRM-650)", () => {
   it("returns null when idle / no active task", () => {
     expect(
-      resolveDmShortWorkingLabel({
+      resolveAgentActivityProjection({
         presence: presence(),
         activeTask: null,
         latestActivity: null,
-        ...labels,
       }),
     ).toBeNull();
   });
 
   it("returns null when offline even with an active task", () => {
     expect(
-      resolveDmShortWorkingLabel({
+      resolveAgentActivityProjection({
         presence: presence({ availability: "offline", workload: "idle" }),
         activeTask: task({ id: "task-1", status: "running" }),
         latestActivity: activity({ activity_kind: "thinking" }),
-        ...labels,
       }),
     ).toBeNull();
   });
 
-  it("shows 思考中 while running with no activity yet", () => {
+  it("shows Thinking while running with no activity yet", () => {
     expect(
-      resolveDmShortWorkingLabel({
+      resolveAgentActivityProjection({
         presence: presence(),
         activeTask: task({ id: "task-1", status: "running" }),
         latestActivity: null,
-        ...labels,
-      }),
-    ).toBe("思考中");
+      })?.label,
+    ).toBe("Thinking");
   });
 
-  it("shows short bubble tool labels (Edit / Shell), not path details", () => {
-    expect(
-      resolveDmShortWorkingLabel({
-        presence: presence(),
-        activeTask: task({ id: "task-1", status: "running" }),
-        latestActivity: activity({
-          activity_kind: "tool_call",
-          tool: "edit_file",
-          tool_target: "packages/views/foo.tsx",
-        }),
-        ...labels,
+  it("shows Running command for bash — never the raw command / Shell short label", () => {
+    const view = resolveAgentActivityProjection({
+      presence: presence(),
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: activity({
+        activity_kind: "tool_call",
+        tool: "bash",
+        tool_target: "pnpm test",
       }),
-    ).toBe("Edit");
-
-    expect(
-      resolveDmShortWorkingLabel({
-        presence: presence(),
-        activeTask: task({ id: "task-1", status: "running" }),
-        latestActivity: activity({
-          activity_kind: "tool_call",
-          tool: "bash",
-          tool_target: "pnpm test",
-        }),
-        ...labels,
-      }),
-    ).toBe("Shell");
+    });
+    expect(view?.label).toBe("Running command");
+    expect(view?.label).not.toMatch(/pnpm|Shell/i);
   });
 
-  it("shows thinking / queued / starting stage labels", () => {
-    expect(
-      resolveDmShortWorkingLabel({
-        presence: presence(),
-        activeTask: task({ id: "task-1", status: "running" }),
-        latestActivity: activity({ activity_kind: "thinking" }),
-        ...labels,
+  it("shows EN tool type labels (Editing file…), not path details", () => {
+    const view = resolveAgentActivityProjection({
+      presence: presence(),
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: activity({
+        activity_kind: "tool_call",
+        tool: "edit_file",
+        tool_target: "packages/views/foo.tsx",
+        status: "running",
       }),
-    ).toBe("思考中");
-
-    expect(
-      resolveDmShortWorkingLabel({
-        presence: presence(),
-        activeTask: task({ id: "task-1", status: "queued", started_at: null }),
-        latestActivity: null,
-        ...labels,
-      }),
-    ).toBe("排队中");
-
-    expect(
-      resolveDmShortWorkingLabel({
-        presence: presence(),
-        activeTask: task({ id: "task-1", status: "dispatched", started_at: null }),
-        latestActivity: null,
-        ...labels,
-      }),
-    ).toBe("处理中");
+    });
+    expect(view?.label).toMatch(/^Editing file/);
+    expect(view?.label).not.toContain("foo.tsx");
   });
 });

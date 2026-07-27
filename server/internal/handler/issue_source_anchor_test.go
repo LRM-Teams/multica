@@ -198,11 +198,17 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	if projectOnlyAnchorCount != 0 {
 		t.Fatalf("project-only anchor count = %d, want 0", projectOnlyAnchorCount)
 	}
+	// `created` is the group-only issue anchored directly in channelID, so its
+	// created event still lands in that channel (direct source is unchanged).
 	assertIssueChannelEvent(t, channelID, created.ID, issueThreadCreatedEvent)
-	assertIssueChannelEvent(t, channelID, projectOnlyCreated.ID, issueThreadCreatedEvent)
-	assertIssueChannelEventCount(t, channelID, projectOnlyCreated.ID, issueThreadCreatedEvent, 1)
+	// LRM-638: the project-projection fan-out was removed. projectOnlyCreated
+	// has NO direct-source channel anchor, so its system events must NOT echo
+	// into any channel feed — not even the project-bound group channel. The
+	// issue stays queryable via issue detail / Activity; only the in-feed
+	// projection is gone.
+	assertIssueChannelEventCount(t, channelID, projectOnlyCreated.ID, issueThreadCreatedEvent, 0)
 	updateIssueForBackflowTest(t, projectOnlyCreated.ID, map[string]any{"status": "in_progress"})
-	assertIssueChannelEvent(t, channelID, projectOnlyCreated.ID, issueThreadStatusChangedEvent)
+	assertIssueChannelEventCount(t, channelID, projectOnlyCreated.ID, issueThreadStatusChangedEvent, 0)
 
 	var storedChannelID string
 	var storedMessageID *string

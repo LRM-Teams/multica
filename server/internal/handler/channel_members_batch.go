@@ -40,6 +40,9 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelAgentCallerMember(w, r, workspaceID, channelID, userID) {
+		return
+	}
 	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
 		return
 	}

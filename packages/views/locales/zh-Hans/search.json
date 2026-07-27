@@ -44,5 +44,44 @@
   },
   "trigger": {
     "label": "搜索..."
+  },
+  "globalSearch": {
+    "title": "全局搜索",
+    "description": "搜索群、DM、消息和成员",
+    "placeholder": "搜索群、DM 和消息…",
+    "scope": {
+      "all": "全部",
+      "messages": "消息",
+      "channels": "群",
+      "dms": "DM",
+      "people": "成员"
+    },
+    "groups": {
+      "channels": "群",
+      "dms": "私信",
+      "messages": "消息",
+      "people": "成员"
+    },
+    "states": {
+      "recent": "最近搜索",
+      "jump_to": "跳转到",
+      "empty": "没有匹配「{{query}}」的结果。试试更短的关键词，或调整过滤条件。",
+      "denied_title": "无法搜索此范围。",
+      "denied_body": "匹配内容你没有权限查看（例如未加入的私密频道）。请换关键词或去掉受限过滤。",
+      "error_title": "搜索失败。",
+      "retry": "重试",
+      "loading": "搜索中…"
+    },
+    "row": {
+      "thread_hits": "THREAD · {{count}} 命中",
+      "members": "{{count}} 成员",
+      "joined": "你也在其中"
+    },
+    "actions": {
+      "open_channel": "打开频道",
+      "open_dm": "打开私信",
+      "open_message": "打开消息",
+      "view_profile": "查看资料"
+    }
   }
 }

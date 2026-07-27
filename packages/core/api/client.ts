@@ -128,6 +128,8 @@ import type {
   ChannelProjectFiles,
   ChannelProjectFileContent,
   CancelTaskResponse,
+  WorkspaceSearchResponse,
+  WorkspaceSearchScope,
   Project,
   CreateProjectRequest,
   UpdateProjectRequest,
@@ -246,6 +248,7 @@ import {
   EMPTY_STICKER_CATALOG_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
+  EMPTY_WORKSPACE_SEARCH_RESPONSE,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
@@ -256,6 +259,7 @@ import {
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
+  WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
   EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
   StickerCatalogResponseSchema,
@@ -2896,6 +2900,31 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/channels/${channelId}/messages/search?${params.toString()}`);
     return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
       endpoint: "GET /api/channels/{channelId}/messages/search",
+    });
+  }
+
+  /**
+   * Workspace-level global search (LRM-605). Returns collaboration content
+   * (Messages/Channels/DMs/People) within the viewer's permission boundary.
+   *
+   * Contract for FE (LRM-606): `denied: true` means the query matched only
+   * content the viewer cannot see — render the explicit 无权限 state, never a
+   * fake empty list. Until BE lands this endpoint, the call 404s and the FE
+   * surfaces the retryable error state (no silent fallback, no mock data).
+   */
+  async searchWorkspace(
+    workspaceId: string,
+    params: { q: string; scope?: WorkspaceSearchScope; limit?: number; signal?: AbortSignal },
+  ): Promise<WorkspaceSearchResponse> {
+    const search = new URLSearchParams({ q: params.q });
+    if (params.scope) search.set("scope", params.scope);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/search?${search.toString()}`,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    return parseWithFallback(raw, WorkspaceSearchResponseSchema, EMPTY_WORKSPACE_SEARCH_RESPONSE, {
+      endpoint: "GET /api/workspaces/{workspace_id}/search",
     });
   }
 

@@ -44,5 +44,44 @@
   },
   "trigger": {
     "label": "검색..."
+  },
+  "globalSearch": {
+    "title": "전역 검색",
+    "description": "채널·DM·메시지·멤버를 검색합니다",
+    "placeholder": "채널·DM·메시지를 검색…",
+    "scope": {
+      "all": "전체",
+      "messages": "메시지",
+      "channels": "채널",
+      "dms": "DM",
+      "people": "멤버"
+    },
+    "groups": {
+      "channels": "채널",
+      "dms": "다이렉트 메시지",
+      "messages": "메시지",
+      "people": "멤버"
+    },
+    "states": {
+      "recent": "최근 검색",
+      "jump_to": "이동",
+      "empty": "“{{query}}”에 대한 결과가 없습니다. 더 짧은 키워드로 시도하거나 필터를 조정해 보세요.",
+      "denied_title": "이 범위는 검색할 수 없습니다.",
+      "denied_body": "일치하는 항목을 볼 수 있는 권한이 없습니다(예: 가입하지 않은 비공개 채널). 다른 키워드를 시도하거나 제한된 필터를 제거하세요.",
+      "error_title": "검색에 실패했습니다.",
+      "retry": "다시 시도",
+      "loading": "검색 중…"
+    },
+    "row": {
+      "thread_hits": "THREAD · {{count}}건 일치",
+      "members": "{{count}}명",
+      "joined": "참여 중"
+    },
+    "actions": {
+      "open_channel": "채널 열기",
+      "open_dm": "DM 열기",
+      "open_message": "메시지 열기",
+      "view_profile": "프로필 보기"
+    }
   }
 }

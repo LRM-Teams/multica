@@ -38,6 +38,7 @@ import {
   X,
   Zap,
   MessageCircle,
+  SearchIcon,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -86,6 +87,7 @@ import { projectDetailOptions } from "@multica/core/projects/queries";
 import type { PinnedItem } from "@multica/core/types";
 import { useLogout } from "../auth/use-logout";
 import { ProjectIcon } from "../projects/components/project-icon";
+import { useGlobalSearchStore } from "../search/global-search-store";
 import { useT } from "../i18n/use-t";
 
 // Top-level nav items stay active when the user is on a child route
@@ -596,6 +598,20 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
 
         {/* Navigation */}
         <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
+          {/* Global search entry (LRM-454 Lock A) — opens the GlobalSearchDialog.
+              ⌘K is intentionally NOT shown here yet: it still opens the existing
+              SearchCommand palette. Reclaiming ⌘K is the gated migration step
+              (see LRM-606) — add the hint when ⌘K actually opens this surface. */}
+          <div className="px-2 pt-2">
+            <SidebarMenuButton
+              onClick={() => useGlobalSearchStore.getState().setOpen(true)}
+              tooltip={t(($) => $.nav.search) ?? undefined}
+              className="text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground"
+            >
+              <SearchIcon className="size-4" />
+              <span>{t(($) => $.nav.search) ?? "Search"}</span>
+            </SidebarMenuButton>
+          </div>
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">

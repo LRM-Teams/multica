@@ -44,5 +44,44 @@
   },
   "trigger": {
     "label": "Search..."
+  },
+  "globalSearch": {
+    "title": "Global Search",
+    "description": "Search channels, DMs, messages, and people",
+    "placeholder": "Search channels, DMs and messages…",
+    "scope": {
+      "all": "All",
+      "messages": "Messages",
+      "channels": "Channels",
+      "dms": "DMs",
+      "people": "People"
+    },
+    "groups": {
+      "channels": "Channels",
+      "dms": "Direct messages",
+      "messages": "Messages",
+      "people": "People"
+    },
+    "states": {
+      "recent": "Recent searches",
+      "jump_to": "Jump to",
+      "empty": "No results for “{{query}}”. Try a shorter keyword or adjust your filters.",
+      "denied_title": "You can't search this scope.",
+      "denied_body": "The matches are in content you can't see (for example, a private channel you haven't joined). Try a different query or remove a restricted filter.",
+      "error_title": "Search failed.",
+      "retry": "Retry",
+      "loading": "Searching…"
+    },
+    "row": {
+      "thread_hits": "THREAD · {{count}} hits",
+      "members": "{{count}} members",
+      "joined": "you're in"
+    },
+    "actions": {
+      "open_channel": "Open channel",
+      "open_dm": "Open DM",
+      "open_message": "Open message",
+      "view_profile": "View profile"
+    }
   }
 }

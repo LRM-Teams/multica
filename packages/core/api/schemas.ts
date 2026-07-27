@@ -45,6 +45,7 @@ import type {
   VoiceCallMedia,
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
+  WorkspaceSearchResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -1105,6 +1106,80 @@ export const EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE: ChannelMessageSearchResponse
   query: "",
   total: 0,
   results: [],
+};
+
+// ---- Workspace-level global search (LRM-605 BE ↔ LRM-606 FE) ----
+// Contract for the collaboration-content search surface (scope tabs
+// 全部/Messages/Channels/DMs/People). Distinct from the single-channel
+// ChannelMessageSearch* above.
+const WorkspaceSearchMessageSchema = z.object({
+  message_id: z.string().default(""),
+  channel_id: z.string().default(""),
+  channel_name: z.string().default(""),
+  channel_kind: z.string().default("group"),
+  thread_root_message_id: z.string().nullable().optional(),
+  thread_hit_count: z.number().optional(),
+  author_id: z.string().nullable().optional(),
+  author_type: z.string().nullable().optional(),
+  author_name: z.string().default(""),
+  author_avatar_url: z.string().nullable().optional(),
+  snippet: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+const WorkspaceSearchChannelSchema = z.object({
+  id: z.string().default(""),
+  name: z.string().default(""),
+  description: z.string().nullable().optional(),
+  member_count: z.number().optional(),
+  joined: z.boolean().optional(),
+}).loose();
+
+const WorkspaceSearchDMSchema = z.object({
+  id: z.string().default(""),
+  peer_id: z.string().default(""),
+  peer_type: z.string().default("user"),
+  peer_name: z.string().default(""),
+  peer_avatar_url: z.string().nullable().optional(),
+  snippet: z.string().nullable().optional(),
+  last_message_at: z.string().nullable().optional(),
+}).loose();
+
+const WorkspaceSearchPersonSchema = z.object({
+  id: z.string().default(""),
+  type: z.string().default("user"),
+  display_name: z.string().default(""),
+  handle: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  avatar_url: z.string().nullable().optional(),
+}).loose();
+
+const WorkspaceSearchCountsSchema = z.object({
+  messages: z.number().default(0),
+  channels: z.number().default(0),
+  dms: z.number().default(0),
+  people: z.number().default(0),
+}).loose();
+
+export const WorkspaceSearchResponseSchema = z.object({
+  query: z.string().default(""),
+  scope: z.string().default("all"),
+  counts: WorkspaceSearchCountsSchema.default({ messages: 0, channels: 0, dms: 0, people: 0 }),
+  messages: z.array(WorkspaceSearchMessageSchema).default([]),
+  channels: z.array(WorkspaceSearchChannelSchema).default([]),
+  dms: z.array(WorkspaceSearchDMSchema).default([]),
+  people: z.array(WorkspaceSearchPersonSchema).default([]),
+  denied: z.boolean().optional(),
+}).loose();
+
+export const EMPTY_WORKSPACE_SEARCH_RESPONSE: WorkspaceSearchResponse = {
+  query: "",
+  scope: "all",
+  counts: { messages: 0, channels: 0, dms: 0, people: 0 },
+  messages: [],
+  channels: [],
+  dms: [],
+  people: [],
 };
 
 const StickerAssetSchema = z.object({

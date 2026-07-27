@@ -102,7 +102,6 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 
 func (h *Handler) issueThreadBackflowScopes(ctx context.Context, issue db.Issue) []issueThreadBackflowScope {
 	var scopes []issueThreadBackflowScope
-	seenChannelIDs := make(map[string]struct{})
 
 	directRows, err := h.DB.Query(ctx, `
 		SELECT src.channel_id, COALESCE(message.thread_root_message_id, message.id), channel_row.created_by
@@ -129,40 +128,15 @@ func (h *Handler) issueThreadBackflowScopes(ctx context.Context, issue db.Issue)
 		}
 		scope.DirectSource = true
 		scopes = append(scopes, scope)
-		seenChannelIDs[uuidToString(scope.ChannelID)] = struct{}{}
 	}
 	if directRows.Err() != nil {
 		return scopes
 	}
-
-	if !issue.ProjectID.Valid {
-		return scopes
-	}
-	projectRows, err := h.DB.Query(ctx, `
-		SELECT id, created_by
-		FROM channel
-		WHERE workspace_id = $1
-		  AND project_id = $2
-		  AND kind = 'group'
-		  AND archived_at IS NULL`, issue.WorkspaceID, issue.ProjectID)
-	if err != nil {
-		return scopes
-	}
-	defer projectRows.Close()
-	for projectRows.Next() {
-		var scope issueThreadBackflowScope
-		if err := projectRows.Scan(&scope.ChannelID, &scope.InitiatorUserID); err != nil {
-			continue
-		}
-		if _, alreadyProjected := seenChannelIDs[uuidToString(scope.ChannelID)]; alreadyProjected {
-			continue
-		}
-		scopes = append(scopes, scope)
-		seenChannelIDs[uuidToString(scope.ChannelID)] = struct{}{}
-	}
-	if projectRows.Err() != nil {
-		return scopes
-	}
+	// LRM-638: issue system-event backflow must be channel-scoped. We no longer
+	// fan out to every group channel bound to the issue's project — that leaked
+	// created_at / issue metadata into channels that never anchored the issue.
+	// Events remain queryable via Activity / issue detail / search; only the
+	// in-feed echo is restricted to the direct-source channels above.
 	return scopes
 }
 

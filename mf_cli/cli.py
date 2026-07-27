@@ -307,6 +307,38 @@ def cmd_edit(args):
         raise SystemExit(1)
 
 
+def cmd_delete(args):
+    """Delete a model from Leagent by name or ID."""
+    env = _load_env()
+
+    leagent_url = args.leagent_url or env.get("LEAGENT_URL", "")
+    supabase_url = args.supabase_url or env.get("SUPABASE_URL", "")
+    anon_key = args.anon_key or env.get("SUPABASE_ANON_KEY", "")
+    admin_email = args.admin_email or env.get("LEAGENT_ADMIN_EMAIL", "")
+    admin_password = args.admin_password or env.get("LEAGENT_ADMIN_PASSWORD", "")
+
+    if args.dry_run:
+        print(
+            f"[dry-run] Would delete model '{args.model}' from Leagent at {leagent_url}"
+        )
+        return
+
+    print(f"Deleting model '{args.model}' from Leagent at {leagent_url} ...")
+    try:
+        result = delete_model_in_leagent(
+            model_identifier=args.model,
+            leagent_url=leagent_url,
+            supabase_url=supabase_url,
+            anon_key=anon_key,
+            admin_email=admin_email,
+            admin_password=admin_password,
+        )
+        print(f"✓ Model deleted!  ID: {result['id']}  Name: {result['model_name']}")
+    except Exception as e:
+        print(f"✖ Delete failed: {e}")
+        raise SystemExit(1)
+
+
 def main():
     p = argparse.ArgumentParser(description="Modelfactory CLI", prog="mf")
     p.add_argument("--username", "-u")
@@ -470,6 +502,40 @@ def main():
         help="Show what would be edited without doing it",
     )
 
+    # Delete — remove a model from Leagent
+    dl = sub.add_parser("delete", help="Delete a model from Leagent")
+    dl.add_argument("model", help="Model name or ID to delete")
+    dl.add_argument(
+        "--leagent-url",
+        default="http://10.110.158.146:8000",
+        help="Leagent backend URL (default: http://10.110.158.146:8000)",
+    )
+    dl.add_argument(
+        "--supabase-url",
+        default=None,
+        help="Supabase URL for Leagent auth (default: from .env SUPABASE_URL)",
+    )
+    dl.add_argument(
+        "--anon-key",
+        default=None,
+        help="Supabase anon key (default: from .env SUPABASE_ANON_KEY)",
+    )
+    dl.add_argument(
+        "--admin-email",
+        default=None,
+        help="Leagent admin email (default: from .env LEAGENT_ADMIN_EMAIL)",
+    )
+    dl.add_argument(
+        "--admin-password",
+        default=None,
+        help="Leagent admin password (default: from .env LEAGENT_ADMIN_PASSWORD)",
+    )
+    dl.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be deleted without doing it",
+    )
+
     args = p.parse_args()
 
     if args.command == "login":
@@ -502,6 +568,8 @@ def main():
         cmd_register(args)
     elif args.command == "edit":
         cmd_edit(args)
+    elif args.command == "delete":
+        cmd_delete(args)
 
 
 if __name__ == "__main__":

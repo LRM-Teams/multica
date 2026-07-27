@@ -26,6 +26,10 @@ mf endpoint <SERVICE_ID>                             # Show inference URL, API k
 # --- Leagent model registration ---
 mf register <SERVICE_ID> --dry-run                   # Preview registration payload
 mf register <SERVICE_ID>                             # Register service as a model in Leagent
+mf edit <MODEL_NAME_OR_ID> --url https://...          # Update model's inference URL
+mf edit <MODEL_NAME_OR_ID> --key sk-...              # Update model's API key
+mf delete <MODEL_NAME_OR_ID> --dry-run               # Preview model deletion
+mf delete <MODEL_NAME_OR_ID>                         # Delete a model from Leagent
 
 # --- Jobs ---
 mf job list                                          # List jobs
@@ -60,10 +64,22 @@ mf ws status <WS_ID>                                 # Check workspace status
 | `mf endpoint ID` | Show service inference URL, API key, and model name |
 | `mf register ID` | Register a Modelfactory service as a model in Leagent |
 | `mf register ID --dry-run` | Preview what would be registered |
+| `mf edit NAME_OR_ID --url URL` | Update a model's inference endpoint URL |
+| `mf edit NAME_OR_ID --key KEY` | Update a model's API key |
+| `mf edit NAME_OR_ID --url URL --key KEY` | Update both URL and key at once |
+| `mf delete NAME_OR_ID` | Delete a model from Leagent |
+| `mf delete NAME_OR_ID --dry-run` | Preview what would be deleted |
 
 `mf register` creates a model in Leagent's admin panel (`/admin/models`) pointing
 to the Modelfactory inference endpoint. It logs into Leagent's Supabase backend
 and POSTs to `/admin/llm-models`.
+
+`mf edit` updates an existing model's `api_base` (via `PATCH`) and/or `api_key`
+(via `POST /rotate-key`). The model can be identified by its `model_name` or
+UUID `id`.
+
+`mf delete` permanently deletes a model from Leagent via `DELETE /admin/llm-models/{id}`.
+The model can be identified by its `model_name` or UUID `id`.
 
 **register options**
 
@@ -81,6 +97,30 @@ and POSTs to `/admin/llm-models`.
 | `--capabilities` | (none) | Comma-separated capabilities |
 | `--description` | (none) | Model description |
 | `--dry-run` | `false` | Preview without registering |
+
+**edit options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--url` | (none) | New inference endpoint URL |
+| `--key` / `-k` | (none) | New API key |
+| `--leagent-url` | `http://10.110.158.146:8000` | Leagent backend URL |
+| `--supabase-url` | — | Supabase URL (default: from `.env`) |
+| `--anon-key` | — | Supabase anon key (default: from `.env`) |
+| `--admin-email` | — | Leagent admin email (default: from `.env`) |
+| `--admin-password` | — | Leagent admin password (default: from `.env`) |
+| `--dry-run` | `false` | Preview without editing |
+
+**delete options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--leagent-url` | `http://10.110.158.146:8000` | Leagent backend URL |
+| `--supabase-url` | — | Supabase URL (default: from `.env`) |
+| `--anon-key` | — | Supabase anon key (default: from `.env`) |
+| `--admin-email` | — | Leagent admin email (default: from `.env`) |
+| `--admin-password` | — | Leagent admin password (default: from `.env`) |
+| `--dry-run` | `false` | Preview without deleting |
 
 Credentials can also be set via environment variables in `mf_cli/.env`:
 
@@ -131,7 +171,7 @@ mf_cli/
 ├── cli.py        # CLI entry point (argparse)
 ├── auth.py       # Playwright login, token caching, .env loading
 ├── service.py    # Inference service CRUD (pure HTTP)
-├── register.py   # Leagent model registration
+├── register.py   # Leagent model registration, edit, and deletion
 ├── job.py        # Job CRUD (pure HTTP)
 ├── workspace.py  # Workspace CRUD + actions (pure HTTP)
 ├── config.py     # API endpoints, GPU specs, defaults

@@ -303,3 +303,80 @@ def edit_model_in_leagent(
             ) from e
 
     return last_result
+
+
+def delete_model_in_leagent(
+    model_identifier: str,
+    leagent_url: str,
+    supabase_url: str,
+    anon_key: str,
+    admin_email: str,
+    admin_password: str,
+) -> dict:
+    """Delete a model from Leagent by name or ID.
+
+    Looks up the model by name or ID, then sends a ``DELETE`` request to the
+    Leagent admin API.
+
+    Args:
+        model_identifier: Model ``model_name`` or UUID ``id`` to delete.
+        leagent_url: Leagent backend URL, e.g. ``http://10.110.158.146:8000``.
+        supabase_url: Supabase URL for Leagent auth.
+        anon_key: Supabase anon key.
+        admin_email: Leagent admin email.
+        admin_password: Leagent admin password.
+
+    Returns:
+        Dict with ``model_name`` and ``id`` of the deleted model.
+
+    Raises:
+        ValueError: If the model cannot be found.
+        RuntimeError: On API errors.
+    """
+    jwt = _get_supabase_session(supabase_url, anon_key, admin_email, admin_password)
+
+    # List models and find the target by ID or model_name
+    list_url = f"{leagent_url.rstrip('/')}/api/admin/llm-models"
+    req = urllib.request.Request(list_url, method="GET")
+    req.add_header("Authorization", f"Bearer {jwt}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            models = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        raise RuntimeError(
+            f"Failed to list Leagent models (HTTP {e.code}): {raw}"
+        ) from e
+
+    target = None
+    for m in models:
+        if m["id"] == model_identifier or m.get("model_name") == model_identifier:
+            if target is not None:
+                raise ValueError(
+                    f"Multiple models match '{model_identifier}'. "
+                    f"Use the model ID instead."
+                )
+            target = m
+
+    if not target:
+        available = [m.get("model_name", m["id"]) for m in models]
+        raise ValueError(
+            f"Model '{model_identifier}' not found in Leagent. "
+            f"Available models: {available}"
+        )
+
+    model_id = target["id"]
+    model_name = target.get("model_name", model_id)
+
+    delete_url = f"{leagent_url.rstrip('/')}/api/admin/llm-models/{model_id}"
+    req = urllib.request.Request(delete_url, method="DELETE")
+    req.add_header("Authorization", f"Bearer {jwt}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            pass  # 204 No Content — nothing to read
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        raise RuntimeError(f"Failed to delete model (HTTP {e.code}): {raw}") from e
+
+    return {"id": model_id, "model_name": model_name}

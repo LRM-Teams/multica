@@ -5,7 +5,6 @@ import { ArrowDown } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { cn } from "@multica/ui/lib/utils";
-import { ActorAvatar } from "../../../common/actor-avatar";
 import { ActivityTimeline } from "./activity-timeline";
 import { useAgentActivityEvents } from "./use-agent-activity-events";
 import {
@@ -114,8 +113,9 @@ function getScrollParent(node: HTMLElement | null): HTMLElement | null {
 }
 
 /**
- * LRM-563 page header: agent face + name + latest-status line (tone dot +
- * action word + relative time from `projectLatestActivity`).
+ * LRM-563 / LRM-618 page header: name + latest-status line (tone dot +
+ * action word + relative time from `projectLatestActivity`). No small avatar
+ * (Frank LRM-571 lock A — Profile shell avatar stays elsewhere).
  */
 function ActivityTabHeader({
   agent,
@@ -164,24 +164,13 @@ function ActivityTabHeader({
 
   return (
     <header
-      className="mb-5 flex items-center gap-3"
+      className="mb-5 min-w-0"
       data-testid="activity-tab-header"
     >
-      <ActorAvatar
-        actorType="agent"
-        actorId={agent.id}
-        size={36}
-        name={displayName}
-        avatarUrlHint={agent.avatar_url}
-        profileLink={false}
-        showStatusDot
-      />
-      <div className="min-w-0 flex-1">
-        <h2 className="truncate text-[15px] font-semibold leading-tight text-foreground">
-          {displayName}
-        </h2>
-        {status}
-      </div>
+      <h2 className="truncate text-[15px] font-semibold leading-tight text-foreground">
+        {displayName}
+      </h2>
+      {status}
     </header>
   );
 }

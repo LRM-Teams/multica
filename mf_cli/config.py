@@ -14,15 +14,25 @@ API_JOB_CREATE = API_JOB
 API_WORKSPACE = "/apis/workspace/v1alpha1/core/v1alpha1"
 
 # GPU spec options
-GPU_SPECS = ["A800-8", "A800-8-Premium", "A800-x", "A100-8", "A100-8-hg680x", "A100-8-srv",
-             "H20-8", "H20-8-Premium", "P100-2", "RTX3090-8"]
+GPU_SPECS = [
+    "A800-8",
+    "A800-8-Premium",
+    "A800-x",
+    "A100-8",
+    "A100-8-hg680x",
+    "A100-8-srv",
+    "H20-8",
+    "H20-8-Premium",
+    "P100-2",
+    "RTX3090-8",
+]
 
 COOKIE_NAME = "aimaster-token-header"
 
 # Default resources per GPU type
 DEFAULT_RESOURCES = {
-    "a800": {"cpu": 8, "diskInGi": 8, "memoryInMi": 81920, "nvidiaGpu": 1},
-    "h20":  {"cpu": 16, "diskInGi": 8, "memoryInMi": 81920, "nvidiaGpu": 1},
+    "a800": {"cpu": 8, "diskInGi": 2, "memoryInMi": 81920, "nvidiaGpu": 1},
+    "h20": {"cpu": 16, "diskInGi": 8, "memoryInMi": 81920, "nvidiaGpu": 1},
     "v100": {"cpu": 8, "diskInGi": 2, "memoryInMi": 81920, "nvidiaGpu": 1},
     "a100": {"cpu": 8, "diskInGi": 8, "memoryInMi": 81920, "nvidiaGpu": 1},
     "p100": {"cpu": 8, "diskInGi": 2, "memoryInMi": 81920, "nvidiaGpu": 1},

@@ -1,0 +1,2 @@
+[console_scripts]
+mf = mf_cli.cli:main

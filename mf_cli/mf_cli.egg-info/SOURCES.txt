@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+mf_cli.egg-info/PKG-INFO
+mf_cli.egg-info/SOURCES.txt
+mf_cli.egg-info/dependency_links.txt
+mf_cli.egg-info/entry_points.txt
+mf_cli.egg-info/requires.txt
+mf_cli.egg-info/top_level.txt

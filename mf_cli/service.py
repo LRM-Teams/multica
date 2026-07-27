@@ -1,20 +1,24 @@
 """Modelfactory service operations — create, list, delete, status."""
 
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import (
-    BASE_URL, API_INFERENCE_LARGE, API_BILLING_PRICE, DEFAULT_RESOURCES, GPU_SPECS,
-)
 from .auth import get_token
+from .config import (
+    API_BILLING_PRICE,
+    API_INFERENCE_LARGE,
+    BASE_URL,
+    DEFAULT_RESOURCES,
+)
 
 
 @dataclass
 class ServiceInfo:
     """Information about a Modelfactory service."""
+
     id: str = ""
     name: str = ""
     model_path: str = ""
@@ -117,7 +121,9 @@ def create_service(
 
     # Auto-detect resources from GPU spec
     spec_key = _gpu_label_to_spec_key(gpu_label)
-    defaults = DEFAULT_RESOURCES.get(spec_key, {"cpu": 8, "memoryInMi": 81920, "diskInGi": 8, "nvidiaGpu": 1})
+    defaults = DEFAULT_RESOURCES.get(
+        spec_key, {"cpu": 8, "memoryInMi": 81920, "diskInGi": 8, "nvidiaGpu": 1}
+    )
 
     if cpu is None:
         cpu = defaults["cpu"]
@@ -132,9 +138,9 @@ def create_service(
     body = {
         "aliases": name,
         "info": {
-            "advance_params": "",
-            "model": "qwen",
+            "name": "",
             "service_type": engine,
+            "model_name": "",
             "model_path": model_path,
             "model_type": "custom",
             "image": f"registry.docker.aimaster.lenovo.com:20443/library/public/inference/{image_tag}",
@@ -142,15 +148,19 @@ def create_service(
             "deploy_type": "nlp",
             "letrain_id": "",
             "envs": "",
+            "advance_params": "",
+            "model": "qwen",
         },
         "resources": {
             "labels": gpu_label,
             "replicas": replicas,
             "resources_per_service": {
-                "diskInGi": defaults["diskInGi"],
-                "nvidiaGpu": defaults["nvidiaGpu"],
                 "cpu": cpu,
+                "nvidiaGpu": defaults["nvidiaGpu"],
+                "gpu": 0,
                 "memoryInMi": memory,
+                "diskInGi": defaults["diskInGi"],
+                "priceToken": "",
             },
             "priceToken": price_token,
             "instances": replicas,
@@ -170,9 +180,7 @@ def create_service(
             "status": "created",
         }
     else:
-        raise RuntimeError(
-            f"Create failed: HTTP {status}, response: {resp}"
-        )
+        raise RuntimeError(f"Create failed: HTTP {status}, response: {resp}")
 
 
 def list_services(
@@ -198,7 +206,11 @@ def list_services(
         latest_status = ""
         if status_list and isinstance(status_list, list):
             phases = {s.get("phase") for s in status_list if isinstance(s, dict)}
-            messages = [s.get("message") for s in status_list if isinstance(s, dict) and s.get("message")]
+            messages = [
+                s.get("message")
+                for s in status_list
+                if isinstance(s, dict) and s.get("message")
+            ]
             if 2 in phases:
                 latest_status = "Running"
             elif 1 in phases:

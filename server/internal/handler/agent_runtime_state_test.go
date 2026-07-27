@@ -2,15 +2,18 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestAttachCanonicalRuntimeStateFillsGenerationAndNotice(t *testing.T) {
+func TestAttachCanonicalRuntimeStateFillsGenerationOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB unavailable")
 	}
@@ -29,6 +32,8 @@ func TestAttachCanonicalRuntimeStateFillsGenerationAndNotice(t *testing.T) {
 	}
 
 	// Production migration A left many agents with an explicit cutover notice.
+	// D6-1a must NOT surface it while legacy PriorSession resume still runs —
+	// current daemons inject a false "brand new / history archived" brief.
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_runtime_state
 		SET fresh_session_notice_reason = 'cutover'
@@ -36,18 +41,113 @@ func TestAttachCanonicalRuntimeStateFillsGenerationAndNotice(t *testing.T) {
 	`, parseUUID(agentID), parseUUID(runtimeID)); err != nil {
 		t.Fatalf("seed cutover notice: %v", err)
 	}
-	resp2 := AgentTaskResponse{RuntimeID: runtimeID}
+	resp2 := AgentTaskResponse{
+		RuntimeID:      runtimeID,
+		PriorSessionID: "legacy-provider-session",
+		PriorWorkDir:   "/tmp/legacy-workdir",
+	}
 	testHandler.attachCanonicalRuntimeState(ctx, parseUUID(agentID), runtimeID, &resp2)
 	if resp2.RuntimeStateGeneration != resp.RuntimeStateGeneration {
 		t.Fatalf("generation churned on re-ensure: %d -> %d", resp.RuntimeStateGeneration, resp2.RuntimeStateGeneration)
 	}
-	if resp2.FreshSessionNoticeReason != "cutover" {
-		t.Fatalf("FreshSessionNoticeReason = %q, want cutover", resp2.FreshSessionNoticeReason)
+	if resp2.FreshSessionNoticeReason != "" {
+		t.Fatalf("FreshSessionNoticeReason = %q, want empty until D6-2 (got cutover leak)", resp2.FreshSessionNoticeReason)
 	}
-	// D6-1a must not invent resume identity.
-	if resp2.PriorSessionID != "" || resp2.PriorWorkDir != "" {
-		t.Fatalf("attach must not set legacy resume fields: session=%q workdir=%q",
+	// D6-1a must not invent or clear resume identity.
+	if resp2.PriorSessionID != "legacy-provider-session" || resp2.PriorWorkDir != "/tmp/legacy-workdir" {
+		t.Fatalf("attach must not mutate legacy resume fields: session=%q workdir=%q",
 			resp2.PriorSessionID, resp2.PriorWorkDir)
+	}
+}
+
+// TestClaimPathSurfacesGenerationWithoutCutoverNotice locks the real claim
+// JSON path (not only attachCanonicalRuntimeState): with migration-218 cutover
+// still on the row and legacy PriorSession filled from chat_session, claim
+// must return generation>0 and empty fresh_session_notice_reason.
+func TestClaimPathSurfacesGenerationWithoutCutoverNotice(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB unavailable")
+	}
+	ctx := context.Background()
+	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+
+	var chatSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			workspace_id, agent_id, creator_id, title,
+			session_id, work_dir, runtime_id
+		)
+		VALUES ($1, $2, $3, 'd6-1a claim wire', 'legacy-claim-session', '/tmp/legacy-claim-wd', $4)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, chatSessionID) })
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content)
+		VALUES ($1, 'user', 'd6-1a claim wire message')
+	`, chatSessionID); err != nil {
+		t.Fatalf("insert chat message: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (
+			agent_id, runtime_id, chat_session_id,
+			status, priority
+		)
+		VALUES ($1, $2, $3, 'pending', 0)
+	`, agentID, runtimeID, chatSessionID); err != nil {
+		t.Fatalf("create pending inbox event: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_runtime_state (agent_id, runtime_id, fresh_session_notice_reason)
+		VALUES ($1, $2, 'cutover')
+		ON CONFLICT (agent_id, runtime_id) DO UPDATE
+		SET fresh_session_notice_reason = EXCLUDED.fresh_session_notice_reason
+	`, agentID, runtimeID); err != nil {
+		t.Fatalf("seed cutover notice: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
+		testWorkspaceID, daemonID)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("runtimeId", runtimeID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	claimTaskThroughInboxForTest(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			ID                       string `json:"id"`
+			PriorSessionID           string `json:"prior_session_id"`
+			PriorWorkDir             string `json:"prior_work_dir"`
+			RuntimeStateGeneration   int64  `json:"runtime_state_generation"`
+			FreshSessionNoticeReason string `json:"fresh_session_notice_reason"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode claim response: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected task in claim response")
+	}
+	if resp.Task.RuntimeStateGeneration <= 0 {
+		t.Fatalf("runtime_state_generation = %d, want > 0", resp.Task.RuntimeStateGeneration)
+	}
+	if resp.Task.FreshSessionNoticeReason != "" {
+		t.Fatalf("fresh_session_notice_reason = %q, want empty under legacy resume", resp.Task.FreshSessionNoticeReason)
+	}
+	if resp.Task.PriorSessionID != "legacy-claim-session" {
+		t.Fatalf("prior_session_id = %q, want legacy-claim-session (resume still live)", resp.Task.PriorSessionID)
+	}
+	if resp.Task.PriorWorkDir != "/tmp/legacy-claim-wd" {
+		t.Fatalf("prior_work_dir = %q, want /tmp/legacy-claim-wd", resp.Task.PriorWorkDir)
+	}
+	if resp.Task.ID != "" {
+		settleClaimedInboxEventForTest(t, resp.Task.ID)
 	}
 }
 

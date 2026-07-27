@@ -1737,13 +1737,18 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	// daemon can later fence agentRuntimeTurnCoordinator.Begin. Soft-fail keeps
 	// legacy resume (PriorSessionID from chat_session/issue) working if Ensure
 	// cannot create/return a row (wrong binding, migration lag, etc.).
+	// Do NOT surface FreshSessionNoticeReason here: migration-218 cutover rows
+	// still pair with legacy PriorSession resume, and current daemons inject a
+	// "brand new / history archived" brief whenever the notice is non-empty.
+	// That false execution hint is reserved for D6-2 after archive/read-switch.
 	h.attachCanonicalRuntimeState(ctx, event.AgentID, resp.RuntimeID, &resp)
 	return &resp
 }
 
 // attachCanonicalRuntimeState ensures the agent×runtime row exists and copies
-// generation + pending fresh-session notice onto the claim response. It does
-// not change PriorSessionID/PriorWorkDir (that is D6-2 resume cutover).
+// generation onto the claim response. It intentionally omits
+// FreshSessionNoticeReason until D6-2 completes archive + resume cutover, and
+// never mutates PriorSessionID/PriorWorkDir.
 func (h *Handler) attachCanonicalRuntimeState(ctx context.Context, agentID pgtype.UUID, runtimeID string, resp *AgentTaskResponse) {
 	if h == nil || resp == nil || !agentID.Valid || strings.TrimSpace(runtimeID) == "" {
 		return
@@ -1767,9 +1772,7 @@ func (h *Handler) attachCanonicalRuntimeState(ctx context.Context, agentID pgtyp
 	if state.Generation > 0 {
 		resp.RuntimeStateGeneration = state.Generation
 	}
-	if state.FreshSessionNoticeReason.Valid {
-		resp.FreshSessionNoticeReason = state.FreshSessionNoticeReason.String
-	}
+	// Intentionally do not copy state.FreshSessionNoticeReason.
 }
 
 func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db.AgentInboxEvent {

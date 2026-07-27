@@ -804,11 +804,12 @@ ORDER BY atq.agent_id, bucket;
 -- clears it.
 --
 -- No UI windows in SQL: stickiness is decided by "is the latest outcome a
--- failure?", not a 2-minute clock. JOINs agent because agent_inbox_event has
--- no workspace_id column.
+-- failure?", not a 2-minute clock. Active events filter directly by their
+-- workspace_id. Latest outcomes enumerate the workspace's agents and do one
+-- ordered index probe per agent, so history growth does not turn this hot
+-- snapshot into a full-history scan.
 SELECT atq.* FROM agent_inbox_event atq
-JOIN agent a ON a.id = atq.agent_id
-WHERE a.workspace_id = $1
+WHERE atq.workspace_id = $1
   AND atq.status IN ('pending', 'draining', 'failed')
   AND (
     atq.issue_id IS NOT NULL
@@ -822,11 +823,12 @@ WHERE a.workspace_id = $1
 
 UNION ALL
 
-SELECT t.* FROM (
-  SELECT DISTINCT ON (atq.agent_id) atq.*
+SELECT latest.* FROM agent a
+JOIN LATERAL (
+  SELECT atq.*
   FROM agent_inbox_event atq
-  JOIN agent a ON a.id = atq.agent_id
-  WHERE a.workspace_id = $1
+  WHERE atq.workspace_id = $1
+    AND atq.agent_id = a.id
     AND atq.status = 'acked'
     AND atq.terminal_outcome IN ('completed', 'failed')
     AND (
@@ -838,8 +840,10 @@ SELECT t.* FROM (
         AND atq.context->>'workspace_id' = $1::text
       )
     )
-  ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST
-) t;
+  ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST, atq.id DESC
+  LIMIT 1
+) latest ON TRUE
+WHERE a.workspace_id = $1;
 
 -- name: ListTasksByIssue :many
 SELECT * FROM agent_inbox_event

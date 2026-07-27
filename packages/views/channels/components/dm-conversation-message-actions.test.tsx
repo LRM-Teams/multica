@@ -468,8 +468,14 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     renderSupervisedDm();
     await screen.findByTestId("message-bubble");
 
-    // Composer is the read-only supervision banner, not an editor.
+    // composer=0 (Iris gate② criterion): the whole write composer is replaced by
+    // the read-only banner — no editor AND no Send affordance. Guards against an
+    // editor leaking back onto the supervised surface.
     expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/supervising this agent pair.*read-only/i),
+    ).toBeInTheDocument();
     // The supervisor isn't a channel_member — opening must NOT auto mark-read
     // (that member-only mutation 403s). This is the core of finding 1.
     expect(markReadSpy).not.toHaveBeenCalled();

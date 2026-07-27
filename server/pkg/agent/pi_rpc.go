@@ -139,9 +139,10 @@ func (b *piRPCBackend) sendControlCommand(ctx context.Context, p *piRPCProcess, 
 type piRPCBackend struct {
 	cfg Config
 
-	mu      sync.Mutex
-	process *piRPCProcess
-	running atomic.Bool
+	mu                        sync.Mutex
+	process                   *piRPCProcess
+	running                   atomic.Bool
+	afterResultPublishForTest func()
 }
 
 type piRPCProcess struct {
@@ -206,13 +207,27 @@ func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
 	go func() {
-		defer b.running.Store(false)
 		defer close(msgCh)
 		defer close(resCh)
+		var releaseOnce sync.Once
+		releaseAdmission := func() {
+			releaseOnce.Do(func() {
+				b.running.Store(false)
+			})
+		}
+		defer releaseAdmission()
 		started := time.Now()
 		result := b.executeTurn(ctx, prompt, opts, msgCh)
 		result.DurationMs = time.Since(started).Milliseconds()
+		// A terminal result is the caller's permission to begin the next turn.
+		// Release admission before publishing it; otherwise the receiver can
+		// observe completion while running is still true and get a false busy
+		// error on an immediate follow-up.
+		releaseAdmission()
 		resCh <- result
+		if b.afterResultPublishForTest != nil {
+			b.afterResultPublishForTest()
+		}
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }

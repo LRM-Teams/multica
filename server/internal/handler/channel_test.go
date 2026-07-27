@@ -7383,6 +7383,57 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	}
 }
 
+func TestListChannelInviteCandidatesExcludesExistingMembersAndPrivateAgents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	privateAgentID, _, memberID := privateAgentTestFixture(t)
+	candidateID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "invite-candidates-"+uuid.NewString(), memberID)
+
+	req := newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/invite-candidates", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelInviteCandidates(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListChannelInviteCandidates: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp ChannelInviteCandidatesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode invite candidates: %v", err)
+	}
+	if !channelInviteCandidatesContain(resp.Candidates, "user", candidateID) {
+		t.Fatalf("candidate user %s missing from invite candidates: %+v", candidateID, resp.Candidates)
+	}
+	if channelInviteCandidatesContain(resp.Candidates, "user", memberID) {
+		t.Fatalf("existing channel member %s leaked into invite candidates", memberID)
+	}
+	if channelInviteCandidatesContain(resp.Candidates, "agent", privateAgentID) {
+		t.Fatalf("private agent %s leaked into plain-member invite candidates", privateAgentID)
+	}
+
+	var fullMemberCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM member WHERE workspace_id = $1`, testWorkspaceID).Scan(&fullMemberCount); err != nil {
+		t.Fatalf("count workspace members: %v", err)
+	}
+	if len(resp.Candidates) == 0 && fullMemberCount > 1 {
+		t.Fatalf("invite candidates came back empty despite workspace members being available")
+	}
+}
+
+func channelInviteCandidatesContain(candidates []ChannelInviteCandidateResponse, memberType, memberID string) bool {
+	for _, c := range candidates {
+		if c.MemberType == memberType && c.MemberID == memberID {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAddChannelMembersRejectsPrivateAgentForPlainMember(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -37,6 +37,15 @@ SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
 RETURNING *;
 
+-- name: RevokeAgentCredentialForDaemonRotation :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE id = $1
+  AND agent_id = $2
+  AND workspace_id = $3
+  AND user_id = $4
+  AND revoked_at IS NULL;
+
 -- name: DisableAgentCredentialsByAgent :exec
 UPDATE agent_credential
 SET disabled_at = COALESCE(disabled_at, now()), updated_at = now()

@@ -268,6 +268,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 	qtx := h.Queries.WithTx(tx)
 
 	rotationReason := "missing_cached_credential"
+	var supersededCredential *db.AgentCredential
 	if _, err := qtx.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
 		UserID:      runtime.OwnerID,
 		WorkspaceID: runtime.WorkspaceID,
@@ -299,12 +300,16 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 			case isNotFound(lookupErr):
 				rotationReason = "not_found_or_scope_mismatch"
 			case cached.RevokedAt.Valid:
+				supersededCredential = &cached
 				rotationReason = "revoked"
 			case cached.DisabledAt.Valid:
+				supersededCredential = &cached
 				rotationReason = "disabled"
 			case !cached.ExpiresAt.Valid || !cached.ExpiresAt.Time.After(time.Now()):
+				supersededCredential = &cached
 				rotationReason = "expired"
 			case !cached.ExpiresAt.Time.After(time.Now().Add(daemonAgentCredentialRefreshBeforeExpiry)):
+				supersededCredential = &cached
 				rotationReason = "near_expiry"
 			default:
 				details, _ := json.Marshal(map[string]any{
@@ -367,7 +372,28 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	details, _ := json.Marshal(map[string]any{
+	supersededCredentialID := ""
+	supersededCredentialRevoked := false
+	if supersededCredential != nil {
+		supersededCredentialID = uuidToString(supersededCredential.ID)
+		if !supersededCredential.RevokedAt.Valid {
+			rows, revokeErr := qtx.RevokeAgentCredentialForDaemonRotation(r.Context(), db.RevokeAgentCredentialForDaemonRotationParams{
+				ID:          supersededCredential.ID,
+				AgentID:     agent.ID,
+				WorkspaceID: agent.WorkspaceID,
+				UserID:      runtime.OwnerID,
+			})
+			if revokeErr != nil {
+				slog.Error("daemon agent credential ensure: superseded credential revoke failed; rolling back",
+					append(logger.RequestAttrs(r), "error", revokeErr, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID, "credential_id", supersededCredentialID)...)
+				writeError(w, http.StatusInternalServerError, "failed to rotate agent credential")
+				return
+			}
+			supersededCredentialRevoked = rows > 0
+		}
+	}
+
+	detailsMap := map[string]any{
 		"source":                  "daemon_runtime_ensure",
 		"daemon_id":               daemonID,
 		"runtime_id":              uuidToString(runtime.ID),
@@ -378,7 +404,12 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		"expires_at":              timestampToPtr(credential.ExpiresAt),
 		"reused":                  false,
 		"rotation_reason":         rotationReason,
-	})
+	}
+	if supersededCredential != nil {
+		detailsMap["superseded_credential_id"] = supersededCredentialID
+		detailsMap["superseded_credential_revoked"] = supersededCredentialRevoked
+	}
+	details, _ := json.Marshal(detailsMap)
 	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
 		WorkspaceID: agent.WorkspaceID,
 		IssueID:     pgtype.UUID{},

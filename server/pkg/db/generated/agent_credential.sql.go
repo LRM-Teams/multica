@@ -190,6 +190,36 @@ func (q *Queries) RevokeAgentCredential(ctx context.Context, id pgtype.UUID) (Ag
 	return i, err
 }
 
+const revokeAgentCredentialForDaemonRotation = `-- name: RevokeAgentCredentialForDaemonRotation :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE id = $1
+  AND agent_id = $2
+  AND workspace_id = $3
+  AND user_id = $4
+  AND revoked_at IS NULL
+`
+
+type RevokeAgentCredentialForDaemonRotationParams struct {
+	ID          pgtype.UUID `json:"id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) RevokeAgentCredentialForDaemonRotation(ctx context.Context, arg RevokeAgentCredentialForDaemonRotationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAgentCredentialForDaemonRotation,
+		arg.ID,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const revokeAgentCredentialsByAgent = `-- name: RevokeAgentCredentialsByAgent :exec
 UPDATE agent_credential
 SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()

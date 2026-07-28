@@ -95,6 +95,17 @@ function createFakeMediaSession(
   };
 }
 
+function createFakeRingback() {
+  const ringback = {
+    start: vi.fn(),
+    stop: vi.fn(),
+  };
+  return {
+    factory: vi.fn(() => ringback),
+    ringback,
+  };
+}
+
 describe("useVoiceCallController", () => {
   let queryClient: QueryClient;
   let createVoiceCall: ReturnType<typeof vi.fn>;
@@ -119,6 +130,46 @@ describe("useVoiceCallController", () => {
   afterEach(() => {
     queryClient.clear();
     vi.restoreAllMocks();
+  });
+
+  it("plays ringback while connecting and stops it when media connects", async () => {
+    let resolveCreate:
+      | ((created: CreateVoiceCallResponse) => void)
+      | undefined;
+    createVoiceCall.mockReturnValue(new Promise<CreateVoiceCallResponse>(
+      (resolve) => {
+        resolveCreate = resolve;
+      },
+    ));
+    const media = createFakeMediaSession();
+    const ringback = createFakeRingback();
+    const { result } = renderHook(
+      () => useVoiceCallController("workspace-1", {
+        mediaSessionFactory: media.factory,
+        ringbackFactory: ringback.factory,
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    let startPromise: Promise<string>;
+    act(() => {
+      startPromise = result.current.start({
+        channel_id: "channel-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    expect(ringback.factory).toHaveBeenCalledTimes(1);
+    expect(ringback.ringback.start).toHaveBeenCalledTimes(1);
+    expect(ringback.ringback.stop).not.toHaveBeenCalled();
+
+    resolveCreate?.(createdCall);
+    await act(async () => {
+      await startPromise;
+    });
+
+    expect(result.current.phase).toBe("connected");
+    expect(ringback.ringback.stop).toHaveBeenCalledTimes(1);
   });
 
   it("creates the server call and connects media without exposing credentials", async () => {
@@ -164,9 +215,11 @@ describe("useVoiceCallController", () => {
       events.onError?.(failure);
       throw failure;
     });
+    const ringback = createFakeRingback();
     const { result } = renderHook(
       () => useVoiceCallController("workspace-1", {
         mediaSessionFactory: media.factory,
+        ringbackFactory: ringback.factory,
       }),
       { wrapper: wrapper(queryClient) },
     );
@@ -181,6 +234,7 @@ describe("useVoiceCallController", () => {
     expect(stopVoiceCall).toHaveBeenCalledTimes(1);
     expect(stopVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
     expect(media.session.disconnect).toHaveBeenCalled();
+    expect(ringback.ringback.stop).toHaveBeenCalledTimes(1);
     expect(result.current.phase).toBe("failed");
     expect(result.current.error).toMatchObject({
       source: "media",

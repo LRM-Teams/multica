@@ -1222,7 +1222,13 @@ function DmChannelConversation({
           onSend={handleThreadSend}
           voiceChannelId={channelId}
           voicePlaybackScope={voicePlaybackScope(channelId, threadSurfaceRoot.id)}
-          voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
+          // #858 — DMs never carry a pending voice record (#838 wired channels
+          // and threads only), so that input is simply absent here; the other
+          // causes map identically.
+          voiceBlock={{
+            hasTextDraft: !threadDraftEmpty,
+            hasAttachmentDraft: threadPending.pending.length > 0,
+          }}
           onVoiceSend={handleThreadVoiceSend}
           isMobile={isMobile}
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
@@ -1470,7 +1476,11 @@ function DmChannelConversation({
         onSend={handleSend}
         voiceChannelId={channelId}
         voicePlaybackScope={voicePlaybackScope(channelId)}
-        voiceDisabled={!draftEmpty || dmPending.pending.length > 0}
+        // #858 — see the DM thread surface above.
+        voiceBlock={{
+          hasTextDraft: !draftEmpty,
+          hasAttachmentDraft: dmPending.pending.length > 0,
+        }}
         onVoiceSend={handleVoiceSend}
         isMobile={isMobile}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive

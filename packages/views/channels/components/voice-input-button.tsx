@@ -23,20 +23,19 @@ export interface VoiceInputButtonProps {
   channelId: string;
   disabled?: boolean;
   /**
-   * Why the mic is blocked, when the caller knows something more specific than
-   * the generic reason (#838: an unsent recording is waiting).
-   *
-   * `voiceDisabled` is currently ORed from several causes and the default copy
-   * only describes some of them — telling a user with an empty composer to
-   * "clear the current text and attachments" sends them somewhere that does
-   * nothing. A caller that knows the actual cause passes it here.
-   *
-   * Deliberately a plain resolved string and NOT a visible surface: #857 owns
-   * the real fix (a visible `role="status"` line covering all causes on
-   * touch/mouse/keyboard/SR). This only stops the existing title from lying
-   * about the state #838 introduced, and #857 replaces it wholesale.
+   * Id of the visible `role="status"` line that explains why the mic is
+   * disabled (#858). The button stays natively `disabled` — never an
+   * `aria-disabled` imitation, which is focusable and clickable and so lies to
+   * assistive tech in a different way — and points at the explanation instead
+   * of carrying it in a `title` that a disabled element never shows.
    */
-  blockedReason?: string;
+  describedById?: string;
+  /**
+   * Reports this button's OWN upload state upward so the shell can say
+   * "uploading your voice message". Only this may resolve to `uploading`; an
+   * attachment upload is a different sentence.
+   */
+  onBusyChange?: (busy: boolean) => void;
   isMobile: boolean;
   playbackScope: string;
   onVoiceSend: (
@@ -71,7 +70,8 @@ async function decodeRecording(blob: Blob): Promise<ArrayBuffer> {
 export function VoiceInputButton({
   channelId,
   disabled = false,
-  blockedReason,
+  describedById,
+  onBusyChange,
   isMobile,
   playbackScope,
   onVoiceSend,
@@ -235,6 +235,15 @@ export function VoiceInputButton({
   }, [clearMaxTimer, playbackScope]);
 
   const busy = state === "starting" || state === "uploading";
+  // Report upward so the shell can render the "uploading your voice message"
+  // status. Kept in an effect (not the setState call sites) so EVERY route into
+  // and out of busy is covered — including the error paths that reset to idle,
+  // where a missed "false" would leave a stale status line pinned on screen.
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  useEffect(() => {
+    onBusyChangeRef.current?.(busy);
+  }, [busy]);
   const recording = state === "recording";
   const label = recording
     ? t(($) => $.composer.voice_stop, { seconds: elapsedSeconds })
@@ -255,7 +264,8 @@ export function VoiceInputButton({
       aria-label={label}
       aria-live="polite"
       aria-busy={busy}
-      title={disabled ? blockedReason ?? t(($) => $.composer.voice_blocked) : label}
+      title={label}
+      aria-describedby={describedById}
       disabled={(disabled && !recording) || busy}
       onClick={recording ? finishCapture : startCapture}
     >

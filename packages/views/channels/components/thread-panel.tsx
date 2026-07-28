@@ -14,7 +14,7 @@ import {
 } from "./composer-send-error-bar";
 import type { QuoteTarget } from "./message-quote-types";
 import { ThreadRootPreview } from "./thread-root-preview";
-import { Composer } from "./composer";
+import { Composer, type ComposerProps } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
 import { ThreadFollowButton } from "./thread-follow-button";
@@ -64,9 +64,8 @@ export interface ThreadPanelProps {
   sendDisabled: boolean;
   sending?: boolean;
   voicePlaybackScope?: string;
-  voiceDisabled?: boolean;
-  /** #838 — specific reason for `voiceDisabled`, threaded to the composer. */
-  voiceBlockedReason?: string;
+  /** #858 — raw block conditions; the composer derives both disabled + reason. */
+  voiceBlock?: ComposerProps["voiceBlock"];
   onVoiceSend?: (
     durationMs: number,
     attachment: VoiceRecordingAttachment,
@@ -129,8 +128,7 @@ export function ThreadPanel({
   sendDisabled,
   sending,
   voicePlaybackScope,
-  voiceDisabled,
-  voiceBlockedReason,
+  voiceBlock,
   onVoiceSend,
   composerLeadingActions,
   composerTray,
@@ -291,8 +289,7 @@ export function ThreadPanel({
             onSend={onSend}
             voiceChannelId={root.channel_id}
             voicePlaybackScope={voicePlaybackScope}
-            voiceDisabled={voiceDisabled}
-            voiceBlockedReason={voiceBlockedReason}
+            voiceBlock={voiceBlock}
             onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive

@@ -28,7 +28,9 @@ const boundaryContractAttachmentID = "11111111-2222-3333-4444-555555555555"
 func boundaryCLIEnv(t *testing.T, srvURL string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MULTICA_TOKEN", "test-agent-token")
+	// Agent machine tokens are mat_* (Ronan #801 CLI gate). Path contracts
+	// exercise the agent runtime credential, not human mul_/JWT paths.
+	t.Setenv("MULTICA_TOKEN", "mat_boundary_contract_test_token")
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
 	t.Setenv("MULTICA_SERVER_URL", srvURL)
 }

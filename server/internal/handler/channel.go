@@ -158,6 +158,8 @@ type ChannelMemberBrief struct {
 	Name         string                      `json:"name"`
 	DisplayName  string                      `json:"display_name"`
 	AvatarURL    *string                     `json:"avatar_url"`
+	// Role is channel-level: owner | manager | member (not workspace role).
+	Role         string                      `json:"role,omitempty"`
 	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
 }
 
@@ -167,6 +169,9 @@ type ChannelMemberResponse struct {
 	Name         string                      `json:"name"`
 	DisplayName  string                      `json:"display_name"`
 	AvatarURL    *string                     `json:"avatar_url"`
+	// Role is channel-level: owner | manager | member (Beckham v2 §4).
+	// Distinct from workspace MemberRole. FE badges: 群主 / 群管|管理员 / 成员.
+	Role         string                      `json:"role"`
 	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
 	CreatedAt    string                      `json:"created_at"`
 }
@@ -807,8 +812,8 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = h.DB.Exec(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'user', $3)
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'user', $3, 'owner')
 		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
 	// LRM-397/398: do NOT auto-provision 贝克汉姆 / group_manager on channel create.
 	// Group managers enter via Wendy hire or POST .../group-manager (InviteGroupManager),
@@ -1265,14 +1270,25 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
 		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       cs.runtime_token_stats,
-		       cm.created_at
+		       cm.created_at,
+		       cm.role
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		LEFT JOIN channel_agent_session cas ON cm.member_type = 'agent' AND cas.channel_id = cm.channel_id AND cas.agent_id = cm.member_id
 		LEFT JOIN chat_session cs ON cs.id = cas.chat_session_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2
-		ORDER BY cm.created_at ASC`, channelID, parseUUID(workspaceID))
+		ORDER BY
+		  CASE cm.role
+		    WHEN 'owner' THEN 0
+		    WHEN 'manager' THEN 1
+		    ELSE 2
+		  END,
+		  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
+		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
+		       ELSE 2
+		  END,
+		  cm.created_at ASC`, channelID, parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel members")
 		return
@@ -1280,16 +1296,19 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []ChannelMemberResponse{}
 	for rows.Next() {
-		var typ, name, displayName string
+		var typ, name, displayName, role string
 		var id pgtype.UUID
 		var avatarURL pgtype.Text
 		var runtimeStatsRaw []byte
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &runtimeStatsRaw, &createdAt); err != nil {
+		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &runtimeStatsRaw, &createdAt, &role); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel members")
 			return
 		}
-		member := ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), AvatarURL: textToPtr(avatarURL), CreatedAt: timestampToString(createdAt)}
+		if role == "" {
+			role = "member"
+		}
+		member := ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), AvatarURL: textToPtr(avatarURL), Role: role, CreatedAt: timestampToString(createdAt)}
 		if len(runtimeStatsRaw) > 0 {
 			var stats protocol.RuntimeTokenStats
 			if json.Unmarshal(runtimeStatsRaw, &stats) == nil {
@@ -5965,26 +5984,40 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 		       COALESCE(u.name, a.name, ''),
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
 		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
-		       cm.created_at
+		       cm.created_at,
+		       cm.role
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2
-		ORDER BY cm.created_at ASC`, parseUUID(channelID), parseUUID(workspaceID))
+		ORDER BY
+		  CASE cm.role
+		    WHEN 'owner' THEN 0
+		    WHEN 'manager' THEN 1
+		    ELSE 2
+		  END,
+		  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
+		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
+		       ELSE 2
+		  END,
+		  cm.created_at ASC`, parseUUID(channelID), parseUUID(workspaceID))
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
 	var out []ChannelMemberResponse
 	for rows.Next() {
-		var typ, name, displayName string
+		var typ, name, displayName, role string
 		var id pgtype.UUID
 		var avatarURL pgtype.Text
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &createdAt); err != nil {
+		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &createdAt, &role); err != nil {
 			continue
 		}
-		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), AvatarURL: textToPtr(avatarURL), CreatedAt: timestampToString(createdAt)})
+		if role == "" {
+			role = "member"
+		}
+		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), AvatarURL: textToPtr(avatarURL), Role: role, CreatedAt: timestampToString(createdAt)})
 	}
 	return out
 }

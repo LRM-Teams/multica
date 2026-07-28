@@ -924,7 +924,13 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
-      onCommitted: () => restore.clear(),
+      // #1276 INV-1: clear the persisted draft ONLY on confirmed success, never on
+      // optimistic dispatch — otherwise a failure/abort or a reload mid-flight
+      // destroys the text before the restore can put it back.
+      onCommitted: () => {
+        restore.clear();
+        onDraftClear?.();
+      },
       onVisibleError: () => {
         // #772: no permanent failed bubble. Restore the failed text into the
         // composer (unless it already holds DIFFERENT new text — then keep it +
@@ -938,7 +944,7 @@ function DmChannelConversation({
       editorRef.current?.clearContent();
       dmPending.clear();
       setQuoteTarget(null);
-      onDraftClear?.();
+      // NB: persisted draft is cleared in onCommitted (success), not here (#1276 INV-1).
       if (typingStartedRef.current) {
         typingStartedRef.current = false;
         publishTyping(false);

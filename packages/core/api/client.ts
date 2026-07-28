@@ -423,7 +423,16 @@ export class PreviewUnsupportedError extends Error {
 // spinner. Aborting an already-landed send is harmless — retries dedupe via
 // client_message_id. Per-request on purpose: uploads / long queries keep their
 // own (or no) timeout (#294).
-const SEND_TIMEOUT_MS = 30_000;
+//
+// #1276: 30s → 8s. This is the ONLY failure signal for the most common real
+// case — online at click, network drops mid-flight (subway / elevator / WiFi
+// switch) — where `navigator.onLine` is still true at dispatch, so nothing else
+// surfaces the failure until this aborts. 8s gives fast, visible feedback (INV-2)
+// and puts the terminal state inside a human/QA observation window. Safe to
+// lower ONLY because #1276 INV-1 now clears the draft on commit (not dispatch):
+// a mis-fired timeout costs one extra retry tap, no longer lost text (a message
+// should send in ~1s anyway; 8s stays tolerant of slow networks).
+const SEND_TIMEOUT_MS = 8_000;
 
 export class ApiClient {
   private baseUrl: string;

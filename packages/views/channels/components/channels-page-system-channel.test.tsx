@@ -724,6 +724,27 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     ).toBe(callsAfterFailure);
   });
 
+  it("a successful retry clears the notice — the row (and its state) go together (#836)", async () => {
+    const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+    await screen.findByTestId("channel-members-row-remove-failed");
+
+    // Retry → confirm again, this time the request succeeds.
+    remove.mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByTestId("channel-members-row-remove-retry"));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("channel-members-row-remove-failed")).toBeNull();
+    });
+  });
+
   it("the in-row notice clears only when the user dismisses it (#836)", async () => {
     (
       apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>

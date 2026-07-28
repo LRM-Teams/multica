@@ -239,6 +239,7 @@ import {
 } from "../../layout/use-profile-panel-width";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { memberFailureKey } from "./member-failure-key";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
@@ -2050,7 +2051,7 @@ export function ChannelsPage({
       mutate: sendMessage.mutate,
       onCommitted: () => {},
       onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+        if (kind === "conflict") showErrorToast(t(($) => $.composer.send_failed));
       },
     });
     if (dispatched) {
@@ -2135,7 +2136,7 @@ export function ChannelsPage({
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {},
       onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+        if (kind === "conflict") showErrorToast(t(($) => $.thread.send_failed));
       },
     });
     if (dispatched) {
@@ -2407,7 +2408,7 @@ export function ChannelsPage({
   // commitment point, so a retry can never remove someone with one click.
   const removeFailureFor = useCallback(
     (m: ChannelMember) => {
-      if (!removeFailedKeys.has(memberFailureKey(m))) return undefined;
+      if (!removeFailedKeys.has(memberFailureKey(active?.id ?? "", m))) return undefined;
       return {
         message: t(($) => $.members.remove_failed),
         retryLabel: t(($) => $.members.remove_retry),
@@ -2416,12 +2417,12 @@ export function ChannelsPage({
         onDismiss: () =>
           setRemoveFailedKeys((prev) => {
             const next = new Set(prev);
-            next.delete(memberFailureKey(m));
+            next.delete(memberFailureKey(active?.id ?? "", m));
             return next;
           }),
       };
     },
-    [removeFailedKeys, t],
+    [removeFailedKeys, active?.id, t],
   );
 
   const memberPanelBody = active ? (
@@ -3934,11 +3935,11 @@ export function ChannelsPage({
                     // sheet on a failed removal would look exactly like a
                     // successful one.
                     onError: () => {
-                      toast.error(t(($) => $.members.remove_failed));
+                      showErrorToast(t(($) => $.members.remove_failed));
                       // #836 — also record it on the row so the failure survives
                       // the toast being dismissed or expiring.
                       setRemoveFailedKeys((prev) =>
-                        new Set(prev).add(memberFailureKey(target)),
+                        new Set(prev).add(memberFailureKey(active.id, target)),
                       );
                     },
                     // A successful removal drops the row; clear any stale mark so
@@ -3946,7 +3947,7 @@ export function ChannelsPage({
                     onSuccess: () =>
                       setRemoveFailedKeys((prev) => {
                         const next = new Set(prev);
-                        next.delete(memberFailureKey(target));
+                        next.delete(memberFailureKey(active.id, target));
                         return next;
                       }),
                     onSettled: () => setRemoveMemberTarget(null),

@@ -9,7 +9,11 @@ import type { ChannelMember } from "@multica/core/types";
  * never land on another's row.
  */
 export function memberFailureKey(
+  channelId: string,
   member: Pick<ChannelMember, "member_type" | "member_id">,
 ): string {
-  return `${member.member_type}:${member.member_id}`;
+  // Channel-scoped: the state lives for the whole ChannelsPage, so a key of
+  // member identity ALONE would let a failure in channel A surface on the same
+  // member's row in channel B, where nothing was ever attempted (Iris review).
+  return `${channelId}:${member.member_type}:${member.member_id}`;
 }

@@ -34,6 +34,7 @@ import { AgentDetailOverview } from "./agent-detail-overview";
 const agent: Agent = {
   id: "agent-1",
   workspace_id: "workspace-1",
+  workspace_role: "member",
   runtime_id: "runtime-1",
   name: "radar-agent",
   display_name: "Radar agent",

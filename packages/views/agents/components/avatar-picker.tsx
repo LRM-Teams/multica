@@ -209,7 +209,8 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
 
       {cropSrc ? (
         <AvatarCropDialog
-          imageSrc={cropSrc}
+          src={cropSrc}
+          busy={uploading}
           onCancel={handleCropCancel}
           onConfirm={handleCropConfirm}
         />

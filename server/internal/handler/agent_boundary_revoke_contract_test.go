@@ -2,32 +2,32 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // #802 handler/revoke contracts (Vera).
-// Barry (2026-07-28): write red controls first; do not wait for impl.
-// - remove-vs-claim final 4-tuple after interleaved revoke
-// - derived-agent may only output to env-dispatch origin channel
-// No production code in this package for #802.
+// Barry gate review 2026-07-28: tighten event truth, real lease race, hard origin ALLOW.
+// No production code changes.
 
-// loadAgentChannelRevokeTuple reads membership/event/delivery/execution for the
-// Barry 4-tuple after remove-vs-claim interleaving.
 type agentChannelRevokeTuple struct {
 	MembershipCount int
 	EventStatus     string
 	EventOutcome    string
-	DeliveryStatus  string
-	ExecutionStatus string
+	FailureReason   string
+	TerminalAtSet   bool
+	CompletedAtSet  bool
+	ActiveDelivery  int
+	RunningExec     int
 }
 
-func loadAgentChannelRevokeTuple(t *testing.T, channelID, agentID, eventID, deliveryID, executionID string) agentChannelRevokeTuple {
+func loadAgentChannelRevokeTuple(t *testing.T, channelID, agentID, eventID string) agentChannelRevokeTuple {
 	t.Helper()
 	ctx := context.Background()
 	var tup agentChannelRevokeTuple
@@ -39,70 +39,103 @@ func loadAgentChannelRevokeTuple(t *testing.T, channelID, agentID, eventID, deli
 		channelID, testWorkspaceID, agentID).Scan(&tup.MembershipCount); err != nil {
 		t.Fatalf("count membership: %v", err)
 	}
+	var terminalAt, completedAt *time.Time
 	if err := testPool.QueryRow(ctx, `
-		SELECT status, COALESCE(terminal_outcome, '')
-		FROM agent_inbox_event WHERE id = $1`, eventID).Scan(&tup.EventStatus, &tup.EventOutcome); err != nil {
+		SELECT status,
+		       COALESCE(terminal_outcome, ''),
+		       COALESCE(failure_reason, ''),
+		       terminal_at,
+		       completed_at
+		FROM agent_inbox_event WHERE id = $1`, eventID).
+		Scan(&tup.EventStatus, &tup.EventOutcome, &tup.FailureReason, &terminalAt, &completedAt); err != nil {
 		t.Fatalf("load event: %v", err)
 	}
+	tup.TerminalAtSet = terminalAt != nil
+	tup.CompletedAtSet = completedAt != nil
 	if err := testPool.QueryRow(ctx, `
-		SELECT status FROM agent_event_delivery WHERE id = $1`, deliveryID).Scan(&tup.DeliveryStatus); err != nil {
-		t.Fatalf("load delivery: %v", err)
+		SELECT count(*)::int FROM agent_event_delivery
+		WHERE inbox_event_id = $1 AND status IN ('leased', 'processing')`, eventID).
+		Scan(&tup.ActiveDelivery); err != nil {
+		t.Fatalf("count active delivery: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		SELECT status FROM agent_execution WHERE id = $1`, executionID).Scan(&tup.ExecutionStatus); err != nil {
-		t.Fatalf("load execution: %v", err)
+		SELECT count(*)::int FROM agent_execution
+		WHERE source_kind = 'inbox' AND source_event_id = $1 AND status = 'running'`, eventID).
+		Scan(&tup.RunningExec); err != nil {
+		t.Fatalf("count running execution: %v", err)
 	}
 	return tup
 }
 
-func assertRevokeFourTupleClosed(t *testing.T, tup agentChannelRevokeTuple) {
+// assertMembershipRevokedFourTuple nails Barry's only-true revoke outcome.
+func assertMembershipRevokedFourTuple(t *testing.T, tup agentChannelRevokeTuple) {
 	t.Helper()
-	// Barry: membership=0 / event=terminal failed / delivery∉{leased,processing} / execution∉running
 	if tup.MembershipCount != 0 {
 		t.Errorf("membership count=%d, want 0", tup.MembershipCount)
 	}
-	eventTerminalFailed := (tup.EventStatus == "acked" || tup.EventStatus == "failed" || tup.EventStatus == "suppressed") &&
-		(tup.EventOutcome == "failed" || tup.EventOutcome == "no_reply" || tup.EventOutcome == "cancelled")
-	// Prefer explicit membership_revoked / failed terminal for remove path.
-	if tup.EventStatus == "pending" || tup.EventStatus == "draining" {
-		t.Errorf("event still active status=%q outcome=%q; want terminal failed", tup.EventStatus, tup.EventOutcome)
+	if tup.EventStatus != "acked" ||
+		tup.EventOutcome != "failed" ||
+		tup.FailureReason != "membership_revoked" {
+		t.Errorf("event status=%q outcome=%q failure_reason=%q; want acked/failed/membership_revoked",
+			tup.EventStatus, tup.EventOutcome, tup.FailureReason)
 	}
-	if tup.EventOutcome == "" && (tup.EventStatus == "acked" || tup.EventStatus == "failed") {
-		// terminal without outcome is weak but may pass some paths; still require not active
-	} else if !eventTerminalFailed && tup.EventStatus != "acked" && tup.EventStatus != "failed" {
-		t.Errorf("event status=%q outcome=%q; want terminal failed after revoke", tup.EventStatus, tup.EventOutcome)
+	if !tup.TerminalAtSet || !tup.CompletedAtSet {
+		t.Errorf("event terminal_at set=%v completed_at set=%v; both must be non-null",
+			tup.TerminalAtSet, tup.CompletedAtSet)
 	}
-	switch tup.DeliveryStatus {
-	case "leased", "processing":
-		t.Errorf("delivery status=%q; must not remain leased|processing after revoke", tup.DeliveryStatus)
+	if tup.ActiveDelivery != 0 {
+		t.Errorf("active delivery count=%d, want 0 (no leased|processing)", tup.ActiveDelivery)
 	}
-	if tup.ExecutionStatus == "running" {
-		t.Errorf("execution status=%q; must not remain running after revoke", tup.ExecutionStatus)
+	if tup.RunningExec != 0 {
+		t.Errorf("running execution count=%d, want 0", tup.RunningExec)
 	}
 }
 
-// seedBoundaryRevokeFixture creates agent member + pending channel inbox event +
-// leased delivery + running execution bound to that event (Barry 4-tuple surface).
-func seedBoundaryRevokeFixture(t *testing.T) (channelID, agentID, eventID, deliveryID, executionID string) {
+type boundaryRevokeSeed struct {
+	channelID  string
+	agentID    string
+	runtimeID  string
+	eventID    string
+	deliveryID string // only sequential seed with pre-leased delivery
+	execID     string // only sequential seed with running execution
+}
+
+// seedBoundarySequentialRevoke: membership + pending event + leased delivery + running execution.
+// For sequential RemoveChannelMember → 4-tuple only (not claim race).
+func seedBoundarySequentialRevoke(t *testing.T) boundaryRevokeSeed {
 	t.Helper()
 	ctx := context.Background()
-
-	agentID = createHandlerTestAgent(t, "BoundaryRevokeAgent", []byte("[]"))
-	channelID = seedChannelForTest(t, "boundary-revoke-"+uuid.NewString(), testUserID)
+	agentID := createHandlerTestAgent(t, "BoundaryRevokeSeq", []byte("[]"))
+	channelID := seedChannelForTest(t, "boundary-revoke-seq-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
+	// Dedicated runtime bound to this agent (lease path uses COALESCE event/session runtime).
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at
+		)
+		VALUES ($1, $2, $3, 'local', 'boundary_test', 'online', 'boundary revoke runtime', now())
+		RETURNING id`,
+		testWorkspaceID, "boundary-"+uuid.NewString(), "Boundary Runtime "+uuid.NewString()).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeID); err != nil {
+		t.Fatalf("bind agent runtime: %v", err)
+	}
 
-	runtimeID := handlerTestRuntimeID(t)
+	var eventID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_inbox_event (
 			workspace_id, channel_id, agent_id, runtime_id, reason, status, priority
 		)
 		VALUES ($1, $2, $3, $4, 'mention', 'pending', 10)
 		RETURNING id`, testWorkspaceID, channelID, agentID, runtimeID).Scan(&eventID); err != nil {
-		t.Fatalf("seed inbox event: %v", err)
+		t.Fatalf("seed pending event: %v", err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_execution WHERE source_event_id = $1`, eventID)
@@ -110,28 +143,79 @@ func seedBoundaryRevokeFixture(t *testing.T) (channelID, agentID, eventID, deliv
 		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
 	})
 
-	// Optional agent_session_id — match cancel fixture when session exists.
+	var deliveryID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_event_delivery (
-			workspace_id, inbox_event_id, runtime_id, status
+			workspace_id, agent_session_id, inbox_event_id, runtime_id, status, lease_expires_at
 		)
-		VALUES ($1, $2, $3, 'leased')
-		RETURNING id`, testWorkspaceID, eventID, runtimeID).Scan(&deliveryID); err != nil {
+		SELECT workspace_id, agent_session_id, id, $2, 'leased', now() + interval '5 minutes'
+		FROM agent_inbox_event WHERE id = $1
+		RETURNING id`, eventID, runtimeID).Scan(&deliveryID); err != nil {
 		t.Fatalf("seed leased delivery: %v", err)
 	}
 
-	executionID = uuid.NewString()
+	execID := uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_execution (
 			id, source_kind, source_event_id, source,
 			workspace_id, runtime_id, agent_id, status
 		)
 		VALUES ($1, 'inbox', $2, 'chat', $3, $4, $5, 'running')
-	`, executionID, eventID, testWorkspaceID, runtimeID, agentID); err != nil {
+	`, execID, eventID, testWorkspaceID, runtimeID, agentID); err != nil {
 		t.Fatalf("seed running execution: %v", err)
 	}
 
-	return channelID, agentID, eventID, deliveryID, executionID
+	return boundaryRevokeSeed{
+		channelID: channelID, agentID: agentID, runtimeID: runtimeID,
+		eventID: eventID, deliveryID: deliveryID, execID: execID,
+	}
+}
+
+// seedBoundaryClaimRace: membership + pending event, NO active delivery/execution.
+// Real claim must go through leaseAgentInboxEventForRuntime.
+func seedBoundaryClaimRace(t *testing.T) boundaryRevokeSeed {
+	t.Helper()
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "BoundaryRevokeRace", []byte("[]"))
+	channelID := seedChannelForTest(t, "boundary-revoke-race-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at
+		)
+		VALUES ($1, $2, $3, 'local', 'boundary_test', 'online', 'boundary race runtime', now())
+		RETURNING id`,
+		testWorkspaceID, "boundary-race-"+uuid.NewString(), "Boundary Race Runtime "+uuid.NewString()).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeID); err != nil {
+		t.Fatalf("bind agent runtime: %v", err)
+	}
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, channel_id, agent_id, runtime_id, reason, status, priority
+		)
+		VALUES ($1, $2, $3, $4, 'mention', 'pending', 10)
+		RETURNING id`, testWorkspaceID, channelID, agentID, runtimeID).Scan(&eventID); err != nil {
+		t.Fatalf("seed pending event: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_execution WHERE source_event_id = $1`, eventID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_event_delivery WHERE inbox_event_id = $1`, eventID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
+	})
+
+	return boundaryRevokeSeed{
+		channelID: channelID, agentID: agentID, runtimeID: runtimeID, eventID: eventID,
+	}
 }
 
 func removeAgentMemberRequest(t *testing.T, channelID, agentID string) *http.Request {
@@ -142,95 +226,179 @@ func removeAgentMemberRequest(t *testing.T, channelID, agentID string) *http.Req
 	return withRouteParams(req, "channelId", channelID, "memberType", "agent", "memberId", agentID)
 }
 
-// TestBoundary_RemoveAgent_FinalFourTuple_AfterRevoke is the sequential form of
-// Barry's revoke contract: after remove, membership/event/delivery/execution
-// must all be closed. Intentionally red on origin/dev until #801 atomic revoke.
+// TestBoundary_RemoveAgent_FinalFourTuple_AfterRevoke — sequential revoke after
+// leased delivery + running execution already exist.
 func TestBoundary_RemoveAgent_FinalFourTuple_AfterRevoke(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-
-	channelID, agentID, eventID, deliveryID, executionID := seedBoundaryRevokeFixture(t)
+	seed := seedBoundarySequentialRevoke(t)
 
 	rec := httptest.NewRecorder()
-	testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, channelID, agentID))
+	testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, seed.channelID, seed.agentID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("RemoveChannelMember status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	tup := loadAgentChannelRevokeTuple(t, channelID, agentID, eventID, deliveryID, executionID)
-	t.Logf("post-remove 4-tuple: membership=%d event=%s/%s delivery=%s execution=%s",
-		tup.MembershipCount, tup.EventStatus, tup.EventOutcome, tup.DeliveryStatus, tup.ExecutionStatus)
-	assertRevokeFourTupleClosed(t, tup)
+	tup := loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID)
+	t.Logf("post-remove 4-tuple: membership=%d event=%s/%s/%s activeDelivery=%d runningExec=%d",
+		tup.MembershipCount, tup.EventStatus, tup.EventOutcome, tup.FailureReason,
+		tup.ActiveDelivery, tup.RunningExec)
+	assertMembershipRevokedFourTuple(t, tup)
 }
 
-// TestBoundary_RemoveVsClaim_InterleavedFourTuple forces Barry's race shape:
-// lease holds event-ish work while remove runs; final state must not leave
-// event=terminal + delivery still leased. Uses concurrent remove + re-lease
-// attempt; flaky green is not the goal — closed 4-tuple is.
-func TestBoundary_RemoveVsClaim_InterleavedFourTuple(t *testing.T) {
+// TestBoundary_RemoveVsClaim_RealLeaseRace uses production lease + remove with
+// an advisory lock held open so one side blocks on the shared
+// agent_channel_membership_revoke(channel,agent) key (Barry lock-order gate).
+//
+// Interleave:
+//  1. Holder takes shared revoke advisory and keeps txn open
+//  2. Start leaseAgentInboxEventForRuntime in a goroutine (must block or serialize)
+//  3. Release holder, run RemoveChannelMember (or reverse order variants)
+//
+// Final: if remove succeeds → membership=0 + event acked/failed/membership_revoked
+// + no active delivery + no running execution. No protocol-foreign delivery inserts.
+func TestBoundary_RemoveVsClaim_RealLeaseRace(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-
-	channelID, agentID, eventID, deliveryID, executionID := seedBoundaryRevokeFixture(t)
 	ctx := context.Background()
+	seed := seedBoundaryClaimRace(t)
 
-	// Simulate lease already holding a leased delivery (fixture). Concurrently:
-	// A) RemoveChannelMember  B) try to insert another leased delivery (claim-like)
-	// then assert final 4-tuple is closed (no leased delivery survives).
-	var wg sync.WaitGroup
-	wg.Add(2)
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(seed.runtimeID))
+	if err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+
+	// Hold the shared revoke advisory so concurrent lease/remove serialize.
+	holdTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin hold tx: %v", err)
+	}
+	defer holdTx.Rollback(ctx)
+	if _, err := holdTx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(
+			hashtext('agent_channel_membership_revoke'),
+			hashtext($1 || ':' || $2)
+		)`, seed.channelID, seed.agentID); err != nil {
+		t.Fatalf("hold revoke advisory: %v", err)
+	}
+
+	leaseDone := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		// Brief delay so remove can interleave with claim-like insert.
-		time.Sleep(5 * time.Millisecond)
-		rec := httptest.NewRecorder()
-		testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, channelID, agentID))
-		if rec.Code != http.StatusOK {
-			t.Errorf("remove status=%d body=%s", rec.Code, rec.Body.String())
+		_, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+		// ErrNoRows is OK if remove terminalized first; other errors surface.
+		if errors.Is(err, pgx.ErrNoRows) {
+			leaseDone <- nil
+			return
 		}
+		leaseDone <- err
 	}()
-	go func() {
-		defer wg.Done()
-		// Claim-like: another leased delivery row for same event (poison if not revoked).
-		_, _ = testPool.Exec(ctx, `
-			INSERT INTO agent_event_delivery (
-				workspace_id, inbox_event_id, runtime_id, status
-			)
-			VALUES ($1, $2, $3, 'leased')
-			ON CONFLICT DO NOTHING`, testWorkspaceID, eventID, handlerTestRuntimeID(t))
-	}()
-	wg.Wait()
 
-	// Re-load primary delivery + any still-leased siblings.
-	tup := loadAgentChannelRevokeTuple(t, channelID, agentID, eventID, deliveryID, executionID)
-	t.Logf("interleaved 4-tuple: membership=%d event=%s/%s delivery=%s execution=%s",
-		tup.MembershipCount, tup.EventStatus, tup.EventOutcome, tup.DeliveryStatus, tup.ExecutionStatus)
+	// Observe whether lease blocks on the shared revoke advisory while we hold it.
+	// Fixed impl: blocks. Unfixed impl: may complete immediately (gate still fails later).
+	leaseFinishedEarly := false
+	select {
+	case err := <-leaseDone:
+		leaseFinishedEarly = true
+		t.Logf("lease returned while revoke advisory held: err=%v (shared lock order missing if it leased)", err)
+	case <-time.After(200 * time.Millisecond):
+		// expected on fixed impl: still blocked
+	}
 
-	var leasedCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)::int FROM agent_event_delivery
-		WHERE inbox_event_id = $1 AND status IN ('leased', 'processing')`, eventID).Scan(&leasedCount); err != nil {
-		t.Fatalf("count leased deliveries: %v", err)
+	// Release hold, then remove — production path under test.
+	if err := holdTx.Rollback(ctx); err != nil {
+		t.Fatalf("release hold: %v", err)
 	}
-	if leasedCount != 0 {
-		t.Errorf("leased|processing delivery count=%d after remove∩claim; want 0 (Barry race)", leasedCount)
+
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, seed.channelID, seed.agentID))
+	removeOK := rec.Code == http.StatusOK
+	if !removeOK {
+		t.Logf("RemoveChannelMember status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	assertRevokeFourTupleClosed(t, tup)
+
+	if !leaseFinishedEarly {
+		select {
+		case err := <-leaseDone:
+			if err != nil {
+				t.Logf("lease after advisory release: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("lease did not complete after advisory release")
+		}
+	}
+
+	// Also try a post-remove lease: must not resurrect active work.
+	if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		t.Logf("post-remove lease err=%v", err)
+	}
+
+	if !removeOK {
+		t.Fatalf("remove did not succeed (status=%d); cannot assert revoke 4-tuple — implementation blocker", rec.Code)
+	}
+
+	tup := loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID)
+	t.Logf("race final 4-tuple: membership=%d event=%s/%s/%s activeDelivery=%d runningExec=%d",
+		tup.MembershipCount, tup.EventStatus, tup.EventOutcome, tup.FailureReason,
+		tup.ActiveDelivery, tup.RunningExec)
+	assertMembershipRevokedFourTuple(t, tup)
 }
 
-// TestBoundary_DerivedAgent_CannotOutputToSourceOtherChannel locks Barry's
-// env-dispatch exception: derived agent may target origin channel only, not
-// every channel where the source agent is a member.
-func TestBoundary_DerivedAgent_CannotOutputToSourceOtherChannel(t *testing.T) {
+// TestBoundary_RemoveVsClaim_LeaseFirstThenRemove: production lease claims the
+// pending event, then remove must still close the 4-tuple (no leftover leased).
+func TestBoundary_RemoveVsClaim_LeaseFirstThenRemove(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	seed := seedBoundaryClaimRace(t)
+
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(seed.runtimeID))
+	if err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+	if err != nil {
+		t.Fatalf("production lease before remove: %v (fixture must be leasable)", err)
+	}
+	if !delivery.InboxEventID.Valid {
+		t.Fatal("lease returned empty delivery")
+	}
+
+	// Optional: start a running execution as claim path would after lease.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_execution (
+			id, source_kind, source_event_id, source,
+			workspace_id, runtime_id, agent_id, status
+		)
+		VALUES ($1, 'inbox', $2, 'chat', $3, $4, $5, 'running')
+	`, uuid.NewString(), seed.eventID, testWorkspaceID, seed.runtimeID, seed.agentID); err != nil {
+		t.Fatalf("seed running execution after lease: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, seed.channelID, seed.agentID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("RemoveChannelMember status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	tup := loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID)
+	t.Logf("lease-then-remove 4-tuple: membership=%d event=%s/%s/%s activeDelivery=%d runningExec=%d",
+		tup.MembershipCount, tup.EventStatus, tup.EventOutcome, tup.FailureReason,
+		tup.ActiveDelivery, tup.RunningExec)
+	assertMembershipRevokedFourTuple(t, tup)
+}
+
+// TestBoundary_DerivedAgent_OriginAllow_OtherDeny: pair of necessary controls.
+// Cross-origin DENY + current origin ALLOW. Surface read stays DENY.
+func TestBoundary_DerivedAgent_OriginAllow_OtherDeny(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 
 	sourceID := createHandlerTestAgent(t, "BoundarySourceAgent", []byte("[]"))
-	// Derived agent with source_agent_id = sourceID
 	var derivedID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
@@ -248,20 +416,21 @@ func TestBoundary_DerivedAgent_CannotOutputToSourceOtherChannel(t *testing.T) {
 
 	originChannel := seedChannelForTest(t, "boundary-origin-"+uuid.NewString(), testUserID)
 	otherChannel := seedChannelForTest(t, "boundary-other-"+uuid.NewString(), testUserID)
-	// Source is member of BOTH channels (the dangerous wide surface).
 	for _, ch := range []string{originChannel, otherChannel} {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 			VALUES ($1, $2, 'agent', $3)
 			ON CONFLICT DO NOTHING`, ch, testWorkspaceID, sourceID); err != nil {
-			t.Fatalf("seed source member on %s: %v", ch, err)
+			t.Fatalf("seed source member: %v", err)
 		}
 	}
-	// Derived is NOT a direct member of either channel (env-dispatch shape).
 
-	var otherName string
+	var originName, otherName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, originChannel).Scan(&originName); err != nil {
+		t.Fatalf("origin name: %v", err)
+	}
 	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, otherChannel).Scan(&otherName); err != nil {
-		t.Fatalf("load other channel name: %v", err)
+		t.Fatalf("other name: %v", err)
 	}
 
 	origin := chatOutputOrigin{
@@ -270,29 +439,24 @@ func TestBoundary_DerivedAgent_CannotOutputToSourceOtherChannel(t *testing.T) {
 		agentID:     parseUUID(derivedID),
 	}
 
-	// Cross-channel: #other must be rejected even though source is a member there.
-	_, err := testHandler.resolveChannelOutputTarget(ctx, origin, otherName)
-	if err == nil {
-		t.Fatalf("derived agent resolved #other (source also member there); must deny cross-origin channel (Barry env exception)")
+	// 1) HARD: other channel DENY even though source is a member there.
+	if _, err := testHandler.resolveChannelOutputTarget(ctx, origin, otherName); err == nil {
+		t.Fatal("derived resolved #other; must DENY cross-origin channel")
 	}
 
-	// Sanity: origin channel by name should still be allowed once source is on origin
-	// (narrow exception). If product later requires origin-only without source membership
-	// on target, this may change — keep as positive control for "origin is OK".
-	var originName string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, originChannel).Scan(&originName); err != nil {
-		t.Fatalf("load origin name: %v", err)
-	}
+	// 2) HARD: origin channel ALLOW via narrow env-dispatch exception.
 	if _, err := testHandler.resolveChannelOutputTarget(ctx, origin, originName); err != nil {
-		// Origin may also fail if exception requires more than source membership
-		// (e.g. current event proof). Log; cross-channel deny is the hard contract.
-		t.Logf("origin resolve err=%v (acceptable if exception not fully wired; cross-channel deny is required)", err)
+		t.Fatalf("derived must ALLOW origin channel #%s via source membership; err=%v", originName, err)
+	}
+
+	// 3) Surface read DENY (direct membership only).
+	if testHandler.channelHasAgentMember(ctx, parseUUID(testWorkspaceID), parseUUID(originChannel), parseUUID(derivedID)) {
+		t.Fatal("derived must not have direct membership (surface read DENY)")
 	}
 }
 
-// TestBoundary_SourceAgentFallback_DoesNotGrantSurfaceRead documents that
-// source_agent_id must NOT widen general surface access (list/members/attach).
-// Pure membership: derived without direct membership has no channel surface.
+// TestBoundary_SourceAgentFallback_DoesNotGrantSurfaceRead keeps general surface
+// read on direct membership only.
 func TestBoundary_SourceAgentFallback_DoesNotGrantSurfaceRead(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -322,27 +486,10 @@ func TestBoundary_SourceAgentFallback_DoesNotGrantSurfaceRead(t *testing.T) {
 		t.Fatalf("seed source member: %v", err)
 	}
 
-	// Direct membership gate only — mirrors agentHasSurfaceAccess contract.
-	var derivedMember bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM channel_member
-			WHERE channel_id = $1 AND workspace_id = $2
-			  AND member_type = 'agent' AND member_id = $3
-		)`, channelID, testWorkspaceID, derivedID).Scan(&derivedMember); err != nil {
-		t.Fatalf("query derived membership: %v", err)
-	}
-	if derivedMember {
-		t.Fatal("derived should not be direct member")
-	}
-
-	// Surface read = direct membership only (Ronan agentHasSurfaceAccess).
 	ws := parseUUID(testWorkspaceID)
 	ch := parseUUID(channelID)
 	ag := parseUUID(derivedID)
 	if testHandler.channelHasAgentMember(ctx, ws, ch, ag) {
 		t.Fatal("derived direct membership true; surface read must be false")
 	}
-	// source_agent wide fallback must not widen list/members/attach — only
-	// narrow output exception on origin channel (separate test).
 }

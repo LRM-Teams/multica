@@ -1562,12 +1562,13 @@ const channelOwnerChangedCode = "owner_changed"
 //
 // so tests can force transfer-first / true lock contention.
 var (
-	testRoleMutationEntryGate       chan struct{}
-	testRoleMutationEntryEntered    int32
-	testRoleMutationPreBeginGate    chan struct{}
-	testRoleMutationPreBeginEntered int32
-	testRoleMutationPostLockGate    chan struct{}
-	testRoleMutationPostLockEntered int32
+	testRoleMutationEntryGate          chan struct{}
+	testRoleMutationEntryEntered       int32
+	testRoleMutationPreBeginGate       chan struct{}
+	testRoleMutationPreBeginEntered    int32
+	testRoleMutationPostLockGate       chan struct{}
+	testRoleMutationPostLockEntered    int32
+	testRoleMutationLockAttemptEntered int32
 )
 
 func roleMutationEntryBarrier() {
@@ -1594,6 +1595,12 @@ func roleMutationPostLockBarrier() {
 	<-testRoleMutationPostLockGate
 }
 
+// noteRoleMutationLockAttempt fires immediately before channel FOR UPDATE so
+// tests can prove a waiter entered the lock attempt (not only pre-begin).
+func noteRoleMutationLockAttempt() {
+	atomic.AddInt32(&testRoleMutationLockAttemptEntered, 1)
+}
+
 type updateChannelMemberRoleRequest struct {
 	Role string `json:"role"`
 }
@@ -1606,6 +1613,7 @@ func (h *Handler) lockOrdinaryGroupChannelTx(
 	workspaceID string,
 	channelID pgtype.UUID,
 ) error {
+	noteRoleMutationLockAttempt()
 	var kind string
 	var systemKey pgtype.Text
 	var archivedAt pgtype.Timestamptz

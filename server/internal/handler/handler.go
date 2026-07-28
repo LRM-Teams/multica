@@ -153,16 +153,14 @@ type Handler struct {
 	Metrics *obsmetrics.BusinessMetrics
 	// Test-only injectors — production leaves these nil/empty. Per-handler so
 	// parallel tests with separate Handler values cannot cross-contaminate.
-	TestForceOwnerReadErr         error  // actorIsChannelOwnerRead returns this (non-NoRows → 500)
-	TestFailSystemEventForChannel string // channel id that forces system-event insert failure
-	channelUnmentionedMessages    uint64
-	channelUnmentionedFullWakes   uint64
-	PATCache                      *auth.PATCache
-	DaemonTokenCache              *auth.DaemonTokenCache
-	MembershipCache               *auth.MembershipCache
-	WebhookRateLimiter            WebhookRateLimiter
-	WebhookIPRateLimiter          WebhookRateLimiter
-	CloudRuntime                  cloudRuntimeProxy
+	channelUnmentionedMessages  uint64
+	channelUnmentionedFullWakes uint64
+	PATCache                    *auth.PATCache
+	DaemonTokenCache            *auth.DaemonTokenCache
+	MembershipCache             *auth.MembershipCache
+	WebhookRateLimiter          WebhookRateLimiter
+	WebhookIPRateLimiter        WebhookRateLimiter
+	CloudRuntime                cloudRuntimeProxy
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host

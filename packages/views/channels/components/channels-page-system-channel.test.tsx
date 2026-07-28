@@ -678,6 +678,89 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     });
   });
 
+  // #839 — the toast is the announcement, NOT the record. Dismissing it (or its
+  // 4s default lifetime expiring) must not erase the fact that the removal
+  // failed, so the failure also lands in the target's own row.
+  it("a failed removal leaves a durable in-row notice — surviving the toast", async () => {
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+
+    // The row itself records it — this is what remains after the toast is gone.
+    const notice = await screen.findByTestId("channel-members-row-remove-failed");
+    expect(notice).toHaveTextContent("Couldn't remove this member");
+    expect(screen.getByTestId("channel-members-row-remove-retry")).toBeInTheDocument();
+    // Scoped to the failed member's row, not a global banner.
+    expect(
+      notice.closest("[data-testid='channel-members-row']"),
+    ).not.toBeNull();
+  });
+
+  it("retry re-opens the confirmation — it never removes on one click (#839)", async () => {
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+    await screen.findByTestId("channel-members-row-remove-failed");
+
+    const callsAfterFailure = (
+      apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>
+    ).mock.calls.length;
+
+    fireEvent.click(screen.getByTestId("channel-members-row-remove-retry"));
+
+    // The confirmation is back and NOTHING was requested by the retry click —
+    // the second confirmation stays the destructive commitment point.
+    await screen.findByRole("button", { name: "Confirm remove" });
+    expect(
+      (apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(callsAfterFailure);
+  });
+
+  it("a successful retry clears the notice — the row (and its state) go together (#839)", async () => {
+    const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+    await screen.findByTestId("channel-members-row-remove-failed");
+
+    // Retry → confirm again, this time the request succeeds.
+    remove.mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByTestId("channel-members-row-remove-retry"));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("channel-members-row-remove-failed")).toBeNull();
+    });
+  });
+
+  it("the in-row notice clears only when the user dismisses it (#839)", async () => {
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+    await screen.findByTestId("channel-members-row-remove-failed");
+
+    fireEvent.click(screen.getByTestId("channel-members-row-remove-dismiss"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("channel-members-row-remove-failed")).toBeNull();
+    });
+  });
+
   it("an ARCHIVED group exposes no member-management menu at all", async () => {
     channelsFixture.current = DEFAULT_CHANNELS.map((c) =>
       (c as { id: string }).id === "chan-random"

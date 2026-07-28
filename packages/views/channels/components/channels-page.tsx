@@ -238,6 +238,8 @@ import {
   useProfilePanelWidth,
 } from "../../layout/use-profile-panel-width";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
+import { memberFailureKey } from "./member-failure-key";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
@@ -552,6 +554,16 @@ export function ChannelsPage({
     if (!isMobile && !isHeaderActionsCompact) setMobilePanel(null);
   }, [isMobile, isHeaderActionsCompact]);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<ChannelMember | null>(null);
+  // #839 — durable in-row record of a failed removal, keyed by member identity.
+  // The toast is the immediate announcement; it is NOT storage — it can be
+  // dismissed (and expires on its own), and losing it must not erase the fact
+  // that the removal failed (Iris). No timer: this clears only when the member
+  // is actually gone (a successful retry drops the row with it) or when the user
+  // explicitly dismisses the notice. Per member, so one failure cannot silently
+  // replace another unresolved one.
+  const [removeFailedKeys, setRemoveFailedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   // A route transition can remount this page between `/channels/[id]` and the
   // base `/channels` route. Preserve the mobile Back intent long enough for
   // that destination mount, then clear it so a later reload still restores the
@@ -2039,7 +2051,7 @@ export function ChannelsPage({
       mutate: sendMessage.mutate,
       onCommitted: () => {},
       onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+        if (kind === "conflict") showErrorToast(t(($) => $.composer.send_failed));
       },
     });
     if (dispatched) {
@@ -2124,7 +2136,7 @@ export function ChannelsPage({
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {},
       onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+        if (kind === "conflict") showErrorToast(t(($) => $.thread.send_failed));
       },
     });
     if (dispatched) {
@@ -2391,6 +2403,28 @@ export function ChannelsPage({
   // LRM-211 — Channel details Members tab reuses the same list as the
   // Members dialog (no dual-tab Popover). LRM-225 — match dialog chrome
   // (search + Add people colors) so mobile/desktop don't diverge.
+  // #839 — per-member failure notice. `onRetry` re-opens the named confirmation
+  // (never calls the mutation): the confirmation stays the single destructive
+  // commitment point, so a retry can never remove someone with one click.
+  const removeFailureFor = useCallback(
+    (m: ChannelMember) => {
+      if (!removeFailedKeys.has(memberFailureKey(active?.id ?? "", m))) return undefined;
+      return {
+        message: t(($) => $.members.remove_failed),
+        retryLabel: t(($) => $.members.remove_retry),
+        dismissLabel: t(($) => $.members.remove_failed_dismiss),
+        onRetry: () => setRemoveMemberTarget(m),
+        onDismiss: () =>
+          setRemoveFailedKeys((prev) => {
+            const next = new Set(prev);
+            next.delete(memberFailureKey(active?.id ?? "", m));
+            return next;
+          }),
+      };
+    },
+    [removeFailedKeys, active?.id, t],
+  );
+
   const memberPanelBody = active ? (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-4 py-3">
@@ -2435,6 +2469,7 @@ export function ChannelsPage({
           handleOpenMemberPanel(userId);
         }}
         onRemove={handleRemoveMemberClick}
+        removeFailureFor={removeFailureFor}
         dmPending={createOrFindDm.isPending}
         className="min-h-0 flex-1"
       />
@@ -3886,6 +3921,9 @@ export function ChannelsPage({
               disabled={removeMember.isPending}
               onClick={() => {
                 if (!active || !removeMemberTarget) return;
+                // Capture: `removeMemberTarget` is cleared in onSettled, so the
+                // callbacks must not read it back.
+                const target = removeMemberTarget;
                 removeMember.mutate(
                   {
                     channelId: active.id,
@@ -3896,7 +3934,22 @@ export function ChannelsPage({
                     // #833 — same reasoning as the desktop path: closing the
                     // sheet on a failed removal would look exactly like a
                     // successful one.
-                    onError: () => toast.error(t(($) => $.members.remove_failed)),
+                    onError: () => {
+                      showErrorToast(t(($) => $.members.remove_failed));
+                      // #839 — also record it on the row so the failure survives
+                      // the toast being dismissed or expiring.
+                      setRemoveFailedKeys((prev) =>
+                        new Set(prev).add(memberFailureKey(active.id, target)),
+                      );
+                    },
+                    // A successful removal drops the row; clear any stale mark so
+                    // a later re-add can't inherit it.
+                    onSuccess: () =>
+                      setRemoveFailedKeys((prev) => {
+                        const next = new Set(prev);
+                        next.delete(memberFailureKey(active.id, target));
+                        return next;
+                      }),
                     onSettled: () => setRemoveMemberTarget(null),
                   },
                 );

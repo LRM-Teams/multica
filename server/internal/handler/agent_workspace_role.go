@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -52,6 +53,7 @@ func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
 
 	var actorRole string
 	err = tx.QueryRow(r.Context(), `
@@ -92,6 +94,8 @@ func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var updatedAgent db.Agent
+	var eventPayload map[string]any
 	if previousRole != newRole {
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE agent
@@ -124,6 +128,26 @@ func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to record agent workspace role")
 			return
 		}
+
+		updatedAgent, err = qtx.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+			ID:          agentID,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load updated agent")
+			return
+		}
+		resp := agentToResponse(updatedAgent)
+		if home, ok := h.loadAgentHomeChannelID(r.Context(), updatedAgent.ID); ok {
+			homeID := uuidToString(home)
+			resp.HomeChannelID = &homeID
+		}
+		if err := h.attachAgentSkills(r.Context(), &resp, updatedAgent.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load agent skills")
+			return
+		}
+		h.attachAgentRuntimeName(r.Context(), &resp)
+		eventPayload = map[string]any{"agent": broadcastAgentResponse(resp)}
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
@@ -131,10 +155,14 @@ func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if previousRole != newRole {
-		h.publish(protocol.EventAgentStatus, uuidToString(workspaceID), "member", userID, map[string]any{
-			"agent_id":       uuidToString(agentID),
-			"workspace_role": newRole,
-		})
+		h.publishAgentVisibilityEvent(
+			protocol.EventAgentStatus,
+			uuidToString(workspaceID),
+			"member",
+			userID,
+			updatedAgent,
+			eventPayload,
+		)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",

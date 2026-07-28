@@ -73,6 +73,7 @@ type AgentResponse struct {
 	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
 	// the channel-panel config tab (and its any-member editability) off this.
 	ManagedRole        string `json:"managed_role,omitempty"`
+	WorkspaceRole      string `json:"workspace_role"`
 	MaxConcurrentTasks int32  `json:"max_concurrent_tasks"`
 	Model              string `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
@@ -151,6 +152,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		CustomEnvKeyCount:  envKeyCount,
 		Visibility:         a.Visibility,
 		Status:             a.Status,
+		WorkspaceRole:      a.WorkspaceRole,
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
 		Model:              a.Model.String,
 		ThinkingLevel:      a.ThinkingLevel.String,

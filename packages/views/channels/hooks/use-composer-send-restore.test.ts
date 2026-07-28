@@ -13,7 +13,7 @@ describe("useComposerSendRestore", () => {
 
       expect(persist).toHaveBeenCalledExactlyOnceWith("hello");
       expect(result.current.nonce).toBe(nonceBefore + 1);
-      expect(result.current.error).toEqual({ conflicted: false });
+      expect(result.current.error).toEqual({ conflicted: false, tooLong: false });
     });
 
     it("keeps the composer's new text (no auto-cover) and flags conflicted", () => {
@@ -26,7 +26,17 @@ describe("useComposerSendRestore", () => {
       // Iris A6 hard rule: never auto-cover the user's new input.
       expect(persist).not.toHaveBeenCalled();
       expect(result.current.nonce).toBe(nonceBefore);
-      expect(result.current.error).toEqual({ conflicted: true });
+      expect(result.current.error).toEqual({ conflicted: true, tooLong: false });
+    });
+
+    it("flags tooLong (413) while still restoring the text — shorten-and-retry, not lost", () => {
+      const persist = vi.fn();
+      const { result } = renderHook(() => useComposerSendRestore(persist));
+
+      act(() => result.current.onFailed("way too long", "way too long", true));
+
+      expect(persist).toHaveBeenCalledExactlyOnceWith("way too long");
+      expect(result.current.error).toEqual({ conflicted: false, tooLong: true });
     });
 
     it("restorePrevious puts the kept-back text back and clears the error", () => {
@@ -66,7 +76,7 @@ describe("useComposerSendRestore", () => {
       act(() => result.current.onFailed("thread reply", "thread reply"));
 
       expect(result.current.restoreText).toBe("thread reply");
-      expect(result.current.error).toEqual({ conflicted: false });
+      expect(result.current.error).toEqual({ conflicted: false, tooLong: false });
     });
 
     it("does not touch restoreText on conflict", () => {
@@ -75,7 +85,7 @@ describe("useComposerSendRestore", () => {
       act(() => result.current.onFailed("failed", "typed something else"));
 
       expect(result.current.restoreText).toBe("");
-      expect(result.current.error).toEqual({ conflicted: true });
+      expect(result.current.error).toEqual({ conflicted: true, tooLong: false });
     });
   });
 

@@ -7,7 +7,7 @@ import { useComposeSendIntent } from "./use-compose-send-intent";
  * send-lock 3-way — a 200-dedup success — is silent (no error at all), so it is
  * not represented here; it flows through the commit path instead.
  */
-export type SendFailureKind = "conflict" | "retry";
+export type SendFailureKind = "conflict" | "retry" | "too_long";
 
 /**
  * Classify a failed send into its recovery branch (#207 send-lock 3-way).
@@ -21,6 +21,10 @@ export type SendFailureKind = "conflict" | "retry";
  */
 export function classifySendFailure(err: unknown): SendFailureKind {
   if (err instanceof ApiError && err.status === 409) return "conflict";
+  // #1276 413 fast-follow: the payload is too large — a plain retry of the same
+  // text just fails again, so the recovery guides the user to shorten it (the
+  // text is preserved + editable like every non-success outcome).
+  if (err instanceof ApiError && err.status === 413) return "too_long";
   return "retry";
 }
 

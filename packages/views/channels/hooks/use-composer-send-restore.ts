@@ -39,11 +39,13 @@ export function useComposerSendRestore(persist?: (text: string) => void) {
    * to send; `current` is the composer's live text at failure time.
    */
   const onFailed = useCallback(
-    (attempted: string, current: string) => {
+    (attempted: string, current: string, tooLong = false) => {
       const conflicted = current.length > 0 && current !== attempted;
       failedContentRef.current = attempted;
       if (!conflicted) putBack(attempted);
-      setError({ conflicted });
+      // #1276 413 fast-follow: a too-large payload surfaces a shorten-and-retry
+      // message with no plain Retry (a raw retry just 413s again).
+      setError({ conflicted, tooLong });
     },
     [putBack],
   );

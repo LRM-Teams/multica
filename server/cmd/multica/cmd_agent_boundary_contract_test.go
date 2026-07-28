@@ -703,7 +703,7 @@ func TestBoundary_AttachmentContent_DocumentsDedicatedDownloadURL(t *testing.T) 
 }
 
 // TestBoundary_IssueList_HitsDedicatedAgentAPI asserts issue list uses
-// GET /api/agent/issues (N-gap until CLI mat_* gate).
+// GET /api/agent/issues under mat_* credentials.
 func TestBoundary_IssueList_HitsDedicatedAgentAPI(t *testing.T) {
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -749,7 +749,7 @@ func TestBoundary_IssueList_HitsDedicatedAgentAPI(t *testing.T) {
 }
 
 // TestBoundary_IssueCommentAdd_HitsDedicatedAgentAPI asserts comment create
-// posts to POST /api/agent/issues/{id}/comments (N-gap: list gated, write not).
+// posts to POST /api/agent/issues/{id}/comments under mat_*.
 func TestBoundary_IssueCommentAdd_HitsDedicatedAgentAPI(t *testing.T) {
 	wantGet := "/api/agent/issues/" + boundaryContractIssueID
 	wantPost := wantGet + "/comments"
@@ -877,9 +877,147 @@ func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_IssueLabelsList_HitsDedicatedAgentAPI asserts issue labels list
+// uses GET /api/agent/issues/{id}/labels (Ronan tip 2b6c0dde4).
+func TestBoundary_IssueLabelsList_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantLabels := wantGet + "/labels"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == wantLabels:
+			_ = json.NewEncoder(w).Encode(map[string]any{"labels": []any{}})
+		default:
+			http.Error(w, "human issue/label path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+	if err := runIssueLabelList(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueLabelList: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "GET "+wantLabels {
+			found = true
+		}
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") || strings.HasPrefix(path, "/api/labels") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want GET %s", gotPaths, wantLabels)
+	}
+}
+
+// TestBoundary_IssueSubscribersList_HitsDedicatedAgentAPI asserts subscribers
+// list uses GET /api/agent/issues/{id}/subscribers.
+func TestBoundary_IssueSubscribersList_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantSubs := wantGet + "/subscribers"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == wantSubs:
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			http.Error(w, "human subscriber path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := runIssueSubscriberList(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueSubscriberList: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "GET "+wantSubs {
+			found = true
+		}
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want GET %s", gotPaths, wantSubs)
+	}
+}
+
+// TestBoundary_IssueTaskRuns_HitsDedicatedAgentAPI asserts task-runs list uses
+// GET /api/agent/issues/{id}/task-runs under mat_*.
+func TestBoundary_IssueTaskRuns_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantRuns := wantGet + "/task-runs"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == wantRuns:
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			http.Error(w, "human task-runs path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "runs"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+	if err := runIssueRuns(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueRuns: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "GET "+wantRuns {
+			found = true
+		}
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want GET %s", gotPaths, wantRuns)
+	}
+}
+
 // TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets is a living map of
 // necessary capabilities → dedicated paths (Ronan table). Fails if a required
 // capability loses its dedicated target string (typo / table drift).
+// Squad is product-removed (Frank) — must not appear.
 func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 	type row struct {
 		capability string
@@ -892,16 +1030,26 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"channel list", []string{"/api/agent/channels"}},
 		{"channel members", []string{"/api/agent/channels/"}},
 		{"channel mute", []string{"/api/agent/channels/"}},
-		{"issue suite", []string{"/api/agent/issues"}},
+		{"issue list/get/create/update", []string{"/api/agent/issues"}},
+		{"issue comments", []string{"/api/agent/issues/", "/comments"}},
+		{"issue labels on-issue", []string{"/api/agent/issues/", "/labels"}},
+		{"issue subscribers", []string{"/api/agent/issues/", "/subscribers"}},
+		{"issue task-runs/rerun/channel", []string{"/api/agent/issues/", "/task-runs"}},
 		{"project resource read", []string{"/api/agent/projects/"}},
 		{"attachment view/upload", []string{"/api/agent/attachments", "/api/agent/upload-file"}},
-		{"directory/workspace", []string{"/api/agent/directory", "/api/agent/workspace"}},
+		{"directory agents", []string{"/api/agent/agents"}},
+		{"workspace get", []string{"/api/agent/workspace"}},
 	}
 	for _, r := range table {
 		if r.capability == "" || len(r.dedicated) == 0 {
 			t.Fatalf("bad row: %+v", r)
 		}
 		for _, p := range r.dedicated {
+			// Allow suffix fragments used as table docs (e.g. "/labels") once a
+			// dedicated prefix already established the /api/agent root.
+			if strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "/api/") {
+				continue
+			}
 			if !strings.HasPrefix(p, "/api/agent/") {
 				t.Fatalf("%s dedicated path %q must be under /api/agent/", r.capability, p)
 			}

@@ -78,6 +78,9 @@ func (h *Handler) loadAttachmentForAgent(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
+	// Barry #801 anti-IDOR: missing and not-visible both 404 so a holder of
+	// the id cannot probe existence. Exact 403 is only for principal/auth
+	// shape failures (wrong API surface), not visibility deny.
 	if !h.agentAttachmentVisible(r.Context(), ws, agentID, att.ID) {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false

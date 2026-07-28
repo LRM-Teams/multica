@@ -25,7 +25,7 @@ QA_PREVIEW_TOKEN=...                 # secret, never printed
 QA_PREVIEW_WORKSPACE_SLUG=multica-qa
 ```
 
-The helper opens `/login`, writes `QA_PREVIEW_TOKEN` to `localStorage.multica_token`, and navigates to `/<workspace>/issues`. This matches the legacy token mode that the web app still accepts for automated browser sessions.
+The helper seeds `QA_PREVIEW_TOKEN` into `localStorage.multica_token` before the first app document evaluates, then navigates to `/<workspace>/issues`. This matches the legacy token mode that the web app still accepts for automated browser sessions and avoids racing the web shell's cookie-vs-token auth decision.
 
 ### Fallback: DB OTP read
 

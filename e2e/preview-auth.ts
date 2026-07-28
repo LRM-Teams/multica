@@ -35,8 +35,10 @@ export async function loginAsPreviewQA(page: Page, opts: PreviewLoginOptions = {
   const token = opts.token ?? process.env.QA_PREVIEW_TOKEN;
 
   if (token) {
-    await page.goto("/login");
-    await page.evaluate((t) => localStorage.setItem("multica_token", t), token);
+    // Seed token mode before the first app document evaluates. The web shell
+    // decides cookie-vs-token auth during initial render, so setting localStorage
+    // after /login loads can race and leave the session in cookie mode.
+    await page.addInitScript((t) => localStorage.setItem("multica_token", t), token);
     await page.goto(pathForWorkspace(workspaceSlug));
     await page.waitForURL("**/issues", { timeout: 10000 });
     return workspaceSlug;

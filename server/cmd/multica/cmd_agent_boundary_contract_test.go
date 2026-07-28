@@ -719,6 +719,51 @@ func TestBoundary_AttachmentContent_DocumentsDedicatedDownloadURL(t *testing.T) 
 	}
 }
 
+// TestBoundary_IssueMetadataList_HitsDedicatedAgentAPI asserts metadata list
+// uses GET /api/agent/issues/{id}/metadata.
+func TestBoundary_IssueMetadataList_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantMeta := wantGet + "/metadata"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case wantMeta:
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			http.Error(w, "human issue path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := runIssueMetadataList(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueMetadataList: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "GET "+wantMeta {
+			found = true
+		}
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want GET %s", gotPaths, wantMeta)
+	}
+}
+
 // TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI asserts resource list
 // uses GET /api/agent/projects/{id}/resources.
 func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {

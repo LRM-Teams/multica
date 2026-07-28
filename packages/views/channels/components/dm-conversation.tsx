@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  channelAttachmentsOptions,
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
@@ -37,6 +38,7 @@ import type {
   ChannelMessageSearchResult,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
@@ -69,6 +71,7 @@ import {
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
+import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
@@ -464,6 +467,14 @@ function DmChannelConversation({
   const [selectedAgentPanelSnapshot, setSelectedAgentPanelSnapshot] =
     useState<AgentPanelIdentitySnapshot | null>(null);
   const [selectedMemberPanelId, setSelectedMemberPanelId] = useState<string | null>(null);
+  // LRM-682 — DM main-area view switch: 聊天 | 文件 (no Issues — DMs have no
+  // issue context). DmConversation remounts per DM (key={source:id} at the
+  // call site), so switching conversations lands back on chat for free.
+  const [dmView, setDmView] = useState<"chat" | "files">("chat");
+  // Files tab count badge. Same queryOptions as ChannelFilesPanel, so the
+  // panel shares this cache entry when the tab opens (no double fetch).
+  const { data: dmAttachments } = useQuery(channelAttachmentsOptions(channelId));
+  const dmFilesCount = dmAttachments?.length ?? 0;
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
     setSelectedMemberPanelId(null);
@@ -1303,6 +1314,35 @@ function DmChannelConversation({
           )
         }
       />
+      {/* LRM-682 — DM main-area tab switch: 聊天 (message list + composer) and
+          文件 (DM attachments via the shared ChannelFilesPanel), mirroring the
+          group-channel tab bar (#562/LRM-675). No Issues tab: a 1:1 has no
+          issue context (LRM-681 design lock). The tab bar is the single Files
+          entry — the header files icon stays removed (LRM-675). */}
+      <Tabs
+        value={dmView}
+        onValueChange={(value) => setDmView(value as "chat" | "files")}
+        className="flex flex-1 min-h-0 flex-col gap-0"
+      >
+        <div className="shrink-0 border-b border-border/40 px-4">
+          <TabsList variant="line" className="h-auto">
+            <TabsTrigger value="chat" className="flex-none px-3 py-2">
+              {t(($) => $.view_tabs.dm_chat)}
+            </TabsTrigger>
+            <TabsTrigger value="files" className="flex-none px-3 py-2">
+              {t(($) => $.view_tabs.files)}
+              {dmFilesCount > 0 && (
+                <span className="ml-1.5 text-xs font-normal tabular-nums text-muted-foreground">
+                  {dmFilesCount}
+                </span>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="files" className="flex flex-1 min-h-0 flex-col text-base">
+          <ChannelFilesPanel channelId={channelId} wide />
+        </TabsContent>
+        <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
       {dm.mode === "agent_pair" && dm.a2a_control && (
         <AgentDMControlStrip channelId={channelId} control={dm.a2a_control} />
       )}
@@ -1515,6 +1555,8 @@ function DmChannelConversation({
       {dm.peer.type === "agent" && !supervisedReadOnly ? (
         <DmAgentBubble agentId={dm.peer.id} agentName={dm.peer.name} />
       ) : null}
+        </TabsContent>
+      </Tabs>
     </main>
   );
 

@@ -84,11 +84,12 @@ func TestWebPushEndpointHashDoesNotExposeEndpoint(t *testing.T) {
 func TestWebPushPayloadLogFields(t *testing.T) {
 	userID := pgtype.UUID{Bytes: [16]byte{0x12, 0x34}, Valid: true}
 	fields := webPushPayloadLogFields(userID, webPushInboxPayload{
-		ItemID:    "msg-1",
-		ChannelID: "ch-1",
+		WorkspaceID: "ws-1",
+		ItemID:      "msg-1",
+		ChannelID:   "ch-1",
 	})
 
-	want := []any{"recipient_id", "12340000-0000-0000-0000-000000000000", "message_id", "msg-1", "channel_id", "ch-1"}
+	want := []any{"recipient_id", "12340000-0000-0000-0000-000000000000", "workspace_id", "ws-1", "message_id", "msg-1", "channel_id", "ch-1"}
 	if !reflect.DeepEqual(fields, want) {
 		t.Fatalf("log fields = %#v, want %#v", fields, want)
 	}

@@ -888,4 +888,15 @@ func TestBuildChatPromptIncludesPerTurnInitiator(t *testing.T) {
 	if !strings.Contains(out, "Related issue for this turn: issue-42") {
 		t.Fatalf("missing per-turn issue in prompt:\n%s", out)
 	}
+	// Malicious email must not inject markdown headings (same sanitizer as brief).
+	mal := buildChatPrompt(Task{
+		ChatSessionID:  "chat-1",
+		ChatMessage:    "hi",
+		InitiatorName:  "Eve",
+		InitiatorType:  "member",
+		InitiatorEmail: "alice@example.com\n## INJECTED",
+	}, "")
+	if strings.Contains(mal, "## INJECTED") {
+		t.Fatalf("unsanitized email injection in prompt:\n%s", mal)
+	}
 }

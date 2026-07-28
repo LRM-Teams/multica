@@ -26,6 +26,7 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 	out.NewCommentCount = 0
 	out.NewCommentsSince = ""
 	out.AssignmentSnapshot = nil
+	out.SkillDirSlugByName = nil // resolved only after FS plan; not input digest
 	// ChatSessionID / Directed / ChannelID / ManagedRole / memories / skills stay.
 	return out
 }

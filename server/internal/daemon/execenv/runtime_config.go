@@ -114,6 +114,12 @@ func sanitizeEmailForBrief(email string) string {
 	return email
 }
 
+// SanitizeEmailForBrief is the shared sanitizer for AGENTS brief and per-turn
+// chat envelope (option A: same path, no second implementation).
+func SanitizeEmailForBrief(email string) string {
+	return sanitizeEmailForBrief(email)
+}
+
 func sanitizeInlineCodeForBrief(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.ReplaceAll(value, "`", "")
@@ -1016,7 +1022,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
 
-	renderSkillIndex(&b, provider, ctx.AgentSkills)
+	renderSkillIndexWithSlugs(&b, provider, ctx.AgentSkills, ctx.SkillDirSlugByName)
 
 	b.WriteString("## Mentions\n\n")
 	b.WriteString("Use plain `@handle` / `@display name` text only when you intentionally want the platform to create a structured mention action:\n\n")
@@ -1237,7 +1243,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	renderRepositoryContext(b, ctx)
 	renderProjectContext(b, ctx)
-	renderSkillIndex(b, provider, chatRuntimeSkills(ctx))
+	renderSkillIndexWithSlugs(b, provider, chatRuntimeSkills(ctx), ctx.SkillDirSlugByName)
 
 	b.WriteString("## Mention Safety\n\n")
 	b.WriteString("@mentions are side-effecting actions, not just formatting: `@human` can notify a person and `@agent` can enqueue a new agent run after the server resolves it. Use plain names in prose. Only include `@` when you are intentionally notifying, escalating, or delegating.\n\n")
@@ -1333,65 +1339,65 @@ func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasProje
 }
 
 func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {
+	renderSkillIndexWithSlugs(b, provider, skills, nil)
+}
+
+// renderSkillIndexWithSlugs uses actualDirSlugByName when set so brief index,
+// disk writer, and receipt share one resolved plan (Barry: no second sanitize).
+func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []SkillContextForEnv, actualDirSlugByName map[string]string) {
 	if len(skills) == 0 {
 		return
 	}
-	{
-		b.WriteString("## Skills\n\n")
-		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
-		b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
+	b.WriteString("## Skills\n\n")
+	b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
+	b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
+	switch provider {
+	case "claude", "codebuddy":
+		b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
+	case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
+		b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
+	case "gemini", "hermes":
+		b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+	default:
+		b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+	}
+	for _, skill := range skills {
+		slug := sanitizeSkillName(skill.Name)
+		if actualDirSlugByName != nil {
+			if s, ok := actualDirSlugByName[skill.Name]; ok && s != "" {
+				slug = s
+			}
+		}
+		location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", slug)
 		switch provider {
 		case "claude", "codebuddy":
-			// Claude/CodeBuddy can also discover skills from .claude/skills/.
-			b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
-		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
-			// These providers also write provider-native skill dirs (see
-			// resolveSkillsDir / hydrateCodexSkills). Still require the agent
-			// to open SKILL.md when the index matches — native discovery is
-			// unreliable across CLI versions and session reuse.
-			b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
-		case "gemini", "hermes":
-			// Gemini reads GEMINI.md directly. Hermes has no native skill
-			// discovery path wired up in resolveSkillsDir; both fall back to
-			// referencing the files explicitly under .agent_context/skills/.
-			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
-		default:
-			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+			location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
+		case "codex":
+			location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
+		case "copilot":
+			location = fmt.Sprintf(".github/skills/%s/SKILL.md", slug)
+		case "opencode":
+			location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
+		case "openclaw":
+			location = fmt.Sprintf("skills/%s/SKILL.md", slug)
+		case "pi":
+			location = fmt.Sprintf(".pi/skills/%s/SKILL.md", slug)
+		case "cursor":
+			location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", slug)
+		case "kimi":
+			location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", slug)
+		case "kiro":
+			location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", slug)
+		case "antigravity":
+			location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
+		case "grok":
+			location = fmt.Sprintf(".grok/skills/%s/SKILL.md", slug)
 		}
-		for _, skill := range skills {
-			// Emit only the index fields here; the full SKILL.md lives on disk.
-			location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			switch provider {
-			case "claude", "codebuddy":
-				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "codex":
-				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "copilot":
-				location = fmt.Sprintf(".github/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "opencode":
-				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "openclaw":
-				location = fmt.Sprintf("skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "pi":
-				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "cursor":
-				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "kimi":
-				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "kiro":
-				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "antigravity":
-				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "grok":
-				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			}
-			if desc := strings.TrimSpace(skill.Description); desc != "" {
-				fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
-			} else {
-				fmt.Fprintf(b, "- **%s** (location: `%s`)\n", skill.Name, location)
-			}
+		if desc := strings.TrimSpace(skill.Description); desc != "" {
+			fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
+		} else {
+			fmt.Fprintf(b, "- **%s** (location: `%s`)\n", skill.Name, location)
 		}
-		b.WriteString("\n")
 	}
-
+	b.WriteString("\n")
 }

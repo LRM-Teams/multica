@@ -626,7 +626,8 @@ func TestChannelOnboardingRemovedGenerationCannotUseFastPublicationPath(t *testi
 		INSERT INTO channel_member (
 		  channel_id, workspace_id, member_type, member_id, join_source, added_by
 		)
-		VALUES ($1, $2, 'agent', $3, 'manual', $4)`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
+		VALUES ($1, $2, 'agent', $3, 'manual', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
 		t.Fatalf("insert pending onboarding generation: %v", err)
 	}
 
@@ -687,7 +688,8 @@ func TestChannelOnboardingPublicationSerializesClaimBeforeConcurrentRemoval(t *t
 		INSERT INTO channel_member (
 		  channel_id, workspace_id, member_type, member_id, join_source, added_by
 		)
-		VALUES ($1, $2, 'agent', $3, 'manual', $4)`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
+		VALUES ($1, $2, 'agent', $3, 'manual', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
 		t.Fatalf("insert pending onboarding generation: %v", err)
 	}
 

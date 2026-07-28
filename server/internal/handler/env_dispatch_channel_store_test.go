@@ -88,7 +88,8 @@ func setupEnvDispatchChannelStoreFixture(t *testing.T) (context.Context, envDisp
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
 	_, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID)
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID)
 	require.NoError(t, err)
 
 	return ctx, envDispatchChannelStore{db: testPool}, envID, channelID, agentID

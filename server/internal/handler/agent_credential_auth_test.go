@@ -300,7 +300,8 @@ func TestDrainAgentInbox_CredentialTransportRuntimeSkipsDeliveryTokenMint(t *tes
 	channelID := seedChannelForTest(t, "agent-credential-no-mint-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent channel member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -613,7 +614,8 @@ func seedAgentCredentialTransportFixture(t *testing.T) agentCredentialTransportF
 	channelID := seedChannelForTest(t, "agent-credential-transport-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent channel member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))

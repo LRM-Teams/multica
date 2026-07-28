@@ -26,7 +26,8 @@ func TestIssueThreadBackflowWritesTargetedEventsWithoutWakingOtherAgents(t *test
 	for _, agentID := range []string{creatorID, assigneeID, unrelatedID} {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("add channel agent %s: %v", agentID, err)
 		}
 	}
@@ -562,7 +563,8 @@ func TestIssueThreadBackflowAggregatesAssigneeAcrossIssues(t *testing.T) {
 	channelID := seedChannelForTest(t, "issue-backflow-assign-agg-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, assigneeID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, assigneeID); err != nil {
 		t.Fatalf("add assignee member: %v", err)
 	}
 

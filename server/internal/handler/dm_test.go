@@ -142,7 +142,8 @@ func seedAgentDMChannelForUser(t *testing.T, userID, agentID string) string {
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)`, channelID, testWorkspaceID, userID, agentID); err != nil {
+		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, userID, agentID); err != nil {
 		t.Fatalf("seed members: %v", err)
 	}
 	return channelID
@@ -1182,7 +1183,8 @@ func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T)
 	ambientChannelID := seedChannelForTest(t, "dm-ambient-gate-bypass-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, ambientChannelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, ambientChannelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed ambient agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(ambientChannelID))

@@ -146,12 +146,13 @@ func TestQuickCreateIssueSourceTrustBoundary(t *testing.T) {
 	})
 
 	t.Run("non member source is rejected before enqueue", func(t *testing.T) {
+		ownerID := createWorkspaceMemberUser(t, "QC Private Owner", "qc-private-owner-"+uuid.NewString()[:8]+"@multica.test")
 		var privateChannelID, privateRootID string
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO channel (workspace_id, name, created_by, kind)
 			VALUES ($1, $2, $3, 'group')
 			RETURNING id
-		`, testWorkspaceID, "quick-create-private-"+uuid.NewString(), testUserID).Scan(&privateChannelID); err != nil {
+		`, testWorkspaceID, "quick-create-private-"+uuid.NewString(), ownerID).Scan(&privateChannelID); err != nil {
 			t.Fatalf("seed private source channel: %v", err)
 		}
 		t.Cleanup(func() {

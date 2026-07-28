@@ -2089,7 +2089,8 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		VALUES
 			($1, $2, 'agent', $3),
 			($1, $2, 'agent', $4)
-	`, targetChannelID, testWorkspaceID, senderID, oldTargetID); err != nil {
+
+ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, senderID, oldTargetID); err != nil {
 		t.Fatalf("seed destination members: %v", err)
 	}
 	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(targetChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "seen before held destination draft", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
@@ -2120,7 +2121,8 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	`, targetChannelID, testWorkspaceID, newTargetID); err != nil {
+
+ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, newTargetID); err != nil {
 		t.Fatalf("add current destination member: %v", err)
 	}
 

@@ -155,7 +155,8 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	for _, agentID := range []string{agentD, agentE} {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("seed agent member %s: %v", agentID, err)
 		}
 	}
@@ -386,7 +387,8 @@ func TestListAgentTasksUsesSingleInboxHistory(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-task-inbox-history-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 

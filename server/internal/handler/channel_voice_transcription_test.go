@@ -181,7 +181,8 @@ func TestDelayedChannelVoiceTranscriptDispatchesAfterAgentCursorAdvanced(t *test
 	agentID := createHandlerTestAgent(t, "Late Voice Agent "+uuid.NewString()[:8], nil)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`,
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`,
 		channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed channel agent: %v", err)
 	}

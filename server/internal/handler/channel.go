@@ -483,30 +483,50 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			SELECT limited.channel_id, limited.member_type, limited.member_id,
 			       COALESCE(u.name, a.name, ''),
 			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
-			       CASE WHEN limited.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
+			       CASE WHEN limited.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
+			       limited.role
 			FROM unnest($1::uuid[]) AS selected(channel_id)
 			JOIN LATERAL (
-				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at
+				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role
 				FROM channel_member cm
 				WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
-				ORDER BY cm.created_at ASC
+				ORDER BY
+				  CASE cm.role
+				    WHEN 'owner' THEN 0
+				    WHEN 'manager' THEN 1
+				    ELSE 2
+				  END,
+				  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
+				       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
+				       ELSE 2
+				  END,
+				  cm.created_at ASC
 				LIMIT $3
 			) limited ON true
 			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
 			LEFT JOIN agent a ON limited.member_type = 'agent' AND a.id = limited.member_id
-			ORDER BY selected.channel_id, limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
+			ORDER BY selected.channel_id,
+			  CASE limited.role
+			    WHEN 'owner' THEN 0
+			    WHEN 'manager' THEN 1
+			    ELSE 2
+			  END,
+			  limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
 		if err == nil {
 			defer memberRows.Close()
 			grouped := map[string][]ChannelMemberBrief{}
 			for memberRows.Next() {
 				var chID, memberID pgtype.UUID
-				var memberType, memberName, memberDisplayName string
+				var memberType, memberName, memberDisplayName, role string
 				var avatarURL pgtype.Text
-				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName, &memberDisplayName, &avatarURL); err != nil {
+				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName, &memberDisplayName, &avatarURL, &role); err != nil {
 					continue
 				}
+				if role == "" {
+					role = "member"
+				}
 				key := uuidToString(chID)
-				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName, DisplayName: firstNonEmpty(memberDisplayName, memberName), AvatarURL: textToPtr(avatarURL)})
+				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName, DisplayName: firstNonEmpty(memberDisplayName, memberName), AvatarURL: textToPtr(avatarURL), Role: role})
 			}
 			for i := range out {
 				if m := grouped[out[i].ID]; m != nil {
@@ -801,12 +821,21 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	desc := trimTextPtr(req.Description)
 	larkChatID := trimTextPtr(req.LarkChatID)
-	row := h.DB.QueryRow(r.Context(), `
-		INSERT INTO channel (workspace_id, name, description, lark_chat_id, project_id, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, system_key, archived_at, archived_by`,
-		parseUUID(workspaceID), name, desc, larkChatID, projectID, parseUUID(userID))
-	ch, err := scanChannel(row)
+
+	// Ordinary groups always go through createOrdinaryGroupWithOwnerTx so
+	// channel + human owner cannot diverge (Parker: single create funnel).
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create channel")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	channelID, err := createOrdinaryGroupWithOwnerTx(
+		r.Context(), tx,
+		parseUUID(workspaceID), parseUUID(userID),
+		name, desc, larkChatID, projectID,
+	)
 	if err != nil {
 		if isChannelNameTakenError(err) {
 			writeCodedError(w, http.StatusConflict, channelNameTakenCode, "channel name already exists")
@@ -815,10 +844,19 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create channel")
 		return
 	}
-	_, _ = h.DB.Exec(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1, $2, 'user', $3, 'owner')
-		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
+	// Re-read full row for response (helper only returns id).
+	ch, err := scanChannel(tx.QueryRow(r.Context(), `
+		SELECT id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, system_key, archived_at, archived_by
+		FROM channel WHERE id = $1::uuid`, channelID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create channel")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create channel")
+		return
+	}
+
 	// LRM-397/398: do NOT auto-provision 贝克汉姆 / group_manager on channel create.
 	// Group managers enter via Wendy hire or POST .../group-manager (InviteGroupManager),
 	// with visibility=channel + home_channel_id bound to that group.
@@ -1426,7 +1464,8 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Agent removal: membership delete + revoke pending/in-flight access must
-	// share one transaction (Barry #801). User removal keeps the simple path.
+	// share one transaction (Barry #801). User removal uses a tx that also
+	// enforces ordinary-group ≥1 human owner (Barry #1286).
 	if memberType == "agent" {
 		removed, err := h.removeAgentChannelMemberAndRevokeTx(r.Context(), parseUUID(workspaceID), channelID, memberID)
 		if err != nil {
@@ -1442,11 +1481,53 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := h.DB.Exec(r.Context(), `
+	// Ordinary groups must keep ≥1 human owner (Barry #1286). Refuse removing
+	// the sole owner (self-leave or kick) so zero-owner groups cannot form.
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var kind string
+	var systemKey pgtype.Text
+	if err := tx.QueryRow(r.Context(), `
+		SELECT kind, system_key FROM channel WHERE id = $1 AND workspace_id = $2`,
+		channelID, parseUUID(workspaceID)).Scan(&kind, &systemKey); err != nil {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	ordinaryGroup := kind == "group" && !systemKey.Valid
+	if ordinaryGroup && memberType == "user" {
+		var role string
+		err := tx.QueryRow(r.Context(), `
+			SELECT role FROM channel_member
+			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+			channelID, parseUUID(workspaceID), memberID).Scan(&role)
+		if err == nil && role == "owner" {
+			var otherOwners int
+			_ = tx.QueryRow(r.Context(), `
+				SELECT count(*) FROM channel_member
+				WHERE channel_id = $1 AND workspace_id = $2
+				  AND role = 'owner' AND member_type = 'user' AND member_id <> $3`,
+				channelID, parseUUID(workspaceID), memberID).Scan(&otherOwners)
+			if otherOwners == 0 {
+				writeError(w, http.StatusConflict, "transfer channel ownership before removing the only owner")
+				return
+			}
+		}
+	}
+
+	tag, err := tx.Exec(r.Context(), `
 		DELETE FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
 		channelID, parseUUID(workspaceID), memberType, memberID)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
 		return
 	}

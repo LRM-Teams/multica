@@ -47,7 +47,8 @@ func newChannelAgentRuntimeFixture(t *testing.T, specs []channelAgentRuntimeSpec
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, testUserID); err != nil {
+		VALUES ($1, $2, 'user', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID); err != nil {
 		t.Fatalf("add collaboration channel user: %v", err)
 	}
 
@@ -97,7 +98,8 @@ func newChannelAgentRuntimeFixture(t *testing.T, specs []channelAgentRuntimeSpec
 		}
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("add collaboration agent to channel: %v", err)
 		}
 		fixture.runtimeIDs = append(fixture.runtimeIDs, runtimeID)

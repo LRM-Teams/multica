@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // channelCopyMap records all IDs that downstream branch-resume work must
@@ -35,10 +36,20 @@ func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourc
 		return channelCopyMap{}, fmt.Errorf("create copied env-dispatch channel: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, created_at)
-		SELECT $2, workspace_id, member_type, member_id, created_at
-		FROM channel_member WHERE channel_id = $1`, sourceChannelID, destinationChannelID); err != nil {
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role, created_at)
+		SELECT $2::uuid, workspace_id, member_type, member_id, role, created_at
+		FROM channel_member WHERE channel_id = $1::uuid`, sourceChannelID, destinationChannelID); err != nil {
 		return channelCopyMap{}, fmt.Errorf("copy channel members: %w", err)
+	}
+	// Fail-closed: ordinary group must have ≥1 human owner after copy (Ronan B1/B2).
+	var createdBy, workspaceUUID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT workspace_id, created_by FROM channel WHERE id = $1::uuid`,
+		destinationChannelID).Scan(&workspaceUUID, &createdBy); err != nil {
+		return channelCopyMap{}, fmt.Errorf("load copied channel identity: %w", err)
+	}
+	if err := ensureOrdinaryGroupHumanOwnerTx(ctx, tx, destinationChannelID, workspaceUUID, createdBy); err != nil {
+		return channelCopyMap{}, fmt.Errorf("ensure copied channel human owner: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE env_dispatch_channel_message_map (source_id uuid PRIMARY KEY, destination_id uuid NOT NULL) ON COMMIT DROP`); err != nil {

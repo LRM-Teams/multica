@@ -18,7 +18,8 @@ func TestListChannelSourceIssuesProjectsOnlyCurrentGroupAnchors(t *testing.T) {
 	ctx := context.Background()
 	suffix := uuid.NewString()
 	visibleChannelID := seedChannelForTest(t, "channel-issues-visible-"+suffix, testUserID)
-	hiddenChannelID := seedChannelForTest(t, "channel-issues-hidden-"+suffix)
+	hiddenOwner := createWorkspaceMemberUser(t, "Channel Issues Hidden Owner", "channel-issues-hidden-"+suffix+"@multica.test")
+	hiddenChannelID := seedChannelForTest(t, "channel-issues-hidden-"+suffix, hiddenOwner)
 
 	createIssue := func(title, status, assigneeID string) string {
 		t.Helper()

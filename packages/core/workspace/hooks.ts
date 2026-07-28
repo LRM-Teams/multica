@@ -46,7 +46,12 @@ export function useActorName() {
   const getActorName = useCallback((type: string, id: string, fallback?: string) => {
     if (type === "member") return getMemberName(id, fallback);
     if (type === "agent") return getAgentName(id, fallback);
-    if (type === "squad") return fallback ?? "Unsupported assignee (squad)";
+    // Squads are retired (Frank 2026-07-28). Historical assignee=squad rows
+    // still render — degraded to a read-only "former" label, never re-selectable
+    // (the composer @ picker already excludes squad, #600/#446). English-only
+    // to match this core hook's hardcoded sentinels; a bilingual surface would
+    // i18n it at the component layer.
+    if (type === "squad") return fallback ?? "Former squad assignment";
     if (type === "system") return "Multica";
     return fallback ?? "System";
   }, [getAgentName, getMemberName]);

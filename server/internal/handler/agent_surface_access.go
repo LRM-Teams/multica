@@ -176,6 +176,20 @@ func (h *Handler) agentAttachmentVisible(ctx context.Context, workspaceID, agent
 			  AND a.workspace_id = $1
 			  AND a.channel_id IS NOT NULL
 		)`, workspaceID, agentID, attachmentID).Scan(&ok)
+	if err == nil && ok {
+		return true
+	}
+	// Uploader-owned secure staging: agent may view its own uploads even when
+	// still unbound (DM/thread bind at message send). Foreign agents DENY.
+	err = h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM attachment a
+			WHERE a.id = $3
+			  AND a.workspace_id = $1
+			  AND a.uploader_type = 'agent'
+			  AND a.uploader_id = $2
+		)`, workspaceID, agentID, attachmentID).Scan(&ok)
 	return err == nil && ok
 }
 

@@ -37,14 +37,15 @@ var attachmentUploadCmd = &cobra.Command{
 	Short: "Upload a local file as an attachment",
 	Long: "Upload a local file and print its attachment id. Use the id with " +
 		"`multica message send --attachment-id` or `multica issue create --attachment-id`.\n\n" +
-		"Pass --target '#channel' to bind the upload to a channel at upload time.\n\n" +
-		"Human tokens may omit --target for an unbound workspace upload (link later via --attachment-id). " +
-		"Agent tokens (mat_*) require a bind target — unbound upload is rejected by /api/agent/attachments (#801).\n\n" +
-		"DM and thread targets are not resolved here for channel bind — use a group #channel target, " +
-		"or bind at message send time only with a human-token unbound upload.",
+		"Pass --target '#channel' to bind the upload to a channel at upload time. " +
+		"Omit --target for an unbound workspace upload (link later via --attachment-id). " +
+		"For agent tokens (mat_*), unbound uploads are uploader-owned staging: only that agent " +
+		"can view them until bound (DM/thread: omit --target, then message send --attachment-id).\n\n" +
+		"DM and thread targets are not resolved as --target here — upload unbound and pass " +
+		"--attachment-id to message send with the full target.",
 	Example: `  $ multica attachment upload --path ./shot.png --target '#eng'
-  $ multica attachment upload --path ./notes.md   # human token only
-  $ multica message send --target '#eng' --attachment-id <id> --message 'see file'`,
+  $ multica attachment upload --path ./notes.md
+  $ multica message send --target 'dm:@user' --attachment-id <id> --message 'see file'`,
 	Args: cobra.NoArgs,
 	RunE: runAttachmentUpload,
 }
@@ -175,11 +176,6 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 	channelID, err := resolveChannelIDFromUploadTarget(ctx, client, target)
 	if err != nil {
 		return err
-	}
-	// #801: agent dedicated upload requires channel (or other) provenance.
-	// Unbound mat_* uploads 400 on the server — fail closed in CLI with clear guidance.
-	if isAgentAPIToken(cmd) && channelID == "" {
-		return fmt.Errorf("agent token requires --target '#channel' (unbound upload is not allowed for agents; bind at upload time)")
 	}
 
 	data, err := os.ReadFile(path)

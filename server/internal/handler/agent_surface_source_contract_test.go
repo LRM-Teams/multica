@@ -7,7 +7,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -61,20 +60,20 @@ func TestAgentDirectoryIsNarrowDTO(t *testing.T) {
 	}
 }
 
-func TestAgentUnboundUploadRejected(t *testing.T) {
-	if testHandler == nil {
+func TestAgentUnboundUploadStagingSelfVisible(t *testing.T) {
+	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
-	if testHandler.Storage == nil {
-		t.Skip("storage not configured on testHandler")
-	}
+	prev := testHandler.Storage
+	store := &mockStorage{}
+	testHandler.Storage = store
+	t.Cleanup(func() { testHandler.Storage = prev })
+
 	var agentID, ownerID string
-	if testPool != nil {
-		_ = testPool.QueryRow(context.Background(),
-			`SELECT id::text, COALESCE(owner_id::text, '') FROM agent WHERE workspace_id = $1 LIMIT 1`,
-			parseUUID(testWorkspaceID)).Scan(&agentID, &ownerID)
-	}
-	if agentID == "" {
+	err := testPool.QueryRow(context.Background(),
+		`SELECT id::text, COALESCE(owner_id::text, '') FROM agent WHERE workspace_id = $1 LIMIT 1`,
+		parseUUID(testWorkspaceID)).Scan(&agentID, &ownerID)
+	if err != nil || agentID == "" {
 		t.Skip("no agent fixture")
 	}
 
@@ -84,24 +83,63 @@ func TestAgentUnboundUploadRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = part.Write([]byte("hello"))
+	_, _ = part.Write([]byte("hello staging"))
 	_ = w.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/attachments", &body)
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	req = req.WithContext(middleware.WithAgentPrincipal(req.Context(), middleware.AgentPrincipal{
+	p := middleware.AgentPrincipal{
 		AgentID:     agentID,
 		WorkspaceID: testWorkspaceID,
 		OwnerUserID: ownerID,
 		ActorSource: "agent_credential",
-	}))
+	}
+	req = req.WithContext(middleware.WithAgentPrincipal(req.Context(), p))
 	rec := httptest.NewRecorder()
 	testHandler.UploadAgentAttachment(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("unbound upload want 400, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unbound staging upload want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "issue_id") && !strings.Contains(rec.Body.String(), "channel_id") {
-		t.Fatalf("expected provenance error, body=%s", rec.Body.String())
+	var att map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &att); err != nil {
+		t.Fatal(err)
+	}
+	attID, _ := att["id"].(string)
+	if attID == "" {
+		t.Fatalf("missing attachment id: %#v", att)
+	}
+
+	// Self view must succeed.
+	view := httptest.NewRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
+	view = withURLParam(view, "id", attID)
+	view = view.WithContext(middleware.WithAgentPrincipal(view.Context(), p))
+	viewRec := httptest.NewRecorder()
+	testHandler.GetAgentAttachment(viewRec, view)
+	if viewRec.Code != http.StatusOK {
+		t.Fatalf("uploader self-view want 200, got %d body=%s", viewRec.Code, viewRec.Body.String())
+	}
+
+	// Foreign agent DENY.
+	var otherAgent string
+	_ = testPool.QueryRow(context.Background(),
+		`SELECT id::text FROM agent WHERE workspace_id = $1 AND id::text <> $2 LIMIT 1`,
+		parseUUID(testWorkspaceID), agentID).Scan(&otherAgent)
+	if otherAgent == "" {
+		t.Log("no second agent fixture; skip foreign deny")
+		return
+	}
+	foreign := httptest.NewRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
+	foreign = withURLParam(foreign, "id", attID)
+	foreign = foreign.WithContext(middleware.WithAgentPrincipal(foreign.Context(), middleware.AgentPrincipal{
+		AgentID:     otherAgent,
+		WorkspaceID: testWorkspaceID,
+		OwnerUserID: ownerID,
+		ActorSource: "agent_credential",
+	}))
+	fRec := httptest.NewRecorder()
+	testHandler.GetAgentAttachment(fRec, foreign)
+	if fRec.Code == http.StatusOK {
+		t.Fatalf("foreign agent must not view uploader staging attachment")
 	}
 }
 

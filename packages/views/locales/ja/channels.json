@@ -389,6 +389,7 @@
     "voice_stop": "録音を停止（{{seconds}} 秒）",
     "voice_uploading": "音声メッセージをアップロード中",
     "voice_blocked": "録音する前に入力内容と添付を消去してください",
+    "voice_blocked_pending_voice": "未送信の音声メッセージがあります。再試行するか削除してから録音してください。",
     "voice_permission_denied": "マイクの使用が許可されませんでした。",
     "voice_secure_context_required": "ブラウザーでマイクを使用するには HTTPS が必要です。HTTPS のアドレスを開いて再試行してください。",
     "voice_unavailable": "このブラウザは音声録音に対応していません。",
@@ -403,7 +404,10 @@
     "tray_remove_aria": "{{filename}} を削除",
     "tray_retry_aria": "{{filename}} のアップロードを再試行",
     "tray_uploading": "アップロード中",
-    "tray_upload_failed": "アップロードに失敗しました"
+    "tray_upload_failed": "アップロードに失敗しました",
+    "voice_unsent": "音声メッセージは送信されていません（{{duration}}）",
+    "voice_unsent_retry": "再送信",
+    "voice_unsent_delete": "削除"
   },
   "message": {
     "add_reaction": "リアクションを追加",

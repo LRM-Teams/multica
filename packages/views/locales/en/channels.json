@@ -389,6 +389,7 @@
     "voice_stop": "Stop recording at {{seconds}} seconds",
     "voice_uploading": "Uploading voice message",
     "voice_blocked": "Clear the current text and attachments before recording",
+    "voice_blocked_pending_voice": "You have an unsent voice message. Retry or delete it before recording again.",
     "voice_permission_denied": "Microphone permission was denied.",
     "voice_secure_context_required": "Browsers only allow microphone access over HTTPS. Open the HTTPS address and try again.",
     "voice_unavailable": "Voice recording is not supported in this browser.",
@@ -403,7 +404,10 @@
     "tray_remove_aria": "Remove {{filename}}",
     "tray_retry_aria": "Retry upload of {{filename}}",
     "tray_uploading": "Uploading",
-    "tray_upload_failed": "Upload failed"
+    "tray_upload_failed": "Upload failed",
+    "voice_unsent": "Voice message not sent ({{duration}})",
+    "voice_unsent_retry": "Retry send",
+    "voice_unsent_delete": "Delete"
   },
   "message": {
     "add_reaction": "Add reaction",

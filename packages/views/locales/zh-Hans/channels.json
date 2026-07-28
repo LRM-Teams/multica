@@ -389,6 +389,7 @@
     "voice_stop": "停止录音，已录制 {{seconds}} 秒",
     "voice_uploading": "正在上传语音",
     "voice_blocked": "请先清空输入内容和附件再录音",
+    "voice_blocked_pending_voice": "当前有一段未发送语音。请先重试或删除后再录制。",
     "voice_permission_denied": "麦克风权限被拒绝。",
     "voice_secure_context_required": "浏览器仅允许通过 HTTPS 使用麦克风。请打开 HTTPS 地址后重试。",
     "voice_unavailable": "当前浏览器不支持语音录制。",
@@ -403,7 +404,10 @@
     "tray_remove_aria": "移除 {{filename}}",
     "tray_retry_aria": "重试上传 {{filename}}",
     "tray_uploading": "上传中",
-    "tray_upload_failed": "上传失败"
+    "tray_upload_failed": "上传失败",
+    "voice_unsent": "语音未发送（{{duration}}）",
+    "voice_unsent_retry": "重试发送",
+    "voice_unsent_delete": "删除"
   },
   "message": {
     "add_reaction": "添加表情回应",

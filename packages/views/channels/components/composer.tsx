@@ -35,6 +35,8 @@ export interface ComposerProps {
   voiceChannelId?: string;
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
+  /** #838 — specific reason for `voiceDisabled`, when the caller knows one. */
+  voiceBlockedReason?: string;
   onVoiceSend?: (
     durationMs: number,
     attachment: VoiceRecordingAttachment,
@@ -80,6 +82,7 @@ export function Composer({
   voiceChannelId,
   voicePlaybackScope,
   voiceDisabled = false,
+  voiceBlockedReason,
   onVoiceSend,
   tray,
   readOnly = false,
@@ -137,6 +140,7 @@ export function Composer({
               <VoiceInputButton
                 channelId={voiceChannelId}
                 disabled={voiceDisabled || sending}
+                blockedReason={voiceBlockedReason}
                 isMobile={isMobile}
                 playbackScope={voicePlaybackScope}
                 onVoiceSend={onVoiceSend}

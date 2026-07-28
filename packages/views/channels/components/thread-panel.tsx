@@ -65,6 +65,8 @@ export interface ThreadPanelProps {
   sending?: boolean;
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
+  /** #838 — specific reason for `voiceDisabled`, threaded to the composer. */
+  voiceBlockedReason?: string;
   onVoiceSend?: (
     durationMs: number,
     attachment: VoiceRecordingAttachment,
@@ -72,6 +74,12 @@ export interface ThreadPanelProps {
   composerLeadingActions?: ReactNode;
   /** Slack-style attachment tray above the editor (Composer `tray` slot). */
   composerTray?: ReactNode;
+  /**
+   * #838 — extra durable state rendered in the composer prefix, above the send
+   * error bar (currently the unsent-voice item). Owned by the caller because
+   * the failure record lives with the send handler, not the panel.
+   */
+  composerPrefixExtra?: ReactNode;
   /** Read-only surface (archived channel) → banner instead of composer. */
   readOnly?: boolean;
   readOnlyContent?: ReactNode;
@@ -122,9 +130,11 @@ export function ThreadPanel({
   sending,
   voicePlaybackScope,
   voiceDisabled,
+  voiceBlockedReason,
   onVoiceSend,
   composerLeadingActions,
   composerTray,
+  composerPrefixExtra,
   readOnly = false,
   readOnlyContent,
   activitySlot,
@@ -282,11 +292,13 @@ export function ThreadPanel({
             voiceChannelId={root.channel_id}
             voicePlaybackScope={voicePlaybackScope}
             voiceDisabled={voiceDisabled}
+            voiceBlockedReason={voiceBlockedReason}
             onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-            prefix={sendError || quoteTarget ? (
+            prefix={sendError || quoteTarget || composerPrefixExtra ? (
               <>
+                {composerPrefixExtra}
                 <ComposerSendErrorBar
                   error={sendError ?? null}
                   onRetry={onSend}

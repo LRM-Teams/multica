@@ -75,7 +75,8 @@
     "row": {
       "thread_hits": "THREAD · {{count}} hits",
       "members": "{{count}} members",
-      "joined": "you're in"
+      "joined": "you're in",
+      "dm_placeholder": "Direct message"
     },
     "actions": {
       "open_channel": "Open channel",

@@ -119,24 +119,4 @@ describe("GlobalSearchDialog", () => {
     });
   });
 
-  it("renders the denied state (never fakes empty) when BE returns denied", async () => {
-    mockSearchWorkspace.mockResolvedValue({
-      query: "secret",
-      scope: "all",
-      counts: { messages: 0, channels: 0, dms: 0, people: 0 },
-      messages: [],
-      channels: [],
-      dms: [],
-      people: [],
-      denied: true,
-    });
-    useGlobalSearchStore.setState({ open: true });
-    const user = userEvent.setup();
-    renderDialog();
-    const input = await screen.findByPlaceholderText(/Search channels/i);
-    await user.type(input, "secret");
-    await waitFor(() => {
-      expect(screen.getByText(/can't search this scope/i)).toBeInTheDocument();
-    });
-  });
 });

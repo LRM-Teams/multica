@@ -75,7 +75,8 @@
     "row": {
       "thread_hits": "THREAD · {{count}}건 일치",
       "members": "{{count}}명",
-      "joined": "참여 중"
+      "joined": "참여 중",
+      "dm_placeholder": "다이렉트 메시지"
     },
     "actions": {
       "open_channel": "채널 열기",

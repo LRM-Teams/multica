@@ -1,23 +1,22 @@
 /**
  * Workspace-level global search contract (LRM-605 BE ↔ LRM-606 FE).
  *
+ * Consumes the real BE contract on dev: `GET /api/search`. The workspace id is
+ * resolved from the auth context on the server (ctxWorkspaceID), NOT from the
+ * URL path. Query: ?q=<query>&scope=all|messages|channels|dms|people&limit=<n>.
+ *
  * This is the collaboration-content search surface (Lock A / Slack-style):
  * scope tabs 全部 / Messages / Channels / DMs / People. It is distinct from the
  * single-channel `messages/search` (ChannelMessageSearch*) — that in-channel
  * search is NOT a terminal Search surface per LRM-454.
  *
- * Contract proposal for BE (LRM-605). FE consumes it via `api.searchWorkspace`.
- *
- * Endpoint (proposed): `GET /api/workspaces/{workspace_id}/search`
- *   ?q=<query>&scope=all|messages|channels|dms|people&limit=<n>
- *
- * Authorization rules (must hold, no silent fallback — LRM-238):
- *  - Only return channels/DMs/messages/people the viewer can see.
- *  - When the query matches ONLY content the viewer cannot see, return
- *    `denied: true` so FE renders the explicit 无权限 state (never fakes an
- *    empty list that hides the permission boundary).
- *  - Missing fields / server errors must surface as an error code the FE can
- *    retry, not an empty 200.
+ * Authorization (LRM-238, AC#3 option b — aligned to Slack + shipping 605):
+ * the server only returns channels/DMs/messages/people the viewer can see (SQL
+ * `JOIN channel_member viewer`). A query that matches only content the viewer
+ * cannot see returns an empty result set — an empty result is simply "no
+ * visible matches", never faked as anything else. Whole-request auth failure
+ * surfaces as a 401/403 error (retryable), never a silent empty 200. There is
+ * intentionally no `denied` field.
  */
 
 export type WorkspaceSearchScope = "all" | "messages" | "channels" | "dms" | "people";
@@ -30,12 +29,19 @@ export interface WorkspaceSearchCounts {
   people: number;
 }
 
+export interface WorkspaceSearchHighlightRange {
+  start: number;
+  end: number;
+}
+
 /**
- * A matched message. `snippet` is plain text carrying the match; FE highlights
- * via `<mark>` (HighlightText). When several hits collapse into one thread,
- * `thread_hit_count` > 1 and the row renders `THREAD + N 命中`.
+ * A matched message. `snippet` is a plain-text excerpt carrying the match;
+ * `content` is the full message text; `highlight_ranges` are char offsets into
+ * `content` for precise `<mark>` highlighting (BE-supplied). When several hits
+ * collapse into one thread, `hit_count` > 1 and the row renders `THREAD + N`.
  */
 export interface WorkspaceSearchMessage {
+  result_type: "message";
   message_id: string;
   channel_id: string;
   /** Display name of the containing conversation, e.g. `multica` (no `#`). */
@@ -43,42 +49,46 @@ export interface WorkspaceSearchMessage {
   channel_kind: "group" | "dm";
   thread_root_message_id?: string | null;
   /** >1 when this row aggregates multiple hits in one thread. */
-  thread_hit_count?: number;
-  author_id?: string | null;
+  hit_count: number;
   author_type?: "user" | "agent" | "lark" | "system" | null;
+  author_id?: string | null;
   author_name: string;
-  author_avatar_url?: string | null;
+  content: string;
   snippet: string;
+  highlight_ranges?: WorkspaceSearchHighlightRange[];
   created_at: string;
 }
 
+/**
+ * Channel search result. BE returns the same `GlobalSearchChannelResult` shape
+ * for both the `channels` and `dms` arrays.
+ */
 export interface WorkspaceSearchChannel {
-  id: string;
+  channel_id: string;
   name: string;
+  kind: "group" | "dm";
   description?: string | null;
-  member_count?: number;
-  /** Whether the viewer is currently a member (for "你也在其中" hint). */
-  joined?: boolean;
 }
 
+/**
+ * DM search result — same server shape as channels (no peer payload). The DM
+ * row renders `name`, falling back to a localized "私信" placeholder when the
+ * server returns no DM name.
+ */
 export interface WorkspaceSearchDM {
-  /** DM channel id — navigate via `paths.channelDetail(id)`. */
-  id: string;
-  peer_id: string;
-  peer_type: "user" | "agent";
-  peer_name: string;
-  peer_avatar_url?: string | null;
-  snippet?: string | null;
-  last_message_at?: string | null;
+  channel_id: string;
+  name: string;
+  kind: "dm";
+  description?: string | null;
 }
 
 export interface WorkspaceSearchPerson {
+  /** "user" for members; "agent" for agents. */
+  actor_type: "user" | "agent";
   /** user_id for members; agent id for agents. */
-  id: string;
-  type: "user" | "agent";
+  actor_id: string;
+  name: string;
   display_name: string;
-  handle?: string | null;
-  email?: string | null;
   avatar_url?: string | null;
 }
 
@@ -90,9 +100,4 @@ export interface WorkspaceSearchResponse {
   channels: WorkspaceSearchChannel[];
   dms: WorkspaceSearchDM[];
   people: WorkspaceSearchPerson[];
-  /**
-   * Explicit permission denial. When true the query matched only content the
-   * viewer cannot see; FE shows the 无权限 state instead of an empty list.
-   */
-  denied?: boolean;
 }

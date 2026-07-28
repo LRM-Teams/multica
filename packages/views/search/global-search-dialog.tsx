@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { useQuery } from "@tanstack/react-query";
-import { SearchIcon, X, ArrowLeft, RotateCw, Hash, AlertCircle } from "lucide-react";
+import { SearchIcon, X, ArrowLeft, RotateCw, Hash, User } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -168,11 +168,11 @@ export function GlobalSearchDialog() {
     [goto, p],
   );
 
-  const openChannel = useCallback((c: WorkspaceSearchChannel) => goto(p.channelDetail(c.id)), [goto, p]);
-  const openDm = useCallback((d: WorkspaceSearchDM) => goto(p.channelDetail(d.id)), [goto, p]);
+  const openChannel = useCallback((c: WorkspaceSearchChannel) => goto(p.channelDetail(c.channel_id)), [goto, p]);
+  const openDm = useCallback((d: WorkspaceSearchDM) => goto(p.channelDetail(d.channel_id)), [goto, p]);
   const openPerson = useCallback(
     (person: WorkspaceSearchPerson) => {
-      goto(person.type === "agent" ? p.agentDetail(person.id) : p.memberDetail(person.id));
+      goto(person.actor_type === "agent" ? p.agentDetail(person.actor_id) : p.memberDetail(person.actor_id));
     },
     [goto, p],
   );
@@ -274,7 +274,6 @@ export function GlobalSearchDialog() {
           {/* Body */}
           <CommandPrimitive.List className="max-h-[min(420px,60vh)] overflow-y-auto overflow-x-hidden sm:max-h-[min(440px,56vh)]">
             {status === "loading" && <SearchSkeleton />}
-            {status === "denied" && <DeniedState query={debouncedQuery} />}
             {status === "error" && <ErrorState onRetry={() => void refetch()} />}
             {status === "empty" && <EmptyState query={debouncedQuery} />}
 
@@ -336,7 +335,7 @@ function SearchResults(props: {
       {show("channels") && data.channels.length > 0 && (
         <Group labelKey="channels">
           {data.channels.map((c) => (
-            <ChannelRow key={`ch:${c.id}`} channel={c} query={props.query} onOpen={() => props.onOpenChannel(c)} />
+            <ChannelRow key={`ch:${c.channel_id}`} channel={c} query={props.query} onOpen={() => props.onOpenChannel(c)} />
           ))}
         </Group>
       )}
@@ -344,7 +343,7 @@ function SearchResults(props: {
       {show("dms") && data.dms.length > 0 && (
         <Group labelKey="dms">
           {data.dms.map((d) => (
-            <DmRow key={`dm:${d.id}`} dm={d} query={props.query} onOpen={() => props.onOpenDm(d)} />
+            <DmRow key={`dm:${d.channel_id}`} dm={d} query={props.query} onOpen={() => props.onOpenDm(d)} />
           ))}
         </Group>
       )}
@@ -361,11 +360,11 @@ function SearchResults(props: {
         <Group labelKey="people">
           {data.people.map((person) => (
             <PersonRow
-              key={`p:${person.type}:${person.id}`}
+              key={`p:${person.actor_type}:${person.actor_id}`}
               person={person}
               query={props.query}
               onOpen={() => props.onOpenPerson(person)}
-              onStartDm={() => props.onStartDm(person.type === "agent" ? "agent" : "user", person.id)}
+              onStartDm={() => props.onStartDm(person.actor_type === "agent" ? "agent" : "user", person.actor_id)}
             />
           ))}
         </Group>
@@ -406,20 +405,14 @@ function RowShell({ onSelect, children }: { onSelect: () => void; children: Reac
 }
 
 function ChannelRow({ channel, query, onOpen }: { channel: WorkspaceSearchChannel; query: string; onOpen: () => void }) {
-  const { t } = useT("search");
   return (
     <RowShell onSelect={onOpen}>
       <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
         <Hash className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">
-            <HighlightText text={channel.name} query={query} />
-          </span>
-          {channel.joined ? (
-            <span className="shrink-0 text-xs text-muted-foreground">{t(($) => $.globalSearch.row.joined)}</span>
-          ) : null}
+        <div className="truncate font-medium">
+          <HighlightText text={channel.name} query={query} />
         </div>
         {channel.description ? (
           <div className="truncate text-xs text-muted-foreground">
@@ -427,41 +420,25 @@ function ChannelRow({ channel, query, onOpen }: { channel: WorkspaceSearchChanne
           </div>
         ) : null}
       </div>
-      {typeof channel.member_count === "number" ? (
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {t(($) => $.globalSearch.row.members, { count: channel.member_count })}
-        </span>
-      ) : null}
     </RowShell>
   );
 }
 
 function DmRow({ dm, query, onOpen }: { dm: WorkspaceSearchDM; query: string; onOpen: () => void }) {
+  const { t } = useT("search");
+  // V0 contract: BE returns DMs in channel shape (channel_id/name/kind) with no
+  // peer payload. Render the channel name, falling back to a localized
+  // "私信" placeholder when the server returns no DM name.
+  const label = dm.name?.trim() || t(($) => $.globalSearch.row.dm_placeholder);
   return (
     <RowShell onSelect={onOpen}>
-      <ActorAvatar
-        actorType={dm.peer_type}
-        actorId={dm.peer_id}
-        size={32}
-        avatarUrlHint={dm.peer_avatar_url}
-        name={dm.peer_name}
-        profileLink={false}
-        className="shrink-0"
-      />
+      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+        <User className="size-4" />
+      </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">
-            <HighlightText text={dm.peer_name} query={query} />
-          </span>
-          {dm.last_message_at ? (
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(dm.last_message_at)}</span>
-          ) : null}
+        <div className="truncate font-medium">
+          <HighlightText text={label} query={query} />
         </div>
-        {dm.snippet ? (
-          <div className="line-clamp-1 text-xs text-muted-foreground">
-            <HighlightText text={dm.snippet} query={query} />
-          </div>
-        ) : null}
       </div>
     </RowShell>
   );
@@ -469,14 +446,13 @@ function DmRow({ dm, query, onOpen }: { dm: WorkspaceSearchDM; query: string; on
 
 function MessageRow({ message, query, onOpen }: { message: WorkspaceSearchMessage; query: string; onOpen: () => void }) {
   const { t } = useT("search");
-  const isThread = (message.thread_hit_count ?? 0) > 1;
+  const isThread = message.hit_count > 1;
   return (
     <RowShell onSelect={onOpen}>
       <ActorAvatar
         actorType={message.author_type ?? "user"}
         actorId={message.author_id ?? ""}
         size={32}
-        avatarUrlHint={message.author_avatar_url}
         name={message.author_name}
         profileLink={false}
         className="shrink-0"
@@ -485,7 +461,7 @@ function MessageRow({ message, query, onOpen }: { message: WorkspaceSearchMessag
         <div className="flex items-center gap-2">
           {isThread ? (
             <span className="shrink-0 rounded border border-primary/40 px-1 text-[10px] font-semibold text-primary">
-              {t(($) => $.globalSearch.row.thread_hits, { count: message.thread_hit_count ?? 0 })}
+              {t(($) => $.globalSearch.row.thread_hits, { count: message.hit_count })}
             </span>
           ) : null}
           <span className="truncate font-medium">{message.author_name}</span>
@@ -514,12 +490,12 @@ function PersonRow({
   onStartDm: () => void;
 }) {
   const { t } = useT("search");
-  const secondary = person.handle ?? person.email ?? "";
+  const secondary = person.name && person.name !== person.display_name ? person.name : "";
   return (
     <RowShell onSelect={onOpen}>
       <ActorAvatar
-        actorType={person.type}
-        actorId={person.id}
+        actorType={person.actor_type}
+        actorId={person.actor_id}
         size={32}
         avatarUrlHint={person.avatar_url}
         name={person.display_name}
@@ -572,21 +548,6 @@ function EmptyState({ query }: { query: string }) {
   return (
     <div className="px-5 py-10 text-center text-sm text-muted-foreground">
       {t(($) => $.globalSearch.states.empty, { query: query.trim() })}
-    </div>
-  );
-}
-
-function DeniedState(_: { query: string }) {
-  const { t } = useT("search");
-  return (
-    <div className="px-5 py-10 text-center text-sm">
-      <div className="mx-auto mb-2 grid size-8 place-items-center rounded-full bg-destructive/10 text-destructive">
-        <AlertCircle className="size-4" />
-      </div>
-      <div className="font-medium text-destructive">{t(($) => $.globalSearch.states.denied_title)}</div>
-      <div className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-        {t(($) => $.globalSearch.states.denied_body)}
-      </div>
     </div>
   );
 }

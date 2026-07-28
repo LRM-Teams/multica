@@ -1112,45 +1112,47 @@ export const EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE: ChannelMessageSearchResponse
 // Contract for the collaboration-content search surface (scope tabs
 // 全部/Messages/Channels/DMs/People). Distinct from the single-channel
 // ChannelMessageSearch* above.
+const WorkspaceSearchHighlightRangeSchema = z.object({
+  start: z.number(),
+  end: z.number(),
+}).loose();
+
 const WorkspaceSearchMessageSchema = z.object({
+  result_type: z.string().default("message"),
   message_id: z.string().default(""),
   channel_id: z.string().default(""),
   channel_name: z.string().default(""),
   channel_kind: z.string().default("group"),
   thread_root_message_id: z.string().nullable().optional(),
-  thread_hit_count: z.number().optional(),
+  hit_count: z.number().default(1),
   author_id: z.string().nullable().optional(),
   author_type: z.string().nullable().optional(),
   author_name: z.string().default(""),
-  author_avatar_url: z.string().nullable().optional(),
+  content: z.string().default(""),
   snippet: z.string().default(""),
+  highlight_ranges: z.array(WorkspaceSearchHighlightRangeSchema).default([]),
   created_at: z.string().default(""),
 }).loose();
 
 const WorkspaceSearchChannelSchema = z.object({
-  id: z.string().default(""),
+  channel_id: z.string().default(""),
   name: z.string().default(""),
+  kind: z.string().default("group"),
   description: z.string().nullable().optional(),
-  member_count: z.number().optional(),
-  joined: z.boolean().optional(),
 }).loose();
 
 const WorkspaceSearchDMSchema = z.object({
-  id: z.string().default(""),
-  peer_id: z.string().default(""),
-  peer_type: z.string().default("user"),
-  peer_name: z.string().default(""),
-  peer_avatar_url: z.string().nullable().optional(),
-  snippet: z.string().nullable().optional(),
-  last_message_at: z.string().nullable().optional(),
+  channel_id: z.string().default(""),
+  name: z.string().default(""),
+  kind: z.string().default("dm"),
+  description: z.string().nullable().optional(),
 }).loose();
 
 const WorkspaceSearchPersonSchema = z.object({
-  id: z.string().default(""),
-  type: z.string().default("user"),
+  actor_type: z.string().default("user"),
+  actor_id: z.string().default(""),
+  name: z.string().default(""),
   display_name: z.string().default(""),
-  handle: z.string().nullable().optional(),
-  email: z.string().nullable().optional(),
   avatar_url: z.string().nullable().optional(),
 }).loose();
 
@@ -1169,7 +1171,6 @@ export const WorkspaceSearchResponseSchema = z.object({
   channels: z.array(WorkspaceSearchChannelSchema).default([]),
   dms: z.array(WorkspaceSearchDMSchema).default([]),
   people: z.array(WorkspaceSearchPersonSchema).default([]),
-  denied: z.boolean().optional(),
 }).loose();
 
 export const EMPTY_WORKSPACE_SEARCH_RESPONSE: WorkspaceSearchResponse = {

@@ -10,8 +10,7 @@ import type { WorkspaceSearchResponse, WorkspaceSearchScope } from "@multica/cor
  *  - loading   → skeleton (first fetch for this query; placeholderData keeps
  *                prior rows on re-fetch, so loading only blankets the first hit)
  *  - success   → results render
- *  - empty     → query returned nothing the viewer can see (NOT denied)
- *  - denied    → explicit no-permission (BE `denied: true`); never faked as empty
+ *  - empty     → query returned no visible matches (viewer-filtered; AC#3 b)
  *  - error     → fetch failed; retryable, no silent fallback (LRM-238)
  */
 export type GlobalSearchStatus =
@@ -19,7 +18,6 @@ export type GlobalSearchStatus =
   | "loading"
   | "success"
   | "empty"
-  | "denied"
   | "error";
 
 export interface GlobalSearchStatusInput {
@@ -44,8 +42,6 @@ export function deriveGlobalSearchStatus(input: GlobalSearchStatusInput): Global
     // Not fetching, not error, no data: treat as loading (e.g. between mounts).
     return input.isLoading ? "loading" : "idle";
   }
-
-  if (data.denied) return "denied";
 
   const hasAny =
     data.messages.length > 0 ||

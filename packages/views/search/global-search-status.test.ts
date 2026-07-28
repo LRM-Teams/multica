@@ -30,40 +30,25 @@ describe("deriveGlobalSearchStatus", () => {
   });
 
   it("success when results present", () => {
-    const data = resp({ messages: [{ message_id: "m1", channel_id: "c", channel_name: "x", channel_kind: "group", author_name: "a", snippet: "hi", created_at: "" }] });
+    const data = resp({ messages: [{ result_type: "message", message_id: "m1", channel_id: "c", channel_name: "x", channel_kind: "group", hit_count: 1, author_name: "a", content: "hi", snippet: "hi", created_at: "" }] });
     expect(
       deriveGlobalSearchStatus({ query: "foo", isFetching: false, isLoading: false, isError: false, data }),
     ).toBe("success");
   });
 
-  it("empty when query returned nothing the viewer can see (not denied)", () => {
+  it("empty when query returned no visible matches", () => {
     expect(
       deriveGlobalSearchStatus({ query: "foo", isFetching: false, isLoading: false, isError: false, data: empty }),
     ).toBe("empty");
   });
 
-  it("denied when BE returns denied:true (never fakes empty)", () => {
-    expect(
-      deriveGlobalSearchStatus({ query: "foo", isFetching: false, isLoading: false, isError: false, data: resp({ denied: true }) }),
-    ).toBe("denied");
-  });
-
   it("error wins over stale data (no silent fallback)", () => {
-    const data = resp({ messages: [{ message_id: "m1", channel_id: "c", channel_name: "x", channel_kind: "group", author_name: "a", snippet: "hi", created_at: "" }] });
+    const data = resp({ messages: [{ result_type: "message", message_id: "m1", channel_id: "c", channel_name: "x", channel_kind: "group", hit_count: 1, author_name: "a", content: "hi", snippet: "hi", created_at: "" }] });
     expect(
       deriveGlobalSearchStatus({ query: "foo", isFetching: true, isLoading: false, isError: true, data }),
     ).toBe("error");
   });
 
-  it("denied wins over a non-empty result list", () => {
-    const data = resp({
-      denied: true,
-      messages: [{ message_id: "m1", channel_id: "c", channel_name: "x", channel_kind: "group", author_name: "a", snippet: "hi", created_at: "" }],
-    });
-    expect(
-      deriveGlobalSearchStatus({ query: "foo", isFetching: false, isLoading: false, isError: false, data }),
-    ).toBe("denied");
-  });
 });
 
 describe("scopeCount", () => {

@@ -2904,27 +2904,32 @@ export class ApiClient {
   }
 
   /**
-   * Workspace-level global search (LRM-605). Returns collaboration content
-   * (Messages/Channels/DMs/People) within the viewer's permission boundary.
+   * Workspace-level global search (LRM-605 / `GET /api/search`). Returns
+   * collaboration content (Messages/Channels/DMs/People) within the viewer's
+   * permission boundary.
    *
-   * Contract for FE (LRM-606): `denied: true` means the query matched only
-   * content the viewer cannot see — render the explicit 无权限 state, never a
-   * fake empty list. Until BE lands this endpoint, the call 404s and the FE
-   * surfaces the retryable error state (no silent fallback, no mock data).
+   * Authorization (LRM-606 AC#3 option b, aligned to Slack): the server filters
+   * to only content the viewer can see (SQL `JOIN channel_member viewer`).
+   * There is no `denied` flag — a query matching only hidden content returns
+   * an empty result (not faked as anything else); whole-request auth failure
+   * surfaces as a 401/403 error (retryable, no silent fallback, LRM-238).
    */
   async searchWorkspace(
-    workspaceId: string,
+    // workspaceId is retained for caller-side query-key isolation but is NOT
+    // part of the request URL: the server resolves the workspace from the
+    // auth context (ctxWorkspaceID). See LRM-605 / channel.go SearchGlobal.
+    _workspaceId: string,
     params: { q: string; scope?: WorkspaceSearchScope; limit?: number; signal?: AbortSignal },
   ): Promise<WorkspaceSearchResponse> {
     const search = new URLSearchParams({ q: params.q });
     if (params.scope) search.set("scope", params.scope);
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     const raw = await this.fetch<unknown>(
-      `/api/workspaces/${workspaceId}/search?${search.toString()}`,
+      `/api/search?${search.toString()}`,
       params.signal ? { signal: params.signal } : undefined,
     );
     return parseWithFallback(raw, WorkspaceSearchResponseSchema, EMPTY_WORKSPACE_SEARCH_RESPONSE, {
-      endpoint: "GET /api/workspaces/{workspace_id}/search",
+      endpoint: "GET /api/search",
     });
   }
 

@@ -791,8 +791,10 @@ func TestOwnerReadDBErrorReturns500(t *testing.T) {
 	}
 }
 
-// TestListAgentChannelMembersIncludesRoleAndOrder forces tie-break: two human
-// members share role+created_at; order must follow member_id ASC.
+// TestListAgentChannelMembersIncludesRoleAndOrder locks agent-route roster
+// order: role → created_at → member_type → member_id (same as human ListChannels).
+// Earlier human manager before later agent manager proves no agent-first manager rank
+// on /api/agent/channels/.../members (Barry #1344 successor).
 func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -807,30 +809,33 @@ func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
 	var ch ChannelResponse
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 
-	// Two members with identical role and created_at — only member_id breaks ties.
+	humanMgr := insertChannelPeerUser(t, ch.ID, "manager")
 	m1 := insertChannelPeerUser(t, ch.ID, "member")
 	m2 := insertChannelPeerUser(t, ch.ID, "member")
 	agentMgr := createHandlerTestAgent(t, "OrdAgent"+uuid.NewString()[:6], []byte("[]"))
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1,$2,'agent',$3,'manager')
-		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
+INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+VALUES ($1,$2,'agent',$3,'manager')
+ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
 		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentMgr)); err != nil {
 		t.Fatalf("agent: %v", err)
 	}
-	// Same timestamp for both human members (tie-break key under test).
+	// owner earliest role rank; human manager earlier than agent manager (created_at);
+	// two members same ts → member_id ASC.
 	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-01-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), testUserID)
+UPDATE channel_member SET created_at = timestamptz '2020-01-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), testUserID)
 	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-06-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='agent'`, parseUUID(ch.ID))
+UPDATE channel_member SET created_at = timestamptz '2020-06-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), humanMgr)
 	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2021-01-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='user' AND member_id = ANY($2::uuid[])`,
+UPDATE channel_member SET created_at = timestamptz '2020-09-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='agent' AND member_id=$2`, parseUUID(ch.ID), agentMgr)
+	_, _ = testPool.Exec(ctx, `
+UPDATE channel_member SET created_at = timestamptz '2021-01-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='user' AND member_id = ANY($2::uuid[])`,
 		parseUUID(ch.ID), []string{m1, m2})
 
-	// Expected member order by member_id string among m1,m2
 	first, second := m1, m2
 	if second < first {
 		first, second = second, first
@@ -847,16 +852,19 @@ func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
 	}
 	var members []ChannelMemberResponse
 	_ = json.Unmarshal(memRec.Body.Bytes(), &members)
-	wantIDs := []string{testUserID, agentMgr, first, second}
-	wantRoles := []string{"owner", "manager", "member", "member"}
-	if len(members) != 4 {
-		t.Fatalf("len=%d want 4 %+v", len(members), members)
+	wantIDs := []string{testUserID, humanMgr, agentMgr, first, second}
+	wantRoles := []string{"owner", "manager", "manager", "member", "member"}
+	if len(members) != 5 {
+		t.Fatalf("len=%d want 5 %+v", len(members), members)
 	}
 	for i := range wantIDs {
 		if members[i].MemberID != wantIDs[i] || members[i].Role != wantRoles[i] || members[i].Role == "" {
 			t.Fatalf("pos %d got id=%s role=%q want id=%s role=%q full=%+v",
 				i, members[i].MemberID, members[i].Role, wantIDs[i], wantRoles[i], members)
 		}
+	}
+	if members[1].MemberType != "user" || members[2].MemberType != "agent" {
+		t.Fatalf("managers want human then agent by created_at got %+v %+v", members[1], members[2])
 	}
 }
 

@@ -596,26 +596,23 @@ describe("voice send failure leaves a durable record (#838)", () => {
     return screen.getByTestId("fire-voice-thread");
   }
 
-  // ⚠️ SKIPPED — NOT COVERAGE. Two findings from probing it (so the next
-  // attempt doesn't repeat them):
-  //   1. The thread composer DOES mount — but only when `?thread=` is present
-  //      at MOUNT. `threadDeepLinkId` seeds from a mount-time `useState`; setting
-  //      the param afterwards and re-rendering did not open it here.
-  //   2. Switching threads mid-test is the actual blocker, and my helper hid it:
-  //      `fire-voice-thread` exists for EITHER thread, so `findByTestId` after a
-  //      switch proves nothing — it matches thread A's composer just as happily.
-  //      A real switch needs thread-identifying evidence in the DOM (the mocked
-  //      Composer receives no root id; ThreadPanel has it).
-  // Not a data-leak risk either way: `threadRoot` is nulled whenever
-  // `activeChannelId !== openThreadRoot.channel_id` (channels-page ~977), so a
-  // thread's content cannot render under another channel (verified by Felix) —
-  // which is also why this case must NOT switch threads by switching channels:
-  // that clearing is correct behaviour and would be misread as "won't mount".
+  // Thread-surface wiring (#838 H0, Iris). The channel cases above prove the
+  // per-target map; these prove the THREAD composer is really wired to it.
   //
-  // What IS proven meanwhile: the channel A/B sequences above (display,
-  // overwrite-resistance, retry target, delete isolation) and voice-target.test.ts
-  // (the key can't collide across channel/thread/root). The thread composer's
-  // OWN wiring to the map is therefore NOT verified end-to-end. Tracked on #838.
+  // Harness requirements, learned the hard way — all four were faults in the
+  // TEST, not the page:
+  //   1. the ChannelMessageList mock must render `header` (ThreadPanel passes
+  //      the pinned root through it — the only per-thread evidence in the DOM);
+  //   2. `refresh()` must build a NEW element (re-rendering the identical object
+  //      lets React bail out, so `?thread=` changes never land);
+  //   3. the messages fixture key is `messages`, not `items`;
+  //   4. thread sends reject through `sendChannelThreadMessage` — rejecting
+  //      `sendChannelMessage` fails for an unrelated downstream reason and the
+  //      test passes while simulating the wrong error.
+  //
+  // Never switch threads by switching CHANNELS: `threadRoot` is nulled whenever
+  // `activeChannelId !== openThreadRoot.channel_id` (channels-page ~977), which
+  // is correct behaviour and would be misread as "the thread won't mount".
   it("thread A→B: B does not show A's unsent recording, and each thread keeps its own", async () => {
     navState.search = new URLSearchParams("thread=root-1");
     const view = renderPage("chan-random");
@@ -665,6 +662,93 @@ describe("voice send failure leaves a durable record (#838)", () => {
     });
     // Thread sends go through sendChannelThreadMessage-shaped args: the thread
     // root must be A's, not B's.
+    const payload = JSON.stringify(threadSendSpy().mock.calls.at(-1) ?? "");
+    expect(payload).toContain("root-1");
+    expect(payload).not.toContain("root-2");
+  });
+
+  /** Leaves thread A and thread B each holding their own failed recording. */
+  async function failInBothThreads() {
+    navState.search = new URLSearchParams("thread=root-1");
+    const view = renderPage("chan-random");
+    await screen.findByTestId("composer");
+    const fireA = await screen.findByTestId("fire-voice-thread");
+    await screen.findByText("THREADROOTONE");
+    threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
+    fireEvent.click(fireA);
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+      ).not.toBeNull();
+    });
+
+    const fireB = await openThread(view, "root-2", "THREADROOTTWO");
+    threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-b"));
+    fireEvent.click(fireB);
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+      ).not.toBeNull();
+    });
+    return view;
+  }
+
+  function threadRecord() {
+    return within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice");
+  }
+
+  // Iris (#838 H0): delete is its OWN action, not covered by the display/retry
+  // cases or by voice-target.test.ts's key unit test. Deleting in one thread must
+  // remove exactly that thread's record and leave the other's fully usable —
+  // "still visible" is not enough, so each direction also RETRIES the survivor
+  // and checks which root the send went to.
+  it("thread: deleting A's record removes only A's — B's survives and still retries to B", async () => {
+    const view = await failInBothThreads();
+
+    await openThread(view, "root-1", "THREADROOTONE");
+    expect(threadRecord()).not.toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId("prefix-thread")).getByTestId("composer-pending-voice-delete"),
+    );
+    await waitFor(() => expect(threadRecord()).toBeNull());
+
+    // B is untouched…
+    await openThread(view, "root-2", "THREADROOTTWO");
+    expect(threadRecord()).not.toBeNull();
+
+    // …and still targets B. Without this, "visible" could be a stale render.
+    const before = threadSendSpy().mock.calls.length;
+    fireEvent.click(
+      within(screen.getByTestId("prefix-thread")).getByTestId("composer-pending-voice-retry"),
+    );
+    await waitFor(() => {
+      expect(threadSendSpy().mock.calls.length).toBeGreaterThan(before);
+    });
+    const payload = JSON.stringify(threadSendSpy().mock.calls.at(-1) ?? "");
+    expect(payload).toContain("root-2");
+    expect(payload).not.toContain("root-1");
+  });
+
+  it("thread: deleting B's record removes only B's — A's survives and still retries to A", async () => {
+    const view = await failInBothThreads();
+
+    // Already on B after the setup.
+    expect(threadRecord()).not.toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId("prefix-thread")).getByTestId("composer-pending-voice-delete"),
+    );
+    await waitFor(() => expect(threadRecord()).toBeNull());
+
+    await openThread(view, "root-1", "THREADROOTONE");
+    expect(threadRecord()).not.toBeNull();
+
+    const before = threadSendSpy().mock.calls.length;
+    fireEvent.click(
+      within(screen.getByTestId("prefix-thread")).getByTestId("composer-pending-voice-retry"),
+    );
+    await waitFor(() => {
+      expect(threadSendSpy().mock.calls.length).toBeGreaterThan(before);
+    });
     const payload = JSON.stringify(threadSendSpy().mock.calls.at(-1) ?? "");
     expect(payload).toContain("root-1");
     expect(payload).not.toContain("root-2");

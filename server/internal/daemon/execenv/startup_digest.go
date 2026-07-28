@@ -115,7 +115,7 @@ func (p StartupMaterializationPlan) Digest() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// StartupStaticDigest pure-renders the real create-time plan and digests it.
+// StartupStaticDigest is the fingerprint alias for ManagedStartupInputDigest.
 func StartupStaticDigest(provider string, ctx TaskContextForEnv) string {
-	return RenderStartupMaterializationPlan(provider, StartupStaticContext(ctx)).Digest()
+	return ManagedStartupInputDigest(provider, ctx)
 }

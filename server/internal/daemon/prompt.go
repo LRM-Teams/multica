@@ -385,6 +385,13 @@ func buildChatPrompt(task Task, agentRoot string) string {
 		if id := strings.TrimSpace(task.InitiatorID); id != "" {
 			fmt.Fprintf(&b, "- ID: %s\n", id)
 		}
+		// Member email was previously only in AGENTS brief; option A static strip
+		// removes it from startup — must live in the per-turn envelope.
+		if task.InitiatorType == "member" {
+			if email := strings.TrimSpace(task.InitiatorEmail); email != "" {
+				fmt.Fprintf(&b, "- Email: %s\n", email)
+			}
+		}
 		b.WriteString("\n")
 	}
 	// Per-turn issue/trigger facts when present on a chat wake (not startup-static).

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,7 @@ var attachmentUploadCmd = &cobra.Command{
 func init() {
 	attachmentCmd.AddCommand(attachmentViewCmd)
 	attachmentCmd.AddCommand(attachmentUploadCmd)
+	attachmentCmd.AddCommand(attachmentListCmd)
 
 	attachmentViewCmd.Flags().String("id", "", "Attachment UUID (transition alias; prefer positional <attachment-id>)")
 	attachmentViewCmd.Flags().String("output", "", "Local file path to write the downloaded bytes to (required)")
@@ -61,6 +63,10 @@ func init() {
 	attachmentUploadCmd.Flags().String("path", "", "Absolute or relative path to the local file to upload (required)")
 	attachmentUploadCmd.Flags().String("target", "", "Optional channel target: '#channel' or channel UUID")
 	_ = attachmentUploadCmd.MarkFlagRequired("path")
+
+	attachmentListCmd.Flags().String("issue", "", "Issue id or key (list issue attachments)")
+	attachmentListCmd.Flags().String("channel", "", "Channel name or UUID (list channel attachments)")
+	attachmentListCmd.Flags().String("output", "table", "Output format: table|json")
 }
 
 // resolveAttachmentViewID returns the attachment id from either a positional
@@ -280,4 +286,82 @@ func formatByteSize(n int64) string {
 		return fmt.Sprintf("%.1fKB", float64(n)/1024)
 	}
 	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
+}
+
+var attachmentListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List attachments for an issue or channel",
+	Long:  "List attachments bound to an issue (--issue) or channel (--channel). Exactly one of the two flags is required.",
+	RunE:  runAttachmentList,
+}
+
+func runAttachmentList(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	issueFlag, _ := cmd.Flags().GetString("issue")
+	channelFlag, _ := cmd.Flags().GetString("channel")
+	issueFlag = strings.TrimSpace(issueFlag)
+	channelFlag = strings.TrimSpace(channelFlag)
+	if (issueFlag == "") == (channelFlag == "") {
+		return fmt.Errorf("exactly one of --issue or --channel is required")
+	}
+
+	var path string
+	if issueFlag != "" {
+		issueRef, err := resolveIssueRef(ctx, client, issueFlag)
+		if err != nil {
+			return fmt.Errorf("resolve issue: %w", err)
+		}
+		path = "/api/issues/" + url.PathEscape(issueRef.ID) + "/attachments"
+		if isAgentAPIToken(cmd) {
+			path = "/api/agent/issues/" + url.PathEscape(issueRef.ID) + "/attachments"
+		}
+	} else {
+		channelID, err := resolveChannelRef(ctx, client, channelFlag)
+		if err != nil {
+			return fmt.Errorf("resolve channel: %w", err)
+		}
+		path = "/api/channels/" + url.PathEscape(channelID) + "/attachments"
+		if isAgentAPIToken(cmd) {
+			path = "/api/agent/channels/" + url.PathEscape(channelID) + "/attachments"
+		}
+	}
+
+	var result any
+	if err := client.GetJSON(ctx, path, &result); err != nil {
+		return fmt.Errorf("list attachments: %w", err)
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	raw, _ := result.([]any)
+	if raw == nil {
+		if m, ok := result.(map[string]any); ok {
+			if arr, ok := m["attachments"].([]any); ok {
+				raw = arr
+			}
+		}
+	}
+	headers := []string{"ID", "NAME", "TYPE", "SIZE"}
+	rows := make([][]string, 0, len(raw))
+	for _, item := range raw {
+		a, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		rows = append(rows, []string{
+			strVal(a, "id"),
+			firstNonEmpty(strVal(a, "filename"), strVal(a, "name")),
+			strVal(a, "content_type"),
+			fmt.Sprintf("%v", a["size"]),
+		})
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
 }

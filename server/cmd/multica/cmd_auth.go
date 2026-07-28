@@ -67,7 +67,11 @@ func init() {
 	authCmd.AddCommand(authLogoutCmd)
 }
 
-func resolveToken(cmd *cobra.Command) string {
+// ambientTokenFromEnvOrFile returns MULTICA_TOKEN or the contents of
+// MULTICA_TOKEN_FILE (daemon agent runs unset MULTICA_TOKEN and inject
+// MULTICA_TOKEN_FILE with mat_* — see daemon cli_transport). Must stay in
+// sync with agentAPITokenFromEnv / isAgentAPIToken path selection (#801).
+func ambientTokenFromEnvOrFile() string {
 	if v := strings.TrimSpace(os.Getenv("MULTICA_TOKEN")); v != "" {
 		return v
 	}
@@ -75,6 +79,13 @@ func resolveToken(cmd *cobra.Command) string {
 		if data, err := os.ReadFile(path); err == nil {
 			return strings.TrimSpace(string(data))
 		}
+	}
+	return ""
+}
+
+func resolveToken(cmd *cobra.Command) string {
+	if v := ambientTokenFromEnvOrFile(); v != "" {
+		return v
 	}
 	if inAgentExecutionContext() {
 		return ""

@@ -463,6 +463,159 @@ func TestBoundary_IssueGet_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// boundaryCLIEnvTokenFile mimics daemon agent execution: unset MULTICA_TOKEN,
+// inject mat_* via MULTICA_TOKEN_FILE only (cli_transport / daemon.go).
+func boundaryCLIEnvTokenFile(t *testing.T, srvURL string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "mat_token")
+	if err := os.WriteFile(tokenFile, []byte("mat_daemon_token_file_only\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", tokenFile)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srvURL)
+	// Agent execution context so resolveToken does not fall through to human profile.
+	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
+	t.Setenv("MULTICA_TASK_ID", "task-boundary")
+}
+
+// TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI is the Frank
+// 2026-07-28 regression: list worked (resolveToken reads TOKEN_FILE) but get
+// 403'd because agentAPITokenFromEnv only checked MULTICA_TOKEN (unset by daemon).
+func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/issues/" + boundaryContractIssueID
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+				"status":     "todo",
+			})
+			return
+		}
+		http.Error(w, "human issue path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "get"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+
+	if err := runIssueGet(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueGet TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+	}
+	if len(gotPaths) == 0 {
+		t.Fatal("no HTTP calls")
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("TOKEN_FILE-only hit human path %q; full=%v", p, gotPaths)
+		}
+		if !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("path %q not under /api/agent/issues; full=%v", p, gotPaths)
+		}
+	}
+}
+
+// TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI covers status
+// mutate under daemon TOKEN_FILE injection (same root cause as get).
+func TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/issues/" + boundaryContractIssueID
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+				"status":     "in_progress",
+			})
+			return
+		}
+		http.Error(w, "human issue path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "status"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+
+	if err := runIssueStatus(cmd, []string{boundaryContractIssueID, "in_progress"}); err != nil {
+		t.Fatalf("runIssueStatus TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("TOKEN_FILE-only status hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+}
+
+// TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI covers comment
+// write under daemon TOKEN_FILE injection.
+func TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantPost := "/api/agent/issues/" + boundaryContractIssueID + "/comments"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == wantPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":      "comment-1",
+				"content": "hi",
+			})
+		default:
+			http.Error(w, "human issue path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "add"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("content", "", "")
+	cmd.Flags().Bool("content-stdin", false, "")
+	cmd.Flags().String("content-file", "", "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().StringSlice("attachment-id", nil, "")
+	cmd.Flags().String("output", "json", "")
+	_ = cmd.Flags().Set("content", "daemon token file comment")
+
+	if err := runIssueCommentAdd(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueCommentAdd TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("TOKEN_FILE-only comment hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+}
+
 // TestBoundary_IssueCreate_HitsDedicatedAgentAPI asserts create posts to
 // POST /api/agent/issues.
 func TestBoundary_IssueCreate_HitsDedicatedAgentAPI(t *testing.T) {

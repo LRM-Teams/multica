@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,8 +127,13 @@ func ambiguousIDPrefixError(kind, input string, matches []idCandidate) error {
 	return fmt.Errorf("ambiguous %s id prefix %q; matches:\n%s\nUse more characters or run the list command with --full-id", kind, input, strings.Join(parts, "\n"))
 }
 
+// agentAPITokenFromEnv reports whether the ambient agent token is mat_*.
+// Uses ambientTokenFromEnvOrFile (env + TOKEN_FILE) — NOT bare MULTICA_TOKEN.
+// Daemon agent execution unsets MULTICA_TOKEN and only sets MULTICA_TOKEN_FILE;
+// env-only checks made resolveIssueRef hit human /api/issues/* → 403 while
+// list (isAgentAPIToken via resolveToken) still worked (Frank 2026-07-28).
 func agentAPITokenFromEnv() bool {
-	return strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_")
+	return strings.HasPrefix(ambientTokenFromEnvOrFile(), "mat_")
 }
 
 func resolveIssueRef(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {

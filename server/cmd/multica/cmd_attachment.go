@@ -239,7 +239,7 @@ func resolveChannelIDFromUploadTarget(ctx context.Context, client *cli.APIClient
 
 	var channels []map[string]any
 	listPath := "/api/channels"
-	if strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_") {
+	if agentAPITokenFromEnv() {
 		listPath = "/api/agent/channels"
 	}
 	if err := client.GetJSON(ctx, listPath, &channels); err != nil {

@@ -38,7 +38,7 @@ func (s *PostgresUpdateStore) Create(ctx context.Context, runtimeID, targetVersi
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := s.expireStale(ctx, tx, "runtime_id = $3", runtimeID); err != nil {
+	if err := s.expireStale(ctx, tx, "runtime_id = $4", runtimeID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -91,7 +91,7 @@ func (s *PostgresUpdateStore) Get(ctx context.Context, id string) (*UpdateReques
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := s.expireStale(ctx, tx, "id = $3", id); err != nil {
+	if err := s.expireStale(ctx, tx, "id = $4", id); err != nil {
 		return nil, err
 	}
 	req, err := scanPostgresUpdate(tx.QueryRow(ctx, postgresUpdateSelect+`
@@ -116,7 +116,7 @@ func (s *PostgresUpdateStore) LatestForRuntime(ctx context.Context, runtimeID st
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := s.expireStale(ctx, tx, "runtime_id = $3", runtimeID); err != nil {
+	if err := s.expireStale(ctx, tx, "runtime_id = $4", runtimeID); err != nil {
 		return nil, err
 	}
 	req, err := scanPostgresUpdate(tx.QueryRow(ctx, postgresUpdateSelect+`
@@ -143,7 +143,7 @@ func (s *PostgresUpdateStore) HasPending(ctx context.Context, runtimeID string) 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := s.expireStale(ctx, tx, "runtime_id = $3", runtimeID); err != nil {
+	if err := s.expireStale(ctx, tx, "runtime_id = $4", runtimeID); err != nil {
 		return false, err
 	}
 	var pending bool
@@ -176,7 +176,7 @@ func (s *PostgresUpdateStore) PopPending(ctx context.Context, runtimeID string) 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := s.expireStale(ctx, tx, "runtime_id = $3", runtimeID); err != nil {
+	if err := s.expireStale(ctx, tx, "runtime_id = $4", runtimeID); err != nil {
 		return nil, err
 	}
 	req, err := scanPostgresUpdate(tx.QueryRow(ctx, `
@@ -239,7 +239,7 @@ func (s *PostgresUpdateStore) transition(
 	if err := s.requireDB(); err != nil {
 		return err
 	}
-	if err := s.expireStale(ctx, s.db, "id = $3", id); err != nil {
+	if err := s.expireStale(ctx, s.db, "id = $4", id); err != nil {
 		return err
 	}
 	allowed := make([]string, 0, len(allowedFrom))
@@ -291,6 +291,7 @@ func (s *PostgresUpdateStore) expireStale(
 			status = 'timeout',
 			error = CASE status
 				WHEN 'pending' THEN 'daemon did not respond within 120 seconds'
+				WHEN 'ready_to_apply' THEN 'activation did not complete within 20 minutes'
 				ELSE 'update did not complete within 150 seconds'
 			END,
 			updated_at = now()
@@ -305,8 +306,12 @@ func (s *PostgresUpdateStore) expireStale(
 				AND run_started_at IS NOT NULL
 				AND run_started_at < now() - ($2 * interval '1 second')
 			)
+			OR (
+				status = 'ready_to_apply'
+				AND updated_at < now() - ($3 * interval '1 second')
+			)
 		  )
-	`, updatePendingTimeout.Seconds(), updateRunningTimeout.Seconds(), value); err != nil {
+	`, updatePendingTimeout.Seconds(), updateRunningTimeout.Seconds(), updateReadyTimeout.Seconds(), value); err != nil {
 		return fmt.Errorf("expire stale daemon runtime update: %w", err)
 	}
 	return nil

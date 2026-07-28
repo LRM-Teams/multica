@@ -96,7 +96,8 @@ func TestInMemoryUpdateStore_RetainsTerminalHistoryBeyondActiveWindow(t *testing
 	}
 }
 
-func TestInMemoryUpdateStoreReadyToApplyDoesNotExpireWhileDrainIsActive(t *testing.T) {
+func TestInMemoryUpdateStore_FreshReadyBlocksCreate(t *testing.T) {
+	// B0-T2: fresh ready_to_apply still conflicts.
 	ctx := context.Background()
 	store := NewInMemoryUpdateStore()
 
@@ -110,20 +111,117 @@ func TestInMemoryUpdateStoreReadyToApplyDoesNotExpireWhileDrainIsActive(t *testi
 	if err := store.ReadyToApply(ctx, ready.ID, "verified"); err != nil {
 		t.Fatalf("mark ready: %v", err)
 	}
-	ready.UpdatedAt = time.Now().Add(-(updateTerminalRetention + time.Hour))
 
-	if _, err := store.Create(ctx, "rt-unrelated", "v1.2.4"); err != nil {
-		t.Fatalf("create unrelated update: %v", err)
+	if _, err := store.Create(ctx, "rt-ready", "v1.2.5"); err != errUpdateInProgress {
+		t.Fatalf("create while fresh ready error = %v, want errUpdateInProgress", err)
 	}
 	got, err := store.Get(ctx, ready.ID)
 	if err != nil {
-		t.Fatalf("get aged ready update: %v", err)
+		t.Fatalf("get: %v", err)
 	}
 	if got == nil || got.Status != UpdateReady {
-		t.Fatalf("aged ready update was pruned: %+v", got)
+		t.Fatalf("fresh ready should stay ready, got %+v", got)
 	}
-	if _, err := store.Create(ctx, "rt-ready", "v1.2.5"); err != errUpdateInProgress {
-		t.Fatalf("create for draining runtime error = %v, want errUpdateInProgress", err)
+}
+
+func TestInMemoryUpdateStore_AgedReadyTimesOutAndAllowsCreate(t *testing.T) {
+	// B0-T1: ready_to_apply past 20m → timeout → Create succeeds.
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+
+	ready, err := store.Create(ctx, "rt-ready", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "rt-ready"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, ready.ID, "verified"); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	// Clock for ready TTL is UpdatedAt at ready transition.
+	ready.UpdatedAt = time.Now().Add(-(updateReadyTimeout + time.Second))
+
+	got, err := store.Get(ctx, ready.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != UpdateTimeout {
+		t.Fatalf("status = %s, want timeout", got.Status)
+	}
+	if got.Error != updateReadyTimeoutError {
+		t.Fatalf("error = %q, want %q", got.Error, updateReadyTimeoutError)
+	}
+
+	next, err := store.Create(ctx, "rt-ready", "v1.2.5")
+	if err != nil {
+		t.Fatalf("create after ready timeout: %v", err)
+	}
+	if next.Status != UpdatePending {
+		t.Fatalf("next status = %s, want pending", next.Status)
+	}
+}
+
+func TestInMemoryUpdateStore_ReadyWithinTTLDoesNotTimeout(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+
+	ready, err := store.Create(ctx, "rt-ready", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "rt-ready"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, ready.ID, "verified"); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	// Still inside 20m window.
+	ready.UpdatedAt = time.Now().Add(-(updateReadyTimeout - time.Minute))
+
+	got, err := store.Get(ctx, ready.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != UpdateReady {
+		t.Fatalf("status = %s, want ready_to_apply", got.Status)
+	}
+}
+
+func TestInMemoryUpdateStore_TerminalHistoryRetainedAfterReadyTimeout(t *testing.T) {
+	// B0-T4: timeout terminal history remains readable until terminal retention.
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+
+	ready, err := store.Create(ctx, "rt-ready", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "rt-ready"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, ready.ID, "verified"); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	ready.UpdatedAt = time.Now().Add(-(updateReadyTimeout + time.Second))
+
+	if _, err := store.Create(ctx, "rt-ready", "v1.2.5"); err != nil {
+		t.Fatalf("create after timeout: %v", err)
+	}
+	latest, err := store.LatestForRuntime(ctx, "rt-ready")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	// Latest may be the new pending; the timed-out row must still be Get-able.
+	got, err := store.Get(ctx, ready.ID)
+	if err != nil {
+		t.Fatalf("get timed-out: %v", err)
+	}
+	if got == nil || got.Status != UpdateTimeout {
+		t.Fatalf("timed-out row missing/wrong: %+v", got)
+	}
+	if latest == nil {
+		t.Fatal("expected some latest row")
 	}
 }
 

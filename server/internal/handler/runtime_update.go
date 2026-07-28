@@ -44,11 +44,18 @@ type UpdateRequest struct {
 const (
 	updatePendingTimeout = 120 * time.Second
 	updateRunningTimeout = 150 * time.Second
+	// updateReadyTimeout is the control-plane safety net for stuck
+	// ready_to_apply rows (D7 / #815 B0). Clock starts when status becomes
+	// ready_to_apply (UpdatedAt at that transition). 20m leaves 5m grace after
+	// daemon T_hard=15m. Must match expireStale / applyUpdateTimeout.
+	updateReadyTimeout   = 20 * time.Minute
 	updateConfirmTimeout = 120 * time.Second
 	updateStoreRetention = 5 * time.Minute
 	// Keep the last terminal update around long enough for a backend deploy /
 	// restart to preserve the user's "I just clicked Update" result and reason.
 	updateTerminalRetention = 6 * time.Hour
+
+	updateReadyTimeoutError = "activation did not complete within 20 minutes"
 )
 
 type UpdateStore interface {
@@ -86,6 +93,14 @@ func applyUpdateTimeout(req *UpdateRequest, now time.Time) bool {
 			req.UpdatedAt = now
 			return true
 		}
+	case UpdateReady:
+		// Clock = UpdatedAt when entered ready_to_apply (set by ReadyToApply).
+		if now.Sub(req.UpdatedAt) > updateReadyTimeout {
+			req.Status = UpdateTimeout
+			req.Error = updateReadyTimeoutError
+			req.UpdatedAt = now
+			return true
+		}
 	}
 	return false
 }
@@ -117,7 +132,8 @@ func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion
 		}
 	}
 
-	// Reject if there is already a pending or running update for this runtime.
+	// Reject if there is already an active (pending/running/ready) update.
+	// applyUpdateTimeout above may have just freed a stuck ready_to_apply.
 	for _, req := range s.requests {
 		if req.RuntimeID == runtimeID && updateRequestBlocksNewRequest(req.Status) {
 			return nil, errUpdateInProgress

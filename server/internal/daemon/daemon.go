@@ -4738,6 +4738,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						Seq:    int(s),
 						Type:   "tool_result",
 						Tool:   toolName,
+						Input:  msg.Input, // LRM-689: backfill carrier when started had empty args
 						Output: output,
 					})
 					mu.Unlock()

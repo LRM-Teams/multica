@@ -136,4 +136,67 @@ describe("task transcript timeline", () => {
       }),
     ]);
   });
+
+  it("backfills empty tool_use.input from a later tool_result.input (LRM-689)", () => {
+    const items = buildTimeline([
+      {
+        task_id: "task-1",
+        issue_id: "issue-1",
+        seq: 1,
+        type: "tool_use",
+        tool: "shell",
+      },
+      {
+        task_id: "task-1",
+        issue_id: "issue-1",
+        seq: 2,
+        type: "tool_result",
+        tool: "shell",
+        input: { command: "pwd" },
+        output: "/tmp\n",
+      },
+    ]);
+
+    expect(items[0]).toEqual(
+      expect.objectContaining({
+        seq: 1,
+        type: "tool_use",
+        tool: "shell",
+        input: { command: "pwd" },
+      }),
+    );
+    expect(items[1]).toEqual(
+      expect.objectContaining({
+        seq: 2,
+        type: "tool_result",
+        tool: "shell",
+        input: { command: "pwd" },
+        output: "/tmp\n",
+      }),
+    );
+  });
+
+  it("does not overwrite a non-empty tool_use.input during backfill", () => {
+    const items = buildTimeline([
+      {
+        task_id: "task-1",
+        issue_id: "issue-1",
+        seq: 1,
+        type: "tool_use",
+        tool: "shell",
+        input: { command: "echo started" },
+      },
+      {
+        task_id: "task-1",
+        issue_id: "issue-1",
+        seq: 2,
+        type: "tool_result",
+        tool: "shell",
+        input: { command: "echo completed" },
+        output: "ok",
+      },
+    ]);
+
+    expect(items[0]?.input).toEqual({ command: "echo started" });
+  });
 });

@@ -143,7 +143,7 @@ type Message struct {
 	Content   string         // text content (Text, Error, Log)
 	Tool      string         // tool name (ToolUse, ToolResult)
 	CallID    string         // tool call ID (ToolUse, ToolResult)
-	Input     map[string]any // tool input (ToolUse)
+	Input     map[string]any // tool input (ToolUse); also on ToolResult when completed backfills started-empty args (LRM-689)
 	Output    string         // tool output (ToolResult)
 	Status    string         // agent status string (Status)
 	Level     string         // log level (Log)

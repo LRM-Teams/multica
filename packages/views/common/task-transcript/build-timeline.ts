@@ -49,6 +49,33 @@ function redactTimelineItems(items: TimelineItem[]): TimelineItem[] {
   }));
 }
 
+function inputKeyCount(input?: Record<string, unknown> | null): number {
+  return input && typeof input === "object" ? Object.keys(input).length : 0;
+}
+
+/**
+ * LRM-689: Cursor often emits tool args only on `completed`. Daemon stores
+ * those on `tool_result.input`; copy onto the nearest prior empty `tool_use`
+ * of the same tool so the bubble stops showing「此步骤未捕获到参数」.
+ */
+export function backfillToolUseInputFromResults(items: TimelineItem[]): TimelineItem[] {
+  if (items.length === 0) return items;
+  const out = items.map((item) => ({ ...item }));
+  for (let i = 0; i < out.length; i++) {
+    const result = out[i];
+    if (!result || result.type !== "tool_result" || inputKeyCount(result.input) === 0) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      const use = out[j];
+      if (!use || use.type !== "tool_use") continue;
+      if (result.tool && use.tool && result.tool !== use.tool) continue;
+      if (inputKeyCount(use.input) > 0) break;
+      out[j] = { ...use, input: { ...(result.input as Record<string, unknown>) } };
+      break;
+    }
+  }
+  return out;
+}
+
 /** Build a chronologically ordered timeline from raw task messages. */
 export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
   const items: TimelineItem[] = [];
@@ -67,5 +94,5 @@ export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
       created_at: msg.created_at,
     });
   }
-  return redactTimelineItems(coalesceTimelineItems(items));
+  return redactTimelineItems(backfillToolUseInputFromResults(coalesceTimelineItems(items)));
 }

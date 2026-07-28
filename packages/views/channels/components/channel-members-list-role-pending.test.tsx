@@ -11,13 +11,22 @@ import type { GroupMemberActions } from "@multica/core/channels";
  * The role mutations don't exist yet (#1321), so promote / demote / transfer
  * render DISABLED with a persistent note. These assert the user-visible
  * contract Iris specified:
- *   - the rows cannot be activated by mouse OR keyboard, and firing nothing is
- *     asserted at the callback boundary (not just "looks dimmed");
+ *   - the rows cannot be activated (asserted at the callback boundary, not on
+ *     styling) and carry aria-disabled;
  *   - the explanation is a real text node present BEFORE any interaction, and
  *     is referenced by each row's aria-describedby (not tooltip-only);
  *   - REMOVE is deliberately NOT in this group — it has a working endpoint, so
  *     telling the user it's "coming soon" would be the opposite lie. (Wiring it
  *     back to the real confirm flow is its own ticket, #833.)
+ *
+ * HOW TO FLIP-VERIFY THESE (matters — there is no flag to toggle):
+ * delete the `disabled` prop from the three rows in channel-members-list.tsx
+ * → the three click cases go red; stop rendering the note → the note case goes
+ * red. That is the regression they guard: rows becoming activatable again.
+ * `disabled` is unconditional on purpose (a half-open flag would mean clickable
+ * rows with no handler behind them), so there is nothing to toggle — a reviewer
+ * flipping a boolean will see nothing move and may wrongly conclude these don't
+ * discriminate.
  */
 
 vi.mock("../../i18n", () => ({
@@ -126,15 +135,18 @@ describe("ChannelMembersList — role rows are disabled while the write API is m
     expect(onGroupMemberAction).not.toHaveBeenCalled();
   });
 
-  it("keyboard activation (Enter / Space) on a disabled role row fires nothing", async () => {
-    const user = userEvent.setup();
-    const onGroupMemberAction = renderList();
-    await openMenu(user);
-
-    await user.keyboard("{ArrowDown}{Enter}");
-    await user.keyboard("{ArrowDown} ");
-    expect(onGroupMemberAction).not.toHaveBeenCalled();
-  });
+  // NO keyboard-activation test here, on purpose. Two attempts could not be
+  // made to discriminate in jsdom: arrow-key traversal skips disabled items (so
+  // Enter lands on an enabled row and the assertion passes without ever
+  // exercising a disabled one), and focusing a row + pressing Enter never
+  // reaches the item handler at all — this menu handles keys at the menu level,
+  // so the "fires nothing" assertion stays green with AND without `disabled`.
+  // A guard that cannot fail is worse than no guard: it reads like coverage.
+  //
+  // What actually protects the keyboard path: it is the SAME `disabled` prop
+  // the click cases above do discriminate against, plus the asserted
+  // `aria-disabled="true"`. Real keyboard/AT behaviour is verified in Iris's
+  // acceptance pass, not faked here.
 
   it("the explanation is visible text before any interaction, and describes each disabled row", async () => {
     const user = userEvent.setup();

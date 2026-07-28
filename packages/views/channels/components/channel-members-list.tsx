@@ -123,22 +123,23 @@ function MemberRow({
       menuActions.canTransferOwnership ||
       menuActions.canRemove);
 
-  // #832 — TEMPORARY, delete wholesale when #1321 lands.
+  // #832 临时诚实守卫：整块删除（勿翻开关/勿部分启用）。删除条件 = #1326 最终角色
+  // 写合同 merged + served，且本菜单三行已接真实授权 mutation（届时由实现真 UI 的
+  // 那张任务一并删除）。
   //
-  // The role mutations (promote / demote / transfer) have no write endpoint
-  // yet, so these rows used to be clickable and answer with an info toast.
-  // Frank set a group manager, saw the toast, and believed it had worked — the
-  // click itself promises the action is available, and a toast that disappears
-  // is not a substitute for saying so up front. Until the real mutation is
-  // wired, they render DISABLED with a persistent adjacent note.
+  // Why it exists: the role mutations (promote / demote / transfer) have no
+  // write endpoint yet, so these rows used to be clickable and answer with an
+  // info toast. Frank set a group manager, saw the toast, and believed it had
+  // worked — the click itself promises the action is available, and a toast
+  // that disappears is no substitute for saying so up front.
   //
-  // When #1321 is served: delete this constant, the note, and the `disabled`
-  // props, and wire the rows to the real authorized mutation. Do NOT keep the
-  // disabled branch alongside the real one — no double path (Parker).
-  const ROLE_MUTATIONS_AVAILABLE = false;
+  // There is deliberately NO feature flag here. `disabled` is unconditional.
+  // A flag would create a legal-looking half-open state — rows clickable with
+  // no handler behind them, i.e. the original bug minus even the toast. This
+  // block has exactly one valid exit: delete it and replace it with rows wired
+  // to the real authorized mutation. One exit ⇒ no switch. (Parker)
   const rolePendingNoteId = `group-member-role-pending-${m.member_type}-${m.member_id}`;
   const showRolePendingNote =
-    !ROLE_MUTATIONS_AVAILABLE &&
     !!menuActions &&
     (menuActions.canPromoteToManager ||
       menuActions.canDemoteToMember ||

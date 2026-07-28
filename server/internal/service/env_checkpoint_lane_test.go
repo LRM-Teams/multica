@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 // --- fakes ---
@@ -568,5 +569,84 @@ func TestBranchDispatchStillAcceptsAKeylessRequest(t *testing.T) {
 	}
 	if err := svc.validate(in); err != nil {
 		t.Fatalf("keyless branch dispatch must still validate until Task 13: %v", err)
+	}
+}
+
+// TestSnapshotCheckpointRoundTripRunningToLanes walks the whole state machine the
+// change exists to enable: a running project is captured in snapshot mode, then
+// materialized into three independent lanes. The other fan-out tests start from a
+// pre-seeded checkpoint, so this is the only one that proves capture and resume
+// agree — resume is fed exactly the savepoints create produced, and the trip as a
+// whole is asserted to cost one snapshot, not one per lane.
+func TestSnapshotCheckpointRoundTripRunningToLanes(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	creator := &fakeSavepointCreator{}
+	savepoints := &fakeSavepointReader{}
+	lanes := newFakeLaneRepo()
+	mat := &fakeLaneMaterializer{}
+	forked := &fakeContinuationStrategy{
+		mode:    SaveModeSnapshot,
+		outcome: ContinuationOutcome{Status: TriggerExecuted, TaskID: "run-1"},
+	}
+	saver := &fakeCheckpointSaver{}
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{},
+		&fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)},
+		&fakeInFlightResolver{triggers: []ResumeTrigger{
+			{TaskID: "t-1", RuntimeID: "r-1", AgentID: "a-1", ProjectID: "proj", Kind: "chat"},
+		}},
+		ContinuationRegistry{Forked: forked}).
+		WithSavepointCreator(creator).
+		WithLanes(lanes, mat, savepoints)
+
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj", SaveMode: SaveModeSnapshot,
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "src-1", WorkspaceID: "ws"}},
+		ActorUserID: "u", SaveTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if cp.SaveStatus != EnvCheckpointSaveComplete {
+		t.Fatalf("save status = %s, want complete", cp.SaveStatus)
+	}
+	// Capture must not disturb the source: the whole point of snapshot mode is
+	// that the project it was taken from keeps running.
+	if len(saver.calls) != 0 {
+		t.Fatalf("snapshot capture must not stop the source, got %d stops", len(saver.calls))
+	}
+
+	// Resume sees the savepoints capture actually produced, not literals.
+	savepoints.savepoints = creator.produced
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: cp.ID, ActorUserID: "u",
+		LaneCount: 3, LaneKeyAnchor: "dispatch-abc",
+	})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res.Status != ResumeCompleted {
+		t.Fatalf("status = %s, want completed", res.Status)
+	}
+	if len(res.Lanes) != 3 {
+		t.Fatalf("lanes = %d, want 3", len(res.Lanes))
+	}
+	for _, lane := range res.Lanes {
+		if lane.Status != LaneStatusReady {
+			t.Fatalf("lane %s status = %s (%s), want ready", lane.LaneKey, lane.Status, lane.Error)
+		}
+		if lane.TriggerStatus != TriggerExecuted {
+			t.Fatalf("lane %s continuation = %s, want executed", lane.LaneKey, lane.TriggerStatus)
+		}
+	}
+	if len(creator.calls) != 1 {
+		t.Fatalf("the whole round trip must take exactly one snapshot, got %d", len(creator.calls))
+	}
+	// Every lane must have been built from that one savepoint.
+	for _, c := range mat.instanceCalls {
+		if c.Savepoint.CubeSnapshotID != creator.produced[0].CubeSnapshotID {
+			t.Fatalf("lane built from %q, want the captured %q",
+				c.Savepoint.CubeSnapshotID, creator.produced[0].CubeSnapshotID)
+		}
 	}
 }

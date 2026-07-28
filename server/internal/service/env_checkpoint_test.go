@@ -191,6 +191,10 @@ type fakeSavepointCreator struct {
 	checkpts []string
 	status   string // defaults to "ready"
 	err      error
+	// produced records what create handed back, so a round-trip test can feed
+	// resume the actual savepoints instead of restating them as literals — a
+	// literal would keep passing if create and resume disagreed on the ids.
+	produced []Savepoint
 }
 
 func (f *fakeSavepointCreator) CreateSavepoint(_ context.Context, ref SandboxInstanceRef, checkpointID, _ string) (Savepoint, error) {
@@ -203,12 +207,14 @@ func (f *fakeSavepointCreator) CreateSavepoint(_ context.Context, ref SandboxIns
 	if status == "" {
 		status = "ready"
 	}
-	return Savepoint{
+	sp := Savepoint{
 		SnapshotID:     fmt.Sprintf("snap-%d", len(f.calls)),
 		CubeSnapshotID: fmt.Sprintf("cube-%d", len(f.calls)),
 		InstanceID:     ref.InstanceID,
 		Status:         status,
-	}, nil
+	}
+	f.produced = append(f.produced, sp)
+	return sp, nil
 }
 
 // --- tests ---

@@ -24,16 +24,27 @@ func (q *Queries) CountChildTasks(ctx context.Context, taskID pgtype.UUID) (int6
 }
 
 // CountActiveTrainingTasks returns the number of non-terminal inbox events
-// for the given project whose agent is part of the training dispatch.  A count
-// of 0 means all trainable agents are idle (all terminal).
+// taking part in the given project's rollout.  A count of 0 means all agents
+// on the rollout are idle (all terminal).
+//
+// Membership is resolved through interaction_dag_session_run, which binds each
+// RL session to {project_id, agent_run_id = agent_inbox_event.id}. Matching on
+// training_dispatch.train_agent_id instead would never hit: rollout tasks run
+// under per-project derived agents, and agent_inbox_event carries no project
+// column to scope them by.
+//
+// Terminal is acked/suppressed (see service.isTerminalAgentTaskStatus); the
+// status enum is pending/draining/acked/failed/suppressed, so treating
+// completed/cancelled as terminal counted every finished task as active and
+// the idle sweep never fired.
 func (q *Queries) CountActiveTrainingTasks(ctx context.Context, projectID pgtype.UUID) (int64, error) {
 	var count int64
 	err := q.db.QueryRow(ctx,
 		`SELECT COUNT(*)
-		 FROM agent_inbox_event t
-		 JOIN training_dispatch d ON d.project_id = $1
-		 WHERE t.agent_id = d.train_agent_id
-		   AND t.status NOT IN ('completed','failed','cancelled')`,
+		 FROM interaction_dag_session_run r
+		 JOIN agent_inbox_event t ON t.id = r.agent_run_id::uuid
+		 WHERE r.project_id = $1::text
+		   AND t.status NOT IN ('acked','suppressed')`,
 		projectID,
 	).Scan(&count)
 	return count, err

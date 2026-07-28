@@ -1339,3 +1339,25 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+
+// TestNoAgentAPITokenFromEnvSymbol hard-forbids the deleted dual detector name
+// (Parker: delete, do not keep same-semantics twin).
+func TestNoAgentAPITokenFromEnvSymbol(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "agentAPITokenFromEnv") {
+			t.Fatalf("%s still references deleted agentAPITokenFromEnv; use isAgentAPIToken / isAgentAPITokenAmbient", f)
+		}
+	}
+}

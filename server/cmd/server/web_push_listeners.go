@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/url"
@@ -81,7 +83,9 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 	subs, err := queries.ListActiveWebPushSubscriptions(ctx, parseUUID(recipientID))
 	if err != nil || len(subs) == 0 {
 		if err != nil {
-			slog.Error("web push: list subscriptions failed", "error", err)
+			slog.Error("web push: list subscriptions failed", "workspace_id", msg.WorkspaceID, "channel_id", msg.ChannelID, "message_id", msg.ID, "recipient_id", recipientID, "error", err)
+		} else {
+			slog.Info("web push: no active subscriptions", "workspace_id", msg.WorkspaceID, "channel_id", msg.ChannelID, "message_id", msg.ID, "recipient_id", recipientID)
 		}
 		return
 	}
@@ -173,19 +177,24 @@ func buildWebPushChannelPayload(ctx context.Context, queries *db.Queries, msg ha
 func deliverWebPushToSubscriptions(ctx context.Context, queries *db.Queries, sender *webpush.Sender, userID pgtype.UUID, subs []db.WebPushSubscription, payload any) {
 	var gone []string
 	seen := make(map[string]struct{}, len(subs))
+	logFields := webPushPayloadLogFields(userID, payload)
 	for _, sub := range subs {
 		if _, ok := seen[sub.Endpoint]; ok {
 			continue
 		}
 		seen[sub.Endpoint] = struct{}{}
 		res, err := sender.Send(ctx, webpush.Subscription{Endpoint: sub.Endpoint, P256DH: sub.P256dh, Auth: sub.Auth}, payload)
+		fields := append(append([]any{}, logFields...), "endpoint_hash", webPushEndpointHash(sub.Endpoint), "status", res.StatusCode)
 		if res.Gone {
+			slog.Warn("web push: delivery gone", fields...)
 			gone = append(gone, sub.Endpoint)
 			continue
 		}
 		if err != nil {
-			slog.Warn("web push: delivery failed", "endpoint", sub.Endpoint, "status", res.StatusCode, "error", err)
+			slog.Warn("web push: delivery failed", append(fields, "error", err)...)
+			continue
 		}
+		slog.Info("web push: delivery succeeded", fields...)
 	}
 	if len(gone) > 0 {
 		_, err := queries.DeleteWebPushSubscriptionsByEndpoints(ctx, db.DeleteWebPushSubscriptionsByEndpointsParams{
@@ -257,6 +266,25 @@ func webPushAbsoluteURL(cfg handler.Config, path string) string {
 		return path
 	}
 	return base + path
+}
+
+func webPushPayloadLogFields(userID pgtype.UUID, payload any) []any {
+	fields := []any{"recipient_id", util.UUIDToString(userID)}
+	if p, ok := payload.(webPushInboxPayload); ok {
+		fields = append(fields, "message_id", p.ItemID)
+		if p.ChannelID != "" {
+			fields = append(fields, "channel_id", p.ChannelID)
+		}
+		if p.IssueKey != "" {
+			fields = append(fields, "issue_key", p.IssueKey)
+		}
+	}
+	return fields
+}
+
+func webPushEndpointHash(endpoint string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(endpoint)))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func uniqueStringList(values []string) []string {

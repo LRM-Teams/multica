@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -63,6 +64,33 @@ func TestShouldDeliverChannelMessageWebPushLRM411(t *testing.T) {
 				t.Fatalf("shouldDeliverChannelMessageWebPush() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWebPushEndpointHashDoesNotExposeEndpoint(t *testing.T) {
+	endpoint := "https://push.example.test/send/token-secret"
+	hash := webPushEndpointHash(endpoint)
+	if len(hash) != 12 {
+		t.Fatalf("endpoint hash length = %d, want 12", len(hash))
+	}
+	if hash == endpoint || hash == "token-secret" {
+		t.Fatalf("endpoint hash exposed raw endpoint: %q", hash)
+	}
+	if got := webPushEndpointHash("  " + endpoint + "  "); got != hash {
+		t.Fatalf("endpoint hash should trim whitespace, got %q want %q", got, hash)
+	}
+}
+
+func TestWebPushPayloadLogFields(t *testing.T) {
+	userID := pgtype.UUID{Bytes: [16]byte{0x12, 0x34}, Valid: true}
+	fields := webPushPayloadLogFields(userID, webPushInboxPayload{
+		ItemID:    "msg-1",
+		ChannelID: "ch-1",
+	})
+
+	want := []any{"recipient_id", "12340000-0000-0000-0000-000000000000", "message_id", "msg-1", "channel_id", "ch-1"}
+	if !reflect.DeepEqual(fields, want) {
+		t.Fatalf("log fields = %#v, want %#v", fields, want)
 	}
 }
 

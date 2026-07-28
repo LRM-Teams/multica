@@ -207,7 +207,11 @@ func fetchIssueCandidates(ctx context.Context, client *cli.APIClient) ([]idCandi
 			params.Set("offset", strconv.Itoa(offset))
 		}
 		var result map[string]any
-		if err := client.GetJSON(ctx, "/api/issues?"+params.Encode(), &result); err != nil {
+		listPath := "/api/issues?" + params.Encode()
+		if agentAPITokenFromEnv() {
+			listPath = "/api/agent/issues?" + params.Encode()
+		}
+		if err := client.GetJSON(ctx, listPath, &result); err != nil {
 			return nil, err
 		}
 		issuesRaw, _ := result["issues"].([]any)
@@ -307,7 +311,11 @@ func resolveTaskRunID(ctx context.Context, client *cli.APIClient, issueID, input
 
 func fetchTaskRunCandidatesForIssue(ctx context.Context, client *cli.APIClient, issueID string) ([]idCandidate, error) {
 	var runs []map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+url.PathEscape(issueID)+"/task-runs", &runs); err != nil {
+	runsPath := "/api/issues/" + url.PathEscape(issueID) + "/task-runs"
+	if agentAPITokenFromEnv() {
+		runsPath = "/api/agent/issues/" + url.PathEscape(issueID) + "/task-runs"
+	}
+	if err := client.GetJSON(ctx, runsPath, &runs); err != nil {
 		return nil, err
 	}
 	candidates := make([]idCandidate, 0, len(runs))
@@ -518,6 +526,9 @@ func (l actorDisplayLookup) loadAgents() {
 	}
 	var agents []map[string]any
 	agentPath := "/api/agents?" + url.Values{"workspace_id": {l.client.WorkspaceID}}.Encode()
+	if agentAPITokenFromEnv() {
+		agentPath = "/api/agent/agents"
+	}
 	if err := l.client.GetJSON(l.ctx, agentPath, &agents); err == nil {
 		for _, a := range agents {
 			if id := strVal(a, "id"); id != "" {

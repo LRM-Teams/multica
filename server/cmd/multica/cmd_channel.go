@@ -327,7 +327,9 @@ func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (re
 	}
 	var agents []map[string]any
 	path := "/api/agents"
-	if client.WorkspaceID != "" {
+	if agentAPITokenFromEnv() {
+		path = "/api/agent/agents"
+	} else if client.WorkspaceID != "" {
 		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
 	}
 	if err := client.GetJSON(ctx, path, &agents); err != nil {
@@ -368,4 +370,26 @@ func nameMatches(name, target string) bool {
 func isAgentAPIToken(cmd *cobra.Command) bool {
 	tok := strings.TrimSpace(resolveToken(cmd))
 	return strings.HasPrefix(tok, "mat_")
+}
+
+// agentIssueAPIPath returns /api/issues/{id}{suffix} or /api/agent/issues/{id}{suffix}.
+// suffix should start with "/" (e.g. "/labels") or be empty.
+func agentIssueAPIPath(cmd *cobra.Command, issueID, suffix string) string {
+	base := "/api/issues/"
+	if isAgentAPIToken(cmd) {
+		base = "/api/agent/issues/"
+	}
+	return base + issueID + suffix
+}
+
+// agentIssuesListPath returns /api/issues or /api/agent/issues (optional query already encoded).
+func agentIssuesListPath(cmd *cobra.Command, query string) string {
+	base := "/api/issues"
+	if isAgentAPIToken(cmd) {
+		base = "/api/agent/issues"
+	}
+	if query == "" {
+		return base
+	}
+	return base + "?" + query
 }

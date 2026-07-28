@@ -477,10 +477,11 @@ func runIssueListWithMine(cmd *cobra.Command, forceMine bool) error {
 		params.Set("with_gates", "true")
 	}
 
-	path := "/api/issues"
+	query := ""
 	if len(params) > 0 {
-		path += "?" + params.Encode()
+		query = params.Encode()
 	}
+	path := agentIssuesListPath(cmd, query)
 
 	var result map[string]any
 	if err := client.GetJSON(ctx, path, &result); err != nil {
@@ -1058,7 +1059,7 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.PutJSON(ctx, "/api/issues/"+issueRef.ID, body, &result); err != nil {
+	if err := client.PutJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, ""), body, &result); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 
@@ -1106,7 +1107,7 @@ func runIssueChannel(cmd *cobra.Command, args []string) error {
 		body["channel_id"] = channelID
 	}
 	var result map[string]any
-	if err := client.PutJSON(ctx, "/api/issues/"+issue.ID+"/channel", body, &result); err != nil {
+	if err := client.PutJSON(ctx, agentIssueAPIPath(cmd, issue.ID, "/channel"), body, &result); err != nil {
 		return fmt.Errorf("update issue channel: %w", err)
 	}
 	return cli.PrintJSON(os.Stdout, result)
@@ -1156,7 +1157,7 @@ func runIssueAssign(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.PutJSON(ctx, "/api/issues/"+issueRef.ID, body, &result); err != nil {
+	if err := client.PutJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, ""), body, &result); err != nil {
 		return fmt.Errorf("assign issue: %w", err)
 	}
 
@@ -1412,7 +1413,7 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 		body["attachment_ids"] = attachmentIDs
 	}
 	var result map[string]any
-	if err := client.PostJSON(ctx, "/api/issues/"+issueID+"/comments", body, &result); err != nil {
+	if err := client.PostJSON(ctx, agentIssueAPIPath(cmd, issueID, "/comments"), body, &result); err != nil {
 		return fmt.Errorf("add comment: %w", err)
 	}
 
@@ -1461,7 +1462,7 @@ func runIssueRuns(cmd *cobra.Command, args []string) error {
 	}
 
 	var runs []map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/task-runs", &runs); err != nil {
+	if err := client.GetJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/task-runs"), &runs); err != nil {
 		return fmt.Errorf("list runs: %w", err)
 	}
 
@@ -1583,7 +1584,7 @@ func runIssueRerun(cmd *cobra.Command, args []string) error {
 	}
 
 	var task map[string]any
-	if err := client.PostJSON(ctx, "/api/issues/"+issueRef.ID+"/rerun", map[string]any{}, &task); err != nil {
+	if err := client.PostJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/rerun"), map[string]any{}, &task); err != nil {
 		return fmt.Errorf("rerun issue: %w", err)
 	}
 
@@ -1718,7 +1719,7 @@ func runIssueSubscriberList(cmd *cobra.Command, args []string) error {
 	}
 
 	var subscribers []map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/subscribers", &subscribers); err != nil {
+	if err := client.GetJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/subscribers"), &subscribers); err != nil {
 		return fmt.Errorf("list subscribers: %w", err)
 	}
 
@@ -1781,7 +1782,7 @@ func runIssueSubscriberMutation(cmd *cobra.Command, issueID, action string) erro
 	}
 
 	var result map[string]any
-	path := "/api/issues/" + issueRef.ID + "/" + action
+	path := agentIssueAPIPath(cmd, issueRef.ID, "/"+action)
 	if err := client.PostJSON(ctx, path, body, &result); err != nil {
 		return fmt.Errorf("%s issue: %w", action, err)
 	}

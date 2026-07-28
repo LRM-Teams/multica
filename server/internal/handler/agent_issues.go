@@ -74,3 +74,78 @@ func (h *Handler) DeleteAgentIssueMetadataKey(w http.ResponseWriter, r *http.Req
 	}
 	h.DeleteIssueMetadataKey(w, r)
 }
+
+// --- necessary batch: labels / subscribers / runs / channel ---
+
+func (h *Handler) ListAgentIssueLabels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.ListLabelsForIssue(w, r)
+}
+
+func (h *Handler) AttachAgentIssueLabel(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.AttachLabel(w, r)
+}
+
+func (h *Handler) DetachAgentIssueLabel(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.DetachLabel(w, r)
+}
+
+func (h *Handler) ListAgentIssueSubscribers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.ListIssueSubscribers(w, r)
+}
+
+func (h *Handler) SubscribeAgentToIssue(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.SubscribeToIssue(w, r)
+}
+
+func (h *Handler) UnsubscribeAgentFromIssue(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.UnsubscribeFromIssue(w, r)
+}
+
+func (h *Handler) ListAgentIssueTaskRuns(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.ListTasksByIssue(w, r)
+}
+
+func (h *Handler) RerunAgentIssue(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.RerunIssue(w, r)
+}
+
+func (h *Handler) SetAgentIssueSourceChannel(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.SetIssueSourceChannel(w, r)
+}
+
+// ListAgentDirectoryAgents — GET /api/agent/agents
+// Directory surface for CLI @-resolve: agents visible in principal workspace.
+func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	// ListAgents is workspace-scoped; under /api/agent/* principal workspace applies.
+	h.ListAgents(w, r)
+}

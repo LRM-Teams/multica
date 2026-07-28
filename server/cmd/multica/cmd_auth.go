@@ -67,14 +67,39 @@ func init() {
 	authCmd.AddCommand(authLogoutCmd)
 }
 
-func resolveToken(cmd *cobra.Command) string {
-	if v := strings.TrimSpace(os.Getenv("MULTICA_TOKEN")); v != "" {
+// multicaTokenEnvKey is the sole production BasicLit "MULTICA_TOKEN".
+// Identifier may only be used by ambientTokenFromEnvOrFile and runtimeEnvToken
+// (Barry #1305 primitive-location + no mutable global for map keys).
+const multicaTokenEnvKey = "MULTICA_TOKEN"
+
+// ambientTokenFromEnvOrFile returns MULTICA_TOKEN or the contents of
+// MULTICA_TOKEN_FILE (daemon agent runs unset MULTICA_TOKEN and inject
+// MULTICA_TOKEN_FILE with mat_* — see daemon cli_transport). Must stay in
+// sync with isAgentAPIToken / isAgentAPITokenAmbient path selection (#801).
+func ambientTokenFromEnvOrFile() string {
+	if v := strings.TrimSpace(os.Getenv(multicaTokenEnvKey)); v != "" {
 		return v
 	}
 	if path := strings.TrimSpace(os.Getenv("MULTICA_TOKEN_FILE")); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			return strings.TrimSpace(string(data))
 		}
+	}
+	return ""
+}
+
+// runtimeEnvToken is a pure map lookup for sandboxd runtime_env agent token.
+// No env/file I/O and no package mutable state.
+func runtimeEnvToken(env map[string]string) string {
+	if env == nil {
+		return ""
+	}
+	return strings.TrimSpace(env[multicaTokenEnvKey])
+}
+
+func resolveToken(cmd *cobra.Command) string {
+	if v := ambientTokenFromEnvOrFile(); v != "" {
+		return v
 	}
 	if inAgentExecutionContext() {
 		return ""

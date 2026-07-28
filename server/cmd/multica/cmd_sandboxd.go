@@ -577,7 +577,7 @@ func (c *sandboxdClient) resumeCubeSandbox(ctx context.Context, sandboxID string
 		return nil, err
 	}
 	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
-	if len(runtimeEnv) > 0 && runtimeEnv["MULTICA_TOKEN"] != "" && hasRuntimeModelConfig(payload.Runtime) {
+	if len(runtimeEnv) > 0 && runtimeEnvToken(runtimeEnv) != "" && hasRuntimeModelConfig(payload.Runtime) {
 		if err := c.stopRuntimeInCube(ctx, sandboxID); err != nil {
 			return nil, err
 		}
@@ -662,7 +662,7 @@ func (c *sandboxdClient) reconfigureCubeSandbox(ctx context.Context, sandboxID s
 		return nil, fmt.Errorf("cube sandbox id is required")
 	}
 	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
-	if runtimeEnv["MULTICA_TOKEN"] == "" {
+	if runtimeEnvToken(runtimeEnv) == "" {
 		return nil, fmt.Errorf("runtime_env missing MULTICA_TOKEN")
 	}
 	// Best-effort resume so /execute works when the cube sandbox was paused.
@@ -943,7 +943,7 @@ func (c *sandboxdClient) deleteCubeSandbox(ctx context.Context, sandboxID string
 }
 
 func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID string, runtimeEnv map[string]string) error {
-	if len(runtimeEnv) == 0 || runtimeEnv["MULTICA_TOKEN"] == "" {
+	if len(runtimeEnv) == 0 || runtimeEnvToken(runtimeEnv) == "" {
 		return fmt.Errorf("runtime_env missing MULTICA_TOKEN")
 	}
 	code := buildStartRuntimeInCubeCode(runtimeEnv)

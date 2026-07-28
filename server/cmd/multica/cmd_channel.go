@@ -327,7 +327,7 @@ func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (re
 	}
 	var agents []map[string]any
 	path := "/api/agents"
-	if agentAPITokenFromEnv() {
+	if isAgentAPITokenAmbient() {
 		path = "/api/agent/agents"
 	} else if client.WorkspaceID != "" {
 		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
@@ -365,11 +365,23 @@ func nameMatches(name, target string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(target))
 }
 
-// isAgentAPIToken reports whether the current MULTICA_TOKEN is an agent machine
-// token (mat_*), which must use /api/agent/* dedicated paths (#801).
+// isMatAgentToken is the sole pure mat_* classifier. All path selection must
+// go through this predicate — never reimplement with Getenv("MULTICA_TOKEN").
+func isMatAgentToken(token string) bool {
+	return strings.HasPrefix(strings.TrimSpace(token), "mat_")
+}
+
+// isAgentAPIToken reports agent machine auth for command handlers.
+// Token source: resolveToken (env + TOKEN_FILE + profile). Classification: isMatAgentToken.
 func isAgentAPIToken(cmd *cobra.Command) bool {
-	tok := strings.TrimSpace(resolveToken(cmd))
-	return strings.HasPrefix(tok, "mat_")
+	return isMatAgentToken(resolveToken(cmd))
+}
+
+// isAgentAPITokenAmbient is for id resolvers without *cobra.Command.
+// Token source: ambientTokenFromEnvOrFile only (env + TOKEN_FILE; daemon shape).
+// Classification: same isMatAgentToken. Never env-only.
+func isAgentAPITokenAmbient() bool {
+	return isMatAgentToken(ambientTokenFromEnvOrFile())
 }
 
 // agentIssueAPIPath returns /api/issues/{id}{suffix} or /api/agent/issues/{id}{suffix}.

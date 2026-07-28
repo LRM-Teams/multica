@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,10 +127,6 @@ func ambiguousIDPrefixError(kind, input string, matches []idCandidate) error {
 	return fmt.Errorf("ambiguous %s id prefix %q; matches:\n%s\nUse more characters or run the list command with --full-id", kind, input, strings.Join(parts, "\n"))
 }
 
-func agentAPITokenFromEnv() bool {
-	return strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_")
-}
-
 func resolveIssueRef(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
@@ -153,7 +148,7 @@ func resolveIssueRef(ctx context.Context, client *cli.APIClient, input string) (
 func fetchIssueRef(ctx context.Context, client *cli.APIClient, ref string) (resolvedID, error) {
 	var issue map[string]any
 	issuePath := "/api/issues/" + url.PathEscape(ref)
-	if agentAPITokenFromEnv() {
+	if isAgentAPITokenAmbient() {
 		issuePath = "/api/agent/issues/" + url.PathEscape(ref)
 	}
 	if err := client.GetJSON(ctx, issuePath, &issue); err != nil {
@@ -208,7 +203,7 @@ func fetchIssueCandidates(ctx context.Context, client *cli.APIClient) ([]idCandi
 		}
 		var result map[string]any
 		listPath := "/api/issues?" + params.Encode()
-		if agentAPITokenFromEnv() {
+		if isAgentAPITokenAmbient() {
 			listPath = "/api/agent/issues?" + params.Encode()
 		}
 		if err := client.GetJSON(ctx, listPath, &result); err != nil {
@@ -312,7 +307,7 @@ func resolveTaskRunID(ctx context.Context, client *cli.APIClient, issueID, input
 func fetchTaskRunCandidatesForIssue(ctx context.Context, client *cli.APIClient, issueID string) ([]idCandidate, error) {
 	var runs []map[string]any
 	runsPath := "/api/issues/" + url.PathEscape(issueID) + "/task-runs"
-	if agentAPITokenFromEnv() {
+	if isAgentAPITokenAmbient() {
 		runsPath = "/api/agent/issues/" + url.PathEscape(issueID) + "/task-runs"
 	}
 	if err := client.GetJSON(ctx, runsPath, &runs); err != nil {
@@ -526,7 +521,7 @@ func (l actorDisplayLookup) loadAgents() {
 	}
 	var agents []map[string]any
 	agentPath := "/api/agents?" + url.Values{"workspace_id": {l.client.WorkspaceID}}.Encode()
-	if agentAPITokenFromEnv() {
+	if isAgentAPITokenAmbient() {
 		agentPath = "/api/agent/agents"
 	}
 	if err := l.client.GetJSON(l.ctx, agentPath, &agents); err == nil {

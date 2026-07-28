@@ -2,6 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -459,6 +463,159 @@ func TestBoundary_IssueGet_HitsDedicatedAgentAPI(t *testing.T) {
 		}
 		if !strings.HasPrefix(path, "/api/agent/issues") {
 			t.Fatalf("path %q not under /api/agent/issues; full=%v", p, gotPaths)
+		}
+	}
+}
+
+// boundaryCLIEnvTokenFile mimics daemon agent execution: unset MULTICA_TOKEN,
+// inject mat_* via MULTICA_TOKEN_FILE only (cli_transport / daemon.go).
+func boundaryCLIEnvTokenFile(t *testing.T, srvURL string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "mat_token")
+	if err := os.WriteFile(tokenFile, []byte("mat_daemon_token_file_only\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", tokenFile)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srvURL)
+	// Agent execution context so resolveToken does not fall through to human profile.
+	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
+	t.Setenv("MULTICA_TASK_ID", "task-boundary")
+}
+
+// TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI is the Frank
+// 2026-07-28 regression: list worked (resolveToken reads TOKEN_FILE) but get
+// 403'd because agentAPITokenFromEnv only checked MULTICA_TOKEN (unset by daemon).
+func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/issues/" + boundaryContractIssueID
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+				"status":     "todo",
+			})
+			return
+		}
+		http.Error(w, "human issue path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "get"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+
+	if err := runIssueGet(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueGet TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+	}
+	if len(gotPaths) == 0 {
+		t.Fatal("no HTTP calls")
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("TOKEN_FILE-only hit human path %q; full=%v", p, gotPaths)
+		}
+		if !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("path %q not under /api/agent/issues; full=%v", p, gotPaths)
+		}
+	}
+}
+
+// TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI covers status
+// mutate under daemon TOKEN_FILE injection (same root cause as get).
+func TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/issues/" + boundaryContractIssueID
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+				"status":     "in_progress",
+			})
+			return
+		}
+		http.Error(w, "human issue path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "status"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+
+	if err := runIssueStatus(cmd, []string{boundaryContractIssueID, "in_progress"}); err != nil {
+		t.Fatalf("runIssueStatus TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("TOKEN_FILE-only status hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+}
+
+// TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI covers comment
+// write under daemon TOKEN_FILE injection.
+func TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantPost := "/api/agent/issues/" + boundaryContractIssueID + "/comments"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == wantPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":      "comment-1",
+				"content": "hi",
+			})
+		default:
+			http.Error(w, "human issue path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "add"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("content", "", "")
+	cmd.Flags().Bool("content-stdin", false, "")
+	cmd.Flags().String("content-file", "", "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().StringSlice("attachment-id", nil, "")
+	cmd.Flags().String("output", "json", "")
+	_ = cmd.Flags().Set("content", "daemon token file comment")
+
+	if err := runIssueCommentAdd(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueCommentAdd TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("TOKEN_FILE-only comment hit human path %q; full=%v", p, gotPaths)
 		}
 	}
 }
@@ -1119,5 +1276,368 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 	}
 	if !found {
 		t.Fatalf("paths=%v, want POST /api/agent/attachments", gotPaths)
+	}
+}
+
+
+// multicaTokenSourceBoundaryViolations enforces Barry #1305 successor:
+//  1. BasicLit "MULTICA_TOKEN" only as value of const multicaTokenEnvKey
+//  2. identifier multicaTokenEnvKey only inside ambientTokenFromEnvOrFile
+//     and pure runtimeEnvToken (no mutable package global)
+func multicaTokenSourceBoundaryViolations(filename, src string) ([]string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filename, src, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Positions of the canonical const declaration Ident + its BasicLit value.
+	canonicalLit := map[token.Pos]bool{}
+	canonicalDeclIdent := map[token.Pos]bool{}
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if name.Name != "multicaTokenEnvKey" {
+					continue
+				}
+				canonicalDeclIdent[name.Pos()] = true
+				if i < len(vs.Values) {
+					if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"MULTICA_TOKEN"` {
+						canonicalLit[lit.Pos()] = true
+					}
+				}
+			}
+		}
+	}
+
+	type fnSpan struct {
+		name string
+		body *ast.BlockStmt
+	}
+	var spans []fnSpan
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		spans = append(spans, fnSpan{name: fn.Name.Name, body: fn.Body})
+	}
+	enclosing := func(pos token.Pos) string {
+		for _, sp := range spans {
+			if pos >= sp.body.Lbrace && pos < sp.body.Rbrace {
+				return sp.name
+			}
+		}
+		return ""
+	}
+	allowedIdentUse := map[string]bool{
+		"ambientTokenFromEnvOrFile": true,
+		"runtimeEnvToken":           true,
+	}
+
+	var bad []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BasicLit:
+			if x.Kind != token.STRING || x.Value != `"MULTICA_TOKEN"` {
+				return true
+			}
+			if !canonicalLit[x.Pos()] {
+				pos := fset.Position(x.Pos())
+				bad = append(bad, fmt.Sprintf("%s:%d: BasicLit MULTICA_TOKEN not on const multicaTokenEnvKey", filename, pos.Line))
+			}
+		case *ast.Ident:
+			if x.Name != "multicaTokenEnvKey" {
+				return true
+			}
+			if canonicalDeclIdent[x.Pos()] {
+				return true
+			}
+			fn := enclosing(x.Pos())
+			if !allowedIdentUse[fn] {
+				pos := fset.Position(x.Pos())
+				where := fn
+				if where == "" {
+					where = "<package-level>"
+				}
+				bad = append(bad, fmt.Sprintf("%s:%d: multicaTokenEnvKey used in %s (only ambientTokenFromEnvOrFile / runtimeEnvToken)", filename, pos.Line, where))
+			}
+		}
+		return true
+	})
+	return bad, nil
+}
+
+// ambientTokenFromEnvOrFileReadsTokenFile reports whether the function body
+// of ambientTokenFromEnvOrFile also reads MULTICA_TOKEN_FILE (cannot be
+// env-only itself).
+func ambientTokenFromEnvOrFileReadsTokenFile(src string) (bool, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "cmd_auth.go", src, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "ambientTokenFromEnvOrFile" || fn.Body == nil {
+			continue
+		}
+		found := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			if lit.Value == `"MULTICA_TOKEN_FILE"` {
+				found = true
+			}
+			return true
+		})
+		return found, nil
+	}
+	return false, fmt.Errorf("ambientTokenFromEnvOrFile not found")
+}
+
+// TestBoundary_NoEnvOnlyMatTokenDetection enforces Barry invariant: sole
+// BasicLit "MULTICA_TOKEN" on const multicaTokenEnvKey; identifier only in
+// ambientTokenFromEnvOrFile + runtimeEnvToken; ambient must read TOKEN_FILE.
+func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bad []string
+	var authSrc string
+	var sawCanonicalConst bool
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		if f == "cmd_auth.go" {
+			authSrc = src
+		}
+		hits, err := multicaTokenSourceBoundaryViolations(f, src)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		bad = append(bad, hits...)
+		if strings.Contains(src, "const multicaTokenEnvKey") && strings.Contains(src, `"MULTICA_TOKEN"`) {
+			sawCanonicalConst = true
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("MULTICA_TOKEN source-boundary violations: %v", bad)
+	}
+	if !sawCanonicalConst {
+		t.Fatal("missing const multicaTokenEnvKey = \"MULTICA_TOKEN\" in production package")
+	}
+	if authSrc == "" {
+		t.Fatal("cmd_auth.go not found in package dir")
+	}
+	ok, err := ambientTokenFromEnvOrFileReadsTokenFile(authSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ambientTokenFromEnvOrFile must also read MULTICA_TOKEN_FILE (cannot be env-only)")
+	}
+}
+
+// TestBoundary_NoEnvOnlyMatTokenDetection_Counterfactuals hard-proves the
+// source-boundary scanner fails closed for Barry's bypass classes.
+func TestBoundary_NoEnvOnlyMatTokenDetection_Counterfactuals(t *testing.T) {
+	mustFlag := func(t *testing.T, name, src string) {
+		t.Helper()
+		hits, err := multicaTokenSourceBoundaryViolations(name, src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hits) == 0 {
+			t.Fatalf("%s: expected source-boundary FAIL; got 0 hits", name)
+		}
+	}
+
+	// 1) wrong const name still carries the literal
+	mustFlag(t, "const_alias.go", `package main
+import "os"
+const key = "MULTICA_TOKEN"
+func badConst() string { return os.Getenv(key) }
+`)
+
+	// 2) import alias + raw literal
+	mustFlag(t, "import_alias.go", `package main
+import o "os"
+func badImport() string { return o.Getenv("MULTICA_TOKEN") }
+`)
+
+	// 3) indirect func var + raw literal
+	mustFlag(t, "func_var.go", `package main
+import "os"
+func badVar() string {
+	g := os.Getenv
+	return g("MULTICA_TOKEN")
+}
+`)
+
+	// 4) compose isMatAgentToken(os.Getenv) still red
+	mustFlag(t, "compose.go", `package main
+import "os"
+func isMatAgentToken(token string) bool { return len(token) > 0 }
+func badCompose() bool { return isMatAgentToken(os.Getenv("MULTICA_TOKEN")) }
+`)
+
+	// 5) bare HasPrefix still red
+	mustFlag(t, "hasprefix.go", `package main
+import ("os"; "strings")
+const multicaTokenEnvKey = "MULTICA_TOKEN"
+func ambientTokenFromEnvOrFile() string {
+	_ = os.Getenv("MULTICA_TOKEN_FILE")
+	return os.Getenv(multicaTokenEnvKey)
+}
+func bad() bool {
+	return strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_")
+}
+`)
+
+	// 6) canonical const used outside ambient/runtimeEnvToken
+	mustFlag(t, "ident_leak.go", `package main
+import "os"
+const multicaTokenEnvKey = "MULTICA_TOKEN"
+func ambientTokenFromEnvOrFile() string { return os.Getenv(multicaTokenEnvKey) }
+func runtimeEnvToken(env map[string]string) string { return env[multicaTokenEnvKey] }
+func badLeak() string { return os.Getenv(multicaTokenEnvKey) }
+`)
+
+	// 7) control: const + ambient + pure map helper → clean
+	clean := `package main
+import ("os"; "strings")
+const multicaTokenEnvKey = "MULTICA_TOKEN"
+func ambientTokenFromEnvOrFile() string {
+	if v := strings.TrimSpace(os.Getenv(multicaTokenEnvKey)); v != "" {
+		return v
+	}
+	if path := strings.TrimSpace(os.Getenv("MULTICA_TOKEN_FILE")); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+func runtimeEnvToken(env map[string]string) string {
+	if env == nil {
+		return ""
+	}
+	return strings.TrimSpace(env[multicaTokenEnvKey])
+}
+func isMatAgentToken(token string) bool {
+	return strings.HasPrefix(strings.TrimSpace(token), "mat_")
+}
+func isAgentAPITokenAmbient() bool {
+	return isMatAgentToken(ambientTokenFromEnvOrFile())
+}
+`
+	hits, err := multicaTokenSourceBoundaryViolations("cmd_auth.go", clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("clean control must be green; got %v", hits)
+	}
+	ok, err := ambientTokenFromEnvOrFileReadsTokenFile(clean)
+	if err != nil || !ok {
+		t.Fatalf("clean ambient must read TOKEN_FILE: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestBoundary_MulticaTokenEnvKey_NoRace freezes Barry's reviewer race probe:
+// concurrent ambientTokenFromEnvOrFile + runtimeEnvToken must be race-free
+// (no package-level mutable key cache).
+func TestBoundary_MulticaTokenEnvKey_NoRace(t *testing.T) {
+	env := map[string]string{multicaTokenEnvKey: "mat_race_probe_token"}
+	const workers = 32
+	done := make(chan struct{}, workers*2)
+	for i := 0; i < workers; i++ {
+		go func() {
+			for j := 0; j < 200; j++ {
+				_ = ambientTokenFromEnvOrFile()
+			}
+			done <- struct{}{}
+		}()
+		go func() {
+			for j := 0; j < 200; j++ {
+				if runtimeEnvToken(env) == "" {
+					t.Error("runtimeEnvToken empty under concurrency")
+				}
+			}
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < workers*2; i++ {
+		<-done
+	}
+	if got := runtimeEnvToken(env); got != "mat_race_probe_token" {
+		t.Fatalf("runtimeEnvToken = %q", got)
+	}
+	if got := runtimeEnvToken(nil); got != "" {
+		t.Fatalf("nil env = %q", got)
+	}
+}
+
+// TestNoAgentAPITokenFromEnvSymbol hard-forbids the deleted dual detector name
+// (Parker: delete, do not keep same-semantics twin).
+func TestNoAgentAPITokenFromEnvSymbol(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "agentAPITokenFromEnv") {
+			t.Fatalf("%s still references deleted agentAPITokenFromEnv; use isAgentAPIToken / isAgentAPITokenAmbient", f)
+		}
+	}
+}
+
+
+func TestIsMatAgentToken(t *testing.T) {
+	if !isMatAgentToken("mat_abc") {
+		t.Fatal("mat_ prefix")
+	}
+	if isMatAgentToken("mul_abc") || isMatAgentToken("") || isMatAgentToken("  ") {
+		t.Fatal("non-mat must be false")
+	}
+	// ambient TOKEN_FILE shape
+	t.Setenv("MULTICA_TOKEN", "")
+	dir := t.TempDir()
+	f := filepath.Join(dir, "tok")
+	if err := os.WriteFile(f, []byte("mat_from_file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+	if !isAgentAPITokenAmbient() {
+		t.Fatal("TOKEN_FILE-only must classify as agent")
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	if isAgentAPITokenAmbient() {
+		t.Fatal("no ambient token must be false")
 	}
 }

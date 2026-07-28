@@ -65,6 +65,8 @@ export interface ThreadPanelProps {
   sending?: boolean;
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
+  /** #838 — specific reason for `voiceDisabled`, threaded to the composer. */
+  voiceBlockedReason?: string;
   onVoiceSend?: (
     durationMs: number,
     attachment: VoiceRecordingAttachment,
@@ -128,6 +130,7 @@ export function ThreadPanel({
   sending,
   voicePlaybackScope,
   voiceDisabled,
+  voiceBlockedReason,
   onVoiceSend,
   composerLeadingActions,
   composerTray,
@@ -289,6 +292,7 @@ export function ThreadPanel({
             voiceChannelId={root.channel_id}
             voicePlaybackScope={voicePlaybackScope}
             voiceDisabled={voiceDisabled}
+            voiceBlockedReason={voiceBlockedReason}
             onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive

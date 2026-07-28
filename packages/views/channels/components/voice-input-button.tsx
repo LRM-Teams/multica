@@ -22,6 +22,21 @@ type RecordingState = "idle" | "starting" | "recording" | "uploading";
 export interface VoiceInputButtonProps {
   channelId: string;
   disabled?: boolean;
+  /**
+   * Why the mic is blocked, when the caller knows something more specific than
+   * the generic reason (#838: an unsent recording is waiting).
+   *
+   * `voiceDisabled` is currently ORed from several causes and the default copy
+   * only describes some of them — telling a user with an empty composer to
+   * "clear the current text and attachments" sends them somewhere that does
+   * nothing. A caller that knows the actual cause passes it here.
+   *
+   * Deliberately a plain resolved string and NOT a visible surface: #857 owns
+   * the real fix (a visible `role="status"` line covering all causes on
+   * touch/mouse/keyboard/SR). This only stops the existing title from lying
+   * about the state #838 introduced, and #857 replaces it wholesale.
+   */
+  blockedReason?: string;
   isMobile: boolean;
   playbackScope: string;
   onVoiceSend: (
@@ -56,6 +71,7 @@ async function decodeRecording(blob: Blob): Promise<ArrayBuffer> {
 export function VoiceInputButton({
   channelId,
   disabled = false,
+  blockedReason,
   isMobile,
   playbackScope,
   onVoiceSend,
@@ -239,7 +255,7 @@ export function VoiceInputButton({
       aria-label={label}
       aria-live="polite"
       aria-busy={busy}
-      title={disabled ? t(($) => $.composer.voice_blocked) : label}
+      title={disabled ? blockedReason ?? t(($) => $.composer.voice_blocked) : label}
       disabled={(disabled && !recording) || busy}
       onClick={recording ? finishCapture : startCapture}
     >

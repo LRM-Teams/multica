@@ -3178,6 +3178,13 @@ export function ChannelsPage({
         onSend={handleThreadSend}
         voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
         voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0 || !!threadPendingVoiceHere}
+        // #838 — the default blocked copy talks about clearing text/attachments,
+        // which is a dead end when the real cause is an unsent recording (the
+        // composer is typically empty then). Only override for that cause; the
+        // other causes keep their existing copy until #857 gives each a true one.
+        voiceBlockedReason={
+          threadPendingVoiceHere ? t(($) => $.composer.voice_blocked_pending_voice) : undefined
+        }
         onVoiceSend={handleThreadVoiceSend}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
         composerPrefixExtra={
@@ -3722,6 +3729,14 @@ export function ChannelsPage({
                       // #838 — an unsent recording must be retried or deleted
                       // first; a new one must never silently replace it.
                       !!channelPendingVoiceHere
+                    }
+                    // #838 — see the thread surface above: only the unsent-recording
+                    // cause gets a specific reason, because only that one is made
+                    // false by the default copy.
+                    voiceBlockedReason={
+                      channelPendingVoiceHere
+                        ? t(($) => $.composer.voice_blocked_pending_voice)
+                        : undefined
                     }
                     onVoiceSend={handleVoiceSend}
                     isMobile={isMobile}

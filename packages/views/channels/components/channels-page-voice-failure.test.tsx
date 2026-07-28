@@ -12,17 +12,26 @@ import enChannels from "../../locales/en/channels.json";
 // path retry takes, when the record clears — is the page's own logic.
 const VOICE = { id: "att-voice-1", url: "https://cdn/v.wav", filename: "v.wav", content_type: "audio/wav", size_bytes: 1234 };
 vi.mock("./composer", () => ({
-  Composer: ({ prefix, onVoiceSend, onSend, surface }: {
+  Composer: ({ prefix, onVoiceSend, onSend, surface, voiceDisabled, voiceBlockedReason }: {
     prefix?: React.ReactNode;
     onVoiceSend?: (d: number, a: unknown) => boolean;
     onSend?: () => void;
     surface?: string;
+    voiceDisabled?: boolean;
+    voiceBlockedReason?: string;
   }) => {
     // `surface` distinguishes the channel composer from a thread's — both real
     // components render through here, so tests can drive either one.
     const sfx = surface === "thread" ? "-thread" : "";
     return (
-      <div data-testid={`composer${sfx}`}>
+      // `data-voice-blocked-reason` surfaces the reason the PAGE resolved —
+      // that is the seam #838 broke: the page added a third cause to
+      // `voiceDisabled` without giving it copy of its own.
+      <div
+        data-testid={`composer${sfx}`}
+        data-voice-disabled={voiceDisabled ? "true" : "false"}
+        data-voice-blocked-reason={voiceBlockedReason ?? ""}
+      >
         <div data-testid={`prefix${sfx}`}>{prefix}</div>
         <button data-testid={`fire-voice${sfx}`} onClick={() => onVoiceSend?.(7000, VOICE)}>voice</button>
         <button data-testid={`fire-text${sfx}`} onClick={() => onSend?.()}>text</button>
@@ -609,6 +618,38 @@ describe("voice send failure leaves a durable record (#838)", () => {
     const payload = JSON.stringify(sendSpy().mock.calls.at(-1) ?? "");
     expect(payload).toContain("root-1");
     expect(payload).not.toContain("root-2");
+  });
+
+  it("while a recording is unsent, the mic is blocked with THAT reason — never the generic 'clear text and attachments'", async () => {
+    const GENERIC = enChannels.composer.voice_blocked;
+    const PENDING = enChannels.composer.voice_blocked_pending_voice;
+
+    const fire = await openChannel();
+    // Control: nothing pending yet — not blocked, and no reason claimed.
+    expect(screen.getByTestId("composer")).toHaveAttribute("data-voice-disabled", "false");
+    expect(screen.getByTestId("composer")).toHaveAttribute("data-voice-blocked-reason", "");
+
+    sendSpy().mockRejectedValueOnce(new Error("boom"));
+    fireEvent.click(fire);
+    await screen.findByTestId("composer-pending-voice");
+
+    // Now blocked — and the reason must name the actual cause. The generic copy
+    // tells a user with an EMPTY composer to clear text and attachments, which
+    // does nothing and never mentions the retry/delete that would.
+    const composer = screen.getByTestId("composer");
+    expect(composer).toHaveAttribute("data-voice-disabled", "true");
+    expect(composer).toHaveAttribute("data-voice-blocked-reason", PENDING);
+    expect(composer.getAttribute("data-voice-blocked-reason")).not.toBe(GENERIC);
+    // Guards the trap directly: the sentence must not survive as a substring
+    // either (e.g. if someone later concatenates the two).
+    expect(composer.getAttribute("data-voice-blocked-reason")).not.toContain("attachments");
+
+    // …and it goes away with the record, not on a timer.
+    fireEvent.click(screen.getByTestId("composer-pending-voice-delete"));
+    await waitFor(() => {
+      expect(screen.getByTestId("composer")).toHaveAttribute("data-voice-disabled", "false");
+    });
+    expect(screen.getByTestId("composer")).toHaveAttribute("data-voice-blocked-reason", "");
   });
 
   it("survives the toast being dismissed — the toast is the announcement, not the storage", async () => {

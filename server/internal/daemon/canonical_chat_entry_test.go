@@ -109,6 +109,7 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		if execOpts.Cwd == taskWorkDir {
 			t.Fatalf("exec cwd still per-task path %q", taskWorkDir)
 		}
+		// Option A: AGENTS exists after process-create materialize; reuse does not rewrite.
 		agentsPath := filepath.Join(turn.WorkDir, "AGENTS.md")
 		raw, readErr := os.ReadFile(agentsPath)
 		if readErr != nil {
@@ -117,20 +118,12 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		if !strings.Contains(string(raw), "BEGIN MULTICA-RUNTIME") {
 			t.Fatalf("AGENTS.md missing Multica runtime block:\n%s", raw)
 		}
-		ctxPath := filepath.Join(turn.WorkDir, ".agent_context", "issue_context.md")
-		ctxRaw, ctxErr := os.ReadFile(ctxPath)
-		if ctxErr != nil {
-			t.Fatalf("expected .agent_context/issue_context.md on stable cwd: %v", ctxErr)
-		}
-		if !strings.Contains(string(ctxRaw), issueMarker) {
-			t.Fatalf("issue_context.md missing this-turn marker %q:\n%s", issueMarker, ctxRaw)
-		}
+		_ = issueMarker // per-turn issue facts live in prompt, not disk residual under option A
 		return backend, release, turn.WorkDir
 	}
 
 	issueA := "issue-marker-task-A-" + uuid.NewString()
 	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, sharedChat, issueA, "provider-session-shared", true)
-	// User-owned sibling under .agent_context must survive ledger cleanup (Tier A).
 	userSibling := filepath.Join(stableWorkDir, ".agent_context", "user_notes.md")
 	if err := os.WriteFile(userSibling, []byte("USER_OWNED_NOTES"), 0o644); err != nil {
 		t.Fatal(err)
@@ -142,6 +135,12 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		t.Fatalf("same-chat resume = %q, want provider-session-shared", got)
 	}
 	releaseA(true)
+
+	agentsPath := filepath.Join(stableWorkDir, "AGENTS.md")
+	infoA, err := os.Stat(agentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	issueB := "issue-marker-task-B-" + uuid.NewString()
 	backendB, releaseB, stableWorkDirB := runTurn(uuid.NewString(), taskWorkDirB, sharedChat, issueB, "provider-session-shared", true)
@@ -163,26 +162,15 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		t.Fatalf("factory counts created=%d closed=%d, want 1/0 (no recreate)", created, closed)
 	}
 
+	infoB, err := os.Stat(agentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !infoA.ModTime().Equal(infoB.ModTime()) {
+		t.Fatal("option A violation: AGENTS.md rewritten on resident reuse")
+	}
 	if raw, err := os.ReadFile(userSibling); err != nil || string(raw) != "USER_OWNED_NOTES" {
 		t.Fatalf("user-owned .agent_context sibling not preserved: %v %q", err, raw)
-	}
-	ctxB, err := os.ReadFile(filepath.Join(stableWorkDir, ".agent_context", "issue_context.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctxText := string(ctxB)
-	if strings.Contains(ctxText, issueA) {
-		t.Fatalf("task A Multica issue marker still present after turn B:\n%s", ctxText)
-	}
-	if !strings.Contains(ctxText, issueB) {
-		t.Fatalf("task B issue marker missing after turn B materialize:\n%s", ctxText)
-	}
-	agentsRaw, err := os.ReadFile(filepath.Join(stableWorkDir, "AGENTS.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(agentsRaw), "BEGIN MULTICA-RUNTIME") {
-		t.Fatal("turn B AGENTS.md missing Multica runtime block")
 	}
 }
 

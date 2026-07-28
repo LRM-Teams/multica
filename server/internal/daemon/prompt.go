@@ -361,6 +361,27 @@ func buildChatPrompt(task Task, agentRoot string) string {
 		b.WriteString("- For a short text reply without a sticker, return plain text (or `{\"action\":\"message_send\",\"parts\":[{\"type\":\"text\",\"text\":\"...\"}]}`) as the final output — never dump protocol JSON as user-visible prose after a tool spiral.\n\n")
 	}
 	writeAgentRootSection(&b, agentRoot)
+	// Per-turn initiator (option A): who is speaking this turn. Not in startup
+	// AGENTS digest — same chat can change speakers without process restart.
+	if name := strings.TrimSpace(task.InitiatorName); name != "" {
+		b.WriteString("Current message initiator:\n")
+		fmt.Fprintf(&b, "- Name: %s\n", name)
+		if t := strings.TrimSpace(task.InitiatorType); t != "" {
+			fmt.Fprintf(&b, "- Type: %s\n", t)
+		}
+		if id := strings.TrimSpace(task.InitiatorID); id != "" {
+			fmt.Fprintf(&b, "- ID: %s\n", id)
+		}
+		b.WriteString("\n")
+	}
+	// Per-turn issue/trigger facts when present on a chat wake (not startup-static).
+	if id := strings.TrimSpace(task.IssueID); id != "" {
+		fmt.Fprintf(&b, "Related issue for this turn: %s\n", id)
+		if cid := strings.TrimSpace(task.TriggerCommentID); cid != "" {
+			fmt.Fprintf(&b, "Trigger comment: %s\n", cid)
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("Context assembly rules:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread only. Do not assume visibility into other DMs, channels, issues, or threads unless the user explicitly references them and the Multica CLI allows access.\n")
 	b.WriteString("- For thread-triggered runs, the thread root and recent replies are the relevant conversation boundary; do not infer the entire parent channel/DM history.\n")

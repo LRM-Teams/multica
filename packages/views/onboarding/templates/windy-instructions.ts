@@ -52,7 +52,11 @@ multica agent draft create --file <draft.json> --output link
 
 Allowed initial_notes keys: notes/agents.md, notes/channels.md, notes/project-map.md, notes/relationship-map.md, notes/role-playbook.md, notes/work-log.md, notes/decisions.md. Allowed initial_memory keys: memory/MEMORY.md and memory/STATE.md only. If there is no useful seed context, omit initial_notes and initial_memory.
 
-Leave avatar_url empty unless the user explicitly provides an image. The Multica UI will assign a random human avatar automatically.
+Avatar-in-draft (one-shot hire):
+
+- When the user asks for a specific look / character / searched image as the agent avatar: find or generate that image, prefer a square close-up face crop around 512x512 (avoid tiny icons and huge full-body posters), upload or obtain a durable image URL, and put that URL in the draft JSON as avatar_url when calling: multica agent draft create --file <draft.json> --output link. The Create Agent card applies it on confirm — do NOT ask the user to download/re-upload, and do NOT require a second "设头像" step after create.
+- When the user does not ask for an avatar: leave avatar_url empty. The Multica UI/server assigns a random human preset on create.
+- Never put a custom avatar in the multica://create-agent URL query string; only server-side drafts may carry avatar_url.
 
 Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
 

@@ -89,7 +89,11 @@ multica agent draft create --file <draft.json> --output link
 
 Allowed initial_notes keys: notes/agents.md, notes/channels.md, notes/project-map.md, notes/relationship-map.md, notes/role-playbook.md, notes/work-log.md, notes/decisions.md. Allowed initial_memory keys: memory/MEMORY.md and memory/STATE.md only. If there is no useful seed context, omit initial_notes and initial_memory.
 
-Leave avatar_url empty unless the user explicitly provides an image. It is only a draft suggestion: final creation sends the trusted draft_id, and the server persists it as assigned provenance or assigns a concrete preset when absent.
+Avatar-in-draft (one-shot hire):
+
+- When the user asks for a specific look / character / searched image as the agent avatar: find or generate that image, prefer a square close-up face crop around 512x512 (avoid tiny icons and huge full-body posters), upload or obtain a durable image URL, and put that URL in the draft JSON as avatar_url when calling: multica agent draft create --file <draft.json> --output link. The Create Agent card applies it on confirm — do NOT ask the user to download/re-upload, and do NOT require a second "设头像" step after create.
+- When the user does not ask for an avatar: leave avatar_url empty. The Multica UI/server assigns a random human preset on create.
+- Never put a custom avatar in the multica://create-agent URL query string; only server-side drafts may carry avatar_url.
 
 Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
 
@@ -119,6 +123,11 @@ Success is not a long onboarding conversation. Success means the user gets a use
 // HR-only split (group monitoring/coordination moved to the per-group manager
 // 贝克汉姆/Beckham) and need a one-shot refresh.
 const windyInstructionsCapabilityMarker = "group manager, 贝克汉姆 (Beckham)"
+
+// windyInstructionsAvatarDraftMarker detects Wendy personas that still tell
+// humans to re-upload / "设头像" after create instead of writing avatar_url
+// into the hire draft for one-shot creation.
+const windyInstructionsAvatarDraftMarker = "Avatar-in-draft (one-shot hire)"
 
 type WindyResponse struct {
 	Agent AgentResponse `json:"agent"`
@@ -566,7 +575,8 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 }
 
 func (h *Handler) refreshWindyInstructionsIfStale(r *http.Request, agent db.Agent) (db.Agent, error) {
-	if strings.Contains(agent.Instructions, windyInstructionsCapabilityMarker) {
+	if strings.Contains(agent.Instructions, windyInstructionsCapabilityMarker) &&
+		strings.Contains(agent.Instructions, windyInstructionsAvatarDraftMarker) {
 		return agent, nil
 	}
 	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{

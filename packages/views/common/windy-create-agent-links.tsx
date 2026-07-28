@@ -17,6 +17,7 @@ import { memberListOptions, workspaceKeys } from "@multica/core/workspace/querie
 import { runtimeListOptions } from "@multica/core/runtimes";
 import type {
   Agent,
+  AgentAvatarSelection,
   AgentCreationDraft,
   AgentVisibility,
   CreateAgentRequest,
@@ -39,6 +40,8 @@ import {
   HomeChannelBindPanel,
   type HomeChannelMode,
 } from "../agents/components/home-channel-bind-panel";
+import { AvatarPicker, type AvatarPickerSelection } from "../agents/components/avatar-picker";
+import { randomPickedAvatarSelection } from "../agents/components/avatar-preset";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
@@ -185,6 +188,22 @@ function InlineCreateAgentDialog({
   });
   const [newChannelName, setNewChannelName] = React.useState(() => draft.name || "");
   const [homeInvalid, setHomeInvalid] = React.useState(false);
+  const draftAvatarUrl = draft.avatar_url?.trim() || null;
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = React.useState<string | null>(
+    () => draftAvatarUrl,
+  );
+  const avatarSelectionRef = React.useRef<AgentAvatarSelection | null>(null);
+  const handleAvatarChange = (selection: AvatarPickerSelection | null) => {
+    if (selection) {
+      setAvatarPreviewUrl(selection.previewUrl);
+      avatarSelectionRef.current = { kind: "uploaded", attachment_id: selection.attachmentId };
+      return;
+    }
+    setAvatarPreviewUrl(null);
+    avatarSelectionRef.current = draftAvatarUrl
+      ? randomPickedAvatarSelection()
+      : null;
+  };
   const [selectedRuntimeId, setSelectedRuntimeId] = React.useState(() => {
     const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
     return firstUsable?.id ?? "";
@@ -252,10 +271,11 @@ function InlineCreateAgentDialog({
         display_name: draft.name,
         description: draft.description,
         instructions: draft.instructions,
-        // #599: avatar_selection is intentionally omitted — the server
-        // resolves the draft's suggested avatar itself via draft_id and
-        // records it as `assigned`. draft.avatar_url is a preview-only
-        // suggestion string; it must never be resubmitted as a raw URL.
+        // #599: never resubmit draft.avatar_url as a raw URL. Prefer an
+        // explicit avatar_selection (user upload or clear→random picked);
+        // otherwise omit so draft_id applies the draft face, or the DB
+        // trigger assigns a random human preset when the draft has none.
+        avatar_selection: avatarSelectionRef.current ?? undefined,
         visibility,
         home_channel_id: visibility === "channel" ? resolvedHomeId : undefined,
         runtime_id: selectedRuntime.id,
@@ -314,9 +334,21 @@ function InlineCreateAgentDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:space-y-5 sm:px-6 sm:py-5">
           <div className="rounded-lg border bg-card p-4">
-            <div className="mb-3 min-w-0">
-              <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
+            <div className="mb-3 flex items-start gap-3">
+              <AvatarPicker
+                value={avatarPreviewUrl}
+                onChange={handleAvatarChange}
+                size={64}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {draftAvatarUrl
+                    ? t(($) => $.windy.avatar_from_draft_hint)
+                    : t(($) => $.windy.avatar_random_hint)}
+                </p>
+              </div>
             </div>
             {draft.instructions && (
               <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">

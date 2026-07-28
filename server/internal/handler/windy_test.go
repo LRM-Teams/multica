@@ -23,11 +23,13 @@ func TestWindyInstructionsAreHROnly(t *testing.T) {
 func TestWindyInstructionsDelegateGroupWorkToBeckham(t *testing.T) {
 	for _, phrase := range []string{
 		windyInstructionsCapabilityMarker,
+		windyInstructionsAvatarDraftMarker,
 		"贝克汉姆",
 		"do not monitor or coordinate work inside group channels",
 		"reply only to HR/team-building needs",
 		"ordinary project execution",
 		"do not answer in the group",
+		"do NOT require a second \"设头像\" step",
 	} {
 		if !strings.Contains(windyInstructions, phrase) {
 			t.Fatalf("Wendy instructions must contain %q", phrase)
@@ -38,6 +40,9 @@ func TestWindyInstructionsDelegateGroupWorkToBeckham(t *testing.T) {
 func TestRefreshWindyInstructionsIfStale(t *testing.T) {
 	if !strings.Contains(windyInstructions, windyInstructionsCapabilityMarker) {
 		t.Fatal("capability marker missing from current Wendy instructions")
+	}
+	if !strings.Contains(windyInstructions, windyInstructionsAvatarDraftMarker) {
+		t.Fatal("avatar-draft marker missing from current Wendy instructions")
 	}
 	stale := "You are Wendy, the user's personal HR"
 	if strings.Contains(stale, windyInstructionsCapabilityMarker) {

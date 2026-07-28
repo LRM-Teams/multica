@@ -71,7 +71,6 @@ function renderPanel(
           onChangeProject={() => {}}
           access={{
             canManage: true,
-            canInvite: false,
             isArchived: false,
             hideSettingsTab: false,
             projectBound: false,
@@ -135,7 +134,6 @@ describe("ChannelDetailsPanel danger zone (LRM-239 / LRM-494)", () => {
     renderPanel({
       access: {
         canManage: true,
-        canInvite: false,
         isArchived: true,
         hideSettingsTab: false,
         projectBound: false,
@@ -161,20 +159,8 @@ describe("ChannelDetailsPanel Slack overview (LRM-494)", () => {
     expect(screen.getByTestId("channel-details-done")).toHaveTextContent("Done");
   });
 
-  it("disables invite when canInvite is false", () => {
-    renderPanel({
-      onInvite: () => {},
-      access: {
-        canManage: true,
-        canInvite: false,
-        isArchived: false,
-        hideSettingsTab: false,
-        projectBound: false,
-        projectEditable: false,
-      },
-    });
-    expect(screen.getByTestId("channel-details-invite")).toBeDisabled();
-  });
+  // #821 — Overview Invite removed (adding people lives on the Members
+  // sub-page), so the old "disables invite" row test is gone with it.
 });
 
 describe("ChannelDetailsPanel — group leave affordance (danger zone)", () => {

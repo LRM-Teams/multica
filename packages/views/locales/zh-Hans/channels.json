@@ -108,7 +108,8 @@
       "demote_human": "取消管理员",
       "transfer": "转让群主",
       "remove": "移出群聊",
-      "coming_soon": "权限配置完成后可用"
+      "coming_soon": "权限配置完成后可用",
+      "role_actions_pending": "群管理权限即将推出；当前不会更改成员角色。"
     },
     "select_user": "选择人类成员",
     "select_agent": "选择智能体",
@@ -620,6 +621,7 @@
   },
   "view_tabs": {
     "chat": "对话",
-    "tasks": "Issues"
+    "tasks": "Issues",
+    "files": "文件"
   }
 }

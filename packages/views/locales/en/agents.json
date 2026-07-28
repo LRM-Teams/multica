@@ -602,7 +602,7 @@
     "full_reset_confirm": "Type this agent's handle {{handle}} to confirm. Workspace files (MEMORY.md, notes/) will be permanently deleted; identity, configuration, chat history, and Issues are kept.",
     "full_reset_confirm_placeholder": "Enter {{handle}}",
     "disabled_reason": {
-      "agent_active": "Wait until the current task finishes, then reset.",
+      "agent_active": "Wait until the current task finishes, then try again.",
       "unsupported_runtime_capability": "This runtime doesn't support in-place restart yet.",
       "no_runtime": "No runtime is bound to this agent.",
       "offline": "The runtime is offline.",

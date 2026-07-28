@@ -589,10 +589,10 @@
       }
     },
     "after_current_run": "将在当前任务完成后执行。",
-    "full_reset_confirm": "输入该智能体的 handle {{handle}} 以确认。工作区文件（MEMORY.md、notes/）将被永久删除；身份、配置、聊天历史和 Issue 保留。",
+    "full_reset_confirm": "输入该智能体的标识 {{handle}} 以确认。工作区文件（MEMORY.md、notes/）将被永久删除；身份、配置、聊天历史和 Issue 保留。",
     "full_reset_confirm_placeholder": "输入 {{handle}}",
     "disabled_reason": {
-      "agent_active": "等当前任务完成后再重置。",
+      "agent_active": "等当前任务完成后再试。",
       "unsupported_runtime_capability": "该运行时暂不支持就地重启。",
       "no_runtime": "该智能体未绑定运行时。",
       "offline": "运行时离线。",

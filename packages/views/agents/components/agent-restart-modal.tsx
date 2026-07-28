@@ -22,6 +22,10 @@ const TIERS: AgentLifecycleActionKind[] = [
   "full_reset_restart",
 ];
 
+// Compare handles ignoring a leading "@": the handle renders as `@name`
+// elsewhere, so typing the "@" the user sees must still match (no dead-end).
+const normalizeHandle = (value: string) => value.trim().replace(/^@+/, "");
+
 const KNOWN_DISABLED_REASONS = new Set([
   "agent_active",
   "unsupported_runtime_capability",
@@ -67,7 +71,8 @@ export function AgentRestartModal({
   const isTerminalSuccess = op?.status === "succeeded";
   const isTerminalFailed = op?.status === "failed";
   const isFullReset = selected === "full_reset_restart";
-  const handleConfirmed = !isFullReset || confirmText.trim() === agentHandle;
+  const handleConfirmed =
+    !isFullReset || normalizeHandle(confirmText) === normalizeHandle(agentHandle);
   const canSubmit =
     selectedState.supported && handleConfirmed && !isActive && !isTerminalSuccess;
 

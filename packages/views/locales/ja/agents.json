@@ -584,7 +584,7 @@
     "full_reset_confirm": "確認のため、このエージェントのハンドル {{handle}} を入力してください。ワークスペースのファイル（MEMORY.md、notes/）は完全に削除されます。アイデンティティ、設定、チャット履歴、Issue は保持されます。",
     "full_reset_confirm_placeholder": "{{handle}} を入力",
     "disabled_reason": {
-      "agent_active": "現在のタスクが完了してからリセットしてください。",
+      "agent_active": "現在のタスクが完了してからもう一度お試しください。",
       "unsupported_runtime_capability": "このランタイムはまだインプレース再起動に対応していません。",
       "no_runtime": "このエージェントにランタイムがバインドされていません。",
       "offline": "ランタイムがオフラインです。",

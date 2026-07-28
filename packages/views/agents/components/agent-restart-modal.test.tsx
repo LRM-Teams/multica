@@ -86,7 +86,7 @@ describe("AgentRestartModal (#633)", () => {
     };
     renderModal();
     expect(
-      screen.getByText("Wait until the current task finishes, then reset."),
+      screen.getByText("Wait until the current task finishes, then try again."),
     ).toBeInTheDocument();
   });
 
@@ -121,6 +121,16 @@ describe("AgentRestartModal (#633)", () => {
     expect(cta).toBeEnabled();
     fireEvent.click(cta);
     expect(mutate).toHaveBeenCalledWith("full_reset_restart");
+  });
+
+  it("accepts the handle typed with a leading @ (no dead-end)", () => {
+    renderModal();
+    fireEvent.click(screen.getByText("Full reset & restart"));
+    const cta = screen.getByRole("button", { name: "Full reset & restart" });
+    fireEvent.change(screen.getByLabelText("Enter atlas"), {
+      target: { value: "@atlas" },
+    });
+    expect(cta).toBeEnabled();
   });
 
   it("starts the selected action on submit", () => {

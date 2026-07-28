@@ -523,3 +523,50 @@ func TestSnapshotFanOutRefusedWhenCheckpointOwnsNoSavepoint(t *testing.T) {
 		t.Fatalf("nothing may be materialized without a savepoint, got %d", len(d.mat.instanceCalls))
 	}
 }
+
+// TestRetriedRequestDerivesTheSameLaneKeys pins the property the unique index
+// relies on: the same anchor and ordinal always name the same lane, so a retry
+// claims the lane it already owns instead of minting a second one. Distinct
+// anchors must not collide, or two unrelated requests would fight over one lane.
+func TestRetriedRequestDerivesTheSameLaneKeys(t *testing.T) {
+	const anchor = "11111111-1111-1111-1111-111111111111"
+	var first, second []string
+	for i := 0; i < 3; i++ {
+		first = append(first, laneKeyForOrdinal(anchor, i))
+		second = append(second, laneKeyForOrdinal(anchor, i))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("lane key %d not retry-stable: %q vs %q", i, first[i], second[i])
+		}
+	}
+	seen := map[string]bool{}
+	for _, k := range first {
+		if seen[k] {
+			t.Fatalf("ordinals must not collide within one anchor: %q repeated", k)
+		}
+		seen[k] = true
+	}
+	if laneKeyForOrdinal("22222222-2222-2222-2222-222222222222", 0) == first[0] {
+		t.Fatal("a different anchor must produce a different lane key")
+	}
+}
+
+// TestBranchDispatchStillAcceptsAKeylessRequest records the deferral decided in
+// plan Task 9: the anchor is documented, but branch dispatch does not yet demand
+// it, because today's clients send none. When plan Task 13 makes branch dispatch
+// go through checkpoint resume, this test is the one that must be inverted — and
+// only after the client sends the key.
+func TestBranchDispatchStillAcceptsAKeylessRequest(t *testing.T) {
+	svc := NewEnvDispatchService(newFakeEnvDispatchDeps(), 1)
+	in := EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeBranch, EnvID: "src-env",
+		SourceProjectID: "src-proj", AgentID: "ag",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 3, Message: &MessageInput{Content: "hi"},
+		IdempotencyKey: "",
+	}
+	if err := svc.validate(in); err != nil {
+		t.Fatalf("keyless branch dispatch must still validate until Task 13: %v", err)
+	}
+}

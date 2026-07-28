@@ -140,7 +140,22 @@ func (s *EnvCheckpointService) WithLanes(repo EnvCheckpointLaneRepository, mat L
 // laneKeyForOrdinal derives one lane's key from the request anchor. The anchor
 // must be stable across retries of the same logical request, because this key is
 // what the unique index deduplicates on: a changing anchor turns a retry into a
-// second sandbox. Task 3.7 pins which id the branch path uses as the anchor.
+// second sandbox.
+//
+// The anchor for the branch path is the dispatch's own idempotency key
+// (`idempotency_key` on the env-dispatch request body, already required to be a
+// UUID when present). Nothing else in the request is retry-stable: the ids the
+// server mints are fresh per attempt, and the env_dispatch_request row is
+// written only after the dispatch completes, so a retry that arrives mid-flight
+// finds no prior row to recover the anchor from.
+//
+// That key is still optional at the boundary, so branch dispatch is not yet
+// retry-safe by this mechanism. Making it mandatory is deliberately held until
+// the branch path is actually served by checkpoint resume (Task 3.8 / plan Task
+// 13), because rejecting a keyless branch dispatch before then would break
+// today's clients — which never send one — for a property nothing yet relies
+// on. When it does land, the client must send the key first: a server that
+// requires it ahead of the client fails every branch dispatch in between.
 func laneKeyForOrdinal(anchor string, ordinal int) string {
 	return fmt.Sprintf("%s#%d", anchor, ordinal)
 }

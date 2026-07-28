@@ -287,8 +287,12 @@ describe("voice send failure leaves a durable record (#838)", () => {
     window.sessionStorage.clear();
     useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
     channelsFixture.current = DEFAULT_CHANNELS;
-    const api = apiMock.proxy as Record<string, ReturnType<typeof vi.fn> | undefined>;
-    api.sendChannelMessage?.mockReset?.();
+    // NOT `api.sendChannelMessage?.mockReset?.()` — optional chaining here is a
+    // silent trap (Felix, #839): if this proxy method is ever renamed, the reset
+    // (and any `mockRejectedValueOnce` written the same way) quietly does
+    // nothing and the tests keep passing for a different reason. Address it
+    // directly so a rename is a hard failure.
+    sendSpy().mockReset();
   });
 
   async function openChannel() {

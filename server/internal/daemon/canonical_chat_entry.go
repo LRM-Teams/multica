@@ -10,15 +10,14 @@ import (
 )
 
 // tryCanonicalChatBackend is the sole D6-1b production path for full Grok/Pi
-// chat wakes. Slot identity is agent×runtime. Context key is ChatSessionID
-// (never task.ID): same key may reuse the resident process; key change
-// disposes the process and forces a fresh provider session (no PriorSessionID).
+// chat wakes. Slot identity is agent×runtime. One long-lived resident process
+// spans channel/DM/thread surfaces (no ChatSessionID force-fresh).
 // There is no generation==0 fallback to legacy ChatSession-keyed pools.
 //
-// Resident process cwd/identity WorkDir is always the stable agent workspace
-// from Begin (turn.WorkDir), never the per-task cloud env workdir.
-// Materialize refreshes disk context before Execute; process restart (fingerprint
-// / context rotate) is what makes Pi/Grok re-read it.
+// Resident process cwd is always the stable agent workspace from Begin
+// (turn.WorkDir). Create-only AGENTS write runs in BeforeCreate; reuse does
+// zero disk I/O. Per-turn surface/initiator/issue facts travel in the Execute
+// prompt.
 func (d *Daemon) tryCanonicalChatBackend(
 	task Task,
 	provider string,
@@ -90,10 +89,8 @@ func (d *Daemon) tryCanonicalChatBackend(
 	}
 	execOpts.Cwd = workDir
 
-	// Option A: materialize only when a new provider process will be created.
-	// Resident reuse re-reads neither AGENTS nor .agent_context (Pi proof); per-turn
-	// facts travel in the Execute prompt. Startup-static digest is in the identity
-	// fingerprint so slow field changes dispose + recreate.
+	// Create-only AGENTS: digest in fingerprint so slow field changes dispose
+	// + recreate; reuse path has zero FS I/O.
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             agentID,
 		RuntimeID:           task.RuntimeID,
@@ -106,9 +103,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		MCP:                 string(execOpts.McpConfig),
 		CustomArgs:          append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
 		Environment:         turn.StableEnvironment,
-		ContextKey:          task.ChatSessionID,
 		WorkspaceID:         task.WorkspaceID,
-		Directed:            taskCtx.Directed,
 		ManagedRole:         taskCtx.ManagedRole,
 		AgentInstructions:   taskCtx.AgentInstructions,
 		WorkspaceContext:    task.WorkspaceContext,
@@ -120,12 +115,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 
 	mode := mustCanonicalRuntimeMode(provider, profile)
 	factory := d.canonicalChatFactory(provider, profile)
-	// Pool clears CanonicalSessionID when ContextKey rotates (defense in depth
-	// vs claim PriorSessionID from the wrong chat). Same-key hard-field drift
-	// restarts the process but may keep PriorSessionID for chat continuity.
-	// Materialize runs only inside BeforeCreate when factory will spawn a process
-	// (Barry: acquire first / reuse path zero FS; create path materialize then factory).
-	ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
+	// No ledger: slim materialize writes AGENTS only (no skill tree / cleanup).
 	taskCtxCopy := taskCtx
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
@@ -134,15 +124,16 @@ func (d *Daemon) tryCanonicalChatBackend(
 		BackendConfig:      backendCfg,
 		Factory:            factory,
 		BeforeCreate: func() error {
+			// ledgerRoot unused; pass agent root sibling for API compat only.
+			ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
 			brief, receipt, err := execenv.MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider, taskCtxCopy)
 			if err != nil {
-				return fmt.Errorf("materialize canonical turn context: %w", err)
+				return fmt.Errorf("materialize canonical AGENTS: %w", err)
 			}
 			if taskLog != nil {
-				taskLog.Info("canonical startup materialize receipt",
+				taskLog.Info("canonical startup AGENTS written",
 					"managed_input_digest", receipt.ManagedInputDigest,
 					"agents_final_sha256", receipt.AgentsFinalSHA256,
-					"skills", len(receipt.Skills),
 					"brief_bytes", len(brief),
 				)
 			}
@@ -162,7 +153,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		taskLog.Info("canonical chat runtime acquired",
 			"provider", provider,
 			"generation", task.RuntimeStateGeneration,
-			"context_key", task.ChatSessionID,
+			"chat_session_id", task.ChatSessionID,
 			"prior_session_claim", task.PriorSessionID != "",
 			"resume_session", resumeID != "",
 			"slot_agent", agentID,

@@ -240,21 +240,21 @@ func TestTryCanonicalChatBackendRotatesFreshSessionAcrossChatSessions(t *testing
 	}
 	releaseA(true)
 
-	// Poisoned claim still carries session A while context key is chat B.
+	// Cross-chat (Frank long-lived colleague): reuse backend, keep Prior.
 	backendB, releaseB := run("chat-B", "provider-session-A")
 	defer releaseB(true)
 	if _, err := backendB.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := backendB.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
-		t.Fatalf("B resume = %q, want empty fresh after ContextKey rotate", got)
+	if got := backendB.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-A" {
+		t.Fatalf("B resume = %q, want Prior retained across chat", got)
 	}
 	created, closed := probe.counts()
-	if created != 2 || closed != 1 {
-		t.Fatalf("created=%d closed=%d, want 2/1", created, closed)
+	if created != 1 || closed != 0 {
+		t.Fatalf("created=%d closed=%d, want 1/0 (reuse across chat)", created, closed)
 	}
-	if backendA.(*canonicalSessionBackend).backend == backendB.(*canonicalSessionBackend).backend {
-		t.Fatal("cross-chat reused resident backend")
+	if backendA.(*canonicalSessionBackend).backend != backendB.(*canonicalSessionBackend).backend {
+		t.Fatal("cross-chat must reuse resident backend")
 	}
 }
 

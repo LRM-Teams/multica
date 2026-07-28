@@ -136,9 +136,17 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
   };
 });
 
+// The auth store is used BOTH as a hook and imperatively: viewerAuthorFields()
+// (core/channels/mutations.ts:22) calls `useAuthStore.getState()` inside
+// `onMutate`. Mocking only the selector form makes that path throw, and a throw
+// in `onMutate` is swallowed by react-query as a mutation failure — which looks
+// exactly like a real failure while no request was ever sent. (Wren, #838.)
+const authState = { user: { id: "user-1", name: "Alice" } };
 vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (selector: (s: { user: { id: string; name: string } }) => unknown) =>
-    selector({ user: { id: "user-1", name: "Alice" } }),
+  useAuthStore: Object.assign(
+    (selector: (s: typeof authState) => unknown) => selector(authState),
+    { getState: () => authState },
+  ),
 }));
 
 vi.mock("@multica/core/hooks", async (importOriginal) => ({
@@ -677,6 +685,20 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     await waitFor(() => {
       expect(toastMock.error).toHaveBeenCalled();
     });
+
+    // POSITIVE CONTROL (#838's lesson, applied here): the assertion above only
+    // proves a failure was announced — it cannot distinguish "the request went
+    // out and the server refused" from "we never got as far as sending". A
+    // throw anywhere before the call (e.g. an imperative store read against a
+    // selector-only mock) is swallowed by react-query as a mutation failure and
+    // looks identical. Note the mock above is set with `?.`, so if this proxy
+    // method were ever renamed the rejection would silently not be installed
+    // and this test would still pass on some other failure. Pin the send.
+    expect(apiMock.proxy.removeChannelMember).toHaveBeenCalledWith(
+      expect.any(String),
+      "user",
+      expect.any(String),
+    );
   });
 
   // #839 — the toast is the announcement, NOT the record. Dismissing it (or its

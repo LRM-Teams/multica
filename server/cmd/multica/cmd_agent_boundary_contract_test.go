@@ -1205,7 +1205,7 @@ func TestBoundary_IssuePullRequests_HitsDedicatedAgentAPI(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnv(t, srv.URL)
+	boundaryCLIEnvTokenFile(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "pull-requests"}
 	cmd.Flags().String("server-url", "", "")

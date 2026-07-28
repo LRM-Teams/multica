@@ -125,8 +125,30 @@ func TestPostgresUpdateStoreEnforcesLifecycleTransitionsAndIdempotency(t *testin
 	if ready == nil || ready.Status != UpdateReady || ready.Output != "verified" {
 		t.Fatalf("ready update after duplicate = %+v, want original output preserved", ready)
 	}
-	if err := store.Fail(ctx, created.ID, "late failure"); err == nil {
-		t.Fatal("ready_to_apply -> failed unexpectedly succeeded")
+	// #815 B-cutover: ready_to_apply → failed is legal (path A drain_timeout).
+	// Keep a separate request for the completed path below.
+	readyFailID := created.ID
+	if err := store.Fail(ctx, readyFailID, DrainTimeoutError); err != nil {
+		t.Fatalf("ready_to_apply -> failed: %v", err)
+	}
+	failedReady, err := store.Get(ctx, readyFailID)
+	if err != nil {
+		t.Fatalf("Get after ready fail: %v", err)
+	}
+	if failedReady == nil || failedReady.Status != UpdateFailed || failedReady.Error != DrainTimeoutError {
+		t.Fatalf("ready→failed = %+v", failedReady)
+	}
+
+	// New request for completed path.
+	created, err = store.Create(ctx, runtimeID, "v0.3.79")
+	if err != nil {
+		t.Fatalf("Create for completed path: %v", err)
+	}
+	if _, err := store.PopPending(ctx, runtimeID); err != nil {
+		t.Fatalf("PopPending completed path: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, created.ID, "verified-2"); err != nil {
+		t.Fatalf("ready completed path: %v", err)
 	}
 
 	if err := store.Complete(ctx, created.ID, "registered"); err != nil {

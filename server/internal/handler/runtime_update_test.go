@@ -188,6 +188,67 @@ func TestInMemoryUpdateStore_ReadyWithinTTLDoesNotTimeout(t *testing.T) {
 	}
 }
 
+func TestInMemoryUpdateStore_ReadyToApplyMayFailWithDrainTimeout(t *testing.T) {
+	// #815 path A: ready_to_apply → failed+drain_timeout frees the channel.
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+
+	req, err := store.Create(ctx, "rt-drain", "v0.3.78")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "rt-drain"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, req.ID, "staged"); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	if err := store.Fail(ctx, req.ID, DrainTimeoutError); err != nil {
+		t.Fatalf("ready→failed: %v", err)
+	}
+	got, err := store.Get(ctx, req.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != UpdateFailed || got.Error != DrainTimeoutError {
+		t.Fatalf("got %+v", got)
+	}
+	// Channel free for a new Initiate.
+	next, err := store.Create(ctx, "rt-drain", "v0.3.79")
+	if err != nil {
+		t.Fatalf("create after drain_timeout: %v", err)
+	}
+	if next.Status != UpdatePending {
+		t.Fatalf("next = %+v", next)
+	}
+}
+
+func TestUpdateReportTransitionAllowsReadyToFailed(t *testing.T) {
+	if !updateReportTransitionAllowed(UpdateReady, UpdateFailed) {
+		t.Fatal("ready→failed must be allowed")
+	}
+	if !updateReportTransitionAllowed(UpdateReady, UpdateCompleted) {
+		t.Fatal("ready→completed must stay allowed")
+	}
+	if updateReportTransitionAllowed(UpdateCompleted, UpdateFailed) {
+		t.Fatal("completed→failed must stay forbidden")
+	}
+}
+
+func TestLateFailedReportIsNoOpOnlyForTimeoutDrainTimeout(t *testing.T) {
+	timeoutRow := &UpdateRequest{Status: UpdateTimeout, Error: updateReadyTimeoutError}
+	if !lateFailedReportIsNoOp(timeoutRow, UpdateFailed, DrainTimeoutError) {
+		t.Fatal("timeout + drain_timeout should no-op")
+	}
+	if lateFailedReportIsNoOp(timeoutRow, UpdateFailed, "other_error") {
+		t.Fatal("timeout + non-drain error must not no-op")
+	}
+	completed := &UpdateRequest{Status: UpdateCompleted}
+	if lateFailedReportIsNoOp(completed, UpdateFailed, DrainTimeoutError) {
+		t.Fatal("completed + failed must not no-op (409 path)")
+	}
+}
+
 func TestInMemoryUpdateStore_TerminalHistoryRetainedAfterReadyTimeout(t *testing.T) {
 	// B0-T4: timeout terminal history remains readable until terminal retention.
 	ctx := context.Background()

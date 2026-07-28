@@ -225,7 +225,8 @@ func (s *PostgresUpdateStore) ReadyToApply(ctx context.Context, id string, outpu
 }
 
 func (s *PostgresUpdateStore) Fail(ctx context.Context, id string, errMsg string) error {
-	return s.transition(ctx, id, UpdateFailed, "", errMsg, []UpdateStatus{UpdateRunning})
+	// ready_to_apply → failed allowed for #815 path A (drain_timeout abandon).
+	return s.transition(ctx, id, UpdateFailed, "", errMsg, []UpdateStatus{UpdateRunning, UpdateReady})
 }
 
 func (s *PostgresUpdateStore) transition(

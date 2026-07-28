@@ -229,8 +229,16 @@ func (h *Handler) SetAgentIssueSourceChannel(w http.ResponseWriter, r *http.Requ
 	h.SetIssueSourceChannel(w, r)
 }
 
+// AgentDirectoryItem is the narrow directory DTO for agent @-resolve (#801).
+// Never expose Instructions/RuntimeConfig/skills/mcp secrets on this surface.
+type AgentDirectoryItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
 // ListAgentDirectoryAgents — GET /api/agent/agents
-// Principal-native directory for @-resolve. Never calls workspaceMember(owner).
+// Principal-native narrow directory. Never calls workspaceMember(owner).
 func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Request) {
 	p, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
@@ -248,20 +256,6 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
-	skillRows, err := h.Queries.ListAgentSkillsByWorkspace(r.Context(), ws)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
-		return
-	}
-	skillMap := map[string][]AgentSkillSummary{}
-	for _, row := range skillRows {
-		aid := uuidToString(row.AgentID)
-		skillMap[aid] = append(skillMap[aid], AgentSkillSummary{
-			ID:          uuidToString(row.ID),
-			Name:        row.Name,
-			Description: row.Description,
-		})
-	}
 	groupManagers, gmErr := h.groupManagerAgentIDs(r.Context(), ws)
 	if gmErr != nil {
 		groupManagers = map[string]bool{}
@@ -277,7 +271,7 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 		agentIDs = append(agentIDs, a.ID)
 	}
 	homeByAgent := h.loadAgentHomeChannelIDs(r.Context(), agentIDs)
-	visible := make([]AgentResponse, 0, len(agents))
+	visible := make([]AgentDirectoryItem, 0, len(agents))
 	for _, a := range agents {
 		if groupManagers[uuidToString(a.ID)] {
 			continue
@@ -286,23 +280,18 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
 			continue
 		}
-		// Agent directory: agents see public agents + self; not other private agents
-		// via owner/admin human role.
+		// Public agents + self only — never other private agents via owner role.
 		if (a.Visibility == "private" || privateAgentOwnerOnly(a)) && uuidToString(a.ID) != uuidToString(selfID) {
 			continue
 		}
-		resp := agentToResponse(a)
-		if homeID != "" {
-			h := homeID
-			resp.HomeChannelID = &h
+		item := AgentDirectoryItem{
+			ID:   uuidToString(a.ID),
+			Name: a.Name,
 		}
-		if skills, ok := skillMap[resp.ID]; ok {
-			resp.Skills = skills
+		if dn := strings.TrimSpace(a.DisplayName); dn != "" {
+			item.DisplayName = dn
 		}
-		// Agents never see mcp_config secrets (same as ListAgents agent branch).
-		redactMcpConfig(&resp)
-		visible = append(visible, resp)
+		visible = append(visible, item)
 	}
-	h.attachAgentRuntimeNames(r.Context(), visible)
 	writeJSON(w, http.StatusOK, visible)
 }

@@ -142,7 +142,8 @@ func TestSetChannelProjectRequiresChannelManager(t *testing.T) {
 	for _, userID := range []string{creatorID, memberID, adminID, testUserID} {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, userID); err != nil {
+			VALUES ($1, $2, 'user', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, userID); err != nil {
 			t.Fatalf("add channel member %s: %v", userID, err)
 		}
 	}

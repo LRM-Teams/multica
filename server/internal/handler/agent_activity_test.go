@@ -1718,14 +1718,15 @@ func createActivityChannelSession(t *testing.T, agentID, memberID string) (strin
 		INSERT INTO channel (workspace_id, name, created_by, kind)
 		VALUES ($1, $2, $3, 'group')
 		RETURNING id
-	`, testWorkspaceID, "activity-"+randomID(), testUserID).Scan(&channelID); err != nil {
+	`, testWorkspaceID, "activity-"+randomID(), memberID).Scan(&channelID); err != nil {
 		t.Fatalf("create activity channel: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3)
-	`, channelID, testWorkspaceID, memberID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, memberID); err != nil {
 		t.Fatalf("add activity channel member: %v", err)
 	}
 	sessionID := createActivityChatSession(t, agentID, testUserID, "channel")

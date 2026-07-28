@@ -219,7 +219,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
 		t.Fatalf("seed members: %v", err)
 	}
 
@@ -323,7 +324,8 @@ func TestChannelGreetingMentionStaysOnMainTimeline(t *testing.T) {
 	channelID := seedChannelForTest(t, "greeting-main-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -378,7 +380,8 @@ func TestChannelChatDoneNoReplyAndReactionPayloadOnly(t *testing.T) {
 	channelID := seedChannelForTest(t, "no-reply-reaction-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -500,7 +503,8 @@ func TestChannelChatDoneSuppressedDaemonOutdatedDoesNotWriteSystemMessage(t *tes
 	channelID := seedChannelForTest(t, "daemon-outdated-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -549,7 +553,8 @@ func TestChannelChatDoneSuppressedTraceOnlyDoesNotWriteSystemMessage(t *testing.
 	channelID := seedChannelForTest(t, "trace-only-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -605,7 +610,8 @@ func TestChannelRementionFollowupDoesNotCancelRunningTask(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
 		t.Fatalf("seed members: %v", err)
 	}
 
@@ -683,7 +689,8 @@ func TestChannelMessageWakeBoundsRepeatedOrdinaryFanout(t *testing.T) {
 		agentIDs = append(agentIDs, agentID)
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("seed agent member: %v", err)
 		}
 	}
@@ -755,7 +762,8 @@ func TestChannelAmbientDispatchNotSkippedForAtMention(t *testing.T) {
 	channelID := seedChannelForTest(t, "ambient-atmention-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -800,7 +808,8 @@ func TestChannelGroupCommandWakesAllAgentsRestoresAndongDefault(t *testing.T) {
 	for _, agentID := range []string{managerID, peerID} {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("seed agent member %s: %v", agentID, err)
 		}
 	}
@@ -831,7 +840,8 @@ func TestChannelAmbientUnreadPromptKeepsLatestTriggerWhenCursorIsStale(t *testin
 	channelID := seedChannelForTest(t, "ambient-latest-trigger-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -875,7 +885,8 @@ func TestChannelAmbientUnreadPromptIncludesSystemRows(t *testing.T) {
 	channelID := seedChannelForTest(t, "ambient-system-read-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -912,7 +923,8 @@ func TestChannelMessageWakeSerializesConcurrentSameAgentOrdinaryMessages(t *test
 	channelID := seedChannelForTest(t, "ordinary-wake-concurrent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -969,7 +981,8 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-drain-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1134,7 +1147,8 @@ func TestChannelAgentInboxDrainDoesNotReplayFailedPromptBacklog(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-bounded-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1208,7 +1222,8 @@ func TestChannelAgentInboxCompleteDirectedMentionAfterNoPublicOutputObserveRecor
 	channelID := seedChannelForTest(t, "agent-inbox-complete-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1402,7 +1417,8 @@ func TestChannelAgentInboxCompletionInfersAbandonedFreshnessDraft(t *testing.T) 
 	channelID := seedChannelForTest(t, "agent-inbox-held-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1560,7 +1576,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-activity-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1771,7 +1788,8 @@ func TestChannelAgentInboxFileClaimWithoutTransportIsSuppressed(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-artifact-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1862,7 +1880,8 @@ func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *tes
 	channelID := seedChannelForTest(t, "agent-inbox-sticker-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1992,7 +2011,8 @@ func TestChannelAgentInboxFailureAfterVisibleTransportSendSettlesAsReplied(t *te
 	channelID := seedChannelForTest(t, "agent-inbox-post-send-fail-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2126,7 +2146,8 @@ func TestChannelAgentInboxTransportBearerTokenThroughMiddleware(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-bearer-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2214,7 +2235,8 @@ func TestChannelAgentInboxDrainReclaimsExpiredDelivery(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-reclaim-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2293,7 +2315,8 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-ambient-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2383,7 +2406,8 @@ func TestChannelHumanMentionDirectsTargetAndOrdinaryWakesOnlyUnmutedBystanders(t
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, muted_at)
 		VALUES ($1, $2, 'agent', $3, now()),
 		       ($1, $2, 'agent', $4, NULL),
-		       ($1, $2, 'agent', $5, now())`, channelID, testWorkspaceID, targetID, bystanderID, mutedBystanderID); err != nil {
+		       ($1, $2, 'agent', $5, now())
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, targetID, bystanderID, mutedBystanderID); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2468,7 +2492,8 @@ func TestChannelAgentMentionDoesNotOrdinaryWakeNonTargets(t *testing.T) {
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3),
 		       ($1, $2, 'agent', $4),
-		       ($1, $2, 'agent', $5)`, channelID, testWorkspaceID, authorID, targetID, bystanderID); err != nil {
+		       ($1, $2, 'agent', $5)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, authorID, targetID, bystanderID); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2509,7 +2534,8 @@ func TestChannelDirectedIssueMentionCoalescesPendingEvent(t *testing.T) {
 	channelID := seedChannelForTest(t, "issue-coalesce-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2561,7 +2587,8 @@ func TestChannelDirectedIssueMentionDoesNotCoalesceDrainingEvent(t *testing.T) {
 	channelID := seedChannelForTest(t, "issue-draining-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2615,7 +2642,8 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-fail-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2763,7 +2791,8 @@ func TestChannelAgentInboxRejectsStaleDeliveryAck(t *testing.T) {
 	channelID := seedChannelForTest(t, "agent-inbox-stale-ack-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2923,7 +2952,8 @@ func TestChannelAmbientGateTxPathDoesNotWakeBeforeCommit(t *testing.T) {
 	channelID := seedChannelForTest(t, "ambient-tx-no-wake-gate-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -2981,7 +3011,8 @@ func TestChannelAmbientGateFailsClosedOnStatsError(t *testing.T) {
 	channelID := seedChannelForTest(t, "ambient-fail-closed-gate-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3017,7 +3048,8 @@ func TestChannelMessageWakeDoesNotSkipObviousNoise(t *testing.T) {
 	channelID := seedChannelForTest(t, "ambient-noise-gate-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3063,7 +3095,8 @@ func TestChannelAmbientGateDoesNotBlockDirectMention(t *testing.T) {
 	channelID := seedChannelForTest(t, "ambient-direct-gate-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3097,7 +3130,8 @@ func TestChannelMessageWakeSkipsMutedAgentButMentionPierces(t *testing.T) {
 	channelID := seedChannelForTest(t, "muted-direct-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, muted_at)
-		VALUES ($1, $2, 'agent', $3, now())`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3, now())
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed muted agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3132,7 +3166,8 @@ func TestChannelAmbientGreetingPromptUsesReactionOnlyForSingleAgentChannel(t *te
 	channelID := seedChannelForTest(t, "ambient-greeting-single-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3172,7 +3207,8 @@ func TestChannelAmbientGreetingPromptUsesReactionOnlyForLargerChannel(t *testing
 	channelID := seedChannelForTest(t, "ambient-greeting-larger-"+uuid.NewString(), testUserID, otherUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, agentID, otherAgentID); err != nil {
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, otherAgentID); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3221,7 +3257,8 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	channelID := seedChannelForTest(t, "identity-mentions-"+suffix, testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`,
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`,
 		channelID, testWorkspaceID, agentID, secondAgentID,
 	); err != nil {
 		t.Fatalf("seed agent members: %v", err)
@@ -3274,7 +3311,8 @@ func TestChannelLegacyAgentHandleTextDoesNotRoute(t *testing.T) {
 	channelID := seedChannelForTest(t, "legacy-agent-text-"+suffix, testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed legacy agent member: %v", err)
 	}
 
@@ -3320,7 +3358,8 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 	channelID := seedChannelForTest(t, "structured-mentions-"+suffix, testUserID, memberID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3464,7 +3503,8 @@ func TestChannelLegacyActorMentionMarkdownIsRejected(t *testing.T) {
 	channelID := seedChannelForTest(t, "structured-mention-normalize-"+suffix, testUserID, memberID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -3505,7 +3545,8 @@ func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 	})
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
 		t.Fatalf("seed members: %v", err)
 	}
 
@@ -3953,7 +3994,8 @@ func TestChannelPayloadsIncludeAgentAvatarURL(t *testing.T) {
 	channelID := seedChannelForTest(t, "avatar-payload-"+uuid.NewString(), testUserID, viewerID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent channel member: %v", err)
 	}
 	content := "agent avatar payload " + uuid.NewString()
@@ -4031,7 +4073,8 @@ func TestSendChannelMessageClientMessageIDDedupesTopLevelWithSideEffects(t *test
 	channelID := seedChannelForTest(t, "client-id-group-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -5638,7 +5681,8 @@ func TestChannelPermanentDeleteCreatorOnlyForbidden(t *testing.T) {
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, creatorID); err != nil {
+		VALUES ($1, $2, 'user', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, creatorID); err != nil {
 		t.Fatalf("seed creator membership: %v", err)
 	}
 
@@ -5881,7 +5925,8 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	channelID := seedChannelForTest(t, "thread-unfollow-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent channel member: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root topic", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-unfollow-root-"+uuid.NewString()), 0)
@@ -6068,7 +6113,8 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-read-model-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-read-model"), 0)
@@ -6135,7 +6181,8 @@ func TestChannelThreadReadModelSurfacesReplyAndAckStates(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-state-model-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -6172,7 +6219,8 @@ func TestChannelThreadReadModelSurfacesInboxTerminalOutcomesAndRetry(t *testing.
 	channelID := seedChannelForTest(t, "thread-terminal-model-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -6275,7 +6323,8 @@ func TestChannelActiveTasksSurfacesInboxTerminalOutcomes(t *testing.T) {
 	channelID := seedChannelForTest(t, "active-terminal-model-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
@@ -6417,7 +6466,8 @@ func TestChannelThreadReplyWithoutMentionCreatesAmbientInboxOnly(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-no-ambient-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-guard-root"), 0)
@@ -6458,7 +6508,8 @@ func TestChannelThreadPlainReplyWakesAgentFollower(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-followup-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, participantID, bystanderID); err != nil {
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, participantID, bystanderID); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("followup-agent-root"), 0)
@@ -6497,7 +6548,8 @@ func TestChannelThreadPlainReplyWakesAgentRootAuthor(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-root-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, rootAgentID, bystanderID); err != nil {
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, rootAgentID, bystanderID); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(rootAgentID), "Thread Root Author", "agent root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("agent-root-thread"), 1)
@@ -6534,7 +6586,8 @@ func TestChannelThreadPlainReplyAfterRootMentionWithoutFollowCreatesAmbientOnly(
 	channelID := seedChannelForTest(t, "thread-root-mention-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, participantID, bystanderID); err != nil {
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, participantID, bystanderID); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Thread Root Helper please help", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("root-mention-followup"), 0)
@@ -6567,7 +6620,8 @@ func TestChannelAmbientGateDoesNotBlockThreadDirectedContinuation(t *testing.T) 
 	channelID := seedChannelForTest(t, "ambient-thread-gate-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, participantID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, participantID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -6625,7 +6679,8 @@ func TestChannelThreadContinuationPromptAllowsSilence(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-silent-prompt-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -6818,7 +6873,8 @@ func TestChannelOfflineRuntimeQueuesButDoesNotShowActiveTask(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	`, channelID, testWorkspaceID, agentID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed offline agent member: %v", err)
 	}
 
@@ -7375,7 +7431,8 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	channelID := seedChannelForTest(t, "thread-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ui-thread"), 0)
@@ -7611,7 +7668,8 @@ func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
 	channelID := seedChannelForTest(t, "member-add-agent-event-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, readerAgentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, readerAgentID); err != nil {
 		t.Fatalf("seed reader agent member: %v", err)
 	}
 
@@ -7915,11 +7973,18 @@ func TestImportLarkChannelMessageRequiresChannelMember(t *testing.T) {
 func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 	t.Helper()
 	ctx := context.Background()
+	// Ordinary-group auto-seed makes created_by an owner. Prefer the first
+	// requested member as creator so callers can seed a channel that does NOT
+	// include testUserID (pass only the intended members).
+	createdBy := testUserID
+	if len(memberIDs) > 0 {
+		createdBy = memberIDs[0]
+	}
 	var channelID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by)
 		VALUES ($1, $2, $3)
-		RETURNING id`, testWorkspaceID, name, testUserID).Scan(&channelID); err != nil {
+		RETURNING id`, testWorkspaceID, name, createdBy).Scan(&channelID); err != nil {
 		t.Fatalf("create channel: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })

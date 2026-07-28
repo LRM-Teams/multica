@@ -37,7 +37,8 @@ func setupEnvDispatchChannelRolloutFixture(t *testing.T) (envID, projectID, chan
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
 	_, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID)
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID)
 	require.NoError(t, err)
 	_, err = testPool.Exec(ctx, `
 		INSERT INTO environment_agent_sandbox (env_id, channel_id, agent_id, status, sandbox_config)

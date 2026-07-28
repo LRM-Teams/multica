@@ -33,7 +33,8 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	firstChannelID := seedChannelForTest(t, "inbox-serial-a-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, firstChannelID, testWorkspaceID, firstAgentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, firstChannelID, testWorkspaceID, firstAgentID); err != nil {
 		t.Fatalf("seed first agent member: %v", err)
 	}
 	firstChannel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(firstChannelID))
@@ -125,7 +126,8 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	secondChannelID := seedChannelForTest(t, "inbox-serial-b-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, secondChannelID, testWorkspaceID, secondAgentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, secondChannelID, testWorkspaceID, secondAgentID); err != nil {
 		t.Fatalf("seed second agent member: %v", err)
 	}
 	secondChannel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(secondChannelID))
@@ -376,7 +378,8 @@ func TestAgentInboxUsageExecutionIdentitySurvivesRenewAndReclaim(t *testing.T) {
 	channelID := seedChannelForTest(t, "inbox-ledger-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -992,7 +995,8 @@ func TestRetryAgentInboxEventReplaysOriginalPromptAfterNewerCompletion(t *testin
 	channelID := seedChannelForTest(t, "inbox-retry-prompt-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1132,7 +1136,8 @@ func TestAgentInboxDrainRejectsChatSessionFromDifferentRuntime(t *testing.T) {
 	channelID := seedChannelForTest(t, "inbox-runtime-pointer-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1215,7 +1220,8 @@ func TestAgentInboxDrainRejectsFallbackSessionFromDifferentRuntime(t *testing.T)
 	channelID := seedChannelForTest(t, "inbox-runtime-fallback-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -1301,7 +1307,8 @@ func TestAgentInboxDrainIncludesSourceChannelMessageAttachment(t *testing.T) {
 	channelID := seedChannelForTest(t, "inbox-source-attachment-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	var attachmentID string
@@ -1362,7 +1369,8 @@ func TestAgentInboxDrainDeduplicatesSourceAndPromptAttachment(t *testing.T) {
 	channelID := seedChannelForTest(t, "inbox-attachment-dedupe-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	var attachmentID string
@@ -1443,7 +1451,8 @@ func TestAgentInboxDrainRejectsEventWithoutExactPrompt(t *testing.T) {
 	channelID := seedChannelForTest(t, "inbox-exact-prompt-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))

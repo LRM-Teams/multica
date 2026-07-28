@@ -152,7 +152,8 @@ func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_Succeeds(t *testing.T) {
 	channelID := seedChannelForTest(t, "cancel-inbox-event-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	root := dispatchThreadMentionForTest(t, channelID, agentID, "cancel-inbox-event-"+uuid.NewString())
@@ -499,7 +500,8 @@ func TestCancelTaskByUser_ChannelBoundChatTask_ChannelMemberSucceeds(t *testing.
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3), ($1, $2, 'user', $4), ($1, $2, 'agent', $5)
-	`, channelID, testWorkspaceID, testUserID, otherUserID, agentID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, otherUserID, agentID); err != nil {
 		t.Fatalf("seed channel members: %v", err)
 	}
 	if _, err := testPool.Exec(context.Background(), `
@@ -551,7 +553,8 @@ func TestCancelTaskByUser_ChannelBoundChatTask_NonMemberReturns403(t *testing.T)
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
-	`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
 		t.Fatalf("seed channel members: %v", err)
 	}
 	if _, err := testPool.Exec(context.Background(), `

@@ -32,7 +32,7 @@ func insertUserAndMember(t *testing.T, workspaceID string) string {
 	var userID string
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
-		"inv-user", "inv-user-"+uuid.NewString()[:8]+"@test.local").Scan(&userID); err != nil {
+		"inv-user-"+uuid.NewString()[:8], "inv-user-"+uuid.NewString()[:8]+"@test.local").Scan(&userID); err != nil {
 		t.Fatalf("user: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `

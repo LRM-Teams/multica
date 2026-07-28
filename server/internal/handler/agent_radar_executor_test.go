@@ -316,7 +316,8 @@ func TestExecuteRadarMentionAgentCreatesVisibleGroupDirectiveAndExactWake(t *tes
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
-	`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
 		t.Fatalf("add agents to channel: %v", err)
 	}
 	directive := "请接手检查并在群里同步结论 " + uuid.NewString()
@@ -432,7 +433,8 @@ func TestExecuteRadarMentionAgentFinalizesEveryTargetOccurrence(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
-	`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
 		t.Fatalf("add agents to channel: %v", err)
 	}
 	payload, err := json.Marshal(map[string]string{
@@ -1538,7 +1540,8 @@ func TestExecuteRadarChannelPostPublishesMessageToChannelMembers(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	`, channelID, testWorkspaceID, agentID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add radar agent to channel: %v", err)
 	}
 
@@ -1598,7 +1601,8 @@ func TestExecuteRadarChannelPostFinalizesDestinationReferences(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
-	`, channelID, testWorkspaceID, publisherID, targetID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, publisherID, targetID); err != nil {
 		t.Fatalf("add radar agents to channel: %v", err)
 	}
 	payload, err := json.Marshal(radarChannelPayload{
@@ -1719,7 +1723,8 @@ func TestExecuteRadarChannelPostRejectsThreadRootFromAnotherChannel(t *testing.T
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	`, targetChannelID, testWorkspaceID, agentID); err != nil {
+	
+ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add radar agent to target channel: %v", err)
 	}
 	root, err := testHandler.insertChannelMessage(
@@ -1848,7 +1853,8 @@ func TestExecuteAgentRadarActionDerivesActivityTargetFromVerifiedChannel(t *test
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	`, channelID, testWorkspaceID, agentID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add radar agent to channel: %v", err)
 	}
 	payload, err := json.Marshal(radarChannelPayload{ChannelID: channelID, Content: "verified activity target"})
@@ -1986,7 +1992,8 @@ func addRadarAgentMembersForExecutorTest(t *testing.T, channelID string, agentID
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 			VALUES ($1, $2, 'agent', $3)
-		`, channelID, testWorkspaceID, agentID); err != nil {
+		
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("add radar agent %s to channel: %v", agentID, err)
 		}
 	}
@@ -2206,7 +2213,8 @@ func createScheduledRadarGroupForExecutorTest(t *testing.T, fixture scheduledRad
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	`, channelID, fixture.workspaceID, fixture.target.ID); err != nil {
+	
+ON CONFLICT DO NOTHING`, channelID, fixture.workspaceID, fixture.target.ID); err != nil {
 		t.Fatalf("add scheduled radar target to group: %v", err)
 	}
 	return channelID

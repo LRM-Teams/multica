@@ -60,7 +60,8 @@ func TestCancelChannelAgentInboxEvent_StopsWakeAndClearsActiveStrip(t *testing.T
 	channelID := seedChannelForTest(t, "cancel-channel-inbox-single-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	eventID, deliveryID := seedChannelInboxWakeWithDelivery(t, channelID, agentID, "single")
@@ -129,7 +130,8 @@ func TestCancelChannelActiveAgentInboxEvents_StopAllInOneRequest(t *testing.T) {
 	channelID := seedChannelForTest(t, "cancel-channel-inbox-bulk-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, agentA, agentB); err != nil {
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentA, agentB); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
 	eventA, _ := seedChannelInboxWakeWithDelivery(t, channelID, agentA, "bulk-a")

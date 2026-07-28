@@ -9,9 +9,24 @@ export function createQueryClient(): QueryClient {
         refetchOnWindowFocus: false,
         refetchOnReconnect: true,
         retry: 1,
+        // Explicit (not the library default) so it's visible and guarded.
+        // "online": offline reads don't fetch — they show the last cached data
+        // rather than erroring. (No offline read blanks a populated view.)
+        networkMode: "online",
       },
       mutations: {
         retry: false,
+        // #1276: pin this explicitly. React Query's default "online" PAUSES a
+        // mutation while offline — it neither runs nor fails, then silently
+        // resumes on reconnect. For our writes (send / pin / rename / archive /
+        // remove member …) that means "the user thought it didn't happen, but
+        // it fires ten minutes later" — worse than a send, since archive/remove
+        // aren't undoable. "always" makes every write ATTEMPT offline, fail fast
+        // (restore + retry), and never silently auto-execute. No mutation here
+        // relies on offline-pause (there is no outbox/offline queue), so this is
+        // a safe global policy; a future queue-backed mutation can override to
+        // "online" explicitly.
+        networkMode: "always",
       },
     },
   });

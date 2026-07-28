@@ -47,7 +47,6 @@ function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | nul
           onChangeProject={onChange}
           access={{
             canManage: true,
-            canInvite: false,
             isArchived: false,
             hideSettingsTab: false,
             projectBound: false,

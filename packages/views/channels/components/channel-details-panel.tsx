@@ -12,7 +12,6 @@ import {
   Square,
   Tag,
   Trash2,
-  UserPlus,
   VolumeX,
 } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
@@ -42,7 +41,6 @@ type DetailsView = "home" | ChannelDetailsTab | "about-edit" | "avatar";
 /** Caps capability / pending flags so the panel avoids many boolean props (react-doctor). */
 export type ChannelDetailsAccess = {
   canManage: boolean;
-  canInvite: boolean;
   isArchived: boolean;
   hideSettingsTab: boolean;
   projectBound: boolean;
@@ -85,7 +83,6 @@ export function ChannelDetailsPanel({
   variant = "panel",
   portalContainer,
   onOpenSearch,
-  onInvite,
   onStopAllAgents,
   stopAllDisabledReason,
   notifyPrefLabel,
@@ -123,7 +120,6 @@ export function ChannelDetailsPanel({
   portalContainer?: RefObject<HTMLDivElement | null>;
   /** LRM-494 — channel-scoped search (not global). */
   onOpenSearch?: () => void;
-  onInvite?: () => void;
   onStopAllAgents?: () => void;
   stopAllDisabledReason?: string;
   /** LRM-494 — live preference label from workspace notify settings (LRM-414). */
@@ -141,7 +137,6 @@ export function ChannelDetailsPanel({
   const { t } = useT("channels");
   const {
     canManage,
-    canInvite,
     isArchived,
     hideSettingsTab,
     stopAllDisabled,
@@ -333,17 +328,8 @@ export function ChannelDetailsPanel({
               onClick={() => setView("files")}
               testId="channel-details-files"
             />
-            <ChannelDetailsDetailRow
-              icon={<UserPlus className="size-4" />}
-              label={t(($) => $.details.row_invite)}
-              onClick={() => {
-                if (!canInvite || !onInvite) return;
-                onClose();
-                onInvite();
-              }}
-              disabled={!canInvite || !onInvite}
-              testId="channel-details-invite"
-            />
+            {/* #821 — Overview Invite removed; adding people is the Members
+                sub-page's job (the single roster/Add home). */}
           </ChannelDetailsSectionCard>
 
           {!hideSettingsTab ? (
@@ -488,32 +474,8 @@ export function ChannelDetailsPanel({
         // load-bearing for the mobile `variant="page"` Drawer case.
         <div ref={portalContainer} className="min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-4 border-b p-3 md:p-4">
-            <div>
-              <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                {t(($) => $.details.rename_label)}
-              </label>
-              <div className="flex gap-2">
-                <Input
-                  value={nameDraft}
-                  onChange={(e) => setNameDraft(e.target.value)}
-                  disabled={!settingsEditable || renamePending}
-                  aria-label={t(($) => $.details.rename_label)}
-                  className="h-9"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!settingsEditable || !nameDirty || !nameDraft.trim() || renamePending}
-                  onClick={() => onRename(nameDraft.trim())}
-                >
-                  {t(($) => $.details.save)}
-                </Button>
-              </div>
-              {!settingsEditable && manageDisabledReason ? (
-                <p className="mt-1.5 text-xs text-muted-foreground">{manageDisabledReason}</p>
-              ) : null}
-            </div>
-
+            {/* #821 — Settings rename removed; About edit is the single
+                name/description editor (avoids two edit entrances). */}
             <div>
               <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 {t(($) => $.details.lark_label)}

@@ -237,7 +237,6 @@ import {
   useProfilePanelWidth,
 } from "../../layout/use-profile-panel-width";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
-import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
@@ -650,7 +649,6 @@ export function ChannelsPage({
   const [createNameError, setCreateNameError] = useState(false);
   // Multi-select invite: keys are `${type}:${id}` so users and agents share one set.
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
-  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [addPeopleDialogOpen, setAddPeopleDialogOpen] = useState(false);
   const [membersQuery, setMembersQuery] = useState("");
   const [inviteQuery, setInviteQuery] = useState("");
@@ -2349,11 +2347,6 @@ export function ChannelsPage({
     t,
   ]);
 
-  const openMembersDialog = useCallback(() => {
-    setMembersQuery("");
-    setMembersDialogOpen(true);
-  }, []);
-
   const openAddPeopleDialog = useCallback(() => {
     setInviteQuery("");
     setDebouncedInviteQuery("");
@@ -3089,7 +3082,6 @@ export function ChannelsPage({
         projectDisabledReason,
         access: {
           canManage: canArchive(active),
-          canInvite: !isActiveSystemChannel && canArchive(active),
           isArchived: isActiveArchived,
           hideSettingsTab: isActiveSystemChannel,
           projectBound: !!channelProjectId,
@@ -3153,11 +3145,6 @@ export function ChannelsPage({
         membersBody: memberPanelBody,
         onClose: closeChannelDetails,
         onOpenSearch: () => setConvSearchOpen(true),
-        onInvite: isActiveSystemChannel
-          ? undefined
-          : () => {
-              openAddPeopleDialog();
-            },
         onStopAllAgents: canPostInChannel
           ? () => {
               openStopAllAgentsConfirm();
@@ -3288,7 +3275,9 @@ export function ChannelsPage({
                   canStop={canPostInChannel}
                   onStopTask={handleStopChannelTask}
                   onStopAll={openStopAllAgentsConfirm}
-                  onOpenMembers={openMembersDialog}
+                  // #821 — the facepile navigates to the Details Members
+                  // sub-page (the single roster home), not a separate dialog.
+                  onOpenMembers={() => openChannelDetails("members")}
                 />
                 {isMobile || isHeaderActionsCompact ? (
                   <Button
@@ -3800,45 +3789,8 @@ export function ChannelsPage({
         </Drawer>
       )}
 
-      {active && (
-        <ChannelMembersDialog
-          open={membersDialogOpen}
-          onOpenChange={(open) => {
-            setMembersDialogOpen(open);
-            if (!open) setMembersQuery("");
-          }}
-          channelName={active.name}
-          memberCount={channelMembers.filter((m) => m.member_type === "user").length}
-          agentCount={channelMembers.filter((m) => m.member_type === "agent").length}
-          members={filteredMembers}
-          loading={membersPending}
-          query={membersQuery}
-          onQueryChange={setMembersQuery}
-          roleForMember={roleForChannelMember}
-          badgeForMember={groupBadgeForMember}
-          memberMenu={groupMemberMenu}
-          onGroupMemberAction={handleGroupMemberAction}
-          canManage={!isActiveSystemChannel && canArchive(active)}
-          isMobile={isMobile}
-          currentUserId={currentUserId ?? ""}
-          onAddPeople={() => {
-            setMembersDialogOpen(false);
-            openAddPeopleDialog();
-          }}
-          onOpenDm={openDmWithMember}
-          onOpenAgent={(agentId, snapshot) => {
-            setMembersDialogOpen(false);
-            handleOpenAgentPanel(agentId, snapshot);
-          }}
-          onOpenMember={(userId) => {
-            setMembersDialogOpen(false);
-            handleOpenMemberPanel(userId);
-          }}
-          onRemove={handleRemoveMemberClick}
-          dmPending={createOrFindDm.isPending}
-        />
-      )}
-
+      {/* #821 — the standalone members dialog is retired; the Details Members
+          sub-page (memberPanelBody) is the single roster home. */}
       {active && !isActiveSystemChannel && (
         <ChannelAddPeopleDialog
           open={addPeopleDialogOpen}

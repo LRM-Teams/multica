@@ -37,15 +37,15 @@ import { MachineDeleteControl } from "./delete-computer-dialog";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
+  headerRuntimeHealthBadge,
   runtimeMachineCounts,
   type RuntimeMachine,
   type RuntimeMachineFilter,
 } from "./runtime-machines";
 import {
   HealthDot,
-  HealthIcon,
+  RuntimeConnectivityStatus,
   RuntimeHealthStateBadge,
-  useHealthLabel,
 } from "./shared";
 import { useT } from "../../i18n/use-t";
 
@@ -611,7 +611,6 @@ function MachineDetail({
   onComputerDeleted?: () => void;
 }) {
   const { t } = useT("runtimes");
-  const healthLabel = useHealthLabel();
 
   if (!machine) {
     return (
@@ -698,6 +697,14 @@ function MachineDetail({
         t,
       })
     : "";
+  // LRM-624 / Plan A: the secondary runtimeHealth badge is reserved for
+  // *incremental* update info only. When runtimeHealth is offline and
+  // connectivity is already offline-ish, it is suppressed (no duplicate
+  // "Offline" next to the single connectivity dot above).
+  const headerBadge = headerRuntimeHealthBadge(
+    machine.runtimeHealth,
+    machine.health,
+  );
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -708,13 +715,17 @@ function MachineDetail({
               <h2 className="truncate text-xl font-semibold tracking-tight">
                 {machine.title}
               </h2>
-              <span className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-0.5 text-xs text-muted-foreground">
-                <HealthIcon health={machine.health} />
-                {healthLabel(machine.health)}
-              </span>
-              {machine.runtimeHealth && machine.runtimeHealth !== "ok" && (
-                <RuntimeHealthStateBadge health={machine.runtimeHealth} />
-              )}
+              {/* LRM-624 / Plan A: single connectivity dot+label — no bordered
+               * chip wall, no wifi-icon stack. Connectivity is expressed
+               * exactly once here. */}
+              <RuntimeConnectivityStatus health={machine.health} />
+              {/* Secondary badge = incremental update info only
+               * (update_available / ready_to_apply / updating / failed). A
+               * runtimeHealth "offline" that duplicates the connectivity dot
+               * above is suppressed — see headerRuntimeHealthBadge. */}
+              {headerBadge ? (
+                <RuntimeHealthStateBadge health={headerBadge} />
+              ) : null}
               {machine.isCurrent && (
                 <span className="rounded-md bg-foreground px-2 py-0.5 text-xs font-medium text-background">
                   {t(($) => $.machine.local_badge)}

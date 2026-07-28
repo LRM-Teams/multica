@@ -3,6 +3,7 @@ import type { AgentRuntime } from "@multica/core/types";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
+  headerRuntimeHealthBadge,
   runtimeMachineCounts,
   splitRuntimeName,
 } from "./runtime-machines";
@@ -365,5 +366,48 @@ describe("splitRuntimeName", () => {
       base: "Codex cloud",
       hostname: null,
     });
+  });
+});
+
+describe("headerRuntimeHealthBadge (LRM-624 / Plan A)", () => {
+  // The title row shows a single connectivity dot+label. The secondary
+  // runtimeHealth badge must carry *incremental* info only and never a
+  // duplicate "Offline".
+  it("never badges ok / null", () => {
+    expect(headerRuntimeHealthBadge(null, "online")).toBeNull();
+    expect(headerRuntimeHealthBadge("ok", "online")).toBeNull();
+    expect(headerRuntimeHealthBadge("ok", "offline")).toBeNull();
+  });
+
+  it("badges incremental update states regardless of connectivity", () => {
+    for (const connectivity of [
+      "online",
+      "recently_lost",
+      "offline",
+      "about_to_gc",
+    ] as const) {
+      expect(headerRuntimeHealthBadge("update_available", connectivity)).toBe(
+        "update_available",
+      );
+      expect(headerRuntimeHealthBadge("ready_to_apply", connectivity)).toBe(
+        "ready_to_apply",
+      );
+      expect(headerRuntimeHealthBadge("updating", connectivity)).toBe(
+        "updating",
+      );
+      expect(headerRuntimeHealthBadge("failed", connectivity)).toBe("failed");
+    }
+  });
+
+  it("suppresses a duplicate offline badge when connectivity is already offline-ish", () => {
+    expect(headerRuntimeHealthBadge("offline", "offline")).toBeNull();
+    expect(headerRuntimeHealthBadge("offline", "recently_lost")).toBeNull();
+    expect(headerRuntimeHealthBadge("offline", "about_to_gc")).toBeNull();
+  });
+
+  it("keeps the offline badge when connectivity is online (not a duplicate)", () => {
+    // Machine reachable but its runtimes individually report offline — a
+    // real signal, not a duplicate of the connectivity dot.
+    expect(headerRuntimeHealthBadge("offline", "online")).toBe("offline");
   });
 });

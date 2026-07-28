@@ -134,9 +134,17 @@ func (d *Daemon) tryCanonicalChatBackend(
 		BackendConfig:      backendCfg,
 		Factory:            factory,
 		BeforeCreate: func() error {
-			_, err := execenv.MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider, taskCtxCopy)
+			brief, receipt, err := execenv.MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider, taskCtxCopy)
 			if err != nil {
 				return fmt.Errorf("materialize canonical turn context: %w", err)
+			}
+			if taskLog != nil {
+				taskLog.Info("canonical startup materialize receipt",
+					"managed_input_digest", receipt.ManagedInputDigest,
+					"agents_final_sha256", receipt.AgentsFinalSHA256,
+					"skills", len(receipt.Skills),
+					"brief_bytes", len(brief),
+				)
 			}
 			return nil
 		},

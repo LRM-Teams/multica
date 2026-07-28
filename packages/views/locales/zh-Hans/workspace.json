@@ -32,18 +32,18 @@
     "sign_in_different": "使用其他账号登录"
   },
   "windy_setup": {
-    "title": "Set up Wendy HR",
+    "title": "设置 Wendy HR",
     "description": "为此工作区设置 Wendy HR：选择它的运行位置，我们会配好它的 runtime、模型和指令。你也可以稍后在 Wendy 设置里完成。",
-    "intro": "Wendy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
-    "runtime_required_title": "Connect or share a runtime first",
-    "runtime_required_description": "Wendy needs an available runtime before it can recruit agents or update its own instructions.",
-    "refresh_runtimes": "Refresh runtimes",
+    "intro": "Wendy 会从对话里招聘有用的 Agent，并把生成的招聘卡留在当前会话。设置完成后，它的私信会自动置顶。",
+    "runtime_required_title": "请先连接或共享 runtime",
+    "runtime_required_description": "Wendy 需要可用的 runtime，才能招聘 Agent 或更新自身指令。",
+    "refresh_runtimes": "刷新 runtime",
     "one_time_note": "这个设置提示只会出现一次——你随时可以稍后再完成。",
-    "update": "Update Wendy",
+    "update": "更新 Wendy",
     "later": "稍后",
-    "badge_label": "Personal agent HR",
-    "intro_title": "Wendy turns conversations into hires",
-    "one_time_label": "One-time update",
-    "runtime_move_note": "Pick any usable runtime now; Wendy can be moved later from its agent settings."
+    "badge_label": "个人 Agent HR",
+    "intro_title": "Wendy 把对话变成招聘",
+    "one_time_label": "一次性设置",
+    "runtime_move_note": "现在选任意可用 runtime；之后可在 Agent 设置里迁移 Wendy。"
   }
 }

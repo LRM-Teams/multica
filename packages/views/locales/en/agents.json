@@ -503,11 +503,16 @@
     "loading": "Loading groups…",
     "load_failed": "Couldn't load groups",
     "retry": "Retry",
-    "no_groups": "Join or create a group first to use 仅本群",
+    "no_groups": "No groups yet — create one below for 仅本群",
     "no_match": "No matching groups",
     "home_required": "Bind a home group for 仅本群 — cannot create without home_channel_id",
     "channel_unavailable": "Home group unavailable",
-    "not_channel_permission_hint": "This is agent visibility (discover / invite / @), not channel sidebar permissions. Other groups won't see this agent; existing seats elsewhere are kept."
+    "not_channel_permission_hint": "This is agent visibility (discover / invite / @), not channel sidebar permissions. Other groups won't see this agent; existing seats elsewhere are kept.",
+    "home_mode_existing": "Existing group",
+    "home_mode_new": "Create new group",
+    "new_channel_name_label": "New group name",
+    "new_channel_name_placeholder": "e.g. Research squad",
+    "new_channel_name_required": "Enter a group name to create"
   },
   "profile_card": {
     "unavailable": "Agent unavailable",

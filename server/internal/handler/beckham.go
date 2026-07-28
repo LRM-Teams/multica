@@ -332,13 +332,34 @@ func (h *Handler) currentGroupManagerAgent(ctx context.Context, workspaceID, cha
 }
 
 // ensureChannelAgentMember adds the agent as a channel member if not already one.
+// On a fresh insert it publishes the agent channel-onboarding system message so
+// the agent is woken into the group (same path as manual AddChannelMember).
 func (h *Handler) ensureChannelAgentMember(ctx context.Context, workspaceID, channelID, agentID pgtype.UUID) {
-	if _, err := h.DB.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING
-	`, channelID, workspaceID, agentID); err != nil {
-		slog.Warn("ensure channel agent member failed", "channel_id", uuidToString(channelID), "agent_id", uuidToString(agentID), "error", err)
+	var generationID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, join_source)
+		VALUES ($1, $2, 'agent', $3, 'system')
+		ON CONFLICT DO NOTHING
+		RETURNING generation_id
+	`, channelID, workspaceID, agentID).Scan(&generationID)
+	if err != nil {
+		if !errorsIsNoRows(err) {
+			slog.Warn("ensure channel agent member failed", "channel_id", uuidToString(channelID), "agent_id", uuidToString(agentID), "error", err)
+		}
+		return
 	}
+	if !generationID.Valid {
+		return
+	}
+	if err := h.publishChannelOnboardingSystemMessageForGeneration(ctx, generationID); err != nil {
+		slog.Warn("ensure channel agent member: onboarding publish failed",
+			"channel_id", uuidToString(channelID),
+			"agent_id", uuidToString(agentID),
+			"generation", uuidToString(generationID),
+			"error", err,
+		)
+	}
+	h.publish(protocol.EventChannelUpdated, uuidToString(workspaceID), "system", "", map[string]any{"id": uuidToString(channelID)})
 }
 
 // InviteGroupManager is the hire entrypoint for a group: create (or reuse) the

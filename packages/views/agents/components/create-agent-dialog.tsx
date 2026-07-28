@@ -16,7 +16,7 @@ import {
   VISIBILITY_LABEL,
   VISIBILITY_OPTIONS,
 } from "@multica/core/agents";
-import { channelsOptions } from "@multica/core/channels";
+import { channelKeys, channelsOptions } from "@multica/core/channels";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -42,7 +42,10 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { toast } from "sonner";
 import { CharCounter } from "./char-counter";
-import { HomeChannelBindChip } from "./home-channel-bind-chip";
+import {
+  HomeChannelBindPanel,
+  type HomeChannelMode,
+} from "./home-channel-bind-panel";
 import { useT } from "../../i18n";
 
 function VisibilityOptionIcon({
@@ -104,9 +107,7 @@ export function CreateAgentDialog({
     () => channels.filter((c) => c.kind === "group" && !c.archived_at),
     [channels],
   );
-  // Only disable after a successful empty load — never while still fetching
-  // (that would block 仅本群 before home can be bound).
-  const channelOptionDisabled = !channelsLoading && groups.length === 0;
+  const hasGroups = groups.length > 0;
 
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
@@ -122,6 +123,7 @@ export function CreateAgentDialog({
       ? seed
       : "workspace";
   });
+  const [homeMode, setHomeMode] = useState<HomeChannelMode>("existing");
   const [homeChannelId, setHomeChannelId] = useState<string | null>(() => {
     if (template?.visibility === "channel" && template.home_channel_id) {
       return template.home_channel_id;
@@ -129,6 +131,9 @@ export function CreateAgentDialog({
     if (draft?.channel_id) return draft.channel_id;
     return defaultHomeChannelId ?? null;
   });
+  const [newChannelName, setNewChannelName] = useState(
+    () => draft?.name ?? template?.display_name ?? "",
+  );
   const [homeInvalid, setHomeInvalid] = useState(false);
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
@@ -184,17 +189,23 @@ export function CreateAgentDialog({
     !isRuntimeUsableForUser(selectedRuntime, currentUserId);
 
   const pickVisibility = (next: AgentVisibility) => {
-    if (next === "channel" && channelOptionDisabled) return;
     setVisibility(next);
     setHomeInvalid(false);
     if (next === "channel") {
-      setHomeChannelId((prev) => {
-        // Keep an existing/default bind while the channel list is still
-        // loading — never wipe home just because groups[] is empty yet.
-        if (prev) return prev;
-        if (defaultHomeChannelId) return defaultHomeChannelId;
-        return groups[0]?.id ?? null;
-      });
+      if (!channelsLoading && !hasGroups) {
+        setHomeMode("new");
+        if (!newChannelName.trim()) {
+          setNewChannelName(name.trim() || draft?.name || "");
+        }
+      } else {
+        setHomeChannelId((prev) => {
+          // Keep an existing/default bind while the channel list is still
+          // loading — never wipe home just because groups[] is empty yet.
+          if (prev) return prev;
+          if (defaultHomeChannelId) return defaultHomeChannelId;
+          return groups[0]?.id ?? null;
+        });
+      }
     } else {
       setHomeChannelId(null);
     }
@@ -202,16 +213,33 @@ export function CreateAgentDialog({
 
   const handleSubmit = async () => {
     if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    const useNewHome = visibility === "channel" && (homeMode === "new" || (!channelsLoading && !hasGroups));
     // Channel without home is an explicit hard stop — never silently
     // rewrite to private/workspace (LRM-238 / LRM-371 AC).
-    if (visibility === "channel" && !homeChannelId) {
-      setHomeInvalid(true);
-      toast.error(t(($) => $.visibility_bind.home_required));
-      return;
+    if (visibility === "channel") {
+      if (useNewHome) {
+        if (!newChannelName.trim()) {
+          setHomeInvalid(true);
+          toast.error(t(($) => $.visibility_bind.new_channel_name_required));
+          return;
+        }
+      } else if (!homeChannelId) {
+        setHomeInvalid(true);
+        toast.error(t(($) => $.visibility_bind.home_required));
+        return;
+      }
     }
     setCreating(true);
 
     try {
+      let resolvedHomeId = homeChannelId;
+      if (visibility === "channel" && useNewHome) {
+        const createdChannel = await api.createChannel({
+          name: newChannelName.trim(),
+        });
+        resolvedHomeId = createdChannel.id;
+        await queryClient.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      }
       const trimmedInstructions = instructions.trim();
       const data: CreateAgentRequest = {
         display_name: name.trim(),
@@ -219,7 +247,7 @@ export function CreateAgentDialog({
         runtime_id: selectedRuntime.id,
         visibility,
         home_channel_id:
-          visibility === "channel" ? homeChannelId : undefined,
+          visibility === "channel" ? resolvedHomeId : undefined,
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
@@ -356,20 +384,18 @@ export function CreateAgentDialog({
               <div className="mt-1.5 flex flex-col gap-2" role="radiogroup" aria-label={t(($) => $.create_dialog.visibility_label)}>
                 {VISIBILITY_OPTIONS.map((option) => {
                   const selected = visibility === option;
-                  const disabled = option === "channel" && channelOptionDisabled;
                   return (
                     <button
                       key={option}
                       type="button"
                       role="radio"
                       aria-checked={selected}
-                      disabled={disabled}
                       onClick={() => pickVisibility(option)}
                       className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
                         selected
                           ? "border-primary bg-primary/5"
                           : "border-border hover:bg-muted"
-                      } ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
+                      }`}
                     >
                       <span
                         aria-hidden
@@ -392,19 +418,28 @@ export function CreateAgentDialog({
                         </div>
                         {option === "channel" && selected ? (
                           <div className="mt-2">
-                            <HomeChannelBindChip
-                              value={homeChannelId}
-                              invalid={homeInvalid}
-                              onChange={(id) => {
+                            <HomeChannelBindPanel
+                              mode={!channelsLoading && !hasGroups ? "new" : homeMode}
+                              onModeChange={(next) => {
+                                setHomeMode(next);
+                                setHomeInvalid(false);
+                                if (next === "new" && !newChannelName.trim()) {
+                                  setNewChannelName(name.trim() || draft?.name || "");
+                                }
+                              }}
+                              existingChannelId={homeChannelId}
+                              onExistingChannelChange={(id) => {
                                 setHomeChannelId(id);
                                 setHomeInvalid(false);
                               }}
+                              newChannelName={newChannelName}
+                              onNewChannelNameChange={(nextName) => {
+                                setNewChannelName(nextName);
+                                setHomeInvalid(false);
+                              }}
+                              invalid={homeInvalid}
+                              hasGroups={hasGroups || channelsLoading}
                             />
-                          </div>
-                        ) : null}
-                        {option === "channel" && disabled ? (
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {t(($) => $.visibility_bind.no_groups)}
                           </div>
                         ) : null}
                       </div>

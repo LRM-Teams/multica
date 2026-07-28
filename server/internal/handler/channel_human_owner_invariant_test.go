@@ -281,3 +281,153 @@ VALUES ($1, $2, $3, 'group') RETURNING id`,
 	_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, userID)
 	_ = chID
 }
+
+func TestHumanOwnerInvariant_ChannelWorkspaceUnilateralChangeFails(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	// Ordinary group in fixture workspace with auto-seeded owner.
+	var chID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO channel (workspace_id, name, created_by, kind)
+VALUES ($1, $2, $3, 'group') RETURNING id`,
+		testWorkspaceID, "inv-ws-ch-"+uuid.NewString()[:8], testUserID).Scan(&chID); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, chID) })
+
+	// Isolated target workspace; owner is NOT a member there.
+	var otherWS string
+	suffix := uuid.NewString()[:8]
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, 'inv ws move', 'IWM') RETURNING id`,
+		"inv-ws-"+suffix, "inv-ws-"+suffix).Scan(&otherWS); err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, otherWS) })
+
+	_, err := testPool.Exec(ctx, `UPDATE channel SET workspace_id = $1 WHERE id = $2`, otherWS, chID)
+	if !ownerInvariantErr(err) {
+		t.Fatalf("channel workspace unilateral change want fail, got: %v", err)
+	}
+}
+
+func TestHumanOwnerInvariant_OwnerRowWorkspaceUnilateralChangeFails(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	var chID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO channel (workspace_id, name, created_by, kind)
+VALUES ($1, $2, $3, 'group') RETURNING id`,
+		testWorkspaceID, "inv-ws-row-"+uuid.NewString()[:8], testUserID).Scan(&chID); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, chID) })
+
+	var otherWS string
+	suffix := uuid.NewString()[:8]
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, 'inv row move', 'IRM') RETURNING id`,
+		"inv-row-"+suffix, "inv-row-"+suffix).Scan(&otherWS); err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, otherWS) })
+
+	_, err := testPool.Exec(ctx, `
+UPDATE channel_member SET workspace_id = $1
+WHERE channel_id = $2 AND member_type = 'user' AND member_id = $3`,
+		otherWS, chID, testUserID)
+	if !ownerInvariantErr(err) {
+		t.Fatalf("owner-row workspace unilateral change want fail, got: %v", err)
+	}
+}
+
+func TestHumanOwnerInvariant_BilateralWorkspaceMoveOK(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	// Owner must be member of both workspaces for a legal bilateral move.
+	var otherWS string
+	suffix := uuid.NewString()[:8]
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, 'inv bilateral', 'IBL') RETURNING id`,
+		"inv-bi-"+suffix, "inv-bi-"+suffix).Scan(&otherWS); err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
+ON CONFLICT DO NOTHING`, otherWS, testUserID); err != nil {
+		t.Fatalf("member other ws: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, otherWS)
+	})
+
+	var chID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO channel (workspace_id, name, created_by, kind)
+VALUES ($1, $2, $3, 'group') RETURNING id`,
+		testWorkspaceID, "inv-bi-ch-"+uuid.NewString()[:8], testUserID).Scan(&chID); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, chID) })
+
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE channel SET workspace_id = $1 WHERE id = $2`, otherWS, chID); err != nil {
+		t.Fatalf("channel ws: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE channel_member SET workspace_id = $1 WHERE channel_id = $2`, otherWS, chID); err != nil {
+		t.Fatalf("member ws: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("bilateral move commit want OK, got: %v", err)
+	}
+
+	var owners int
+	if err := testPool.QueryRow(ctx, `
+SELECT count(*) FROM channel c
+JOIN channel_member cm ON cm.channel_id = c.id AND cm.workspace_id = c.workspace_id
+  AND cm.role = 'owner' AND cm.member_type = 'user'
+JOIN member m ON m.workspace_id = c.workspace_id AND m.user_id = cm.member_id
+WHERE c.id = $1`, chID).Scan(&owners); err != nil {
+		t.Fatal(err)
+	}
+	if owners != 1 {
+		t.Fatalf("after bilateral move eligible owners=%d want 1", owners)
+	}
+}
+
+func TestHumanOwnerInvariant_WorkspaceMemberRemovalGhostSoleOwnerFails(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	// Dedicated user as sole owner so we can remove their workspace membership.
+	owner := insertUserAndMember(t, testWorkspaceID)
+	var chID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO channel (workspace_id, name, created_by, kind)
+VALUES ($1, $2, $3, 'group') RETURNING id`,
+		testWorkspaceID, "inv-ghost-"+uuid.NewString()[:8], owner).Scan(&chID); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, chID) })
+
+	_, err := testPool.Exec(ctx, `
+DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, owner)
+	if !ownerInvariantErr(err) {
+		t.Fatalf("remove sole owner workspace membership want fail, got: %v", err)
+	}
+}

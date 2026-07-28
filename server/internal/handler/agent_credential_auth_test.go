@@ -59,6 +59,44 @@ func TestCreateAgentCredential_DerivesBindingFromAgentAndRuntimeOwner(t *testing
 	}
 }
 
+func TestCreateAgentCredential_AllowsCallerChosenNoExpiry(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Product decision (Frank, 2026-07-28): manually issued agent credentials
+	// may be non-expiring, like GitHub PATs. Tightening this requires a new
+	// product decision; archive/member-delete revocation remains mandatory.
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	agentID := createHandlerTestAgent(t, "agent-credential-no-expiry", nil)
+	req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+agentID+"/credentials", map[string]any{}), "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.CreateAgentCredential(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAgentCredential: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp CreateAgentCredentialResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Token == "" || resp.ExpiresAt != nil {
+		t.Fatalf("manual no-expiry credential response = %#v, want token with nil expires_at", resp)
+	}
+
+	var expiresAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT expires_at
+		FROM agent_credential
+		WHERE id = $1
+	`, resp.ID).Scan(&expiresAt); err != nil {
+		t.Fatalf("load manual credential expiry: %v", err)
+	}
+	if expiresAt.Valid {
+		t.Fatalf("manual credential expires_at = %v, want NULL", expiresAt)
+	}
+}
+
 func TestCreateAgentCredential_RejectsCallerSuppliedBindingFields(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -233,6 +271,67 @@ func TestEnsureDaemonAgentCredential_DerivesOwnerFromRuntime(t *testing.T) {
 	remaining := time.Until(credential.ExpiresAt.Time)
 	if !credential.ExpiresAt.Valid || remaining < 23*time.Hour || remaining > 25*time.Hour {
 		t.Fatalf("daemon-issued credential expires_at = %v, want bounded future expiry", credential.ExpiresAt)
+	}
+}
+
+func TestEnsureDaemonAgentCredential_ReusesOnlyLiveCachedCredential(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	daemonID := "agent-credential-reuse-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonID(t, daemonID)
+	agentID := createHandlerTestAgent(t, "agent-credential-daemon-reuse", nil)
+
+	ensure := func(body any) (int, CreateAgentCredentialResponse) {
+		t.Helper()
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", body, testWorkspaceID, daemonID)
+		req = withRouteParams(req, "runtimeId", runtimeID, "agentId", agentID)
+		w := httptest.NewRecorder()
+		testHandler.EnsureDaemonAgentCredential(w, req)
+		var resp CreateAgentCredentialResponse
+		if w.Body.Len() > 0 {
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+			}
+		}
+		return w.Code, resp
+	}
+
+	status, issued := ensure(nil)
+	if status != http.StatusCreated || issued.Token == "" || issued.ID == "" {
+		t.Fatalf("initial ensure = %d %#v, want newly issued credential", status, issued)
+	}
+
+	status, reused := ensure(map[string]any{"credential_id": issued.ID})
+	if status != http.StatusOK || !reused.Reused || reused.ID != issued.ID || reused.Token != "" {
+		t.Fatalf("reuse ensure = %d %#v, want tokenless exact-ID reuse", status, reused)
+	}
+
+	if _, err := testHandler.Queries.RevokeAgentCredential(context.Background(), parseUUID(issued.ID)); err != nil {
+		t.Fatalf("revoke cached credential: %v", err)
+	}
+	status, rotated := ensure(map[string]any{"credential_id": issued.ID})
+	if status != http.StatusCreated || rotated.Token == "" || rotated.ID == issued.ID || rotated.RotationReason != "revoked" {
+		t.Fatalf("revoked ensure = %d %#v, want rotated credential", status, rotated)
+	}
+	var auditReused bool
+	var auditReason string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT (details->>'reused')::boolean, details->>'rotation_reason'
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = $2
+		  AND details->>'agent_id' = $3
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, testWorkspaceID, agentCredentialActivityDaemonEnsured, agentID).Scan(&auditReused, &auditReason); err != nil {
+		t.Fatalf("load daemon ensure audit: %v", err)
+	}
+	if auditReused || auditReason != "revoked" {
+		t.Fatalf("daemon ensure audit reused/reason = %v/%q, want false/revoked", auditReused, auditReason)
 	}
 }
 
@@ -737,6 +836,200 @@ func TestAgentCredentialAuthSetsBoundActorHeaders(t *testing.T) {
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked credential status = %d, want 401", w.Code)
+	}
+}
+
+func TestAgentCredentialArchiveRevokesImmediatelyAndRestoreDoesNotResurrect(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "agent-credential-archive-boundary", nil)
+	rawToken, err := auth.GenerateAgentCredentialToken()
+	if err != nil {
+		t.Fatalf("generate agent credential token: %v", err)
+	}
+	credential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
+		TokenHash:   auth.HashToken(rawToken),
+		TokenPrefix: tokenPrefixForTest(rawToken),
+		AgentID:     parseUUID(agentID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+		UserID:      parseUUID(testUserID),
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("create agent credential: %v", err)
+	}
+
+	authHandler := middleware.Auth(testHandler.Queries, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/probe", nil)
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+
+	w := httptest.NewRecorder()
+	authHandler.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("precondition auth status = %d, want 204", w.Code)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("archive agent: %v", err)
+	}
+	w = httptest.NewRecorder()
+	authHandler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("archived agent credential status = %d, want 401", w.Code)
+	}
+
+	var revokedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `SELECT revoked_at FROM agent_credential WHERE id = $1`, credential.ID).Scan(&revokedAt); err != nil {
+		t.Fatalf("load revoked_at: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("archive boundary must durably revoke the credential")
+	}
+	var reason string
+	var revokedCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT details->>'reason', (details->>'revoked_count')::integer
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'agent_credential_revoked'
+		  AND details->>'agent_id' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, testWorkspaceID, agentID).Scan(&reason, &revokedCount); err != nil {
+		t.Fatalf("load archive revoke audit: %v", err)
+	}
+	if reason != "agent_archived" || revokedCount != 1 {
+		t.Fatalf("archive revoke audit reason/count = %q/%d, want agent_archived/1", reason, revokedCount)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = NULL, archived_by = NULL WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("restore agent: %v", err)
+	}
+	w = httptest.NewRecorder()
+	authHandler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("restored agent old credential status = %d, want 401", w.Code)
+	}
+}
+
+func TestAgentCredentialOwnerMemberDeleteRevokesImmediately(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, _, memberID := privateAgentTestFixture(t)
+	rawToken, err := auth.GenerateAgentCredentialToken()
+	if err != nil {
+		t.Fatalf("generate agent credential token: %v", err)
+	}
+	credential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
+		TokenHash:   auth.HashToken(rawToken),
+		TokenPrefix: tokenPrefixForTest(rawToken),
+		AgentID:     parseUUID(agentID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+		UserID:      parseUUID(memberID),
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("create member-bound credential: %v", err)
+	}
+
+	if _, err := testPool.Exec(ctx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, memberID); err != nil {
+		t.Fatalf("delete owner membership: %v", err)
+	}
+
+	var revokedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `SELECT revoked_at FROM agent_credential WHERE id = $1`, credential.ID).Scan(&revokedAt); err != nil {
+		t.Fatalf("load revoked_at: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("member delete boundary must durably revoke the credential")
+	}
+	var reason string
+	var revokedCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT details->>'reason', (details->>'revoked_count')::integer
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'agent_credential_revoked'
+		  AND details->>'owner_user_id' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, testWorkspaceID, memberID).Scan(&reason, &revokedCount); err != nil {
+		t.Fatalf("load member revoke audit: %v", err)
+	}
+	if reason != "owner_membership_deleted" || revokedCount != 1 {
+		t.Fatalf("member revoke audit reason/count = %q/%d, want owner_membership_deleted/1", reason, revokedCount)
+	}
+
+	authHandler := middleware.Auth(testHandler.Queries, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/probe", nil)
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	w := httptest.NewRecorder()
+	authHandler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("deleted-member credential status = %d, want 401", w.Code)
+	}
+}
+
+func TestAgentCredentialInsertSerializesWithArchive(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "agent-credential-archive-race", nil)
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin archive tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("archive agent in tx: %v", err)
+	}
+
+	insertDone := make(chan error, 1)
+	go func() {
+		rawToken, tokenErr := auth.GenerateAgentCredentialToken()
+		if tokenErr != nil {
+			insertDone <- tokenErr
+			return
+		}
+		_, insertErr := testHandler.Queries.CreateAgentCredential(context.Background(), db.CreateAgentCredentialParams{
+			TokenHash:   auth.HashToken(rawToken),
+			TokenPrefix: tokenPrefixForTest(rawToken),
+			AgentID:     parseUUID(agentID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+			UserID:      parseUUID(testUserID),
+			ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		})
+		insertDone <- insertErr
+	}()
+
+	select {
+	case err := <-insertDone:
+		t.Fatalf("credential insert crossed uncommitted archive boundary: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit archive tx: %v", err)
+	}
+	select {
+	case err := <-insertDone:
+		if err == nil {
+			t.Fatal("credential insert after archive commit must fail closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("credential insert did not unblock after archive commit")
 	}
 }
 

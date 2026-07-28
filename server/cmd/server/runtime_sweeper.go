@@ -72,6 +72,9 @@ const (
 	// ticks and 500 rows/tick we drain 60k rows/hour worst case — plenty
 	// of headroom for the documented backlog without monopolising DB CPU.
 	queuedExpireBatchSize = 500
+	// expiredAgentCredentialRetention keeps short-lived credential audit rows
+	// for one week after expiry. GC is bounded to 500 rows per sweeper tick.
+	expiredAgentCredentialRetention = 7 * 24 * time.Hour
 	// sandboxNodeStaleThresholdSeconds mirrors handler/sandbox.go
 	// sandboxNodeStaleThreshold. sandboxd claims every ~5s and heartbeats
 	// every ~10s; 60s marks a node offline after several missed polls.
@@ -104,7 +107,23 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, healthEventExec
 			sweepExpiredQueuedTasks(ctx, queries, taskSvc)
 			sweepQueuedTasksOnOfflineRuntimes(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
+			gcExpiredAgentCredentials(ctx, queries)
 		}
+	}
+}
+
+func gcExpiredAgentCredentials(ctx context.Context, queries *db.Queries) {
+	cutoff := pgtype.Timestamptz{
+		Time:  time.Now().Add(-expiredAgentCredentialRetention),
+		Valid: true,
+	}
+	deleted, err := queries.DeleteExpiredAgentCredentials(ctx, cutoff)
+	if err != nil {
+		slog.Warn("runtime sweeper: expired agent credential gc failed", "error", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("runtime sweeper: expired agent credentials deleted", "count", deleted)
 	}
 }
 

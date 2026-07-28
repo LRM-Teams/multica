@@ -3225,19 +3225,31 @@ func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskL
 	if strings.TrimSpace(task.WorkspaceID) == "" || strings.TrimSpace(task.RuntimeID) == "" || strings.TrimSpace(task.AgentID) == "" {
 		return "", fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
 	}
-	if cached, ok := readCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, time.Now()); ok {
-		taskLog.Info("agent credential cache hit", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
-		return cached.Token, nil
+	cached, cacheOK := readCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, time.Now())
+	cachedCredentialID := ""
+	if cacheOK {
+		cachedCredentialID = cached.CredentialID
 	}
-	resp, err := d.client.EnsureAgentCredential(ctx, task.RuntimeID, task.AgentID)
+	resp, err := d.client.EnsureAgentCredential(ctx, task.RuntimeID, task.AgentID, cachedCredentialID)
 	if err != nil {
 		return "", fmt.Errorf("ensure daemon agent credential: %w", err)
 	}
-	cached, err := writeCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, *resp, time.Now())
+	if resp.Reused {
+		if !cacheOK || resp.ID != cached.CredentialID {
+			return "", fmt.Errorf("ensure response reused an unexpected credential")
+		}
+		taskLog.Info("agent credential cache validated", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
+		return cached.Token, nil
+	}
+	cached, err = writeCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, *resp, time.Now())
 	if err != nil {
 		return "", err
 	}
-	taskLog.Info("agent credential ensured", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
+	taskLog.Info("agent credential ensured",
+		"credential_id", shortID(cached.CredentialID),
+		"token_prefix", cached.Prefix,
+		"rotation_reason", resp.RotationReason,
+	)
 	return cached.Token, nil
 }
 

@@ -89,12 +89,16 @@ func TestClient_VersionOmittedWhenUnset(t *testing.T) {
 }
 
 func TestClient_RuntimeScopedCallsUseRuntimeDaemonToken(t *testing.T) {
+	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/api/daemon/runtimes/rt-1/agents/agent-1/credential" {
 			t.Fatalf("path = %q, want ensure credential path", got)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
 			t.Fatalf("Authorization = %q, want runtime daemon token", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode ensure body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"mac_abc","token":"mac_secret"}`))
@@ -105,8 +109,11 @@ func TestClient_RuntimeScopedCallsUseRuntimeDaemonToken(t *testing.T) {
 	c.SetToken("mul-profile")
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
 
-	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1"); err != nil {
+	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1", "cred-cached"); err != nil {
 		t.Fatalf("EnsureAgentCredential: %v", err)
+	}
+	if got, _ := body["credential_id"].(string); got != "cred-cached" {
+		t.Fatalf("credential_id = %q, want cred-cached", got)
 	}
 }
 
@@ -127,7 +134,7 @@ func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
 	c.SetToken("mul-profile")
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(-time.Hour))
 
-	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1"); err != nil {
+	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1", ""); err != nil {
 		t.Fatalf("EnsureAgentCredential: %v", err)
 	}
 }

@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // This file is the actor-provenance RED slice for task #844. It intentionally
@@ -62,7 +65,7 @@ func requireChannelMembershipActor(t *testing.T, channelID, memberType, memberID
 func TestExistingChannelMemberWritersRecordCanonicalActorProvenance(t *testing.T) {
 	requireChannelMemberActorProvenanceSchema(t)
 
-	t.Run("ordinary group auto seeded owner is the creating user", func(t *testing.T) {
+	t.Run("ordinary group database seed is the creating user", func(t *testing.T) {
 		var channelID string
 		if err := testPool.QueryRow(context.Background(), `
 			INSERT INTO channel (workspace_id, name, created_by, kind)
@@ -70,6 +73,39 @@ func TestExistingChannelMemberWritersRecordCanonicalActorProvenance(t *testing.T
 			RETURNING id::text`,
 			testWorkspaceID, "owner-provenance-"+uuid.NewString(), testUserID).Scan(&channelID); err != nil {
 			t.Fatalf("create ordinary group: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID)
+		})
+		requireChannelMembershipActor(t, channelID, "user", testUserID, "user", testUserID)
+	})
+
+	t.Run("ordinary group helper owner is the creating user", func(t *testing.T) {
+		ctx := context.Background()
+		tx, err := testPool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin helper owner writer: %v", err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+			t.Fatalf("disable channel seed trigger: %v", err)
+		}
+		var channelID string
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO channel (workspace_id, name, created_by, kind)
+			VALUES ($1, $2, $3, 'group')
+			RETURNING id::text`,
+			testWorkspaceID, "owner-helper-provenance-"+uuid.NewString(), testUserID).Scan(&channelID); err != nil {
+			t.Fatalf("create helper-owned group: %v", err)
+		}
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = origin`); err != nil {
+			t.Fatalf("restore channel seed trigger: %v", err)
+		}
+		if err := insertChannelHumanOwnerTx(ctx, tx, channelID, parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
+			t.Fatalf("insert helper-owned membership: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit helper owner writer: %v", err)
 		}
 		t.Cleanup(func() {
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID)
@@ -94,20 +130,142 @@ func TestExistingChannelMemberWritersRecordCanonicalActorProvenance(t *testing.T
 		requireChannelMembershipActor(t, channelID, "user", targetID, "user", testUserID)
 	})
 
-	t.Run("system writer uses a null actor id", func(t *testing.T) {
-		targetID := createChannelPlainMember(t)
-		channelID := seedChannelForTest(t, "system-provenance-"+uuid.NewString(), testUserID)
-		if _, err := testPool.Exec(context.Background(), `
-			INSERT INTO channel_member (
-			  channel_id, workspace_id, member_type, member_id, role,
-			  added_by_type, added_by_id, join_source
-			)
-			VALUES ($1, $2, 'user', $3, 'member', 'system', NULL, 'system')`,
-			channelID, testWorkspaceID, targetID); err != nil {
-			t.Fatalf("insert system-authored member: %v", err)
+	t.Run("human batch add records the requesting user for every inserted target", func(t *testing.T) {
+		firstTarget := createChannelPlainMember(t)
+		secondTarget := createChannelPlainMember(t)
+		channelID := seedChannelForTest(t, "human-batch-provenance-"+uuid.NewString(), testUserID)
+		req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members/batch", AddChannelMembersRequest{
+			Members: []AddChannelMemberRequest{
+				{MemberType: "user", MemberID: firstTarget},
+				{MemberType: "user", MemberID: secondTarget},
+			},
+		})
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		req = withURLParam(req, "channelId", channelID)
+		rec := httptest.NewRecorder()
+		testHandler.AddChannelMembers(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("human batch add status=%d body=%s", rec.Code, rec.Body.String())
 		}
-		requireChannelMembershipActor(t, channelID, "user", targetID, "system", "")
+		requireChannelMembershipActor(t, channelID, "user", firstTarget, "user", testUserID)
+		requireChannelMembershipActor(t, channelID, "user", secondTarget, "user", testUserID)
 	})
+
+	t.Run("dm members record the human creator", func(t *testing.T) {
+		targetAgent := createHandlerTestAgent(t, "DM Provenance "+uuid.NewString()[:8], nil)
+		canonical := "dm-provenance-" + uuid.NewString()
+		channel, created := testHandler.createDMChannel(
+			context.Background(), httptest.NewRecorder(), testWorkspaceID, testUserID, canonical,
+			[]dmMember{
+				{memberType: "user", memberID: parseUUID(testUserID)},
+				{memberType: "agent", memberID: parseUUID(targetAgent)},
+			},
+		)
+		if !created {
+			t.Fatal("createDMChannel did not create the provenance fixture")
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channel.ID)
+		})
+		requireChannelMembershipActor(t, channel.ID, "user", testUserID, "user", testUserID)
+		requireChannelMembershipActor(t, channel.ID, "agent", targetAgent, "user", testUserID)
+	})
+
+	t.Run("beckham system ensure uses a null actor id", func(t *testing.T) {
+		targetAgent := createHandlerTestAgent(t, "Beckham Provenance "+uuid.NewString()[:8], nil)
+		channelID := seedChannelForTest(t, "beckham-system-provenance-"+uuid.NewString(), testUserID)
+		testHandler.ensureChannelAgentMember(
+			context.Background(), parseUUID(testWorkspaceID), parseUUID(channelID), parseUUID(targetAgent),
+		)
+		requireChannelMembershipActor(t, channelID, "agent", targetAgent, "system", "")
+	})
+
+	t.Run("env dispatch create records user owner and system roster actors", func(t *testing.T) {
+		ctx, _, envID, _, targetAgent := setupEnvDispatchChannelStoreFixture(t)
+		projectID := projectIDForEnvDispatchStoreFixture(t, ctx, envID)
+		adapter := &envDispatchDepsAdapter{h: testHandler}
+		channelID, err := adapter.CreateEnvDispatchChannel(
+			ctx, testWorkspaceID, testUserID, projectID, envID,
+			service.MessageRoster{LeaderID: targetAgent, AgentIDs: []string{targetAgent}}, nil,
+		)
+		if err != nil {
+			t.Fatalf("create env-dispatch channel: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID)
+		})
+		requireChannelMembershipActor(t, channelID, "user", testUserID, "user", testUserID)
+		requireChannelMembershipActor(t, channelID, "agent", targetAgent, "system", "")
+	})
+}
+
+func TestChannelMemberActorBoundaryRejectsUnknownAndCrossWorkspaceActorsBeforeWrites(t *testing.T) {
+	requireChannelMemberActorProvenanceSchema(t)
+	foreignWorkspace := createOtherTestWorkspace(t)
+	foreignUser := insertUserAndMember(t, foreignWorkspace)
+	foreignAgent := createForeignWorkspaceAgent(t)
+
+	for _, tc := range []struct {
+		name      string
+		actorType string
+		actorID   string
+	}{
+		{name: "nonexistent user", actorType: "user", actorID: uuid.NewString()},
+		{name: "cross workspace user", actorType: "user", actorID: foreignUser},
+		{name: "nonexistent agent", actorType: "agent", actorID: uuid.NewString()},
+		{name: "cross workspace agent", actorType: "agent", actorID: foreignAgent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			channelID := seedChannelForTest(t, "invalid-actor-boundary-"+uuid.NewString(), testUserID)
+			targetAgent := createHandlerTestAgent(t, "Invalid Actor Target "+uuid.NewString()[:8], nil)
+			var membersBefore, onboardingsBefore, messagesBefore int
+			if err := testPool.QueryRow(ctx, `
+				SELECT
+				  (SELECT count(*) FROM channel_member WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2),
+				  (SELECT count(*) FROM channel_agent_onboarding WHERE channel_id = $1 AND agent_id = $2),
+				  (SELECT count(*) FROM channel_message WHERE channel_id = $1)`,
+				channelID, targetAgent).Scan(&membersBefore, &onboardingsBefore, &messagesBefore); err != nil {
+				t.Fatalf("count invalid-actor baseline: %v", err)
+			}
+
+			// The future shared write boundary must use this actor resolver
+			// before membership/onboarding/event writes. A non-empty ref for an
+			// unknown or foreign actor is therefore a contract failure.
+			actorRef := testHandler.channelMemberSystemEventActorRefWithExec(
+				ctx, testPool, testWorkspaceID, tc.actorType, parseUUID(tc.actorID),
+			)
+			if actorRef.Type != "" {
+				_, _ = testPool.Exec(ctx, `
+					INSERT INTO channel_member (
+					  channel_id, workspace_id, member_type, member_id, role,
+					  added_by_type, added_by_id, join_source
+					)
+					VALUES ($1, $2, 'agent', $3, 'member', $4, $5, 'manual')`,
+					channelID, testWorkspaceID, targetAgent, tc.actorType, tc.actorID)
+			}
+
+			var membersAfter, onboardingsAfter, messagesAfter int
+			if err := testPool.QueryRow(ctx, `
+				SELECT
+				  (SELECT count(*) FROM channel_member WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2),
+				  (SELECT count(*) FROM channel_agent_onboarding WHERE channel_id = $1 AND agent_id = $2),
+				  (SELECT count(*) FROM channel_message WHERE channel_id = $1)`,
+				channelID, targetAgent).Scan(&membersAfter, &onboardingsAfter, &messagesAfter); err != nil {
+				t.Fatalf("count invalid-actor side effects: %v", err)
+			}
+			if actorRef.Type != "" ||
+				membersAfter != membersBefore ||
+				onboardingsAfter != onboardingsBefore ||
+				messagesAfter != messagesBefore {
+				t.Fatalf(
+					"invalid actor %s/%s resolved=%q and mutated member=%d->%d onboarding=%d->%d message=%d->%d",
+					tc.actorType, tc.actorID, actorRef.Type,
+					membersBefore, membersAfter, onboardingsBefore, onboardingsAfter, messagesBefore, messagesAfter,
+				)
+			}
+		})
+	}
 }
 
 func TestChannelMemberActorProvenanceShapeFailsClosed(t *testing.T) {
@@ -312,17 +470,6 @@ func forceChannelOwnerStateForProvenanceTest(t *testing.T, fixture agentAuthored
 	t.Helper()
 	ctx := context.Background()
 	switch state {
-	case "duplicate":
-		secondOwner := createChannelPlainMember(t)
-		if _, err := testPool.Exec(ctx, `
-			INSERT INTO channel_member (
-			  channel_id, workspace_id, member_type, member_id, role,
-			  added_by_type, added_by_id, join_source
-			)
-			VALUES ($1, $2, 'user', $3, 'owner', 'user', $3, 'manual')`,
-			fixture.channelID, testWorkspaceID, secondOwner); err != nil {
-			t.Fatalf("insert duplicate current owner: %v", err)
-		}
 	case "missing":
 		conn, err := testPool.Acquire(ctx)
 		if err != nil {
@@ -373,6 +520,54 @@ func forceChannelOwnerStateForProvenanceTest(t *testing.T, fixture agentAuthored
 	}
 }
 
+func materializeChannelOnboardingWithDuplicateOwnerShadow(
+	t *testing.T,
+	fixture agentAuthoredOnboardingFixture,
+	runtime db.AgentRuntime,
+) error {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := testPool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire isolated duplicate-owner connection: %v", err)
+	}
+	defer conn.Release()
+
+	var schema string
+	if err := conn.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatalf("resolve handler test schema: %v", err)
+	}
+	sourceTable := pgx.Identifier{schema, "channel_member"}.Sanitize()
+	if _, err := conn.Exec(ctx, `
+		CREATE TEMP TABLE channel_member
+		(LIKE `+sourceTable+` INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING IDENTITY)
+		ON COMMIT PRESERVE ROWS`); err != nil {
+		t.Fatalf("create isolated channel_member shadow: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO pg_temp.channel_member
+		SELECT * FROM `+sourceTable+` WHERE channel_id = $1`,
+		fixture.channelID); err != nil {
+		t.Fatalf("copy channel memberships into isolated shadow: %v", err)
+	}
+	secondOwner := createChannelPlainMember(t)
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO pg_temp.channel_member (
+		  channel_id, workspace_id, member_type, member_id, role,
+		  added_by_type, added_by_id, join_source
+		)
+		VALUES ($1, $2, 'user', $3, 'owner', 'user', $3, 'manual')`,
+		fixture.channelID, testWorkspaceID, secondOwner); err != nil {
+		t.Fatalf("insert duplicate owner into isolated shadow: %v", err)
+	}
+
+	isolated := *testHandler
+	isolated.DB = conn
+	isolated.TxStarter = conn
+	isolated.Queries = db.New(conn)
+	return isolated.materializeNextChannelOnboardingForRuntime(ctx, runtime)
+}
+
 func TestChannelOnboardingFailsClosedWithoutExactlyOneEligibleHumanOwner(t *testing.T) {
 	requireChannelMemberActorProvenanceSchema(t)
 	for _, state := range []string{"missing", "duplicate", "cross_workspace"} {
@@ -392,7 +587,11 @@ func TestChannelOnboardingFailsClosedWithoutExactlyOneEligibleHumanOwner(t *test
 			if err != nil {
 				t.Fatalf("load target runtime: %v", err)
 			}
-			err = testHandler.materializeNextChannelOnboardingForRuntime(ctx, runtime)
+			if state == "duplicate" {
+				err = materializeChannelOnboardingWithDuplicateOwnerShadow(t, fixture, runtime)
+			} else {
+				err = testHandler.materializeNextChannelOnboardingForRuntime(ctx, runtime)
+			}
 			if err == nil || !strings.Contains(err.Error(), "owner invariant") {
 				t.Fatalf("%s owner state error = %v, want owner invariant", state, err)
 			}

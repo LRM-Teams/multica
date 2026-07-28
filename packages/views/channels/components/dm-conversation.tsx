@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, Eye, FileText, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   channelMessageThreadOptions,
@@ -37,11 +37,6 @@ import type {
   ChannelMessageSearchResult,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@multica/ui/components/ui/popover";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
@@ -74,7 +69,6 @@ import {
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
-import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
@@ -259,18 +253,17 @@ export function DmConversation({
   );
 }
 
-// Shared peer header: avatar (presence dot for agents) + name + optional search + Files popover.
+// Shared peer header: avatar (presence dot for agents) + name + optional search.
+// LRM-675 — the Files popover is removed: the channel main-area 「文件」 tab
+// is the single Files entry (no duplicate header icon).
 function DmHeader({
   dm,
   onBack,
-  filesChannelId,
   onSearchOpen,
   voiceCallAction,
 }: {
   dm: DMItem;
   onBack: () => void;
-  /** Channel id whose project files to surface. Only dm_channel DMs have one. */
-  filesChannelId?: string;
   /** When provided, renders a magnifying-glass button (source gate: dm_channel only). */
   onSearchOpen?: () => void;
   /** Agent-only call control; kept outside the shared header chrome. */
@@ -423,20 +416,6 @@ function DmHeader({
             >
               <Search className="size-4" />
             </Button>
-          )}
-          {filesChannelId && (
-            <Popover>
-              <PopoverTrigger
-                className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                aria-label={t(($) => $.dm.files)}
-              >
-                <FileText className="size-4" />
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-80">
-                <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
-                <ChannelFilesPanel channelId={filesChannelId} />
-              </PopoverContent>
-            </Popover>
           )}
         </>
       }
@@ -1310,7 +1289,6 @@ function DmChannelConversation({
       <DmHeader
         dm={dm}
         onBack={onBack}
-        filesChannelId={channelId}
         onSearchOpen={() => dispatch({ type: "openSearch" })}
         voiceCallAction={
           // #692 finding 1: no voice call on the read-only supervision surface —

@@ -320,14 +320,25 @@ func TestUpdateChannelMemberRoleOwnerOnly(t *testing.T) {
 		t.Fatalf("sole owner self-demote want 409, got %d: %s", selfRec.Code, selfRec.Body.String())
 	}
 
-	// Transfer ownership to peer.
-	xfer := newRequestAs(testUserID, http.MethodPatch,
+	// PATCH role=owner must reject — transfer is a separate endpoint (Iris/Barry).
+	badOwner := newRequestAs(testUserID, http.MethodPatch,
 		"/api/channels/"+ch.ID+"/members/user/"+peerID,
 		map[string]any{"role": "owner"})
+	badOwner = withChannelTestWorkspaceCtx(t, badOwner, testUserID)
+	badOwner = withRouteParams(badOwner, "channelId", ch.ID, "memberType", "user", "memberId", peerID)
+	badRec := httptest.NewRecorder()
+	testHandler.UpdateChannelMemberRole(badRec, badOwner)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH role=owner want 400, got %d: %s", badRec.Code, badRec.Body.String())
+	}
+
+	// Transfer ownership to peer via dedicated POST.
+	xfer := newRequestAs(testUserID, http.MethodPost,
+		"/api/channels/"+ch.ID+"/members/user/"+peerID+"/transfer-ownership", nil)
 	xfer = withChannelTestWorkspaceCtx(t, xfer, testUserID)
 	xfer = withRouteParams(xfer, "channelId", ch.ID, "memberType", "user", "memberId", peerID)
 	xferRec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(xferRec, xfer)
+	testHandler.TransferChannelOwnership(xferRec, xfer)
 	if xferRec.Code != http.StatusOK {
 		t.Fatalf("transfer = %d: %s", xferRec.Code, xferRec.Body.String())
 	}
@@ -354,7 +365,7 @@ func TestUpdateChannelMemberRoleOwnerOnly(t *testing.T) {
 		t.Fatalf("former owner manage want 403, got %d: %s", afterRec.Code, afterRec.Body.String())
 	}
 
-	// Agent cannot become owner.
+	// Agent cannot receive ownership via transfer endpoint.
 	var agentID pgtype.UUID
 	if err := testPool.QueryRow(ctx,
 		`SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, parseUUID(testWorkspaceID)).Scan(&agentID); err != nil {
@@ -364,16 +375,14 @@ func TestUpdateChannelMemberRoleOwnerOnly(t *testing.T) {
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
 		VALUES ($1, $2, 'agent', $3, 'member')
 		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(testWorkspaceID), agentID)
-	// Re-become owner as peer for this check.
-	agentOwner := newRequestAs(peerID, http.MethodPatch,
-		"/api/channels/"+ch.ID+"/members/agent/"+uuidToString(agentID),
-		map[string]any{"role": "owner"})
+	agentOwner := newRequestAs(peerID, http.MethodPost,
+		"/api/channels/"+ch.ID+"/members/agent/"+uuidToString(agentID)+"/transfer-ownership", nil)
 	agentOwner = withChannelTestWorkspaceCtx(t, agentOwner, peerID)
 	agentOwner = withRouteParams(agentOwner, "channelId", ch.ID, "memberType", "agent", "memberId", uuidToString(agentID))
 	agentRec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(agentRec, agentOwner)
+	testHandler.TransferChannelOwnership(agentRec, agentOwner)
 	if agentRec.Code != http.StatusBadRequest {
-		t.Fatalf("agent owner want 400, got %d: %s", agentRec.Code, agentRec.Body.String())
+		t.Fatalf("agent transfer want 400, got %d: %s", agentRec.Code, agentRec.Body.String())
 	}
 
 	// Peer (now owner) can promote agent to manager.

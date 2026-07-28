@@ -353,6 +353,45 @@ func setTaskPriority(t *testing.T, taskID string, priority int) {
 	}
 }
 
+func setChannelCompletionSourceAuthor(t *testing.T, taskID, channelID, authorType string) {
+	t.Helper()
+	ctx := context.Background()
+
+	authorID := testUserID
+	if authorType == "agent" {
+		if err := testPool.QueryRow(ctx, `
+			SELECT agent_id
+			FROM agent_inbox_event
+			WHERE id = $1
+		`, taskID).Scan(&authorID); err != nil {
+			t.Fatalf("load completion task agent: %v", err)
+		}
+	}
+
+	var sourceMessageID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (
+			channel_id, workspace_id, author_type, author_id, author_name,
+			content, source, external_message_id, trigger_depth
+		)
+		VALUES ($1, $2, $3, $4, 'Directed Source', '@agent reply', 'multica', $5, 0)
+		RETURNING id
+	`, channelID, testWorkspaceID, authorType, authorID, "directed-source-"+uuid.NewString()).Scan(&sourceMessageID); err != nil {
+		t.Fatalf("seed directed source message: %v", err)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET workspace_id = $2,
+		    channel_id = $3,
+		    source_message_id = $4,
+		    reason = 'mention'
+		WHERE id = $1
+	`, taskID, testWorkspaceID, channelID, sourceMessageID); err != nil {
+		t.Fatalf("attach directed source message: %v", err)
+	}
+}
+
 func createClaimReclaimRuntime(t *testing.T, ctx context.Context, name string) string {
 	t.Helper()
 
@@ -3581,7 +3620,7 @@ func TestCompleteTask_DirectedCLICapableRunAfterTransportAttemptWithoutReceiptFa
 	}
 
 	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertMissingTransportReceiptFailure(t, taskID, w)
+	assertMissingTransportReceiptFailure(t, taskID, w, true)
 }
 
 func TestCompleteTask_DirectedNoReplyRunAfterTransportAttemptWithoutReceiptFails(t *testing.T) {
@@ -3616,66 +3655,107 @@ func TestCompleteTask_DirectedNoReplyRunAfterTransportAttemptWithoutReceiptFails
 		t.Fatalf("channel message count = %d, want 0", msgCount)
 	}
 
-	assertMissingTransportReceiptFailure(t, taskID, w)
+	assertMissingTransportReceiptFailure(t, taskID, w, true)
 }
 
-func TestCompleteTask_DirectedNoReplyWithoutTransportAttemptRemainsNoReply(t *testing.T) {
+func TestCompleteTask_HumanDirectedNoReplyWithoutTransportAttemptFails(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	w := completeTaskForTest(t, taskID, map[string]any{
-		"action": protocol.ChatOutputActionNoReply,
-		"output": "",
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
+	for _, channelKind := range []string{"group", "dm"} {
+		t.Run(channelKind, func(t *testing.T) {
+			taskID, channelID := createChannelCompletionTask(t, channelKind)
+			setChannelCompletionSourceAuthor(t, taskID, channelID, "user")
+			seedPoisonedChatResumeForTask(t, taskID)
 
-	var receipt struct {
-		OK              bool   `json:"ok"`
-		TerminalOutcome string `json:"terminal_outcome"`
-		ResumeUnsafe    bool   `json:"resume_unsafe"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
-		t.Fatalf("decode completion receipt: %v body=%s", err, w.Body.String())
-	}
-	if !receipt.OK || receipt.TerminalOutcome != "no_reply" || receipt.ResumeUnsafe {
-		t.Fatalf("completion receipt = %+v, want ok=true terminal_outcome=no_reply resume_unsafe=false", receipt)
-	}
+			w := completeTaskForTest(t, taskID, map[string]any{
+				"action": protocol.ChatOutputActionNoReply,
+				"output": "",
+			})
+			if w.Code != http.StatusOK {
+				t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+			}
 
-	var messageCount int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent'
-	`, channelID).Scan(&messageCount); err != nil {
-		t.Fatalf("count channel messages: %v", err)
-	}
-	if messageCount != 0 {
-		t.Fatalf("channel message count = %d, want 0", messageCount)
-	}
-
-	var status, terminalOutcome, failureReason string
-	var retryable bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT status,
-		       COALESCE(terminal_outcome, ''),
-		       retryable,
-		       COALESCE(failure_reason, '')
-		FROM agent_inbox_event
-		WHERE id = $1
-	`, taskID).Scan(&status, &terminalOutcome, &retryable, &failureReason); err != nil {
-		t.Fatalf("load deliberate no-reply outcome: %v", err)
-	}
-	if status != "acked" || terminalOutcome != "no_reply" || retryable || failureReason != "" {
-		t.Fatalf("deliberate no-reply outcome = status:%q terminal:%q retryable:%v failure_reason:%q",
-			status, terminalOutcome, retryable, failureReason)
+			assertNoAgentChannelMessages(t, channelID)
+			assertMissingTransportReceiptFailure(t, taskID, w, false)
+		})
 	}
 }
 
-func assertMissingTransportReceiptFailure(t *testing.T, taskID string, w *httptest.ResponseRecorder) {
+func TestCompleteTask_NoReplyWithoutTransportAttemptAllowedOutsideHumanDirected(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	tests := []struct {
+		name                  string
+		authorType            string
+		priority              int
+		wantAgentMessageCount int
+	}{
+		{name: "agent directed", authorType: "agent", priority: 2, wantAgentMessageCount: 1},
+		{name: "human ambient", authorType: "user", priority: 1, wantAgentMessageCount: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			taskID, channelID := createChannelCompletionTask(t, "group")
+			setChannelCompletionSourceAuthor(t, taskID, channelID, tt.authorType)
+			setTaskPriority(t, taskID, tt.priority)
+			w := completeTaskForTest(t, taskID, map[string]any{
+				"action": protocol.ChatOutputActionNoReply,
+				"output": "",
+			})
+			if w.Code != http.StatusOK {
+				t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+
+			var receipt struct {
+				OK              bool   `json:"ok"`
+				TerminalOutcome string `json:"terminal_outcome"`
+				ResumeUnsafe    bool   `json:"resume_unsafe"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
+				t.Fatalf("decode completion receipt: %v body=%s", err, w.Body.String())
+			}
+			if !receipt.OK || receipt.TerminalOutcome != "no_reply" || receipt.ResumeUnsafe {
+				t.Fatalf("completion receipt = %+v, want ok=true terminal_outcome=no_reply resume_unsafe=false", receipt)
+			}
+
+			var messageCount int
+			if err := testPool.QueryRow(context.Background(), `
+				SELECT count(*)
+				FROM channel_message
+				WHERE channel_id = $1 AND author_type = 'agent'
+			`, channelID).Scan(&messageCount); err != nil {
+				t.Fatalf("count channel messages: %v", err)
+			}
+			if messageCount != tt.wantAgentMessageCount {
+				t.Fatalf("channel agent message count = %d, want %d source messages only", messageCount, tt.wantAgentMessageCount)
+			}
+
+			var status, terminalOutcome, failureReason string
+			var retryable bool
+			if err := testPool.QueryRow(context.Background(), `
+				SELECT status,
+				       COALESCE(terminal_outcome, ''),
+				       retryable,
+				       COALESCE(failure_reason, '')
+				FROM agent_inbox_event
+				WHERE id = $1
+			`, taskID).Scan(&status, &terminalOutcome, &retryable, &failureReason); err != nil {
+				t.Fatalf("load deliberate no-reply outcome: %v", err)
+			}
+			if status != "acked" || terminalOutcome != "no_reply" || retryable || failureReason != "" {
+				t.Fatalf("deliberate no-reply outcome = status:%q terminal:%q retryable:%v failure_reason:%q",
+					status, terminalOutcome, retryable, failureReason)
+			}
+		})
+	}
+}
+
+func assertMissingTransportReceiptFailure(t *testing.T, taskID string, w *httptest.ResponseRecorder, wantTransportAttempted bool) {
 	t.Helper()
 
 	var receipt struct {
@@ -3719,8 +3799,8 @@ func assertMissingTransportReceiptFailure(t *testing.T, taskID string, w *httpte
 	if err := json.Unmarshal(result, &persisted); err != nil {
 		t.Fatalf("decode persisted failed completion: %v result=%s", err, result)
 	}
-	if !persisted.TransportAttempted || !persisted.MustReplyFailure {
-		t.Fatalf("persisted failed completion = %+v, want transport_attempted and must_reply_failure", persisted)
+	if persisted.TransportAttempted != wantTransportAttempted || !persisted.MustReplyFailure {
+		t.Fatalf("persisted failed completion = %+v, want transport_attempted=%v and must_reply_failure", persisted, wantTransportAttempted)
 	}
 
 	var resumeState string

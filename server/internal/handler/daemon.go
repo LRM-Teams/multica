@@ -1852,6 +1852,29 @@ func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentInboxEven
 	return exists
 }
 
+func (h *Handler) agentInboxEventHasHumanSource(ctx context.Context, event db.AgentInboxEvent) bool {
+	if !event.SourceMessageID.Valid || !event.WorkspaceID.Valid {
+		return false
+	}
+	var authorType string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT author_type
+		FROM channel_message
+		WHERE id = $1
+		  AND workspace_id = $2
+	`, event.SourceMessageID, event.WorkspaceID).Scan(&authorType); err != nil {
+		if !isNotFound(err) {
+			slog.Warn("complete task: failed to resolve channel source author",
+				"task_id", uuidToString(event.ID),
+				"source_message_id", uuidToString(event.SourceMessageID),
+				"error", err,
+			)
+		}
+		return false
+	}
+	return channelMessageIsHumanAuthored(authorType)
+}
+
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at
 // and fires the issue_executed analytics event iff this is the first task on
 // the issue to reach terminal done. Retries / re-assignments / comment-

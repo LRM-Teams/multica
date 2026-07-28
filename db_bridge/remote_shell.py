@@ -41,6 +41,11 @@ logger = logging.getLogger("db_bridge.remote_shell")
 
 _TABLE: Final = "areal_remote_commands"
 
+# Ceiling for the claim-retry backoff. Supabase has wedged for minutes at a
+# time; without a ceiling the runner would either keep hammering a database
+# that is already struggling or drift into sleeps far longer than the outage.
+_CLAIM_BACKOFF_MAX_S: Final = 60.0
+
 # Status constants (mirror the schema check constraint).
 STATUS_PENDING: Final = "PENDING"
 STATUS_CLAIMED: Final = "CLAIMED"
@@ -567,6 +572,13 @@ class RemoteShellRunner:
             except Exception:  # noqa: BLE001
                 logger.exception("shell failed to mark crashed command id=%s", cmd.id)
 
+    async def _sleep(self, delay: float) -> None:
+        """Sleep for ``delay`` seconds, waking early once :meth:`stop` is called."""
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=delay)
+        except TimeoutError:
+            pass
+
     async def run(self) -> None:
         """Run the poll loop until :meth:`stop` is called."""
         if not self._config.enabled:
@@ -584,13 +596,24 @@ class RemoteShellRunner:
             self._config.lease_seconds,
             self._config.max_concurrency,
         )
+        backoff = 0.0
         try:
             while not self._stop.is_set():
                 await self._maybe_sweep()
                 await self._maybe_cleanup()
-                started = await self.poll_once()
+                try:
+                    started = await self.poll_once()
+                except Exception:  # noqa: BLE001 -- a wedged DB must not end the run
+                    backoff = min(
+                        max(2 * backoff, self._config.poll_interval_s),
+                        _CLAIM_BACKOFF_MAX_S,
+                    )
+                    logger.exception("shell claim failed; retrying in %.1fs", backoff)
+                    await self._sleep(backoff)
+                    continue
+                backoff = 0.0
                 if not started:
-                    await asyncio.sleep(self._config.poll_interval_s)
+                    await self._sleep(self._config.poll_interval_s)
         finally:
             for task in list(self._active):
                 task.cancel()

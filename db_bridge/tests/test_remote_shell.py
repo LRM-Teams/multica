@@ -7,8 +7,11 @@ run -> terminal lifecycle is exercised without a live database or real tmux.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
+
+import httpx
 
 from db_bridge.config import RemoteShellConfig
 from db_bridge.remote_shell import RemoteShellDB, RemoteShellRunner
@@ -341,8 +344,6 @@ async def test_poll_once_claims_and_runs():
 
     assert await runner.poll_once() is True
     # Drain the spawned execution task.
-    import asyncio
-
     while fake.tables[SHELL_TABLE][cmd_id]["status"] not in {
         "SUCCEEDED",
         "FAILED",
@@ -360,3 +361,73 @@ async def test_disabled_runner_refuses_to_claim():
     runner = RemoteShellRunner(db, ex, cfg)
     await runner.run()  # returns immediately without claiming
     assert not ex.launched
+
+
+async def _until(predicate: Callable[[], bool]) -> None:
+    while not predicate():
+        await asyncio.sleep(0)
+
+
+async def test_run_retries_after_claim_failure():
+    db, fake = _db()
+    cmd_id = _insert_pending(fake, command="echo hi")
+    ex = FakeShellExecutor()
+    ex.scripts[_session(cmd_id)] = [CaptureResult(b"hi\n", b"", 3, 0)]
+    runner = RemoteShellRunner(db, ex, _config())
+
+    remaining_failures = 2
+    real_claim = db.claim_next
+
+    async def flaky_claim(*args, **kwargs):
+        nonlocal remaining_failures
+        if remaining_failures:
+            remaining_failures -= 1
+            raise httpx.ReadTimeout("supabase wedged")
+        return await real_claim(*args, **kwargs)
+
+    db.claim_next = flaky_claim
+
+    task = asyncio.create_task(runner.run())
+    try:
+        await asyncio.wait_for(
+            _until(lambda: _row(fake, cmd_id)["status"] in {"SUCCEEDED", "FAILED"}),
+            timeout=5,
+        )
+    finally:
+        runner.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert remaining_failures == 0
+    assert _row(fake, cmd_id)["status"] == "SUCCEEDED"
+
+
+async def test_claim_backoff_grows_then_caps():
+    db, _fake = _db()
+    runner = RemoteShellRunner(
+        db, FakeShellExecutor(), _config(AREAL_REMOTE_SHELL_POLL_INTERVAL="10")
+    )
+
+    delays: list[float] = []
+
+    # Patched so the schedule is asserted directly instead of by wall clock.
+    # The yield matters: awaiting a coroutine that never suspends would let the
+    # poll loop starve every other task, including this test's timeout.
+    async def record(delay: float) -> None:
+        delays.append(delay)
+        await asyncio.sleep(0)
+
+    runner._sleep = record
+
+    async def always_timeout(*args, **kwargs):
+        raise httpx.ReadTimeout("supabase wedged")
+
+    db.claim_next = always_timeout
+
+    task = asyncio.create_task(runner.run())
+    try:
+        await asyncio.wait_for(_until(lambda: len(delays) >= 5), timeout=5)
+    finally:
+        runner.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert delays[:5] == [10.0, 20.0, 40.0, 60.0, 60.0]

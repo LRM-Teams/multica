@@ -11,12 +11,14 @@ import { ChannelChip } from "../../../channels/components/channel-chip";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import {
   type ActivityEvent,
+  type ActivityTimelineItem,
   ACTIVITY_LABEL_EN,
   ACTIVITY_SUBTEXT_EN,
   ACTIVITY_CHROME_EN,
   ACTIVITY_TONE_DOT_CLASS,
   activityExpansionContent,
   activityPresentation,
+  collapseConsecutiveIdle,
   formatActivityTime,
   isNarrativeActivityEvent,
   normalizeActivityExpandedText,
@@ -25,6 +27,10 @@ import {
 // All dots are STATIC — no `animate-pulse` (#404 follow-up). Tone → color lives
 // in ONE shared table (ACTIVITY_TONE_DOT_CLASS) so the header can't drift from it.
 const TONE_DOT = ACTIVITY_TONE_DOT_CLASS;
+
+/** Shared right-aligned tabular timestamp — every Activity row uses this. */
+const TIMESTAMP_CLASS =
+  "ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/55";
 
 // Keep long Activity details on the exact existing history-message baseline.
 // The detail header is already the sole expand/collapse control, so this is a
@@ -233,8 +239,7 @@ function ActivityRow({
     };
   }, [expanded]);
 
-  const timestampClass =
-    "ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/55";
+  const timestampClass = TIMESTAMP_CLASS;
 
   if (expansion) {
     return (
@@ -397,6 +402,40 @@ function ActivityRow({
   );
 }
 
+/**
+ * LRM-566 方案 B — a run of consecutive Idle status rows merged into one
+ * de-emphasized line. Idle (end-of-round presence) is low-signal next to the
+ * action rows around it, and a stack of bare `Idle · <time>` lines painted a
+ * vertical middle-gap void (SoT LRM-567). The merge collapses that stack to a
+ * single row (`Idle · N`, latest timestamp) and dims it
+ * (`text-[12px] font-medium text-muted-foreground py-0.5`); content rows keep
+ * their existing `py-1` weight. No invented copy — N is the merged count.
+ */
+function MergedIdleRow({ events, tz }: { events: ActivityEvent[]; tz: string }) {
+  const count = events.length;
+  const label =
+    count > 1 ? `${ACTIVITY_LABEL_EN.idle} · ${count}` : ACTIVITY_LABEL_EN.idle;
+  // Events arrive chronological; the last in the run is the most recent idle.
+  const latest = events[events.length - 1]!;
+  const time = formatActivityTime(latest.occurred_at, tz);
+  return (
+    <div
+      className="flex items-baseline gap-2 py-0.5"
+      data-testid="activity-idle-row"
+      data-idle-count={count}
+      data-activity-kind="custom"
+    >
+      <span className={cn("flex shrink-0 justify-center self-start", SPINE_COL)}>
+        <ActivitySpineDot tone="neutral" />
+      </span>
+      <span className="shrink-0 text-[12px] font-medium text-muted-foreground">
+        {label}
+      </span>
+      <span className={TIMESTAMP_CLASS}>{time}</span>
+    </div>
+  );
+}
+
 function ActivityTimelineLoading() {
   return (
     <div
@@ -483,17 +522,23 @@ export function ActivityTimeline({
 }) {
   const tz = useViewingTimezone();
 
-  const shown = useMemo(() => {
+  const shown = useMemo((): ActivityTimelineItem[] => {
     const narrative = events.filter(isNarrativeActivityEvent);
-    if (!compact) return narrative;
-    // Compact peek surface drops settled "Idle" status rows — in a recent-activity
-    // glance they read as status noise, not an action/result (#465②,
-    // Barry/Ronan/Iris 2026-07-15). The full timeline keeps them (the historical
-    // "went idle" fact). Filter via the shared presentation, not a duplicated
-    // status check.
-    return narrative
-      .filter((event) => activityPresentation(event).labelKey !== "idle")
-      .slice(-COMPACT_RECENT_LIMIT);
+    if (compact) {
+      // Compact peek surface drops settled "Idle" status rows — in a recent-activity
+      // glance they read as status noise, not an action/result (#465②,
+      // Barry/Ronan/Iris 2026-07-15). The full timeline keeps them (the historical
+      // "went idle" fact). Filter via the shared presentation, not a duplicated
+      // status check.
+      return narrative
+        .filter((event) => activityPresentation(event).labelKey !== "idle")
+        .slice(-COMPACT_RECENT_LIMIT)
+        .map((event) => ({ kind: "event", event }));
+    }
+    // Full timeline (LRM-566 方案 B): consecutive Idle status rows merge into one
+    // de-emphasized `Idle · N` line so a stack of empty-gap Idle rows no longer
+    // reads as a blank vertical stretch (SoT LRM-567).
+    return collapseConsecutiveIdle(narrative);
   }, [events, compact]);
 
   // Compact profile peek keeps the legacy one-line empty; loading/error belong
@@ -521,14 +566,22 @@ export function ActivityTimeline({
           data-testid="activity-timeline-spine"
         />
       ) : null}
-      {shown.map((event) => (
-        <ActivityRow
-          key={event.id}
-          event={event}
-          time={formatActivityTime(event.occurred_at, tz)}
-          compact={compact}
-        />
-      ))}
+      {shown.map((item) =>
+        item.kind === "idle" ? (
+          <MergedIdleRow
+            key={`idle-${item.events[0]!.id}`}
+            events={item.events}
+            tz={tz}
+          />
+        ) : (
+          <ActivityRow
+            key={item.event.id}
+            event={item.event}
+            time={formatActivityTime(item.event.occurred_at, tz)}
+            compact={compact}
+          />
+        ),
+      )}
     </div>
   );
 }

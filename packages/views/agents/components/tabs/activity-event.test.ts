@@ -3,6 +3,8 @@ import type { ActivityEvent } from "./activity-event";
 import {
   activityExpansionContent,
   activityPresentation,
+  collapseConsecutiveIdle,
+  isIdleStatusEvent,
   isNarrativeActivityEvent,
   normalizeActivityExpandedText,
   ACTIVITY_TONE_DOT_CLASS,
@@ -504,6 +506,93 @@ describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () =>
   it("carries no subtext — the label IS the state (no invented detail)", () => {
     expect(activityPresentation(statusEvent("idle")).subtext).toBeUndefined();
     expect(activityPresentation(statusEvent("working")).subtext).toBeUndefined();
+  });
+});
+
+describe("isIdleStatusEvent (#411/#525)", () => {
+  it("matches a custom agent_status_changed idle row", () => {
+    expect(isIdleStatusEvent(idleAt("i", "2026-07-06T09:00:00Z"))).toBe(true);
+  });
+
+  it("does not match a working status row", () => {
+    const working: ActivityEvent = {
+      ...evtBase("custom"),
+      detail_kind: "agent_status_changed",
+      status: "working",
+    } as ActivityEvent;
+    expect(isIdleStatusEvent(working)).toBe(false);
+  });
+
+  it("does not match an ordinary custom/text event", () => {
+    expect(isIdleStatusEvent(evtBase("text"))).toBe(false);
+    expect(
+      isIdleStatusEvent({ ...evtBase("custom"), detail_kind: "radar_action_executed" }),
+    ).toBe(false);
+  });
+});
+
+// Idle status events for the merge (distinct ids + ascending timestamps so the
+// "latest timestamp" pick is observable).
+function idleAt(id: string, iso: string): ActivityEvent {
+  return {
+    ...evtBase("custom"),
+    id,
+    detail_kind: "agent_status_changed",
+    status: "idle",
+    occurred_at: iso,
+  } as ActivityEvent;
+}
+
+describe("collapseConsecutiveIdle (LRM-566 方案 B)", () => {
+  it("returns no items for an empty stream", () => {
+    expect(collapseConsecutiveIdle([])).toEqual([]);
+  });
+
+  it("passes a non-idle stream through as individual event items", () => {
+    const a = evtBase("text");
+    const b = toolEvent("bash");
+    expect(collapseConsecutiveIdle([a, b])).toEqual([
+      { kind: "event", event: a },
+      { kind: "event", event: b },
+    ]);
+  });
+
+  it("collapses a run of consecutive idle rows into one idle item preserving order", () => {
+    const i1 = idleAt("i1", "2026-07-06T09:36:14Z");
+    const i2 = idleAt("i2", "2026-07-06T09:36:30Z");
+    const i3 = idleAt("i3", "2026-07-06T09:36:48Z");
+    const before = evtBase("text");
+    const after = toolEvent("bash");
+    expect(collapseConsecutiveIdle([before, i1, i2, i3, after])).toEqual([
+      { kind: "event", event: before },
+      { kind: "idle", events: [i1, i2, i3] },
+      { kind: "event", event: after },
+    ]);
+  });
+
+  it("produces a separate idle item per non-adjacent idle run", () => {
+    const run1 = [idleAt("a1", "2026-07-06T09:00:00Z"), idleAt("a2", "2026-07-06T09:00:10Z")];
+    const run2 = [idleAt("b1", "2026-07-06T09:01:00Z")];
+    const sep = evtBase("text");
+    expect(collapseConsecutiveIdle([...run1, sep, ...run2])).toEqual([
+      { kind: "idle", events: run1 },
+      { kind: "event", event: sep },
+      { kind: "idle", events: run2 },
+    ]);
+  });
+
+  it("keeps a lone idle as its own idle item (de-emphasis applies uniformly)", () => {
+    const lone = idleAt("lone", "2026-07-06T09:36:14Z");
+    expect(collapseConsecutiveIdle([lone])).toEqual([{ kind: "idle", events: [lone] }]);
+  });
+
+  it("flushes a trailing idle run at the end of the stream", () => {
+    const i1 = idleAt("i1", "2026-07-06T09:00:00Z");
+    const i2 = idleAt("i2", "2026-07-06T09:00:05Z");
+    expect(collapseConsecutiveIdle([evtBase("text"), i1, i2])).toEqual([
+      { kind: "event", event: evtBase("text") },
+      { kind: "idle", events: [i1, i2] },
+    ]);
   });
 });
 

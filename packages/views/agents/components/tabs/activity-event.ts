@@ -325,6 +325,71 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
   }
 }
 
+/**
+ * An Idle status row (#411/#525): the end-of-round presence transition the
+ * timeline keeps (a bare "Working" status row is dropped as redundant). Idle is
+ * low-signal vs the action rows around it, so LRM-566 方案 B both merges runs
+ * of these and de-emphasizes the result.
+ */
+export function isIdleStatusEvent(event: ActivityEvent): boolean {
+  return (
+    event.activity_kind === "custom" &&
+    event.detail_kind === "agent_status_changed" &&
+    event.status === "idle"
+  );
+}
+
+/**
+ * LRM-566 方案 B — a run of consecutive Idle status rows merged into a single
+ * de-emphasized timeline line. The group carries every merged event so the row
+ * can render `Idle · N` + the latest timestamp without inventing copy.
+ */
+export interface MergedIdleActivityItem {
+  kind: "idle";
+  events: ActivityEvent[];
+}
+
+/** A single (non-idle) narrative event rendered as its own row. */
+export interface EventActivityItem {
+  kind: "event";
+  event: ActivityEvent;
+}
+
+/**
+ * What the Activity timeline iterates over. Most rows are plain events; a run
+ * of consecutive Idle status rows collapses to one `idle` item (LRM-566 方案 B)
+ * so the timeline no longer paints a stack of empty middle-gap Idle lines.
+ */
+export type ActivityTimelineItem = EventActivityItem | MergedIdleActivityItem;
+
+/**
+ * Collapse consecutive Idle status rows into a single `idle` timeline item
+ * (LRM-566 方案 B). Operates on already-narrative events (the caller filters
+ * diagnostics first via `isNarrativeActivityEvent`); a lone Idle still becomes
+ * an `idle` item so the de-emphasized Idle styling applies uniformly. Pure so
+ * the merge is unit-testable independent of React.
+ */
+export function collapseConsecutiveIdle(events: ActivityEvent[]): ActivityTimelineItem[] {
+  const items: ActivityTimelineItem[] = [];
+  let idle: ActivityEvent[] = [];
+  const flushIdle = () => {
+    if (idle.length > 0) {
+      items.push({ kind: "idle", events: idle });
+      idle = [];
+    }
+  };
+  for (const event of events) {
+    if (isIdleStatusEvent(event)) {
+      idle.push(event);
+    } else {
+      flushIdle();
+      items.push({ kind: "event", event });
+    }
+  }
+  flushIdle();
+  return items;
+}
+
 function normalizedTool(event: ActivityEvent): string {
   return event.tool?.trim().toLowerCase() ?? "";
 }

@@ -25,6 +25,13 @@ const TERMINAL_STATUSES: ReadonlySet<AgentTask["status"]> = new Set([
  * can't supply, so a bare insert isn't possible — the caller coalesces a single
  * snapshot refetch per burst instead of one refetch per event. Drift from any
  * missed event self-heals via the query's 30s staleTime + refetchOnWindowFocus.
+ *
+ * GUARDRAIL (Wren review, #1280): patching only `status` is correct because the
+ * sole snapshot consumer — `deriveWorkloadDetail` — reads only `t.status`. If a
+ * future consumer starts reading a MUTABLE non-status field off the snapshot
+ * array, a status-only patch would leave that field stale until the 30s
+ * staleTime; such a consumer must either patch that field here too or read it
+ * from its own live source.
  */
 export function patchAgentTaskSnapshotStatus(
   qc: QueryClient,

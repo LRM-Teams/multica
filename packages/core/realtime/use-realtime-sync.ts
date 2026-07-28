@@ -620,15 +620,17 @@ export function useRealtimeSync(
         // p95 amplifier. Its status is now patched in place from the payload by
         // the task lifecycle ws.on handlers below (patchAgentTaskSnapshotStatus),
         // with a single coalesced refetch only when a brand-new task appears.
-        // 30d activity series shares the same lifecycle signal — any task
-        // completion / failure shifts the histogram. (Dispatch alone
-        // doesn't change a completed_at-anchored series, but invalidating
-        // here keeps the WS-handler shape uniform; the resulting refetch
-        // is cheap.) Both the list (trailing 7d slice) and the detail
-        // panel read off this single cache.
-        qc.invalidateQueries({ queryKey: agentActivityKeys.last30d(wsId) });
-        // 30-day run count likewise increments per task lifecycle event.
-        qc.invalidateQueries({ queryKey: agentRunCountsKeys.last30d(wsId) });
+        // NOTE (step② #2/#3): the 30d activity histogram and run-count series
+        // are NO LONGER invalidated per task event. They are 30-DAY aggregates
+        // where a single completion shifts a bucket by one — imperceptible — so
+        // refetching the whole series on every lifecycle event (×every client)
+        // was pure load on the `activity?tab=all` path for no visible gain. They
+        // now refresh via their own 60s staleTime + refetchOnWindowFocus
+        // (bounded resync); a just-completed run shows in the histogram within
+        // that window or on focus, which is the correct latency budget for a
+        // 30-day chart. This directly cuts the per-event refetch pressure on the
+        // activity query (the p95 target); presence stays live via the snapshot
+        // in-place patch above.
         // Per-agent task list (Activity tab "Recent work"). Prefix match
         // catches every agent's list — the per-agent detail key sits
         // under agentTasks/<wsId>/<agentId>.

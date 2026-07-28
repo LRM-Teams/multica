@@ -247,47 +247,51 @@ func TestBoundary_RemoveAgent_FinalFourTuple_AfterRevoke(t *testing.T) {
 	assertMembershipRevokedFourTuple(t, tup)
 }
 
-// TestBoundary_RemoveVsClaim_RealLeaseRace uses production lease + remove with
-// an advisory lock held open so one side blocks on the shared
-// agent_channel_membership_revoke(channel,agent) key (Barry lock-order gate).
+// holdRevokeAdvisory opens a txn that holds the shared #801 advisory key
+// agent_channel_membership_revoke(channel,agent). Caller must Rollback/Commit.
+func holdRevokeAdvisory(t *testing.T, channelID, agentID string) pgx.Tx {
+	t.Helper()
+	tx, err := testPool.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin hold tx: %v", err)
+	}
+	if _, err := tx.Exec(context.Background(), `
+		SELECT pg_advisory_xact_lock(
+			hashtext('agent_channel_membership_revoke'),
+			hashtext($1 || ':' || $2)
+		)`, channelID, agentID); err != nil {
+		_ = tx.Rollback(context.Background())
+		t.Fatalf("hold revoke advisory: %v", err)
+	}
+	return tx
+}
+
+// TestBoundary_LeaseBlocksOnSharedRevokeAdvisory proves production lease takes
+// the same advisory key as remove. Wrong impl that never takes this key fails
+// because lease returns while the holder still owns the lock (t.Fatal).
 //
-// Interleave:
-//  1. Holder takes shared revoke advisory and keeps txn open
-//  2. Start leaseAgentInboxEventForRuntime in a goroutine (must block or serialize)
-//  3. Release holder, run RemoveChannelMember (or reverse order variants)
-//
-// Final: if remove succeeds → membership=0 + event acked/failed/membership_revoked
-// + no active delivery + no running execution. No protocol-foreign delivery inserts.
-func TestBoundary_RemoveVsClaim_RealLeaseRace(t *testing.T) {
+// Sequence (Barry 615ca7a3 #1):
+//  1. holder takes expected advisory
+//  2. start leaseAgentInboxEventForRuntime — must NOT return within 200ms
+//  3. release holder; wait lease complete
+//  4. RemoveChannelMember; assert exact membership_revoked 4-tuple
+func TestBoundary_LeaseBlocksOnSharedRevokeAdvisory(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 	seed := seedBoundaryClaimRace(t)
-
 	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(seed.runtimeID))
 	if err != nil {
 		t.Fatalf("load runtime: %v", err)
 	}
 
-	// Hold the shared revoke advisory so concurrent lease/remove serialize.
-	holdTx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin hold tx: %v", err)
-	}
+	holdTx := holdRevokeAdvisory(t, seed.channelID, seed.agentID)
 	defer holdTx.Rollback(ctx)
-	if _, err := holdTx.Exec(ctx, `
-		SELECT pg_advisory_xact_lock(
-			hashtext('agent_channel_membership_revoke'),
-			hashtext($1 || ':' || $2)
-		)`, seed.channelID, seed.agentID); err != nil {
-		t.Fatalf("hold revoke advisory: %v", err)
-	}
 
 	leaseDone := make(chan error, 1)
 	go func() {
 		_, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
-		// ErrNoRows is OK if remove terminalized first; other errors surface.
 		if errors.Is(err, pgx.ErrNoRows) {
 			leaseDone <- nil
 			return
@@ -295,54 +299,141 @@ func TestBoundary_RemoveVsClaim_RealLeaseRace(t *testing.T) {
 		leaseDone <- err
 	}()
 
-	// Observe whether lease blocks on the shared revoke advisory while we hold it.
-	// Fixed impl: blocks. Unfixed impl: may complete immediately (gate still fails later).
-	leaseFinishedEarly := false
 	select {
 	case err := <-leaseDone:
-		leaseFinishedEarly = true
-		t.Logf("lease returned while revoke advisory held: err=%v (shared lock order missing if it leased)", err)
+		t.Fatalf("lease returned while shared revoke advisory held (err=%v); "+
+			"production lease must take agent_channel_membership_revoke(channel,agent) — missing lock is a false-green hole", err)
 	case <-time.After(200 * time.Millisecond):
-		// expected on fixed impl: still blocked
+		// required: still blocked
 	}
 
-	// Release hold, then remove — production path under test.
 	if err := holdTx.Rollback(ctx); err != nil {
 		t.Fatalf("release hold: %v", err)
 	}
 
+	select {
+	case err := <-leaseDone:
+		if err != nil {
+			t.Fatalf("lease after advisory release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("lease did not complete after advisory release")
+	}
+
 	rec := httptest.NewRecorder()
 	testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, seed.channelID, seed.agentID))
-	removeOK := rec.Code == http.StatusOK
-	if !removeOK {
-		t.Logf("RemoveChannelMember status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("RemoveChannelMember status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertMembershipRevokedFourTuple(t, loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID))
+}
+
+// TestBoundary_RemoveBlocksOnSharedRevokeAdvisoryAndBeatsLease proves remove
+// takes the same advisory key and, when remove enters the critical section
+// first, lease ends with ErrNoRows and the 4-tuple stays closed (no resurrection).
+//
+// Sequence (Barry 615ca7a3 #2):
+//  1. holder takes same advisory
+//  2. start RemoveChannelMember — must NOT return within 200ms
+//  3. start lease (will queue behind remove once hold is released, after remove
+//     acquires the key — fixed order: release hold, remove already waiting so
+//     it acquires first when using fair/xact wait; we release only after both
+//     waiters are launched)
+//  4. release holder
+//  5. remove must be 200; lease must be ErrNoRows; exact 4-tuple
+//
+// Waiter order after release is PG-dependent. We force remove-first by:
+// starting remove under hold (blocked), releasing hold so remove runs to
+// completion before starting lease. That still proves remove takes the key
+// (step 2 hard block). Resurrection is covered by post-remove lease ErrNoRows.
+//
+// A separate sub-path starts lease while remove is still blocked (both waiters),
+// then releases — if remove finishes first we require lease ErrNoRows + tuple;
+// if lease wrongly wins under hold we already Fatal at step 2 for remove.
+func TestBoundary_RemoveBlocksOnSharedRevokeAdvisoryAndBeatsLease(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	seed := seedBoundaryClaimRace(t)
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(seed.runtimeID))
+	if err != nil {
+		t.Fatalf("load runtime: %v", err)
 	}
 
-	if !leaseFinishedEarly {
-		select {
-		case err := <-leaseDone:
-			if err != nil {
-				t.Logf("lease after advisory release: %v", err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("lease did not complete after advisory release")
+	holdTx := holdRevokeAdvisory(t, seed.channelID, seed.agentID)
+	defer holdTx.Rollback(ctx)
+
+	removeDone := make(chan int, 1) // HTTP status
+	go func() {
+		rec := httptest.NewRecorder()
+		testHandler.RemoveChannelMember(rec, removeAgentMemberRequest(t, seed.channelID, seed.agentID))
+		removeDone <- rec.Code
+	}()
+
+	select {
+	case code := <-removeDone:
+		t.Fatalf("RemoveChannelMember returned status=%d while shared revoke advisory held; "+
+			"production remove must take agent_channel_membership_revoke(channel,agent)", code)
+	case <-time.After(200 * time.Millisecond):
+		// required: remove blocked on same key
+	}
+
+	// Launch lease while remove is still waiting on the advisory (both waiters).
+	// After release, whoever the kernel wakes first runs; we require final state
+	// closed either way: if remove wins, lease → ErrNoRows; if lease won first,
+	// remove must still terminalize (same as LeaseFirstThenRemove). Hard proof
+	// that remove takes the key is the 200ms block above.
+	leaseDone := make(chan error, 1)
+	go func() {
+		_, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+		if errors.Is(err, pgx.ErrNoRows) {
+			leaseDone <- pgx.ErrNoRows
+			return
 		}
+		leaseDone <- err
+	}()
+
+	// Give lease a moment to also park on the advisory (if it takes the key).
+	time.Sleep(50 * time.Millisecond)
+
+	if err := holdTx.Rollback(ctx); err != nil {
+		t.Fatalf("release hold: %v", err)
 	}
 
-	// Also try a post-remove lease: must not resurrect active work.
-	if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		t.Logf("post-remove lease err=%v", err)
+	var removeCode int
+	select {
+	case removeCode = <-removeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("remove did not complete after advisory release")
+	}
+	if removeCode != http.StatusOK {
+		t.Fatalf("RemoveChannelMember status=%d, want 200", removeCode)
 	}
 
-	if !removeOK {
-		t.Fatalf("remove did not succeed (status=%d); cannot assert revoke 4-tuple — implementation blocker", rec.Code)
+	var leaseErr error
+	select {
+	case leaseErr = <-leaseDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lease did not complete after advisory release")
 	}
 
-	tup := loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID)
-	t.Logf("race final 4-tuple: membership=%d event=%s/%s/%s activeDelivery=%d runningExec=%d",
-		tup.MembershipCount, tup.EventStatus, tup.EventOutcome, tup.FailureReason,
-		tup.ActiveDelivery, tup.RunningExec)
-	assertMembershipRevokedFourTuple(t, tup)
+	// Post-remove: another lease must not revive work.
+	_, postErr := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+	if postErr != nil && !errors.Is(postErr, pgx.ErrNoRows) {
+		t.Fatalf("post-remove lease unexpected err=%v", postErr)
+	}
+	if postErr == nil {
+		t.Fatal("post-remove lease succeeded; must not resurrect after membership revoke")
+	}
+
+	// If lease ran after remove, it must be ErrNoRows. If lease ran before remove
+	// finished, remove still must close the 4-tuple (assert below).
+	if leaseErr != nil && !errors.Is(leaseErr, pgx.ErrNoRows) {
+		t.Fatalf("lease err=%v; want nil (leased then revoked) or ErrNoRows (remove-first)", leaseErr)
+	}
+
+	assertMembershipRevokedFourTuple(t, loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID))
 }
 
 // TestBoundary_RemoveVsClaim_LeaseFirstThenRemove: production lease claims the

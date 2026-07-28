@@ -667,6 +667,21 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     });
   });
 
+  it("a FAILED removal says so — silence would read as 'my click did nothing'", async () => {
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+
+    // There is no optimistic removal, so on failure nothing on screen changes —
+    // without this toast the owner cannot tell a failure from a no-op.
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+  });
+
   it("an ARCHIVED group exposes no member-management menu at all", async () => {
     channelsFixture.current = DEFAULT_CHANNELS.map((c) =>
       (c as { id: string }).id === "chan-random"

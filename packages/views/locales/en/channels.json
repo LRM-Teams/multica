@@ -121,6 +121,7 @@
     "remove_confirm_description": "They will immediately lose read and write access to this channel.",
     "remove_confirm": "Confirm remove",
     "remove_cancel": "Cancel",
+    "remove_failed": "Couldn't remove this member. Please try again.",
     "no_candidates": "No one left to invite",
     "invite": "Invite",
     "invite_count": "Invite ({{count}})",

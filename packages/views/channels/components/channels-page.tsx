@@ -2358,13 +2358,23 @@ export function ChannelsPage({
         setRemoveMemberTarget(m);
         return;
       }
-      removeMember.mutate({
-        channelId: active.id,
-        memberType: m.member_type,
-        memberId: m.member_id,
-      });
+      removeMember.mutate(
+        {
+          channelId: active.id,
+          memberType: m.member_type,
+          memberId: m.member_id,
+        },
+        // #833: a failure has to say so. There is no optimistic removal, so on
+        // error NOTHING on screen changes — the member simply stays in the
+        // list, which reads as "my click did nothing" rather than "it failed".
+        // Self-leave already surfaces both outcomes through this same mutation;
+        // removing someone else was the silent one, and this fix is what makes
+        // that path reachable for an owner in the first place. Success needs no
+        // toast: the row disappearing is the feedback.
+        { onError: () => toast.error(t(($) => $.members.remove_failed)) },
+      );
     },
-    [active, isMobile, removeMember],
+    [active, isMobile, removeMember, t],
   );
 
   // #833 — the menu's "remove" used to land on a no-op toast while the real
@@ -3875,7 +3885,13 @@ export function ChannelsPage({
                     memberType: removeMemberTarget.member_type,
                     memberId: removeMemberTarget.member_id,
                   },
-                  { onSettled: () => setRemoveMemberTarget(null) },
+                  {
+                    // #833 — same reasoning as the desktop path: closing the
+                    // sheet on a failed removal would look exactly like a
+                    // successful one.
+                    onError: () => toast.error(t(($) => $.members.remove_failed)),
+                    onSettled: () => setRemoveMemberTarget(null),
+                  },
                 );
               }}
             >

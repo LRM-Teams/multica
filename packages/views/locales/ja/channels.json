@@ -121,6 +121,7 @@
     "remove_confirm_description": "このチャンネルの読み書き権限をすぐに失います。",
     "remove_confirm": "削除を確認",
     "remove_cancel": "キャンセル",
+    "remove_failed": "メンバーを削除できませんでした。もう一度お試しください。",
     "no_candidates": "招待できる相手がいません",
     "invite": "招待",
     "invite_count": "招待 ({{count}})",

@@ -92,9 +92,6 @@ func (h *Handler) insertChannelMemberSystemEventExec(
 	targetType string,
 	targetID pgtype.UUID,
 ) (ChannelMessageResponse, error) {
-	if h.TestFailSystemEventForChannel != "" && h.TestFailSystemEventForChannel == uuidToString(channelID) {
-		return ChannelMessageResponse{}, fmt.Errorf("forced channel member system event insert failure for channel %s", h.TestFailSystemEventForChannel)
-	}
 	actorRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, "user", actorID)
 	targetRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, targetType, targetID)
 	params := channelMemberSystemEventParams{

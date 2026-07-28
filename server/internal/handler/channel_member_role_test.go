@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -533,8 +532,8 @@ func TestConcurrentTransferOnlyOneWins(t *testing.T) {
 	}
 }
 
-// TestTransferAuditFailureRollsBackOwnership injects a real system-event INSERT
-// failure and asserts ownership UPDATEs do not commit (Barry hard gate).
+// TestTransferAuditFailureRollsBackOwnership injects a real channel_message
+// INSERT failure inside the transfer transaction (Barry hard gate).
 func TestTransferAuditFailureRollsBackOwnership(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -553,9 +552,7 @@ func TestTransferAuditFailureRollsBackOwnership(t *testing.T) {
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 	peer := insertChannelPeerUser(t, ch.ID, "member")
 
-	// Force audit insert failure only for this channel (handler-scoped).
-	testHandler.TestFailSystemEventForChannel = ch.ID
-	t.Cleanup(func() { testHandler.TestFailSystemEventForChannel = "" })
+	restore := installRoleMutationInsertFail(testHandler, ch.ID)
 
 	xfer := newRequestAs(testUserID, http.MethodPost,
 		"/api/channels/"+ch.ID+"/members/user/"+peer+"/transfer-ownership", nil)
@@ -564,7 +561,7 @@ func TestTransferAuditFailureRollsBackOwnership(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testHandler.TransferChannelOwnership(rec, xfer)
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("forced audit fail want 500, got %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("forced INSERT fail want 500, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	var ownerID, peerRole string
@@ -582,12 +579,11 @@ func TestTransferAuditFailureRollsBackOwnership(t *testing.T) {
 		  AND parts->0->>'event'=$2`,
 		parseUUID(ch.ID), channelOwnershipTransferredEvent).Scan(&auditN)
 	if ownerID != testUserID || peerRole != "member" || auditN != 0 {
-		t.Fatalf("after failed audit owner=%s peerRole=%s audit=%d want owner=actor peer=member audit=0",
+		t.Fatalf("after failed INSERT owner=%s peerRole=%s audit=%d want actor/member/0",
 			ownerID, peerRole, auditN)
 	}
 
-	// Remove injection → retry succeeds (flip to green).
-	testHandler.TestFailSystemEventForChannel = ""
+	restore() // remove injector
 	rec2 := httptest.NewRecorder()
 	testHandler.TransferChannelOwnership(rec2, xfer)
 	if rec2.Code != http.StatusOK {
@@ -606,9 +602,10 @@ func TestTransferAuditFailureRollsBackOwnership(t *testing.T) {
 	}
 }
 
-// TestConcurrentTransferVsRoleRace forces transfer-first lock overlap:
-// transfer holds after channel FOR UPDATE; PATCH queues on same lock; then
-// transfer commits → PATCH always 403 owner_changed (Barry deterministic).
+// TestConcurrentTransferVsRoleRace forces transfer-first lock hold with
+// barrier proof (no sleep): transfer at post-lock → patch at pre-begin
+// (entryWasOwner already true) → release patch begin (blocks on channel
+// lock) → release transfer → patch 403 owner_changed every time.
 func TestConcurrentTransferVsRoleRace(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -620,25 +617,23 @@ func TestConcurrentTransferVsRoleRace(t *testing.T) {
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	created := httptest.NewRecorder()
 	testHandler.CreateChannel(created, req)
-	if created.Code != http.StatusCreated {
-		t.Fatalf("create: %d", created.Code)
-	}
 	var ch ChannelResponse
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 	peer := insertChannelPeerUser(t, ch.ID, "member")
 	targetMgr := insertChannelPeerUser(t, ch.ID, "member")
 
-	entryGate := make(chan struct{})
 	postLockGate := make(chan struct{})
-	testRoleMutationEntryGate = entryGate
+	// preBegin installed only after transfer holds the channel lock, so transfer
+	// is not blocked by the PATCH pre-begin gate.
 	testRoleMutationPostLockGate = postLockGate
-	atomic.StoreInt32(&testRoleMutationEntryEntered, 0)
+	testRoleMutationPreBeginGate = nil
 	atomic.StoreInt32(&testRoleMutationPostLockEntered, 0)
+	atomic.StoreInt32(&testRoleMutationPreBeginEntered, 0)
 	t.Cleanup(func() {
-		testRoleMutationEntryGate = nil
 		testRoleMutationPostLockGate = nil
-		atomic.StoreInt32(&testRoleMutationEntryEntered, 0)
+		testRoleMutationPreBeginGate = nil
 		atomic.StoreInt32(&testRoleMutationPostLockEntered, 0)
+		atomic.StoreInt32(&testRoleMutationPreBeginEntered, 0)
 	})
 
 	type res struct {
@@ -648,6 +643,7 @@ func TestConcurrentTransferVsRoleRace(t *testing.T) {
 	}
 	out := make(chan res, 2)
 
+	// 1) Start transfer only — will hold channel lock at post-lock barrier.
 	go func() {
 		r := newRequestAs(testUserID, http.MethodPost,
 			"/api/channels/"+ch.ID+"/members/user/"+peer+"/transfer-ownership", nil)
@@ -657,28 +653,20 @@ func TestConcurrentTransferVsRoleRace(t *testing.T) {
 		testHandler.TransferChannelOwnership(rec, r)
 		out <- res{"transfer", rec.Code, rec.Body.String()}
 	}()
-	// Wait until transfer has entry snapshot, release entry so transfer can take channel lock.
 	deadline := time.After(5 * time.Second)
-	for atomic.LoadInt32(&testRoleMutationEntryEntered) < 1 {
-		select {
-		case <-deadline:
-			t.Fatal("transfer never reached entry barrier")
-		default:
-			time.Sleep(time.Millisecond)
-		}
-	}
-	close(entryGate)
-	// Wait until transfer holds channel lock (post-lock barrier).
-	deadline = time.After(5 * time.Second)
 	for atomic.LoadInt32(&testRoleMutationPostLockEntered) < 1 {
 		select {
 		case <-deadline:
-			t.Fatal("transfer never reached post-lock barrier")
+			t.Fatal("transfer never reached post-lock (channel lock held)")
 		default:
 			time.Sleep(time.Millisecond)
 		}
 	}
-	// Now start PATCH while transfer still holds channel lock.
+
+	// 2) Arm pre-begin, then start PATCH — snapshots entryWasOwner while transfer
+	//    holds lock but has not demoted; blocks at pre-begin before Begin.
+	preBeginGate := make(chan struct{})
+	testRoleMutationPreBeginGate = preBeginGate
 	go func() {
 		r := newRequestAs(testUserID, http.MethodPatch,
 			"/api/channels/"+ch.ID+"/members/user/"+targetMgr,
@@ -689,25 +677,28 @@ func TestConcurrentTransferVsRoleRace(t *testing.T) {
 		testHandler.UpdateChannelMemberRole(rec, r)
 		out <- res{"patch", rec.Code, rec.Body.String()}
 	}()
-	// Give PATCH time to block on channel FOR UPDATE.
-	time.Sleep(50 * time.Millisecond)
-	// Release transfer to finish; PATCH then wakes as stale owner.
+	deadline = time.After(5 * time.Second)
+	for atomic.LoadInt32(&testRoleMutationPreBeginEntered) < 1 {
+		select {
+		case <-deadline:
+			t.Fatal("patch never reached pre-begin (entry snapshot done)")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	// 3) Release PATCH begin — it Begin()s and blocks on channel FOR UPDATE.
+	close(preBeginGate)
+	// 4) Release transfer — demote + commit; PATCH wakes as stale owner.
 	close(postLockGate)
 
 	a, b := <-out, <-out
-	byName := map[string]res{a.name: a, b.name: b}
-	if byName["transfer"].code != http.StatusOK {
-		t.Fatalf("transfer want 200 got %d %s", byName["transfer"].code, byName["transfer"].body)
+	by := map[string]res{a.name: a, b.name: b}
+	if by["transfer"].code != http.StatusOK {
+		t.Fatalf("transfer want 200 got %d %s", by["transfer"].code, by["transfer"].body)
 	}
-	if byName["patch"].code != http.StatusForbidden {
-		t.Fatalf("patch want 403 owner_changed got %d %s", byName["patch"].code, byName["patch"].body)
-	}
-	if !strings.Contains(byName["patch"].body, channelOwnerChangedCode) {
-		t.Fatalf("patch body missing owner_changed: %s", byName["patch"].body)
-	}
-	// Top-level code field present (literal contract).
-	if !strings.Contains(byName["patch"].body, `"code"`) {
-		t.Fatalf("patch body missing top-level code key: %s", byName["patch"].body)
+	if by["patch"].code != http.StatusForbidden || !strings.Contains(by["patch"].body, channelOwnerChangedCode) {
+		t.Fatalf("patch want 403 owner_changed got %d %s", by["patch"].code, by["patch"].body)
 	}
 	var owners int
 	var ownerID string
@@ -717,6 +708,394 @@ func TestConcurrentTransferVsRoleRace(t *testing.T) {
 		parseUUID(ch.ID)).Scan(&owners, &ownerID)
 	if owners != 1 || ownerID != peer {
 		t.Fatalf("owners=%d owner=%s want 1/%s", owners, ownerID, peer)
+	}
+}
+
+// TestOwnerReadDBErrorReturns500 uses a QueryRow wrapper so Scan returns
+// non-NoRows through the production actorIsChannelOwnerRead path.
+func TestOwnerReadDBErrorReturns500(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-preread-err-" + uuid.NewString()[:8],
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannel(created, req)
+	var ch ChannelResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &ch)
+	peer := insertChannelPeerUser(t, ch.ID, "member")
+
+	restore := installRoleMutationOwnerReadFail(testHandler, fmt.Errorf("injected owner pre-read failure"))
+	t.Cleanup(restore)
+
+	pr := newRequestAs(testUserID, http.MethodPatch,
+		"/api/channels/"+ch.ID+"/members/user/"+peer,
+		map[string]any{"role": "manager"})
+	pr = withChannelTestWorkspaceCtx(t, pr, testUserID)
+	pr = withRouteParams(pr, "channelId", ch.ID, "memberType", "user", "memberId", peer)
+	prRec := httptest.NewRecorder()
+	testHandler.UpdateChannelMemberRole(prRec, pr)
+	if prRec.Code != http.StatusInternalServerError {
+		t.Fatalf("PATCH want 500 got %d %s", prRec.Code, prRec.Body.String())
+	}
+	if strings.Contains(prRec.Body.String(), channelOwnerChangedCode) {
+		t.Fatalf("PATCH 500 must not carry owner_changed: %s", prRec.Body.String())
+	}
+
+	tr := newRequestAs(testUserID, http.MethodPost,
+		"/api/channels/"+ch.ID+"/members/user/"+peer+"/transfer-ownership", nil)
+	tr = withChannelTestWorkspaceCtx(t, tr, testUserID)
+	tr = withRouteParams(tr, "channelId", ch.ID, "memberType", "user", "memberId", peer)
+	trRec := httptest.NewRecorder()
+	testHandler.TransferChannelOwnership(trRec, tr)
+	if trRec.Code != http.StatusInternalServerError {
+		t.Fatalf("transfer want 500 got %d %s", trRec.Code, trRec.Body.String())
+	}
+	if strings.Contains(trRec.Body.String(), channelOwnerChangedCode) {
+		t.Fatalf("transfer 500 must not carry owner_changed: %s", trRec.Body.String())
+	}
+
+	var peerRole, ownerID string
+	var auditN int
+	_ = testPool.QueryRow(ctx, `SELECT role FROM channel_member WHERE channel_id=$1 AND member_id=$2`,
+		parseUUID(ch.ID), peer).Scan(&peerRole)
+	_ = testPool.QueryRow(ctx, `
+		SELECT member_id::text FROM channel_member
+		WHERE channel_id=$1 AND role='owner' AND member_type='user'`,
+		parseUUID(ch.ID)).Scan(&ownerID)
+	_ = testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id=$1 AND author_type='system'
+		  AND parts->0->>'event'=$2`,
+		parseUUID(ch.ID), channelOwnershipTransferredEvent).Scan(&auditN)
+	if peerRole != "member" || ownerID != testUserID || auditN != 0 {
+		t.Fatalf("mutations leaked peerRole=%s owner=%s audit=%d", peerRole, ownerID, auditN)
+	}
+}
+
+// TestListAgentChannelMembersIncludesRoleAndOrder forces tie-break: two human
+// members share role+created_at; order must follow member_id ASC.
+func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-agent-order-" + uuid.NewString()[:8],
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannel(created, req)
+	var ch ChannelResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &ch)
+
+	// Two members with identical role and created_at — only member_id breaks ties.
+	m1 := insertChannelPeerUser(t, ch.ID, "member")
+	m2 := insertChannelPeerUser(t, ch.ID, "member")
+	agentMgr := createHandlerTestAgent(t, "OrdAgent"+uuid.NewString()[:6], []byte("[]"))
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1,$2,'agent',$3,'manager')
+		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
+		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentMgr)); err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	// Same timestamp for both human members (tie-break key under test).
+	_, _ = testPool.Exec(ctx, `
+		UPDATE channel_member SET created_at = timestamptz '2020-01-01 00:00:00+00'
+		WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), testUserID)
+	_, _ = testPool.Exec(ctx, `
+		UPDATE channel_member SET created_at = timestamptz '2020-06-01 00:00:00+00'
+		WHERE channel_id=$1 AND member_type='agent'`, parseUUID(ch.ID))
+	_, _ = testPool.Exec(ctx, `
+		UPDATE channel_member SET created_at = timestamptz '2021-01-01 00:00:00+00'
+		WHERE channel_id=$1 AND member_type='user' AND member_id = ANY($2::uuid[])`,
+		parseUUID(ch.ID), []string{m1, m2})
+
+	// Expected member order by member_id string among m1,m2
+	first, second := m1, m2
+	if second < first {
+		first, second = second, first
+	}
+
+	memReq := newRequest(http.MethodGet, "/api/agent/channels/"+ch.ID+"/members", nil)
+	memReq = withAgentPrincipal(memReq, agentMgr, testWorkspaceID, testUserID)
+	memReq = withChannelTestWorkspaceCtx(t, memReq, testUserID)
+	memReq = withURLParam(memReq, "channelId", ch.ID)
+	memRec := httptest.NewRecorder()
+	testHandler.ListAgentChannelMembers(memRec, memReq)
+	if memRec.Code != http.StatusOK {
+		t.Fatalf("list=%d %s", memRec.Code, memRec.Body.String())
+	}
+	var members []ChannelMemberResponse
+	_ = json.Unmarshal(memRec.Body.Bytes(), &members)
+	wantIDs := []string{testUserID, agentMgr, first, second}
+	wantRoles := []string{"owner", "manager", "member", "member"}
+	if len(members) != 4 {
+		t.Fatalf("len=%d want 4 %+v", len(members), members)
+	}
+	for i := range wantIDs {
+		if members[i].MemberID != wantIDs[i] || members[i].Role != wantRoles[i] || members[i].Role == "" {
+			t.Fatalf("pos %d got id=%s role=%q want id=%s role=%q full=%+v",
+				i, members[i].MemberID, members[i].Role, wantIDs[i], wantRoles[i], members)
+		}
+	}
+}
+
+// TestAuditFailIsChannelScoped: INSERT fail injector is per-handler and
+// channel-scoped — channel B still transfers while A is poisoned.
+func TestAuditFailIsChannelScoped(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	mk := func(suffix string) (ChannelResponse, string) {
+		req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+			"name": "role-scope-" + suffix + "-" + uuid.NewString()[:6],
+		})
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		created := httptest.NewRecorder()
+		testHandler.CreateChannel(created, req)
+		if created.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d", suffix, created.Code)
+		}
+		var ch ChannelResponse
+		_ = json.Unmarshal(created.Body.Bytes(), &ch)
+		return ch, insertChannelPeerUser(t, ch.ID, "member")
+	}
+	chA, peerA := mk("a")
+	chB, peerB := mk("b")
+
+	restore := installRoleMutationInsertFail(testHandler, chA.ID)
+	t.Cleanup(restore)
+
+	xa := newRequestAs(testUserID, http.MethodPost,
+		"/api/channels/"+chA.ID+"/members/user/"+peerA+"/transfer-ownership", nil)
+	xa = withChannelTestWorkspaceCtx(t, xa, testUserID)
+	xa = withRouteParams(xa, "channelId", chA.ID, "memberType", "user", "memberId", peerA)
+	ra := httptest.NewRecorder()
+	testHandler.TransferChannelOwnership(ra, xa)
+	if ra.Code != http.StatusInternalServerError {
+		t.Fatalf("A want 500 got %d", ra.Code)
+	}
+
+	xb := newRequestAs(testUserID, http.MethodPost,
+		"/api/channels/"+chB.ID+"/members/user/"+peerB+"/transfer-ownership", nil)
+	xb = withChannelTestWorkspaceCtx(t, xb, testUserID)
+	xb = withRouteParams(xb, "channelId", chB.ID, "memberType", "user", "memberId", peerB)
+	rb := httptest.NewRecorder()
+	testHandler.TransferChannelOwnership(rb, xb)
+	if rb.Code != http.StatusOK {
+		t.Fatalf("B want 200 got %d %s", rb.Code, rb.Body.String())
+	}
+}
+
+// TestTransferAlreadyOwnerIdempotentExact: exact key set + zero new audit.
+func TestTransferAlreadyOwnerIdempotentExact(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-xfer-idem-" + uuid.NewString()[:8],
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannel(created, req)
+	var ch ChannelResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &ch)
+
+	var auditBefore int
+	_ = testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id=$1 AND author_type='system'
+		  AND parts->0->>'event'=$2`,
+		parseUUID(ch.ID), channelOwnershipTransferredEvent).Scan(&auditBefore)
+
+	xfer := newRequestAs(testUserID, http.MethodPost,
+		"/api/channels/"+ch.ID+"/members/user/"+testUserID+"/transfer-ownership", nil)
+	xfer = withChannelTestWorkspaceCtx(t, xfer, testUserID)
+	xfer = withRouteParams(xfer, "channelId", ch.ID, "memberType", "user", "memberId", testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.TransferChannelOwnership(rec, xfer)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	wantKeys := map[string]bool{"status": true, "member_type": true, "member_id": true, "role": true, "previous_owner_id": true}
+	if len(body) != len(wantKeys) {
+		t.Fatalf("body keys=%v want exactly %v", body, wantKeys)
+	}
+	for k := range wantKeys {
+		if _, ok := body[k]; !ok {
+			t.Fatalf("missing key %s in %v", k, body)
+		}
+	}
+	if body["status"] != "ok" || body["role"] != "owner" || body["member_type"] != "user" ||
+		body["member_id"] != testUserID || body["previous_owner_id"] != testUserID {
+		t.Fatalf("body=%v", body)
+	}
+	var auditAfter int
+	_ = testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id=$1 AND author_type='system'
+		  AND parts->0->>'event'=$2`,
+		parseUUID(ch.ID), channelOwnershipTransferredEvent).Scan(&auditAfter)
+	if auditAfter != auditBefore {
+		t.Fatalf("audit %d→%d want unchanged on idempotent transfer", auditBefore, auditAfter)
+	}
+}
+
+// TestRoleMutationRejectsAgentPrincipalExact: PATCH+transfer both 403 exact body.
+func TestRoleMutationRejectsAgentPrincipalExact(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-agent-prin-" + uuid.NewString()[:8],
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannel(created, req)
+	var ch ChannelResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &ch)
+	peer := insertChannelPeerUser(t, ch.ID, "member")
+	agentID := createHandlerTestAgent(t, "PrinAgent"+uuid.NewString()[:6], []byte("[]"))
+
+	for _, tc := range []struct {
+		name string
+		run  func() *httptest.ResponseRecorder
+	}{
+		{"patch", func() *httptest.ResponseRecorder {
+			r := newRequest(http.MethodPatch, "/api/channels/"+ch.ID+"/members/user/"+peer, map[string]any{"role": "manager"})
+			r = withAgentPrincipal(r, agentID, testWorkspaceID, testUserID)
+			r = withChannelTestWorkspaceCtx(t, r, testUserID)
+			r = withRouteParams(r, "channelId", ch.ID, "memberType", "user", "memberId", peer)
+			rec := httptest.NewRecorder()
+			testHandler.UpdateChannelMemberRole(rec, r)
+			return rec
+		}},
+		{"transfer", func() *httptest.ResponseRecorder {
+			r := newRequest(http.MethodPost, "/api/channels/"+ch.ID+"/members/user/"+peer+"/transfer-ownership", nil)
+			r = withAgentPrincipal(r, agentID, testWorkspaceID, testUserID)
+			r = withChannelTestWorkspaceCtx(t, r, testUserID)
+			r = withRouteParams(r, "channelId", ch.ID, "memberType", "user", "memberId", peer)
+			rec := httptest.NewRecorder()
+			testHandler.TransferChannelOwnership(rec, r)
+			return rec
+		}},
+	} {
+		rec := tc.run()
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s want 403 got %d %s", tc.name, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "agent must use dedicated") {
+			t.Fatalf("%s body=%q want dedicated route message", tc.name, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), channelOwnerChangedCode) {
+			t.Fatalf("%s must not use owner_changed", tc.name)
+		}
+	}
+}
+
+// TestRoleMutationCrossWorkspace: channel in other workspace → 404, zero side effects.
+func TestRoleMutationCrossWorkspace(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	// Create foreign workspace + channel owned by a throwaway user.
+	var foreignWS, foreignUser, foreignCh string
+	tag := uuid.NewString()
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`,
+		"fx-"+tag[:8], "fx-"+tag+"@example.com").Scan(&foreignUser); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM channel_member WHERE channel_id=$1`, foreignCh)
+		_, _ = testPool.Exec(ctx, `DELETE FROM channel WHERE id=$1`, foreignCh)
+		_, _ = testPool.Exec(ctx, `DELETE FROM member WHERE workspace_id=$1`, foreignWS)
+		_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE id=$1`, foreignWS)
+		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id=$1`, foreignUser)
+	})
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO workspace (name, slug) VALUES ($1,$2) RETURNING id`,
+		"fx-ws-"+tag[:8], "fx-"+tag[:8]).Scan(&foreignWS); err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	_, _ = testPool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'owner')`, foreignWS, foreignUser)
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, kind, created_by)
+		VALUES ($1,$2,'group',$3) RETURNING id::text`,
+		foreignWS, "fx-ch-"+tag[:8], foreignUser).Scan(&foreignCh); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	_, _ = testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1,$2,'user',$3,'owner')`, parseUUID(foreignCh), parseUUID(foreignWS), foreignUser)
+
+	// testUserID acts in testWorkspaceID context against foreign channel id.
+	r := newRequestAs(testUserID, http.MethodPatch,
+		"/api/channels/"+foreignCh+"/members/user/"+foreignUser,
+		map[string]any{"role": "manager"})
+	r = withChannelTestWorkspaceCtx(t, r, testUserID)
+	r = withRouteParams(r, "channelId", foreignCh, "memberType", "user", "memberId", foreignUser)
+	rec := httptest.NewRecorder()
+	testHandler.UpdateChannelMemberRole(rec, r)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-ws want 404/403 got %d %s", rec.Code, rec.Body.String())
+	}
+	var role string
+	_ = testPool.QueryRow(ctx, `
+		SELECT role FROM channel_member WHERE channel_id=$1 AND member_id=$2`,
+		parseUUID(foreignCh), foreignUser).Scan(&role)
+	if role != "owner" {
+		t.Fatalf("foreign owner role mutated to %q", role)
+	}
+}
+
+// TestRoleMutationSystemGeneralNoSkip creates a system general channel when missing.
+func TestRoleMutationSystemGeneralNoSkip(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	var channelID string
+	err := testPool.QueryRow(ctx, `
+		SELECT id::text FROM channel
+		WHERE workspace_id=$1 AND system_key='general' LIMIT 1`,
+		parseUUID(testWorkspaceID)).Scan(&channelID)
+	if err != nil {
+		// Create disposable system general for this workspace.
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO channel (workspace_id, name, kind, system_key, created_by)
+			VALUES ($1,'general','group','general',$2)
+			RETURNING id::text`, parseUUID(testWorkspaceID), testUserID).Scan(&channelID); err != nil {
+			t.Fatalf("create system general: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(ctx, `DELETE FROM channel_member WHERE channel_id=$1`, channelID)
+			_, _ = testPool.Exec(ctx, `DELETE FROM channel WHERE id=$1`, channelID)
+		})
+	}
+	_, _ = testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1,$2,'user',$3,'member')
+		ON CONFLICT DO NOTHING`, parseUUID(channelID), parseUUID(testWorkspaceID), testUserID)
+
+	r := newRequestAs(testUserID, http.MethodPatch,
+		"/api/channels/"+channelID+"/members/user/"+testUserID,
+		map[string]any{"role": "manager"})
+	r = withChannelTestWorkspaceCtx(t, r, testUserID)
+	r = withRouteParams(r, "channelId", channelID, "memberType", "user", "memberId", testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.UpdateChannelMemberRole(rec, r)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("system general want 409 got %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -735,7 +1114,6 @@ func TestRoleMutationNonOwnerHasNoOwnerChangedCode(t *testing.T) {
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 	peer := insertChannelPeerUser(t, ch.ID, "member")
 
-	// Peer tries promote self → plain 403, no owner_changed.
 	r := newRequestAs(peer, http.MethodPatch,
 		"/api/channels/"+ch.ID+"/members/user/"+peer,
 		map[string]any{"role": "manager"})
@@ -750,7 +1128,6 @@ func TestRoleMutationNonOwnerHasNoOwnerChangedCode(t *testing.T) {
 		t.Fatalf("plain non-owner must not carry owner_changed: %s", rec.Body.String())
 	}
 
-	// Peer tries transfer → plain 403 no code.
 	tr := newRequestAs(peer, http.MethodPost,
 		"/api/channels/"+ch.ID+"/members/user/"+testUserID+"/transfer-ownership", nil)
 	tr = withChannelTestWorkspaceCtx(t, tr, peer)
@@ -765,14 +1142,70 @@ func TestRoleMutationNonOwnerHasNoOwnerChangedCode(t *testing.T) {
 	}
 }
 
-// TestRoleMutationNegativeMatrix locks non-ordinary-group / missing target branches.
+// TestRoleMutationWorkspaceAdminNotChannelOwner: workspace admin without channel owner → plain 403.
+func TestRoleMutationWorkspaceAdminNotChannelOwner(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-ws-admin-" + uuid.NewString()[:8],
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannel(created, req)
+	var ch ChannelResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &ch)
+
+	tag := uuid.NewString()
+	var adminID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`,
+		"wsadmin-"+tag[:8], "wsadmin-"+tag+"@example.com").Scan(&adminID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM channel_member WHERE member_id=$1`, adminID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM member WHERE user_id=$1`, adminID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id=$1`, adminID)
+	})
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'admin')`,
+		testWorkspaceID, adminID); err != nil {
+		if _, err2 := testPool.Exec(ctx,
+			`INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'owner')`,
+			testWorkspaceID, adminID); err2 != nil {
+			t.Fatalf("ws role: %v / %v", err, err2)
+		}
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1,$2,'user',$3,'member')`,
+		parseUUID(ch.ID), parseUUID(testWorkspaceID), adminID); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newRequestAs(adminID, http.MethodPatch,
+		"/api/channels/"+ch.ID+"/members/user/"+adminID,
+		map[string]any{"role": "manager"})
+	r = withChannelTestWorkspaceCtx(t, r, adminID)
+	r = withRouteParams(r, "channelId", ch.ID, "memberType", "user", "memberId", adminID)
+	rec := httptest.NewRecorder()
+	testHandler.UpdateChannelMemberRole(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ws admin non-channel-owner want 403 got %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), channelOwnerChangedCode) {
+		t.Fatalf("must not be owner_changed: %s", rec.Body.String())
+	}
+}
+
+// TestRoleMutationNegativeMatrix: missing target 404, agent transfer 400, DM 404, archived 409.
 func TestRoleMutationNegativeMatrix(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
 	ctx := context.Background()
-
-	// Ordinary group for missing-target / agent-target.
 	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
 		"name": "role-neg-" + uuid.NewString()[:8],
 	})
@@ -782,7 +1215,6 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 	var ch ChannelResponse
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 
-	// Missing target → 404.
 	ghost := uuid.NewString()
 	miss := newRequestAs(testUserID, http.MethodPatch,
 		"/api/channels/"+ch.ID+"/members/user/"+ghost,
@@ -795,7 +1227,6 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 		t.Fatalf("missing target want 404 got %d %s", missRec.Code, missRec.Body.String())
 	}
 
-	// Agent cannot receive ownership → 400.
 	agentID := createHandlerTestAgent(t, "NegAgent"+uuid.NewString()[:6], []byte("[]"))
 	_, _ = testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
@@ -811,7 +1242,6 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 		t.Fatalf("agent transfer want 400 got %d %s", agRec.Code, agRec.Body.String())
 	}
 
-	// DM channel → not found / not group (404).
 	var dmID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, kind, created_by)
@@ -833,7 +1263,6 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 		t.Fatalf("DM role patch want 404 got %d %s", dmRec.Code, dmRec.Body.String())
 	}
 
-	// Archived ordinary group → 409.
 	archReq := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
 		"name": "role-arch-" + uuid.NewString()[:8],
 	})
@@ -844,8 +1273,8 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 	_ = json.Unmarshal(archCreated.Body.Bytes(), &arch)
 	peer := insertChannelPeerUser(t, arch.ID, "member")
 	_, err := testPool.Exec(ctx, `
-		UPDATE channel SET archived_at = now(), archived_by = $2
-		WHERE id = $1`, parseUUID(arch.ID), testUserID)
+		UPDATE channel SET archived_at = now(), archived_by = $2 WHERE id = $1`,
+		parseUUID(arch.ID), testUserID)
 	if err != nil {
 		t.Fatalf("archive: %v", err)
 	}
@@ -858,142 +1287,6 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 	testHandler.UpdateChannelMemberRole(arRec, ar)
 	if arRec.Code != http.StatusConflict {
 		t.Fatalf("archived want 409 got %d %s", arRec.Code, arRec.Body.String())
-	}
-}
-
-// TestListAgentChannelMembersIncludesRoleAndOrder asserts roles non-empty + exact order.
-func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	ctx := context.Background()
-	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
-		"name": "role-agent-order-" + uuid.NewString()[:8],
-	})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannel(created, req)
-	var ch ChannelResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &ch)
-
-	// Insert with controlled created_at so order is deterministic beyond role rank.
-	// Sequence desired: owner(human), manager(agent), manager(human), member(human).
-	humanMember := insertChannelPeerUser(t, ch.ID, "member")
-	humanManager := insertChannelPeerUser(t, ch.ID, "manager")
-	agentMgr := createHandlerTestAgent(t, "OrdAgent"+uuid.NewString()[:6], []byte("[]"))
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1,$2,'agent',$3,'manager')
-		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
-		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentMgr)); err != nil {
-		t.Fatalf("agent member: %v", err)
-	}
-	// Owner oldest; both managers share identical created_at so ORDER BY
-	// member_type, member_id tie-break is forced (Barry #3).
-	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-01-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), testUserID)
-	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-06-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_id = ANY($2::uuid[])`,
-		parseUUID(ch.ID), []string{agentMgr, humanManager})
-	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-12-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), humanMember)
-
-	memReq := newRequest(http.MethodGet, "/api/agent/channels/"+ch.ID+"/members", nil)
-	memReq = withAgentPrincipal(memReq, agentMgr, testWorkspaceID, testUserID)
-	memReq = withChannelTestWorkspaceCtx(t, memReq, testUserID)
-	memReq = withURLParam(memReq, "channelId", ch.ID)
-	memRec := httptest.NewRecorder()
-	testHandler.ListAgentChannelMembers(memRec, memReq)
-	if memRec.Code != http.StatusOK {
-		t.Fatalf("list=%d %s", memRec.Code, memRec.Body.String())
-	}
-	var members []ChannelMemberResponse
-	_ = json.Unmarshal(memRec.Body.Bytes(), &members)
-	wantIDs := []string{testUserID, agentMgr, humanManager, humanMember}
-	wantRoles := []string{"owner", "manager", "manager", "member"}
-	if len(members) != len(wantIDs) {
-		t.Fatalf("len=%d want %d members=%+v", len(members), len(wantIDs), members)
-	}
-	for i := range wantIDs {
-		if members[i].MemberID != wantIDs[i] || members[i].Role != wantRoles[i] {
-			t.Fatalf("pos %d got id=%s role=%q want id=%s role=%q full=%+v",
-				i, members[i].MemberID, members[i].Role, wantIDs[i], wantRoles[i], members)
-		}
-		if members[i].Role == "" {
-			t.Fatalf("pos %d empty role", i)
-		}
-	}
-}
-
-// TestOwnerReadDBErrorReturns500: non-NoRows pre-read error → 500, no owner_changed,
-// zero mutation (Barry #5 evidence, not code review).
-func TestOwnerReadDBErrorReturns500(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	ctx := context.Background()
-	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
-		"name": "role-preread-err-" + uuid.NewString()[:8],
-	})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannel(created, req)
-	var ch ChannelResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &ch)
-	peer := insertChannelPeerUser(t, ch.ID, "member")
-
-	testHandler.TestForceOwnerReadErr = errors.New("injected owner pre-read failure")
-	t.Cleanup(func() { testHandler.TestForceOwnerReadErr = nil })
-
-	// PATCH
-	pr := newRequestAs(testUserID, http.MethodPatch,
-		"/api/channels/"+ch.ID+"/members/user/"+peer,
-		map[string]any{"role": "manager"})
-	pr = withChannelTestWorkspaceCtx(t, pr, testUserID)
-	pr = withRouteParams(pr, "channelId", ch.ID, "memberType", "user", "memberId", peer)
-	prRec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(prRec, pr)
-	if prRec.Code != http.StatusInternalServerError {
-		t.Fatalf("PATCH want 500 got %d %s", prRec.Code, prRec.Body.String())
-	}
-	if strings.Contains(prRec.Body.String(), channelOwnerChangedCode) {
-		t.Fatalf("PATCH 500 must not carry owner_changed: %s", prRec.Body.String())
-	}
-
-	// TRANSFER
-	tr := newRequestAs(testUserID, http.MethodPost,
-		"/api/channels/"+ch.ID+"/members/user/"+peer+"/transfer-ownership", nil)
-	tr = withChannelTestWorkspaceCtx(t, tr, testUserID)
-	tr = withRouteParams(tr, "channelId", ch.ID, "memberType", "user", "memberId", peer)
-	trRec := httptest.NewRecorder()
-	testHandler.TransferChannelOwnership(trRec, tr)
-	if trRec.Code != http.StatusInternalServerError {
-		t.Fatalf("transfer want 500 got %d %s", trRec.Code, trRec.Body.String())
-	}
-	if strings.Contains(trRec.Body.String(), channelOwnerChangedCode) {
-		t.Fatalf("transfer 500 must not carry owner_changed: %s", trRec.Body.String())
-	}
-
-	// Zero mutation / zero audit
-	var peerRole, ownerID string
-	var auditN int
-	_ = testPool.QueryRow(ctx, `
-		SELECT role FROM channel_member WHERE channel_id=$1 AND member_id=$2`,
-		parseUUID(ch.ID), peer).Scan(&peerRole)
-	_ = testPool.QueryRow(ctx, `
-		SELECT member_id::text FROM channel_member
-		WHERE channel_id=$1 AND role='owner' AND member_type='user'`,
-		parseUUID(ch.ID)).Scan(&ownerID)
-	_ = testPool.QueryRow(ctx, `
-		SELECT count(*) FROM channel_message
-		WHERE channel_id=$1 AND author_type='system'
-		  AND parts->0->>'event'=$2`,
-		parseUUID(ch.ID), channelOwnershipTransferredEvent).Scan(&auditN)
-	if peerRole != "member" || ownerID != testUserID || auditN != 0 {
-		t.Fatalf("mutations leaked peerRole=%s owner=%s audit=%d", peerRole, ownerID, auditN)
 	}
 }
 
@@ -1025,214 +1318,4 @@ func insertChannelPeerUser(t *testing.T, channelID, role string) string {
 		t.Fatalf("ch member: %v", err)
 	}
 	return id
-}
-
-// TestTransferAlreadyOwnerIdempotent: transfer to self/current owner → 200 exact shape.
-func TestTransferAlreadyOwnerIdempotent(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
-		"name": "role-xfer-idem-" + uuid.NewString()[:8],
-	})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannel(created, req)
-	var ch ChannelResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &ch)
-
-	xfer := newRequestAs(testUserID, http.MethodPost,
-		"/api/channels/"+ch.ID+"/members/user/"+testUserID+"/transfer-ownership", nil)
-	xfer = withChannelTestWorkspaceCtx(t, xfer, testUserID)
-	xfer = withRouteParams(xfer, "channelId", ch.ID, "memberType", "user", "memberId", testUserID)
-	rec := httptest.NewRecorder()
-	testHandler.TransferChannelOwnership(rec, xfer)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 got %d %s", rec.Code, rec.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["status"] != "ok" || body["role"] != "owner" || body["member_id"] != testUserID {
-		t.Fatalf("body=%v want status=ok role=owner member_id=self", body)
-	}
-	if body["previous_owner_id"] != testUserID {
-		t.Fatalf("previous_owner_id=%v want self", body["previous_owner_id"])
-	}
-}
-
-// TestRoleMutationSystemGeneralProtected: system general channel rejects role writes.
-func TestRoleMutationSystemGeneralProtected(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	ctx := context.Background()
-	// Prefer existing system general if present; else skip when fixture unavailable.
-	var channelID string
-	err := testPool.QueryRow(ctx, `
-		SELECT id::text FROM channel
-		WHERE workspace_id = $1 AND system_key = 'general'
-		LIMIT 1`, parseUUID(testWorkspaceID)).Scan(&channelID)
-	if err != nil {
-		t.Skip("no system general channel in test workspace")
-	}
-	// Ensure caller is a member so we hit system protection not 403 membership.
-	_, _ = testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1,$2,'user',$3,'member')
-		ON CONFLICT DO NOTHING`, parseUUID(channelID), parseUUID(testWorkspaceID), testUserID)
-
-	r := newRequestAs(testUserID, http.MethodPatch,
-		"/api/channels/"+channelID+"/members/user/"+testUserID,
-		map[string]any{"role": "manager"})
-	r = withChannelTestWorkspaceCtx(t, r, testUserID)
-	r = withRouteParams(r, "channelId", channelID, "memberType", "user", "memberId", testUserID)
-	rec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(rec, r)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("system general want 409 got %d %s", rec.Code, rec.Body.String())
-	}
-}
-
-// TestRoleMutationWorkspaceAdminNotChannelOwner: workspace admin without channel
-// owner role gets plain 403 (no owner_changed).
-func TestRoleMutationWorkspaceAdminNotChannelOwner(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	ctx := context.Background()
-	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
-		"name": "role-ws-admin-" + uuid.NewString()[:8],
-	})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannel(created, req)
-	var ch ChannelResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &ch)
-
-	tag := uuid.NewString()
-	var adminID string
-	if err := testPool.QueryRow(ctx,
-		`INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`,
-		"wsadmin-"+tag[:8], "wsadmin-"+tag+"@example.com").Scan(&adminID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(ctx, `DELETE FROM channel_member WHERE member_id=$1`, adminID)
-		_, _ = testPool.Exec(ctx, `DELETE FROM member WHERE user_id=$1`, adminID)
-		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id=$1`, adminID)
-	})
-	// Workspace admin (or owner) but only channel *member*.
-	if _, err := testPool.Exec(ctx,
-		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'admin')`,
-		testWorkspaceID, adminID); err != nil {
-		// some envs use 'owner' only — try admin first
-		if _, err2 := testPool.Exec(ctx,
-			`INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'owner')`,
-			testWorkspaceID, adminID); err2 != nil {
-			t.Fatalf("ws role: %v / %v", err, err2)
-		}
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1,$2,'user',$3,'member')`,
-		parseUUID(ch.ID), parseUUID(testWorkspaceID), adminID); err != nil {
-		t.Fatal(err)
-	}
-
-	r := newRequestAs(adminID, http.MethodPatch,
-		"/api/channels/"+ch.ID+"/members/user/"+adminID,
-		map[string]any{"role": "manager"})
-	r = withChannelTestWorkspaceCtx(t, r, adminID)
-	r = withRouteParams(r, "channelId", ch.ID, "memberType", "user", "memberId", adminID)
-	rec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(rec, r)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("ws admin non-channel-owner want 403 got %d %s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), channelOwnerChangedCode) {
-		t.Fatalf("must not be owner_changed: %s", rec.Body.String())
-	}
-}
-
-// TestRoleMutationRejectsAgentPrincipal: agent token cannot call human role routes.
-func TestRoleMutationRejectsAgentPrincipal(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
-		"name": "role-agent-prin-" + uuid.NewString()[:8],
-	})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannel(created, req)
-	var ch ChannelResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &ch)
-	peer := insertChannelPeerUser(t, ch.ID, "member")
-	agentID := createHandlerTestAgent(t, "PrinAgent"+uuid.NewString()[:6], []byte("[]"))
-
-	r := newRequest(http.MethodPatch,
-		"/api/channels/"+ch.ID+"/members/user/"+peer,
-		map[string]any{"role": "manager"})
-	r = withAgentPrincipal(r, agentID, testWorkspaceID, testUserID)
-	r = withChannelTestWorkspaceCtx(t, r, testUserID)
-	r = withRouteParams(r, "channelId", ch.ID, "memberType", "user", "memberId", peer)
-	rec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(rec, r)
-	if rec.Code == http.StatusOK {
-		t.Fatalf("agent principal must not PATCH role, got 200")
-	}
-	// rejectAgentOnHumanRoute typically 403
-	if rec.Code != http.StatusForbidden && rec.Code != http.StatusUnauthorized {
-		t.Logf("agent principal status=%d body=%s (acceptable if forbidden-class)", rec.Code, rec.Body.String())
-	}
-}
-
-// TestAuditFailIsChannelScoped: failing audit on channel A does not block transfer on B.
-func TestAuditFailIsChannelScoped(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("handler test DB not configured")
-	}
-	mk := func(suffix string) (ChannelResponse, string) {
-		req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
-			"name": "role-scope-" + suffix + "-" + uuid.NewString()[:6],
-		})
-		req = withChannelTestWorkspaceCtx(t, req, testUserID)
-		created := httptest.NewRecorder()
-		testHandler.CreateChannel(created, req)
-		if created.Code != http.StatusCreated {
-			t.Fatalf("create %s: %d", suffix, created.Code)
-		}
-		var ch ChannelResponse
-		_ = json.Unmarshal(created.Body.Bytes(), &ch)
-		return ch, insertChannelPeerUser(t, ch.ID, "member")
-	}
-	chA, peerA := mk("a")
-	chB, peerB := mk("b")
-
-	testHandler.TestFailSystemEventForChannel = chA.ID
-	t.Cleanup(func() { testHandler.TestFailSystemEventForChannel = "" })
-
-	// A fails
-	xa := newRequestAs(testUserID, http.MethodPost,
-		"/api/channels/"+chA.ID+"/members/user/"+peerA+"/transfer-ownership", nil)
-	xa = withChannelTestWorkspaceCtx(t, xa, testUserID)
-	xa = withRouteParams(xa, "channelId", chA.ID, "memberType", "user", "memberId", peerA)
-	ra := httptest.NewRecorder()
-	testHandler.TransferChannelOwnership(ra, xa)
-	if ra.Code != http.StatusInternalServerError {
-		t.Fatalf("A want 500 got %d", ra.Code)
-	}
-
-	// B succeeds under same process while A is poisoned
-	xb := newRequestAs(testUserID, http.MethodPost,
-		"/api/channels/"+chB.ID+"/members/user/"+peerB+"/transfer-ownership", nil)
-	xb = withChannelTestWorkspaceCtx(t, xb, testUserID)
-	xb = withRouteParams(xb, "channelId", chB.ID, "memberType", "user", "memberId", peerB)
-	rb := httptest.NewRecorder()
-	testHandler.TransferChannelOwnership(rb, xb)
-	if rb.Code != http.StatusOK {
-		t.Fatalf("B want 200 got %d %s", rb.Code, rb.Body.String())
-	}
 }

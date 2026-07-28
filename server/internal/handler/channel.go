@@ -502,8 +502,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 				       ELSE 2
 				  END,
 				  cm.created_at ASC,
-		  cm.member_type ASC,
-		  cm.member_id ASC
+				  cm.member_type ASC,
+				  cm.member_id ASC
 				LIMIT $3
 			) limited ON true
 			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
@@ -514,7 +514,13 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			    WHEN 'manager' THEN 1
 			    ELSE 2
 			  END,
-			  limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
+			  CASE WHEN limited.role = 'manager' AND limited.member_type = 'agent' THEN 0
+			       WHEN limited.role = 'manager' AND limited.member_type = 'user' THEN 1
+			       ELSE 2
+			  END,
+			  limited.created_at ASC,
+			  limited.member_type ASC,
+			  limited.member_id ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
 		if err == nil {
 			defer memberRows.Close()
 			grouped := map[string][]ChannelMemberBrief{}
@@ -1558,6 +1564,8 @@ const channelOwnerChangedCode = "owner_changed"
 var (
 	testRoleMutationEntryGate       chan struct{}
 	testRoleMutationEntryEntered    int32
+	testRoleMutationPreBeginGate    chan struct{}
+	testRoleMutationPreBeginEntered int32
 	testRoleMutationPostLockGate    chan struct{}
 	testRoleMutationPostLockEntered int32
 )
@@ -1568,6 +1576,14 @@ func roleMutationEntryBarrier() {
 	}
 	atomic.AddInt32(&testRoleMutationEntryEntered, 1)
 	<-testRoleMutationEntryGate
+}
+
+func roleMutationPreBeginBarrier() {
+	if testRoleMutationPreBeginGate == nil {
+		return
+	}
+	atomic.AddInt32(&testRoleMutationPreBeginEntered, 1)
+	<-testRoleMutationPreBeginGate
 }
 
 func roleMutationPostLockBarrier() {
@@ -1656,9 +1672,6 @@ func writeChannelRoleMutationErr(w http.ResponseWriter, err error) {
 // Returns (isOwner, err). Only pgx.ErrNoRows → (false, nil) plain non-owner.
 // Other DB errors must surface as 500 — never disguise infra failure as deny.
 func (h *Handler) actorIsChannelOwnerRead(ctx context.Context, workspaceID string, channelID, actorID pgtype.UUID) (bool, error) {
-	if h.TestForceOwnerReadErr != nil {
-		return false, h.TestForceOwnerReadErr
-	}
 	var role string
 	err := h.DB.QueryRow(ctx, `
 		SELECT role FROM channel_member
@@ -1762,6 +1775,7 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 	roleMutationEntryBarrier()
+	roleMutationPreBeginBarrier()
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
@@ -1878,6 +1892,7 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	roleMutationEntryBarrier()
+	roleMutationPreBeginBarrier()
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {

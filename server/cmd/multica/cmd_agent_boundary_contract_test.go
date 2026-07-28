@@ -1185,6 +1185,51 @@ func TestBoundary_IssueTaskRuns_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_IssuePullRequests_HitsDedicatedAgentAPI asserts pull-requests
+// list uses GET /api/agent/issues/{id}/pull-requests under mat_*.
+func TestBoundary_IssuePullRequests_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantPRs := wantGet + "/pull-requests"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == wantPRs:
+			_ = json.NewEncoder(w).Encode(map[string]any{"pull_requests": []any{}})
+		default:
+			http.Error(w, "human pull-requests path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "pull-requests"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := runIssuePullRequests(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssuePullRequests: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "GET "+wantPRs {
+			found = true
+		}
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want GET %s", gotPaths, wantPRs)
+	}
+}
+
 // TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets is a living map of
 // necessary capabilities → dedicated paths (Ronan table). Fails if a required
 // capability loses its dedicated target string (typo / table drift).
@@ -1206,6 +1251,7 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"issue labels on-issue", []string{"/api/agent/issues/", "/labels"}},
 		{"issue subscribers", []string{"/api/agent/issues/", "/subscribers"}},
 		{"issue task-runs/rerun/channel", []string{"/api/agent/issues/", "/task-runs"}},
+		{"issue pull-requests", []string{"/api/agent/issues/", "/pull-requests"}},
 		{"project resource read", []string{"/api/agent/projects/"}},
 		{"attachment view/upload", []string{"/api/agent/attachments", "/api/agent/upload-file"}},
 		{"directory agents", []string{"/api/agent/agents"}},

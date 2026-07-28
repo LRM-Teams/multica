@@ -678,7 +678,11 @@ func runIssuePullRequests(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+url.PathEscape(issueRef.ID)+"/pull-requests", &result); err != nil {
+	prPath := "/api/issues/" + url.PathEscape(issueRef.ID) + "/pull-requests"
+	if isAgentAPIToken(cmd) {
+		prPath = agentIssueAPIPath(cmd, issueRef.ID, "/pull-requests")
+	}
+	if err := client.GetJSON(ctx, prPath, &result); err != nil {
 		return fmt.Errorf("list issue pull requests: %w", err)
 	}
 

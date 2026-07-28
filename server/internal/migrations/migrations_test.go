@@ -428,6 +428,57 @@ func TestMigration209SuppressesEnvDispatchChannelOnboarding(t *testing.T) {
 	}
 }
 
+func TestMigration245ReplacesUserShapedChannelMemberProvenance(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	read := func(name string) string {
+		t.Helper()
+		body, err := os.ReadFile(filepath.Join(migrationsDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return string(body)
+	}
+
+	up := read("245_channel_member_actor_provenance.up.sql")
+	for _, required := range []string{
+		"added_by_type",
+		"added_by_id",
+		"source_actor_type",
+		"source_actor_id",
+		"'user'",
+		"'agent'",
+		"'system'",
+		"WHEN (NEW.join_source <> 'env_dispatch')",
+		"trg_maintain_channel_agent_onboarding_insert",
+		"trg_maintain_channel_agent_onboarding_delete",
+		"CREATE OR REPLACE FUNCTION channel_seed_human_owner_on_insert()",
+	} {
+		if !strings.Contains(up, required) {
+			t.Errorf("migration 245 up missing %q", required)
+		}
+	}
+	if strings.Contains(up, "ADD COLUMN added_by UUID") {
+		t.Error("migration 245 must replace, not preserve, the user-only added_by column")
+	}
+
+	down := read("245_channel_member_actor_provenance.down.sql")
+	for _, required := range []string{
+		"LOSSY",
+		"agent",
+		"added_by",
+		"DROP COLUMN",
+		"WHEN (NEW.join_source <> 'env_dispatch')",
+	} {
+		if !strings.Contains(down, required) {
+			t.Errorf("migration 245 down missing rollback contract %q", required)
+		}
+	}
+}
+
 func TestMigration233RestoresWendyAmbientRadarAuthorization(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -563,7 +614,6 @@ func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 		}
 	}
 }
-
 func TestMigration246SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

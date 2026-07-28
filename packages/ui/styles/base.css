@@ -226,6 +226,35 @@
   }
 }
 
+/* =============================================================================
+ * Motion contract (#820) — shared timing tokens + content fade for view/tab/
+ * panel/menu swaps. Principles (enforced by the MotionContent primitive):
+ *   1. Semantics / focus / actionable state switch INSTANTLY; motion only
+ *      presents an already-committed state (never gates interaction on a frame).
+ *   2. Enter fades the new content in; the old is unmounted at once, so exit is
+ *      instant — always faster than enter.
+ *   3. Rapid retarget renders only the final intent (keyed remount reconciles to
+ *      the latest key; no stacked fades, no flicker-back).
+ *   4. prefers-reduced-motion → no transform, near-zero duration (motion-reduce
+ *      utility drops the animation entirely).
+ * ========================================================================== */
+:root {
+  --motion-duration-fast: 120ms;
+  --motion-duration-moderate: 200ms;
+  --motion-duration-slow: 320ms;
+  /* Decelerating ease-out: quick to start, gentle to settle (spring-like). */
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes content-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Sidebar: open triggers (dropdown/popover) get active background */
 [data-sidebar="menu-button"][data-popup-open] {
   background-color: var(--sidebar-accent);

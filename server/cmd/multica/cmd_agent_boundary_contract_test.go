@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1277,52 +1280,100 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 }
 
 
-// envOnlyMatTokenDetections scans production-like Go source for env-only mat_*
-// classification: Getenv("MULTICA_TOKEN") near "mat_" without TOKEN_FILE /
-// ambientTokenFromEnvOrFile / resolveToken / isMatAgentToken / isAgentAPIToken
-// in the look-ahead window.
-//
-// Never skips whole files. cmd_auth.go hosts ambientTokenFromEnvOrFile and is
-// the highest-risk place to reintroduce a bare detector (Barry counterfactual).
-func envOnlyMatTokenDetections(filename, src string) []string {
-	var bad []string
-	if !strings.Contains(src, `Getenv("MULTICA_TOKEN")`) {
-		return nil
+// multicaTokenGetenvEnclosingFuncs returns FuncDecl names that contain
+// os.Getenv("MULTICA_TOKEN") (or Getenv("MULTICA_TOKEN") after os import).
+// Uses go/parser AST — no keyword heuristics on "mat_".
+func multicaTokenGetenvEnclosingFuncs(filename, src string) ([]string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filename, src, 0)
+	if err != nil {
+		return nil, err
 	}
-	lines := strings.Split(src, "\n")
-	for i, line := range lines {
-		if !strings.Contains(line, `Getenv("MULTICA_TOKEN")`) {
+	var hits []string
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
 			continue
 		}
-		end := i + 15
-		if end > len(lines) {
-			end = len(lines)
-		}
-		window := strings.Join(lines[i:end], "\n")
-		if !(strings.Contains(window, `"mat_"`) || strings.Contains(window, "mat_")) {
-			continue
-		}
-		if strings.Contains(window, "MULTICA_TOKEN_FILE") ||
-			strings.Contains(window, "ambientTokenFromEnvOrFile") ||
-			strings.Contains(window, "resolveToken") ||
-			strings.Contains(window, "isMatAgentToken") ||
-			strings.Contains(window, "isAgentAPIToken") {
-			continue
-		}
-		bad = append(bad, fmt.Sprintf("%s:%d", filename, i+1))
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			// os.Getenv("MULTICA_TOKEN") or Getenv("MULTICA_TOKEN")
+			name := callName(call.Fun)
+			if name != "Getenv" && name != "os.Getenv" {
+				return true
+			}
+			if len(call.Args) != 1 {
+				return true
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			// unquote
+			if lit.Value == `"MULTICA_TOKEN"` {
+				hits = append(hits, fn.Name.Name)
+			}
+			return true
+		})
 	}
-	return bad
+	return hits, nil
 }
 
-// TestBoundary_NoEnvOnlyMatTokenDetection forbids reintroducing env-only mat_*
-// detectors (Frank 2026-07-28). Scans all non-test package files with no
-// whole-file exemption for cmd_auth.go.
+func callName(fun ast.Expr) string {
+	switch x := fun.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok {
+			return id.Name + "." + x.Sel.Name
+		}
+	}
+	return ""
+}
+
+// ambientTokenFromEnvOrFileReadsTokenFile reports whether the function body
+// of ambientTokenFromEnvOrFile also reads MULTICA_TOKEN_FILE (cannot be
+// env-only itself).
+func ambientTokenFromEnvOrFileReadsTokenFile(src string) (bool, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "cmd_auth.go", src, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "ambientTokenFromEnvOrFile" || fn.Body == nil {
+			continue
+		}
+		found := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			if lit.Value == `"MULTICA_TOKEN_FILE"` {
+				found = true
+			}
+			return true
+		})
+		return found, nil
+	}
+	return false, fmt.Errorf("ambientTokenFromEnvOrFile not found")
+}
+
+// TestBoundary_NoEnvOnlyMatTokenDetection enforces Barry invariant: production
+// os.Getenv("MULTICA_TOKEN") may only appear inside ambientTokenFromEnvOrFile;
+// that function must also read MULTICA_TOKEN_FILE.
 func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var bad []string
+	var authSrc string
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -1331,49 +1382,123 @@ func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		bad = append(bad, envOnlyMatTokenDetections(f, string(b))...)
+		src := string(b)
+		if f == "cmd_auth.go" {
+			authSrc = src
+		}
+		funcs, err := multicaTokenGetenvEnclosingFuncs(f, src)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		for _, name := range funcs {
+			if name != "ambientTokenFromEnvOrFile" {
+				bad = append(bad, fmt.Sprintf("%s: func %s reads Getenv(MULTICA_TOKEN)", f, name))
+			}
+		}
 	}
 	if len(bad) > 0 {
-		t.Fatalf("env-only mat_* detection reintroduced (use isMatAgentToken / isAgentAPIToken / ambientTokenFromEnvOrFile): %v", bad)
+		t.Fatalf("MULTICA_TOKEN Getenv outside ambientTokenFromEnvOrFile (use ambientTokenFromEnvOrFile / resolveToken): %v", bad)
+	}
+	if authSrc == "" {
+		t.Fatal("cmd_auth.go not found in package dir")
+	}
+	ok, err := ambientTokenFromEnvOrFileReadsTokenFile(authSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ambientTokenFromEnvOrFile must also read MULTICA_TOKEN_FILE (cannot be env-only)")
 	}
 }
 
-// TestBoundary_NoEnvOnlyMatTokenDetection_AuthFileCounterfactual hard-proves the
-// scanner fails closed on Barry's reviewer counterfactual: bare mat_ check in
-// cmd_auth.go next to Getenv("MULTICA_TOKEN") must be flagged even when
-// ambientTokenFromEnvOrFile also exists in that file (no whole-file skip).
-func TestBoundary_NoEnvOnlyMatTokenDetection_AuthFileCounterfactual(t *testing.T) {
-	synthetic := "package main\n" +
-		"import (\"os\"; \"strings\")\n" +
-		"func ambientTokenFromEnvOrFile() string {\n" +
-		"\tif v := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN\")); v != \"\" {\n" +
-		"\t\treturn v\n" +
-		"\t}\n" +
-		"\tif path := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN_FILE\")); path != \"\" {\n" +
-		"\t\treturn path\n" +
-		"\t}\n" +
-		"\treturn \"\"\n" +
-		"}\n" +
-		"func bad() bool {\n" +
-		"\treturn strings.HasPrefix(strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN\")), \"mat_\")\n" +
-		"}\n"
-	hits := envOnlyMatTokenDetections("cmd_auth.go", synthetic)
-	if len(hits) == 0 {
-		t.Fatal("expected env-only mat_ detector in synthetic cmd_auth.go to FAIL closed; whole-file skip false-green")
+// TestBoundary_NoEnvOnlyMatTokenDetection_Counterfactuals hard-proves the
+// scanner fails closed for Barry's two false-green classes.
+func TestBoundary_NoEnvOnlyMatTokenDetection_Counterfactuals(t *testing.T) {
+	// 1) bare HasPrefix(Getenv) in cmd_auth.go next to legitimate ambient helper
+	syntheticBare := `package main
+import ("os"; "strings")
+func ambientTokenFromEnvOrFile() string {
+	if v := strings.TrimSpace(os.Getenv("MULTICA_TOKEN")); v != "" {
+		return v
 	}
-	// Control: ambient helper only (reads env+file, no mat_ classify) must be clean
-	clean := "package main\n" +
-		"func ambientTokenFromEnvOrFile() string {\n" +
-		"\tif v := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN\")); v != \"\" {\n" +
-		"\t\treturn v\n" +
-		"\t}\n" +
-		"\tif path := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN_FILE\")); path != \"\" {\n" +
-		"\t\treturn path\n" +
-		"\t}\n" +
-		"\treturn \"\"\n" +
-		"}\n"
-	if got := envOnlyMatTokenDetections("cmd_auth.go", clean); len(got) != 0 {
-		t.Fatalf("ambient-only source should not flag: %v", got)
+	if path := strings.TrimSpace(os.Getenv("MULTICA_TOKEN_FILE")); path != "" {
+		return path
+	}
+	return ""
+}
+func bad() bool {
+	return strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_")
+}
+`
+	funcs, err := multicaTokenGetenvEnclosingFuncs("cmd_auth.go", syntheticBare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundBad := false
+	for _, n := range funcs {
+		if n == "bad" {
+			foundBad = true
+		}
+	}
+	if !foundBad {
+		t.Fatalf("expected bad() Getenv(MULTICA_TOKEN) to be flagged; got %v", funcs)
+	}
+
+	// 2) isMatAgentToken(os.Getenv("MULTICA_TOKEN")) — reuses classifier, env-only source
+	syntheticCompose := `package main
+import "os"
+func isMatAgentToken(token string) bool { return len(token) > 0 }
+func badCompose() bool {
+	return isMatAgentToken(os.Getenv("MULTICA_TOKEN"))
+}
+`
+	funcs2, err := multicaTokenGetenvEnclosingFuncs("cmd_other.go", syntheticCompose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundCompose := false
+	for _, n := range funcs2 {
+		if n == "badCompose" {
+			foundCompose = true
+		}
+	}
+	if !foundCompose {
+		t.Fatalf("expected badCompose() Getenv(MULTICA_TOKEN) to be flagged; got %v", funcs2)
+	}
+
+	// 3) control: only ambientTokenFromEnvOrFile reads MULTICA_TOKEN + FILE → clean
+	clean := `package main
+import ("os"; "strings")
+func ambientTokenFromEnvOrFile() string {
+	if v := strings.TrimSpace(os.Getenv("MULTICA_TOKEN")); v != "" {
+		return v
+	}
+	if path := strings.TrimSpace(os.Getenv("MULTICA_TOKEN_FILE")); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+func isMatAgentToken(token string) bool {
+	return strings.HasPrefix(strings.TrimSpace(token), "mat_")
+}
+func isAgentAPITokenAmbient() bool {
+	return isMatAgentToken(ambientTokenFromEnvOrFile())
+}
+`
+	funcs3, err := multicaTokenGetenvEnclosingFuncs("cmd_auth.go", clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range funcs3 {
+		if n != "ambientTokenFromEnvOrFile" {
+			t.Fatalf("clean source flagged unexpected func %s: %v", n, funcs3)
+		}
+	}
+	ok, err := ambientTokenFromEnvOrFileReadsTokenFile(clean)
+	if err != nil || !ok {
+		t.Fatalf("clean ambient must read TOKEN_FILE: ok=%v err=%v", ok, err)
 	}
 }
 

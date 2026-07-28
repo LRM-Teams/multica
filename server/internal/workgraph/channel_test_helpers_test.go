@@ -20,6 +20,12 @@ func createWorkgraphChannel(t *testing.T, ctx context.Context, workspaceID, chan
 		t.Fatalf("create channel user: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, workspaceID, userID); err != nil {
+		t.Fatalf("add channel user to workspace: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_runtime (
 		  id, workspace_id, name, runtime_mode, provider, metadata
 		) VALUES (

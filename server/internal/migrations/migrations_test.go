@@ -564,16 +564,16 @@ func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 	}
 }
 
-func TestMigration244SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t *testing.T) {
+func TestMigration246SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(migrationsDir, "244_agent_credential_issuance_source.up.sql"))
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "246_agent_credential_issuance_source.up.sql"))
 	if err != nil {
-		t.Fatalf("read migration 244 up: %v", err)
+		t.Fatalf("read migration 246 up: %v", err)
 	}
 	contents := string(up)
 	for _, required := range []string{
@@ -591,13 +591,13 @@ func TestMigration244SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t 
 		"AND revoked_at IS NULL",
 	} {
 		if !strings.Contains(contents, required) {
-			t.Errorf("migration 244 up missing %q", required)
+			t.Errorf("migration 246 up missing %q", required)
 		}
 	}
 
-	down, err := os.ReadFile(filepath.Join(migrationsDir, "244_agent_credential_issuance_source.down.sql"))
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "246_agent_credential_issuance_source.down.sql"))
 	if err != nil {
-		t.Fatalf("read migration 244 down: %v", err)
+		t.Fatalf("read migration 246 down: %v", err)
 	}
 	downContents := string(down)
 	for _, required := range []string{
@@ -606,7 +606,7 @@ func TestMigration244SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t 
 		"DROP COLUMN IF EXISTS issuance_source",
 	} {
 		if !strings.Contains(downContents, required) {
-			t.Errorf("migration 244 down missing %q", required)
+			t.Errorf("migration 246 down missing %q", required)
 		}
 	}
 }

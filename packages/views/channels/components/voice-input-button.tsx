@@ -16,6 +16,7 @@ import {
 import { deliverVoiceRecording } from "../lib/voice-recording-delivery";
 import { voiceCaptureUnavailableReason } from "../lib/voice-capture";
 import { cancelVoicePlayback, prepareVoicePlayback } from "../lib/voice-playback";
+import type { VoiceCapturePhase } from "./voice-block-reason";
 
 type RecordingState = "idle" | "starting" | "recording" | "uploading";
 
@@ -31,11 +32,16 @@ export interface VoiceInputButtonProps {
    */
   describedById?: string;
   /**
-   * Reports this button's OWN upload state upward so the shell can say
-   * "uploading your voice message". Only this may resolve to `uploading`; an
-   * attachment upload is a different sentence.
+   * Reports this button's OWN capture phase upward so the shell can say what is
+   * actually happening. Typed rather than a `busy` boolean: "acquiring the
+   * microphone" and "uploading the recording" are different states, and
+   * collapsing them made the shell claim an upload was in flight while
+   * `getUserMedia` was still pending (Iris, #858).
+   *
+   * `recording` maps to `idle` here — while recording, this control is the STOP
+   * button and is not blocked.
    */
-  onBusyChange?: (busy: boolean) => void;
+  onCapturePhaseChange?: (phase: VoiceCapturePhase) => void;
   isMobile: boolean;
   playbackScope: string;
   onVoiceSend: (
@@ -71,7 +77,7 @@ export function VoiceInputButton({
   channelId,
   disabled = false,
   describedById,
-  onBusyChange,
+  onCapturePhaseChange,
   isMobile,
   playbackScope,
   onVoiceSend,
@@ -239,11 +245,13 @@ export function VoiceInputButton({
   // status. Kept in an effect (not the setState call sites) so EVERY route into
   // and out of busy is covered — including the error paths that reset to idle,
   // where a missed "false" would leave a stale status line pinned on screen.
-  const onBusyChangeRef = useRef(onBusyChange);
-  onBusyChangeRef.current = onBusyChange;
+  const capturePhase: VoiceCapturePhase =
+    state === "starting" ? "starting" : state === "uploading" ? "uploading" : "idle";
+  const onCapturePhaseChangeRef = useRef(onCapturePhaseChange);
+  onCapturePhaseChangeRef.current = onCapturePhaseChange;
   useEffect(() => {
-    onBusyChangeRef.current?.(busy);
-  }, [busy]);
+    onCapturePhaseChangeRef.current?.(capturePhase);
+  }, [capturePhase]);
   const recording = state === "recording";
   const label = recording
     ? t(($) => $.composer.voice_stop, { seconds: elapsedSeconds })

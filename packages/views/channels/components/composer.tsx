@@ -7,7 +7,11 @@ import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { VoiceInputButton } from "./voice-input-button";
 import type { VoiceRecordingAttachment } from "../lib/voice-audio";
-import { resolveVoiceBlockReason, type VoiceBlockReason } from "./voice-block-reason";
+import {
+  resolveVoiceBlockReason,
+  type VoiceBlockReason,
+  type VoiceCapturePhase,
+} from "./voice-block-reason";
 import { useT } from "../../i18n/use-t";
 
 /**
@@ -107,12 +111,12 @@ export function Composer({
   // upload arrives as `hasAttachmentDraft` and gets the attachment sentence
   // (Iris, #858): calling a PDF upload "uploading your voice message" would be
   // the same class of lie this ticket removes.
-  const [voiceUploading, setVoiceUploading] = useState(false);
-  const handleVoiceBusyChange = useCallback((busy: boolean) => setVoiceUploading(busy), []);
+  const [capturePhase, setCapturePhase] = useState<VoiceCapturePhase>("idle");
+  const handleCapturePhaseChange = useCallback((phase: VoiceCapturePhase) => setCapturePhase(phase), []);
 
   const voiceBlockReason: VoiceBlockReason | null = voiceBlock
     ? resolveVoiceBlockReason({
-        voiceUploading,
+        capturePhase,
         pendingVoice: voiceBlock.pendingVoice ?? false,
         sending,
         hasTextDraft: voiceBlock.hasTextDraft,
@@ -128,6 +132,9 @@ export function Composer({
   // to clear text and attachments.
   let voiceBlockText: string | null = null;
   switch (voiceBlockReason) {
+    case "starting":
+      voiceBlockText = t(($) => $.composer.voice_blocked_starting);
+      break;
     case "uploading":
       voiceBlockText = t(($) => $.composer.voice_blocked_uploading);
       break;
@@ -224,7 +231,7 @@ export function Composer({
                 channelId={voiceChannelId}
                 disabled={voiceBlocked}
                 describedById={voiceBlockText ? voiceStatusId : undefined}
-                onBusyChange={handleVoiceBusyChange}
+                onCapturePhaseChange={handleCapturePhaseChange}
                 isMobile={isMobile}
                 playbackScope={voicePlaybackScope}
                 onVoiceSend={onVoiceSend}

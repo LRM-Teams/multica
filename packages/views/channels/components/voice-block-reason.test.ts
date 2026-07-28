@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveVoiceBlockReason, type VoiceBlockInputs } from "./voice-block-reason";
 
 const NONE: VoiceBlockInputs = {
-  voiceUploading: false,
+  capturePhase: "idle",
   pendingVoice: false,
   sending: false,
   hasTextDraft: false,
@@ -21,7 +21,8 @@ describe("resolveVoiceBlockReason (#858)", () => {
   });
 
   it.each([
-    ["uploading", { voiceUploading: true }],
+    ["starting", { capturePhase: "starting" }],
+    ["uploading", { capturePhase: "uploading" }],
     ["pending_voice", { pendingVoice: true }],
     ["sending", { sending: true }],
     ["text_draft", { hasTextDraft: true }],
@@ -45,7 +46,31 @@ describe("resolveVoiceBlockReason (#858)", () => {
       ["text draft", { hasTextDraft: true }],
       ["attachment draft", { hasAttachmentDraft: true }],
     ] as const)("uploading outranks %s", (_label, lower) => {
-      expect(resolve({ voiceUploading: true, ...lower })).toBe("uploading");
+      expect(resolve({ capturePhase: "uploading", ...lower })).toBe("uploading");
+    });
+
+    it.each([
+      ["pending_voice", { pendingVoice: true }],
+      ["sending", { sending: true }],
+      ["text draft", { hasTextDraft: true }],
+      ["attachment draft", { hasAttachmentDraft: true }],
+    ] as const)("starting outranks %s", (_label, lower) => {
+      expect(resolve({ capturePhase: "starting", ...lower })).toBe("starting");
+    });
+
+    it("starting and uploading are distinct — acquiring the mic is not an upload", () => {
+      // The bug this replaced: one `busy` boolean covered both, so the shell
+      // said "uploading your voice message" while getUserMedia was still
+      // pending and nothing had been uploaded.
+      expect(resolve({ capturePhase: "starting" })).toBe("starting");
+      expect(resolve({ capturePhase: "starting" })).not.toBe("uploading");
+      expect(resolve({ capturePhase: "uploading" })).toBe("uploading");
+    });
+
+    it("recording is not a blocked state — it maps to idle and blocks nothing", () => {
+      // While recording, the control is the STOP button; there is nothing to
+      // explain because nothing is unavailable.
+      expect(resolve({ capturePhase: "idle" })).toBeNull();
     });
 
     it.each([
@@ -65,12 +90,13 @@ describe("resolveVoiceBlockReason (#858)", () => {
     });
   });
 
-  it("an attachment upload never resolves to 'uploading' — that reason is voice-only", () => {
+  it("an attachment upload never resolves to 'uploading' or 'starting' — those are voice-only", () => {
     // Iris's boundary (#858): the tray's `hasUploading` is a subset of
     // `pending`, so an uploading PDF arrives here as `hasAttachmentDraft`. It
     // must get the attachment sentence, never "uploading your voice message".
     expect(resolve({ hasAttachmentDraft: true })).toBe("attachment_draft");
     expect(resolve({ hasAttachmentDraft: true })).not.toBe("uploading");
+    expect(resolve({ hasAttachmentDraft: true })).not.toBe("starting");
   });
 
   it("every cause combination resolves to exactly one reason, and only the empty one is null", () => {
@@ -78,20 +104,22 @@ describe("resolveVoiceBlockReason (#858)", () => {
     // being added without a branch, which would silently return null and put us
     // back to a disabled mic with no explanation.
     const flags = [
-      "voiceUploading",
       "pendingVoice",
       "sending",
       "hasTextDraft",
       "hasAttachmentDraft",
     ] as const;
-    for (let mask = 0; mask < 1 << flags.length; mask += 1) {
-      const inputs = { ...NONE };
-      flags.forEach((flag, bit) => {
-        inputs[flag] = Boolean(mask & (1 << bit));
-      });
-      const reason = resolveVoiceBlockReason(inputs);
-      if (mask === 0) expect(reason).toBeNull();
-      else expect(reason).not.toBeNull();
+    const phases = ["idle", "starting", "uploading"] as const;
+    for (const phase of phases) {
+      for (let mask = 0; mask < 1 << flags.length; mask += 1) {
+        const inputs: VoiceBlockInputs = { ...NONE, capturePhase: phase };
+        flags.forEach((flag, bit) => {
+          inputs[flag] = Boolean(mask & (1 << bit));
+        });
+        const reason = resolveVoiceBlockReason(inputs);
+        if (phase === "idle" && mask === 0) expect(reason).toBeNull();
+        else expect(reason).not.toBeNull();
+      }
     }
   });
 });

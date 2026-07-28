@@ -34,6 +34,7 @@ vi.mock("../../i18n/use-t", () => ({
         voice_start: string;
         voice_stop: string;
         voice_uploading: string;
+        voice_blocked_starting: string;
         voice_blocked_uploading: string;
         voice_blocked_pending_voice: string;
         voice_blocked_sending: string;
@@ -46,6 +47,7 @@ vi.mock("../../i18n/use-t", () => ({
         voice_start: "Record voice message",
         voice_stop: "Stop recording",
         voice_uploading: "Uploading voice message",
+        voice_blocked_starting: "COPY_STARTING",
         voice_blocked_uploading: "COPY_UPLOADING",
         voice_blocked_pending_voice: "COPY_PENDING_VOICE",
         voice_blocked_sending: "COPY_SENDING",
@@ -71,6 +73,9 @@ vi.mock("../lib/voice-audio", async (importOriginal) => ({
 // The upload is held open on purpose: `state` sits at "uploading" for exactly as
 // long as this promise is unresolved, which is the window under test.
 const delivery = vi.hoisted(() => ({ resolve: undefined as undefined | (() => void) }));
+// Held open so the machine sits in "starting" — the window where the old
+// `busy` boolean wrongly claimed an upload was already in flight.
+const media = vi.hoisted(() => ({ resolve: undefined as undefined | (() => void) }));
 vi.mock("../lib/voice-recording-delivery", () => ({
   deliverVoiceRecording: vi.fn(
     () =>
@@ -116,9 +121,15 @@ describe("Composer — the uploading cause, driven through a real capture (#858)
       decodeAudioData = async () => ({ sampleRate: 16_000 });
       close = async () => undefined;
     });
+    media.resolve = undefined;
     vi.stubGlobal("navigator", {
       ...globalThis.navigator,
-      mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) },
+      mediaDevices: {
+        getUserMedia: () =>
+          new Promise((resolve) => {
+            media.resolve = () => resolve({ getTracks: () => [] });
+          }),
+      },
     });
   });
 
@@ -146,7 +157,8 @@ describe("Composer — the uploading cause, driven through a real capture (#858)
     // pass on a shell that renders it unconditionally.
     expect(status()).toBeNull();
 
-    fireEvent.click(mic()); // start capture
+    fireEvent.click(mic()); // start capture — getUserMedia is held pending
+    media.resolve?.();
     await waitFor(() => expect(mic()).toHaveAccessibleName("Stop recording"));
     fireEvent.click(mic()); // stop → enters "uploading" and stays there
 
@@ -184,5 +196,45 @@ describe("Composer — the uploading cause, driven through a real capture (#858)
     );
     expect(status()).toHaveTextContent("COPY_ATTACHMENT");
     expect(status()).not.toHaveTextContent("COPY_UPLOADING");
+  });
+
+  it("says it is PREPARING while acquiring the mic, and only says uploading after the recording is handed off", async () => {
+    // The gap Iris caught in review: `busy = starting || uploading` reported one
+    // boolean, so this window announced "uploading your voice message" while
+    // getUserMedia was still pending and nothing had been uploaded. Same defect
+    // as the original shared sentence, one state earlier.
+    render(
+      <Composer
+        surface="channel"
+        {...base}
+        onVoiceSend={() => true}
+        voiceBlock={{ hasTextDraft: false, hasAttachmentDraft: false }}
+      />,
+    );
+    expect(status()).toBeNull();
+
+    fireEvent.click(mic()); // getUserMedia deliberately left pending
+
+    await waitFor(() => expect(status()).not.toBeNull());
+    const starting = status();
+    expect(starting).toHaveTextContent("COPY_STARTING");
+    // The whole point: it must NOT claim an upload yet.
+    expect(starting).not.toHaveTextContent("COPY_UPLOADING");
+    expect(screen.getByRole("status")).toBe(starting);
+    const preparing = mic();
+    expect(preparing).toBeDisabled();
+    expect(preparing).not.toHaveAttribute("aria-disabled");
+    expect(preparing.getAttribute("aria-describedby")).toBe(starting?.getAttribute("id"));
+
+    // Let the mic open, record, then stop → NOW it is genuinely uploading.
+    media.resolve?.();
+    await waitFor(() => expect(mic()).toHaveAccessibleName("Stop recording"));
+    fireEvent.click(mic());
+
+    await waitFor(() => expect(status()).toHaveTextContent("COPY_UPLOADING"));
+    expect(status()).not.toHaveTextContent("COPY_STARTING");
+
+    delivery.resolve?.();
+    await waitFor(() => expect(status()).toBeNull());
   });
 });

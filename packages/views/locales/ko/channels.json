@@ -389,6 +389,7 @@
     "voice_stop": "녹음 중지 ({{seconds}}초)",
     "voice_uploading": "음성 메시지 업로드 중",
     "voice_blocked_pending_voice": "보내지 못한 음성 메시지가 있습니다. 다시 시도하거나 삭제한 후 녹음해 주세요.",
+    "voice_blocked_starting": "마이크를 준비하는 중입니다. 잠시만 기다려 주세요.",
     "voice_blocked_uploading": "음성 메시지를 업로드하는 중입니다. 완료될 때까지 기다려 주세요.",
     "voice_blocked_sending": "메시지를 보내는 중입니다. 잠시 후 녹음해 주세요.",
     "voice_blocked_text_draft": "입력한 텍스트가 있습니다. 보내거나 지우면 음성을 녹음할 수 있습니다.",

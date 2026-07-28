@@ -48,3 +48,158 @@ func TestRequireAgentPrincipalRejectsHuman(t *testing.T) {
 		t.Fatalf("status=%d want 204", rec.Code)
 	}
 }
+
+// #801 completion criterion ④ (Parker): admin / platform-structure surfaces
+// must 403 when AgentPrincipal hits human routes. RejectAgentOnHumanAPI is
+// the fail-closed gate. These contracts must distinguish:
+//   - issue labels on /api/agent/issues/{id}/labels  → ALLOW (necessary work)
+//   - global /api/labels CRUD                        → 403 (platform structure)
+// Do not edit counterfactual ①② while Barry independent-verifies them.
+
+func agentPrincipalCtx(r *http.Request) *http.Request {
+	ctx := WithAgentPrincipal(r.Context(), AgentPrincipal{
+		AgentID:     "11111111-1111-1111-1111-111111111111",
+		WorkspaceID: "22222222-2222-2222-2222-222222222222",
+		OwnerUserID: "33333333-3333-3333-3333-333333333333",
+		ActorSource: "agent_credential",
+	})
+	return r.WithContext(ctx)
+}
+
+func TestRejectAgentOnHumanAPI_AdminSurfaces403(t *testing.T) {
+	// Downstream would succeed if middleware did not reject — proves the gate.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := RejectAgentOnHumanAPI(inner)
+
+	// Parker product boundary: agent = worker, not platform admin.
+	// Each row is a human/admin surface that must not be usable with AgentPrincipal.
+	cases := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		// project write + structure
+		{"project create", http.MethodPost, "/api/projects"},
+		{"project update", http.MethodPut, "/api/projects/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		{"project delete", http.MethodDelete, "/api/projects/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		{"project resource create", http.MethodPost, "/api/projects/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resources"},
+		{"project resource delete", http.MethodDelete, "/api/projects/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resources/r1"},
+		// squad fully retired for agents (middleware 403 before 410 handler)
+		{"squad list", http.MethodGet, "/api/squads"},
+		{"squad create", http.MethodPost, "/api/squads"},
+		{"squad set-role", http.MethodPatch, "/api/squads/s1/members/role"},
+		// global labels CRUD — NOT issue-on-issue labels
+		{"labels list global", http.MethodGet, "/api/labels"},
+		{"labels create global", http.MethodPost, "/api/labels"},
+		{"labels update global", http.MethodPut, "/api/labels/l1"},
+		{"labels delete global", http.MethodDelete, "/api/labels/l1"},
+		// agent admin / lifecycle
+		{"agents list admin", http.MethodGet, "/api/agents"},
+		{"agents create", http.MethodPost, "/api/agents"},
+		{"agents update", http.MethodPut, "/api/agents/a1"},
+		{"agents archive", http.MethodPost, "/api/agents/a1/archive"},
+		{"agent skills set", http.MethodPut, "/api/agents/a1/skills"},
+		// autopilot
+		{"autopilot list", http.MethodGet, "/api/autopilots"},
+		{"autopilot create", http.MethodPost, "/api/autopilots"},
+		// PAT / me
+		{"tokens list", http.MethodGet, "/api/tokens"},
+		{"me", http.MethodGet, "/api/me"},
+		// runtime ops
+		{"runtimes list", http.MethodGet, "/api/runtimes"},
+		// human issue write still on human path
+		{"human issue create", http.MethodPost, "/api/issues"},
+		{"human channels list", http.MethodGet, "/api/channels"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := agentPrincipalCtx(httptest.NewRequest(tc.method, tc.path, nil))
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s want 403 for agent on %s %s",
+					rec.Code, rec.Body.String(), tc.method, tc.path)
+			}
+		})
+	}
+}
+
+// TestRejectAgentOnHumanAPI_DedicatedAgentPathsPass proves necessary work
+// surfaces under /api/agent/* are NOT blocked by the admin 403 gate —
+// especially issue labels (attach/list) vs global /api/labels.
+func TestRejectAgentOnHumanAPI_DedicatedAgentPathsPass(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := RejectAgentOnHumanAPI(inner)
+
+	allow := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"agent channels", http.MethodGet, "/api/agent/channels"},
+		{"agent issue get", http.MethodGet, "/api/agent/issues/i1"},
+		// necessary: labels ON an issue (not global label system)
+		{"agent issue labels list", http.MethodGet, "/api/agent/issues/i1/labels"},
+		{"agent issue labels attach", http.MethodPost, "/api/agent/issues/i1/labels"},
+		{"agent issue labels detach", http.MethodDelete, "/api/agent/issues/i1/labels/l1"},
+		{"agent directory", http.MethodGet, "/api/agent/agents"},
+		{"agent workspace", http.MethodGet, "/api/agent/workspace"},
+		{"agent project resources RO", http.MethodGet, "/api/agent/projects/p1/resources"},
+	}
+	for _, tc := range allow {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := agentPrincipalCtx(httptest.NewRequest(tc.method, tc.path, nil))
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status=%d body=%s want 204 (dedicated path must pass gate) for %s %s",
+					rec.Code, rec.Body.String(), tc.method, tc.path)
+			}
+		})
+	}
+}
+
+// TestRejectAgentOnHumanAPI_HumanWithoutPrincipalUnaffected ensures the
+// middleware only fires for AgentPrincipal (humans still reach handlers).
+func TestRejectAgentOnHumanAPI_HumanWithoutPrincipalUnaffected(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := RejectAgentOnHumanAPI(inner)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d want 204 for non-agent principal on human path", rec.Code)
+	}
+}
+
+// TestRejectAgentOnHumanAPI_IssueLabelsVsGlobalLabels documents the product
+// split: same domain, two entry points, opposite agent policy.
+func TestRejectAgentOnHumanAPI_IssueLabelsVsGlobalLabels(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := RejectAgentOnHumanAPI(inner)
+
+	// Global label system → 403
+	rec := httptest.NewRecorder()
+	req := agentPrincipalCtx(httptest.NewRequest(http.MethodPost, "/api/labels", nil))
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("global labels create status=%d want 403", rec.Code)
+	}
+
+	// On-issue label attach via dedicated path → pass gate
+	rec = httptest.NewRecorder()
+	req = agentPrincipalCtx(httptest.NewRequest(http.MethodPost, "/api/agent/issues/i1/labels", nil))
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("issue labels attach status=%d want 204 (necessary; not global CRUD)", rec.Code)
+	}
+}

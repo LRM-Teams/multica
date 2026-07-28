@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -61,8 +62,7 @@ type fakeRLClient struct {
 		proxyKey string
 		reward   float64
 	}
-	endSessionCalls []string
-	callOrder       []string // "StartSession", "SetReward", "EndSession"
+	callOrder []string // "StartSession", "SetReward"
 }
 
 func (f *fakeRLClient) StartSession(_ context.Context, taskID, envID string) (arealrl.SessionCreds, error) {
@@ -79,12 +79,6 @@ func (f *fakeRLClient) SetReward(_ context.Context, proxyKey string, reward floa
 		reward   float64
 	}{proxyKey, reward})
 	f.callOrder = append(f.callOrder, "SetReward")
-	return f.err
-}
-
-func (f *fakeRLClient) EndSession(_ context.Context, proxyKey string) error {
-	f.endSessionCalls = append(f.endSessionCalls, proxyKey)
-	f.callOrder = append(f.callOrder, "EndSession")
 	return f.err
 }
 
@@ -354,11 +348,11 @@ func TestMaybeOpenTrainingSession_EmptyEnvID_WhenUnavailable(t *testing.T) {
 	}
 }
 
-// TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession:
+// TestMaybeCloseTrainingSession_CompletedTask_CallsSetReward:
 // task with context.areal_proxy carrying session_id + api_key reaches
-// 'completed' -> SetReward(proxy_key, default_reward) called THEN
-// EndSession(proxy_key) called (order asserted).
-func TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession(t *testing.T) {
+// 'completed' -> SetReward(proxy_key, default_reward) is the whole close
+// protocol. AReaL v2 has no end_session, so SetReward must be the only RL call.
+func TestMaybeCloseTrainingSession_CompletedTask_CallsSetReward(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	rl := &fakeRLClient{}
 	deps := newTrainingDeps(lookup, nil, rl)
@@ -382,23 +376,13 @@ func TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession(t 
 		t.Fatalf("SetReward reward = %f, want 1.0", rl.setRewardCalls[0].reward)
 	}
 
-	if len(rl.endSessionCalls) != 1 {
-		t.Fatalf("EndSession calls = %d, want 1", len(rl.endSessionCalls))
-	}
-	if rl.endSessionCalls[0] != "pk-xyz" {
-		t.Fatalf("EndSession proxyKey = %q, want pk-xyz", rl.endSessionCalls[0])
-	}
-
-	if len(rl.callOrder) != 2 {
-		t.Fatalf("call order length = %d, want 2", len(rl.callOrder))
-	}
-	if rl.callOrder[0] != "SetReward" || rl.callOrder[1] != "EndSession" {
-		t.Fatalf("call order = %v, want [SetReward, EndSession]", rl.callOrder)
+	if len(rl.callOrder) != 1 || rl.callOrder[0] != "SetReward" {
+		t.Fatalf("call order = %v, want exactly [SetReward]", rl.callOrder)
 	}
 }
 
 // TestMaybeCloseTrainingSession_FailedTask_AlsoCloses:
-// task with areal_proxy reaches 'failed' -> SetReward + EndSession called.
+// task with areal_proxy reaches 'failed' -> SetReward called.
 func TestMaybeCloseTrainingSession_FailedTask_AlsoCloses(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	rl := &fakeRLClient{}
@@ -413,14 +397,13 @@ func TestMaybeCloseTrainingSession_FailedTask_AlsoCloses(t *testing.T) {
 
 	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
 
-	if len(rl.setRewardCalls) != 1 || len(rl.endSessionCalls) != 1 {
-		t.Fatalf("SetReward+EndSession not called for failed task: got %d+%d calls",
-			len(rl.setRewardCalls), len(rl.endSessionCalls))
+	if len(rl.setRewardCalls) != 1 {
+		t.Fatalf("SetReward not called for failed task: got %d calls", len(rl.setRewardCalls))
 	}
 }
 
 // TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses:
-// task with areal_proxy reaches 'cancelled' -> SetReward + EndSession called.
+// task with areal_proxy reaches 'cancelled' -> SetReward called.
 func TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	rl := &fakeRLClient{}
@@ -435,9 +418,8 @@ func TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses(t *testing.T) {
 
 	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
 
-	if len(rl.setRewardCalls) != 1 || len(rl.endSessionCalls) != 1 {
-		t.Fatalf("SetReward+EndSession not called for cancelled task: got %d+%d calls",
-			len(rl.setRewardCalls), len(rl.endSessionCalls))
+	if len(rl.setRewardCalls) != 1 {
+		t.Fatalf("SetReward not called for cancelled task: got %d calls", len(rl.setRewardCalls))
 	}
 }
 
@@ -457,14 +439,14 @@ func TestMaybeCloseTrainingSession_NoArealProxy_NoOp(t *testing.T) {
 
 	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
 
-	if len(rl.setRewardCalls) != 0 || len(rl.endSessionCalls) != 0 {
-		t.Fatalf("no-op expected, got SetReward=%d EndSession=%d calls",
-			len(rl.setRewardCalls), len(rl.endSessionCalls))
+	if len(rl.callOrder) != 0 {
+		t.Fatalf("no-op expected, got RL calls %v", rl.callOrder)
 	}
 }
 
 // TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal:
-// SetReward returns error -> error is logged, still call EndSession.
+// SetReward returns error -> error is logged, the close hook still returns
+// normally (the task is already terminal; a bridge failure must not escalate).
 func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
 	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
 	rl := &fakeRLClient{err: fmt.Errorf("rl bridge error")}
@@ -479,12 +461,8 @@ func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
 
 	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
 
-	// Even though SetReward failed, we still try EndSession
 	if len(rl.setRewardCalls) != 1 {
 		t.Fatalf("SetReward should have been called once despite error")
-	}
-	if len(rl.endSessionCalls) != 1 {
-		t.Fatalf("EndSession should still be called even if SetReward fails")
 	}
 }
 
@@ -643,19 +621,14 @@ func (f *fakeDiagnoser) Diagnose(_ context.Context, projectID, workspaceID strin
 	return f.rewards, f.err
 }
 
-// orderCloser is an arealSessionCloser that appends "SetReward"/"EndSession" to
-// a shared order slice, for the diagnosis-before-close-hook ordering test.
+// orderCloser is an arealSessionCloser that appends "SetReward" to a shared
+// order slice, for the diagnosis-before-close-hook ordering test.
 type orderCloser struct {
 	order *[]string
 }
 
 func (o *orderCloser) SetReward(_ context.Context, _ string, _ float64) error {
 	*o.order = append(*o.order, "SetReward")
-	return nil
-}
-
-func (o *orderCloser) EndSession(_ context.Context, _ string) error {
-	*o.order = append(*o.order, "EndSession")
 	return nil
 }
 
@@ -783,7 +756,7 @@ func TestMaybeDiagnoseProject_SoftFail(t *testing.T) {
 }
 
 // TestDiagnosisBeforeCloseHook_Ordering: at root terminal, Diagnose fires and
-// RecordStepRewards is called BEFORE the close hook's SetReward/EndSession.
+// RecordStepRewards is called BEFORE the close hook's SetReward.
 // Mirrors RouteTerminalTrainingTask's order (diagnosis then close hook); the
 // shared order slice proves the cross-helper sequencing.
 func TestDiagnosisBeforeCloseHook_Ordering(t *testing.T) {
@@ -806,8 +779,8 @@ func TestDiagnosisBeforeCloseHook_Ordering(t *testing.T) {
 	maybeDiagnoseProject(context.Background(), deps, task, projectID, dispatch)
 	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
 
-	want := []string{"Diagnose", "RecordStepRewards", "SetReward", "EndSession"}
-	if len(order) != len(want) || order[0] != want[0] || order[1] != want[1] || order[2] != want[2] || order[3] != want[3] {
+	want := []string{"Diagnose", "RecordStepRewards", "SetReward"}
+	if !slices.Equal(order, want) {
 		t.Fatalf("call order = %v, want %v", order, want)
 	}
 }

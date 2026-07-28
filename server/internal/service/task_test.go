@@ -25,7 +25,7 @@ import (
 // marker into the shared fakeRLClient.callOrder slice so tests can assert the
 // D9 ordering: the child's StartSession (fresh session open) must happen BEFORE
 // NotifyTaskEnqueued (daemon announce). The existing fakeRLClient already
-// records "StartSession"/"EndSession"/"SetReward"; this adapter adds the notify
+// records "StartSession"/"SetReward"; this adapter adds the notify
 // signal to the same ordered log without inventing a parallel harness.
 type retryWakeup struct {
 	rl *fakeRLClient
@@ -304,7 +304,7 @@ func TestMaybeRetryOfflineEphemeralTaskReclaimsFreshResourcesWhenChildInsertFail
 
 // TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify verifies the D9
 // ordering: a trained parent fails with a retryable reason; RouteTerminalTrainingTask
-// closes the parent's session (S_A EndSession) BEFORE MaybeRetryFailedTask opens
+// closes the parent's session (S_A SetReward) BEFORE MaybeRetryFailedTask opens
 // the child's FRESH session (S_B StartSession), and the child's session open +
 // RecordSessionAgentRun fires BEFORE NotifyTaskEnqueued (open->broadcast->notify).
 func TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify(t *testing.T) {
@@ -318,12 +318,13 @@ func TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child, "retryable failure must spawn a child task")
 
-	// Parent EndSession (S_A closed) BEFORE child StartSession (S_B opened).
-	endIdx := callOrderIndex(env.rl, "EndSession")
+	// Parent close (S_A rewarded) BEFORE child StartSession (S_B opened).
+	// SetReward is the close bookend: AReaL v2 has no end_session.
+	closeIdx := callOrderIndex(env.rl, "SetReward")
 	startIdx := callOrderIndex(env.rl, "StartSession")
-	require.NotEqual(t, -1, endIdx, "parent EndSession must fire")
+	require.NotEqual(t, -1, closeIdx, "parent close must fire")
 	require.NotEqual(t, -1, startIdx, "child StartSession must fire")
-	assert.Less(t, endIdx, startIdx, "parent EndSession must precede child StartSession")
+	assert.Less(t, closeIdx, startIdx, "parent close must precede child StartSession")
 
 	// Child StartSession BEFORE NotifyTaskEnqueued (open->broadcast->notify).
 	notifyIdx := callOrderIndex(env.rl, "NotifyTaskEnqueued")
@@ -359,7 +360,7 @@ func TestMaybeRetryFailedTask_NonRetryableIsTerminal(t *testing.T) {
 	assert.Nil(t, child, "non-retryable failure must not spawn a child")
 
 	// Session was closed (terminal), but no fresh session opened for a child.
-	assert.NotEqual(t, -1, callOrderIndex(env.rl, "EndSession"),
+	assert.NotEqual(t, -1, callOrderIndex(env.rl, "SetReward"),
 		"parent session must be closed on terminal routing")
 	assert.Equal(t, -1, callOrderIndex(env.rl, "StartSession"),
 		"no child StartSession for a non-retryable failure")

@@ -70,11 +70,13 @@ type arealSessionStarter interface {
 	StartSession(ctx context.Context, sessionRef, envID string) (arealrl.SessionCreds, error)
 }
 
-// arealSessionCloser closes an RL session and sets reward via the bridge.
-// The real implementation is *arealrl.Client; tests inject a fake.
+// arealSessionCloser finalizes an RL session by setting its reward via the
+// bridge. The real implementation is *arealrl.Client; tests inject a fake.
+//
+// SetReward is the whole close protocol: AReaL v2 has no end_session route, and
+// reclaims the session itself once the trajectory is exported.
 type arealSessionCloser interface {
 	SetReward(ctx context.Context, proxyKey string, reward float64) error
-	EndSession(ctx context.Context, proxyKey string) error
 }
 
 // criticTaskCreator creates critic tasks and reads existing ones for the
@@ -128,7 +130,7 @@ type TrainingSessionDeps struct {
 	DAG *InteractionDAGService
 	// Diagnosis, when non-nil, runs the Pi diagnosis agent at root-task terminal
 	// to emit per-LLM-output process rewards, recorded via DAG.RecordStepRewards
-	// BEFORE the RL close hook fires (SetReward/EndSession). Nil = diagnosis not
+	// BEFORE the RL close hook fires (SetReward). Nil = diagnosis not
 	// configured (no-op); the INTERACTION_DAG_ENABLED gate (DAG.Enabled()) is the
 	// second condition, and the root-task gate (agent_id == train_agent_id) the
 	// third. Production construction (NewDiagnosisAgentRunner from env) is wired
@@ -467,15 +469,6 @@ func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, t
 		)
 	}
 
-	// End session (best effort)
-	if err := deps.Closer.EndSession(ctx, cfg.APIKey); err != nil {
-		slog.Warn("training: failed to end session",
-			"task_id", util.UUIDToString(task.ID),
-			"session_id", cfg.SessionID,
-			"error", err,
-		)
-	}
-
 	slog.Info("training session closed",
 		"task_id", util.UUIDToString(task.ID),
 		"project_id", util.UUIDToString(projectID),
@@ -546,13 +539,7 @@ func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDe
 		reward = 1.0
 	}
 	if rErr := deps.Closer.SetReward(ctx, cfg.APIKey, reward); rErr != nil {
-		slog.Warn("training: idle-sweep set_reward failed",
-			"task_id", util.UUIDToString(task.ID),
-			"error", rErr,
-		)
-	}
-	if eErr := deps.Closer.EndSession(ctx, cfg.APIKey); eErr != nil {
-		return fmt.Errorf("training: idle-sweep end_session: %w", eErr)
+		return fmt.Errorf("training: idle-sweep set_reward: %w", rErr)
 	}
 	slog.Info("training session swept (all agents idle)",
 		"task_id", util.UUIDToString(task.ID),
@@ -568,7 +555,7 @@ func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDe
 // parsed reward. Otherwise, when the owning project has a training_dispatch row
 // with a critic_agent_id, it spawns a critic task (deferring the RL session
 // close to critic-terminal — T8). If no critic is configured, it falls back to
-// D's close hook (SetReward(default) → EndSession). Safe to call on any
+// D's close hook (SetReward(default)). Safe to call on any
 // terminal task; errors are logged, not propagated — the task is already
 // terminal.
 // maybeTriggerCheckpoint fires the checkpoint trigger for a trained rollout
@@ -666,7 +653,7 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 	}
 	// T8: if this is a critic task, close the trained session from it. The
 	// critic path parses {"reward": <float>} from the critic's output and
-	// calls SetReward then EndSession on the trained session. Returns false
+	// calls SetReward on the trained session. Returns false
 	// (no-op) for non-critic tasks, so trained-terminal routing proceeds.
 	if maybeCloseTrainingSessionFromCritic(ctx, s.Training, task) {
 		return // closed via critic; skip trained-terminal routing
@@ -751,8 +738,8 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 // when training_dispatch has a critic_agent_id. Replaces D's close hook for
 // trained tasks when a critic is configured. Idempotent — a prior spawn
 // (matched on context.critic_of.trained_task_id) is a no-op. On spawn
-// failure, the error is swallowed and D's close hook fires (SetReward +
-// EndSession with default reward) so the RL session is not orphaned.
+// failure, the error is swallowed and D's close hook fires (SetReward with
+// the default reward) so the RL session is not left unrewarded.
 //
 // Returns nil in all expected cases (including spawn-failure fallback). An
 // error is returned only for pre-spawn lookup failures that prevent the
@@ -833,7 +820,7 @@ func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, traine
 	}); err != nil {
 		// Spawn failed — fall back to D's close so the RL session is not
 		// orphaned. The error is swallowed; the close is the user-visible
-		// outcome (default reward + EndSession).
+		// outcome (default reward).
 		slog.Warn("critic spawn failed; closing with default reward",
 			"trained_task_id", util.UUIDToString(trained.ID),
 			"critic_agent_id", util.UUIDToString(td.CriticAgentID),
@@ -857,8 +844,7 @@ func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, traine
 // terminating task is itself a critic task (carries context.critic_of). It
 // reads proxy_key from context.critic_of and parses {"reward": <float>} from
 // the LAST line of the critic's output (TaskCompletedPayload.Output stored in
-// result JSONB). SetReward is called before EndSession (same ordering as D's
-// close hook). RL errors are logged, not propagated — the task is already
+// result JSONB). RL errors are logged, not propagated — the task is already
 // terminal.
 //
 // Returns true when the critic path fired (session close attempted). Returns
@@ -931,16 +917,6 @@ func maybeCloseTrainingSessionFromCritic(ctx context.Context, deps *TrainingSess
 			"trained_task_id", cof.TrainedTaskID,
 			"session_id", cof.SessionID,
 			"reward", reward,
-			"error", err,
-		)
-	}
-
-	// End session (best effort)
-	if err := deps.Closer.EndSession(ctx, cof.ProxyKey); err != nil {
-		slog.Warn("critic close: EndSession failed",
-			"critic_task_id", util.UUIDToString(critic.ID),
-			"trained_task_id", cof.TrainedTaskID,
-			"session_id", cof.SessionID,
 			"error", err,
 		)
 	}

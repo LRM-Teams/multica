@@ -165,48 +165,6 @@ func TestSetReward_Non2xxIsError(t *testing.T) {
 	}
 }
 
-func TestEndSession_RequestAndAuth(t *testing.T) {
-	var (
-		gotPath string
-		gotAuth string
-	)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %q, want POST", r.Method)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"message":"success","interaction_count":0}`))
-	}))
-	defer srv.Close()
-
-	c := New(srv.URL, testAdminKey)
-	if err := c.EndSession(context.Background(), testProxyKey); err != nil {
-		t.Fatalf("EndSession returned error: %v", err)
-	}
-
-	if gotPath != "/rl/end_session" {
-		t.Errorf("path = %q, want /rl/end_session", gotPath)
-	}
-	if gotAuth != "Bearer "+testProxyKey {
-		t.Errorf("auth = %q, want Bearer proxy key (session-key auth)", gotAuth)
-	}
-}
-
-func TestEndSession_Non2xxIsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	c := New(srv.URL, testAdminKey)
-	if err := c.EndSession(context.Background(), testProxyKey); err == nil {
-		t.Fatal("expected error on non-2xx, got nil")
-	}
-}
-
 func TestStartSession_IncludesEnvIDWhenNonEmpty(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

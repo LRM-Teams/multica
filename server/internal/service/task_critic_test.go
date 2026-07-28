@@ -119,7 +119,6 @@ func TestMaybeSpawnCriticTask_CreatesCriticTask(t *testing.T) {
 
 	// D's close NOT called — session remains open for the critic run
 	assert.Empty(t, rl.setRewardCalls)
-	assert.Empty(t, rl.endSessionCalls)
 }
 
 // (2) No critic configured → no spawn, no close (caller's D-close fallback fires).
@@ -140,7 +139,6 @@ func TestMaybeSpawnCriticTask_NoCritic_NoSpawn(t *testing.T) {
 	assert.Empty(t, creator.createdTasks)
 	// close NOT called here — the routing layer's no-critic branch owns the D-close fallback
 	assert.Empty(t, rl.setRewardCalls)
-	assert.Empty(t, rl.endSessionCalls)
 }
 
 // (3) Existing critic task already linked → idempotent skip, no duplicate spawn.
@@ -162,7 +160,6 @@ func TestMaybeSpawnCriticTask_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, creator.createdTasks) // no duplicate spawn
 	assert.Empty(t, rl.setRewardCalls)    // close NOT called
-	assert.Empty(t, rl.endSessionCalls)
 }
 
 // (4) CreateCriticTask fails → error swallowed, D's close fires with default reward.
@@ -182,7 +179,6 @@ func TestMaybeSpawnCriticTask_SpawnFails_FallsBackToD(t *testing.T) {
 	err := maybeSpawnCriticTask(context.Background(), deps, trainedTask, td, projectID)
 	require.NoError(t, err) // error swallowed, fallback fired
 	require.Len(t, rl.setRewardCalls, 1)
-	require.Len(t, rl.endSessionCalls, 1)
 	// default reward used
 	assert.Equal(t, 1.0, rl.setRewardCalls[0].reward)
 }
@@ -207,7 +203,7 @@ func fmtFloat(f float64) string {
 }
 
 // (T8-1) Critic task with valid context.critic_of + Output ending in
-// {"reward": 0.85} → SetReward("pk1", 0.85) THEN EndSession("pk1"), in order.
+// {"reward": 0.85} → SetReward("pk1", 0.85), and nothing else.
 func TestMaybeCloseTrainingSessionFromCritic_ParsesRewardAndCloses(t *testing.T) {
 	rl := &fakeRLClient{}
 	deps := &TrainingSessionDeps{
@@ -221,12 +217,7 @@ func TestMaybeCloseTrainingSessionFromCritic_ParsesRewardAndCloses(t *testing.T)
 	require.Len(t, rl.setRewardCalls, 1)
 	assert.Equal(t, "pk1", rl.setRewardCalls[0].proxyKey)
 	assert.InDelta(t, 0.85, rl.setRewardCalls[0].reward, 0.001)
-	require.Len(t, rl.endSessionCalls, 1)
-	assert.Equal(t, "pk1", rl.endSessionCalls[0])
-	// Order: SetReward BEFORE EndSession
-	require.Len(t, rl.callOrder, 2)
-	assert.Equal(t, "SetReward", rl.callOrder[0])
-	assert.Equal(t, "EndSession", rl.callOrder[1])
+	assert.Equal(t, []string{"SetReward"}, rl.callOrder)
 }
 
 // (T8-2) Critic output without a parseable reward line → default reward used,
@@ -246,7 +237,6 @@ func TestMaybeCloseTrainingSessionFromCritic_Unparseable_FallbackDefault(t *test
 	require.True(t, closed)
 	require.Len(t, rl.setRewardCalls, 1)
 	assert.InDelta(t, 1.0, rl.setRewardCalls[0].reward, 0.001) // default
-	require.Len(t, rl.endSessionCalls, 1)
 }
 
 // (T8-3) Critic reward 1.5 (out of [0.0, 1.0]) → default reward used.
@@ -262,7 +252,6 @@ func TestMaybeCloseTrainingSessionFromCritic_OutOfRange_FallbackDefault(t *testi
 	require.True(t, closed)
 	require.Len(t, rl.setRewardCalls, 1)
 	assert.InDelta(t, 1.0, rl.setRewardCalls[0].reward, 0.001) // default fallback
-	require.Len(t, rl.endSessionCalls, 1)
 }
 
 // (T8-4) Non-critic task (no context.critic_of) → no-op, returns false so the
@@ -280,7 +269,6 @@ func TestMaybeCloseTrainingSessionFromCritic_NonCriticTask_NoOp(t *testing.T) {
 	closed := maybeCloseTrainingSessionFromCritic(context.Background(), deps, regularTask)
 	assert.False(t, closed)
 	assert.Empty(t, rl.setRewardCalls)
-	assert.Empty(t, rl.endSessionCalls)
 }
 
 // (T8-5) Nil deps (training not configured) → no-op, returns false.

@@ -499,6 +499,50 @@ func TestBoundary_IssueCreate_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_WorkspaceGet_HitsDedicatedAgentAPI asserts workspace get uses
+// GET /api/agent/workspace (or /api/agent/workspaces/{id}) — not human /api/workspaces.
+func TestBoundary_WorkspaceGet_HitsDedicatedAgentAPI(t *testing.T) {
+	wsID := "w1111111-2222-3333-4444-555555555555"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodGet && (r.URL.Path == "/api/agent/workspace" ||
+			r.URL.Path == "/api/agent/workspaces/"+wsID ||
+			r.URL.Path == "/api/agent/workspace/"+wsID) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":   wsID,
+				"name": "ws",
+				"slug": "ws",
+			})
+			return
+		}
+		http.Error(w, "human workspace path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", wsID)
+
+	cmd := &cobra.Command{Use: "get"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+
+	if err := runWorkspaceGet(cmd, []string{wsID}); err != nil {
+		t.Fatalf("runWorkspaceGet: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/workspaces") {
+			t.Fatalf("hit human workspace path %q; full=%v", p, gotPaths)
+		}
+		if !strings.HasPrefix(path, "/api/agent/") {
+			t.Fatalf("path %q not under /api/agent/; full=%v", p, gotPaths)
+		}
+	}
+}
+
 // TestBoundary_ReminderList_AlreadyDedicated keeps reminder list on dedicated path.
 func TestBoundary_ReminderList_AlreadyDedicated(t *testing.T) {
 	var gotPath string

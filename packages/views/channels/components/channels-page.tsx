@@ -1671,6 +1671,19 @@ export function ChannelsPage({
       {
         onSuccess: (channel: Channel) => {
           selectChannel(channel.id);
+          // Beckham v2 §4 — pin the freshly-created group to the CREATOR's own
+          // sidebar so it's easy to find right after creating it. Reuses the
+          // existing per-user channel pin (the creator can unpin like any other),
+          // and only pins for that one user — not a workspace-wide pin. Ordinary
+          // groups only (the create dialog makes those; gate defensively). Pin is
+          // best-effort: a failure never blocks or alarms — the group is created
+          // and selected regardless, and the user can pin manually.
+          if (channel.kind === "group") {
+            setChannelPin.mutate(
+              { channelId: channel.id, pinned: true },
+              { onError: () => {} },
+            );
+          }
           setNewName("");
           setNewLarkChatId("");
           setNewProjectId(null);

@@ -256,4 +256,18 @@ describe("ChannelsPage create-group popover — optional project field (#576)", 
       "provision_group_manager",
     );
   });
+
+  it("pins the freshly-created group to the creator's own sidebar (Beckham v2 §4)", async () => {
+    const pinChannel = apiMock.proxy.pinChannel as ReturnType<typeof vi.fn>;
+    pinChannel.mockClear();
+    renderPage();
+    openCreatePopover();
+    const nameInput = await screen.findByPlaceholderText("Channel name");
+    fireEvent.change(nameInput, { target: { value: "New Group" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    // The created group (kind:"group", id "chan-new") is pinned for the creator
+    // only — a per-user pin reusing the existing channel pin, best-effort.
+    await waitFor(() => expect(pinChannel).toHaveBeenCalledWith("chan-new"));
+  });
 });

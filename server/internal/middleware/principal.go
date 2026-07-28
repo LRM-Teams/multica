@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // AgentPrincipal is the typed server-side identity for agent tokens
@@ -76,6 +78,33 @@ func IsAgentActorSource(source string) bool {
 	}
 }
 
+// agentHumanRouteHits counts AgentPrincipal requests that hit a human data-plane
+// route. Must stay at 0 after #801 cutover. Label "site" is a stable landmark.
+var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "multica",
+	Subsystem: "agent_surface",
+	Name:      "human_route_hits_total",
+	Help:      "AgentPrincipal requests that hit human (non-/api/agent) data-plane routes. Must be 0 after #801 cutover.",
+}, []string{"site"})
+
+var agentHumanRouteMetricsRegistered atomic.Bool
+
+func ensureAgentHumanRouteMetrics() {
+	if agentHumanRouteMetricsRegistered.Swap(true) {
+		return
+	}
+	_ = prometheus.Register(agentHumanRouteHits)
+}
+
+// RecordAgentHumanRouteHit increments the alias-zero observation counter.
+func RecordAgentHumanRouteHit(site string) {
+	ensureAgentHumanRouteMetrics()
+	if site == "" {
+		site = "unknown"
+	}
+	agentHumanRouteHits.WithLabelValues(site).Inc()
+}
+
 // RequireAgentPrincipal allows only requests with AgentPrincipal in context.
 func RequireAgentPrincipal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +124,7 @@ func RejectAgentOnHumanAPI(next http.Handler) http.Handler {
 		if _, ok := AgentPrincipalFromContext(r.Context()); ok {
 			path := r.URL.Path
 			if path != "/api/agent" && !strings.HasPrefix(path, "/api/agent/") {
+				RecordAgentHumanRouteHit("RejectAgentOnHumanAPI")
 				http.Error(w, `{"error":"agent must use dedicated /api/agent/* route"}`, http.StatusForbidden)
 				return
 			}

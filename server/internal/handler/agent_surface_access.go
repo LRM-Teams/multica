@@ -5,33 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/prometheus/client_golang/prometheus"
 )
-
-// agentHumanRouteHits counts AgentPrincipal requests that hit a human data-plane
-// route (must stay at 0 after #801 alias deletion). Label "site" is a stable
-// code landmark, not a raw URL (avoid high-cardinality).
-var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
-	Namespace: "multica",
-	Subsystem: "agent_surface",
-	Name:      "human_route_hits_total",
-	Help:      "AgentPrincipal requests that hit human (non-/api/agent) data-plane routes. Must be 0 after #801 cutover.",
-}, []string{"site"})
-
-var agentHumanRouteMetricsRegistered atomic.Bool
-
-func ensureAgentHumanRouteMetrics() {
-	if agentHumanRouteMetricsRegistered.Swap(true) {
-		return
-	}
-	// Best-effort: tests may re-register; ignore AlreadyRegistered.
-	_ = prometheus.Register(agentHumanRouteHits)
-}
 
 // rejectAgentOnHumanRoute fails closed when an AgentPrincipal hits a human
 // data-plane URL (not under /api/agent/). Shared helpers invoked from dedicated
@@ -46,11 +24,7 @@ func rejectAgentOnHumanRoute(w http.ResponseWriter, r *http.Request, site string
 	if strings.HasPrefix(r.URL.Path, "/api/agent/") {
 		return false
 	}
-	ensureAgentHumanRouteMetrics()
-	if site == "" {
-		site = "unknown"
-	}
-	agentHumanRouteHits.WithLabelValues(site).Inc()
+	middleware.RecordAgentHumanRouteHit(site)
 	writeError(w, http.StatusForbidden, "agent must use dedicated /api/agent/* route")
 	return true
 }

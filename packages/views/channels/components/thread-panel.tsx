@@ -8,6 +8,10 @@ import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { ComposerQuotePreview } from "./message-quote";
+import {
+  ComposerSendErrorBar,
+  type ComposerSendErrorState,
+} from "./composer-send-error-bar";
 import type { QuoteTarget } from "./message-quote-types";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { Composer } from "./composer";
@@ -51,6 +55,9 @@ export interface ThreadPanelProps {
   onOpenAgent?: OpenAgentPanelFn;
   quoteTarget?: QuoteTarget | null;
   onClearQuote?: () => void;
+  /** #772 inline send-failure bar for the thread composer (surface-owned). */
+  sendError?: ComposerSendErrorState | null;
+  onRestorePrevious?: () => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.
   editor: ReactNode;
   onSend: () => void;
@@ -107,6 +114,8 @@ export function ThreadPanel({
   onOpenAgent,
   quoteTarget,
   onClearQuote,
+  sendError,
+  onRestorePrevious,
   editor,
   onSend,
   sendDisabled,
@@ -275,12 +284,22 @@ export function ThreadPanel({
             voiceDisabled={voiceDisabled}
             onVoiceSend={onVoiceSend}
             isMobile={isMobile}
-            prefix={quoteTarget ? (
-              <ComposerQuotePreview
-                quote={quoteTarget}
-                onCancel={onClearQuote ?? (() => {})}
-                cancelLabel={t(($) => $.quote.cancel)}
-              />
+            // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
+            prefix={sendError || quoteTarget ? (
+              <>
+                <ComposerSendErrorBar
+                  error={sendError ?? null}
+                  onRetry={onSend}
+                  onRestore={onRestorePrevious ?? (() => {})}
+                />
+                {quoteTarget ? (
+                  <ComposerQuotePreview
+                    quote={quoteTarget}
+                    onCancel={onClearQuote ?? (() => {})}
+                    cancelLabel={t(($) => $.quote.cancel)}
+                  />
+                ) : null}
+              </>
             ) : undefined}
             tray={composerTray}
             leadingActions={composerActions}

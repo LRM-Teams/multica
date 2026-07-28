@@ -60,6 +60,8 @@ import { useT } from "../../i18n/use-t";
 import { DmAgentVoiceCall } from "../../voice-calls";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
+import { useComposerSendRestore } from "../hooks/use-composer-send-restore";
+import { ComposerSendErrorBar } from "./composer-send-error-bar";
 import {
   buildChatMessageParts,
   useComposerPendingAttachments,
@@ -611,6 +613,14 @@ function DmChannelConversation({
 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
+  // #772 send-failure → composer-restore (main + thread composers). The failed
+  // text is restored into the composer (or kept-back when the composer already
+  // holds new text) and an inline bar is shown; the editor is remounted via a
+  // nonce bump so it re-reads the restored text. The main composer restores via
+  // the persistent draft store; the thread composer has no persistent draft so
+  // it restores via the hook-owned `restoreText` → editor `defaultValue`.
+  const restore = useComposerSendRestore(onDraftChange);
+  const threadRestore = useComposerSendRestore();
   const focusThreadComposerOnOpenRef = useRef(false);
   const draftEmpty = !draft.trim();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -914,12 +924,16 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
-      onCommitted: () => {},
-      onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+      onCommitted: () => restore.clear(),
+      onVisibleError: () => {
+        // #772: no permanent failed bubble. Restore the failed text into the
+        // composer (unless it already holds DIFFERENT new text — then keep it +
+        // offer Restore-previous) and show the inline error bar.
+        restore.onFailed(content, editorRef.current?.getMarkdown()?.trim() ?? "");
       },
     });
     if (dispatched) {
+      restore.clear();
       prepareVoicePlayback(voicePlaybackScope(channelId));
       editorRef.current?.clearContent();
       dmPending.clear();
@@ -989,12 +1003,19 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => {},
-      onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+      onCommitted: () => threadRestore.clear(),
+      onVisibleError: () => {
+        // #772 (thread): restore the failed text into the thread composer (via
+        // the editor's `defaultValue` + remount) unless it already holds new
+        // text; show the inline error bar.
+        threadRestore.onFailed(
+          content,
+          threadEditorRef.current?.getMarkdown()?.trim() ?? "",
+        );
       },
     });
     if (dispatched) {
+      threadRestore.reset();
       prepareVoicePlayback(voicePlaybackScope(channelId, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
@@ -1202,12 +1223,22 @@ function DmChannelConversation({
           voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
           onVoiceSend={handleThreadVoiceSend}
           isMobile={isMobile}
-          prefix={threadQuoteTarget ? (
-            <ComposerQuotePreview
-              quote={threadQuoteTarget}
-              onCancel={() => setThreadQuoteTarget(null)}
-              cancelLabel={t(($) => $.quote.cancel)}
-            />
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
+          prefix={threadRestore.error || threadQuoteTarget ? (
+            <>
+              <ComposerSendErrorBar
+                error={threadRestore.error}
+                onRetry={handleThreadSend}
+                onRestore={threadRestore.restorePrevious}
+              />
+              {threadQuoteTarget ? (
+                <ComposerQuotePreview
+                  quote={threadQuoteTarget}
+                  onCancel={() => setThreadQuoteTarget(null)}
+                  cancelLabel={t(($) => $.quote.cancel)}
+                />
+              ) : null}
+            </>
           ) : undefined}
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
           tray={
@@ -1220,8 +1251,9 @@ function DmChannelConversation({
           }
           editor={
             <ContentEditor
-              key={`dm-thread-editor:${threadSurfaceRoot.id}`}
+              key={`dm-thread-editor:${threadSurfaceRoot.id}:${threadRestore.nonce}`}
               ref={threadEditorRef}
+              defaultValue={threadRestore.restoreText}
               // Bare URLs stay plain text in the composer (#531/#542).
               plainUrls
               placeholder={t(($) => $.thread.composer_placeholder)}
@@ -1411,12 +1443,22 @@ function DmChannelConversation({
         voiceDisabled={!draftEmpty || dmPending.pending.length > 0}
         onVoiceSend={handleVoiceSend}
         isMobile={isMobile}
-        prefix={quoteTarget ? (
-          <ComposerQuotePreview
-            quote={quoteTarget}
-            onCancel={() => setQuoteTarget(null)}
-            cancelLabel={t(($) => $.quote.cancel)}
-          />
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
+        prefix={restore.error || quoteTarget ? (
+          <>
+            <ComposerSendErrorBar
+              error={restore.error}
+              onRetry={handleSend}
+              onRestore={restore.restorePrevious}
+            />
+            {quoteTarget ? (
+              <ComposerQuotePreview
+                quote={quoteTarget}
+                onCancel={() => setQuoteTarget(null)}
+                cancelLabel={t(($) => $.quote.cancel)}
+              />
+            ) : null}
+          </>
         ) : undefined}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
         tray={
@@ -1429,7 +1471,7 @@ function DmChannelConversation({
         }
         editor={
             <ContentEditor
-              key={channelId}
+              key={`${channelId}:${restore.nonce}`}
               ref={editorRef}
               // Chat composer: typed/loaded bare URLs stay plain text
               // (#531/#542) — made clickable on the read side, not here.

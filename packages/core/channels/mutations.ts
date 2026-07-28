@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import { ApiError } from "../api/client";
 import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
 import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache, upsertChannelMessageThreadInCache } from "./queries";
@@ -8,7 +7,6 @@ import {
   buildOptimisticChannelMessage,
   insertOptimisticChannelMessage,
   insertOptimisticThreadMessage,
-  markOptimisticChannelMessageFailed,
   removeOptimisticChannelMessage,
   resolveOptimisticSiblings,
 } from "./optimistic-send";
@@ -20,10 +18,6 @@ import {
   optimisticallyMarkActivityThreadRead,
   restoreActivityQueries,
 } from "../user-activity/mutations";
-
-function isConflictError(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 409;
-}
 
 function viewerAuthorFields() {
   const user = useAuthStore.getState().user;
@@ -165,15 +159,14 @@ export function useSendChannelMessage() {
       });
       insertOptimisticChannelMessage(qc, optimistic);
     },
-    onError: (err, vars) => {
+    onError: (_err, vars) => {
       if (!vars.clientMessageId) return;
-      if (isConflictError(err)) {
-        removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId);
-        return;
-      }
-      // Real transport / server failure only — never auto-fail while the request
-      // is still in flight (LRM-280; API abort budget is SEND_TIMEOUT_MS).
-      markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId);
+      // #772: no permanent failed bubble in the transcript. Remove the optimistic
+      // row on ANY failure (conflict OR real transport/server failure) — the
+      // surface's `onVisibleError` restores the text into the composer and shows
+      // an inline error bar, so the transcript stays clean. (LRM-280 still holds:
+      // onError only fires after the request truly settles, never in-flight.)
+      removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId);
     },
     onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
@@ -286,13 +279,12 @@ export function useSendChannelThreadMessage() {
       });
       insertOptimisticThreadMessage(qc, optimistic, vars.messageId);
     },
-    onError: (err, vars) => {
+    onError: (_err, vars) => {
       if (!vars.clientMessageId) return;
-      if (isConflictError(err)) {
-        removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId, vars.messageId);
-        return;
-      }
-      markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId, vars.messageId);
+      // #772: no permanent failed bubble — remove the optimistic row on ANY
+      // failure (conflict OR transport/server); the surface's onVisibleError
+      // restores the text into the composer + shows an inline error bar.
+      removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId, vars.messageId);
     },
     onSuccess: (msg, vars) => {
       // Prefer the mutation's thread root — ACK payloads occasionally omit

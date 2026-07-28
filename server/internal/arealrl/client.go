@@ -26,9 +26,6 @@
 //     reward}; we send only {reward} (NO session_id — session is resolved
 //     from the key).
 //
-//   - POST /rl/end_session — session-key auth (Bearer <proxy_key>). No body
-//     fields are required; the gateway forwards `{}`, which we mirror.
-//
 //   - POST /rl/close_segment - session-key auth (Bearer <proxy_key>), no body.
 //     Closes the session's current segment without reward (the segment-DAG
 //     path slices a session into communication-bounded segments). Response
@@ -41,6 +38,13 @@
 //     serialized interactions>}. The segment-DAG path calls this per closed
 //     segment with remove_session=false to fetch the tensor ref while keeping
 //     the session alive.
+//
+// There is deliberately no end_session call. The v1 proxy_rollout_server
+// exposed /rl/end_session, but the v2 inference_service
+// (areal/v2/inference_service/{gateway,data_proxy}/app.py) serves only
+// start_session, set_reward and close_segment: a session is torn down on the
+// AReaL side by export_trajectories(remove_session=true) or by the store's
+// stale-session reaper. Calling end_session against v2 is a guaranteed 404.
 //
 // Deviations from design §4.6:
 //   - §4.6 specifies body {task_id, group_size:1} for start_session. The
@@ -65,7 +69,6 @@ import (
 const (
 	startSessionPath = "/rl/start_session"
 	setRewardPath    = "/rl/set_reward"
-	endSessionPath   = "/rl/end_session"
 	closeSegmentPath = "/rl/close_segment"
 	exportTrajPath   = "/export_trajectories"
 )
@@ -88,7 +91,7 @@ func New(stubBaseURL, adminKey string) *Client {
 }
 
 // SessionCreds are the credentials returned by StartSession. ProxyKey is the
-// per-session api_key used for session-key auth on SetReward/EndSession.
+// per-session api_key used for session-key auth on SetReward/CloseSegment.
 type SessionCreds struct {
 	SessionID string
 	ProxyKey  string
@@ -153,16 +156,6 @@ func (c *Client) SetReward(ctx context.Context, proxyKey string, reward float64)
 	return checkStatus(resp, "set_reward")
 }
 
-// EndSession ends the session identified by proxyKey (session-key auth).
-func (c *Client) EndSession(ctx context.Context, proxyKey string) error {
-	resp, err := c.doJSON(ctx, endSessionPath, proxyKey, map[string]any{})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return checkStatus(resp, "end_session")
-}
-
 // closeSegmentResponse mirrors AReaL's CloseSegmentResponse. TrajectoryID is
 // nil when close_segment did not close a trajectory (no active segment); the
 // segment-DAG flow treats that as an error since every close should yield a
@@ -177,7 +170,7 @@ type closeSegmentResponse struct {
 // CloseSegment closes the session's current segment (session-key auth via
 // proxyKey) and returns the trajectory id of the just-closed segment. The
 // endpoint resolves the session from the bearer token, so no session_id is
-// sent - mirroring SetReward/EndSession.
+// sent - mirroring SetReward.
 func (c *Client) CloseSegment(ctx context.Context, proxyKey string) (int, error) {
 	resp, err := c.doJSON(ctx, closeSegmentPath, proxyKey, map[string]any{})
 	if err != nil {

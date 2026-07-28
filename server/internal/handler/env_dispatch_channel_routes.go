@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/arealrl"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -171,16 +170,9 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 		if b.RuntimeID != nil {
 			_ = adapter.DeleteAgentRuntime(ctx, workspaceID, *b.RuntimeID)
 		}
-		// Close the training session when present (AC-6). The session proxy key is
-		// persisted on the binding by AC-4 training provisioning; EndSession closes
-		// it via the bridge. Absent key (static dispatch) is a no-op.
-		if b.TrainingSessionID != nil && *b.TrainingSessionID != "" && b.TrainingSessionKey != nil && *b.TrainingSessionKey != "" {
-			if cfg := service.LoadTrainingConfig(); cfg.BridgeStubURL != "" && cfg.AdminAPIKey != "" {
-				if cerr := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey).EndSession(ctx, *b.TrainingSessionKey); cerr != nil {
-					slog.Warn("env-dispatch channel cleanup: close training session", "training_session_id", *b.TrainingSessionID, "error", cerr)
-				}
-			}
-		}
+		// Nothing to tear down on the AReaL side: v2 has no end_session, and a
+		// session is reclaimed there by export_trajectories(remove_session) or
+		// the stale-session reaper once this rollout stops driving it.
 	}
 	// Foreign-key-safe order: channel (cascades messages/members/sessions and
 	// the bindings' channel_id FK) -> project (cascades DAG/chat/issues) ->

@@ -5,7 +5,6 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  FileText,
   ImageIcon,
   Search,
   Settings,
@@ -27,17 +26,18 @@ import { ChannelDetailsMemberStack } from "./channel-details-member-stack";
 import { GroupManagerHint } from "./group-manager-hint";
 import { MotionContent } from "../../common/motion-content";
 import { ChannelDetailsSectionCard } from "./channel-details-section-card";
-import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { isConversationMuted } from "./conversation-muted";
 
 /**
  * LRM-494 — Slack-style channel details surface.
  * Home is a single overview (hero + section cards + danger). Drill-down
- * reuses the prior About/Members/Files/Settings bodies as sub-views.
+ * reuses the prior About/Members/Settings bodies as sub-views.
  * `initialTab` still remounts into a drill-down when the opener requests it.
+ * LRM-675 — the Files drill-down is removed: the main-area 「文件」 tab is
+ * the single Files entry (no dual-track entry, LRM-238).
  */
-export type ChannelDetailsTab = "about" | "members" | "files" | "settings";
+export type ChannelDetailsTab = "about" | "members" | "settings";
 type DetailsView = "home" | ChannelDetailsTab | "about-edit" | "avatar";
 
 /** Caps capability / pending flags so the panel avoids many boolean props (react-doctor). */
@@ -178,9 +178,7 @@ export function ChannelDetailsPanel({
   const subTitle =
     view === "members"
       ? t(($) => $.details.tab_members)
-      : view === "files"
-        ? t(($) => $.details.tab_files)
-        : view === "settings"
+      : view === "settings"
           ? t(($) => $.details.section_settings)
           : view === "about-edit"
             ? t(($) => $.details.row_name_description)
@@ -340,14 +338,10 @@ export function ChannelDetailsPanel({
               }}
               testId="channel-details-search"
             />
-            <ChannelDetailsDetailRow
-              icon={<FileText className="size-4" />}
-              label={t(($) => $.details.row_files)}
-              onClick={() => setView("files")}
-              testId="channel-details-files"
-            />
             {/* #821 — Overview Invite removed; adding people is the Members
-                sub-page's job (the single roster/Add home). */}
+                sub-page's job (the single roster/Add home). LRM-675 — the
+                Files row is gone too: the main-area 「文件」 tab is the
+                single entry. */}
           </ChannelDetailsSectionCard>
 
           {!hideSettingsTab ? (
@@ -402,12 +396,6 @@ export function ChannelDetailsPanel({
       {view === "members" ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {membersBody}
-        </div>
-      ) : null}
-
-      {view === "files" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          <ChannelFilesPanel channelId={channel.id} />
         </div>
       ) : null}
 

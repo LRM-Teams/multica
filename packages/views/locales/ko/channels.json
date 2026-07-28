@@ -619,6 +619,7 @@
   },
   "view_tabs": {
     "chat": "채팅",
-    "tasks": "이슈"
+    "tasks": "이슈",
+    "files": "파일"
   }
 }

@@ -192,6 +192,7 @@ import {
 } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
+import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
@@ -557,10 +558,11 @@ export function ChannelsPage({
   // user's saved group.
   const [skipInitialBaseRestore] = useState(() => shouldSkipMobileBaseRestore(wsId));
   // Channel main-content view switch (#562): the channel area is a top-level
-  // `Chat | Tasks` tab, same level as the message list. Tasks renders a
-  // channel-scoped board full-width in the main content area. Reset to Chat
-  // whenever the active channel changes so switching channels lands on chat.
-  const [channelView, setChannelView] = useState<"chat" | "tasks">("chat");
+  // `Chat | Issues | Files` tab (LRM-675 added Files), same level as the
+  // message list. Tasks renders a channel-scoped board full-width in the main
+  // content area. Reset to Chat whenever the active channel changes so
+  // switching channels lands on chat.
+  const [channelView, setChannelView] = useState<"chat" | "tasks" | "files">("chat");
   // Tracks the channel `channelView` currently belongs to, so a channel switch
   // resets the tab to Chat via the render-time guard below (not an effect).
   // A ref (not state): it's bookkeeping that gates the reset, never a render
@@ -3307,14 +3309,17 @@ export function ChannelsPage({
               </div>
             }
           />
-              {/* #562 — channel main-content tab switch: Chat (message list) and
-                  Tasks (channel-scoped board), full-width in the main area. Uses
-                  the shared Tabs primitive so tablist/tab/tabpanel ARIA roles and
-                  arrow-key navigation come for free; extend by adding a sibling
-                  TabsTrigger + TabsContent for a new view. */}
+              {/* #562 — channel main-content tab switch: Chat (message list),
+                  Tasks (channel-scoped board), and LRM-675 Files (channel
+                  attachments), full-width in the main area. Uses the shared
+                  Tabs primitive so tablist/tab/tabpanel ARIA roles and
+                  arrow-key navigation come for free; extend by adding a
+                  sibling TabsTrigger + TabsContent for a new view. */}
               <Tabs
                 value={channelView}
-                onValueChange={(value) => setChannelView(value as "chat" | "tasks")}
+                onValueChange={(value) =>
+                  setChannelView(value as "chat" | "tasks" | "files")
+                }
                 className="flex flex-1 min-h-0 flex-col gap-0"
               >
                 <div className="shrink-0 border-b border-border/40 px-4">
@@ -3325,8 +3330,17 @@ export function ChannelsPage({
                     <TabsTrigger value="tasks" className="flex-none px-3 py-2">
                       {t(($) => $.view_tabs.tasks)}
                     </TabsTrigger>
+                    <TabsTrigger value="files" className="flex-none px-3 py-2">
+                      {t(($) => $.view_tabs.files)}
+                    </TabsTrigger>
                   </TabsList>
                 </div>
+                <TabsContent value="files" className="flex flex-1 min-h-0 flex-col text-base">
+                  {/* LRM-675 — the single Files entry (settings Files block and
+                      duplicate entries removed); same attachment source as the
+                      legacy details panel. */}
+                  <ChannelFilesPanel channelId={active.id} wide />
+                </TabsContent>
                 <TabsContent value="tasks" className="flex flex-1 min-h-0 flex-col text-base">
                   <ChannelTasksBoard channelId={active.id} />
                 </TabsContent>

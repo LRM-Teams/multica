@@ -619,6 +619,7 @@
   },
   "view_tabs": {
     "chat": "对话",
-    "tasks": "Issues"
+    "tasks": "Issues",
+    "files": "文件"
   }
 }

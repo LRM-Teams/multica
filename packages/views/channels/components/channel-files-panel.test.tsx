@@ -40,14 +40,18 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
-vi.mock("../../editor", () => ({
-  useAttachmentPreview: () => ({
-    tryOpen,
-    open: vi.fn(),
-    modal: null,
-  }),
-  useDownloadAttachment: () => download,
-}));
+vi.mock("../../editor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../editor")>();
+  return {
+    ...actual,
+    useAttachmentPreview: () => ({
+      tryOpen,
+      open: vi.fn(),
+      modal: null,
+    }),
+    useDownloadAttachment: () => download,
+  };
+});
 
 vi.mock("../../i18n/use-message-time", () => ({
   useMessageTime: () => ({
@@ -70,7 +74,7 @@ function renderPanel() {
   );
 }
 
-describe("ChannelFilesPanel channel attachments (LRM-607)", () => {
+describe("ChannelFilesPanel channel attachments (LRM-607 / LRM-675)", () => {
   beforeEach(() => {
     listChannelAttachments.mockReset();
     tryOpen.mockReset();
@@ -105,10 +109,99 @@ describe("ChannelFilesPanel channel attachments (LRM-607)", () => {
     expect(screen.getByText(/Frank/)).toBeInTheDocument();
     expect(screen.queryByText("MEMORY.md")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(tryOpen).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(download).toHaveBeenCalledWith("att-1"));
+  });
+
+  it("image rows render a visible thumbnail (LRM-675)", async () => {
+    listChannelAttachments.mockResolvedValue([
+      {
+        id: "att-img",
+        workspace_id: "ws",
+        issue_id: null,
+        comment_id: null,
+        chat_session_id: null,
+        chat_message_id: "m2",
+        uploader_type: "member",
+        uploader_id: "user-1",
+        filename: "shot.png",
+        url: "/u",
+        download_url: "/api/attachments/att-img/download",
+        markdown_url: "/api/attachments/att-img/download",
+        content_type: "image/png",
+        size_bytes: 200_000,
+        created_at: "2026-07-26T02:00:00Z",
+      },
+    ]);
+
+    renderPanel();
+
+    const thumb = await screen.findByTestId("channel-file-thumb");
+    expect(thumb).toHaveAttribute("src", "/api/attachments/att-img/download");
+    // image is previewable → Open stays available and the row click previews
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(tryOpen).toHaveBeenCalled();
+  });
+
+  it("clicking the row opens the preview modal", async () => {
+    listChannelAttachments.mockResolvedValue([
+      {
+        id: "att-md",
+        workspace_id: "ws",
+        issue_id: null,
+        comment_id: null,
+        chat_session_id: null,
+        chat_message_id: "m3",
+        uploader_type: "member",
+        uploader_id: "user-1",
+        filename: "notes.md",
+        url: "/u",
+        download_url: "/api/attachments/att-md/download",
+        markdown_url: "/api/attachments/att-md/download",
+        content_type: "text/markdown",
+        size_bytes: 3_000,
+        created_at: "2026-07-26T02:00:00Z",
+      },
+    ]);
+
+    renderPanel();
+
+    const row = await screen.findByTestId("channel-file-row");
+    fireEvent.click(row.firstElementChild as HTMLElement);
+    expect(tryOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "full" }),
+    );
+  });
+
+  it("non-previewable binaries drop the Open action and download on click", async () => {
+    tryOpen.mockReturnValue(false);
+    listChannelAttachments.mockResolvedValue([
+      {
+        id: "att-zip",
+        workspace_id: "ws",
+        issue_id: null,
+        comment_id: null,
+        chat_session_id: null,
+        chat_message_id: "m4",
+        uploader_type: "member",
+        uploader_id: "user-1",
+        filename: "build-log.zip",
+        url: "/u",
+        download_url: "/api/attachments/att-zip/download",
+        markdown_url: "/api/attachments/att-zip/download",
+        content_type: "application/zip",
+        size_bytes: 4_600_000,
+        created_at: "2026-07-26T02:00:00Z",
+      },
+    ]);
+
+    renderPanel();
+
+    await screen.findByText("build-log.zip");
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+    const row = screen.getByTestId("channel-file-row");
+    fireEvent.click(row.firstElementChild as HTMLElement);
+    await waitFor(() => expect(download).toHaveBeenCalledWith("att-zip"));
   });
 
   it("shows empty state when the channel has no uploads", async () => {

@@ -619,6 +619,7 @@
   },
   "view_tabs": {
     "chat": "Chat",
-    "tasks": "Issues"
+    "tasks": "Issues",
+    "files": "Files"
   }
 }

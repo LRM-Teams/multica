@@ -167,13 +167,26 @@ jobs:
           fi
           echo "--- process-group command sample (calibration evidence) ---"
           ps -eo pgid=,pid=,comm= | awk -v g="${PGID}" '$1==g' | head -20 || true
+          # ⚠️ Round 1 read peak_procs=3 / 178MB / 2% of MemTotal. That cleared
+          # the >1 guard, but the guard is necessary-not-sufficient: Vitest's
+          # default pool uses worker THREADS, so workers are not separate
+          # processes at all and their memory sits inside one process's RSS.
+          # Process-group aggregation therefore cannot enumerate them, and a
+          # plausible-looking count does not prove the figure covers the
+          # workers. Treat RSS here as "this configuration stayed far from the
+          # ceiling", never as a per-worker measurement.
           echo "--- turbo run summaries (cache status per task) ---"
           for f in .turbo/runs/*.json; do
             [ -e "$f" ] || continue
             echo "== $f"
+            # `require` needs an explicit path, not a bare relative string —
+            # otherwise Node resolves it as a MODULE NAME and throws. Read the
+            # file instead of requiring it (round 1 was voided by this bug: the
+            # run itself was fine, but the cache-status evidence never printed).
             node -e '
-              const j=require(process.argv[1]);
-              for (const t of (j.tasks||[])) {
+              const fs = require("node:fs");
+              const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              for (const t of (j.tasks || [])) {
                 console.log(`  ${t.taskId}  cache.status=${t.cache?.status}  local=${t.cache?.local}  remote=${t.cache?.remote}`);
               }' "$f" || cat "$f"
           done

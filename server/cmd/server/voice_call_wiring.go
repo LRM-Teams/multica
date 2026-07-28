@@ -15,11 +15,10 @@ import (
 
 const (
 	voiceCallCallbackPath         = "/api/voice-calls/callback"
+	voiceCallLLMPath              = "/api/voice-calls/llm"
 	defaultVoiceCallTTSVoiceID    = "zh_male_m191_uranus_bigtts"
 	defaultVoiceCallTokenTTL      = 30 * time.Minute
 	defaultVoiceCallOperationWait = 10 * time.Second
-	defaultVoiceCallAgentWait     = 90 * time.Second
-	voiceCallLLMPath              = "/api/voice-calls/llm"
 )
 
 var voiceCallOptInEnvironmentNames = []string{
@@ -30,8 +29,8 @@ var voiceCallOptInEnvironmentNames = []string{
 	"VOLCENGINE_RTC_SESSION_TOKEN",
 	"VOLCENGINE_RTC_ENDPOINT",
 	"VOLCENGINE_RTC_REGION",
-	"VOLCENGINE_RTC_LLM_URL",
-	"VOLCENGINE_RTC_LLM_API_KEY",
+	"VOLCENGINE_RTC_ARK_ENDPOINT_ID",
+	"VOLCENGINE_RTC_ARK_MODEL_NAME",
 	"VOLCENGINE_RTC_TTS_VOICE_ID",
 	"VOLCENGINE_RTC_CALLBACK_URL",
 	"VOLCENGINE_RTC_CALLBACK_SIGNATURE",
@@ -42,7 +41,6 @@ var voiceCallEnvironmentNames = append([]string{
 	"VOLCENGINE_RTC_TOKEN_TTL",
 	"VOLCENGINE_RTC_COMPENSATION_TIMEOUT",
 	"VOLCENGINE_RTC_CLEANUP_TIMEOUT",
-	"VOLCENGINE_RTC_AGENT_TIMEOUT",
 }, voiceCallOptInEnvironmentNames...)
 
 type voiceCallRuntimeConfig struct {
@@ -54,15 +52,14 @@ type voiceCallRuntimeConfig struct {
 	Endpoint            string
 	Region              string
 	APIVersion          string
-	CustomLLMURL        string
-	CustomLLMAPIKey     string
+	ArkEndpointID       string
+	ArkModelName        string
 	TTSVoiceID          string
 	CallbackURL         string
 	CallbackSignature   string
 	TokenTTL            time.Duration
 	CompensationTimeout time.Duration
 	CleanupTimeout      time.Duration
-	AgentTimeout        time.Duration
 }
 
 func loadVoiceCallRuntimeConfig(
@@ -91,8 +88,8 @@ func loadVoiceCallRuntimeConfig(
 		Endpoint:          strings.TrimSpace(getenv("VOLCENGINE_RTC_ENDPOINT")),
 		Region:            strings.TrimSpace(getenv("VOLCENGINE_RTC_REGION")),
 		APIVersion:        strings.TrimSpace(getenv("VOLCENGINE_RTC_API_VERSION")),
-		CustomLLMURL:      strings.TrimSpace(getenv("VOLCENGINE_RTC_LLM_URL")),
-		CustomLLMAPIKey:   strings.TrimSpace(getenv("VOLCENGINE_RTC_LLM_API_KEY")),
+		ArkEndpointID:     strings.TrimSpace(getenv("VOLCENGINE_RTC_ARK_ENDPOINT_ID")),
+		ArkModelName:      strings.TrimSpace(getenv("VOLCENGINE_RTC_ARK_MODEL_NAME")),
 		TTSVoiceID:        strings.TrimSpace(getenv("VOLCENGINE_RTC_TTS_VOICE_ID")),
 		CallbackURL:       strings.TrimSpace(getenv("VOLCENGINE_RTC_CALLBACK_URL")),
 		CallbackSignature: strings.TrimSpace(getenv("VOLCENGINE_RTC_CALLBACK_SIGNATURE")),
@@ -115,6 +112,11 @@ func loadVoiceCallRuntimeConfig(
 			)
 		}
 	}
+	if (config.ArkEndpointID == "") == (config.ArkModelName == "") {
+		return voiceCallRuntimeConfig{}, true, errors.New(
+			"voice calling requires exactly one VOLCENGINE_RTC_ARK_ENDPOINT_ID or VOLCENGINE_RTC_ARK_MODEL_NAME",
+		)
+	}
 	if config.TTSVoiceID == "" {
 		config.TTSVoiceID = strings.TrimSpace(getenv("DOUBAO_TTS_SPEAKER_ID"))
 	}
@@ -135,23 +137,6 @@ func loadVoiceCallRuntimeConfig(
 			)
 		}
 		config.CallbackURL = publicURL + voiceCallCallbackPath
-	}
-	if config.CustomLLMURL == "" {
-		publicURL := strings.TrimRight(
-			strings.TrimSpace(getenv("MULTICA_PUBLIC_URL")),
-			"/",
-		)
-		if publicURL == "" {
-			return voiceCallRuntimeConfig{}, true, errors.New(
-				"voice calling requires VOLCENGINE_RTC_LLM_URL or MULTICA_PUBLIC_URL",
-			)
-		}
-		config.CustomLLMURL = publicURL + voiceCallLLMPath
-	}
-	if config.CustomLLMAPIKey == "" {
-		return voiceCallRuntimeConfig{}, true, errors.New(
-			"voice calling requires VOLCENGINE_RTC_LLM_API_KEY",
-		)
 	}
 	if config.CallbackSignature == "" {
 		return voiceCallRuntimeConfig{}, true, errors.New(
@@ -180,14 +165,6 @@ func loadVoiceCallRuntimeConfig(
 		getenv,
 		"VOLCENGINE_RTC_CLEANUP_TIMEOUT",
 		defaultVoiceCallOperationWait,
-	)
-	if err != nil {
-		return voiceCallRuntimeConfig{}, true, err
-	}
-	config.AgentTimeout, err = voiceCallDuration(
-		getenv,
-		"VOLCENGINE_RTC_AGENT_TIMEOUT",
-		defaultVoiceCallAgentWait,
 	)
 	if err != nil {
 		return voiceCallRuntimeConfig{}, true, err
@@ -248,8 +225,8 @@ func configureVoiceCallService(
 	}
 	provider, err := voicecall.NewVolcengineProvider(
 		voicecall.VolcengineProviderConfig{
-			CustomLLMURL:        config.CustomLLMURL,
-			CustomLLMAPIKey:     config.CustomLLMAPIKey,
+			ArkEndpointID:       config.ArkEndpointID,
+			ArkModelName:        config.ArkModelName,
 			TTSVoiceID:          config.TTSVoiceID,
 			CallbackURL:         config.CallbackURL,
 			CallbackSignature:   config.CallbackSignature,
@@ -291,14 +268,8 @@ func configureVoiceCallService(
 	if err != nil {
 		return fmt.Errorf("initialize voice call callback service: %w", err)
 	}
-	agentBridge, err := handler.NewVoiceCallAgentBridge(h, config.AgentTimeout)
-	if err != nil {
-		return fmt.Errorf("initialize voice call agent bridge: %w", err)
-	}
 	h.VoiceCallService = callService
 	h.VoiceCallCallbackProcessor = callbackService
 	h.VoiceCallCallbackSignature = config.CallbackSignature
-	h.VoiceCallLLMProcessor = agentBridge
-	h.VoiceCallLLMAPIKey = config.CustomLLMAPIKey
 	return nil
 }

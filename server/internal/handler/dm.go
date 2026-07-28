@@ -191,6 +191,11 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 		return ChannelResponse{}, false
 	}
 	defer tx.Rollback(ctx) // no-op once committed
+	actor := channelMemberUserActor(parseUUID(creatorID))
+	if err := validateChannelMemberActorWithExec(ctx, tx, workspaceID, actor); err != nil {
+		writeDMCreateError(w)
+		return ChannelResponse{}, false
+	}
 
 	row := tx.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by, kind)
@@ -212,9 +217,15 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 	}
 	for _, m := range members {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, $3, $4)
-			ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), m.memberType, m.memberID); err != nil {
+			INSERT INTO channel_member (
+			  channel_id, workspace_id, member_type, member_id,
+			  added_by_type, added_by_id, join_source
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, 'manual')
+			ON CONFLICT DO NOTHING`,
+			parseUUID(ch.ID), parseUUID(workspaceID), m.memberType, m.memberID,
+			actor.Type, actor.ID,
+		); err != nil {
 			writeDMCreateError(w)
 			return ChannelResponse{}, false
 		}

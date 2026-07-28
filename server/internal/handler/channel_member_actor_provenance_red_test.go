@@ -306,9 +306,15 @@ func seedAgentAuthoredOnboarding(t *testing.T, channelID string) agentAuthoredOn
 		    terminal_evidence = '{"reason":"test_superseded"}'::jsonb,
 		    terminal_at = now(),
 		    updated_at = now()
-		WHERE agent_id = $1 AND id <> $2 AND status IN ('pending', 'claimed')`,
-		targetAgent, onboardingID); err != nil {
-		t.Fatalf("expire unrelated target onboarding: %v", err)
+		WHERE id <> $1
+		  AND status IN ('pending', 'claimed')
+		  AND agent_id IN (
+		    SELECT id
+		    FROM agent
+		    WHERE runtime_id = $2
+		  )`,
+		onboardingID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatalf("expire unrelated runtime onboarding: %v", err)
 	}
 	if err := testHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID)); err != nil {
 		t.Fatalf("publish agent-authored onboarding: %v", err)
@@ -437,6 +443,9 @@ func forceChannelOwnerStateForProvenanceTest(t *testing.T, fixture agentAuthored
 	t.Helper()
 	ctx := context.Background()
 	switch state {
+	case "duplicate":
+		// The connection-private shadow used below supplies the duplicate
+		// owner without weakening the real table's owner constraint.
 	case "missing":
 		conn, err := testPool.Acquire(ctx)
 		if err != nil {
@@ -494,7 +503,9 @@ func materializeChannelOnboardingWithDuplicateOwnerShadow(
 ) error {
 	t.Helper()
 	ctx := context.Background()
-	conn, err := testPool.Acquire(ctx)
+	connConfig := testPool.Config().ConnConfig.Copy()
+	connConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	conn, err := pgx.ConnectConfig(ctx, connConfig)
 	if err != nil {
 		t.Fatalf("acquire isolated duplicate-owner connection: %v", err)
 	}
@@ -505,7 +516,9 @@ func materializeChannelOnboardingWithDuplicateOwnerShadow(
 		); dropErr != nil {
 			t.Errorf("drop isolated channel_member shadow: %v", dropErr)
 		}
-		conn.Release()
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Errorf("close isolated duplicate-owner connection: %v", closeErr)
+		}
 	}()
 
 	var schema string

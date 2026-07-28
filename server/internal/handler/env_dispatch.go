@@ -807,12 +807,19 @@ func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, w
 		return "", err
 	}
 	store := envDispatchChannelStore{}
+	systemActor := channelMemberSystemActor()
+	if err := validateChannelMemberActorWithExec(ctx, tx, workspaceID, systemActor); err != nil {
+		return "", err
+	}
 	for _, agentID := range roster.AgentIDs {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO channel_member (
-				channel_id, workspace_id, member_type, member_id, join_source
-			) VALUES ($1, $2, 'agent', $3, $4)`,
-			channelID, workspaceID, agentID, envDispatchChannelJoinSource); err != nil {
+				channel_id, workspace_id, member_type, member_id,
+				added_by_type, added_by_id, join_source
+			) VALUES ($1, $2, 'agent', $3, $4, $5, $6)`,
+			channelID, workspaceID, agentID,
+			systemActor.Type, systemActor.ID, envDispatchChannelJoinSource,
+		); err != nil {
 			return "", err
 		}
 		config := json.RawMessage(`{}`)

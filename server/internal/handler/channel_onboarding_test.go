@@ -624,9 +624,10 @@ func TestChannelOnboardingRemovedGenerationCannotUseFastPublicationPath(t *testi
 	channelID := seedChannelForTest(t, "onboarding-removed-publish-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (
-		  channel_id, workspace_id, member_type, member_id, join_source, added_by
+		  channel_id, workspace_id, member_type, member_id, join_source,
+		  added_by_type, added_by_id
 		)
-		VALUES ($1, $2, 'agent', $3, 'manual', $4)
+		VALUES ($1, $2, 'agent', $3, 'manual', 'user', $4)
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
 		t.Fatalf("insert pending onboarding generation: %v", err)
 	}
@@ -686,9 +687,10 @@ func TestChannelOnboardingPublicationSerializesClaimBeforeConcurrentRemoval(t *t
 	channelID := seedChannelForTest(t, "onboarding-publish-remove-race-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (
-		  channel_id, workspace_id, member_type, member_id, join_source, added_by
+		  channel_id, workspace_id, member_type, member_id, join_source,
+		  added_by_type, added_by_id
 		)
-		VALUES ($1, $2, 'agent', $3, 'manual', $4)
+		VALUES ($1, $2, 'agent', $3, 'manual', 'user', $4)
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
 		t.Fatalf("insert pending onboarding generation: %v", err)
 	}

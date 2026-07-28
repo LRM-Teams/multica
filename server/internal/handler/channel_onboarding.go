@@ -27,11 +27,11 @@ type channelOnboardingRecord struct {
 	SystemMessageID        pgtype.UUID
 	SystemMessageSeq       int64
 	SourceType             string
+	SourceActorType        string
 	SourceActorID          pgtype.UUID
 	ChannelName            string
 	ChannelDescription     pgtype.Text
 	ChannelSystemKey       pgtype.Text
-	ChannelCreatorID       pgtype.UUID
 }
 
 func (h *Handler) materializeNextChannelOnboardingForRuntime(ctx context.Context, runtime db.AgentRuntime) error {
@@ -58,11 +58,11 @@ func (h *Handler) materializeNextChannelOnboardingForRuntime(ctx context.Context
 		       onboarding.system_message_id,
 		       system_message.seq,
 		       onboarding.source_type,
+		       onboarding.source_actor_type,
 		       onboarding.source_actor_id,
 		       channel_row.name,
 		       channel_row.description,
-		       channel_row.system_key,
-		       channel_row.created_by
+		       channel_row.system_key
 		FROM channel_agent_onboarding onboarding
 		JOIN agent agent_row
 		  ON agent_row.id = onboarding.agent_id
@@ -104,17 +104,27 @@ func (h *Handler) materializeNextChannelOnboardingForRuntime(ctx context.Context
 		&onboarding.SystemMessageID,
 		&onboarding.SystemMessageSeq,
 		&onboarding.SourceType,
+		&onboarding.SourceActorType,
 		&onboarding.SourceActorID,
 		&onboarding.ChannelName,
 		&onboarding.ChannelDescription,
 		&onboarding.ChannelSystemKey,
-		&onboarding.ChannelCreatorID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return tx.Commit(ctx)
 		}
 		return fmt.Errorf("select channel onboarding: %w", err)
+	}
+
+	creatorID, err := resolveCurrentChannelHumanOwnerForOnboardingTx(
+		ctx,
+		tx,
+		onboarding.WorkspaceID,
+		onboarding.ChannelID,
+	)
+	if err != nil {
+		return err
 	}
 
 	qtx := h.Queries.WithTx(tx)
@@ -129,10 +139,6 @@ func (h *Handler) materializeNextChannelOnboardingForRuntime(ctx context.Context
 		Description: textToPtr(onboarding.ChannelDescription),
 		Kind:        "group",
 		SystemKey:   textToPtr(onboarding.ChannelSystemKey),
-	}
-	creatorID := onboarding.SourceActorID
-	if !creatorID.Valid {
-		creatorID = onboarding.ChannelCreatorID
 	}
 	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, channel, onboarding.AgentID, creatorID)
 	if err != nil {
@@ -188,6 +194,76 @@ func (h *Handler) materializeNextChannelOnboardingForRuntime(ctx context.Context
 		return fmt.Errorf("tag channel onboarding prompt: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+func resolveCurrentChannelHumanOwnerForOnboardingTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, channelID pgtype.UUID,
+) (pgtype.UUID, error) {
+	var systemKey pgtype.Text
+	if err := tx.QueryRow(ctx, `
+		SELECT system_key
+		FROM channel
+		WHERE id = $2 AND workspace_id = $1
+		FOR SHARE`,
+		workspaceID, channelID,
+	).Scan(&systemKey); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("channel onboarding owner invariant channel: %w", err)
+	}
+
+	query := `
+		SELECT membership.member_id
+		FROM channel_member membership
+		JOIN member workspace_member
+		  ON workspace_member.workspace_id = $1
+		 AND workspace_member.user_id = membership.member_id
+		WHERE membership.channel_id = $2
+		  AND membership.workspace_id = $1
+		  AND membership.member_type = 'user'
+		  AND membership.role = 'owner'
+		ORDER BY membership.member_id
+		LIMIT 2
+		FOR SHARE OF membership, workspace_member`
+	args := []any{workspaceID, channelID}
+	if systemKey.Valid {
+		// System channels intentionally have no channel owner. Their legacy
+		// chat-session creator is the one current human workspace owner.
+		query = `
+			SELECT workspace_owner.user_id
+			FROM member workspace_owner
+			WHERE workspace_owner.workspace_id = $1
+			  AND workspace_owner.role = 'owner'
+			ORDER BY workspace_owner.user_id
+			LIMIT 2
+			FOR SHARE OF workspace_owner`
+		args = []any{workspaceID}
+	}
+
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("channel onboarding owner invariant query: %w", err)
+	}
+	defer rows.Close()
+
+	owners := make([]pgtype.UUID, 0, 2)
+	for rows.Next() {
+		var ownerID pgtype.UUID
+		if err := rows.Scan(&ownerID); err != nil {
+			return pgtype.UUID{}, fmt.Errorf("channel onboarding owner invariant scan: %w", err)
+		}
+		owners = append(owners, ownerID)
+	}
+	if err := rows.Err(); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("channel onboarding owner invariant rows: %w", err)
+	}
+	if len(owners) != 1 {
+		return pgtype.UUID{}, fmt.Errorf(
+			"channel onboarding owner invariant: expected exactly one current same-workspace human owner, found %d",
+			len(owners),
+		)
+	}
+	return owners[0], nil
 }
 
 type channelOnboardingPublication struct {
@@ -533,9 +609,27 @@ func expireInvalidChannelOnboardingsForRuntimeTx(ctx context.Context, tx pgx.Tx,
 
 func (h *Handler) buildChannelOnboardingPrompt(ctx context.Context, onboarding channelOnboardingRecord, channel ChannelResponse, agentRow db.Agent) string {
 	actor := "system"
-	if onboarding.SourceActorID.Valid {
-		ref := h.channelMemberSystemEventActorRef(ctx, channel.WorkspaceID, "user", onboarding.SourceActorID)
-		actor = fmt.Sprintf("%s (@%s, id %s)", ref.DisplayName, ref.Handle, uuidToString(onboarding.SourceActorID))
+	if onboarding.SourceActorType != channelMemberActorSystem && onboarding.SourceActorID.Valid {
+		ref := h.channelMemberSystemEventActorRef(
+			ctx,
+			channel.WorkspaceID,
+			onboarding.SourceActorType,
+			onboarding.SourceActorID,
+		)
+		if ref.Type == "" {
+			actor = fmt.Sprintf(
+				"%s (id %s)",
+				onboarding.SourceActorType,
+				uuidToString(onboarding.SourceActorID),
+			)
+		} else {
+			actor = fmt.Sprintf(
+				"%s (@%s, id %s)",
+				ref.DisplayName,
+				ref.Handle,
+				uuidToString(onboarding.SourceActorID),
+			)
+		}
 	}
 	systemKey := "none"
 	if onboarding.ChannelSystemKey.Valid {

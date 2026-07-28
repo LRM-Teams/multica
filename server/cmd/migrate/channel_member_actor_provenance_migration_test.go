@@ -75,9 +75,11 @@ func TestChannelMemberActorProvenanceMigration245BackfillsAndSurvivesDownUp(t *t
 		"7a000000-0000-4000-8000-000000000005", "agent",
 		"7a000000-0000-4000-8000-000000000007", "system", "")
 	assertMigratedOnboardingActor(t, ctx, pool,
+		"7a000000-0000-4000-8000-000000000005",
 		"7a000000-0000-4000-8000-000000000006", "user",
 		"7a000000-0000-4000-8000-000000000001")
 	assertMigratedOnboardingActor(t, ctx, pool,
+		"7a000000-0000-4000-8000-000000000005",
 		"7a000000-0000-4000-8000-000000000007", "system", "")
 
 	// Introduce membership and onboarding actor shapes that the old user-only
@@ -144,6 +146,7 @@ func TestChannelMemberActorProvenanceMigration245BackfillsAndSurvivesDownUp(t *t
 		"7a000000-0000-4000-8000-000000000005", "agent",
 		"7a000000-0000-4000-8000-000000000007", "system", "")
 	assertMigratedOnboardingActor(t, ctx, pool,
+		"7a000000-0000-4000-8000-000000000005",
 		"7a000000-0000-4000-8000-000000000006", "system", "")
 }
 
@@ -171,15 +174,15 @@ func assertMigratedOnboardingActor(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	agentID, wantType, wantID string,
+	channelID, agentID, wantType, wantID string,
 ) {
 	t.Helper()
 	var actorType, actorID string
 	if err := pool.QueryRow(ctx, `
 		SELECT source_actor_type, COALESCE(source_actor_id::text, '')
 		FROM channel_agent_onboarding
-		WHERE agent_id = $1`,
-		agentID).Scan(&actorType, &actorID); err != nil {
+		WHERE channel_id = $1 AND agent_id = $2`,
+		channelID, agentID).Scan(&actorType, &actorID); err != nil {
 		t.Fatalf("load migrated onboarding actor: %v", err)
 	}
 	if actorType != wantType || actorID != wantID {

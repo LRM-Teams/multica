@@ -1404,12 +1404,24 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.validateChannelMemberTarget(w, r, workspaceID, channelID, req.MemberType, memberID) {
 		return
 	}
+	actor := channelMemberUserActor(parseUUID(userID))
+	if err := validateChannelMemberActorWithExec(r.Context(), h.DB, workspaceID, actor); err != nil {
+		slog.Warn("channel member add: validate actor failed", "workspace", workspaceID, "actor", userID, "error", err)
+		writeError(w, http.StatusForbidden, "channel member actor is not available")
+		return
+	}
 	var membershipGenerationID pgtype.UUID
 	err := h.DB.QueryRow(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, added_by, join_source)
-		VALUES ($1, $2, $3, $4, $5, 'manual')
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id,
+		  added_by_type, added_by_id, join_source
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, 'manual')
 		ON CONFLICT DO NOTHING
-		RETURNING generation_id`, channelID, parseUUID(workspaceID), req.MemberType, memberID, parseUUID(userID)).Scan(&membershipGenerationID)
+		RETURNING generation_id`,
+		channelID, parseUUID(workspaceID), req.MemberType, memberID,
+		actor.Type, actor.ID,
+	).Scan(&membershipGenerationID)
 	if err != nil {
 		if !errorsIsNoRows(err) {
 			writeError(w, http.StatusInternalServerError, "failed to add channel member")
@@ -1418,7 +1430,7 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 	if membershipGenerationID.Valid && req.MemberType == "user" {
-		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), req.MemberType, memberID)
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, actor.Type, actor.ID, req.MemberType, memberID)
 	} else if membershipGenerationID.Valid && req.MemberType == "agent" {
 		if err := h.publishChannelOnboardingSystemMessageForGeneration(r.Context(), membershipGenerationID); err != nil {
 			slog.Warn("channel member add: publish agent membership system event failed", "channel", uuidToString(channelID), "agent", uuidToString(memberID), "generation", uuidToString(membershipGenerationID), "error", err)
@@ -1476,7 +1488,7 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		}
 		h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 		if removed {
-			h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberRemovedEvent, parseUUID(userID), memberType, memberID)
+			h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberRemovedEvent, channelMemberActorUser, parseUUID(userID), memberType, memberID)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
@@ -1538,7 +1550,7 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		if memberType == "user" && uuidToString(memberID) == userID {
 			event = channelMemberLeftEvent
 		}
-		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, event, parseUUID(userID), memberType, memberID)
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, event, channelMemberActorUser, parseUUID(userID), memberType, memberID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -2000,7 +2012,7 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 	// Durable audit in the same transaction (Parker/Iris: transfer ⇔ audit).
 	auditMsg, err := h.insertChannelMemberSystemEventExec(
 		r.Context(), tx, workspaceID, channelID,
-		channelOwnershipTransferredEvent, actorUUID, "user", memberID,
+		channelOwnershipTransferredEvent, channelMemberActorUser, actorUUID, "user", memberID,
 	)
 	if err != nil {
 		// Fail closed: do not commit ownership without audit row.

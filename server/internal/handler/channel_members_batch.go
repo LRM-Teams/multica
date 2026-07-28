@@ -73,18 +73,27 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
+	actor := channelMemberUserActor(parseUUID(userID))
+	if err := validateChannelMemberActorWithExec(r.Context(), h.DB, workspaceID, actor); err != nil {
+		slog.Warn("channel members batch: validate actor failed", "workspace", workspaceID, "actor", userID, "error", err)
+		writeError(w, http.StatusForbidden, "channel member actor is not available")
+		return
+	}
 
 	// Insert every valid target in one statement. The EXISTS guards keep us from
 	// adding ids that aren't a workspace member / workspace agent.
 	rows, err := h.DB.Query(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, added_by, join_source)
-		SELECT $1, $2, t.mt, t.mid::uuid, $5, 'manual'
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id,
+		  added_by_type, added_by_id, join_source
+		)
+		SELECT $1, $2, t.mt, t.mid::uuid, $5, $6, 'manual'
 		FROM unnest($3::text[], $4::text[]) AS t(mt, mid)
 		WHERE (t.mt = 'user'  AND EXISTS (SELECT 1 FROM member m WHERE m.workspace_id = $2 AND m.user_id = t.mid::uuid))
 		   OR (t.mt = 'agent' AND EXISTS (SELECT 1 FROM agent  a WHERE a.workspace_id = $2 AND a.id      = t.mid::uuid))
 		ON CONFLICT DO NOTHING
 		RETURNING member_type, member_id, generation_id`,
-		channelID, parseUUID(workspaceID), types, ids, parseUUID(userID),
+		channelID, parseUUID(workspaceID), types, ids, actor.Type, actor.ID,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add channel members")
@@ -114,7 +123,7 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 	for _, member := range inserted {
 		if member.memberType == "user" {
-			h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), member.memberType, member.memberID)
+			h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, actor.Type, actor.ID, member.memberType, member.memberID)
 			continue
 		}
 		if err := h.publishChannelOnboardingSystemMessageForGeneration(r.Context(), member.generationID); err != nil {

@@ -36,9 +36,20 @@ func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourc
 		return channelCopyMap{}, fmt.Errorf("create copied env-dispatch channel: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role, created_at)
-		SELECT $2::uuid, workspace_id, member_type, member_id, role, created_at
-		FROM channel_member WHERE channel_id = $1::uuid`, sourceChannelID, destinationChannelID); err != nil {
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id, role,
+		  added_by_type, added_by_id, join_source, created_at
+		)
+		SELECT $2::uuid, workspace_id, member_type, member_id, role,
+		       added_by_type, added_by_id, join_source, created_at
+		FROM channel_member WHERE channel_id = $1::uuid
+		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE
+		SET role = EXCLUDED.role,
+		    added_by_type = EXCLUDED.added_by_type,
+		    added_by_id = EXCLUDED.added_by_id,
+		    join_source = EXCLUDED.join_source,
+		    created_at = EXCLUDED.created_at`,
+		sourceChannelID, destinationChannelID); err != nil {
 		return channelCopyMap{}, fmt.Errorf("copy channel members: %w", err)
 	}
 	// Fail-closed: ordinary group must have ≥1 human owner after copy (Ronan B1/B2).

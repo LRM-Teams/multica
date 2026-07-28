@@ -280,6 +280,14 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentInb
 		slog.Warn("cancel task: failed to revoke task tokens",
 			"task_id", util.UUIDToString(task.ID), "error", err)
 	}
+	// Inbox-scoped mat_ credentials carry the same canonical task/event ID.
+	// Revoke them at the same terminal seam so every cancellation path closes
+	// both accepted task-scoped credential sources. CancelTaskWithResult skips
+	// this hook for an already-terminal task, preserving idempotent retries.
+	if err := s.Queries.DeleteAgentInboxTokensByEvent(ctx, task.ID); err != nil {
+		slog.Warn("cancel task: failed to revoke agent inbox tokens",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	}
 }
 
 func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.AgentInboxEvent, status string) {
@@ -3299,13 +3307,17 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 	if task.ChatSessionID.Valid {
 		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
 	}
-	s.Bus.Publish(events.Event{
+	event := events.Event{
 		Type:        eventType,
 		WorkspaceID: workspaceID,
 		ActorType:   "system",
 		ActorID:     "",
 		Payload:     payload,
-	})
+	}
+	if eventType == protocol.EventTaskCancelled {
+		event.TaskID = util.UUIDToString(task.ID)
+	}
+	s.Bus.Publish(event)
 }
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.

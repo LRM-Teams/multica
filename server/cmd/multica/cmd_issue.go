@@ -1633,6 +1633,9 @@ func runIssueCancelTask(cmd *cobra.Command, args []string) error {
 
 	var result map[string]any
 	path := "/api/tasks/" + url.PathEscape(taskRef.ID) + "/cancel"
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/tasks/" + url.PathEscape(taskRef.ID) + "/cancel"
+	}
 	if err := client.PostJSON(ctx, path, map[string]any{}, &result); err != nil {
 		return fmt.Errorf("cancel task: %w", err)
 	}

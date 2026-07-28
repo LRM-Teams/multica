@@ -939,7 +939,7 @@ func TestManagedPatrolOpenLoopContextIncludesManagerOutboundDMForNoRepeat(t *tes
 		VALUES
 		  ($1, $2, 'user', $3),
 		  ($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, dmID, testWorkspaceID, testUserID, fixture.agentIDs[0]); err != nil {
 		t.Fatal(err)
 	}

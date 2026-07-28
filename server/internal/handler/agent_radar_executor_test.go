@@ -316,7 +316,7 @@ func TestExecuteRadarMentionAgentCreatesVisibleGroupDirectiveAndExactWake(t *tes
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
 		t.Fatalf("add agents to channel: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestExecuteRadarMentionAgentFinalizesEveryTargetOccurrence(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
 		t.Fatalf("add agents to channel: %v", err)
 	}
@@ -1540,7 +1540,7 @@ func TestExecuteRadarChannelPostPublishesMessageToChannelMembers(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add radar agent to channel: %v", err)
 	}
@@ -1601,7 +1601,7 @@ func TestExecuteRadarChannelPostFinalizesDestinationReferences(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, publisherID, targetID); err != nil {
 		t.Fatalf("add radar agents to channel: %v", err)
 	}
@@ -1723,7 +1723,7 @@ func TestExecuteRadarChannelPostRejectsThreadRootFromAnotherChannel(t *testing.T
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add radar agent to target channel: %v", err)
 	}
@@ -1853,7 +1853,7 @@ func TestExecuteAgentRadarActionDerivesActivityTargetFromVerifiedChannel(t *test
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add radar agent to channel: %v", err)
 	}
@@ -1992,7 +1992,7 @@ func addRadarAgentMembersForExecutorTest(t *testing.T, channelID string, agentID
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 			VALUES ($1, $2, 'agent', $3)
-		
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("add radar agent %s to channel: %v", agentID, err)
 		}
@@ -2213,7 +2213,7 @@ func createScheduledRadarGroupForExecutorTest(t *testing.T, fixture scheduledRad
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, channelID, fixture.workspaceID, fixture.target.ID); err != nil {
 		t.Fatalf("add scheduled radar target to group: %v", err)
 	}

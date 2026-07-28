@@ -2089,7 +2089,7 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		VALUES
 			($1, $2, 'agent', $3),
 			($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, senderID, oldTargetID); err != nil {
 		t.Fatalf("seed destination members: %v", err)
 	}
@@ -2121,7 +2121,7 @@ ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, senderID, oldTargetID
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, newTargetID); err != nil {
 		t.Fatalf("add current destination member: %v", err)
 	}

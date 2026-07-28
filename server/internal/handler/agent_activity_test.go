@@ -1725,7 +1725,7 @@ func createActivityChannelSession(t *testing.T, agentID, memberID string) (strin
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, memberID); err != nil {
 		t.Fatalf("add activity channel member: %v", err)
 	}

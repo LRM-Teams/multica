@@ -500,7 +500,7 @@ func TestCancelTaskByUser_ChannelBoundChatTask_ChannelMemberSucceeds(t *testing.
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3), ($1, $2, 'user', $4), ($1, $2, 'agent', $5)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, otherUserID, agentID); err != nil {
 		t.Fatalf("seed channel members: %v", err)
 	}
@@ -553,7 +553,7 @@ func TestCancelTaskByUser_ChannelBoundChatTask_NonMemberReturns403(t *testing.T)
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
 		t.Fatalf("seed channel members: %v", err)
 	}

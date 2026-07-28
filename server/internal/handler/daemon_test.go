@@ -282,7 +282,7 @@ func createChannelCompletionTaskWithCapabilities(t *testing.T, channelKind strin
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
-	
+
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
 		t.Fatalf("setup: seed channel members: %v", err)
 	}
@@ -3122,7 +3122,7 @@ func TestCompleteTask_CrossChannelTargetFinalizesMentionsInDestination(t *testin
 			if _, err := testPool.Exec(ctx, `
 				INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 				VALUES ($1, $2, 'agent', $3)
-			
+
 ON CONFLICT DO NOTHING`, sourceChannelID, testWorkspaceID, sourceOnlyID); err != nil {
 				t.Fatalf("add source-only agent: %v", err)
 			}
@@ -3133,7 +3133,7 @@ ON CONFLICT DO NOTHING`, sourceChannelID, testWorkspaceID, sourceOnlyID); err !=
 				VALUES
 					($1, $2, 'agent', $3),
 					($1, $2, 'agent', $4)
-			
+
 ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, senderID, targetOnlyID); err != nil {
 				t.Fatalf("seed destination agents: %v", err)
 			}
@@ -3177,7 +3177,7 @@ func TestCompleteTask_CrossChannelTargetDoesNotLeakSourceOnlyMention(t *testing.
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, sourceChannelID, testWorkspaceID, sourceOnlyID); err != nil {
 		t.Fatalf("add source-only agent: %v", err)
 	}
@@ -3185,7 +3185,7 @@ ON CONFLICT DO NOTHING`, sourceChannelID, testWorkspaceID, sourceOnlyID); err !=
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
-	
+
 ON CONFLICT DO NOTHING`, targetChannelID, testWorkspaceID, senderID); err != nil {
 		t.Fatalf("add sender to destination: %v", err)
 	}

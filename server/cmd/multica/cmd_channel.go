@@ -70,8 +70,8 @@ var channelMemberAddCmd = &cobra.Command{
 	Long: "Add one or more agents to a group channel in one call. Each <agent> " +
 		"may be an agent UUID or display name (resolved against the workspace " +
 		"agent list). Only agents can be added this way — to invite people, add " +
-		"them from the channel UI. <channel> is the --target channel UUID or #name.",	Args: cobra.MinimumNArgs(1),
-	RunE:  runChannelMemberAdd,
+		"them from the channel UI. <channel> is the --target channel UUID or #name.", Args: cobra.MinimumNArgs(1),
+	RunE: runChannelMemberAdd,
 }
 
 func init() {
@@ -105,8 +105,12 @@ func runChannelList(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
+	path := "/api/channels"
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/channels"
+	}
 	var channels []map[string]any
-	if err := client.GetJSON(ctx, "/api/channels", &channels); err != nil {
+	if err := client.GetJSON(ctx, path, &channels); err != nil {
 		return fmt.Errorf("list channels: %w", err)
 	}
 
@@ -143,6 +147,9 @@ func runChannelMembers(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	path := fmt.Sprintf("/api/channels/%s/members", url.PathEscape(target))
+	if isAgentAPIToken(cmd) {
+		path = fmt.Sprintf("/api/agent/channels/%s/members", url.PathEscape(target))
+	}
 	var members []map[string]any
 	if err := client.GetJSON(ctx, path, &members); err != nil {
 		return fmt.Errorf("list channel members: %w", err)
@@ -195,6 +202,9 @@ func setChannelMute(cmd *cobra.Command, mute bool) error {
 
 	action := "mute"
 	path := fmt.Sprintf("/api/channels/%s/agent-mute", url.PathEscape(channelID))
+	if isAgentAPIToken(cmd) {
+		path = fmt.Sprintf("/api/agent/channels/%s/mute", url.PathEscape(channelID))
+	}
 	if !mute {
 		action = "unmute"
 	}
@@ -317,7 +327,9 @@ func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (re
 	}
 	var agents []map[string]any
 	path := "/api/agents"
-	if client.WorkspaceID != "" {
+	if agentAPITokenFromEnv() {
+		path = "/api/agent/agents"
+	} else if client.WorkspaceID != "" {
 		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
 	}
 	if err := client.GetJSON(ctx, path, &agents); err != nil {
@@ -351,4 +363,33 @@ func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (re
 // nameMatches is a trimmed, case-insensitive comparison for display-name lookup.
 func nameMatches(name, target string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(target))
+}
+
+// isAgentAPIToken reports whether the current MULTICA_TOKEN is an agent machine
+// token (mat_*), which must use /api/agent/* dedicated paths (#801).
+func isAgentAPIToken(cmd *cobra.Command) bool {
+	tok := strings.TrimSpace(resolveToken(cmd))
+	return strings.HasPrefix(tok, "mat_")
+}
+
+// agentIssueAPIPath returns /api/issues/{id}{suffix} or /api/agent/issues/{id}{suffix}.
+// suffix should start with "/" (e.g. "/labels") or be empty.
+func agentIssueAPIPath(cmd *cobra.Command, issueID, suffix string) string {
+	base := "/api/issues/"
+	if isAgentAPIToken(cmd) {
+		base = "/api/agent/issues/"
+	}
+	return base + issueID + suffix
+}
+
+// agentIssuesListPath returns /api/issues or /api/agent/issues (optional query already encoded).
+func agentIssuesListPath(cmd *cobra.Command, query string) string {
+	base := "/api/issues"
+	if isAgentAPIToken(cmd) {
+		base = "/api/agent/issues"
+	}
+	if query == "" {
+		return base
+	}
+	return base + "?" + query
 }

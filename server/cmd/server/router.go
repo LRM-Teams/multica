@@ -606,6 +606,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier))
 		r.Use(middleware.RefreshCloudFrontCookies(cfSigner))
+		// #801: AgentPrincipal may only use /api/agent/* (fail-closed admin/human).
+		r.Use(middleware.RejectAgentOnHumanAPI)
 
 		// --- User-scoped routes (no workspace context required) ---
 		r.Get("/api/me", h.GetMe)
@@ -1209,6 +1211,43 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Agent task-token chat transport. These routes intentionally live
 			// on the regular Auth API so task tokens use the same workspace and
 			// permission chain as other channel operations.
+			// Agent data-plane API (#801). RequireAgentPrincipal is enforced in
+			// handlers via context; routes are agent-only contracts.
+			r.Route("/api/agent", func(r chi.Router) {
+				r.Use(middleware.RequireAgentPrincipal)
+				r.Get("/channels", h.ListAgentChannels)
+				r.Get("/channels/{channelId}/members", h.ListAgentChannelMembers)
+				r.Put("/channels/{channelId}/mute", h.MuteAgentChannel)
+				r.Delete("/channels/{channelId}/mute", h.UnmuteAgentChannel)
+				r.Get("/attachments/{id}", h.GetAgentAttachment)
+				r.Get("/attachments/{id}/download", h.DownloadAgentAttachment)
+				r.Get("/attachments/{id}/content", h.GetAgentAttachmentContent)
+				r.Post("/attachments", h.UploadAgentAttachment)
+				// Issues / projects / workspace / squad (necessary batch)
+				r.Get("/issues", h.ListAgentIssues)
+				r.Get("/issues/{id}", h.GetAgentIssue)
+				r.Post("/issues", h.CreateAgentIssue)
+				r.Put("/issues/{id}", h.UpdateAgentIssue)
+				r.Get("/issues/{id}/comments", h.ListAgentIssueComments)
+				r.Post("/issues/{id}/comments", h.CreateAgentIssueComment)
+				r.Get("/issues/{id}/metadata", h.ListAgentIssueMetadata)
+				r.Put("/issues/{id}/metadata/{key}", h.SetAgentIssueMetadataKey)
+				r.Delete("/issues/{id}/metadata/{key}", h.DeleteAgentIssueMetadataKey)
+				r.Get("/issues/{id}/labels", h.ListAgentIssueLabels)
+				r.Post("/issues/{id}/labels", h.AttachAgentIssueLabel)
+				r.Delete("/issues/{id}/labels/{labelId}", h.DetachAgentIssueLabel)
+				r.Get("/issues/{id}/subscribers", h.ListAgentIssueSubscribers)
+				r.Post("/issues/{id}/subscribe", h.SubscribeAgentToIssue)
+				r.Post("/issues/{id}/unsubscribe", h.UnsubscribeAgentFromIssue)
+				r.Get("/issues/{id}/task-runs", h.ListAgentIssueTaskRuns)
+				r.Post("/issues/{id}/rerun", h.RerunAgentIssue)
+				r.Put("/issues/{id}/channel", h.SetAgentIssueSourceChannel)
+				r.Get("/projects/{id}/resources", h.ListAgentProjectResources)
+				r.Get("/workspace", h.GetAgentWorkspace)
+				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)
+				r.Get("/agents", h.ListAgentDirectoryAgents)
+				// Squad retired (Frank 2026-07-28): no /api/agent/squads*.
+			})
 			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)

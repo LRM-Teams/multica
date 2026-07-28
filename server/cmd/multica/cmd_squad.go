@@ -381,6 +381,8 @@ func runSquadMemberSetRole(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
+	// Squad product retired (Frank 2026-07-28). No /api/agent/squads* cutover;
+	// human route remains until Nash's full squad removal PR.
 	if err := client.PatchJSON(ctx, "/api/squads/"+args[0]+"/members/role", body, &result); err != nil {
 		return fmt.Errorf("set member role: %w", err)
 	}

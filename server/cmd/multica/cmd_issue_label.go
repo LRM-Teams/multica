@@ -69,7 +69,7 @@ func runIssueLabelList(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/labels", &result); err != nil {
+	if err := client.GetJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/labels"), &result); err != nil {
 		return fmt.Errorf("list issue labels: %w", err)
 	}
 	labelsRaw, _ := result["labels"].([]any)
@@ -102,7 +102,7 @@ func runIssueLabelAdd(cmd *cobra.Command, args []string) error {
 
 	body := map[string]any{"label_id": labelRef.ID}
 	var result map[string]any
-	if err := client.PostJSON(ctx, "/api/issues/"+issueRef.ID+"/labels", body, &result); err != nil {
+	if err := client.PostJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/labels"), body, &result); err != nil {
 		return fmt.Errorf("attach label: %w", err)
 	}
 	labelsRaw, _ := result["labels"].([]any)
@@ -133,7 +133,7 @@ func runIssueLabelRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve label: %w", err)
 	}
 
-	if err := client.DeleteJSON(ctx, "/api/issues/"+issueRef.ID+"/labels/"+labelRef.ID); err != nil {
+	if err := client.DeleteJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/labels/"+labelRef.ID)); err != nil {
 		return fmt.Errorf("detach label: %w", err)
 	}
 
@@ -142,7 +142,7 @@ func runIssueLabelRemove(cmd *cobra.Command, args []string) error {
 	// detach itself already succeeded.
 	var result map[string]any
 	output, _ := cmd.Flags().GetString("output")
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/labels", &result); err != nil {
+	if err := client.GetJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/labels"), &result); err != nil {
 		if output == "json" {
 			return cli.PrintJSON(os.Stdout, map[string]any{"detached": true})
 		}

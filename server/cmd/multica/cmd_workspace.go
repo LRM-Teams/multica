@@ -111,6 +111,15 @@ func fetchWorkspaces(ctx context.Context, cmd *cobra.Command) ([]workspaceSummar
 	}
 
 	client := cli.NewAPIClient(serverURL, "", token)
+	if isAgentAPIToken(cmd) {
+		var one map[string]any
+		if err := client.GetJSON(ctx, "/api/agent/workspace", &one); err != nil {
+			return nil, fmt.Errorf("list workspaces: %w", err)
+		}
+		return []workspaceSummary{{
+			ID: strVal(one, "id"), Name: strVal(one, "name"), Slug: strVal(one, "slug"),
+		}}, nil
+	}
 	var workspaces []workspaceSummary
 	if err := client.GetJSON(ctx, "/api/workspaces", &workspaces); err != nil {
 		return nil, fmt.Errorf("list workspaces: %w", err)
@@ -305,7 +314,11 @@ func runWorkspaceGet(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	var ws map[string]any
-	if err := client.GetJSON(ctx, "/api/workspaces/"+wsID, &ws); err != nil {
+	wsPath := "/api/workspaces/" + wsID
+	if isAgentAPIToken(cmd) {
+		wsPath = "/api/agent/workspace"
+	}
+	if err := client.GetJSON(ctx, wsPath, &ws); err != nil {
 		return fmt.Errorf("get workspace: %w", err)
 	}
 

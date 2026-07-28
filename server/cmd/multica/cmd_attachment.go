@@ -39,11 +39,13 @@ var attachmentUploadCmd = &cobra.Command{
 		"`multica message send --attachment-id` or `multica issue create --attachment-id`.\n\n" +
 		"Pass --target '#channel' to bind the upload to a channel at upload time. " +
 		"Omit --target for an unbound workspace upload (link later via --attachment-id). " +
-		"DM and thread targets are not resolved here — upload without --target and " +
-		"pass --attachment-id to message send with the full target.",
+		"For agent tokens (mat_*), unbound uploads are uploader-owned staging: only that agent " +
+		"can view them until bound (DM/thread: omit --target, then message send --attachment-id).\n\n" +
+		"DM and thread targets are not resolved as --target here — upload unbound and pass " +
+		"--attachment-id to message send with the full target.",
 	Example: `  $ multica attachment upload --path ./shot.png --target '#eng'
   $ multica attachment upload --path ./notes.md
-  $ multica message send --target '#eng' --attachment-id <id> --message 'see file'`,
+  $ multica message send --target 'dm:@user' --attachment-id <id> --message 'see file'`,
 	Args: cobra.NoArgs,
 	RunE: runAttachmentUpload,
 }
@@ -104,7 +106,11 @@ func runAttachmentView(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	var att map[string]any
-	if err := client.GetJSON(ctx, "/api/attachments/"+id, &att); err != nil {
+	attPath := "/api/attachments/" + id
+	if isAgentAPIToken(cmd) {
+		attPath = "/api/agent/attachments/" + id
+	}
+	if err := client.GetJSON(ctx, attPath, &att); err != nil {
 		return fmt.Errorf("get attachment: %w", err)
 	}
 
@@ -177,7 +183,11 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read file: %w", err)
 	}
 
-	id, err := client.UploadFileOpts(ctx, data, path, cli.UploadFileOptions{ChannelID: channelID})
+	uploadOpts := cli.UploadFileOptions{ChannelID: channelID}
+	if isAgentAPIToken(cmd) {
+		uploadOpts.Path = "/api/agent/attachments"
+	}
+	id, err := client.UploadFileOpts(ctx, data, path, uploadOpts)
 	if err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
@@ -228,7 +238,11 @@ func resolveChannelIDFromUploadTarget(ctx context.Context, client *cli.APIClient
 	}
 
 	var channels []map[string]any
-	if err := client.GetJSON(ctx, "/api/channels", &channels); err != nil {
+	listPath := "/api/channels"
+	if strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_") {
+		listPath = "/api/agent/channels"
+	}
+	if err := client.GetJSON(ctx, listPath, &channels); err != nil {
 		return "", fmt.Errorf("list channels: %w", err)
 	}
 

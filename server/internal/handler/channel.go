@@ -153,22 +153,22 @@ type ChannelLastMessage struct {
 }
 
 type ChannelMemberBrief struct {
-	MemberType   string                      `json:"member_type"`
-	MemberID     string                      `json:"member_id"`
-	Name         string                      `json:"name"`
-	DisplayName  string                      `json:"display_name"`
-	AvatarURL    *string                     `json:"avatar_url"`
+	MemberType  string  `json:"member_type"`
+	MemberID    string  `json:"member_id"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	AvatarURL   *string `json:"avatar_url"`
 	// Role is channel-level: owner | manager | member (not workspace role).
 	Role         string                      `json:"role,omitempty"`
 	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
 }
 
 type ChannelMemberResponse struct {
-	MemberType   string                      `json:"member_type"`
-	MemberID     string                      `json:"member_id"`
-	Name         string                      `json:"name"`
-	DisplayName  string                      `json:"display_name"`
-	AvatarURL    *string                     `json:"avatar_url"`
+	MemberType  string  `json:"member_type"`
+	MemberID    string  `json:"member_id"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	AvatarURL   *string `json:"avatar_url"`
 	// Role is channel-level: owner | manager | member (Beckham v2 §4).
 	// Distinct from workspace MemberRole. FE badges: 群主 / 群管|管理员 / 成员.
 	Role         string                      `json:"role"`
@@ -400,6 +400,10 @@ func (h *Handler) StartChannelBridge() {
 }
 
 func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
+	// #801: no human-route alias. Agents must use GET /api/agent/channels.
+	if rejectAgentOnHumanRoute(w, r, "ListChannels") {
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -1252,6 +1256,10 @@ func (h *Handler) channelInviteRequesterRole(ctx context.Context, userID, worksp
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
+	// #801: no human-route alias. Agents must use GET /api/agent/channels/{id}/members.
+	if rejectAgentOnHumanRoute(w, r, "ListChannelMembers") {
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -1416,6 +1424,24 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Agent removal: membership delete + revoke pending/in-flight access must
+	// share one transaction (Barry #801). User removal keeps the simple path.
+	if memberType == "agent" {
+		removed, err := h.removeAgentChannelMemberAndRevokeTx(r.Context(), parseUUID(workspaceID), channelID, memberID)
+		if err != nil {
+			slog.Error("remove agent channel member failed", "error", err, "channel", uuidToString(channelID), "agent", uuidToString(memberID))
+			writeError(w, http.StatusInternalServerError, "failed to remove channel member")
+			return
+		}
+		h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+		if removed {
+			h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberRemovedEvent, parseUUID(userID), memberType, memberID)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
 	tag, err := h.DB.Exec(r.Context(), `
 		DELETE FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,

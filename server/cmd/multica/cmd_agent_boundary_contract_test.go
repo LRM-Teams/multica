@@ -402,6 +402,136 @@ func TestBoundary_NonessentialAllowlist_InventoryDocumentsNamedSurfaces(t *testi
 	}
 }
 
+const boundaryContractIssueID = "1881a167-4bb6-4602-944b-f40ce4192fe6"
+const boundaryContractProjectID = "p1111111-2222-3333-4444-555555555555"
+
+// --- ④ issue + project resource (necessary; still human paths today) ---
+
+// TestBoundary_IssueGet_HitsDedicatedAgentAPI asserts issue get uses
+// GET /api/agent/issues/{id} (resolve + read both under dedicated).
+func TestBoundary_IssueGet_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/issues/" + boundaryContractIssueID
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "boundary",
+				"status":     "todo",
+			})
+			return
+		}
+		http.Error(w, "human issue path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "get"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+
+	if err := runIssueGet(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueGet: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") {
+			t.Fatalf("hit human issue path %q; full=%v", p, gotPaths)
+		}
+		if !strings.HasPrefix(path, "/api/agent/issues") {
+			t.Fatalf("path %q not under /api/agent/issues; full=%v", p, gotPaths)
+		}
+	}
+}
+
+// TestBoundary_IssueCreate_HitsDedicatedAgentAPI asserts create posts to
+// POST /api/agent/issues.
+func TestBoundary_IssueCreate_HitsDedicatedAgentAPI(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/agent/issues" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         boundaryContractIssueID,
+				"identifier": "MUL-1",
+				"title":      "created",
+			})
+			return
+		}
+		http.Error(w, "human issue path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "create"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("title", "", "")
+	cmd.Flags().String("description", "", "")
+	cmd.Flags().Bool("description-stdin", false, "")
+	cmd.Flags().String("description-file", "", "")
+	cmd.Flags().String("status", "", "")
+	cmd.Flags().String("priority", "", "")
+	cmd.Flags().String("assignee", "", "")
+	cmd.Flags().String("assignee-id", "", "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().String("project", "", "")
+	cmd.Flags().String("channel", "", "")
+	cmd.Flags().String("start-date", "", "")
+	cmd.Flags().String("due-date", "", "")
+	cmd.Flags().StringArray("acceptance-criteria", nil, "")
+	cmd.Flags().String("source-channel", "", "")
+	cmd.Flags().String("source-message", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().StringSlice("attachment-id", nil, "")
+	_ = cmd.Flags().Set("title", "boundary create")
+
+	if err := runIssueCreate(cmd, nil); err != nil {
+		t.Fatalf("runIssueCreate: %v (paths=%v)", err, gotPaths)
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "POST /api/agent/issues" {
+		t.Fatalf("paths = %v, want [POST /api/agent/issues]", gotPaths)
+	}
+}
+
+// TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI asserts resource list
+// uses GET /api/agent/projects/{id}/resources.
+func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/projects/" + boundaryContractProjectID + "/resources"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resources": []map[string]any{},
+			})
+			return
+		}
+		http.Error(w, "human project path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+
+	if err := runProjectResourceList(cmd, []string{boundaryContractProjectID}); err != nil {
+		t.Fatalf("runProjectResourceList: %v (paths=%v)", err, gotPaths)
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET "+wantPath {
+		t.Fatalf("paths = %v, want [GET %s]", gotPaths, wantPath)
+	}
+}
+
 // TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets is a living map of
 // necessary capabilities → dedicated paths (Ronan table). Fails if a required
 // capability loses its dedicated target string (typo / table drift).

@@ -868,3 +868,20 @@ func TestReferencedEntitySnapshotsAreSeparateFromExactTurnBody(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildChatPromptIncludesPerTurnInitiator(t *testing.T) {
+	out := buildChatPrompt(Task{
+		ChatSessionID: "chat-1",
+		ChatMessage:   "hello",
+		InitiatorName: "Alice",
+		InitiatorType: "member",
+		InitiatorID:   "member-alice",
+		IssueID:       "issue-42",
+	}, "")
+	if !strings.Contains(out, "Current message initiator") || !strings.Contains(out, "Alice") {
+		t.Fatalf("missing initiator in prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "Related issue for this turn: issue-42") {
+		t.Fatalf("missing per-turn issue in prompt:\n%s", out)
+	}
+}

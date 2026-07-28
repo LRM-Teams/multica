@@ -46,13 +46,14 @@ type canonicalAgentRuntimeIdentity struct {
 	Environment  map[string]string
 
 	// Hard-instruction / context boundary fields (fingerprint). Prefer rotate
-	// when unsure; never put task.ID or per-turn lease metadata here.
-	ContextKey        string // ChatSessionID
-	WorkspaceID       string
-	Directed          bool
-	ManagedRole       string
-	AgentInstructions string
-	WorkspaceContext  string
+	// when unsure; never put task.ID, Initiator, or other per-turn prompt fields.
+	ContextKey          string // ChatSessionID
+	WorkspaceID         string
+	Directed            bool
+	ManagedRole         string
+	AgentInstructions   string
+	WorkspaceContext    string
+	StartupStaticDigest string // canonical hash of slow-changing startup bundle bytes
 }
 
 type canonicalAgentRuntimeIdentityParams canonicalAgentRuntimeIdentity
@@ -85,23 +86,24 @@ func newCanonicalAgentRuntimeIdentity(params canonicalAgentRuntimeIdentityParams
 		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime identity contains current-turn environment")
 	}
 	identity := canonicalAgentRuntimeIdentity{
-		AgentID:           strings.TrimSpace(params.AgentID),
-		RuntimeID:         strings.TrimSpace(params.RuntimeID),
-		Provider:          strings.TrimSpace(params.Provider),
-		Executable:        strings.TrimSpace(params.Executable),
-		Model:             strings.TrimSpace(params.Model),
-		Thinking:          strings.TrimSpace(params.Thinking),
-		WorkDir:           strings.TrimSpace(params.WorkDir),
-		SystemPrompt:      params.SystemPrompt,
-		MCP:               params.MCP,
-		CustomArgs:        append([]string(nil), params.CustomArgs...),
-		Environment:       cloneStringMap(stable),
-		ContextKey:        strings.TrimSpace(params.ContextKey),
-		WorkspaceID:       strings.TrimSpace(params.WorkspaceID),
-		Directed:          params.Directed,
-		ManagedRole:       strings.TrimSpace(params.ManagedRole),
-		AgentInstructions: params.AgentInstructions,
-		WorkspaceContext:  params.WorkspaceContext,
+		AgentID:             strings.TrimSpace(params.AgentID),
+		RuntimeID:           strings.TrimSpace(params.RuntimeID),
+		Provider:            strings.TrimSpace(params.Provider),
+		Executable:          strings.TrimSpace(params.Executable),
+		Model:               strings.TrimSpace(params.Model),
+		Thinking:            strings.TrimSpace(params.Thinking),
+		WorkDir:             strings.TrimSpace(params.WorkDir),
+		SystemPrompt:        params.SystemPrompt,
+		MCP:                 params.MCP,
+		CustomArgs:          append([]string(nil), params.CustomArgs...),
+		Environment:         cloneStringMap(stable),
+		ContextKey:          strings.TrimSpace(params.ContextKey),
+		WorkspaceID:         strings.TrimSpace(params.WorkspaceID),
+		Directed:            params.Directed,
+		ManagedRole:         strings.TrimSpace(params.ManagedRole),
+		AgentInstructions:   params.AgentInstructions,
+		WorkspaceContext:    params.WorkspaceContext,
+		StartupStaticDigest: strings.TrimSpace(params.StartupStaticDigest),
 	}
 	if identity.ContextKey == "" {
 		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime context_key (chat_session_id) is required")
@@ -115,21 +117,22 @@ func (i canonicalAgentRuntimeIdentity) slotKey() string {
 
 func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 	type canonical struct {
-		Provider          string      `json:"provider"`
-		Executable        string      `json:"executable"`
-		Model             string      `json:"model"`
-		Thinking          string      `json:"thinking"`
-		WorkDir           string      `json:"work_dir"`
-		SystemPrompt      string      `json:"system_prompt"`
-		MCP               string      `json:"mcp"`
-		CustomArgs        []string    `json:"custom_args"`
-		Environment       [][2]string `json:"environment"`
-		ContextKey        string      `json:"context_key"`
-		WorkspaceID       string      `json:"workspace_id"`
-		Directed          bool        `json:"directed"`
-		ManagedRole       string      `json:"managed_role"`
-		AgentInstructions string      `json:"agent_instructions"`
-		WorkspaceContext  string      `json:"workspace_context"`
+		Provider            string      `json:"provider"`
+		Executable          string      `json:"executable"`
+		Model               string      `json:"model"`
+		Thinking            string      `json:"thinking"`
+		WorkDir             string      `json:"work_dir"`
+		SystemPrompt        string      `json:"system_prompt"`
+		MCP                 string      `json:"mcp"`
+		CustomArgs          []string    `json:"custom_args"`
+		Environment         [][2]string `json:"environment"`
+		ContextKey          string      `json:"context_key"`
+		WorkspaceID         string      `json:"workspace_id"`
+		Directed            bool        `json:"directed"`
+		ManagedRole         string      `json:"managed_role"`
+		AgentInstructions   string      `json:"agent_instructions"`
+		WorkspaceContext    string      `json:"workspace_context"`
+		StartupStaticDigest string      `json:"startup_static_digest"`
 	}
 	keys := make([]string, 0, len(i.Environment))
 	for key := range i.Environment {
@@ -141,24 +144,56 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		environment = append(environment, [2]string{key, i.Environment[key]})
 	}
 	payload, _ := json.Marshal(canonical{
-		Provider:          i.Provider,
-		Executable:        i.Executable,
-		Model:             i.Model,
-		Thinking:          i.Thinking,
-		WorkDir:           i.WorkDir,
-		SystemPrompt:      i.SystemPrompt,
-		MCP:               i.MCP,
-		CustomArgs:        append([]string(nil), i.CustomArgs...),
-		Environment:       environment,
-		ContextKey:        i.ContextKey,
-		WorkspaceID:       i.WorkspaceID,
-		Directed:          i.Directed,
-		ManagedRole:       i.ManagedRole,
-		AgentInstructions: i.AgentInstructions,
-		WorkspaceContext:  i.WorkspaceContext,
+		Provider:            i.Provider,
+		Executable:          i.Executable,
+		Model:               i.Model,
+		Thinking:            i.Thinking,
+		WorkDir:             i.WorkDir,
+		SystemPrompt:        i.SystemPrompt,
+		MCP:                 i.MCP,
+		CustomArgs:          append([]string(nil), i.CustomArgs...),
+		Environment:         environment,
+		ContextKey:          i.ContextKey,
+		WorkspaceID:         i.WorkspaceID,
+		Directed:            i.Directed,
+		ManagedRole:         i.ManagedRole,
+		AgentInstructions:   i.AgentInstructions,
+		WorkspaceContext:    i.WorkspaceContext,
+		StartupStaticDigest: i.StartupStaticDigest,
 	})
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// willReuseResident reports whether acquire would reuse an existing resident
+// backend without factory create (same fingerprint + mode + idle backend).
+// Used so option-A materialize runs only before process create, not on reuse.
+func (p *canonicalAgentRuntimePool) willReuseResident(identity canonicalAgentRuntimeIdentity, mode canonicalRuntimeMode) bool {
+	if p == nil || mode != canonicalRuntimeResident {
+		return false
+	}
+	key := identity.slotKey()
+	fingerprint := identity.fingerprint()
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return false
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if slot.running || slot.backend == nil {
+		return false
+	}
+	if slot.fingerprint == "" || slot.fingerprint != fingerprint || slot.mode != mode {
+		return false
+	}
+	// Context key rotate always creates a new process path.
+	if slot.lastContextKey != "" && slot.lastContextKey != identity.ContextKey {
+		return false
+	}
+	return true
 }
 
 func cloneStringMap(source map[string]string) map[string]string {

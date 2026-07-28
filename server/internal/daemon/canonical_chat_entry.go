@@ -90,35 +90,41 @@ func (d *Daemon) tryCanonicalChatBackend(
 	}
 	execOpts.Cwd = workDir
 
-	// Materialize Multica runtime brief + task context + skills into the
-	// stable cwd. Ledger is daemon-owned under agent RootDir (sibling of
-	// WorkDir) — never inside provider-writable CWD.
-	ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
-	if _, err := execenv.MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider, taskCtx); err != nil {
-		return nil, nil, nil, false, fmt.Errorf("materialize canonical turn context: %w", err)
-	}
-
+	// Option A: materialize only when a new provider process will be created.
+	// Resident reuse re-reads neither AGENTS nor .agent_context (Pi proof); per-turn
+	// facts travel in the Execute prompt. Startup-static digest is in the identity
+	// fingerprint so slow field changes dispose + recreate.
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
-		AgentID:           agentID,
-		RuntimeID:         task.RuntimeID,
-		Provider:          provider,
-		Executable:        entry.Path,
-		Model:             execOpts.Model,
-		Thinking:          execOpts.ThinkingLevel,
-		WorkDir:           workDir,
-		SystemPrompt:      execOpts.SystemPrompt,
-		MCP:               string(execOpts.McpConfig),
-		CustomArgs:        append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
-		Environment:       turn.StableEnvironment,
-		ContextKey:        task.ChatSessionID,
-		WorkspaceID:       task.WorkspaceID,
-		Directed:          taskCtx.Directed,
-		ManagedRole:       taskCtx.ManagedRole,
-		AgentInstructions: taskCtx.AgentInstructions,
-		WorkspaceContext:  task.WorkspaceContext,
+		AgentID:             agentID,
+		RuntimeID:           task.RuntimeID,
+		Provider:            provider,
+		Executable:          entry.Path,
+		Model:               execOpts.Model,
+		Thinking:            execOpts.ThinkingLevel,
+		WorkDir:             workDir,
+		SystemPrompt:        execOpts.SystemPrompt,
+		MCP:                 string(execOpts.McpConfig),
+		CustomArgs:          append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
+		Environment:         turn.StableEnvironment,
+		ContextKey:          task.ChatSessionID,
+		WorkspaceID:         task.WorkspaceID,
+		Directed:            taskCtx.Directed,
+		ManagedRole:         taskCtx.ManagedRole,
+		AgentInstructions:   taskCtx.AgentInstructions,
+		WorkspaceContext:    task.WorkspaceContext,
+		StartupStaticDigest: execenv.StartupStaticDigest(taskCtx),
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical identity: %w", err)
+	}
+
+	mode := mustCanonicalRuntimeMode(provider, profile)
+	if !d.canonicalRuntimes.willReuseResident(identity, mode) {
+		// Process create path only: write startup snapshot once before factory.
+		ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
+		if _, err := execenv.MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider, taskCtx); err != nil {
+			return nil, nil, nil, false, fmt.Errorf("materialize canonical turn context: %w", err)
+		}
 	}
 
 	factory := d.canonicalChatFactory(provider, profile)
@@ -127,7 +133,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 	// restarts the process but may keep PriorSessionID for chat continuity.
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
-		Mode:               mustCanonicalRuntimeMode(provider, profile),
+		Mode:               mode,
 		CanonicalSessionID: task.PriorSessionID,
 		BackendConfig:      backendCfg,
 		Factory:            factory,

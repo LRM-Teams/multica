@@ -165,12 +165,18 @@ type fakeContinuationStrategy struct {
 	calls   []ContinuationRequest
 	outcome ContinuationOutcome
 	err     error
+	// errOnCall fails only the given call indexes, so a per-lane failure can be
+	// distinguished from a whole-resume failure.
+	errOnCall map[int]error
 }
 
 func (f *fakeContinuationStrategy) Mode() EnvCheckpointSaveMode { return f.mode }
 
 func (f *fakeContinuationStrategy) ResumeAgentRun(_ context.Context, req ContinuationRequest) (ContinuationOutcome, error) {
 	f.calls = append(f.calls, req)
+	if err, ok := f.errOnCall[len(f.calls)-1]; ok {
+		return ContinuationOutcome{Status: TriggerFailed}, err
+	}
 	if f.err != nil {
 		return ContinuationOutcome{Status: TriggerFailed}, f.err
 	}

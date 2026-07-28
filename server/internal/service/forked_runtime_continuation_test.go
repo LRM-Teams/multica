@@ -34,7 +34,7 @@ func TestForkedRuntimeContinuationEnqueuesAgainstLaneRuntime(t *testing.T) {
 		Index:       3,
 		Trigger:     ResumeTrigger{AgentID: "a-src", Kind: "chat"},
 		Lane: LaneRef{
-			LaneKey: "lane-0", InstanceID: "inst-0", ProjectID: "proj-0",
+			LaneKey: "lane-0", LaneEnvID: "env-0", InstanceID: "inst-0", ProjectID: "proj-0",
 			RuntimeID: "rt-0", AgentID: "a-0", ChannelID: "ch-0",
 			ChatSessionID: "cs-0", SourceMessageID: "msg-0",
 		},
@@ -51,6 +51,12 @@ func TestForkedRuntimeContinuationEnqueuesAgainstLaneRuntime(t *testing.T) {
 	got := enq.calls[0]
 	if got.RuntimeID != "rt-0" || got.SandboxInstanceID != "inst-0" || got.AgentID != "a-0" {
 		t.Fatalf("lane binding not used: %+v", got)
+	}
+	// The env id is its own field: a fan-out lane key is an anchor plus an
+	// ordinal, so using the lane key as the env id would enqueue against a
+	// nonexistent env.
+	if got.EnvID != "env-0" {
+		t.Fatalf("enqueued env = %q, want the lane's env id", got.EnvID)
 	}
 	// The caller's rollout index must survive the seam, not be flattened to 0.
 	if enq.indexes[0] != 3 {
@@ -76,12 +82,32 @@ func TestForkedRuntimeContinuationRejectsMissingLaneRuntime(t *testing.T) {
 	}
 }
 
+// A lane with no env id would start a run detached from the environment it is
+// meant to act on, which the enqueue path cannot detect for itself.
+func TestForkedRuntimeContinuationRejectsMissingLaneEnvID(t *testing.T) {
+	enq := &fakeForkedEnqueuer{}
+	strategy := NewForkedRuntimeContinuation(enq)
+	out, err := strategy.ResumeAgentRun(context.Background(), ContinuationRequest{
+		WorkspaceID: "ws",
+		Lane:        LaneRef{LaneKey: "lane-0", InstanceID: "i", RuntimeID: "rt", AgentID: "a"},
+	})
+	if err == nil {
+		t.Fatal("expected error when the lane has no env id")
+	}
+	if out.Status != TriggerFailed {
+		t.Fatalf("status = %s, want failed", out.Status)
+	}
+	if len(enq.calls) != 0 {
+		t.Fatalf("an env-less lane must not be enqueued, got %d calls", len(enq.calls))
+	}
+}
+
 func TestForkedRuntimeContinuationReportsEnqueueFailureAsFailed(t *testing.T) {
 	enq := &fakeForkedEnqueuer{err: fmt.Errorf("queue down")}
 	strategy := NewForkedRuntimeContinuation(enq)
 	out, err := strategy.ResumeAgentRun(context.Background(), ContinuationRequest{
 		WorkspaceID: "ws",
-		Lane:        LaneRef{LaneKey: "lane-0", InstanceID: "i", RuntimeID: "rt", AgentID: "a", ChannelID: "ch"},
+		Lane:        LaneRef{LaneKey: "lane-0", LaneEnvID: "env-0", InstanceID: "i", RuntimeID: "rt", AgentID: "a", ChannelID: "ch"},
 	})
 	if err == nil {
 		t.Fatal("expected enqueue error")

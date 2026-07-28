@@ -515,7 +515,6 @@ func TestMigration234KillsWendyAmbientRadarAuthorization(t *testing.T) {
 	}
 }
 
-
 func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -652,10 +651,21 @@ func TestMigration245CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testin
 			t.Errorf("245 up missing %q", required)
 		}
 	}
+	// The lane's conversation must be its own and must be recorded, or a lane
+	// interrupted between copying its channel and starting its run would copy a
+	// second channel on recovery.
+	for _, conversation := range []string{"channel_id UUID", "chat_session_id UUID", "source_message_id UUID"} {
+		if !strings.Contains(contents, conversation) {
+			t.Errorf("245 up missing per-lane %q", conversation)
+		}
+	}
 	// The per-step ids must stay nullable: a lane interrupted partway is
 	// continued from its first unfilled step, which is impossible if they are
 	// required up front.
-	for _, step := range []string{"instance_id", "project_id", "runtime_id", "task_id", "env_id"} {
+	for _, step := range []string{
+		"instance_id", "project_id", "runtime_id", "task_id", "env_id",
+		"channel_id", "chat_session_id", "source_message_id",
+	} {
 		if strings.Contains(contents, step+" UUID NOT NULL") {
 			t.Errorf("245 up makes %s NOT NULL, which breaks continuing an interrupted lane", step)
 		}
@@ -692,6 +702,8 @@ func TestLaneQueriesClaimIdempotentlyAndStayWorkspaceScoped(t *testing.T) {
 		// in a different workspace than the checkpoint it belongs to.
 		"SELECT c.id, c.workspace_id, @lane_key, 'provisioning'",
 		"COALESCE(sqlc.narg(instance_id), instance_id)",
+		"COALESCE(sqlc.narg(channel_id), channel_id)",
+		"COALESCE(sqlc.narg(source_message_id), source_message_id)",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("lane queries missing %q", required)
@@ -811,4 +823,3 @@ func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 		t.Errorf("%d checkpoint scans read resume_trigger but only %d follow it with save_mode", scans, saveModeScans)
 	}
 }
-

@@ -30,12 +30,15 @@ ORDER BY created_at ASC;
 -- Records one materialization step's id. COALESCE keeps already-filled steps, so
 -- a continued lane never regresses to an earlier state.
 UPDATE env_checkpoint_lane
-SET instance_id = COALESCE(sqlc.narg(instance_id), instance_id),
-    project_id  = COALESCE(sqlc.narg(project_id), project_id),
-    runtime_id  = COALESCE(sqlc.narg(runtime_id), runtime_id),
-    task_id     = COALESCE(sqlc.narg(task_id), task_id),
-    env_id      = COALESCE(sqlc.narg(env_id), env_id),
-    updated_at  = now()
+SET instance_id       = COALESCE(sqlc.narg(instance_id), instance_id),
+    project_id        = COALESCE(sqlc.narg(project_id), project_id),
+    runtime_id        = COALESCE(sqlc.narg(runtime_id), runtime_id),
+    task_id           = COALESCE(sqlc.narg(task_id), task_id),
+    env_id            = COALESCE(sqlc.narg(env_id), env_id),
+    channel_id        = COALESCE(sqlc.narg(channel_id), channel_id),
+    chat_session_id   = COALESCE(sqlc.narg(chat_session_id), chat_session_id),
+    source_message_id = COALESCE(sqlc.narg(source_message_id), source_message_id),
+    updated_at        = now()
 WHERE id = @id AND workspace_id = @workspace_id
 RETURNING *;
 

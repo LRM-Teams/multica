@@ -8,6 +8,12 @@
 -- The per-step ids are filled in as materialization advances, which lets a lane
 -- interrupted partway be continued from its first unfilled step instead of
 -- being redone or duplicated. They are nullable for exactly that reason.
+--
+-- The conversation ids (channel, chat session, source message) are per-lane and
+-- not shared with the source: lanes that posted into one channel would not be
+-- independent continuations. They are recorded here rather than derived, because
+-- a lane interrupted between copying its channel and starting its run would
+-- otherwise copy a second channel on recovery.
 CREATE TABLE IF NOT EXISTS env_checkpoint_lane (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     checkpoint_id UUID NOT NULL REFERENCES env_checkpoint(id) ON DELETE CASCADE,
@@ -20,6 +26,9 @@ CREATE TABLE IF NOT EXISTS env_checkpoint_lane (
     runtime_id UUID,
     task_id UUID,
     env_id UUID,
+    channel_id UUID,
+    chat_session_id UUID,
+    source_message_id UUID,
     error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -17,7 +17,7 @@ SELECT c.id, c.workspace_id, $1, 'provisioning'
 FROM env_checkpoint c
 WHERE c.id = $2
 ON CONFLICT (checkpoint_id, lane_key) DO NOTHING
-RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at
+RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at
 `
 
 type ClaimEnvCheckpointLaneParams struct {
@@ -48,6 +48,9 @@ func (q *Queries) ClaimEnvCheckpointLane(ctx context.Context, arg ClaimEnvCheckp
 		&i.RuntimeID,
 		&i.TaskID,
 		&i.EnvID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.SourceMessageID,
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -78,7 +81,7 @@ func (q *Queries) CountProvisioningEnvCheckpointLanes(ctx context.Context, arg C
 }
 
 const getEnvCheckpointLane = `-- name: GetEnvCheckpointLane :one
-SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at FROM env_checkpoint_lane
+SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at FROM env_checkpoint_lane
 WHERE checkpoint_id = $1
   AND lane_key = $2
   AND workspace_id = $3
@@ -104,6 +107,9 @@ func (q *Queries) GetEnvCheckpointLane(ctx context.Context, arg GetEnvCheckpoint
 		&i.RuntimeID,
 		&i.TaskID,
 		&i.EnvID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.SourceMessageID,
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -112,7 +118,7 @@ func (q *Queries) GetEnvCheckpointLane(ctx context.Context, arg GetEnvCheckpoint
 }
 
 const listEnvCheckpointLanes = `-- name: ListEnvCheckpointLanes :many
-SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at FROM env_checkpoint_lane
+SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at FROM env_checkpoint_lane
 WHERE checkpoint_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -142,6 +148,9 @@ func (q *Queries) ListEnvCheckpointLanes(ctx context.Context, arg ListEnvCheckpo
 			&i.RuntimeID,
 			&i.TaskID,
 			&i.EnvID,
+			&i.ChannelID,
+			&i.ChatSessionID,
+			&i.SourceMessageID,
 			&i.Error,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -157,7 +166,7 @@ func (q *Queries) ListEnvCheckpointLanes(ctx context.Context, arg ListEnvCheckpo
 }
 
 const listStaleProvisioningEnvCheckpointLanes = `-- name: ListStaleProvisioningEnvCheckpointLanes :many
-SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at FROM env_checkpoint_lane
+SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at FROM env_checkpoint_lane
 WHERE status = 'provisioning' AND updated_at < $1
 ORDER BY updated_at ASC
 LIMIT $2
@@ -189,6 +198,9 @@ func (q *Queries) ListStaleProvisioningEnvCheckpointLanes(ctx context.Context, a
 			&i.RuntimeID,
 			&i.TaskID,
 			&i.EnvID,
+			&i.ChannelID,
+			&i.ChatSessionID,
+			&i.SourceMessageID,
 			&i.Error,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -207,7 +219,7 @@ const markEnvCheckpointLaneFailed = `-- name: MarkEnvCheckpointLaneFailed :one
 UPDATE env_checkpoint_lane
 SET status = 'failed', error = $1, updated_at = now()
 WHERE id = $2 AND workspace_id = $3
-RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at
+RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at
 `
 
 type MarkEnvCheckpointLaneFailedParams struct {
@@ -230,6 +242,9 @@ func (q *Queries) MarkEnvCheckpointLaneFailed(ctx context.Context, arg MarkEnvCh
 		&i.RuntimeID,
 		&i.TaskID,
 		&i.EnvID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.SourceMessageID,
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -241,7 +256,7 @@ const markEnvCheckpointLaneReady = `-- name: MarkEnvCheckpointLaneReady :one
 UPDATE env_checkpoint_lane
 SET status = 'ready', error = NULL, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at
+RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at
 `
 
 type MarkEnvCheckpointLaneReadyParams struct {
@@ -263,6 +278,9 @@ func (q *Queries) MarkEnvCheckpointLaneReady(ctx context.Context, arg MarkEnvChe
 		&i.RuntimeID,
 		&i.TaskID,
 		&i.EnvID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.SourceMessageID,
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -272,24 +290,30 @@ func (q *Queries) MarkEnvCheckpointLaneReady(ctx context.Context, arg MarkEnvChe
 
 const updateEnvCheckpointLaneStep = `-- name: UpdateEnvCheckpointLaneStep :one
 UPDATE env_checkpoint_lane
-SET instance_id = COALESCE($1, instance_id),
-    project_id  = COALESCE($2, project_id),
-    runtime_id  = COALESCE($3, runtime_id),
-    task_id     = COALESCE($4, task_id),
-    env_id      = COALESCE($5, env_id),
-    updated_at  = now()
-WHERE id = $6 AND workspace_id = $7
-RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, error, created_at, updated_at
+SET instance_id       = COALESCE($1, instance_id),
+    project_id        = COALESCE($2, project_id),
+    runtime_id        = COALESCE($3, runtime_id),
+    task_id           = COALESCE($4, task_id),
+    env_id            = COALESCE($5, env_id),
+    channel_id        = COALESCE($6, channel_id),
+    chat_session_id   = COALESCE($7, chat_session_id),
+    source_message_id = COALESCE($8, source_message_id),
+    updated_at        = now()
+WHERE id = $9 AND workspace_id = $10
+RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at
 `
 
 type UpdateEnvCheckpointLaneStepParams struct {
-	InstanceID  pgtype.UUID `json:"instance_id"`
-	ProjectID   pgtype.UUID `json:"project_id"`
-	RuntimeID   pgtype.UUID `json:"runtime_id"`
-	TaskID      pgtype.UUID `json:"task_id"`
-	EnvID       pgtype.UUID `json:"env_id"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	InstanceID      pgtype.UUID `json:"instance_id"`
+	ProjectID       pgtype.UUID `json:"project_id"`
+	RuntimeID       pgtype.UUID `json:"runtime_id"`
+	TaskID          pgtype.UUID `json:"task_id"`
+	EnvID           pgtype.UUID `json:"env_id"`
+	ChannelID       pgtype.UUID `json:"channel_id"`
+	ChatSessionID   pgtype.UUID `json:"chat_session_id"`
+	SourceMessageID pgtype.UUID `json:"source_message_id"`
+	ID              pgtype.UUID `json:"id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 }
 
 // Records one materialization step's id. COALESCE keeps already-filled steps, so
@@ -301,6 +325,9 @@ func (q *Queries) UpdateEnvCheckpointLaneStep(ctx context.Context, arg UpdateEnv
 		arg.RuntimeID,
 		arg.TaskID,
 		arg.EnvID,
+		arg.ChannelID,
+		arg.ChatSessionID,
+		arg.SourceMessageID,
 		arg.ID,
 		arg.WorkspaceID,
 	)
@@ -316,6 +343,9 @@ func (q *Queries) UpdateEnvCheckpointLaneStep(ctx context.Context, arg UpdateEnv
 		&i.RuntimeID,
 		&i.TaskID,
 		&i.EnvID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.SourceMessageID,
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,

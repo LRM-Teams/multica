@@ -1525,7 +1525,10 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		ActorUserID: in.UserID,
 		Index:       idx,
 		Lane: LaneRef{
+			// On the branch path the copied env id is both the idempotency key
+			// and the env to act on; fan-out separates the two.
 			LaneKey:         r.EnvID,
+			LaneEnvID:       r.EnvID,
 			InstanceID:      provisioned.SandboxInstanceID,
 			ProjectID:       r.ProjectID,
 			RuntimeID:       provisioned.RuntimeID,

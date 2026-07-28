@@ -289,6 +289,9 @@ type ResumeFromCheckpointResponse struct {
 	RolloutHandle string                       `json:"rollout_handle"`
 	TriggerStatus string                       `json:"trigger_status"`
 	Lanes         []LaneResponse               `json:"lanes,omitempty"`
+	// Status summarizes a fan-out resume and is absent for pause_in_place, which
+	// has one outcome already reported by trigger_status.
+	Status string `json:"status,omitempty"`
 }
 
 // ResumeEnvCheckpoint handles POST /api/v1/env-checkpoints/{checkpointID}/resume.
@@ -376,5 +379,6 @@ func (h *Handler) ResumeEnvCheckpoint(w http.ResponseWriter, r *http.Request) {
 		RolloutHandle: res.RolloutHandle,
 		TriggerStatus: string(res.TriggerStatus),
 		Lanes:         lanes,
+		Status:        string(res.Status),
 	})
 }

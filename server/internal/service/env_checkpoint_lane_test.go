@@ -1,0 +1,525 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+)
+
+// --- fakes ---
+
+// fakeLaneRepo stands in for the unique index. ClaimLane loses on an existing
+// key, which is the only behavior of the real index the service depends on.
+type fakeLaneRepo struct {
+	mu    sync.Mutex
+	lanes map[string]EnvCheckpointLane
+	seq   int
+}
+
+func newFakeLaneRepo() *fakeLaneRepo {
+	return &fakeLaneRepo{lanes: map[string]EnvCheckpointLane{}}
+}
+
+func laneRepoKey(checkpointID, laneKey string) string { return checkpointID + "/" + laneKey }
+
+func (f *fakeLaneRepo) seed(lane EnvCheckpointLane) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lanes[laneRepoKey(lane.CheckpointID, lane.LaneKey)] = lane
+}
+
+func (f *fakeLaneRepo) ClaimLane(_ context.Context, checkpointID, workspaceID, laneKey string) (EnvCheckpointLane, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := laneRepoKey(checkpointID, laneKey)
+	if _, exists := f.lanes[key]; exists {
+		return EnvCheckpointLane{}, false, nil
+	}
+	f.seq++
+	lane := EnvCheckpointLane{
+		ID: fmt.Sprintf("lane-%d", f.seq), CheckpointID: checkpointID,
+		WorkspaceID: workspaceID, LaneKey: laneKey, Status: LaneStatusProvisioning,
+	}
+	f.lanes[key] = lane
+	return lane, true, nil
+}
+
+func (f *fakeLaneRepo) GetLane(_ context.Context, checkpointID, _, laneKey string) (EnvCheckpointLane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	lane, ok := f.lanes[laneRepoKey(checkpointID, laneKey)]
+	if !ok {
+		return EnvCheckpointLane{}, fmt.Errorf("not found: lane %q", laneKey)
+	}
+	return lane, nil
+}
+
+func (f *fakeLaneRepo) ListLanes(_ context.Context, checkpointID, _ string) ([]EnvCheckpointLane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []EnvCheckpointLane
+	for _, lane := range f.lanes {
+		if lane.CheckpointID == checkpointID {
+			out = append(out, lane)
+		}
+	}
+	return out, nil
+}
+
+// byID finds a lane by its surrogate id, mirroring the real UPDATE ... WHERE id.
+func (f *fakeLaneRepo) byID(laneID string) (string, EnvCheckpointLane, bool) {
+	for key, lane := range f.lanes {
+		if lane.ID == laneID {
+			return key, lane, true
+		}
+	}
+	return "", EnvCheckpointLane{}, false
+}
+
+func (f *fakeLaneRepo) RecordLaneStep(_ context.Context, laneID, _ string, step LaneStep) (EnvCheckpointLane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, lane, ok := f.byID(laneID)
+	if !ok {
+		return EnvCheckpointLane{}, fmt.Errorf("not found: lane id %q", laneID)
+	}
+	// COALESCE semantics: an empty field leaves the stored value alone.
+	for _, f := range []struct {
+		dst *string
+		src string
+	}{
+		{&lane.InstanceID, step.InstanceID},
+		{&lane.ProjectID, step.ProjectID},
+		{&lane.RuntimeID, step.RuntimeID},
+		{&lane.TaskID, step.TaskID},
+		{&lane.EnvID, step.EnvID},
+		{&lane.ChannelID, step.ChannelID},
+		{&lane.ChatSessionID, step.ChatSessionID},
+		{&lane.SourceMessageID, step.SourceMessageID},
+	} {
+		if f.src != "" {
+			*f.dst = f.src
+		}
+	}
+	f.lanes[key] = lane
+	return lane, nil
+}
+
+func (f *fakeLaneRepo) MarkLaneReady(_ context.Context, laneID, _ string) (EnvCheckpointLane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, lane, ok := f.byID(laneID)
+	if !ok {
+		return EnvCheckpointLane{}, fmt.Errorf("not found: lane id %q", laneID)
+	}
+	lane.Status = LaneStatusReady
+	lane.Error = ""
+	f.lanes[key] = lane
+	return lane, nil
+}
+
+func (f *fakeLaneRepo) MarkLaneFailed(_ context.Context, laneID, _, reason string) (EnvCheckpointLane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, lane, ok := f.byID(laneID)
+	if !ok {
+		return EnvCheckpointLane{}, fmt.Errorf("not found: lane id %q", laneID)
+	}
+	lane.Status = LaneStatusFailed
+	lane.Error = reason
+	f.lanes[key] = lane
+	return lane, nil
+}
+
+func (f *fakeLaneRepo) CountProvisioningLanes(_ context.Context, checkpointID, _ string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, lane := range f.lanes {
+		if lane.CheckpointID == checkpointID && lane.Status == LaneStatusProvisioning {
+			n++
+		}
+	}
+	return n, nil
+}
+
+type fakeLaneMaterializer struct {
+	instanceCalls []LaneInstanceInput
+	projectCalls  []LaneProjectInput
+	runtimeCalls  []LaneRuntimeInput
+
+	instanceErr error
+	projectErr  error
+	runtimeErr  error
+}
+
+func (f *fakeLaneMaterializer) CreateLaneInstance(_ context.Context, in LaneInstanceInput) (SandboxInstanceRef, error) {
+	f.instanceCalls = append(f.instanceCalls, in)
+	if f.instanceErr != nil {
+		return SandboxInstanceRef{}, f.instanceErr
+	}
+	return SandboxInstanceRef{
+		InstanceID:  fmt.Sprintf("inst-%d", len(f.instanceCalls)),
+		WorkspaceID: in.WorkspaceID,
+	}, nil
+}
+
+func (f *fakeLaneMaterializer) CopyLaneProjectSubtree(_ context.Context, in LaneProjectInput) (string, string, error) {
+	f.projectCalls = append(f.projectCalls, in)
+	if f.projectErr != nil {
+		return "", "", f.projectErr
+	}
+	n := len(f.projectCalls)
+	return fmt.Sprintf("proj-%d", n), fmt.Sprintf("env-%d", n), nil
+}
+
+func (f *fakeLaneMaterializer) ProvisionLaneAgent(_ context.Context, in LaneRuntimeInput) (LaneBinding, error) {
+	f.runtimeCalls = append(f.runtimeCalls, in)
+	if f.runtimeErr != nil {
+		return LaneBinding{}, f.runtimeErr
+	}
+	n := len(f.runtimeCalls)
+	return LaneBinding{
+		RuntimeID:       fmt.Sprintf("rt-%d", n),
+		DaemonID:        fmt.Sprintf("daemon-%d", n),
+		AgentID:         in.AgentID,
+		ChannelID:       fmt.Sprintf("chan-%d", n),
+		ChatSessionID:   fmt.Sprintf("cs-%d", n),
+		SourceMessageID: fmt.Sprintf("msg-%d", n),
+	}, nil
+}
+
+type fakeSavepointReader struct {
+	savepoints []Savepoint
+	listCalls  int
+	failed     []string
+	listErr    error
+}
+
+func (f *fakeSavepointReader) ListSavepoints(_ context.Context, _, _ string) ([]Savepoint, error) {
+	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.savepoints, nil
+}
+
+func (f *fakeSavepointReader) MarkSavepointFailed(_ context.Context, snapshotID, _, _ string) error {
+	f.failed = append(f.failed, snapshotID)
+	return nil
+}
+
+// --- fixture ---
+
+type fanoutDeps struct {
+	repo       *fakeCheckpointRepo
+	creator    *fakeSavepointCreator
+	savepoints *fakeSavepointReader
+	lanes      *fakeLaneRepo
+	mat        *fakeLaneMaterializer
+	forked     *fakeContinuationStrategy
+}
+
+// newFanoutFixture builds a snapshot-mode checkpoint with exactly one ready
+// savepoint over one source instance — the shape every fan-out case starts from,
+// so each test states only its own deviation.
+func newFanoutFixture(t *testing.T) (*EnvCheckpointService, *fanoutDeps) {
+	t.Helper()
+	d := &fanoutDeps{
+		repo:    newFakeCheckpointRepo(),
+		creator: &fakeSavepointCreator{},
+		savepoints: &fakeSavepointReader{savepoints: []Savepoint{
+			{SnapshotID: "snap-1", CubeSnapshotID: "cube-1", InstanceID: "src-1", Status: "ready"},
+		}},
+		lanes:  newFakeLaneRepo(),
+		mat:    &fakeLaneMaterializer{},
+		forked: &fakeContinuationStrategy{mode: SaveModeSnapshot},
+	}
+	d.repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
+		SaveMode: SaveModeSnapshot, SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "src-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"agent_id":"a-1","project_id":"proj","kind":"chat"}`),
+	}
+	svc := NewEnvCheckpointService(d.repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{},
+		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
+		ContinuationRegistry{Forked: d.forked}).
+		WithSavepointCreator(d.creator).
+		WithLanes(d.lanes, d.mat, d.savepoints)
+	return svc, d
+}
+
+func fanOut(svc *EnvCheckpointService, laneCount int, anchor string) (ResumeFromCheckpointResult, error) {
+	return svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: "cp-1", ActorUserID: "u",
+		LaneCount: laneCount, LaneKeyAnchor: anchor,
+	})
+}
+
+// --- tests ---
+
+// The invariant the whole change exists for: N lanes cost one snapshot, taken
+// once at capture time, not one snapshot per lane.
+func TestThreeLanesTriggerOneSnapshotPerSourceInstance(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+
+	res, err := fanOut(svc, 3, "dispatch-abc")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(deps.creator.calls) != 0 {
+		t.Fatalf("resume must take no new snapshot, got %d", len(deps.creator.calls))
+	}
+	if deps.savepoints.listCalls != 1 {
+		t.Fatalf("resume must read the savepoints once, got %d", deps.savepoints.listCalls)
+	}
+	if len(res.Lanes) != 3 {
+		t.Fatalf("lanes = %d, want 3", len(res.Lanes))
+	}
+	if len(deps.mat.instanceCalls) != 3 {
+		t.Fatalf("want 3 lane instances, got %d", len(deps.mat.instanceCalls))
+	}
+	for _, c := range deps.mat.instanceCalls {
+		if c.Savepoint.CubeSnapshotID != "cube-1" {
+			t.Fatalf("lane instance must come from the single savepoint, got %q", c.Savepoint.CubeSnapshotID)
+		}
+	}
+	if len(deps.mat.projectCalls) != 3 || len(deps.mat.runtimeCalls) != 3 {
+		t.Fatalf("each lane needs its own subtree and runtime: subtrees=%d runtimes=%d",
+			len(deps.mat.projectCalls), len(deps.mat.runtimeCalls))
+	}
+	// Sharing a runtime or a conversation would make the lanes observe each
+	// other, which is the opposite of independent continuations.
+	for _, field := range []struct {
+		name string
+		get  func(ContinuationRequest) string
+	}{
+		{"runtime", func(r ContinuationRequest) string { return r.Lane.RuntimeID }},
+		{"env", func(r ContinuationRequest) string { return r.Lane.LaneEnvID }},
+		{"channel", func(r ContinuationRequest) string { return r.Lane.ChannelID }},
+		{"chat session", func(r ContinuationRequest) string { return r.Lane.ChatSessionID }},
+	} {
+		seen := map[string]bool{}
+		for _, c := range deps.forked.calls {
+			v := field.get(c)
+			if v == "" {
+				t.Fatalf("lane %q has no %s", c.Lane.LaneKey, field.name)
+			}
+			if seen[v] {
+				t.Fatalf("lanes must not share a %s: %q", field.name, v)
+			}
+			seen[v] = true
+		}
+	}
+	if len(deps.forked.calls) != 3 {
+		t.Fatalf("want 3 continuations, got %d", len(deps.forked.calls))
+	}
+	if res.Status != ResumeCompleted {
+		t.Fatalf("status = %q, want completed", res.Status)
+	}
+}
+
+func TestRepeatedLaneKeyReturnsExistingLane(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+
+	first, err := fanOut(svc, 1, "same")
+	if err != nil {
+		t.Fatalf("first resume: %v", err)
+	}
+	second, err := fanOut(svc, 1, "same")
+	if err != nil {
+		t.Fatalf("second resume: %v", err)
+	}
+	if len(deps.mat.instanceCalls) != 1 {
+		t.Fatalf("retry must not materialize a second sandbox, instances = %d", len(deps.mat.instanceCalls))
+	}
+	if first.Lanes[0].LaneKey != second.Lanes[0].LaneKey {
+		t.Fatalf("lane key not stable: %q vs %q", first.Lanes[0].LaneKey, second.Lanes[0].LaneKey)
+	}
+	if first.Lanes[0].InstanceID != second.Lanes[0].InstanceID {
+		t.Fatalf("retry must return the existing instance: %q vs %q",
+			first.Lanes[0].InstanceID, second.Lanes[0].InstanceID)
+	}
+	if len(deps.forked.calls) != 1 {
+		t.Fatalf("retry must not re-enqueue the continuation, calls = %d", len(deps.forked.calls))
+	}
+}
+
+func TestNewLaneKeyReExpandsWithoutASecondCheckpoint(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+
+	for _, anchor := range []string{"anchor-a", "anchor-b"} {
+		if _, err := fanOut(svc, 1, anchor); err != nil {
+			t.Fatalf("resume %s: %v", anchor, err)
+		}
+	}
+	all, err := deps.lanes.ListLanes(context.Background(), "cp-1", "ws")
+	if err != nil {
+		t.Fatalf("list lanes: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("a new anchor must add a lane, got %d", len(all))
+	}
+	if len(deps.repo.createCalls) != 0 {
+		t.Fatalf("re-expansion must not create a second checkpoint, got %d", len(deps.repo.createCalls))
+	}
+	if len(deps.creator.calls) != 0 {
+		t.Fatalf("re-expansion must reuse the savepoint, snapshots taken = %d", len(deps.creator.calls))
+	}
+}
+
+func TestInterruptedLaneContinuesFromFirstIncompleteStep(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	// Crashed after the sandbox came up, before the subtree copy.
+	deps.lanes.seed(EnvCheckpointLane{
+		ID: "l-0", CheckpointID: "cp-1", WorkspaceID: "ws",
+		LaneKey: laneKeyForOrdinal("dispatch-abc", 0), Status: LaneStatusProvisioning,
+		InstanceID: "inst-recovered",
+	})
+
+	res, err := fanOut(svc, 1, "dispatch-abc")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(deps.mat.instanceCalls) != 0 {
+		t.Fatalf("a completed step must not re-run, instance calls = %d", len(deps.mat.instanceCalls))
+	}
+	if len(deps.mat.projectCalls) != 1 || len(deps.mat.runtimeCalls) != 1 {
+		t.Fatalf("remaining steps must run once: subtrees=%d runtimes=%d",
+			len(deps.mat.projectCalls), len(deps.mat.runtimeCalls))
+	}
+	if res.Lanes[0].InstanceID != "inst-recovered" {
+		t.Fatalf("a recovered lane must keep its sandbox, got %q", res.Lanes[0].InstanceID)
+	}
+	if res.Lanes[0].Status != LaneStatusReady {
+		t.Fatalf("recovered lane status = %q, want ready", res.Lanes[0].Status)
+	}
+}
+
+// A lane that already provisioned its conversation must not copy a second one on
+// recovery, which is why the conversation ids are persisted rather than derived.
+func TestInterruptedLaneAfterProvisioningDoesNotReprovision(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	deps.lanes.seed(EnvCheckpointLane{
+		ID: "l-0", CheckpointID: "cp-1", WorkspaceID: "ws",
+		LaneKey: laneKeyForOrdinal("dispatch-abc", 0), Status: LaneStatusProvisioning,
+		InstanceID: "inst-recovered", ProjectID: "proj-recovered", EnvID: "env-recovered",
+		RuntimeID: "rt-recovered", ChannelID: "chan-recovered",
+		ChatSessionID: "cs-recovered", SourceMessageID: "msg-recovered",
+	})
+
+	res, err := fanOut(svc, 1, "dispatch-abc")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(deps.mat.runtimeCalls) != 0 {
+		t.Fatalf("a provisioned lane must not be provisioned again, calls = %d", len(deps.mat.runtimeCalls))
+	}
+	if len(deps.forked.calls) != 1 {
+		t.Fatalf("the remaining step is the agent run, calls = %d", len(deps.forked.calls))
+	}
+	lane := deps.forked.calls[0].Lane
+	if lane.ChannelID != "chan-recovered" || lane.SourceMessageID != "msg-recovered" {
+		t.Fatalf("the recovered conversation must be reused: %+v", lane)
+	}
+	if res.Lanes[0].Status != LaneStatusReady {
+		t.Fatalf("lane status = %q, want ready", res.Lanes[0].Status)
+	}
+}
+
+func TestLaneWithMissingSavepointFailsTypedAndMarksSavepointFailed(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	deps.mat.instanceErr = ErrSavepointGone
+
+	res, err := fanOut(svc, 1, "dispatch-abc")
+	if !errors.Is(err, ErrSavepointGone) {
+		t.Fatalf("expected typed ErrSavepointGone, got %v", err)
+	}
+	if res.Lanes[0].Status != LaneStatusFailed {
+		t.Fatalf("lane status = %q, want failed", res.Lanes[0].Status)
+	}
+	// Marking the savepoint failed is what makes later resumes fail fast instead
+	// of each one rediscovering the same missing snapshot.
+	if len(deps.savepoints.failed) != 1 || deps.savepoints.failed[0] != "snap-1" {
+		t.Fatalf("savepoint must be marked failed: %v", deps.savepoints.failed)
+	}
+}
+
+func TestAllLanesFailedIsReportedAsFailure(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	deps.mat.instanceErr = fmt.Errorf("cube unavailable")
+
+	res, err := fanOut(svc, 3, "dispatch-abc")
+	if err == nil {
+		t.Fatal("all lanes failing must surface as an error, not a partial success")
+	}
+	if len(res.Lanes) != 3 {
+		t.Fatalf("failure must still report every lane, got %d", len(res.Lanes))
+	}
+	for i, lane := range res.Lanes {
+		if lane.Status != LaneStatusFailed {
+			t.Fatalf("lane %d status = %q, want failed", i, lane.Status)
+		}
+		if lane.Error == "" {
+			t.Fatalf("lane %d must carry a diagnosable error", i)
+		}
+	}
+}
+
+// One lane's agent run failing leaves that lane's sandbox intact, so it is a
+// partial result the caller can act on rather than a whole-resume failure.
+func TestLaneTaskEnqueueFailureIsPerLanePartial(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	deps.forked.errOnCall = map[int]error{1: fmt.Errorf("enqueue rejected")}
+
+	res, err := fanOut(svc, 3, "dispatch-abc")
+	if err != nil {
+		t.Fatalf("a single trigger failure is partial, not fatal: %v", err)
+	}
+	want := []TriggerStatus{TriggerExecuted, TriggerFailed, TriggerExecuted}
+	for i, lane := range res.Lanes {
+		if lane.TriggerStatus != want[i] {
+			t.Fatalf("lane %d trigger = %q, want %q", i, lane.TriggerStatus, want[i])
+		}
+		if lane.InstanceID == "" {
+			t.Fatalf("lane %d lost its sandbox on trigger failure", i)
+		}
+	}
+	if res.Status != ResumePartial {
+		t.Fatalf("result status = %q, want partial", res.Status)
+	}
+}
+
+func TestSnapshotFanOutRefusedWhenLaneSeamsMissing(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	putResumableCheckpoint(repo, SaveModeSnapshot, EnvCheckpointSaveComplete)
+	resumer := &fakeCheckpointResumer{}
+	svc := newResumeService(repo, resumer)
+
+	if _, err := resumeOneLane(svc, "cp-1"); err == nil {
+		t.Fatal("snapshot resume without the lane seams must be refused")
+	}
+	// Refused rather than degraded: falling back to the pause-in-place path
+	// would resume instances that were never stopped.
+	if len(resumer.calls) != 0 {
+		t.Fatalf("a refused fan-out must not touch the sources, got %d", len(resumer.calls))
+	}
+}
+
+func TestSnapshotFanOutRefusedWhenCheckpointOwnsNoSavepoint(t *testing.T) {
+	svc, d := newFanoutFixture(t)
+	d.savepoints.savepoints = nil
+
+	_, err := fanOut(svc, 1, "dispatch-abc")
+	if !errors.Is(err, ErrCheckpointNotResumable) {
+		t.Fatalf("a savepoint-less snapshot checkpoint is permanently unresumable, got %v", err)
+	}
+	if len(d.mat.instanceCalls) != 0 {
+		t.Fatalf("nothing may be materialized without a savepoint, got %d", len(d.mat.instanceCalls))
+	}
+}

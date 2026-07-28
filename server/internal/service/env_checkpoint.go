@@ -64,7 +64,10 @@ type InFlightTaskResolver interface {
 // LaneRef identifies one materialized lane for forked continuation. The zero
 // value means "no lane", which is same-runtime continuation.
 type LaneRef struct {
+	// LaneKey identifies the lane for idempotency. It is not an env id: in
+	// fan-out it is an anchor plus an ordinal, so the env id travels separately.
 	LaneKey         string
+	LaneEnvID       string
 	InstanceID      string
 	ProjectID       string
 	RuntimeID       string
@@ -237,10 +240,25 @@ type ResumeLane struct {
 	Error         string
 }
 
+// ResumeStatus summarizes a fan-out resume. It is empty for pause_in_place,
+// which has a single outcome already carried by TriggerStatus and no lanes to
+// summarize.
+type ResumeStatus string
+
+const (
+	// ResumeCompleted means every requested lane is ready and triggered.
+	ResumeCompleted ResumeStatus = "completed"
+	// ResumePartial means at least one lane is usable and at least one is not.
+	// The caller decides whether that is enough, which is why the per-lane
+	// detail is reported rather than collapsed.
+	ResumePartial ResumeStatus = "partial"
+)
+
 // ResumeFromCheckpointResult is the continuation handle returned by
 // ResumeFromCheckpoint. AReaL uses RolloutHandle to re-enter the rollout;
-// TriggerStatus reports whether the agent runtime was re-engaged. Lanes is
-// additive and stays empty for pause_in_place, which has nothing to fan out.
+// TriggerStatus reports whether the agent runtime was re-engaged. Lanes and
+// Status are additive and stay empty for pause_in_place, which has nothing to fan
+// out, so its result is unchanged.
 type ResumeFromCheckpointResult struct {
 	CheckpointID  string
 	ProjectID     string
@@ -249,6 +267,7 @@ type ResumeFromCheckpointResult struct {
 	RolloutHandle string
 	TriggerStatus TriggerStatus
 	Lanes         []ResumeLane
+	Status        ResumeStatus
 }
 
 var (
@@ -269,6 +288,11 @@ type EnvCheckpointService struct {
 	inFlight      InFlightTaskResolver
 	continuations ContinuationRegistry
 	savepoints    SavepointCreator
+
+	// Fan-out seams, all three installed together by WithLanes.
+	lanes           EnvCheckpointLaneRepository
+	materializer    LaneMaterializer
+	savepointReader SavepointReader
 }
 
 func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader, inFlight InFlightTaskResolver, continuations ContinuationRegistry) *EnvCheckpointService {
@@ -440,9 +464,85 @@ func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, in Resu
 }
 
 // resumeSnapshotLanes materializes one independent lane per requested lane from
-// the checkpoint's savepoints.
-func (s *EnvCheckpointService) resumeSnapshotLanes(_ context.Context, _ EnvCheckpoint, _ ResumeFromCheckpointInput) (ResumeFromCheckpointResult, error) {
-	return ResumeFromCheckpointResult{}, fmt.Errorf("not_implemented: snapshot fan-out resume")
+// the checkpoint's savepoints. The savepoints are read once and reused by every
+// lane: fanning out to N lanes must not take N snapshots, which is the whole
+// point of paying for a savepoint at capture time.
+func (s *EnvCheckpointService) resumeSnapshotLanes(ctx context.Context, cp EnvCheckpoint, in ResumeFromCheckpointInput) (ResumeFromCheckpointResult, error) {
+	if s.lanes == nil || s.materializer == nil || s.savepointReader == nil {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: snapshot fan-out resume is not configured")
+	}
+	savepoints, err := s.savepointReader.ListSavepoints(ctx, cp.ID, in.WorkspaceID)
+	if err != nil {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("list savepoints: %w", err)
+	}
+	// A snapshot-mode checkpoint with no savepoint can never be materialized, so
+	// this is permanent rather than transient.
+	if len(savepoints) == 0 {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: %w: checkpoint owns no savepoint", ErrCheckpointNotResumable)
+	}
+	result := ResumeFromCheckpointResult{
+		CheckpointID:  cp.ID,
+		ProjectID:     cp.ProjectID,
+		EnvIDMap:      cp.EnvIDMap,
+		SandboxRefs:   cp.SandboxRefs,
+		RolloutHandle: fmt.Sprintf("resume:%s", cp.ID),
+	}
+	var trigger ResumeTrigger
+	hasTrigger := len(cp.ResumeTrigger) > 0
+	if hasTrigger {
+		if err := json.Unmarshal(cp.ResumeTrigger, &trigger); err != nil {
+			result.TriggerStatus = TriggerFailed
+			return result, fmt.Errorf("unmarshal resume_trigger: %w", err)
+		}
+	}
+	strategy := s.continuations.For(SaveModeSnapshot)
+
+	usable, triggered := 0, 0
+	var firstErr error
+	for i := 0; i < in.LaneCount; i++ {
+		lane, err := s.materializeLane(ctx, cp, in,
+			laneKeyForOrdinal(in.LaneKeyAnchor, i), savepoints[0], trigger, hasTrigger, strategy, i)
+		result.Lanes = append(result.Lanes, lane)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if lane.Status == LaneStatusReady {
+			usable++
+			if lane.TriggerStatus == TriggerExecuted {
+				triggered++
+			}
+		}
+	}
+
+	// Nothing usable came out of it, so this is a failure and not a fan-out with
+	// zero lanes. The first lane's cause is wrapped so a typed failure such as a
+	// vanished savepoint stays recognizable.
+	if usable == 0 {
+		result.TriggerStatus = TriggerFailed
+		result.Status = ResumePartial
+		if firstErr != nil {
+			return result, fmt.Errorf("resume: all %d requested lanes failed: %w", in.LaneCount, firstErr)
+		}
+		return result, fmt.Errorf("resume: all %d requested lanes failed", in.LaneCount)
+	}
+	if !hasTrigger {
+		result.TriggerStatus = TriggerSkippedLegacy
+		result.Status = ResumeCompleted
+		if usable < len(result.Lanes) {
+			result.Status = ResumePartial
+		}
+		return result, nil
+	}
+	// A partial fan-out is reported as such rather than as success: the caller
+	// owns the decision about whether fewer lanes than it asked for is workable.
+	if triggered < len(result.Lanes) {
+		result.TriggerStatus = TriggerFailed
+		result.Status = ResumePartial
+		return result, nil
+	}
+	result.TriggerStatus = TriggerExecuted
+	result.Status = ResumeCompleted
+	return result, nil
 }
 
 // resumePauseInPlace resumes the paused instances themselves. This is the

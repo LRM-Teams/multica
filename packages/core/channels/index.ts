@@ -72,6 +72,13 @@ export {
 export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey } from "./stores";
 export { isImmutableSystemChannel } from "./system-channel";
 export {
+  channelMemberRole,
+  channelMemberBadge,
+  canManageGroupMembers,
+  isRemovableGroupMember,
+  type ChannelMemberBadge,
+} from "./member-role";
+export {
   contentMentionsViewer,
   messageMentionsViewer,
 } from "./mentions-viewer";

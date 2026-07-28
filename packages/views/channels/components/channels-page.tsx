@@ -62,6 +62,7 @@ import {
   useComposerDraftStore,
   useLastSelectedChannelStore,
   isImmutableSystemChannel,
+  channelMemberBadge,
   type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
@@ -2217,6 +2218,18 @@ export function ChannelsPage({
     [workspaceMembers],
   );
 
+  // The group member panel shows the CHANNEL/group role badge (owner / 群管 /
+  // 管理员), which REPLACES the workspace-role label. Gated to ordinary
+  // non-system groups only: `general` is kind=group + system_key, and a system
+  // channel must never paint a "群主" badge — a product-impossible concept — even
+  // if BE returns a role. Fail closed on the display side; do not trust upstream
+  // data (Parker/Iris alignment #multica:f8b8c656). DMs (kind!=="group") also
+  // keep the workspace badge.
+  const groupBadgeForMember =
+    active?.kind === "group" && !isActiveSystemChannel
+      ? channelMemberBadge
+      : undefined;
+
   const openMembersDialog = useCallback(() => {
     setMembersQuery("");
     setMembersDialogOpen(true);
@@ -2280,6 +2293,7 @@ export function ChannelsPage({
         }
         noResultsLabel={t(($) => $.members.no_results)}
         roleForMember={roleForChannelMember}
+        badgeForMember={groupBadgeForMember}
         canRemove={!isActiveSystemChannel && canArchive(active)}
         isMobile={isMobile}
         currentUserId={currentUserId ?? ""}
@@ -3679,6 +3693,7 @@ export function ChannelsPage({
           query={membersQuery}
           onQueryChange={setMembersQuery}
           roleForMember={roleForChannelMember}
+          badgeForMember={groupBadgeForMember}
           canManage={!isActiveSystemChannel && canArchive(active)}
           isMobile={isMobile}
           currentUserId={currentUserId ?? ""}

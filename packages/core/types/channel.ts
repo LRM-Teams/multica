@@ -66,6 +66,13 @@ export interface ChannelMember {
   avatar_url?: string | null;
   runtime_stats?: RuntimeTokenStats | null;
   created_at: string;
+  /**
+   * Group membership role (group management, BE #1284). `owner` is the human
+   * group owner; `manager` is elevated (group manager for agents, admin for
+   * humans); `member` is ordinary. Optional — older backends omit it; treat a
+   * missing value as `member` (least-privileged fallback).
+   */
+  role?: ChannelMemberRole;
 }
 
 /** LRM-622 — invite picker row from GET /api/channels/:id/invite-candidates. */
@@ -82,6 +89,8 @@ export interface ChannelInviteCandidate {
 export interface ChannelInviteCandidatesResponse {
   candidates: ChannelInviteCandidate[];
 }
+
+export type ChannelMemberRole = "owner" | "manager" | "member";
 
 export interface ChannelReaction {
   id: string;

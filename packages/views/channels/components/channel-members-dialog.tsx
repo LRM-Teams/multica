@@ -1,6 +1,7 @@
 "use client";
 
 import type { ChannelMember } from "@multica/core/types";
+import type { ChannelMemberBadge } from "@multica/core/channels";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -36,6 +37,7 @@ export function ChannelMembersDialog({
   query,
   onQueryChange,
   roleForMember,
+  badgeForMember,
   canManage,
   isMobile,
   currentUserId,
@@ -56,6 +58,7 @@ export function ChannelMembersDialog({
   query: string;
   onQueryChange: (q: string) => void;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
+  badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
   canManage: boolean;
   isMobile: boolean;
   currentUserId: string;
@@ -126,6 +129,7 @@ export function ChannelMembersDialog({
           }
           noResultsLabel={t(($) => $.members.no_results)}
           roleForMember={roleForMember}
+          badgeForMember={badgeForMember}
           canRemove={canManage}
           isMobile={isMobile}
           currentUserId={currentUserId}

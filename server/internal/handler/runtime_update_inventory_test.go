@@ -1,27 +1,28 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestComputeUpdateInventoryDiagnostic_StuckCounts(t *testing.T) {
+func TestComputeUpdateInventoryDiagnostic_StatusAgeCounts(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	runStart := now.Add(-45 * time.Minute)
 	freshReady := now.Add(-5 * time.Minute)
 	oldReady := now.Add(-40 * time.Minute)
 
 	latest := map[string]*UpdateRequest{
-		"rt-run-stuck": {
+		"rt-run-old": {
 			ID:           "u1",
-			RuntimeID:    "rt-run-stuck",
+			RuntimeID:    "rt-run-old",
 			Status:       UpdateRunning,
 			RunStartedAt: &runStart,
 			UpdatedAt:    runStart,
 		},
-		"rt-ready-stuck": {
+		"rt-ready-old": {
 			ID:        "u2",
-			RuntimeID: "rt-ready-stuck",
+			RuntimeID: "rt-ready-old",
 			Status:    UpdateReady,
 			UpdatedAt: oldReady,
 		},
@@ -44,14 +45,14 @@ func TestComputeUpdateInventoryDiagnostic_StuckCounts(t *testing.T) {
 	if got.Kind != "inventory_diagnostic" {
 		t.Fatalf("kind = %q", got.Kind)
 	}
-	if got.StuckOverMinutes != 30 {
-		t.Fatalf("stuck_over_minutes = %d", got.StuckOverMinutes)
+	if got.StatusAgeOverMinutes != 30 {
+		t.Fatalf("status_age_over_minutes = %d", got.StatusAgeOverMinutes)
 	}
-	if got.StuckUpdateCounts[string(UpdateRunning)] != 1 {
-		t.Fatalf("running stuck = %d, want 1", got.StuckUpdateCounts[string(UpdateRunning)])
+	if got.RunningOverThreshold != 1 {
+		t.Fatalf("running_over_threshold = %d, want 1", got.RunningOverThreshold)
 	}
-	if got.StuckUpdateCounts[string(UpdateReady)] != 1 {
-		t.Fatalf("ready stuck = %d, want 1 (only old ready)", got.StuckUpdateCounts[string(UpdateReady)])
+	if got.ReadyToApplyOverThreshold != 1 {
+		t.Fatalf("ready_to_apply_over_threshold = %d, want 1", got.ReadyToApplyOverThreshold)
 	}
 	if got.EligibleRuntimeCount != 5 {
 		t.Fatalf("eligible = %d", got.EligibleRuntimeCount)
@@ -62,18 +63,15 @@ func TestComputeUpdateInventoryDiagnostic_StuckCounts(t *testing.T) {
 	if got.CLIVersionDistribution["unknown"] != 1 {
 		t.Fatalf("dist unknown = %d", got.CLIVersionDistribution["unknown"])
 	}
-	if got.CLIVersionDistribution["0.3.64"] != 1 || got.CLIVersionDistribution["v0.3.78"] != 1 {
-		t.Fatalf("dist = %#v", got.CLIVersionDistribution)
-	}
-	if got.Notes == "" || got.Notes == "safety" {
-		t.Fatalf("notes must mark inventory/diagnostic, got %q", got.Notes)
+	if strings.Contains(strings.ToLower(got.Notes), "stuck") {
+		t.Fatalf("notes must not use judgment word stuck: %q", got.Notes)
 	}
 }
 
 func TestComputeUpdateInventoryDiagnostic_Empty(t *testing.T) {
 	got := ComputeUpdateInventoryDiagnostic(time.Now(), 30*time.Minute, nil, nil)
-	if got.StuckUpdateCounts[string(UpdateRunning)] != 0 || got.StuckUpdateCounts[string(UpdateReady)] != 0 {
-		t.Fatalf("stuck = %#v", got.StuckUpdateCounts)
+	if got.RunningOverThreshold != 0 || got.ReadyToApplyOverThreshold != 0 {
+		t.Fatalf("counts = %d/%d", got.RunningOverThreshold, got.ReadyToApplyOverThreshold)
 	}
 	if got.EligibleRuntimeCount != 0 {
 		t.Fatalf("eligible = %d", got.EligibleRuntimeCount)

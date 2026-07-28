@@ -18,6 +18,7 @@
     "name_required": "채널 이름을 입력하세요.",
     "create_name_taken": "이미 같은 이름의 채널이 있습니다.",
     "create_failed": "채널 생성에 실패했습니다. 다시 시도해 주세요.",
+    "create_pin_failed": "그룹을 만들었지만 고정하지 못했습니다. 나중에 수동으로 고정할 수 있습니다.",
     "empty": "아직 채널이 없습니다.",
     "menu_aria": "채널 작업",
     "delete": "그룹 삭제",

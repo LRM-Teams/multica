@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { toast } from "sonner";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelsPage } from "./channels-page";
@@ -38,6 +39,15 @@ const apiMock = vi.hoisted(() => {
   return { proxy, createChannel };
 });
 vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
+
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), {
+    info: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+  }),
+}));
 
 const CHANNELS = [
   {
@@ -269,5 +279,28 @@ describe("ChannelsPage create-group popover — optional project field (#576)", 
     // The created group (kind:"group", id "chan-new") is pinned for the creator
     // only — a per-user pin reusing the existing channel pin, best-effort.
     await waitFor(() => expect(pinChannel).toHaveBeenCalledWith("chan-new"));
+  });
+
+  it("surfaces a non-blocking toast when the creator pin fails — creation still succeeds (Beckham v2 §4, Iris)", async () => {
+    const pinChannel = apiMock.proxy.pinChannel as ReturnType<typeof vi.fn>;
+    pinChannel.mockClear();
+    pinChannel.mockRejectedValueOnce(new Error("pin failed"));
+    const infoToast = toast.info as ReturnType<typeof vi.fn>;
+    infoToast.mockClear();
+    renderPage();
+    openCreatePopover();
+    const nameInput = await screen.findByPlaceholderText("Channel name");
+    fireEvent.change(nameInput, { target: { value: "New Group" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+    // Creation proceeds and the pin is still attempted…
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(pinChannel).toHaveBeenCalledWith("chan-new"));
+    // …but the pin rejection is NOT swallowed — an info toast tells the user
+    // the group exists yet wasn't pinned and can be pinned manually.
+    await waitFor(() =>
+      expect(infoToast).toHaveBeenCalledWith(
+        "Group created, but it couldn't be pinned. You can pin it manually later.",
+      ),
+    );
   });
 });

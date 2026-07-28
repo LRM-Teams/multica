@@ -18,6 +18,7 @@
     "name_required": "请输入频道名。",
     "create_name_taken": "该频道名已存在。",
     "create_failed": "创建频道失败，请重试。",
+    "create_pin_failed": "群聊已创建，但未能置顶。你可以稍后手动置顶。",
     "empty": "还没有群聊。",
     "menu_aria": "群组操作",
     "delete": "删除群组",

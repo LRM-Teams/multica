@@ -18,6 +18,7 @@
     "name_required": "Please enter a channel name.",
     "create_name_taken": "A channel with this name already exists.",
     "create_failed": "Failed to create channel. Please try again.",
+    "create_pin_failed": "Group created, but it couldn't be pinned. You can pin it manually later.",
     "empty": "No channels yet.",
     "menu_aria": "Channel actions",
     "delete": "Delete group",

@@ -1676,12 +1676,16 @@ export function ChannelsPage({
           // existing per-user channel pin (the creator can unpin like any other),
           // and only pins for that one user — not a workspace-wide pin. Ordinary
           // groups only (the create dialog makes those; gate defensively). Pin is
-          // best-effort: a failure never blocks or alarms — the group is created
-          // and selected regardless, and the user can pin manually.
+          // best-effort: a failure never blocks or rolls back — the group is
+          // created and selected regardless. But we don't swallow it silently:
+          // the product promises "new group pinned", so a pin failure surfaces a
+          // non-blocking info toast (not an error — creation succeeded) telling
+          // the user they can pin manually, rather than leaving them with neither
+          // the pin nor any signal.
           if (channel.kind === "group") {
             setChannelPin.mutate(
               { channelId: channel.id, pinned: true },
-              { onError: () => {} },
+              { onError: () => toast.info(t(($) => $.sidebar.create_pin_failed)) },
             );
           }
           setNewName("");

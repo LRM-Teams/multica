@@ -39,3 +39,44 @@ self.addEventListener('notificationclick', (event) => {
     if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
   })());
 });
+
+// LRM-679 缺陷 B: handle pushsubscriptionchange so a rotated/invalidated
+// subscription is re-created automatically. Safari's support is spotty, so
+// the page-side key-mismatch guard (getOrCreateSubscription, 缺陷 A) is the
+// authoritative path; this covers Chrome and any browser that fires the event.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    try {
+      const res = await fetch('/api/web-push/public-key', { credentials: 'include' });
+      if (!res.ok) return;
+      const { enabled, public_key: publicKey } = await res.json();
+      if (!enabled || !publicKey) return;
+      const padding = '='.repeat((4 - (publicKey.length % 4)) % 4);
+      const base64 = (publicKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(base64);
+      const key = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+      const newSubscription = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: key,
+      });
+      const payload = newSubscription.toJSON();
+      // Best-effort rebind. SW cannot read the CSRF cookie to set X-CSRF-Token,
+      // so this may 403 on CSRF-strict servers; the page-side guard
+      // (bindCurrentWebPushSubscription) will complete the rebind on next open.
+      await fetch('/api/web-push/subscriptions', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: payload.endpoint,
+          keys: { p256dh: payload.keys?.p256dh, auth: payload.keys?.auth },
+          expiration_time: payload.expirationTime ?? null,
+          device_id: payload.endpoint,
+          user_agent: navigator.userAgent,
+        }),
+      }).catch(() => undefined);
+    } catch {
+      /* page-side guard will retry on next open */
+    }
+  })());
+});

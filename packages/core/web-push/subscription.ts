@@ -103,12 +103,40 @@ export async function unbindCurrentWebPushSubscription(): Promise<void> {
 }
 
 async function getOrCreateSubscription(registration: ServiceWorkerRegistration, publicKey: string): Promise<PushSubscription> {
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
   const existing = await registration.pushManager.getSubscription();
-  if (existing) return existing;
+  if (existing) {
+    // LRM-679 缺陷 A (VAPID key rotation guard): if the existing
+    // subscription was created with a different applicationServerKey, its
+    // endpoint is now stale and will silently fail to receive pushes.
+    // Unsubscribe and create a fresh subscription bound to the current key
+    // so VAPID rotation (e.g. LRM-680) doesn't leave devices dark.
+    if (hasMatchingApplicationServerKey(existing, applicationServerKey)) {
+      return existing;
+    }
+    await existing.unsubscribe().catch(() => undefined);
+  }
   return registration.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
+    applicationServerKey,
   });
+}
+
+function hasMatchingApplicationServerKey(subscription: PushSubscription, expectedKey: Uint8Array): boolean {
+  const actual = subscription.options?.applicationServerKey;
+  if (!actual) return false;
+  const actualBytes = toUint8Array(actual);
+  if (actualBytes.length !== expectedKey.length) return false;
+  for (let i = 0; i < actualBytes.length; i += 1) {
+    if (actualBytes[i] !== expectedKey[i]) return false;
+  }
+  return true;
+}
+
+function toUint8Array(value: ArrayBuffer | ArrayBufferView): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
 }
 
 function subscriptionToPayload(subscription: PushSubscription): WebPushSubscriptionPayload {

@@ -88,6 +88,12 @@
     "presence_attention": "확인 필요",
     "working_verb_with_duration": "{{verb}} · {{duration}}"
   },
+  "group_manager_hint": {
+    "title": "그룹 관리자가 아직 없습니다",
+    "body": "당신은 그룹 소유자입니다. 멤버 목록에서 멤버를 확인하고 관리할 수 있으며, 그룹 관리자 권한 설정이 완료되면 여기에서 지정할 수 있습니다.",
+    "cta": "멤버 보기",
+    "dismiss": "나중에"
+  },
   "members": {
     "role_badge": {
       "owner": "소유자",

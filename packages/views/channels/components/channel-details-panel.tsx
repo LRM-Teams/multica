@@ -24,6 +24,7 @@ import { useT } from "../../i18n";
 import { ChannelDetailsDetailRow } from "./channel-details-detail-row";
 import { ChannelDetailsHeroAvatar } from "./channel-details-hero-avatar";
 import { ChannelDetailsMemberStack } from "./channel-details-member-stack";
+import { GroupManagerHint } from "./group-manager-hint";
 import { MotionContent } from "../../common/motion-content";
 import { ChannelDetailsSectionCard } from "./channel-details-section-card";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -263,6 +264,18 @@ export function ChannelDetailsPanel({
             </span>
             <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           </button>
+
+          {/* #808 — group-level "no manager yet" onboarding for the OWNER,
+              right after the member summary (Iris): zero-manager is a group
+              state, so it sits with the group's member entry and its CTA leads
+              into Members. Self-gating and fail-closed; renders nothing for
+              anyone else. */}
+          {channel.kind === "group" ? (
+            <GroupManagerHint
+              channelId={channel.id}
+              onOpenMembers={() => setView("members")}
+            />
+          ) : null}
 
           <ChannelDetailsSectionCard title={t(($) => $.details.section_about)}>
             <ChannelDetailsDetailRow

@@ -88,6 +88,12 @@
     "presence_attention": "要確認",
     "working_verb_with_duration": "{{verb}} · {{duration}}"
   },
+  "group_manager_hint": {
+    "title": "グループ管理者が未設定です",
+    "body": "あなたはグループのオーナーです。メンバー一覧でメンバーの確認と管理ができます。グループ管理者の権限設定が完了すると、ここで指定できるようになります。",
+    "cta": "メンバーを見る",
+    "dismiss": "後で"
+  },
   "members": {
     "role_badge": {
       "owner": "オーナー",

@@ -9,6 +9,15 @@ import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelDetailsPanel } from "./channel-details-panel";
 
+// #808 — the overview hosts GroupManagerHint, which reads the viewer from the
+// auth store and the roster from the members query. Neither is what this file
+// tests, so stub the viewer; the hint self-gates to owner + zero-manager and
+// stays hidden here.
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (s: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: "viewer-1" } }),
+}));
+
 vi.mock("@multica/core/projects/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/projects/queries")>()),
   projectListOptions: () => ({

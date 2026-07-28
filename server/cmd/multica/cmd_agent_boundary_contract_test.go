@@ -1230,6 +1230,53 @@ func TestBoundary_IssuePullRequests_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_IssueRunMessages_HitsDedicatedAgentAPI asserts task-run
+// messages use GET /api/agent/tasks/{id}/messages under daemon TOKEN_FILE auth.
+func TestBoundary_IssueRunMessages_HitsDedicatedAgentAPI(t *testing.T) {
+	taskID := "99999999-8888-7777-6666-555555555555"
+	wantMessages := "/api/agent/tasks/" + taskID + "/messages"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.RequestURI())
+		if r.Method == http.MethodGet && r.URL.Path == wantMessages {
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"seq": 1, "type": "text", "content": "done",
+			}})
+			return
+		}
+		http.Error(w, "human task messages path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvTokenFile(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "run-messages"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Int("since", 0, "")
+	cmd.Flags().String("issue", "", "")
+	_ = cmd.Flags().Set("since", "7")
+	if err := runIssueRunMessages(cmd, []string{taskID}); err != nil {
+		t.Fatalf("runIssueRunMessages: %v (paths=%v)", err, gotPaths)
+	}
+
+	wantRequest := "GET " + wantMessages + "?since=7"
+	found := false
+	for _, request := range gotPaths {
+		if request == wantRequest {
+			found = true
+		}
+		path := strings.SplitN(request, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/tasks") {
+			t.Fatalf("hit human task path %q; full=%v", request, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("requests=%v, want %s", gotPaths, wantRequest)
+	}
+}
+
 // TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets is a living map of
 // necessary capabilities → dedicated paths (Ronan table). Fails if a required
 // capability loses its dedicated target string (typo / table drift).
@@ -1252,6 +1299,7 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"issue subscribers", []string{"/api/agent/issues/", "/subscribers"}},
 		{"issue task-runs/rerun/channel", []string{"/api/agent/issues/", "/task-runs"}},
 		{"issue pull-requests", []string{"/api/agent/issues/", "/pull-requests"}},
+		{"task run messages", []string{"/api/agent/tasks/", "/messages"}},
 		{"project resource read", []string{"/api/agent/projects/"}},
 		{"attachment view/upload", []string{"/api/agent/attachments", "/api/agent/upload-file"}},
 		{"directory agents", []string{"/api/agent/agents"}},

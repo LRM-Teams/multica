@@ -1529,6 +1529,9 @@ func runIssueRunMessages(cmd *cobra.Command, args []string) error {
 	}
 
 	path := "/api/tasks/" + url.PathEscape(taskRef.ID) + "/messages"
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/tasks/" + url.PathEscape(taskRef.ID) + "/messages"
+	}
 	if since, _ := cmd.Flags().GetInt("since"); since > 0 {
 		path += fmt.Sprintf("?since=%d", since)
 	}

@@ -2317,9 +2317,18 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// ListAgentTaskMessages — GET /api/agent/tasks/{taskId}/messages.
+// Dedicated agent read of the existing workspace-scoped task message model.
+func (h *Handler) ListAgentTaskMessages(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.ListTaskMessagesByUser(w, r)
+}
+
 // ListTaskMessagesByUser returns task messages for a task.
-// Used by the frontend under regular user auth (not daemon auth).
-// Verifies the task belongs to the caller's workspace.
+// Used by the frontend under regular user auth and by the dedicated agent
+// wrapper above. Verifies the task belongs to the caller's workspace.
 func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 	taskUUID, ok := parseUUIDOrBadRequest(w, taskID, "task_id")

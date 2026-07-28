@@ -1314,7 +1314,8 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 //   - created_at: delete created_at → RED (member order opposite member_id)
 //   - manager-type: swap agent/user rank constants → RED (product agent-before-human)
 //   - member_type: ordinary agent+user same UUID/role/created_at → delete member_type RED
-//   - member_id: same type/role/created_at, two fixed UUIDs → delete member_id RED
+//   - member_id: same type/role/created_at, two fixed UUIDs → ASC→DESC flip RED
+//     (locks direction; delete alone is planner-undefined, not evidence — Barry)
 //
 // Independent subtests/channels so limit=5 does not force one fixture to carry all keys.
 func TestListChannelsMemberBriefExactOrder(t *testing.T) {
@@ -1506,7 +1507,10 @@ WHERE channel_id=$1 AND member_type=$2 AND member_id=$3`,
 	})
 
 	t.Run("member_id_same_type_role_created_at", func(t *testing.T) {
-		// Two human members, same role/created_at, fixed UUIDs — only member_id ASC.
+		// Two human members, same role/created_at, fixed UUIDs — product order
+		// member_id ASC (smaller id first). Honest counterfactual: flip ASC→DESC
+		// in the OVER clause → RED. Delete alone is NOT guaranteed RED (planner
+		// may still emit same order; Barry exact -count=20).
 		ch := createGroup(t)
 		const idA = "b2200000-0000-4000-8000-000000000001" // smaller
 		const idB = "b2200000-0000-4000-8000-000000000002" // larger

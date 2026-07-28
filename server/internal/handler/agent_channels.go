@@ -97,14 +97,21 @@ func (h *Handler) ListAgentChannelMembers(w http.ResponseWriter, r *http.Request
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
 		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       cs.runtime_token_stats,
-		       cm.created_at
+		       cm.created_at,
+		       cm.role
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		LEFT JOIN channel_agent_session cas ON cm.member_type = 'agent' AND cas.channel_id = cm.channel_id AND cas.agent_id = cm.member_id
 		LEFT JOIN chat_session cs ON cs.id = cas.chat_session_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2
-		ORDER BY cm.created_at ASC`, channelID, parseUUID(p.WorkspaceID))
+		ORDER BY
+		  CASE cm.role
+		    WHEN 'owner' THEN 0
+		    WHEN 'manager' THEN 1
+		    ELSE 2
+		  END,
+		  cm.created_at ASC`, channelID, parseUUID(p.WorkspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel members")
 		return
@@ -112,14 +119,17 @@ func (h *Handler) ListAgentChannelMembers(w http.ResponseWriter, r *http.Request
 	defer rows.Close()
 	out := []ChannelMemberResponse{}
 	for rows.Next() {
-		var typ, name, displayName string
+		var typ, name, displayName, role string
 		var id pgtype.UUID
 		var avatarURL pgtype.Text
 		var runtimeStatsRaw []byte
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &runtimeStatsRaw, &createdAt); err != nil {
+		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &runtimeStatsRaw, &createdAt, &role); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel members")
 			return
+		}
+		if role == "" {
+			role = "member"
 		}
 		member := ChannelMemberResponse{
 			MemberType:  typ,
@@ -127,6 +137,7 @@ func (h *Handler) ListAgentChannelMembers(w http.ResponseWriter, r *http.Request
 			Name:        name,
 			DisplayName: firstNonEmpty(displayName, name),
 			AvatarURL:   textToPtr(avatarURL),
+			Role:        role,
 			CreatedAt:   timestampToString(createdAt),
 		}
 		if len(runtimeStatsRaw) > 0 {

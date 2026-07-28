@@ -1542,6 +1542,194 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+
+type updateChannelMemberRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// UpdateChannelMemberRole — PATCH /api/channels/{channelId}/members/{memberType}/{memberId}
+// Only the channel's human owner may change roles (workspace admin does NOT substitute).
+// role=owner transfers ownership to a human member (old owner becomes manager).
+// role=manager|member promote/demote; agents may be manager|member only (CHECK).
+func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "UpdateChannelMemberRole") {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	memberType := chi.URLParam(r, "memberType")
+	memberID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "memberId"), "member id")
+	if !ok {
+		return
+	}
+	if memberType != "user" && memberType != "agent" {
+		writeError(w, http.StatusBadRequest, "member_type must be user or agent")
+		return
+	}
+	var req updateChannelMemberRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	newRole := strings.TrimSpace(req.Role)
+	switch newRole {
+	case "owner", "manager", "member":
+	default:
+		writeError(w, http.StatusBadRequest, "role must be owner, manager, or member")
+		return
+	}
+	if newRole == "owner" && memberType != "user" {
+		writeError(w, http.StatusBadRequest, "only human members can be channel owner")
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	// Ordinary non-system group only (system_key already blocked; DM rejected by requireGroupChannel).
+	var systemKey pgtype.Text
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT system_key FROM channel WHERE id = $1 AND workspace_id = $2`,
+		channelID, parseUUID(workspaceID)).Scan(&systemKey); err != nil {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if systemKey.Valid {
+		writeSystemChannelProtected(w)
+		return
+	}
+	if !h.requireChannelRoleOwner(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update member role")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var currentRole string
+	err = tx.QueryRow(r.Context(), `
+		SELECT role FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4
+		FOR UPDATE`,
+		channelID, parseUUID(workspaceID), memberType, memberID).Scan(&currentRole)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "channel member not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load channel member")
+		return
+	}
+	if currentRole == newRole {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "ok",
+			"member_type": memberType,
+			"member_id":   uuidToString(memberID),
+			"role":        newRole,
+		})
+		return
+	}
+
+	if newRole == "owner" {
+		// Transfer: demote current owners to manager (Iris: explicit transfer keeps
+		// prior owner elevated as 管理员, not silent full demotion), then promote target.
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE channel_member
+			SET role = 'manager'
+			WHERE channel_id = $1 AND workspace_id = $2 AND role = 'owner'`,
+			channelID, parseUUID(workspaceID)); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+			return
+		}
+		tag, err := tx.Exec(r.Context(), `
+			UPDATE channel_member
+			SET role = 'owner'
+			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+			channelID, parseUUID(workspaceID), memberID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+			return
+		}
+		if tag.RowsAffected() != 1 {
+			writeError(w, http.StatusNotFound, "channel member not found")
+			return
+		}
+	} else {
+		// Demoting the sole owner without transfer is forbidden.
+		if currentRole == "owner" {
+			var otherOwners int
+			_ = tx.QueryRow(r.Context(), `
+				SELECT count(*) FROM channel_member
+				WHERE channel_id = $1 AND workspace_id = $2
+				  AND role = 'owner' AND member_type = 'user' AND member_id <> $3`,
+				channelID, parseUUID(workspaceID), memberID).Scan(&otherOwners)
+			if otherOwners == 0 {
+				writeError(w, http.StatusConflict, "transfer channel ownership before changing the only owner's role")
+				return
+			}
+		}
+		tag, err := tx.Exec(r.Context(), `
+			UPDATE channel_member
+			SET role = $5
+			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
+			channelID, parseUUID(workspaceID), memberType, memberID, newRole)
+		if err != nil {
+			// 237 CHECK: owner ⇒ user
+			writeError(w, http.StatusBadRequest, "invalid channel member role")
+			return
+		}
+		if tag.RowsAffected() != 1 {
+			writeError(w, http.StatusNotFound, "channel member not found")
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update member role")
+		return
+	}
+	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"member_type": memberType,
+		"member_id":   uuidToString(memberID),
+		"role":        newRole,
+	})
+}
+
+// requireChannelRoleOwner gates mutations on channel_member.role = owner.
+// Workspace owner/admin does NOT substitute (Parker/Iris #814).
+func (h *Handler) requireChannelRoleOwner(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID, userID pgtype.UUID) bool {
+	var role string
+	err := h.DB.QueryRow(ctx, `
+		SELECT role FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+		channelID, parseUUID(workspaceID), userID).Scan(&role)
+	if err != nil || role != "owner" {
+		writeError(w, http.StatusForbidden, "only the channel owner can manage member roles")
+		return false
+	}
+	return true
+}
+
 func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

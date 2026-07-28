@@ -123,9 +123,12 @@ function MemberRow({
       menuActions.canTransferOwnership ||
       menuActions.canRemove);
 
-  // #832 临时诚实守卫：整块删除（勿翻开关/勿部分启用）。删除条件 = #1326 最终角色
-  // 写合同 merged + served，且本菜单三行已接真实授权 mutation（届时由实现真 UI 的
+  // #832 临时诚实守卫：整块删除（勿翻开关/勿部分启用）。删除条件 = **#814 的角色写
+  // 接口 merged + served**，且本菜单三行已接真实授权 mutation（届时由实现真 UI 的
   // 那张任务一并删除）。
+  //
+  // 条件写任务号、不写 PR 号：PR 会滚（#1321 → #1326 → #1332 …），指向一个已经合并
+  // 的前身会让人以为条件已满足、提前把守卫拆掉。任务号不会滚。
   //
   // Why it exists: the role mutations (promote / demote / transfer) have no
   // write endpoint yet, so these rows used to be clickable and answer with an

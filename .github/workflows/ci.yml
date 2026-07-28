@@ -88,9 +88,12 @@ jobs:
         # uses its own file workers, so views' 297 files stay parallel; we are
         # removing the multiplication, not serialising the suite.
         #
-        # The cost is small and was measured before choosing this: views ~65s is
-        # ~89% of frontend test wall time (core 3.51s + desktop 2.53s + web 1.77s
-        # ≈ 7.8s), so giving up cross-package overlap costs ~8s at most.
+        # The cost is small and was measured before choosing this. Note the
+        # package set is exactly what `@multica/web...` expands to — core, ui,
+        # views, web; desktop is NOT in this job (`Web-only`, above), so it is
+        # not part of the trade: views ~65s is ~92% of this job's test wall time
+        # (core 3.51s + web 1.77s ≈ 5.3s; ui has no test script), so giving up
+        # cross-package overlap costs ~5s at most.
         #
         # Deliberately NOT done here: raising any timeout. Starvation slowdown is
         # a censored lower bound of ≥21–24×, so no timeout value is known to be

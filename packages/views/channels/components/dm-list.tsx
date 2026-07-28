@@ -76,6 +76,7 @@ import {
   CONVERSATION_SIDEBAR_ROW_IDLE,
   CONVERSATION_SIDEBAR_UNREAD_BADGE,
 } from "./conversation-sidebar-styles";
+import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
@@ -116,7 +117,8 @@ export function DmList({
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const bubbleUnreadByAgent = useAgentBubbleUnreadByAgent(wsId);
-  const [collapsed, setCollapsed] = useState(false);
+  // LRM-655: persist collapse across ChannelsPage/DmList remounts (e.g. select channel).
+  const [collapsed, setCollapsed] = useSidebarSectionCollapsed("dms", wsId);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const dmActions = useDmRowActions();

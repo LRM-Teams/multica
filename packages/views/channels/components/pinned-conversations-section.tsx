@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { useT } from "../../i18n/use-t";
+import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 import {
   isConversationMuted,
   sumUnmutedUnreadCounts,
@@ -22,7 +24,9 @@ export function PinnedConversationsSection({
   children: ReactNode;
 }) {
   const { t } = useT("channels");
-  const [collapsed, setCollapsed] = useState(false);
+  const wsId = useWorkspaceId();
+  // LRM-655: same remount-safe collapse as DMs / CHANNELS.
+  const [collapsed, setCollapsed] = useSidebarSectionCollapsed("pinned", wsId);
 
   const aggregateUnread = useMemo(() => {
     let total = 0;

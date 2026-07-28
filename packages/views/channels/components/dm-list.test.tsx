@@ -130,6 +130,12 @@ vi.mock("@multica/ui/components/ui/drawer", () => ({
 
 import { DmList } from "./dm-list";
 import { CONVERSATION_SIDEBAR_ROW_ACTIVE } from "./conversation-sidebar-styles";
+import { resetSidebarSectionCollapsedMemoryForTests } from "../hooks/use-sidebar-section-collapsed";
+
+beforeEach(() => {
+  resetSidebarSectionCollapsedMemoryForTests();
+  window.sessionStorage.clear();
+});
 
 function makeDm(overrides: Partial<DMItem> = {}): DMItem {
   return {
@@ -430,6 +436,8 @@ describe("DmList no Ask Wendy promo card (LRM-294)", () => {
 
 describe("DmList sidebar contrast (LRM-354)", () => {
   beforeEach(() => {
+    resetSidebarSectionCollapsedMemoryForTests();
+    window.sessionStorage.clear();
     mockViewport.isMobile = false;
     mockQueryData.dms = [];
     mockQueryData.dmsPending = false;
@@ -460,11 +468,38 @@ describe("DmList sidebar contrast (LRM-354)", () => {
       }),
     ];
 
-    const { container } = renderDmList();
+    const { container, unmount } = renderDmList();
     fireEvent.click(screen.getByRole("button", { name: /Direct messages/i }));
     const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
     expect(badge).not.toBeNull();
     expect(badge).toHaveTextContent("5");
+    unmount();
+  });
+
+  it("keeps DIRECT MESSAGES collapsed after remount (LRM-655)", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-1",
+        peer: { type: "user", id: "peer-1", name: "Peer" },
+      }),
+    ];
+
+    const first = renderDmList();
+    fireEvent.click(screen.getByRole("button", { name: /Direct messages/i }));
+    expect(
+      first.container.querySelector('[aria-expanded="false"]'),
+    ).not.toBeNull();
+    // Row body gone while collapsed.
+    expect(screen.queryByText("Peer")).toBeNull();
+    first.unmount();
+
+    // Simulate ChannelsPage remount on channel select — collapse must stick.
+    const second = renderDmList();
+    expect(
+      second.container.querySelector('[aria-expanded="false"]'),
+    ).not.toBeNull();
+    expect(screen.queryByText("Peer")).toBeNull();
+    second.unmount();
   });
 });
 

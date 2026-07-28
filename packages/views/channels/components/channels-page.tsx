@@ -223,6 +223,7 @@ import {
 } from "./conversation-sidebar-styles";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
+import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
@@ -620,7 +621,11 @@ export function ChannelsPage({
   }, [searchParamsString]);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [channelsCollapsed, setChannelsCollapsed] = useState(false);
+  // LRM-655: remount-safe collapse (pairs with DmList / PINNED).
+  const [channelsCollapsed, setChannelsCollapsed] = useSidebarSectionCollapsed(
+    "channels",
+    wsId,
+  );
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);

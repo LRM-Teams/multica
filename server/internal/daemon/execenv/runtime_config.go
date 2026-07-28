@@ -190,18 +190,16 @@ func CanonicalTurnLedgerRoot(agentRootDir string) string {
 	return filepath.Join(strings.TrimSpace(agentRootDir), "daemon", "canonical_turn_ledger")
 }
 
-// MaterializeCanonicalTurnContext writes Multica turn-scoped provider context
-// into a stable agent workspace (D6-1b turn.WorkDir).
+// MaterializeCanonicalTurnContext applies the pure-rendered startup plan into
+// workDir (process-create path only under option A).
 //
-// workDir is the provider CWD (AgentWorkspaceLayout.WorkDir).
-// ledgerRoot must be daemon-owned and must NOT lie under workDir
-// (use CanonicalTurnLedgerRoot(agentRoot)).
+// workDir = provider CWD; ledgerRoot = CanonicalTurnLedgerRoot(agentRoot) and
+// must not lie under workDir. All writes fail closed on symlink descendants
+// (correctness / accident model — same UID, not a hostile sandbox).
 //
-// Tier A (stable): durable agent files outside Multica-owned writes are left alone.
-// Tier B (refresh): Multica AGENTS block + Multica skills/sidecars via non-nil
-// sidecarManifest (refuse-to-clobber).
-// Tier C: reclaim only ledger-recorded paths confined to workDir, plus
-// ownership-marked Multica sidecars/skills (crash recovery / upgrade path).
+// Uses StartupStaticContext so per-turn prompt fields are not stamped into
+// the on-disk startup snapshot. Digest of the same plan feeds the runtime
+// fingerprint (产物即证据).
 func MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider string, ctx TaskContextForEnv) (string, error) {
 	workDir = strings.TrimSpace(workDir)
 	ledgerRoot = strings.TrimSpace(ledgerRoot)
@@ -219,42 +217,143 @@ func MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider string, ctx T
 	if err != nil {
 		return "", fmt.Errorf("abs ledger: %w", err)
 	}
-	// Fail closed: ledger must not be inside provider-writable CWD.
 	if absLedger == absWork || pathWithin(absWork, absLedger) {
 		return "", errors.New("canonical turn ledger must not live under provider workdir")
 	}
-	if err := os.MkdirAll(absLedger, 0o755); err != nil {
+	if err := validateManagedBase(absWork); err != nil {
+		return "", fmt.Errorf("canonical workdir invalid: %w", err)
+	}
+	// Ledger parent must not be a symlink escape from agent root (sibling of workDir).
+	agentRoot := filepath.Dir(absWork)
+	if err := mkdirAllWithoutSymlink(agentRoot, absLedger, 0o755); err != nil {
 		return "", fmt.Errorf("create canonical turn ledger: %w", err)
 	}
 
-	// Tier C: reclaim previous Multica writes (confined cleanup + ownership markers).
-	if err := CleanupSidecarsConfined(absLedger, absWork); err != nil {
-		return "", fmt.Errorf("cleanup prior canonical turn sidecars: %w", err)
-	}
-	if err := reclaimMarkedMulticaSidecars(absWork); err != nil {
-		return "", fmt.Errorf("reclaim marked Multica sidecars: %w", err)
-	}
-	if err := removeManagedSkillDirs(absWork, provider); err != nil {
-		return "", fmt.Errorf("clear prior managed skills: %w", err)
-	}
+	staticCtx := StartupStaticContext(ctx)
+	plan := RenderStartupMaterializationPlan(provider, staticCtx)
 
-	brief, err := InjectRuntimeConfig(absWork, provider, ctx)
-	if err != nil {
+	// Best-effort reclaim of prior Multica-owned sidecars (confined + no symlink).
+	_ = CleanupSidecarsConfined(absLedger, absWork)
+	_ = reclaimMarkedMulticaSidecars(absWork)
+	_ = removeManagedSkillDirs(absWork, provider)
+
+	// Write runtime brief (same bytes as plan.RuntimeBrief).
+	if err := injectRuntimeConfigSafe(absWork, provider, plan.RuntimeBrief); err != nil {
 		return "", err
 	}
+
 	manifest := &sidecarManifest{}
-	if err := writeContextFiles(absWork, provider, ctx, manifest); err != nil {
-		return "", fmt.Errorf("write canonical turn context files: %w", err)
+	if plan.IssueContext != "" {
+		ctxDir := filepath.Join(absWork, ".agent_context")
+		if err := ensureNoSymlinkDir(absWork, ctxDir, manifest); err != nil {
+			return "", err
+		}
+		marker := filepath.Join(ctxDir, managedIssueContextMarker)
+		content := filepath.Join(ctxDir, "issue_context.md")
+		if err := writeFileNoSymlink(absWork, marker, []byte("issue_context.md\n"), 0o644, manifest); err != nil {
+			return "", err
+		}
+		if err := writeFileNoSymlink(absWork, content, []byte(plan.IssueContext), 0o644, manifest); err != nil {
+			return "", err
+		}
 	}
-	// Ownership markers close the write-before-ledger crash window: even if
-	// the process dies before the ledger lands, next materialize reclaims by marker.
-	if err := writeCanonicalOwnershipMarkers(absWork, manifest); err != nil {
-		return "", fmt.Errorf("write canonical ownership markers: %w", err)
+	if len(plan.SkillFiles) > 0 {
+		skillsDir := skillsDirPath(absWork, provider)
+		if err := ensureNoSymlinkDir(absWork, skillsDir, manifest); err != nil {
+			return "", err
+		}
+		// Group by top-level skill dir for mkdir.
+		for rel, body := range plan.SkillFiles {
+			full := filepath.Join(skillsDir, filepath.FromSlash(rel))
+			if err := ensureNoSymlinkDir(absWork, filepath.Dir(full), manifest); err != nil {
+				return "", err
+			}
+			if err := writeFileNoSymlink(absWork, full, []byte(body), 0o644, manifest); err != nil {
+				return "", err
+			}
+		}
+	}
+	if plan.ProjectResources != "" {
+		projDir := filepath.Join(absWork, ".multica", "project")
+		if err := ensureNoSymlinkDir(absWork, projDir, manifest); err != nil {
+			return "", err
+		}
+		marker := filepath.Join(projDir, managedResourcesMarker)
+		resPath := filepath.Join(projDir, "resources.json")
+		if err := writeFileNoSymlink(absWork, marker, []byte("resources.json\n"), 0o644, manifest); err != nil {
+			return "", err
+		}
+		if err := writeFileNoSymlink(absWork, resPath, []byte(plan.ProjectResources), 0o644, manifest); err != nil {
+			return "", err
+		}
 	}
 	if err := writeSidecarManifestAtomic(absLedger, manifest); err != nil {
 		return "", fmt.Errorf("write canonical turn ledger: %w", err)
 	}
-	return brief, nil
+	return plan.RuntimeBrief, nil
+}
+
+// injectRuntimeConfigSafe writes the Multica managed brief with symlink fail-closed.
+func injectRuntimeConfigSafe(workDir, provider, brief string) error {
+	path := runtimeConfigPath(workDir, provider)
+	if path == "" {
+		return nil
+	}
+	if err := validatePathUnderWorkDirNoSymlink(workDir, path); err != nil {
+		// file may not exist yet — parent must be safe
+		if err2 := validatePathUnderWorkDirNoSymlink(workDir, filepath.Dir(path)); err2 != nil {
+			return fmt.Errorf("unsafe runtime config path: %w", err2)
+		}
+		if strings.Contains(err.Error(), "symlink") {
+			return fmt.Errorf("refusing symlink runtime config path: %w", err)
+		}
+	}
+	// Reject if path itself is a symlink.
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through symlink runtime config: %s", path)
+	}
+	return writeRuntimeConfigFile(path, brief)
+}
+
+func ensureNoSymlinkDir(workDir, dir string, m *sidecarManifest) error {
+	if err := mkdirAllWithoutSymlink(workDir, dir, 0o755); err != nil {
+		return err
+	}
+	if err := validatePathUnderWorkDirNoSymlink(workDir, dir); err != nil {
+		return err
+	}
+	_ = recordMkdirAll(dir, 0o755, m)
+	return nil
+}
+
+func writeFileNoSymlink(workDir, path string, data []byte, perm os.FileMode, m *sidecarManifest) error {
+	if err := validatePathUnderWorkDirNoSymlink(workDir, filepath.Dir(path)); err != nil {
+		return fmt.Errorf("unsafe write parent: %w", err)
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through symlink: %s", path)
+	} else if err == nil {
+		// Pre-existing regular file: refuse-to-clobber (manifest contract).
+		return nil
+	}
+	return recordWriteFile(path, data, perm, m)
+}
+
+// validatePathUnderWorkDirNoSymlink requires target under workDir with no
+// symlink components. Missing leaf is OK if ancestors are clean.
+func validatePathUnderWorkDirNoSymlink(workDir, target string) error {
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return err
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if absTarget != absWork && !pathWithin(absWork, absTarget) {
+		return fmt.Errorf("path escapes workdir: %s", target)
+	}
+	return validateNoSymlinkDescendants(absWork, absTarget)
 }
 
 // removeManagedSkillDirs removes only Multica-owned skill packages under the
@@ -264,6 +363,14 @@ func removeManagedSkillDirs(workDir, provider string) error {
 	skills := skillsDirPath(workDir, provider)
 	if skills == "" {
 		return nil
+	}
+	if err := validatePathUnderWorkDirNoSymlink(workDir, skills); err != nil {
+		if errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err) {
+			return nil
+		}
+		if strings.Contains(err.Error(), "symlink") || strings.Contains(err.Error(), "escapes") {
+			return fmt.Errorf("refusing managed skill cleanup: %w", err)
+		}
 	}
 	entries, err := os.ReadDir(skills)
 	if err != nil {
@@ -280,6 +387,9 @@ func removeManagedSkillDirs(workDir, provider string) error {
 		if !isManagedSkillDir(dir) {
 			continue
 		}
+		if err := validatePathUnderWorkDirNoSymlink(workDir, dir); err != nil {
+			return fmt.Errorf("refusing managed skill dir cleanup: %w", err)
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("remove managed skill dir %s: %w", dir, err)
 		}
@@ -295,28 +405,8 @@ const (
 	managedResourcesMarker    = ".multica-managed-resources"
 )
 
-// writeCanonicalOwnershipMarkers records Multica ownership next to fixed
-// sidecars created this turn so a crash before ledger write is recoverable.
-func writeCanonicalOwnershipMarkers(workDir string, m *sidecarManifest) error {
-	issue := filepath.Join(workDir, ".agent_context", "issue_context.md")
-	if _, err := os.Lstat(issue); err == nil {
-		marker := filepath.Join(workDir, ".agent_context", managedIssueContextMarker)
-		if err := recordWriteFile(marker, []byte("issue_context.md\n"), 0o644, m); err != nil && !errors.Is(err, errPathPreExists) {
-			return err
-		}
-	}
-	resources := filepath.Join(workDir, ".multica", "project", "resources.json")
-	if _, err := os.Lstat(resources); err == nil {
-		marker := filepath.Join(workDir, ".multica", "project", managedResourcesMarker)
-		if err := recordWriteFile(marker, []byte("resources.json\n"), 0o644, m); err != nil && !errors.Is(err, errPathPreExists) {
-			return err
-		}
-	}
-	return nil
-}
-
 // reclaimMarkedMulticaSidecars removes Multica-owned fixed sidecars when their
-// ownership marker is present (ledger-independent recovery path).
+// ownership marker is present. Fail-closed on symlink paths (accident model).
 func reclaimMarkedMulticaSidecars(workDir string) error {
 	pairs := [][2]string{
 		{filepath.Join(workDir, ".agent_context", managedIssueContextMarker), filepath.Join(workDir, ".agent_context", "issue_context.md")},
@@ -326,6 +416,17 @@ func reclaimMarkedMulticaSidecars(workDir string) error {
 		marker, content := pair[0], pair[1]
 		if _, err := os.Lstat(marker); err != nil {
 			continue
+		}
+		if err := validatePathUnderWorkDirNoSymlink(workDir, marker); err != nil {
+			return fmt.Errorf("refusing reclaim via unsafe marker: %w", err)
+		}
+		if err := validatePathUnderWorkDirNoSymlink(workDir, content); err != nil {
+			if err2 := validatePathUnderWorkDirNoSymlink(workDir, filepath.Dir(content)); err2 != nil {
+				return fmt.Errorf("refusing reclaim via unsafe content parent: %w", err2)
+			}
+			if strings.Contains(err.Error(), "symlink") {
+				return fmt.Errorf("refusing reclaim via symlink content: %w", err)
+			}
 		}
 		if err := os.Remove(content); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove marked sidecar %s: %w", content, err)

@@ -90,7 +90,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		}
 	})
 
-	t.Run("unauthorized ambient poison head terminalizes without delivery and unblocks later wake", func(t *testing.T) {
+	t.Run("high-priority wake bypasses unauthorized ambient and poison terminalizes after active delivery", func(t *testing.T) {
 		agentID, runtimeID, _ := createRuntimeGuardAgent(t, ctx)
 		// Channel exists for cooldown key shape, but agent is NOT a member → unauthorized.
 		channelID := seedChannelForTest(t, "radar-ambient-poison-"+uuid.NewString()[:8], testUserID)
@@ -123,7 +123,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatal("expected unauthorized ambient when agent is not a channel member")
 		}
 
-		// Younger directed wake that must not stay stuck behind the poison head.
+		// Younger, higher-priority directed wake must not stay stuck behind the
+		// low-priority poison.
 		var sessionID string
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO agent_session (
@@ -158,7 +159,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("load runtime: %v", err)
 		}
 
-		// One lease call must terminalize the poison head and admit the directed wake.
+		// Priority admission leases the directed wake first. The poison remains
+		// pending until the active delivery settles; it must not be delivered.
 		delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
 		if err != nil {
 			t.Fatalf("lease after poison head: %v", err)
@@ -167,7 +169,30 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("leased event=%s, want directed wake %s", uuidToString(delivery.InboxEventID), directedID)
 		}
 
-		var poisonStatus, poisonReason, runStatus string
+		var poisonStatus, poisonReason string
+		if err := testPool.QueryRow(ctx, `
+			SELECT status, COALESCE(failure_reason, '')
+			FROM agent_inbox_event WHERE id = $1
+		`, poison.ID).Scan(&poisonStatus, &poisonReason); err != nil {
+			t.Fatalf("read queued poison status: %v", err)
+		}
+		if poisonStatus != "pending" || poisonReason != "" {
+			t.Fatalf("queued poison status/reason=%s/%s, want pending/empty", poisonStatus, poisonReason)
+		}
+
+		// A live delivery still excludes all other work for the Agent.
+		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("second lease err=%v, want no rows while directed delivery active", err)
+		}
+		settleClaimedInboxEventForTest(t, directedID)
+
+		// The next poll terminalizes the remaining unauthorized poison and
+		// commits that cleanup even though it returns no delivery.
+		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("poison cleanup lease err=%v, want no rows", err)
+		}
+
+		var runStatus string
 		var poisonDeliveries int
 		if err := testPool.QueryRow(ctx, `
 			SELECT status, COALESCE(failure_reason, '')
@@ -191,11 +216,6 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		}
 		if runStatus != "failed" {
 			t.Fatalf("poison radar run status=%q, want failed", runStatus)
-		}
-
-		// Second lease must not re-pick anything while directed delivery is active.
-		if _, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime); !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatalf("second lease err=%v, want no rows while directed delivery active", err)
 		}
 	})
 

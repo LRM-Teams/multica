@@ -31,6 +31,11 @@ events with the same priority.
   `TestClaimTaskByRuntime_ConcurrentClaimsKeepEqualPriorityFIFOWithoutDuplicates`,
   `TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake`, and
   `TestClaimTaskByRuntime_SerializesAcrossChatSessions` all passed.
+- [x] Investigate the first backend CI failure. The old Radar regression
+  required a low-priority unauthorized event to be cleaned before leasing a
+  later priority-100 human wake. Update it to verify the new order: lease the
+  human wake, preserve active-delivery exclusion, then terminalize the poison
+  on the first poll after the human delivery settles.
 - [x] Push independent PR
   [#1318](https://github.com/LRM-Teams/multica/pull/1318) into `dev`.
 

@@ -229,7 +229,12 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	CanonicalSessionID string
 	BackendConfig      agent.Config
 	Factory            canonicalRuntimeBackendFactory
-	Now                time.Time
+	// BeforeCreate runs only when a new backend will be factory-created
+	// (not on resident reuse). Used for option-A startup materialize — zero
+	// filesystem I/O on the reuse path. Must not leave a half-created slot
+	// if it fails (acquire rolls running back before return).
+	BeforeCreate func() error
+	Now          time.Time
 }
 
 type canonicalAgentRuntimePool struct {
@@ -337,6 +342,15 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		backend = slot.backend
 		closeBackend = slot.close
 	} else {
+		// Option A: startup materialize only on the create path (Barry structure gate).
+		if request.BeforeCreate != nil {
+			if err := request.BeforeCreate(); err != nil {
+				slot.running = false
+				slot.fingerprint = prevFingerprint
+				slot.mode = prevMode
+				return nil, fmt.Errorf("canonical runtime before-create: %w", err)
+			}
+		}
 		config := request.BackendConfig
 		config.ExecutablePath = request.Identity.Executable
 		config.Env = cloneStringMap(request.Identity.Environment)

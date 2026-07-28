@@ -119,24 +119,27 @@ func (d *Daemon) tryCanonicalChatBackend(
 	}
 
 	mode := mustCanonicalRuntimeMode(provider, profile)
-	if !d.canonicalRuntimes.willReuseResident(identity, mode) {
-		// Process create path only: write startup snapshot once before factory.
-		ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
-		if _, err := execenv.MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider, taskCtx); err != nil {
-			return nil, nil, nil, false, fmt.Errorf("materialize canonical turn context: %w", err)
-		}
-	}
-
 	factory := d.canonicalChatFactory(provider, profile)
 	// Pool clears CanonicalSessionID when ContextKey rotates (defense in depth
 	// vs claim PriorSessionID from the wrong chat). Same-key hard-field drift
 	// restarts the process but may keep PriorSessionID for chat continuity.
+	// Materialize runs only inside BeforeCreate when factory will spawn a process
+	// (Barry: acquire first / reuse path zero FS; create path materialize then factory).
+	ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
+	taskCtxCopy := taskCtx
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
 		Mode:               mode,
 		CanonicalSessionID: task.PriorSessionID,
 		BackendConfig:      backendCfg,
 		Factory:            factory,
+		BeforeCreate: func() error {
+			_, err := execenv.MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider, taskCtxCopy)
+			if err != nil {
+				return fmt.Errorf("materialize canonical turn context: %w", err)
+			}
+			return nil
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("acquire canonical runtime: %w", err)

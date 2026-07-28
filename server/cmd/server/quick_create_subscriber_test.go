@@ -398,6 +398,49 @@ func TestQuickCreateCompletion_SourcePermissionDeniedRecordsSkippedReturn(t *tes
 	})
 	issue := createQuickCreateOriginIssue(t, queries, agentID, task.ID, "permission source bug")
 
+	// Owner invariant: cannot delete the sole human owner of an ordinary group.
+	// Transfer ownership to another workspace member first, then remove the
+	// requester so the test still asserts source_requester_not_member (not zero-owner).
+	var otherUserID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
+		"qc-other-owner", "qc-other-"+uuid.NewString()[:8]+"@test.local").Scan(&otherUserID); err != nil {
+		t.Fatalf("seed other user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, otherUserID)
+	})
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
+ON CONFLICT DO NOTHING`, testWorkspaceID, otherUserID); err != nil {
+		t.Fatalf("seed other workspace member: %v", err)
+	}
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+VALUES ($1, $2, 'user', $3, 'member')
+ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role = 'member'`,
+		channelID, testWorkspaceID, otherUserID); err != nil {
+		t.Fatalf("add other channel member: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE channel_member SET role = 'member'
+WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2`, channelID, testUserID); err != nil {
+		t.Fatalf("demote requester: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE channel_member SET role = 'owner'
+WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2`, channelID, otherUserID); err != nil {
+		t.Fatalf("promote other owner: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("transfer owner: %v", err)
+	}
+
 	if _, err := testPool.Exec(ctx, `
 		DELETE FROM channel_member
 		WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2

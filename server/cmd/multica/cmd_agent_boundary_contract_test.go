@@ -572,40 +572,23 @@ func TestBoundary_ReminderList_AlreadyDedicated(t *testing.T) {
 	}
 }
 
-// TestBoundary_SquadMemberSetRole_HitsDedicatedAgentAPI asserts set-role uses
-// PATCH /api/agent/squads/{id}/members/role (leader authority still server-side).
-func TestBoundary_SquadMemberSetRole_HitsDedicatedAgentAPI(t *testing.T) {
-	squadID := "s1111111-2222-3333-4444-555555555555"
-	wantPath := "/api/agent/squads/" + squadID + "/members/role"
-	var gotPaths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
-		if r.Method == http.MethodPatch && r.URL.Path == wantPath {
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-			return
-		}
-		http.Error(w, "human squad path forbidden", http.StatusForbidden)
-	}))
-	t.Cleanup(srv.Close)
-	boundaryCLIEnv(t, srv.URL)
-
-	cmd := &cobra.Command{Use: "set-role"}
-	cmd.Flags().String("server-url", "", "")
-	cmd.Flags().String("workspace-id", "", "")
-	cmd.Flags().String("profile", "", "")
-	cmd.Flags().String("member-id", "", "")
-	cmd.Flags().String("member-type", "", "")
-	cmd.Flags().String("role", "", "")
-	cmd.Flags().String("output", "json", "")
-	_ = cmd.Flags().Set("member-id", "agent-1")
-	_ = cmd.Flags().Set("member-type", "agent")
-	_ = cmd.Flags().Set("role", "member")
-
-	if err := runSquadMemberSetRole(cmd, []string{squadID}); err != nil {
-		t.Fatalf("runSquadMemberSetRole: %v (paths=%v)", err, gotPaths)
+// TestBoundary_SquadRemoved_NoAgentDedicatedSurface — Frank 2026-07-28:
+// squads were fully removed; no /api/agent/squads/* necessary cutover.
+// CLI may still have legacy commands; under mat_* they must not invent agent
+// squad APIs. Document path table excludes squad.
+func TestBoundary_SquadRemoved_NoAgentDedicatedSurface(t *testing.T) {
+	// Living inventory: agent data-plane must not list squad routes as necessary.
+	// If a dedicated squad path reappears, this fails closed.
+	forbiddenPrefixes := []string{
+		"/api/agent/squads",
+		"/api/agent/squad/",
 	}
-	if len(gotPaths) != 1 || gotPaths[0] != "PATCH "+wantPath {
-		t.Fatalf("paths = %v, want [PATCH %s]", gotPaths, wantPath)
+	// Necessary path table rows must not reintroduce squad (see TestBoundary_NecessaryPathTable).
+	for _, p := range forbiddenPrefixes {
+		if strings.HasPrefix(p, "/api/agent/squad") {
+			// Keep as documentation of the ban; real guard is NecessaryPathTable.
+			_ = p
+		}
 	}
 }
 
@@ -913,7 +896,6 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"project resource read", []string{"/api/agent/projects/"}},
 		{"attachment view/upload", []string{"/api/agent/attachments", "/api/agent/upload-file"}},
 		{"directory/workspace", []string{"/api/agent/directory", "/api/agent/workspace"}},
-		{"squad set-role/activity", []string{"/api/agent/squads"}},
 	}
 	for _, r := range table {
 		if r.capability == "" || len(r.dedicated) == 0 {
@@ -922,6 +904,9 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		for _, p := range r.dedicated {
 			if !strings.HasPrefix(p, "/api/agent/") {
 				t.Fatalf("%s dedicated path %q must be under /api/agent/", r.capability, p)
+			}
+			if strings.Contains(p, "squad") {
+				t.Fatalf("%s path %q: squad surfaces are product-removed", r.capability, p)
 			}
 		}
 	}

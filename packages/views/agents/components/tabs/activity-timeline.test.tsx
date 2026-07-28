@@ -201,6 +201,58 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("Idle")).toBeInTheDocument();
   });
 
+  it("merges consecutive Idle rows into one de-emphasized `Idle · N` line (LRM-566 方案 B)", () => {
+    // SoT LRM-567 BEFORE: three bare `Idle · <time>` rows stack a middle-gap
+    // void. AFTER: one collapsed row, latest timestamp, dimmed + tight.
+    const idle14: ActivityEvent = { ...IDLE_STATUS, id: "idle-14", occurred_at: "2026-07-06T09:36:14Z" };
+    const idle30: ActivityEvent = { ...IDLE_STATUS, id: "idle-30", occurred_at: "2026-07-06T09:36:30Z" };
+    const idle48: ActivityEvent = { ...IDLE_STATUS, id: "idle-48", occurred_at: "2026-07-06T09:36:48Z" };
+    render(<ActivityTimeline events={[TEXT, idle14, idle30, idle48]} />);
+
+    // Exactly one merged idle row carries the whole run.
+    const idleRow = screen.getByTestId("activity-idle-row");
+    expect(idleRow).toHaveAttribute("data-idle-count", "3");
+    expect(screen.getAllByTestId("activity-idle-row")).toHaveLength(1);
+    // Label is `Idle · 3` (the merged count), not three separate `Idle` rows.
+    expect(screen.getByText("Idle · 3")).toBeInTheDocument();
+    // Latest timestamp wins (09:36:48), not the first.
+    expect(idleRow).toHaveTextContent("09:36:48");
+    expect(idleRow).not.toHaveTextContent("09:36:14");
+
+    // De-emphasized per SoT: tight row + dimmed medium label.
+    expect(idleRow.className).toContain("py-0.5");
+    const label = screen.getByText("Idle · 3");
+    expect(label.className).toContain("text-[12px]");
+    expect(label.className).toContain("font-medium");
+    expect(label.className).toContain("text-muted-foreground");
+  });
+
+  it("a lone Idle row stays de-emphasized but shows plain `Idle` (no count suffix)", () => {
+    render(<ActivityTimeline events={[TEXT, IDLE_STATUS]} />);
+    const idleRow = screen.getByTestId("activity-idle-row");
+    expect(idleRow).toHaveAttribute("data-idle-count", "1");
+    // No `· 1` suffix for a single idle — same dimmed styling as a merged run.
+    expect(screen.getByText("Idle")).toBeInTheDocument();
+    expect(screen.queryByText("Idle · 1")).toBeNull();
+    expect(idleRow.className).toContain("py-0.5");
+    const label = screen.getByText("Idle");
+    expect(label.className).toContain("text-[12px]");
+    expect(label.className).toContain("text-muted-foreground");
+  });
+
+  it("keeps separate (non-adjacent) Idle runs as separate merged rows", () => {
+    const a1: ActivityEvent = { ...IDLE_STATUS, id: "a1", occurred_at: "2026-07-06T09:00:00Z" };
+    const a2: ActivityEvent = { ...IDLE_STATUS, id: "a2", occurred_at: "2026-07-06T09:00:10Z" };
+    const b1: ActivityEvent = { ...IDLE_STATUS, id: "b1", occurred_at: "2026-07-06T09:01:00Z" };
+    render(<ActivityTimeline events={[a1, a2, TEXT, b1]} />);
+    const idleRows = screen.getAllByTestId("activity-idle-row");
+    expect(idleRows).toHaveLength(2);
+    expect(idleRows[0]).toHaveAttribute("data-idle-count", "2");
+    expect(idleRows[0]).toHaveTextContent("09:00:10");
+    expect(idleRows[1]).toHaveAttribute("data-idle-count", "1");
+    expect(idleRows[1]).toHaveTextContent("09:01:00");
+  });
+
   it("shows the empty state when there are no mainline events", () => {
     render(<ActivityTimeline events={[DIAG]} />);
     expect(screen.getByTestId("activity-timeline-empty")).toBeInTheDocument();

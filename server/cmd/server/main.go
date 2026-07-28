@@ -315,7 +315,10 @@ func main() {
 	var metricsServer *http.Server
 	var httpMetrics *obsmetrics.HTTPMetrics
 	var businessMetrics *obsmetrics.BusinessMetrics
+	var httpSLOAlerter *obsmetrics.HTTPRequestSLOAlerter
 	var samplerPool *pgxpool.Pool
+	sloCtx, sloCancel := context.WithCancel(context.Background())
+	defer sloCancel()
 	if metricsConfig.Enabled() {
 		// Build a dedicated tiny pool for the BusinessSamplerCollector
 		// so a stalled scrape can never starve business traffic. If the
@@ -355,6 +358,13 @@ func main() {
 				"addr", metricsConfig.Addr,
 			)
 		}
+		// In-process served p95 SLO (Frank: every API < 1s). Works without
+		// Prometheus Operator — critical for docker/aliyun where scrape
+		// rules may not exist.
+		httpSLOAlerter = obsmetrics.NewHTTPRequestSLOAlerter(
+			metricsRegistry.Gatherer,
+			obsmetrics.HTTPRequestSLOConfigFromEnv(),
+		)
 	}
 	if samplerPool != nil {
 		defer samplerPool.Close()
@@ -490,6 +500,9 @@ func main() {
 			}
 		}()
 	}
+	if httpSLOAlerter != nil {
+		go httpSLOAlerter.Run(sloCtx)
+	}
 
 	go func() {
 		slog.Info("server starting", "port", port)
@@ -539,6 +552,7 @@ func main() {
 		}
 	}
 
+	sloCancel()
 	if metricsServer != nil {
 		metricsShutdownCtx, metricsShutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if err := metricsServer.Shutdown(metricsShutdownCtx); err != nil {

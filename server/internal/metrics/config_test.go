@@ -25,3 +25,24 @@ func TestIsLoopbackAddr(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigFromEnvDefaultsLoopback(t *testing.T) {
+	t.Setenv("METRICS_ADDR", "")
+	t.Setenv("METRICS_DISABLED", "")
+	cfg := ConfigFromEnv()
+	if !cfg.Enabled() {
+		t.Fatal("expected enabled by default")
+	}
+	if cfg.Addr != DefaultMetricsAddr {
+		t.Fatalf("addr=%q want %q", cfg.Addr, DefaultMetricsAddr)
+	}
+}
+
+func TestConfigFromEnvDisabled(t *testing.T) {
+	t.Setenv("METRICS_DISABLED", "1")
+	t.Setenv("METRICS_ADDR", "127.0.0.1:1")
+	cfg := ConfigFromEnv()
+	if cfg.Enabled() {
+		t.Fatal("expected disabled")
+	}
+}

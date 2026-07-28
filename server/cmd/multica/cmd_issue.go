@@ -1891,8 +1891,10 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string, ki
 		}
 	}
 
-	// Search members.
-	if kinds.member {
+	// Search members (human tokens only). Under mat_*: R1a fail-closed —
+	// no agent members directory; name resolve must use UUID via ByID path
+	// is also blocked for members (see below after buckets).
+	if kinds.member && !isAgentAPITokenAmbient() {
 		fetchAttempts++
 		var members []map[string]any
 		if err := client.GetJSON(ctx, "/api/workspaces/"+client.WorkspaceID+"/members", &members); err != nil {
@@ -1904,16 +1906,40 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string, ki
 		}
 	}
 
-	// Search agents.
+	// Search agents (principal-aware list path).
 	if kinds.agent {
 		fetchAttempts++
 		var agents []map[string]any
-		agentPath := "/api/agents?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
+		agentPath := agentAgentsListPathAmbient(client)
 		if err := client.GetJSON(ctx, agentPath, &agents); err != nil {
 			errs = append(errs, fmt.Errorf("fetch agents: %w", err))
 		} else {
 			for _, a := range agents {
-				classify("agent", strVal(a, "id"), strVal(a, "name"))
+				id := strVal(a, "id")
+				// Match either display_name or name into one logical candidate
+				// (display label prefers display_name). Avoid double-bucket
+				// ambiguity when both strings equal the input.
+				display := firstNonEmpty(strVal(a, "display_name"), strVal(a, "name"))
+				name := strVal(a, "name")
+				if id != "" && (strings.EqualFold(id, input) || strings.EqualFold(truncateID(id), input)) {
+					idMatches = append(idMatches, assigneeMatch{Type: "agent", ID: id, Name: display})
+					continue
+				}
+				if display != "" && strings.EqualFold(display, input) {
+					exactMatches = append(exactMatches, assigneeMatch{Type: "agent", ID: id, Name: display})
+					continue
+				}
+				if name != "" && name != display && strings.EqualFold(name, input) {
+					exactMatches = append(exactMatches, assigneeMatch{Type: "agent", ID: id, Name: display})
+					continue
+				}
+				if display != "" && strings.Contains(strings.ToLower(display), inputLower) {
+					substringMatches = append(substringMatches, assigneeMatch{Type: "agent", ID: id, Name: display})
+					continue
+				}
+				if name != "" && strings.Contains(strings.ToLower(name), inputLower) {
+					substringMatches = append(substringMatches, assigneeMatch{Type: "agent", ID: id, Name: display})
+				}
 			}
 		}
 	}
@@ -1939,6 +1965,13 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string, ki
 		default:
 			return "", "", ambiguousAssigneeError(input, bucket)
 		}
+	}
+	if kinds.member && isAgentAPITokenAmbient() {
+		// Prefer agent-miss wording when agent lookup ran; still fail-closed on members.
+		if kinds.agent {
+			return "", "", fmt.Errorf("no agent found matching %q; member name resolve is not available for agent tokens (use a member UUID via the id flag)", input)
+		}
+		return "", "", fmt.Errorf("member name resolve is not available for agent tokens; pass a member UUID via the id flag")
 	}
 	return "", "", fmt.Errorf("no %s found matching %q", kinds.describe(), input)
 }
@@ -1983,15 +2016,14 @@ func resolveAssigneeByID(ctx context.Context, client *cli.APIClient, id string, 
 
 	var members []map[string]any
 	var memberErr error
-	if kinds.member {
+	if kinds.member && !isAgentAPITokenAmbient() {
 		memberErr = client.GetJSON(ctx, "/api/workspaces/"+client.WorkspaceID+"/members", &members)
 	}
 
 	var agents []map[string]any
 	var agentErr error
 	if kinds.agent {
-		agentPath := "/api/agents?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
-		agentErr = client.GetJSON(ctx, agentPath, &agents)
+		agentErr = client.GetJSON(ctx, agentAgentsListPathAmbient(client), &agents)
 	}
 
 	// Squad product retired — do not fetch /api/squads.
@@ -2025,6 +2057,9 @@ func resolveAssigneeByID(ctx context.Context, client *cli.APIClient, id string, 
 		if strings.EqualFold(strVal(a, "id"), input) {
 			return "agent", strVal(a, "id"), nil
 		}
+	}
+	if kinds.member && isAgentAPITokenAmbient() {
+		return "", "", fmt.Errorf("member resolve is not available for agent tokens (no agent members directory); use an agent UUID or a human token")
 	}
 	return "", "", fmt.Errorf("no %s found with ID %q", kinds.describe(), input)
 }

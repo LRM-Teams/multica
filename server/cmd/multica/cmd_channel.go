@@ -283,15 +283,13 @@ func runChannelMemberAdd(cmd *cobra.Command, args []string) error {
 
 // resolveChannelRef resolves a channel target (UUID or name) to a channel id
 // via the workspace channel list. Ambiguous or missing names are errors.
+// Under mat_* ambient token, list uses /api/agent/channels only (no human path).
 func resolveChannelRef(ctx context.Context, client *cli.APIClient, target string) (string, error) {
 	if _, err := uuid.Parse(target); err == nil {
 		return target, nil
 	}
 	var channels []map[string]any
-	path := "/api/channels"
-	if client.WorkspaceID != "" {
-		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
-	}
+	path := agentChannelsListPathAmbient(client)
 	if err := client.GetJSON(ctx, path, &channels); err != nil {
 		return "", fmt.Errorf("list channels: %w", err)
 	}
@@ -326,12 +324,7 @@ func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (re
 		return resolvedID{ID: ref, Display: ref}, nil
 	}
 	var agents []map[string]any
-	path := "/api/agents"
-	if isAgentAPITokenAmbient() {
-		path = "/api/agent/agents"
-	} else if client.WorkspaceID != "" {
-		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
-	}
+	path := agentAgentsListPathAmbient(client)
 	if err := client.GetJSON(ctx, path, &agents); err != nil {
 		return resolvedID{}, fmt.Errorf("list agents: %w", err)
 	}
@@ -405,3 +398,38 @@ func agentIssuesListPath(cmd *cobra.Command, query string) string {
 	}
 	return base + "?" + query
 }
+
+// agentChannelsListPathAmbient is the principal-aware channel list URL for
+// resolvers without *cobra.Command (ambient mat_* / human).
+func agentChannelsListPathAmbient(client *cli.APIClient) string {
+	if isAgentAPITokenAmbient() {
+		return "/api/agent/channels"
+	}
+	path := "/api/channels"
+	if client != nil && client.WorkspaceID != "" {
+		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
+	}
+	return path
+}
+
+// agentAgentsListPathAmbient is the principal-aware agent list URL for resolvers.
+func agentAgentsListPathAmbient(client *cli.APIClient) string {
+	if isAgentAPITokenAmbient() {
+		return "/api/agent/agents"
+	}
+	path := "/api/agents"
+	if client != nil && client.WorkspaceID != "" {
+		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
+	}
+	return path
+}
+
+// agentProjectResourcesPathAmbient lists project resources for resolvers.
+func agentProjectResourcesPathAmbient(projectID string) string {
+	escaped := url.PathEscape(projectID)
+	if isAgentAPITokenAmbient() {
+		return "/api/agent/projects/" + escaped + "/resources"
+	}
+	return "/api/projects/" + escaped + "/resources"
+}
+

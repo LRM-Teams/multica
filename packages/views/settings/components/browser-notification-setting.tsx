@@ -46,9 +46,13 @@ export function BrowserNotificationSetting() {
     setBusy(true);
     try {
       await requestAndBindWebPushSubscription();
-    } catch {
-      // Permission denial or unavailable Push Service is reflected by the
-      // browser APIs below; the in-app preference toggle remains authoritative.
+    } catch (err) {
+      // Permission denial is reflected by Notification.permission below, but a
+      // subscribe/bind failure (network / CSRF / server error) is NOT — the
+      // browser can hold a subscription while the server has no row, leaving
+      // background push silently broken ("foreground works, background doesn't").
+      // Surface it so DevTools / QA can diagnose.
+      console.error("[web-push] enable failed (subscribe/bind)", err);
     } finally {
       refresh((version) => version + 1);
       setBusy(false);

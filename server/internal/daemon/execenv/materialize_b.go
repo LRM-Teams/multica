@@ -141,18 +141,20 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 		if err != nil {
 			return "", receipt, fmt.Errorf("create skill staging dir: %w", err)
 		}
-		// Only remove this exact path we created; surface cleanup errors.
-		cleanupStage := func() error {
+		// Only remove this exact path we created; cleanup errors fail-closed.
+		cleanupStage := func(primary error) error {
 			if err := os.RemoveAll(stageDir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
+				if primary != nil {
+					return fmt.Errorf("%w (also cleanup staging: %v)", primary, err)
+				}
+				return fmt.Errorf("cleanup staging %s: %w", stageDir, err)
 			}
-			return nil
+			return primary
 		}
 		// Marker first inside staging.
 		markerBody := []byte(sk.LogicalName + "\n")
 		if err := os.WriteFile(filepath.Join(stageDir, managedSkillMarker), markerBody, 0o644); err != nil {
-			_ = cleanupStage()
-			return "", receipt, err
+			return "", receipt, cleanupStage(err)
 		}
 		rec := MaterializedSkillReceipt{
 			LogicalName: sk.LogicalName,
@@ -166,33 +168,27 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 			// Paths already validated at resolve; re-check confinement under stage.
 			full, err := confinedJoin(stageDir, f.RelPath)
 			if err != nil {
-				_ = cleanupStage()
-				return "", receipt, fmt.Errorf("skill file path: %w", err)
+				return "", receipt, cleanupStage(fmt.Errorf("skill file path: %w", err))
 			}
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-				_ = cleanupStage()
-				return "", receipt, err
+				return "", receipt, cleanupStage(err)
 			}
 			if err := os.WriteFile(full, f.Body, 0o644); err != nil {
-				_ = cleanupStage()
-				return "", receipt, err
+				return "", receipt, cleanupStage(err)
 			}
 			rec.Files = append(rec.Files, MaterializedFile{RelPath: f.RelPath, SHA256: sha256Hex(f.Body)})
 		}
 		// Reclaim final if managed leftover, then atomic rename staging → final.
 		if isManagedSkillDir(finalDir) {
 			if err := os.RemoveAll(finalDir); err != nil {
-				_ = cleanupStage()
-				return "", receipt, err
+				return "", receipt, cleanupStage(err)
 			}
 		}
 		if _, err := os.Lstat(finalDir); err == nil {
-			_ = cleanupStage()
-			return "", receipt, fmt.Errorf("skill final dir still exists after resolve: %s", finalDir)
+			return "", receipt, cleanupStage(fmt.Errorf("skill final dir still exists after resolve: %s", finalDir))
 		}
 		if err := os.Rename(stageDir, finalDir); err != nil {
-			_ = cleanupStage()
-			return "", receipt, fmt.Errorf("activate skill package %s: %w", sk.ActualSlug, err)
+			return "", receipt, cleanupStage(fmt.Errorf("activate skill package %s: %w", sk.ActualSlug, err))
 		}
 		manifest.Dirs = append(manifest.Dirs, finalDir)
 		for _, f := range rec.Files {

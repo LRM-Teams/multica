@@ -116,7 +116,7 @@ func TestAgentCannotBeChannelOwnerCHECK(t *testing.T) {
 	err := testPool.QueryRow(context.Background(),
 		`SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, parseUUID(testWorkspaceID)).Scan(&agentID)
 	if err != nil {
-		t.Skip("no agent fixture in test workspace")
+		t.Fatalf("agent fixture required for CHECK test: %v", err)
 	}
 	_, err = testPool.Exec(context.Background(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
@@ -161,13 +161,56 @@ func TestRemoveSoleOwnerBlocked(t *testing.T) {
 	del = withURLParam(del, "memberId", testUserID)
 	delRec := httptest.NewRecorder()
 	testHandler.RemoveChannelMember(delRec, del)
-	if delRec.Code == http.StatusOK {
-		t.Fatalf("sole owner self-leave should be blocked, got 200: %s", delRec.Body.String())
+	if delRec.Code != http.StatusConflict {
+		t.Fatalf("sole owner self-leave want 409, got %d: %s", delRec.Code, delRec.Body.String())
 	}
 	var n int
 	if err := testPool.QueryRow(context.Background(),
 		`SELECT count(*) FROM channel_member WHERE channel_id = $1 AND role = 'owner'`,
 		parseUUID(ch.ID)).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("owner still present: n=%d err=%v", n, err)
+	}
+}
+
+// TestListChannelsMemberBriefIncludesRole asserts channel list avatar stack
+// returns role (not omitempty-empty).
+func TestListChannelsMemberBriefIncludesRole(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	name := "role-list-brief-" + t.Name()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{"name": name})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.CreateChannel(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	listReq := newRequestAs(testUserID, http.MethodGet, "/api/channels", nil)
+	listReq = withChannelTestWorkspaceCtx(t, listReq, testUserID)
+	listRec := httptest.NewRecorder()
+	testHandler.ListChannels(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListChannels: %d %s", listRec.Code, listRec.Body.String())
+	}
+	var channels []ChannelResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &channels); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, ch := range channels {
+		if ch.Name != name {
+			continue
+		}
+		found = true
+		if len(ch.Members) == 0 {
+			t.Fatal("expected members on channel list brief")
+		}
+		if ch.Members[0].Role != "owner" {
+			t.Fatalf("list brief role=%q want owner", ch.Members[0].Role)
+		}
+	}
+	if !found {
+		t.Fatalf("channel %q not in list", name)
 	}
 }

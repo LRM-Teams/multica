@@ -51,3 +51,41 @@ func insertChannelHumanOwnerTx(ctx context.Context, tx pgx.Tx, channelID string,
 	}
 	return nil
 }
+
+// ensureOrdinaryGroupHumanOwnerTx fails closed unless ≥1 human owner exists.
+// Prefer promoting created_by; insert if that user is not yet a member.
+func ensureOrdinaryGroupHumanOwnerTx(ctx context.Context, tx pgx.Tx, channelID string, workspaceID, createdBy pgtype.UUID) error {
+	var ownerCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1::uuid AND role = 'owner' AND member_type = 'user'`,
+		channelID).Scan(&ownerCount); err != nil {
+		return err
+	}
+	if ownerCount > 0 {
+		return nil
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE channel_member
+		SET role = 'owner'
+		WHERE channel_id = $1::uuid AND member_type = 'user' AND member_id = $2`,
+		channelID, createdBy)
+	if err != nil {
+		return fmt.Errorf("promote created_by to owner: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if err := insertChannelHumanOwnerTx(ctx, tx, channelID, workspaceID, createdBy); err != nil {
+			return fmt.Errorf("insert created_by as owner: %w", err)
+		}
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1::uuid AND role = 'owner' AND member_type = 'user'`,
+		channelID).Scan(&ownerCount); err != nil {
+		return err
+	}
+	if ownerCount == 0 {
+		return fmt.Errorf("ordinary group %s still has zero human owners after repair", channelID)
+	}
+	return nil
+}

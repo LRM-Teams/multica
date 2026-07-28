@@ -636,7 +636,7 @@ func TestClaimTaskByRuntime_SerializesAcrossChatSessions(t *testing.T) {
 	}
 }
 
-func TestClaimTaskByRuntime_ConcurrentClaimsKeepPerAgentFIFOWithoutDuplicates(t *testing.T) {
+func TestClaimTaskByRuntime_ConcurrentClaimsKeepEqualPriorityFIFOWithoutDuplicates(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -675,10 +675,10 @@ func TestClaimTaskByRuntime_ConcurrentClaimsKeepPerAgentFIFOWithoutDuplicates(t 
 		INSERT INTO agent_inbox_event (
 		  agent_id, runtime_id, issue_id, status, priority, created_at
 		)
-		VALUES ($1, $2, $3, 'pending', 100, $4)
+		VALUES ($1, $2, $3, 'pending', 0, $4)
 		RETURNING id
 	`, agentID, runtimeID, secondIssueID, base.Add(time.Second)).Scan(&secondTaskID); err != nil {
-		t.Fatalf("create newer high-priority wake: %v", err)
+		t.Fatalf("create newer equal-priority wake: %v", err)
 	}
 
 	claimRound := func() []string {

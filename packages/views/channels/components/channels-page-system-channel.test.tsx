@@ -678,7 +678,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     });
   });
 
-  // #836 — the toast is the announcement, NOT the record. Dismissing it (or its
+  // #839 — the toast is the announcement, NOT the record. Dismissing it (or its
   // 4s default lifetime expiring) must not erase the fact that the removal
   // failed, so the failure also lands in the target's own row.
   it("a failed removal leaves a durable in-row notice — surviving the toast", async () => {
@@ -700,7 +700,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     ).not.toBeNull();
   });
 
-  it("retry re-opens the confirmation — it never removes on one click (#836)", async () => {
+  it("retry re-opens the confirmation — it never removes on one click (#839)", async () => {
     (
       apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
     ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
@@ -724,7 +724,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     ).toBe(callsAfterFailure);
   });
 
-  it("a successful retry clears the notice — the row (and its state) go together (#836)", async () => {
+  it("a successful retry clears the notice — the row (and its state) go together (#839)", async () => {
     const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
     (
       apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
@@ -745,7 +745,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     });
   });
 
-  it("the in-row notice clears only when the user dismisses it (#836)", async () => {
+  it("the in-row notice clears only when the user dismisses it (#839)", async () => {
     (
       apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
     ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));

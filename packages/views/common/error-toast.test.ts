@@ -8,7 +8,7 @@ const { showErrorToast } = await import("@multica/ui/lib/error-toast");
 // Lives here, not beside the source: `@multica/ui` has no test runner (no
 // vitest dep/config), and standing one up for a single helper would add
 // infrastructure to a package that deliberately has none.
-describe("showErrorToast (#835/#836)", () => {
+describe("showErrorToast (#835/#839)", () => {
   it("never lets a failure age out, and always offers a way to close it", () => {
     // sonner's default lifetime is 4s and a 4th toast evicts an unresolved one.
     // A failure is unresolved state: it must persist until the user dismisses it,

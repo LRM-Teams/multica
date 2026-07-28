@@ -3,7 +3,7 @@ import { memberFailureKey } from "./member-failure-key";
 
 const bob = { member_type: "user" as const, member_id: "u-1" };
 
-describe("memberFailureKey (#836)", () => {
+describe("memberFailureKey (#839)", () => {
   it("scopes by channel — the same member in another channel is a different key", () => {
     // The failure state lives for the whole ChannelsPage. Keyed by member alone,
     // a failed removal in channel A would surface on that member's row in

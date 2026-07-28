@@ -1,7 +1,7 @@
 import type { ChannelMember } from "@multica/core/types";
 
 /**
- * #836 — identity key for a per-member failure notice.
+ * #839 — identity key for a per-member failure notice.
  *
  * Keyed by `(member_type, member_id)` because a user and an agent can share an
  * id space, and because the notice must follow the member rather than a list

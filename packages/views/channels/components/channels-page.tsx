@@ -554,7 +554,7 @@ export function ChannelsPage({
     if (!isMobile && !isHeaderActionsCompact) setMobilePanel(null);
   }, [isMobile, isHeaderActionsCompact]);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<ChannelMember | null>(null);
-  // #836 — durable in-row record of a failed removal, keyed by member identity.
+  // #839 — durable in-row record of a failed removal, keyed by member identity.
   // The toast is the immediate announcement; it is NOT storage — it can be
   // dismissed (and expires on its own), and losing it must not erase the fact
   // that the removal failed (Iris). No timer: this clears only when the member
@@ -2403,7 +2403,7 @@ export function ChannelsPage({
   // LRM-211 — Channel details Members tab reuses the same list as the
   // Members dialog (no dual-tab Popover). LRM-225 — match dialog chrome
   // (search + Add people colors) so mobile/desktop don't diverge.
-  // #836 — per-member failure notice. `onRetry` re-opens the named confirmation
+  // #839 — per-member failure notice. `onRetry` re-opens the named confirmation
   // (never calls the mutation): the confirmation stays the single destructive
   // commitment point, so a retry can never remove someone with one click.
   const removeFailureFor = useCallback(
@@ -3936,7 +3936,7 @@ export function ChannelsPage({
                     // successful one.
                     onError: () => {
                       showErrorToast(t(($) => $.members.remove_failed));
-                      // #836 — also record it on the row so the failure survives
+                      // #839 — also record it on the row so the failure survives
                       // the toast being dismissed or expiring.
                       setRemoveFailedKeys((prev) =>
                         new Set(prev).add(memberFailureKey(active.id, target)),

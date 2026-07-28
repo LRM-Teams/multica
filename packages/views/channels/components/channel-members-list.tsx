@@ -59,7 +59,7 @@ function MemberRow({
 }: {
   m: ChannelMember;
   /**
-   * #836 — in-row record of a failed removal for THIS member (undefined when
+   * #839 — in-row record of a failed removal for THIS member (undefined when
    * there is none). Supplied per row so one member's failure can never render
    * on another's; `onRetry` must re-open the confirmation, not remove directly.
    */
@@ -167,7 +167,7 @@ function MemberRow({
       data-testid="channel-members-row"
       data-member-type={m.member_type}
     >
-      {/* #836 — the identity line keeps its own layout; a failure notice (below)
+      {/* #839 — the identity line keeps its own layout; a failure notice (below)
           is a second line inside the SAME row, so the failure stays attached to
           the member it belongs to rather than becoming a global banner. */}
       <div className="group flex min-h-[52px] items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-hover">
@@ -314,7 +314,7 @@ function MemberRow({
         </button>
       )}
       </div>
-      {/* #836 — durable in-row record of a failed removal. The toast is the
+      {/* #839 — durable in-row record of a failed removal. The toast is the
           immediate announcement and can be dismissed; this stays until the
           member is actually gone or the user clears it, so "it failed" is still
           discoverable afterwards. `重试` re-opens the named confirmation — it
@@ -381,7 +381,7 @@ export function ChannelMembersList({
   className,
 }: {
   /**
-   * #836 — returns the in-row failure notice for a member, or undefined. Given
+   * #839 — returns the in-row failure notice for a member, or undefined. Given
    * per member (not a single "last error") so a second failure cannot silently
    * replace an unresolved first one.
    */

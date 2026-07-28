@@ -1,7 +1,7 @@
 import { toast } from "sonner";
 
 /**
- * #835/#836 — the one place a failure is announced.
+ * #835/#839 — the one place a failure is announced.
  *
  * sonner's defaults (`TOAST_LIFETIME` 4s, 3 visible) were never chosen by us:
  * every failure message we show auto-dismisses after four seconds, and a fourth

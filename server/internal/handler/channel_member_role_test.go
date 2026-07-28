@@ -180,7 +180,7 @@ func TestListChannelsMemberBriefIncludesRole(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
-	name := "role-list-brief-" + t.Name()
+	name := "role-list-brief-" + uuid.NewString()[:8]
 	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{"name": name})
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	rec := httptest.NewRecorder()
@@ -1305,19 +1305,22 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 	}
 }
 
-// TestListChannelsMemberBriefExactOrder protects outer ListChannels ORDER BY only.
+// TestListChannelsMemberBriefExactOrder locks the single canonical ListChannels
+// avatar-stack total order (same keys as channelMemberSummaries):
 //
-// LATERAL picks top-N by product rank then scrambles by member_id DESC so the
-// outer ORDER BY is the sole client-visible order (Barry: inner already matching
-// product order made outer keys untestable dead code).
+//	role-rank → manager-type-rank → created_at → member_type → member_id
 //
-// Flip-red fixtures (each outer key independently):
-//  1. role rank — owner created_at is *latest*; without owner CASE bucket owner is last
-//  2. manager type — agentMgr id > humanMgr id, same created_at; without agent-before-human
-//     CASE, managers sort by member_id ASC → human first
-//  3. created_at — among members, later-id has earlier created_at; without created_at key
-//     member_id ASC puts later-id second; with it, earlier ts wins first
-//  4. member_id — secondary key when created_at ties (covered by manager pair same ts)
+// Production uses one source: LATERAL row_number() OVER that ORDER BY, filter
+// stack_position <= limit, outer ORDER BY stack_position only (no scramble).
+//
+// Flip-red (delete any key from the OVER clause):
+//  1. role — owner has *latest* created_at but must still be first
+//  2. manager-type + member_type — agent manager before human manager sharing
+//     one UUID and created_at (PK is channel_id, member_type, member_id)
+//  3. created_at — among human members, larger member_id has earlier created_at
+//  4. member_id — secondary after created_at among human members
+//
+// Fixed UUIDs only — no random mint / size loops (Barry).
 func TestListChannelsMemberBriefExactOrder(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -1334,50 +1337,82 @@ func TestListChannelsMemberBriefExactOrder(t *testing.T) {
 	var ch ChannelResponse
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 
-	humanMgr := insertChannelPeerUser(t, ch.ID, "manager")
-	m1 := insertChannelPeerUser(t, ch.ID, "member")
-	m2 := insertChannelPeerUser(t, ch.ID, "member")
+	// Controllable identity: same UUID as agent manager + human manager locks
+	// member_type in the total order (PK is channel_id, member_type, member_id).
+	const sharedMgrID = "a1000000-0000-4000-8000-000000000001"
+	const memLargeID = "b2000000-0000-4000-8000-000000000002" // lex larger
+	const memSmallID = "b2000000-0000-4000-8000-000000000001" // lex smaller
 
-	// Ensure agent manager UUID sorts *after* human manager so member_id ASC alone
-	// would put human manager first (counterfactual for agent-before-human rank).
-	var agentMgr string
-	for attempt := 0; attempt < 64; attempt++ {
-		id := createHandlerTestAgent(t, "BriefOrd"+uuid.NewString()[:6], []byte("[]"))
-		if id > humanMgr {
-			agentMgr = id
-			break
+	insertFixedUser := func(id, label string) {
+		t.Helper()
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)
+ON CONFLICT (id) DO NOTHING`, id, label, label+"@example.com"); err != nil {
+			t.Fatalf("user %s: %v", id, err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(ctx, `DELETE FROM channel_member WHERE member_id=$1`, id)
+			_, _ = testPool.Exec(ctx, `DELETE FROM member WHERE user_id=$1`, id)
+			_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id=$1`, id)
+		})
+		_, _ = testPool.Exec(ctx, `
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'member')
+ON CONFLICT DO NOTHING`, testWorkspaceID, id)
+	}
+	insertFixedAgent := func(id, label string) {
+		t.Helper()
+		handle := "ord" + id[len(id)-8:]
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO agent (
+  id, workspace_id, name, display_name, description, runtime_mode, runtime_config,
+  runtime_id, visibility, max_concurrent_tasks, owner_id,
+  instructions, custom_env, custom_args, mcp_config
+) VALUES (
+  $1,$2,$3,$4,'','cloud','{}'::jsonb,$5,'private',1,$6,'','{}'::jsonb,'[]'::jsonb,'[]'::jsonb
+)
+ON CONFLICT (id) DO NOTHING`,
+			id, testWorkspaceID, handle, label, handlerTestRuntimeID(t), testUserID); err != nil {
+			t.Fatalf("agent %s: %v", id, err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(ctx, `DELETE FROM channel_member WHERE member_id=$1`, id)
+			_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE id=$1`, id)
+		})
+	}
+
+	insertFixedUser(sharedMgrID, "shared-mgr-human")
+	insertFixedAgent(sharedMgrID, "shared-mgr-agent")
+	insertFixedUser(memLargeID, "mem-large")
+	insertFixedUser(memSmallID, "mem-small")
+
+	for _, row := range []struct {
+		typ, id, role string
+	}{
+		{"agent", sharedMgrID, "manager"},
+		{"user", sharedMgrID, "manager"},
+		{"user", memLargeID, "member"},
+		{"user", memSmallID, "member"},
+	} {
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role=EXCLUDED.role`,
+			parseUUID(ch.ID), parseUUID(testWorkspaceID), row.typ, parseUUID(row.id), row.role); err != nil {
+			t.Fatalf("channel_member %s/%s: %v", row.typ, row.id, err)
 		}
 	}
-	if agentMgr == "" {
-		t.Fatal("could not mint agent manager id > human manager id")
-	}
-	if _, err := testPool.Exec(ctx, `
-INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-VALUES ($1,$2,'agent',$3,'manager')
-ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
-		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentMgr)); err != nil {
-		t.Fatal(err)
-	}
 
-	// Member pair: want created_at to decide opposite of member_id ASC.
-	// earlyID = lex-smaller id gets *later* ts → without created_at key, earlyID first;
-	// with created_at, lateID (earlier ts) first.
-	earlyID, lateID := m1, m2
-	if lateID < earlyID {
-		earlyID, lateID = lateID, earlyID
-	}
-
-	// Timestamps:
-	//  - owner latest (role rank must beat created_at)
-	//  - both managers same mid ts (manager-type rank must beat member_id)
-	//  - lateID (lex larger) earlier member ts; earlyID later member ts
+	// Timestamps force independent keys against stack_position:
+	// managers share mid ts (type ranks decide; same member_id);
+	// memLarge earlier than memSmall despite larger id (created_at over member_id);
+	// owner latest (role over created_at).
 	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2020-06-01+00' WHERE channel_id=$1 AND role='manager'`,
 		parseUUID(ch.ID))
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-01-01+00' WHERE channel_id=$1 AND member_id=$2`,
-		parseUUID(ch.ID), lateID)
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-06-01+00' WHERE channel_id=$1 AND member_id=$2`,
-		parseUUID(ch.ID), earlyID)
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2022-01-01+00' WHERE channel_id=$1 AND member_id=$2`,
+	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-01-01+00' WHERE channel_id=$1 AND member_type='user' AND member_id=$2`,
+		parseUUID(ch.ID), memLargeID)
+	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-06-01+00' WHERE channel_id=$1 AND member_type='user' AND member_id=$2`,
+		parseUUID(ch.ID), memSmallID)
+	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2022-01-01+00' WHERE channel_id=$1 AND member_id=$2 AND member_type='user' AND role='owner'`,
 		parseUUID(ch.ID), testUserID)
 
 	listReq := newRequestAs(testUserID, http.MethodGet, "/api/channels", nil)
@@ -1399,27 +1434,26 @@ ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
 	if found == nil {
 		t.Fatalf("channel %q not in list", name)
 	}
-	// Full stack of 5 fits channelListMemberAvatarLimit.
 	if len(found.Members) != 5 {
 		t.Fatalf("members=%d want 5 %+v", len(found.Members), found.Members)
 	}
-	// 0: owner (role rank 0) despite latest created_at
-	if found.Members[0].MemberID != testUserID || found.Members[0].Role != "owner" {
-		t.Fatalf("pos0=%+v want owner creator (role rank over created_at)", found.Members[0])
+	// 0: owner despite latest created_at
+	if found.Members[0].MemberID != testUserID || found.Members[0].Role != "owner" || found.Members[0].MemberType != "user" {
+		t.Fatalf("pos0=%+v want owner", found.Members[0])
 	}
-	// 1-2: managers — agent before human by type rank (humanMgr < agentMgr by id)
-	if found.Members[1].MemberID != agentMgr || found.Members[1].Role != "manager" || found.Members[1].MemberType != "agent" {
-		t.Fatalf("pos1=%+v want agent manager (type rank; id would put human first)", found.Members[1])
+	// 1-2: same UUID managers — agent before user (manager-type + member_type)
+	if found.Members[1].MemberID != sharedMgrID || found.Members[1].MemberType != "agent" || found.Members[1].Role != "manager" {
+		t.Fatalf("pos1=%+v want agent manager id=%s", found.Members[1], sharedMgrID)
 	}
-	if found.Members[2].MemberID != humanMgr || found.Members[2].Role != "manager" || found.Members[2].MemberType != "user" {
-		t.Fatalf("pos2=%+v want human manager", found.Members[2])
+	if found.Members[2].MemberID != sharedMgrID || found.Members[2].MemberType != "user" || found.Members[2].Role != "manager" {
+		t.Fatalf("pos2=%+v want human manager id=%s", found.Members[2], sharedMgrID)
 	}
-	// 3-4: members by created_at ASC then member_id — lateID earlier ts first
-	if found.Members[3].MemberID != lateID || found.Members[3].Role != "member" {
-		t.Fatalf("pos3=%+v want member %s (earlier created_at, not lex-smaller id)", found.Members[3], lateID)
+	// 3-4: human members by created_at (large id earlier ts) then would be member_id
+	if found.Members[3].MemberID != memLargeID || found.Members[3].Role != "member" || found.Members[3].MemberType != "user" {
+		t.Fatalf("pos3=%+v want member %s (earlier created_at)", found.Members[3], memLargeID)
 	}
-	if found.Members[4].MemberID != earlyID || found.Members[4].Role != "member" {
-		t.Fatalf("pos4=%+v want member %s (later created_at)", found.Members[4], earlyID)
+	if found.Members[4].MemberID != memSmallID || found.Members[4].Role != "member" || found.Members[4].MemberType != "user" {
+		t.Fatalf("pos4=%+v want member %s", found.Members[4], memSmallID)
 	}
 }
 

@@ -1655,9 +1655,12 @@ func writeChannelRoleMutationErr(w http.ResponseWriter, err error) {
 // the locked in-tx recheck.
 // Returns (isOwner, err). Only pgx.ErrNoRows → (false, nil) plain non-owner.
 // Other DB errors must surface as 500 — never disguise infra failure as deny.
-func actorIsChannelOwnerRead(ctx context.Context, exec dbExecutor, workspaceID string, channelID, actorID pgtype.UUID) (bool, error) {
+func (h *Handler) actorIsChannelOwnerRead(ctx context.Context, workspaceID string, channelID, actorID pgtype.UUID) (bool, error) {
+	if h.TestForceOwnerReadErr != nil {
+		return false, h.TestForceOwnerReadErr
+	}
 	var role string
-	err := exec.QueryRow(ctx, `
+	err := h.DB.QueryRow(ctx, `
 		SELECT role FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2
 		  AND member_type = 'user' AND member_id = $3`,
@@ -1753,7 +1756,7 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	entryWasOwner, entryErr := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	entryWasOwner, entryErr := h.actorIsChannelOwnerRead(r.Context(), workspaceID, channelID, parseUUID(userID))
 	if entryErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load channel membership")
 		return
@@ -1869,7 +1872,7 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	entryWasOwner, entryErr := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	entryWasOwner, entryErr := h.actorIsChannelOwnerRead(r.Context(), workspaceID, channelID, parseUUID(userID))
 	if entryErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load channel membership")
 		return

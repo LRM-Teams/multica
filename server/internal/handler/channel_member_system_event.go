@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -17,12 +16,6 @@ const (
 	channelMemberLeftEvent           = "channel_member_left"
 	channelOwnershipTransferredEvent = "channel_ownership_transferred"
 )
-
-// testFailChannelMemberSystemEventChannelID, when non-empty, forces
-// insertChannelMemberSystemEventExec to fail only for that channel id.
-// Tests only — production never sets it. Channel-scoped so parallel tests
-// on other channels are unaffected.
-var testFailChannelMemberSystemEventChannelID atomic.Value // string
 
 type channelMemberSystemEventParams struct {
 	ActorID           string `json:"actor_id,omitempty"`
@@ -99,8 +92,8 @@ func (h *Handler) insertChannelMemberSystemEventExec(
 	targetType string,
 	targetID pgtype.UUID,
 ) (ChannelMessageResponse, error) {
-	if failID, _ := testFailChannelMemberSystemEventChannelID.Load().(string); failID != "" && failID == uuidToString(channelID) {
-		return ChannelMessageResponse{}, fmt.Errorf("forced channel member system event insert failure for channel %s", failID)
+	if h.TestFailSystemEventForChannel != "" && h.TestFailSystemEventForChannel == uuidToString(channelID) {
+		return ChannelMessageResponse{}, fmt.Errorf("forced channel member system event insert failure for channel %s", h.TestFailSystemEventForChannel)
 	}
 	actorRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, "user", actorID)
 	targetRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, targetType, targetID)

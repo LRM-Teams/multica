@@ -150,15 +150,19 @@ type Handler struct {
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
 	// nil Metrics as "PostHog only".
-	Metrics                     *obsmetrics.BusinessMetrics
-	channelUnmentionedMessages  uint64
-	channelUnmentionedFullWakes uint64
-	PATCache                    *auth.PATCache
-	DaemonTokenCache            *auth.DaemonTokenCache
-	MembershipCache             *auth.MembershipCache
-	WebhookRateLimiter          WebhookRateLimiter
-	WebhookIPRateLimiter        WebhookRateLimiter
-	CloudRuntime                cloudRuntimeProxy
+	Metrics *obsmetrics.BusinessMetrics
+	// Test-only injectors — production leaves these nil/empty. Per-handler so
+	// parallel tests with separate Handler values cannot cross-contaminate.
+	TestForceOwnerReadErr         error  // actorIsChannelOwnerRead returns this (non-NoRows → 500)
+	TestFailSystemEventForChannel string // channel id that forces system-event insert failure
+	channelUnmentionedMessages    uint64
+	channelUnmentionedFullWakes   uint64
+	PATCache                      *auth.PATCache
+	DaemonTokenCache              *auth.DaemonTokenCache
+	MembershipCache               *auth.MembershipCache
+	WebhookRateLimiter            WebhookRateLimiter
+	WebhookIPRateLimiter          WebhookRateLimiter
+	CloudRuntime                  cloudRuntimeProxy
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host

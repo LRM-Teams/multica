@@ -167,14 +167,19 @@ jobs:
           fi
           echo "--- process-group command sample (calibration evidence) ---"
           ps -eo pgid=,pid=,comm= | awk -v g="${PGID}" '$1==g' | head -20 || true
-          # ⚠️ Round 1 read peak_procs=3 / 178MB / 2% of MemTotal. That cleared
-          # the >1 guard, but the guard is necessary-not-sufficient: Vitest's
-          # default pool uses worker THREADS, so workers are not separate
-          # processes at all and their memory sits inside one process's RSS.
-          # Process-group aggregation therefore cannot enumerate them, and a
-          # plausible-looking count does not prove the figure covers the
-          # workers. Treat RSS here as "this configuration stayed far from the
-          # ceiling", never as a per-worker measurement.
+          # ⚠️ Round 1 read peak_procs=3 / 178MB / 2% of MemTotal.
+          #
+          # An earlier version of this comment said worker threads "cannot be
+          # enumerated" by process-group aggregation. That was WRONG (@Ronan):
+          # RSS is process-level and already includes every thread / V8 isolate
+          # resident in the process, and child processes inheriting the PGID are
+          # aggregated too. The actual limitations are that 1s sampling can miss
+          # transient peaks, and that summing RSS across processes double-counts
+          # shared pages — so this is not precise unique memory. `peak_procs>1`
+          # shows several processes were caught; it is not a thread-coverage
+          # condition. Conservative reading only: "peak observed under this
+          # sampling method is far below MemTotal; precise unique / cgroup peak
+          # not measured."
           echo "--- turbo run summaries (cache status per task) ---"
           for f in .turbo/runs/*.json; do
             [ -e "$f" ] || continue

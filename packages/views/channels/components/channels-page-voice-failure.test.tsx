@@ -140,6 +140,22 @@ const membersByChannel: Record<string, unknown[]> = {
   ],
 };
 
+// ⚠️ SHARED BY EVERY TEST IN THIS FILE. Changing what these return has
+// cross-test effects: seeding `channelMessagesPageOptions` with two messages
+// (an attempt at the thread A→B case, #838) turned the unrelated, previously
+// green "survives the toast being dismissed" RED. So:
+//
+//   after touching this mock, re-run the WHOLE file and compare against the
+//   baseline — a green target test says nothing about the other nine.
+//
+// Without that step the likely conclusion is "this other test was already
+// flaky", and someone edits a healthy test to match a fixture change.
+//
+// Shape trap, same case: the messages page is `{ messages: [...] }`, NOT
+// `{ items: [...] }` — `flattenChannelMessagePages` reads `page.messages`
+// (core/channels/queries.ts:142). The wrong key is accepted silently and the
+// fixture simply never reaches the component, which on screen is
+// indistinguishable from "the fixture arrived and the code is broken".
 vi.mock("@multica/core/channels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/channels")>();
   const options = (queryKey: string[], data: unknown) => ({ queryKey, queryFn: async () => data });

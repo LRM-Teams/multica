@@ -1,0 +1,58 @@
+import type { ChannelMember, ChannelMemberRole } from "../types";
+
+/**
+ * Pure helpers for group-membership roles (group management FE). Kept UI-free so
+ * the badge scheme and the management-menu gate are unit-testable. The server
+ * (BE #1284) is the source of `member.role`; a missing value means the least
+ * privilege ("member").
+ */
+
+export function channelMemberRole(
+  member: Pick<ChannelMember, "role">,
+): ChannelMemberRole {
+  return member.role ?? "member";
+}
+
+/**
+ * Elevated-only badge, or `null` for ordinary members. Rendered ONLY in
+ * management surfaces (the member list / settings) — never in the message
+ * stream (Parker's durable rule: role markers stay out of content scenes).
+ *   owner            → group owner (always human)
+ *   manager + agent  → group manager ("群管")
+ *   manager + human  → admin ("管理员")
+ *   member           → no badge
+ */
+export type ChannelMemberBadge = "owner" | "manager_agent" | "manager_human";
+
+export function channelMemberBadge(
+  member: Pick<ChannelMember, "role" | "member_type">,
+): ChannelMemberBadge | null {
+  switch (channelMemberRole(member)) {
+    case "owner":
+      return "owner";
+    case "manager":
+      return member.member_type === "agent" ? "manager_agent" : "manager_human";
+    case "member":
+      return null;
+  }
+}
+
+/**
+ * Whether a viewer may open the management menu (change role / transfer
+ * ownership / remove) on other members. Owner-only in V1 — the mutations
+ * themselves are gated behind #801; this drives the FE menu show/hide.
+ */
+export function canManageGroupMembers(viewerRole: ChannelMemberRole): boolean {
+  return viewerRole === "owner";
+}
+
+/**
+ * The owner cannot be removed or leave while still owner — ownership must be
+ * transferred first. Drives the disabled "remove" affordance + the
+ * "transfer ownership first" copy.
+ */
+export function isRemovableGroupMember(
+  member: Pick<ChannelMember, "role">,
+): boolean {
+  return channelMemberRole(member) !== "owner";
+}

@@ -88,6 +88,11 @@
     "working_verb_with_duration": "{{verb}} · {{duration}}"
   },
   "members": {
+    "role_badge": {
+      "owner": "소유자",
+      "manager_agent": "매니저",
+      "manager_human": "관리자"
+    },
     "select_user": "멤버 선택",
     "select_agent": "에이전트 선택",
     "join": "추가",

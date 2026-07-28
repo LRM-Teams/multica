@@ -88,6 +88,11 @@
     "working_verb_with_duration": "{{verb}} · {{duration}}"
   },
   "members": {
+    "role_badge": {
+      "owner": "オーナー",
+      "manager_agent": "マネージャー",
+      "manager_human": "管理者"
+    },
     "select_user": "メンバーを選択",
     "select_agent": "エージェントを選択",
     "join": "追加",

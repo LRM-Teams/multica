@@ -88,6 +88,11 @@
     "settings_aria": "群设置"
   },
   "members": {
+    "role_badge": {
+      "owner": "群主",
+      "manager_agent": "群管",
+      "manager_human": "管理员"
+    },
     "select_user": "选择人类成员",
     "select_agent": "选择智能体",
     "join": "加入",

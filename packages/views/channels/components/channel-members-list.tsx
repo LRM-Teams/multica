@@ -5,6 +5,7 @@ import {
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type { ChannelMember } from "@multica/core/types";
+import type { ChannelMemberBadge } from "@multica/core/channels";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
@@ -32,6 +33,7 @@ function SectionHeader({ label, count }: { label: "HUMANS" | "Agents"; count: nu
 function MemberRow({
   m,
   roleForMember,
+  badgeForMember,
   canRemove,
   isMobile,
   currentUserId,
@@ -43,6 +45,7 @@ function MemberRow({
 }: {
   m: ChannelMember;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
+  badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
   canRemove: boolean;
   isMobile: boolean;
   currentUserId: string;
@@ -60,9 +63,17 @@ function MemberRow({
   );
   const roleKey = roleForMember(m);
   const showMutedRole = !isAgent && (roleKey === "owner" || roleKey === "admin");
-  const mutedRoleLabel = showMutedRole
-    ? t(($) => $.profile_popover.role[roleKey])
-    : null;
+  // The group member panel passes `badgeForMember` → show the channel/group role
+  // (owner / 群管 / 管理员; ordinary members get no badge). Everywhere else, keep
+  // the existing workspace-role label.
+  const groupBadge = badgeForMember?.(m) ?? null;
+  const mutedRoleLabel = badgeForMember
+    ? groupBadge
+      ? t(($) => $.members.role_badge[groupBadge])
+      : null
+    : showMutedRole
+      ? t(($) => $.profile_popover.role[roleKey])
+      : null;
   const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
   const actorType = isAgent ? "agent" : "member";
   const profileMemberType = isAgent ? "agent" : "user";
@@ -172,6 +183,7 @@ export function ChannelMembersList({
   emptyLabel,
   noResultsLabel,
   roleForMember,
+  badgeForMember,
   canRemove,
   isMobile,
   currentUserId,
@@ -187,6 +199,7 @@ export function ChannelMembersList({
   emptyLabel: string;
   noResultsLabel: string;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
+  badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
   canRemove: boolean;
   isMobile: boolean;
   currentUserId: string;
@@ -259,6 +272,7 @@ export function ChannelMembersList({
                 key={`${m.member_type}:${m.member_id}`}
                 m={m}
                 roleForMember={roleForMember}
+                badgeForMember={badgeForMember}
                 canRemove={canRemove}
                 isMobile={isMobile}
                 currentUserId={currentUserId}
@@ -281,6 +295,7 @@ export function ChannelMembersList({
                 key={`${m.member_type}:${m.member_id}`}
                 m={m}
                 roleForMember={roleForMember}
+                badgeForMember={badgeForMember}
                 canRemove={canRemove}
                 isMobile={isMobile}
                 currentUserId={currentUserId}

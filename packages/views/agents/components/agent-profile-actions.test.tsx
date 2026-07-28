@@ -79,6 +79,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// #633: the three-tier restart modal has its own test; stub it here so this
+// suite only exercises the actions stack (the modal mounts a real lifecycle
+// hook we don't need to wire for these assertions).
+vi.mock("./agent-restart-modal", () => ({
+  AgentRestartModal: () => null,
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (r: typeof RESOURCES) => string, vars?: Record<string, unknown>) => {
@@ -107,6 +114,9 @@ const RESOURCES = {
     delete_dialog_confirm: "Confirm delete",
     agent_deleted_toast: "Deleted",
     delete_failed_toast: "Delete failed",
+  },
+  restart_modal: {
+    trigger: "Restart…",
   },
 };
 
@@ -206,14 +216,20 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
-  it("does not render Restart / Copy diagnostic / Report (out of scope)", () => {
+  it("renders the #633 Restart entry for a manager; Copy diagnostic / Report stay out of scope", () => {
     render(<AgentProfileActions agent={agent} canManage />);
-    expect(screen.queryByTestId("agent-profile-action-reset")).not.toBeInTheDocument();
+    // #633 reinstates a Restart entry (opens the three-tier restart modal).
+    expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
+    // The other LRM-468 items remain out of scope.
     expect(screen.queryByTestId("agent-profile-action-copy")).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-report")).not.toBeInTheDocument();
-    expect(screen.queryByText("Restart / Reset")).not.toBeInTheDocument();
     expect(screen.queryByText("Copy diagnostic info")).not.toBeInTheDocument();
     expect(screen.queryByText("Report issue")).not.toBeInTheDocument();
+  });
+
+  it("hides the Restart entry for a non-manager", () => {
+    render(<AgentProfileActions agent={agent} canManage={false} />);
+    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
   });
 
   it("hides Delete when canManage is false; keeps Message", () => {

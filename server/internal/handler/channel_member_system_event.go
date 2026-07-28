@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	channelMemberAddedEvent            = "channel_member_added"
-	channelMemberRemovedEvent          = "channel_member_removed"
-	channelMemberLeftEvent             = "channel_member_left"
-	channelOwnershipTransferredEvent   = "channel_ownership_transferred"
+	channelMemberAddedEvent          = "channel_member_added"
+	channelMemberRemovedEvent        = "channel_member_removed"
+	channelMemberLeftEvent           = "channel_member_left"
+	channelOwnershipTransferredEvent = "channel_ownership_transferred"
 )
 
 type channelMemberSystemEventParams struct {
@@ -77,6 +77,85 @@ func (h *Handler) emitChannelMemberSystemEvent(ctx context.Context, workspaceID 
 		return
 	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, workspaceID, "system", "", channelID, msg)
+}
+
+// insertChannelMemberSystemEventExec writes the durable system row on exec.
+// Callers must publish the returned message only after a successful commit.
+// Fail-closed: any insert/marshal error is returned (no soft log-and-continue).
+func (h *Handler) insertChannelMemberSystemEventExec(
+	ctx context.Context,
+	exec dbExecutor,
+	workspaceID string,
+	channelID pgtype.UUID,
+	event string,
+	actorID pgtype.UUID,
+	targetType string,
+	targetID pgtype.UUID,
+) (ChannelMessageResponse, error) {
+	actorRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, "user", actorID)
+	targetRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, targetType, targetID)
+	params := channelMemberSystemEventParams{
+		ActorID:           uuidToString(actorID),
+		ActorType:         actorRef.Type,
+		ActorHandle:       actorRef.Handle,
+		ActorDisplayName:  actorRef.DisplayName,
+		ActorName:         actorRef.DisplayName,
+		TargetID:          uuidToString(targetID),
+		TargetType:        targetRef.Type,
+		TargetHandle:      targetRef.Handle,
+		TargetDisplayName: targetRef.DisplayName,
+		TargetName:        targetRef.DisplayName,
+	}
+	content := channelMemberSystemEventCanonicalContent(event, actorRef.DisplayName, targetRef.DisplayName)
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return ChannelMessageResponse{}, fmt.Errorf("marshal channel member system event: %w", err)
+	}
+	inserted, err := insertChannelMessageWithPartsExec(
+		ctx, exec, channelID, parseUUID(workspaceID),
+		"system", pgtype.UUID{}, "system", content,
+		[]protocol.MessagePart{{Type: protocol.MessagePartTypeSystemEvent, Event: event, EventParams: paramsJSON}},
+		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0,
+	)
+	if err != nil {
+		return ChannelMessageResponse{}, fmt.Errorf("insert channel member system event: %w", err)
+	}
+	return inserted.Message, nil
+}
+
+func (h *Handler) channelMemberSystemEventActorRefWithExec(
+	ctx context.Context,
+	exec dbExecutor,
+	workspaceID, memberType string,
+	memberID pgtype.UUID,
+) channelMemberSystemEventActorRef {
+	ref := channelMemberSystemEventActorRef{Type: channelMemberSystemEventPublicType(memberType)}
+	var err error
+	switch memberType {
+	case "agent":
+		err = exec.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(name, ''), 'agent'),
+			       COALESCE(NULLIF(display_name, ''), NULLIF(name, ''), 'Agent')
+			FROM agent
+			WHERE workspace_id = $1 AND id = $2`, parseUUID(workspaceID), memberID).Scan(&ref.Handle, &ref.DisplayName)
+	default:
+		err = exec.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(u.email, ''), 'user'),
+			       COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), NULLIF(u.email, ''), 'User')
+			FROM "user" u
+			JOIN member m ON m.user_id = u.id AND m.workspace_id = $1
+			WHERE u.id = $2`, parseUUID(workspaceID), memberID).Scan(&ref.Handle, &ref.DisplayName)
+	}
+	if err != nil || ref.DisplayName == "" {
+		if ref.Type == "agent" {
+			ref.Handle = firstNonEmpty(ref.Handle, "agent")
+			ref.DisplayName = "Agent"
+			return ref
+		}
+		ref.Handle = firstNonEmpty(ref.Handle, "user")
+		ref.DisplayName = "User"
+	}
+	return ref
 }
 
 type channelMemberSystemEventActorRef struct {

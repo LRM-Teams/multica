@@ -1823,6 +1823,18 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 	if len(previousOwnerIDs) > 0 {
 		prev = previousOwnerIDs[0]
 	}
+	// Distinct durable audit surface (Parker/Iris): not a generic role PATCH.
+	h.emitChannelMemberSystemEvent(
+		r.Context(), workspaceID, channelID, channelOwnershipTransferredEvent,
+		parseUUID(userID), "user", memberID,
+	)
+	slog.Info("channel ownership transferred",
+		"workspace_id", workspaceID,
+		"channel_id", uuidToString(channelID),
+		"previous_owner_id", prev,
+		"new_owner_id", uuidToString(memberID),
+		"actor_id", userID,
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "ok",
 		"member_type":       "user",

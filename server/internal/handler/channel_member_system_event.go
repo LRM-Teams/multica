@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	channelMemberAddedEvent   = "channel_member_added"
-	channelMemberRemovedEvent = "channel_member_removed"
-	channelMemberLeftEvent    = "channel_member_left"
+	channelMemberAddedEvent            = "channel_member_added"
+	channelMemberRemovedEvent          = "channel_member_removed"
+	channelMemberLeftEvent             = "channel_member_left"
+	channelOwnershipTransferredEvent   = "channel_ownership_transferred"
 )
 
 type channelMemberSystemEventParams struct {
@@ -129,6 +130,9 @@ func channelMemberSystemEventCanonicalContent(event, actorName, targetName strin
 		return fmt.Sprintf("%s removed %s from the channel", actorName, targetName)
 	case channelMemberLeftEvent:
 		return fmt.Sprintf("%s left the channel", targetName)
+	case channelOwnershipTransferredEvent:
+		// actor = previous owner (transfer initiator), target = new owner.
+		return fmt.Sprintf("%s transferred channel ownership to %s", actorName, targetName)
 	default:
 		return targetName
 	}

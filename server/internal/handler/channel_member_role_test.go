@@ -398,13 +398,56 @@ func TestUpdateChannelMemberRoleOwnerOnly(t *testing.T) {
 	}
 }
 
-// TestListAgentChannelMembersIncludesRole closes the agent-surface gap found in #814 fact check.
+// TestListAgentChannelMembersIncludesRole closes the agent-surface gap found in
+// #814 fact check. Must actually run (no skip) — a skipped name is a false green.
 func TestListAgentChannelMembersIncludesRole(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
-	// Reuse CreateChannel + agent principal if available via existing boundary fixtures is heavy;
-	// assert SQL shape via human list already covers role. Agent path unit: call ListAgentChannelMembers
-	// only when agent principal helper exists.
-	t.Skip("agent principal fixture shared with boundary tests; covered by ListAgentChannelMembers SELECT cm.role code path + human list lock")
+	ctx := context.Background()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-agent-list-" + uuid.NewString()[:8],
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannel(created, req)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateChannel = %d: %s", created.Code, created.Body.String())
+	}
+	var ch ChannelResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &ch); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	agentID := createHandlerTestAgent(t, "RoleListAgent"+uuid.NewString()[:6], []byte("[]"))
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'agent', $3, 'manager')
+		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role = 'manager'`,
+		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentID)); err != nil {
+		t.Fatalf("insert agent member: %v", err)
+	}
+
+	memReq := newRequest(http.MethodGet, "/api/agent/channels/"+ch.ID+"/members", nil)
+	memReq = withAgentPrincipal(memReq, agentID, testWorkspaceID, testUserID)
+	memReq = withChannelTestWorkspaceCtx(t, memReq, testUserID)
+	memReq = withURLParam(memReq, "channelId", ch.ID)
+	memRec := httptest.NewRecorder()
+	testHandler.ListAgentChannelMembers(memRec, memReq)
+	if memRec.Code != http.StatusOK {
+		t.Fatalf("ListAgentChannelMembers = %d: %s", memRec.Code, memRec.Body.String())
+	}
+	var members []ChannelMemberResponse
+	if err := json.Unmarshal(memRec.Body.Bytes(), &members); err != nil {
+		t.Fatalf("decode members: %v", err)
+	}
+	byID := map[string]string{}
+	for _, m := range members {
+		byID[m.MemberID] = m.Role
+	}
+	if byID[testUserID] != "owner" {
+		t.Fatalf("human owner role=%q want owner (members=%+v)", byID[testUserID], members)
+	}
+	if byID[agentID] != "manager" {
+		t.Fatalf("agent role=%q want manager (members=%+v)", byID[agentID], members)
+	}
 }

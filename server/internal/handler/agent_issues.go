@@ -62,6 +62,15 @@ func (h *Handler) ListAgentIssues(w http.ResponseWriter, r *http.Request) {
 	h.ListIssues(w, r)
 }
 
+// SearchAgentIssues — GET /api/agent/issues/search
+// Thin principal gate over SearchIssues (workspace from AgentPrincipal).
+func (h *Handler) SearchAgentIssues(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	h.SearchIssues(w, r)
+}
+
 func (h *Handler) ListAgentIssueMetadata(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAgentPrincipal(w, r); !ok {
 		return

@@ -1661,6 +1661,9 @@ func runIssueSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	path := "/api/issues/search?" + params.Encode()
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/issues/search?" + params.Encode()
+	}
 
 	var result map[string]any
 	if err := client.GetJSON(ctx, path, &result); err != nil {

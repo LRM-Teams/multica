@@ -21,7 +21,7 @@ hang-up, terminal server state, or component teardown.
   passed; the full `@multica/views` suite passed 2,818 tests with 5 skipped.
 - [x] Verify TypeScript, focused ESLint, and React Doctor: all passed with
   zero new diagnostics.
-- [ ] Push one independent PR into `dev`.
+- [x] Push one independent PR into `dev`: [#1345](https://github.com/LRM-Teams/multica/pull/1345).
 
 ## Boundaries
 

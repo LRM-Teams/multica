@@ -589,8 +589,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// Because the corruption is shell-driven, the guardrail is provider-agnostic.
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment-id <uuid>]` — Post a comment. For agent-authored bodies, do NOT inline `--content` — the shell can rewrite backticks, `$()`, quotes, or newlines before the CLI sees them; use the platform-correct non-inline mode shown in ## Comment Formatting below. Run `multica issue comment add --help` for details.\n")
 	b.WriteString("- `multica issue metadata list|set|delete ...` — Read or pin a small issue-specific KV fact only when explicitly working on that issue. Run `multica issue metadata --help` or the subcommand help for exact flags; issue tasks include the semantic bar in their metadata section.\n\n")
-	b.WriteString("### Squad maintenance\n")
-	b.WriteString("- `multica squad member set-role <squad-id> --member-id <id> --member-type <agent|member> --role <role> [--output json]` — Change a squad member role in place; use this instead of remove+add when only the role changes.\n\n")
 
 	// Comment Formatting guardrail for ALL providers. The MUL-2904
 	// duplicate-comment loop happened because an agent inlined a backtick-wrapped
@@ -727,12 +725,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			fmt.Fprintf(&b, "3. Catch up on comments — read with `multica issue comment list %s --output json` (long issue? `--recent 20`).\n", ctx.IssueID)
 		}
 		fmt.Fprintf(&b, "4. Find the triggering comment (ID: `%s`) and understand what is being asked — do NOT confuse it with previous comments\n", ctx.TriggerCommentID)
-		if ctx.IsSquadLeader {
 			b.WriteString("5. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 7 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
-			fmt.Fprintf(&b, "   - **Squad leader rule:** If your evaluation outcome is `no_action`, call `multica squad activity %s no_action --reason \"...\"` and then EXIT IMMEDIATELY. DO NOT post any comment whose only purpose is to announce that you are taking no action, exiting silently, or acknowledging another agent. A comment like \"No action needed\" or \"Exiting silently\" is noise — the `squad activity` call already records your decision in the timeline.\n", ctx.IssueID)
-		} else {
-			b.WriteString("5. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 7 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
-		}
 		b.WriteString("6. If a reply IS warranted: do any requested work first **and self-verify it against the issue's acceptance criteria with real evidence before you reply** (build/run/test it; for UI compare the running screenshot to the target — do not reply on an unverified partial), then **decide whether to include any `@mention` link.** The default is NO mention. Only mention when you are escalating to a human owner who is not yet involved, delegating a concrete new sub-task to another agent for the first time, or the user explicitly asked you to loop someone in. Never @mention the agent you are replying to as a thank-you or sign-off.\n")
 		b.WriteString("7. **If you reply, post it as a comment — this step is mandatory when you reply.** Text in your terminal or run logs is NOT delivered to the user. ")
 		b.WriteString(BuildCommentReplyInstructions(provider, ctx.IssueID, ctx.TriggerCommentID))
@@ -761,11 +754,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			}
 			fmt.Fprintf(&b, "4. Run `multica issue status %s in_progress` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
 			b.WriteString("5. Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries — build the full, production-quality result, not a quick shallow pass just to reply. Then **self-verify before you treat it as done**: re-read the acceptance criteria and check your work against EACH one with real evidence (build/compile, run it, exercise the actual behavior, run or add tests; for UI compare the running screenshot to the target), and fix whatever fails. Do NOT report a shallow/partial result and wait to be bounced in review; if a requirement genuinely cannot be met, raise it as a blocker (step 9) instead of quietly shipping less. Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action; if your role is delegation-only, perform the allowed delegation work and stop once that outcome is delivered.\n")
-			if ctx.IsSquadLeader {
-				fmt.Fprintf(&b, "6. **Post your final results as a comment** (unless your outcome is `no_action` — in that case, calling `multica squad activity %s no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment announcing no_action or saying you are exiting silently): post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID, ctx.IssueID)
-			} else {
 				fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
-			}
 			b.WriteString("7. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
 			fmt.Fprintf(&b, "8. When done, run `multica issue status %s in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
 			fmt.Fprintf(&b, "9. If blocked, run `multica issue status %s blocked` unless your Agent Identity forbids issue status changes. Post a comment explaining the blocker unless your Agent Identity forbids issue comments.\n\n", ctx.IssueID)
@@ -830,11 +819,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	case terminalAssignment:
 		b.WriteString("This assignment wake is stale because the issue is already terminal. Return one concise line with the current terminal status; do not call issue read or write commands.\n")
 	default:
-		if ctx.IsSquadLeader {
-			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")
-		} else {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
-		}
 		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
 		b.WriteString(compactCloseoutStatusInstruction)
 		b.WriteString("\n")
@@ -1000,7 +985,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")
 	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
 	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating.\n")
-	b.WriteString("- Workspace/channel/squad: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
+	b.WriteString("- Workspace/channel: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
 
 	renderRepositoryContext(b, ctx)

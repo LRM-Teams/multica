@@ -944,17 +944,13 @@ func commentMentionsAnyone(content string) bool {
 // are skipped (parking lot), and the leader agent must have a runtime and
 // not be archived.
 func (h *Handler) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db.Issue) bool {
-	if issue.Status == "backlog" {
-		return false
-	}
-	return h.isSquadLeaderReady(ctx, issue)
+	// Squad product retired (Frank 2026-07-28): never enqueue leader tasks.
+	// Historical issues may still have assignee_type=squad for read-only display.
+	_ = ctx
+	_ = issue
+	return false
 }
 
-// isSquadLeaderReady returns true when the issue is assigned to a squad whose
-// leader agent can accept work right now. Readiness criteria (archived,
-// runtime bound, runtime online) are shared with the autopilot admission
-// gate via service.AgentReadiness — both paths must move together or one
-// will start enqueueing tasks the other refuses (MUL-2429 RFC §4.b B4).
 func (h *Handler) isSquadLeaderReady(ctx context.Context, issue db.Issue) bool {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "squad" || !issue.AssigneeID.Valid {
 		return false

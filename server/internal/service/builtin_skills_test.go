@@ -401,39 +401,15 @@ func TestCreatingAgentsSkillCoversAgentCreationContracts(t *testing.T) {
 	}
 }
 
-func TestSquadsSkillCoversLeaderRoutingContract(t *testing.T) {
-	skill, ok := findSkill(t, "multica-squads")
-	if !ok {
-		return
-	}
-	fm, body, _ := splitFrontmatter(skill.Content)
-
-	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
-		t.Errorf("user-invocable = %q, want false (squad guidance triggers from context)", got)
-	}
-	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
-		t.Errorf("allowed-tools = %q, want access to the Multica CLI", got)
-	}
-
-	mustContain := []string{
-		"A squad is not an agent",
-		"squad's `leader_id` agent",
-		"squad members are not automatically fanned out",
-		"multica squad member set-role",
-		"mention://squad/<squad-id>",
-		"recording squad activity",
-		"references/squad-source-map.md",
-	}
-	for _, want := range mustContain {
-		if !strings.Contains(body, want) {
-			t.Errorf("squads skill missing %q", want)
+func TestSquadsSkillRetired(t *testing.T) {
+	// Squad product retired (Frank 2026-07-28): multica-squads skill must not ship.
+	for _, s := range loadBuiltinSkills() {
+		if s.Name == "multica-squads" {
+			t.Fatal("multica-squads skill must be removed from builtin_skills")
 		}
 	}
-
-	if !skillHasFile(skill, "references/squad-source-map.md") {
-		t.Errorf("squads skill missing supporting file references/squad-source-map.md")
-	}
 }
+
 
 func TestAutopilotsSkillCoversDispatchAndSideEffects(t *testing.T) {
 	skill, ok := findSkill(t, "multica-autopilots")

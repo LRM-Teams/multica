@@ -137,7 +137,7 @@ var issueChannelCmd = &cobra.Command{
 
 var issueAssignCmd = &cobra.Command{
 	Use:   "assign <id>",
-	Short: "Assign an issue to a member, agent, or squad",
+	Short: "Assign an issue to a member or agent",
 	Args:  exactArgs(1),
 	RunE:  runIssueAssign,
 }
@@ -282,8 +282,8 @@ func init() {
 	issueListCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
 	issueListCmd.Flags().String("status", "", "Filter by status")
 	issueListCmd.Flags().String("priority", "", "Filter by priority")
-	issueListCmd.Flags().String("assignee", "", "Filter by assignee name (member, agent, or squad; fuzzy match)")
-	issueListCmd.Flags().String("assignee-id", "", "Filter by assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
+	issueListCmd.Flags().String("assignee", "", "Filter by assignee name (member or agent; fuzzy match)")
+	issueListCmd.Flags().String("assignee-id", "", "Filter by assignee UUID — member or agent (mutually exclusive with --assignee)")
 	issueListCmd.Flags().Bool("mine", false, "Filter to issues assigned to the running agent (agent execution context only; mutually exclusive with --assignee/--assignee-id)")
 	issueListCmd.Flags().String("project", "", "Filter by project ID")
 	issueListCmd.Flags().StringSlice("metadata", nil, "Filter by metadata key=value (repeatable; combined with AND). Value is JSON-parsed: 'true'/'false' → bool, numbers → number, otherwise string. Wrap as '\"42\"' to force a string when the value would otherwise sniff as a number.")
@@ -315,8 +315,8 @@ func init() {
 	issueCreateCmd.Flags().String("description-file", "", "Read issue description from a UTF-8 file (preserves multi-line content verbatim; use this on Windows when stdin piping mangles non-ASCII bytes)")
 	issueCreateCmd.Flags().String("status", "", "Issue status")
 	issueCreateCmd.Flags().String("priority", "", "Issue priority")
-	issueCreateCmd.Flags().String("assignee", "", "Assignee name (member, agent, or squad; fuzzy match)")
-	issueCreateCmd.Flags().String("assignee-id", "", "Assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
+	issueCreateCmd.Flags().String("assignee", "", "Assignee name (member or agent; fuzzy match)")
+	issueCreateCmd.Flags().String("assignee-id", "", "Assignee UUID — member or agent (mutually exclusive with --assignee)")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("project", "", "Project ID")
 	issueCreateCmd.Flags().String("channel", "", "Group channel ID or name to associate with this issue")
@@ -336,8 +336,8 @@ func init() {
 	issueUpdateCmd.Flags().String("description-file", "", "Read new description from a UTF-8 file (preserves multi-line content verbatim; use this on Windows when stdin piping mangles non-ASCII bytes)")
 	issueUpdateCmd.Flags().String("status", "", "New status")
 	issueUpdateCmd.Flags().String("priority", "", "New priority")
-	issueUpdateCmd.Flags().String("assignee", "", "New assignee name (member, agent, or squad; fuzzy match)")
-	issueUpdateCmd.Flags().String("assignee-id", "", "New assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
+	issueUpdateCmd.Flags().String("assignee", "", "New assignee name (member or agent; fuzzy match)")
+	issueUpdateCmd.Flags().String("assignee-id", "", "New assignee UUID — member or agent (mutually exclusive with --assignee)")
 	issueUpdateCmd.Flags().String("project", "", "Project ID")
 	issueChannelCmd.Flags().Bool("clear", false, "Clear the associated group")
 	issueUpdateCmd.Flags().String("start-date", "", "New start date (calendar day, YYYY-MM-DD; pass empty string to clear)")
@@ -350,8 +350,8 @@ func init() {
 	issueStatusCmd.Flags().String("output", "table", "Output format: table or json")
 
 	// issue assign
-	issueAssignCmd.Flags().String("to", "", "Assignee name (member, agent, or squad; fuzzy match)")
-	issueAssignCmd.Flags().String("to-id", "", "Assignee UUID — member, agent, or squad (mutually exclusive with --to)")
+	issueAssignCmd.Flags().String("to", "", "Assignee name (member or agent; fuzzy match)")
+	issueAssignCmd.Flags().String("to-id", "", "Assignee UUID — member or agent (mutually exclusive with --to)")
 	issueAssignCmd.Flags().Bool("unassign", false, "Remove current assignee")
 	issueAssignCmd.Flags().String("output", "json", "Output format: table or json")
 
@@ -1918,27 +1918,8 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string, ki
 		}
 	}
 
-	// Search squads. The platform allows issues to be assigned to a squad
-	// (the leader agent then coordinates delegation), so squad names must
-	// resolve here too for issue-assignee callers — otherwise a user saying
-	// "assign to <SquadName>" silently falls through and the autopilot
-	// prompt emits "Unrecognized assignee: <SquadName>" (MUL-2165). Callers
-	// whose target schema is member-or-agent only (project lead, subscriber)
-	// must opt out via `kinds.squad = false`.
-	if kinds.squad {
-		fetchAttempts++
-		var squads []map[string]any
-		if err := client.GetJSON(ctx, "/api/squads", &squads); err != nil {
-			errs = append(errs, fmt.Errorf("fetch squads: %w", err))
-		} else {
-			for _, s := range squads {
-				if strVal(s, "archived_at") != "" {
-					continue
-				}
-				classify("squad", strVal(s, "id"), strVal(s, "name"))
-			}
-		}
-	}
+	// Squad product retired: never resolve assignee_type=squad for new writes.
+	kinds.squad = false
 
 	// If every fetch failed, report the errors instead of a misleading "not found".
 	if fetchAttempts > 0 && len(errs) == fetchAttempts {
@@ -2013,11 +1994,9 @@ func resolveAssigneeByID(ctx context.Context, client *cli.APIClient, id string, 
 		agentErr = client.GetJSON(ctx, agentPath, &agents)
 	}
 
-	var squads []map[string]any
+	// Squad product retired — do not fetch /api/squads.
+	kinds.squad = false
 	var squadErr error
-	if kinds.squad {
-		squadErr = client.GetJSON(ctx, "/api/squads", &squads)
-	}
 
 	allFailed := true
 	hasFetch := false
@@ -2047,12 +2026,6 @@ func resolveAssigneeByID(ctx context.Context, client *cli.APIClient, id string, 
 			return "agent", strVal(a, "id"), nil
 		}
 	}
-	for _, s := range squads {
-		if strings.EqualFold(strVal(s, "id"), input) {
-			return "squad", strVal(s, "id"), nil
-		}
-	}
-
 	return "", "", fmt.Errorf("no %s found with ID %q", kinds.describe(), input)
 }
 

@@ -480,6 +480,11 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 
 	// Second pass: members for the avatar stack, grouped by channel.
 	if len(channelIDs) > 0 {
+		// LATERAL picks the top-N stack in product rank (so LIMIT keeps the right
+		// people), then deliberately returns them scrambled by member_id so the
+		// outer ORDER BY is the sole client-visible order. Deleting an outer
+		// rank key must change results when fixtures force that key to decide
+		// (Barry flip-red for ListChannels member brief order).
 		memberRows, err := h.DB.Query(r.Context(), `
 			SELECT limited.channel_id, limited.member_type, limited.member_id,
 			       COALESCE(u.name, a.name, ''),
@@ -488,38 +493,34 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			       limited.role
 			FROM unnest($1::uuid[]) AS selected(channel_id)
 			JOIN LATERAL (
-				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role
-				FROM channel_member cm
-				WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
-				ORDER BY
-				  CASE cm.role
-				    WHEN 'owner' THEN 0
-				    WHEN 'manager' THEN 1
-				    ELSE 2
-				  END,
-				  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
-				       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
-				       ELSE 2
-				  END,
-				  cm.created_at ASC,
-				  cm.member_type ASC,
-				  cm.member_id ASC
-				LIMIT $3
+				SELECT picked.channel_id, picked.member_type, picked.member_id, picked.created_at, picked.role
+				FROM (
+					SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role
+					FROM channel_member cm
+					WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
+					ORDER BY
+					  CASE
+					    WHEN cm.role = 'owner' THEN 0
+					    WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 1
+					    WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 2
+					    ELSE 3
+					  END,
+					  cm.created_at ASC,
+					  cm.member_id ASC
+					LIMIT $3
+				) picked
+				ORDER BY picked.member_id DESC
 			) limited ON true
 			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
 			LEFT JOIN agent a ON limited.member_type = 'agent' AND a.id = limited.member_id
 			ORDER BY selected.channel_id,
-			  CASE limited.role
-			    WHEN 'owner' THEN 0
-			    WHEN 'manager' THEN 1
-			    ELSE 2
-			  END,
-			  CASE WHEN limited.role = 'manager' AND limited.member_type = 'agent' THEN 0
-			       WHEN limited.role = 'manager' AND limited.member_type = 'user' THEN 1
-			       ELSE 2
+			  CASE
+			    WHEN limited.role = 'owner' THEN 0
+			    WHEN limited.role = 'manager' AND limited.member_type = 'agent' THEN 1
+			    WHEN limited.role = 'manager' AND limited.member_type = 'user' THEN 2
+			    ELSE 3
 			  END,
 			  limited.created_at ASC,
-			  limited.member_type ASC,
 			  limited.member_id ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
 		if err == nil {
 			defer memberRows.Close()

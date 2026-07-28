@@ -1061,8 +1061,8 @@ func TestRoleMutationCrossWorkspace(t *testing.T) {
 	r = withRouteParams(r, "channelId", foreignCh, "memberType", "user", "memberId", foreignUser)
 	rec := httptest.NewRecorder()
 	testHandler.UpdateChannelMemberRole(rec, r)
-	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-ws want 404/403 got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-ws want exact 404 got %d %s", rec.Code, rec.Body.String())
 	}
 	var role string
 	_ = testPool.QueryRow(ctx, `
@@ -1305,9 +1305,19 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 	}
 }
 
-// TestListChannelsMemberBriefExactOrder protects outer ListChannels ORDER BY
-// (owner → manager agent → manager human → member by member_id). Deleting any
-// outer sort key must RED this test (Barry flip-red gate).
+// TestListChannelsMemberBriefExactOrder protects outer ListChannels ORDER BY only.
+//
+// LATERAL picks top-N by product rank then scrambles by member_id DESC so the
+// outer ORDER BY is the sole client-visible order (Barry: inner already matching
+// product order made outer keys untestable dead code).
+//
+// Flip-red fixtures (each outer key independently):
+//  1. role rank — owner created_at is *latest*; without owner CASE bucket owner is last
+//  2. manager type — agentMgr id > humanMgr id, same created_at; without agent-before-human
+//     CASE, managers sort by member_id ASC → human first
+//  3. created_at — among members, later-id has earlier created_at; without created_at key
+//     member_id ASC puts later-id second; with it, earlier ts wins first
+//  4. member_id — secondary key when created_at ties (covered by manager pair same ts)
 func TestListChannelsMemberBriefExactOrder(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -1327,33 +1337,48 @@ func TestListChannelsMemberBriefExactOrder(t *testing.T) {
 	humanMgr := insertChannelPeerUser(t, ch.ID, "manager")
 	m1 := insertChannelPeerUser(t, ch.ID, "member")
 	m2 := insertChannelPeerUser(t, ch.ID, "member")
-	agentMgr := createHandlerTestAgent(t, "BriefOrd"+uuid.NewString()[:6], []byte("[]"))
+
+	// Ensure agent manager UUID sorts *after* human manager so member_id ASC alone
+	// would put human manager first (counterfactual for agent-before-human rank).
+	var agentMgr string
+	for attempt := 0; attempt < 64; attempt++ {
+		id := createHandlerTestAgent(t, "BriefOrd"+uuid.NewString()[:6], []byte("[]"))
+		if id > humanMgr {
+			agentMgr = id
+			break
+		}
+	}
+	if agentMgr == "" {
+		t.Fatal("could not mint agent manager id > human manager id")
+	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1,$2,'agent',$3,'manager')
-		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
+INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+VALUES ($1,$2,'agent',$3,'manager')
+ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
 		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentMgr)); err != nil {
 		t.Fatal(err)
 	}
-	// Same created_at for both managers and both members to force type/id tie-break.
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2020-01-01+00' WHERE channel_id=$1 AND member_id=$2`,
-		parseUUID(ch.ID), testUserID)
+
+	// Member pair: want created_at to decide opposite of member_id ASC.
+	// earlyID = lex-smaller id gets *later* ts → without created_at key, earlyID first;
+	// with created_at, lateID (earlier ts) first.
+	earlyID, lateID := m1, m2
+	if lateID < earlyID {
+		earlyID, lateID = lateID, earlyID
+	}
+
+	// Timestamps:
+	//  - owner latest (role rank must beat created_at)
+	//  - both managers same mid ts (manager-type rank must beat member_id)
+	//  - lateID (lex larger) earlier member ts; earlyID later member ts
 	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2020-06-01+00' WHERE channel_id=$1 AND role='manager'`,
 		parseUUID(ch.ID))
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-01-01+00' WHERE channel_id=$1 AND role='member'`,
-		parseUUID(ch.ID))
-
-	firstM, secondM := m1, m2
-	if secondM < firstM {
-		firstM, secondM = secondM, firstM
-	}
-	want := []struct{ id, role string }{
-		{testUserID, "owner"},
-		{agentMgr, "manager"},
-		{humanMgr, "manager"},
-		{firstM, "member"},
-		{secondM, "member"},
-	}
+	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-01-01+00' WHERE channel_id=$1 AND member_id=$2`,
+		parseUUID(ch.ID), lateID)
+	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-06-01+00' WHERE channel_id=$1 AND member_id=$2`,
+		parseUUID(ch.ID), earlyID)
+	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2022-01-01+00' WHERE channel_id=$1 AND member_id=$2`,
+		parseUUID(ch.ID), testUserID)
 
 	listReq := newRequestAs(testUserID, http.MethodGet, "/api/channels", nil)
 	listReq = withChannelTestWorkspaceCtx(t, listReq, testUserID)
@@ -1374,20 +1399,27 @@ func TestListChannelsMemberBriefExactOrder(t *testing.T) {
 	if found == nil {
 		t.Fatalf("channel %q not in list", name)
 	}
-	if len(found.Members) < len(want) {
-		t.Fatalf("members=%d want >=%d %+v", len(found.Members), len(want), found.Members)
+	// Full stack of 5 fits channelListMemberAvatarLimit.
+	if len(found.Members) != 5 {
+		t.Fatalf("members=%d want 5 %+v", len(found.Members), found.Members)
 	}
-	// Avatar stack may be limited; require at least the ordered prefix we care about
-	// for full order we need limit high enough - default limit is typically >=5
-	for i, w := range want {
-		if i >= len(found.Members) {
-			t.Fatalf("missing member pos %d in %+v", i, found.Members)
-		}
-		got := found.Members[i]
-		if got.MemberID != w.id || got.Role != w.role {
-			t.Fatalf("ListChannels brief pos %d id=%s role=%q want id=%s role=%q full=%+v",
-				i, got.MemberID, got.Role, w.id, w.role, found.Members)
-		}
+	// 0: owner (role rank 0) despite latest created_at
+	if found.Members[0].MemberID != testUserID || found.Members[0].Role != "owner" {
+		t.Fatalf("pos0=%+v want owner creator (role rank over created_at)", found.Members[0])
+	}
+	// 1-2: managers — agent before human by type rank (humanMgr < agentMgr by id)
+	if found.Members[1].MemberID != agentMgr || found.Members[1].Role != "manager" || found.Members[1].MemberType != "agent" {
+		t.Fatalf("pos1=%+v want agent manager (type rank; id would put human first)", found.Members[1])
+	}
+	if found.Members[2].MemberID != humanMgr || found.Members[2].Role != "manager" || found.Members[2].MemberType != "user" {
+		t.Fatalf("pos2=%+v want human manager", found.Members[2])
+	}
+	// 3-4: members by created_at ASC then member_id — lateID earlier ts first
+	if found.Members[3].MemberID != lateID || found.Members[3].Role != "member" {
+		t.Fatalf("pos3=%+v want member %s (earlier created_at, not lex-smaller id)", found.Members[3], lateID)
+	}
+	if found.Members[4].MemberID != earlyID || found.Members[4].Role != "member" {
+		t.Fatalf("pos4=%+v want member %s (later created_at)", found.Members[4], earlyID)
 	}
 }
 
@@ -1641,36 +1673,25 @@ func TestRoleMutationExactMatrixBothEndpoints(t *testing.T) {
 		}},
 	} {
 		rec := ep.run()
-		// requireChannelUserMember fails first → typically 403 forbidden membership, not 404
-		// Barry wants unique locked code. Check what production returns and lock it.
-		if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
-			t.Fatalf("%s want 404 or 403 got %d %s", ep.name, rec.Code, rec.Body.String())
+		// Object-level: foreign channel/workspace → exact 404 both ends (Parker product;
+		// not 403 membership). Fixed contract — no dynamic probe.
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s want exact 404 got %d %s", ep.name, rec.Code, rec.Body.String())
 		}
-		// Record actual for first and require both match same exact code
-	}
-	// Probe once and require both endpoints share that exact code
-	probe := newRequestAs(testUserID, http.MethodPatch, "/api/channels/"+foreignCh+"/members/user/"+foreignUser, map[string]any{"role": "manager"})
-	probe = withChannelTestWorkspaceCtx(t, probe, testUserID)
-	probe = withRouteParams(probe, "channelId", foreignCh, "memberType", "user", "memberId", foreignUser)
-	probeRec := httptest.NewRecorder()
-	testHandler.UpdateChannelMemberRole(probeRec, probe)
-	wantXWS := probeRec.Code
-	if wantXWS != http.StatusNotFound && wantXWS != http.StatusForbidden {
-		t.Fatalf("unexpected cross-ws status %d", wantXWS)
-	}
-	// re-run transfer must match
-	xr := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+foreignCh+"/members/user/"+foreignUser+"/transfer-ownership", nil)
-	xr = withChannelTestWorkspaceCtx(t, xr, testUserID)
-	xr = withRouteParams(xr, "channelId", foreignCh, "memberType", "user", "memberId", foreignUser)
-	xrRec := httptest.NewRecorder()
-	testHandler.TransferChannelOwnership(xrRec, xr)
-	if xrRec.Code != wantXWS {
-		t.Fatalf("cross-ws transfer %d != patch %d", xrRec.Code, wantXWS)
 	}
 	var role string
 	_ = testPool.QueryRow(ctx, `SELECT role FROM channel_member WHERE channel_id=$1 AND member_id=$2`, parseUUID(foreignCh), foreignUser).Scan(&role)
 	if role != "owner" {
 		t.Fatalf("cross-ws mutated role=%s", role)
+	}
+	var auditN int
+	_ = testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id=$1 AND author_type='system'
+		  AND parts->0->>'event'=$2`,
+		parseUUID(foreignCh), channelOwnershipTransferredEvent).Scan(&auditN)
+	if auditN != 0 {
+		t.Fatalf("cross-ws audit rows=%d want 0", auditN)
 	}
 }
 

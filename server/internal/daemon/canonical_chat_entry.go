@@ -104,7 +104,6 @@ func (d *Daemon) tryCanonicalChatBackend(
 		CustomArgs:          append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
 		Environment:         turn.StableEnvironment,
 		WorkspaceID:         task.WorkspaceID,
-		ManagedRole:         taskCtx.ManagedRole,
 		AgentInstructions:   taskCtx.AgentInstructions,
 		WorkspaceContext:    task.WorkspaceContext,
 		StartupStaticDigest: execenv.StartupStaticDigest(provider, taskCtx),

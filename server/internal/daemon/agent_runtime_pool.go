@@ -47,7 +47,6 @@ type canonicalAgentRuntimeIdentity struct {
 	// Slow-changing process boundary (fingerprint). Prefer restart when unsure;
 	// never put ChatSessionID, Directed, Initiator, Issue, or other per-turn fields.
 	WorkspaceID         string
-	ManagedRole         string
 	AgentInstructions   string
 	WorkspaceContext    string
 	StartupStaticDigest string // hash of create-time AGENTS managed brief bytes
@@ -95,7 +94,6 @@ func newCanonicalAgentRuntimeIdentity(params canonicalAgentRuntimeIdentityParams
 		CustomArgs:          append([]string(nil), params.CustomArgs...),
 		Environment:         cloneStringMap(stable),
 		WorkspaceID:         strings.TrimSpace(params.WorkspaceID),
-		ManagedRole:         strings.TrimSpace(params.ManagedRole),
 		AgentInstructions:   params.AgentInstructions,
 		WorkspaceContext:    params.WorkspaceContext,
 		StartupStaticDigest: strings.TrimSpace(params.StartupStaticDigest),
@@ -118,7 +116,6 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		CustomArgs          []string    `json:"custom_args"`
 		Environment         [][2]string `json:"environment"`
 		WorkspaceID         string      `json:"workspace_id"`
-		ManagedRole         string      `json:"managed_role"`
 		AgentInstructions   string      `json:"agent_instructions"`
 		WorkspaceContext    string      `json:"workspace_context"`
 		StartupStaticDigest string      `json:"startup_static_digest"`
@@ -143,7 +140,6 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		CustomArgs:          append([]string(nil), i.CustomArgs...),
 		Environment:         environment,
 		WorkspaceID:         i.WorkspaceID,
-		ManagedRole:         i.ManagedRole,
 		AgentInstructions:   i.AgentInstructions,
 		WorkspaceContext:    i.WorkspaceContext,
 		StartupStaticDigest: i.StartupStaticDigest,

@@ -34,7 +34,6 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 	return TaskContextForEnv{
 		AgentID:           strings.TrimSpace(ctx.AgentID),
 		AgentName:         strings.TrimSpace(ctx.AgentName),
-		ManagedRole:       strings.TrimSpace(ctx.ManagedRole),
 		AgentInstructions: ctx.AgentInstructions,
 		// Multica-owned agent roots (durable, not user CWD)
 		AgentRoot:           strings.TrimSpace(ctx.AgentRoot),

@@ -8,14 +8,14 @@ required_names=(
   VOLCENGINE_RTC_APP_KEY
   VOLCENGINE_RTC_ACCESS_KEY_ID
   VOLCENGINE_RTC_SECRET_ACCESS_KEY
-  VOLCENGINE_RTC_LLM_API_KEY
   VOLCENGINE_RTC_CALLBACK_SIGNATURE
 )
 optional_names=(
   VOLCENGINE_RTC_SESSION_TOKEN
   VOLCENGINE_RTC_ENDPOINT
   VOLCENGINE_RTC_REGION
-  VOLCENGINE_RTC_LLM_URL
+  VOLCENGINE_RTC_ARK_ENDPOINT_ID
+  VOLCENGINE_RTC_ARK_MODEL_NAME
   VOLCENGINE_RTC_TTS_VOICE_ID
   VOLCENGINE_RTC_CALLBACK_URL
 )
@@ -35,6 +35,7 @@ complete_environment=("${clean_environment[@]}")
 for name in "${required_names[@]}"; do
   complete_environment+=("$name=test-value")
 done
+complete_environment+=(VOLCENGINE_RTC_ARK_ENDPOINT_ID=ep-test)
 complete_output="$("${complete_environment[@]}" bash "$validator")"
 if [[ "$complete_output" != *"configuration is complete"* ]]; then
   echo "Complete RTC validation did not report success."
@@ -67,7 +68,7 @@ fi
 set +e
 optional_only_output="$(
   "${clean_environment[@]}" \
-    VOLCENGINE_RTC_LLM_URL=https://must-not-be-printed.example \
+    VOLCENGINE_RTC_ARK_ENDPOINT_ID=must-not-be-printed \
     bash "$validator" 2>&1
 )"
 optional_only_status=$?
@@ -79,6 +80,38 @@ fi
 if [[ "$optional_only_output" != *"VOLCENGINE_RTC_APP_ID"* ]] ||
   [[ "$optional_only_output" == *"must-not-be-printed"* ]]; then
   echo "Optional-only RTC validation did not fail safely."
+  exit 1
+fi
+
+set +e
+missing_ark_output="$(
+  "${clean_environment[@]}" \
+    "${required_names[0]}=test-value" \
+    "${required_names[1]}=test-value" \
+    "${required_names[2]}=test-value" \
+    "${required_names[3]}=test-value" \
+    "${required_names[4]}=test-value" \
+    bash "$validator" 2>&1
+)"
+missing_ark_status=$?
+set -e
+if [[ "$missing_ark_status" -eq 0 ]] ||
+  [[ "$missing_ark_output" != *"exactly one"* ]]; then
+  echo "Missing Ark model selection did not fail safely."
+  exit 1
+fi
+
+set +e
+ambiguous_ark_output="$(
+  "${complete_environment[@]}" \
+    VOLCENGINE_RTC_ARK_MODEL_NAME=Doubao-Seed \
+    bash "$validator" 2>&1
+)"
+ambiguous_ark_status=$?
+set -e
+if [[ "$ambiguous_ark_status" -eq 0 ]] ||
+  [[ "$ambiguous_ark_output" != *"exactly one"* ]]; then
+  echo "Ambiguous Ark model selection did not fail safely."
   exit 1
 fi
 

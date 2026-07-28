@@ -539,22 +539,13 @@ func (l actorDisplayLookup) loadAgents() {
 }
 
 func (l actorDisplayLookup) loadSquads() {
+	// Squad product retired: no /api/squads. Historical assignee_type=squad
+	// displays as 原小队指派 via actor() without name resolution.
 	if l.state == nil || l.state.squadsLoaded {
 		return
 	}
 	l.state.squadsLoaded = true
 	l.state.squads = map[string]string{}
-	if l.client == nil || l.client.WorkspaceID == "" {
-		return
-	}
-	var squads []map[string]any
-	if err := l.client.GetJSON(l.ctx, "/api/squads", &squads); err == nil {
-		for _, s := range squads {
-			if id := strVal(s, "id"); id != "" {
-				l.state.squads[id] = strVal(s, "name")
-			}
-		}
-	}
 }
 
 func (l actorDisplayLookup) actor(actorType, id string) string {
@@ -577,12 +568,8 @@ func (l actorDisplayLookup) actor(actorType, id string) string {
 			}
 		}
 	case "squad":
-		l.loadSquads()
-		if l.state != nil && l.state.squads != nil {
-			if name := l.state.squads[id]; name != "" {
-				return "squad:" + name
-			}
-		}
+		// Historical-only: squad product retired; do not resolve names via API.
+		return "原小队指派"
 	}
 	return actorType + ":" + id
 }

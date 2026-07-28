@@ -68,7 +68,6 @@ For "why didn't it run":
 
 1. `multica autopilot get <id> --output json` — status, mode, assignee, triggers.
 2. `multica autopilot runs <id> --output json` — run status and failure reason.
-3. If assigned to a squad, inspect the squad: `multica squad get <squad-id> --output json`; execution goes to the leader.
 4. Inspect the target agent/runtime: `multica agent get <agent-id> --output json` and `multica runtime list --output json`.
 5. For `create_issue`, inspect the created issue if the run records one.
 

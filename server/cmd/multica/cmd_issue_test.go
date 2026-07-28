@@ -911,7 +911,7 @@ func TestFormatAssignee(t *testing.T) {
 		{"no id", map[string]any{"assignee_type": "member"}, ""},
 		{"member", map[string]any{"assignee_type": "member", "assignee_id": "abcdefgh-1234"}, "member:Alice"},
 		{"agent", map[string]any{"assignee_type": "agent", "assignee_id": "xyz"}, "agent:CodeBot"},
-		{"squad", map[string]any{"assignee_type": "squad", "assignee_id": "sq-1"}, "squad:Super Human"},
+		{"squad", map[string]any{"assignee_type": "squad", "assignee_id": "sq-1"}, "原小队指派"},
 		{"unknown fallback", map[string]any{"assignee_type": "agent", "assignee_id": "missing"}, "agent:missing"},
 	}
 	for _, tt := range tests {

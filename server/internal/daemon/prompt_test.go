@@ -181,79 +181,43 @@ func TestBuildQuickCreatePromptRules(t *testing.T) {
 	}
 }
 
-// TestBuildQuickCreatePromptAssigneeIncludesSquads locks in the MUL-2165
-// fix: the assignee-resolution rules must tell the agent to consult the
-// squad list alongside members and agents. Before this, a quick-create
-// input like "assign to <SquadName>" silently fell through to
-// "Unrecognized assignee" because squads were never queried.
-func TestBuildQuickCreatePromptAssigneeIncludesSquads(t *testing.T) {
-	out := buildQuickCreatePrompt(Task{QuickCreatePrompt: "fix the login button color"})
-	mustContain := []string{
+func TestBuildQuickCreatePromptAssigneeSquadsRetired(t *testing.T) {
+	out := buildQuickCreatePrompt(Task{
+		QuickCreatePrompt: "assign to Super Human",
+		Agent:             &AgentData{ID: "a1", Name: "Bot"},
+	})
+	for _, forbidden := range []string{
 		"multica squad list",
 		"Squads are first-class assignees",
-		"Treat bare @-routing as an assignee directive",
-		"让 @独立团 review 这个 PR",
 		"pass the squad's `id` as `--assignee-id`",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(out, s) {
-			t.Errorf("buildQuickCreatePrompt assignee block missing %q\n--- output ---\n%s", s, out)
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("squad product retired: quick-create prompt still contains %q", forbidden)
 		}
 	}
 }
 
-// TestBuildQuickCreatePromptSquadDefaultsToSquad locks in the MUL-2203
-// fix: when the picker was a squad, the task runs on the squad's leader
-// agent, but the default assignee for issues created by this run must
-// point at the SQUAD's UUID — not the leader agent's UUID. The previous
-// "default to YOURSELF" instruction made squad-created issues land under
-// the leader, hiding them from the squad's delegation flow.
-func TestBuildQuickCreatePromptSquadDefaultsToSquad(t *testing.T) {
-	const (
-		squadID   = "aaaa1111-2222-3333-4444-555555555555"
-		squadName = "独立团"
-		leaderID  = "bbbb1111-2222-3333-4444-666666666666"
-	)
-	out := buildQuickCreatePrompt(Task{
-		QuickCreatePrompt: "fix the login button color",
-		Agent:             &AgentData{ID: leaderID, Name: "leader-agent"},
-		SquadID:           squadID,
-		SquadName:         squadName,
-	})
 
-	// The default-assignee instruction must point at the squad UUID.
-	if !strings.Contains(out, "--assignee-id \""+squadID+"\"") {
-		t.Errorf("buildQuickCreatePrompt with SquadID must default to the squad's UUID, got:\n%s", out)
-	}
-	// And it must NOT tell the agent to default to itself (the leader).
-	if strings.Contains(out, "--assignee-id \""+leaderID+"\"") {
-		t.Errorf("buildQuickCreatePrompt with SquadID must NOT default to the leader agent's UUID, got:\n%s", out)
-	}
-	// The squad name should appear in the instruction so the agent has
-	// human-readable context for the routing decision.
-	if !strings.Contains(out, squadName) {
-		t.Errorf("buildQuickCreatePrompt with SquadID should mention the squad name %q, got:\n%s", squadName, out)
-	}
-	// And the prompt must explicitly call out the squad-vs-leader rule
-	// so the agent does not silently regress to "default to YOURSELF".
-	mustContain := []string{
+func TestBuildQuickCreatePromptSquadDefaultsRetired(t *testing.T) {
+	// Residual SquadID on task must not teach squad assignee defaulting.
+	out := buildQuickCreatePrompt(Task{
+		QuickCreatePrompt: "file a bug",
+		Agent:             &AgentData{ID: "leader-1", Name: "Leader"},
+		SquadID:           "aaaa1111-2222-3333-4444-555555555555",
+		SquadName:         "独立团",
+	})
+	for _, forbidden := range []string{
 		"picker SQUAD",
 		"running on the squad's behalf",
-		"do not assign it to your own agent UUID",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(out, s) {
-			t.Errorf("buildQuickCreatePrompt with SquadID missing %q\n--- output ---\n%s", s, out)
+		`--assignee-id "aaaa1111-2222-3333-4444-555555555555"`,
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("squad product retired: quick-create still defaults to squad: %q", forbidden)
 		}
 	}
 }
 
-// TestBuildQuickCreatePromptProjectPinning verifies that when the user
-// pins a project in the quick-create modal, the prompt instructs the agent
-// to pass `--project <uuid>` exactly. Without this, the agent would re-read
-// the workspace default and silently drop the user's selection — the same
-// "I have to retype 'in project X' every time" failure mode the modal
-// addition was meant to fix.
+
 func TestBuildQuickCreatePromptProjectPinning(t *testing.T) {
 	const projectID = "11111111-2222-3333-4444-555555555555"
 	out := buildQuickCreatePrompt(Task{
@@ -387,11 +351,8 @@ func TestBuildPromptSquadLeaderNoActionForMemberTrigger(t *testing.T) {
 		},
 	}
 	out := BuildPrompt(task, "claude", "")
-	if !strings.Contains(out, "Squad leader no_action rule") {
-		t.Errorf("buildCommentPrompt must inject squad leader no_action rule for member-triggered comments, got:\n%s", out)
-	}
-	if !strings.Contains(out, "DO NOT post any comment") {
-		t.Errorf("buildCommentPrompt must contain DO NOT post prohibition for member-triggered squad leader, got:\n%s", out)
+	if strings.Contains(out, "Squad leader no_action rule") || strings.Contains(out, "multica squad activity") {
+		t.Errorf("squad product retired: brief must not teach squad activity")
 	}
 }
 
@@ -409,8 +370,8 @@ func TestBuildPromptSquadLeaderNoActionForAgentTrigger(t *testing.T) {
 		},
 	}
 	out := BuildPrompt(task, "claude", "")
-	if !strings.Contains(out, "Squad leader no_action rule") {
-		t.Errorf("buildCommentPrompt must inject squad leader no_action rule for agent-triggered comments, got:\n%s", out)
+	if strings.Contains(out, "Squad leader no_action rule") || strings.Contains(out, "multica squad activity") {
+		t.Errorf("squad product retired: brief must not teach squad activity")
 	}
 }
 

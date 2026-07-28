@@ -716,7 +716,13 @@ func (s *TaskService) CreateMentionTaskRow(ctx context.Context, q *db.Queries, i
 // as a worker (do not skip). This matters for agents that are simultaneously
 // the leader and a worker of the same squad — see migration 090.
 func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentInboxEvent, error) {
-	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false)
+	// Squad product retired: never enqueue leader-role tasks.
+	_ = s
+	_ = ctx
+	_ = issue
+	_ = leaderID
+	_ = triggerCommentID
+	return db.AgentInboxEvent{}, fmt.Errorf("squad leader enqueue retired")
 }
 
 func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentInboxEvent, error) {

@@ -835,8 +835,7 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica issue status <id> <status>",
 		"multica issue comment add <issue-id>",
 		"multica issue comment add --help",
-		"multica squad member set-role <squad-id>",
-		"## Lazy References",
+				"## Lazy References",
 		"CLI details: inspect `multica ... --help`",
 	} {
 		if !strings.Contains(s, want) {
@@ -851,8 +850,7 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica label list",
 		"multica workspace member list",
 		"multica agent list",
-		"multica squad list",
-		"multica issue runs",
+				"multica issue runs",
 		"multica issue run-messages",
 		"multica attachment view",
 		"multica autopilot list",
@@ -3453,12 +3451,9 @@ func TestInjectRuntimeConfigMentionLoopHardening(t *testing.T) {
 	})
 }
 
-// TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction verifies that
-// when IsSquadLeader is true and the task is comment-triggered, the generated
-// CLAUDE.md explicitly forbids posting comments that merely announce no_action.
-// This is the fix for MUL-2168 — squad leaders were posting "Exiting silently"
-// comments because the comment-triggered path lacked the prohibition.
-func TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction(t *testing.T) {
+// TestInjectRuntimeConfigSquadSurfaceRetired: squad product removed — brief
+// must not teach multica squad CLI even when IsSquadLeader residual is set.
+func TestInjectRuntimeConfigSquadSurfaceRetired(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -3475,40 +3470,15 @@ func TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction(t *testing.T) {
 		t.Fatalf("read CLAUDE.md: %v", err)
 	}
 	s := string(data)
-
-	// The comment-triggered workflow must contain the squad leader no_action rule.
-	for _, want := range []string{
+	for _, forbidden := range []string{
 		"Squad leader rule",
-		"DO NOT post any comment",
 		"multica squad activity",
+		"multica squad member",
+		"### Squad maintenance",
 	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("squad leader comment-triggered CLAUDE.md missing %q", want)
+		if strings.Contains(s, forbidden) {
+			t.Errorf("retired squad surface still in CLAUDE.md: %q", forbidden)
 		}
-	}
-
-	// The Output section must use strong prohibition language.
-	if !strings.Contains(s, "you MUST exit without posting any comment") {
-		t.Errorf("Output section missing strong prohibition for squad leader no_action")
-	}
-
-	// Non-squad-leader should NOT have the squad leader rule in comment-triggered path.
-	dir2 := t.TempDir()
-	ctx2 := TaskContextForEnv{
-		IssueID:          "issue-1",
-		TriggerCommentID: "comment-1",
-		IsSquadLeader:    false,
-	}
-	if _, err := InjectRuntimeConfig(dir2, "claude", ctx2); err != nil {
-		t.Fatalf("InjectRuntimeConfig failed: %v", err)
-	}
-	data2, err := os.ReadFile(filepath.Join(dir2, "CLAUDE.md"))
-	if err != nil {
-		t.Fatalf("read CLAUDE.md: %v", err)
-	}
-	s2 := string(data2)
-	if strings.Contains(s2, "Squad leader rule") {
-		t.Errorf("non-squad-leader CLAUDE.md should NOT contain squad leader rule")
 	}
 }
 

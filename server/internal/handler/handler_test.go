@@ -42,31 +42,51 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runHandlerTests(m))
+}
+
+func runHandlerTests(m *testing.M) int {
 	ctx := context.Background()
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
 	}
 
+	lockConn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		fmt.Printf("Skipping tests: could not connect to database: %v\n", err)
+		return 0
+	}
+	// Keep a dedicated database session alive for the entire suite. PostgreSQL
+	// releases this database-scoped session lock automatically if the test
+	// process crashes and the connection closes.
+	defer lockConn.Close(context.Background())
+	if _, err := lockConn.Exec(ctx, `
+		SELECT pg_advisory_lock(
+			hashtextextended('multica:internal/handler:TestMain', 0)
+		)
+	`); err != nil {
+		fmt.Printf("Failed to acquire handler test database lock: %v\n", err)
+		return 1
+	}
+
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		fmt.Printf("Skipping tests: could not connect to database: %v\n", err)
-		os.Exit(0)
+		return 0
 	}
+	defer pool.Close()
 	if err := pool.Ping(ctx); err != nil {
 		fmt.Printf("Skipping tests: database not reachable: %v\n", err)
-		pool.Close()
-		os.Exit(0)
+		return 0
 	}
 	if err := ensureHandlerTestSchema(ctx, pool, dbURL); err != nil {
 		fmt.Printf("Failed to bootstrap handler test database: %v\n", err)
-		pool.Close()
-		os.Exit(1)
+		return 1
 	}
 	if err := ensureAgentInboxTestFixtureDefaults(ctx, pool); err != nil {
 		fmt.Printf("Failed to install agent inbox test fixture defaults: %v\n", err)
-		pool.Close()
-		os.Exit(1)
+		return 1
 	}
 
 	queries := db.New(pool)
@@ -98,8 +118,7 @@ func TestMain(m *testing.M) {
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
 	if err != nil {
 		fmt.Printf("Failed to set up handler test fixture: %v\n", err)
-		pool.Close()
-		os.Exit(1)
+		return 1
 	}
 
 	code := m.Run()
@@ -109,8 +128,7 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 	}
-	pool.Close()
-	os.Exit(code)
+	return code
 }
 
 // ensureAgentInboxTestFixtureDefaults keeps low-level SQL fixtures concise

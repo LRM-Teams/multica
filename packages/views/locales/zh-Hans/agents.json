@@ -570,6 +570,51 @@
     "agent_deleted_toast": "已删除智能体",
     "delete_failed_toast": "删除智能体失败"
   },
+  "restart_modal": {
+    "trigger": "重启…",
+    "title": "重启智能体",
+    "description": "选择如何重启 {{name}}。它的身份、配置、聊天历史和 Issue 始终保留。",
+    "tier": {
+      "restart": {
+        "title": "重启",
+        "scope": "重启进程。保留会话、工作区（MEMORY.md、notes/）及其余一切。"
+      },
+      "reset_session_restart": {
+        "title": "重置会话并重启",
+        "scope": "清除模型会话与上下文，然后重启。工作区（MEMORY.md、notes/）及其余一切保留。"
+      },
+      "full_reset_restart": {
+        "title": "完全重置并重启",
+        "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。身份、配置、聊天历史和 Issue 保留。这不是删除智能体。"
+      }
+    },
+    "after_current_run": "将在当前任务完成后执行。",
+    "full_reset_confirm": "输入该智能体的标识 {{handle}} 以确认。工作区文件（MEMORY.md、notes/）将被永久删除；身份、配置、聊天历史和 Issue 保留。",
+    "full_reset_confirm_placeholder": "输入 {{handle}}",
+    "disabled_reason": {
+      "agent_active": "等当前任务完成后再试。",
+      "unsupported_runtime_capability": "该运行时暂不支持就地重启。",
+      "no_runtime": "该智能体未绑定运行时。",
+      "offline": "运行时离线。",
+      "no_permission": "你没有重启该智能体的权限。",
+      "unavailable": "此操作当前不可用。"
+    },
+    "status": {
+      "scheduled": "已排期重启——将在当前任务完成后执行。",
+      "running": "重启中…",
+      "succeeded": "完成。智能体已恢复在线。",
+      "failed": "重启失败。",
+      "failed_reason": "重启失败：{{reason}}"
+    },
+    "cta": {
+      "restart": "重启",
+      "reset_session_restart": "重置会话并重启",
+      "full_reset_restart": "完全重置并重启"
+    },
+    "cancel": "取消",
+    "retry": "重试",
+    "done": "完成"
+  },
   "live_peek": {
     "current_issue_label": "正在处理",
     "no_current_issue": "暂无任务",

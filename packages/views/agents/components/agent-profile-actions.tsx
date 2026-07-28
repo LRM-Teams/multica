@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertCircle, Loader2, MessageSquare, Square, Trash2 } from "lucide-react";
+import { AlertCircle, Loader2, MessageSquare, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent } from "@multica/core/types";
@@ -27,6 +27,7 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
+import { AgentRestartModal } from "./agent-restart-modal";
 import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
 
 /**
@@ -73,6 +74,7 @@ export function AgentProfileActions({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
@@ -191,6 +193,20 @@ export function AgentProfileActions({
         ) : null}
 
         {canManage && !isArchived ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="w-full gap-2"
+            data-testid="agent-profile-action-restart"
+            onClick={() => setRestartOpen(true)}
+          >
+            <RotateCcw className="size-4 shrink-0" aria-hidden />
+            {t(($) => $.restart_modal.trigger)}
+          </Button>
+        ) : null}
+
+        {canManage && !isArchived ? (
           <div className="mt-1 border-t border-border pt-3">
             <Button
               type="button"
@@ -244,6 +260,16 @@ export function AgentProfileActions({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+      ) : null}
+
+      {canManage && !isArchived ? (
+        <AgentRestartModal
+          agentId={agent.id}
+          agentHandle={agent.name}
+          agentName={displayName}
+          open={restartOpen}
+          onOpenChange={setRestartOpen}
+        />
       ) : null}
     </section>
   );

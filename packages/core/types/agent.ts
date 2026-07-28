@@ -869,6 +869,55 @@ export interface ListAgentSkillSuggestionsResponse {
   suggestions: AgentSkillSuggestion[];
 }
 
+// Agent lifecycle actions (#632/#633). Single server entry, three kinds; the
+// client only ever sends `action_kind` (the server resolves the workspace root
+// from the agent/workspace binding — never a path).
+export type AgentLifecycleActionKind =
+  | "restart"
+  | "reset_session_restart"
+  | "full_reset_restart";
+
+export type AgentLifecycleExecutionMode = "immediate" | "after_current_run";
+
+export type AgentLifecycleOperationStatus =
+  | "scheduled"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+/**
+ * Per-action executability from the preflight — server-authoritative. The FE
+ * must not derive active/idle from `agent.status`; `supported`/`disabled_reason`
+ * is the final judge (covers permission, no runtime, offline/old daemon, and the
+ * dormant `unsupported_runtime_capability` gate before #677 D6 activates).
+ * `full_reset_restart` is idle-only: while a run is active it reports
+ * `{ supported: false, disabled_reason: "agent_active" }` and is never scheduled.
+ */
+export interface AgentLifecycleActionState {
+  supported: boolean;
+  disabled_reason?: string | null;
+  execution_mode: AgentLifecycleExecutionMode;
+}
+
+export interface AgentLifecycleOperation {
+  id: string;
+  agent_id: string;
+  runtime_id: string | null;
+  action_kind: AgentLifecycleActionKind;
+  status: AgentLifecycleOperationStatus;
+  execution_mode: AgentLifecycleExecutionMode;
+  step?: string | null;
+  reason_code?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface AgentLifecyclePreflight {
+  actions: Record<AgentLifecycleActionKind, AgentLifecycleActionState>;
+  active_operation?: AgentLifecycleOperation | null;
+}
+
 export interface DecideAgentSkillSuggestionRequest {
   decision: "accept" | "dismiss";
 }

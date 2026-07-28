@@ -580,6 +580,51 @@
     "agent_deleted_toast": "Agent deleted",
     "delete_failed_toast": "Failed to delete agent"
   },
+  "restart_modal": {
+    "trigger": "Restart…",
+    "title": "Restart agent",
+    "description": "Choose how to restart {{name}}. Its identity, configuration, chat history, and Issues are always kept.",
+    "tier": {
+      "restart": {
+        "title": "Restart",
+        "scope": "Restarts the process. Keeps the session, workspace (MEMORY.md, notes/), and everything else."
+      },
+      "reset_session_restart": {
+        "title": "Reset session & restart",
+        "scope": "Clears the model session and context, then restarts. Workspace (MEMORY.md, notes/) and everything else are kept."
+      },
+      "full_reset_restart": {
+        "title": "Full reset & restart",
+        "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. Identity, configuration, chat history, and Issues are kept. This is not Delete agent."
+      }
+    },
+    "after_current_run": "Runs after the current task finishes.",
+    "full_reset_confirm": "Type this agent's handle {{handle}} to confirm. Workspace files (MEMORY.md, notes/) will be permanently deleted; identity, configuration, chat history, and Issues are kept.",
+    "full_reset_confirm_placeholder": "Enter {{handle}}",
+    "disabled_reason": {
+      "agent_active": "Wait until the current task finishes, then try again.",
+      "unsupported_runtime_capability": "This runtime doesn't support in-place restart yet.",
+      "no_runtime": "No runtime is bound to this agent.",
+      "offline": "The runtime is offline.",
+      "no_permission": "You don't have permission to restart this agent.",
+      "unavailable": "This action isn't available right now."
+    },
+    "status": {
+      "scheduled": "Restart scheduled — runs after the current task finishes.",
+      "running": "Restarting…",
+      "succeeded": "Done. The agent is back online.",
+      "failed": "Restart failed.",
+      "failed_reason": "Restart failed: {{reason}}"
+    },
+    "cta": {
+      "restart": "Restart",
+      "reset_session_restart": "Reset session & restart",
+      "full_reset_restart": "Full reset & restart"
+    },
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "done": "Done"
+  },
   "live_peek": {
     "current_issue_label": "Now on",
     "no_current_issue": "No task",

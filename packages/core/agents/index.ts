@@ -4,6 +4,8 @@ export * from "./queries";
 export * from "./panel-open";
 export * from "./use-agent-presence";
 export * from "./use-agent-health";
+export * from "./agent-lifecycle";
+export * from "./use-agent-lifecycle";
 export * from "./use-agent-activity";
 export * from "./use-workspace-presence-prefetch";
 export * from "./constants";

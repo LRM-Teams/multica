@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
 )
 
@@ -68,6 +69,10 @@ func NewRegistry(opts RegistryOptions) *Registry {
 	if sampler != nil {
 		reg.MustRegister(sampler.Collectors()...)
 	}
+
+	// #801 alias-zero: must live on this registry (served /metrics gatherer),
+	// not prometheus.DefaultRegisterer — otherwise scrape never sees the series.
+	middleware.RegisterAgentHumanRouteMetrics(reg)
 
 	return &Registry{
 		Gatherer: reg,

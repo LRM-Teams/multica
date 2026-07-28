@@ -6,7 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestAgentPrincipalRoundTrip(t *testing.T) {
@@ -209,8 +210,20 @@ func TestRejectAgentOnHumanAPI_IssueLabelsVsGlobalLabels(t *testing.T) {
 // TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric hard-asserts the
 // human_route_hits_total counter increments on reject (Barry: metric not just source-looking-right).
 func TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric(t *testing.T) {
-	ensureAgentHumanRouteMetrics()
-	before := testutil.ToFloat64(agentHumanRouteHits.WithLabelValues("RejectAgentOnHumanAPI"))
+	// Per-registry CounterVec (production path via metrics.NewRegistry).
+	reg := prometheus.NewRegistry()
+	RegisterAgentHumanRouteMetrics(reg)
+	// Same-registry re-entry must not panic (Parker successor note).
+	RegisterAgentHumanRouteMetrics(reg)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := humanRouteSiteFromGather(mfs, "RejectAgentOnHumanAPI")
+	if before != 0 {
+		t.Fatalf("seeded RejectAgentOnHumanAPI = %v, want exact 0", before)
+	}
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -223,8 +236,28 @@ func TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric(t *testing.T) {
 		t.Fatalf("status=%d want 403", rec.Code)
 	}
 
-	after := testutil.ToFloat64(agentHumanRouteHits.WithLabelValues("RejectAgentOnHumanAPI"))
-	if after < before+1 {
-		t.Fatalf("human_route_hits_total{site=RejectAgentOnHumanAPI} before=%v after=%v; want +1", before, after)
+	mfs, err = reg.Gather()
+	if err != nil {
+		t.Fatal(err)
 	}
+	after := humanRouteSiteFromGather(mfs, "RejectAgentOnHumanAPI")
+	if after != before+1 {
+		t.Fatalf("human_route_hits_total{site=RejectAgentOnHumanAPI} before=%v after=%v; want exact +1", before, after)
+	}
+}
+
+func humanRouteSiteFromGather(mfs []*dto.MetricFamily, site string) float64 {
+	for _, mf := range mfs {
+		if mf.GetName() != "multica_agent_surface_human_route_hits_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "site" && lp.GetValue() == site && m.GetCounter() != nil {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return -1 // missing
 }

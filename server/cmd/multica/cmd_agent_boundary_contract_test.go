@@ -1361,3 +1361,28 @@ func TestNoAgentAPITokenFromEnvSymbol(t *testing.T) {
 		}
 	}
 }
+
+
+func TestIsMatAgentToken(t *testing.T) {
+	if !isMatAgentToken("mat_abc") {
+		t.Fatal("mat_ prefix")
+	}
+	if isMatAgentToken("mul_abc") || isMatAgentToken("") || isMatAgentToken("  ") {
+		t.Fatal("non-mat must be false")
+	}
+	// ambient TOKEN_FILE shape
+	t.Setenv("MULTICA_TOKEN", "")
+	dir := t.TempDir()
+	f := filepath.Join(dir, "tok")
+	if err := os.WriteFile(f, []byte("mat_from_file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+	if !isAgentAPITokenAmbient() {
+		t.Fatal("TOKEN_FILE-only must classify as agent")
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	if isAgentAPITokenAmbient() {
+		t.Fatal("no ambient token must be false")
+	}
+}

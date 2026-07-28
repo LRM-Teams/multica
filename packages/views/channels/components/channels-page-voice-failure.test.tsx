@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -12,17 +12,23 @@ import enChannels from "../../locales/en/channels.json";
 // path retry takes, when the record clears — is the page's own logic.
 const VOICE = { id: "att-voice-1", url: "https://cdn/v.wav", filename: "v.wav", content_type: "audio/wav", size_bytes: 1234 };
 vi.mock("./composer", () => ({
-  Composer: ({ prefix, onVoiceSend, onSend }: {
+  Composer: ({ prefix, onVoiceSend, onSend, surface }: {
     prefix?: React.ReactNode;
     onVoiceSend?: (d: number, a: unknown) => boolean;
     onSend?: () => void;
-  }) => (
-    <div data-testid="composer">
-      {prefix}
-      <button data-testid="fire-voice" onClick={() => onVoiceSend?.(7000, VOICE)}>voice</button>
-      <button data-testid="fire-text" onClick={() => onSend?.()}>text</button>
-    </div>
-  ),
+    surface?: string;
+  }) => {
+    // `surface` distinguishes the channel composer from a thread's — both real
+    // components render through here, so tests can drive either one.
+    const sfx = surface === "thread" ? "-thread" : "";
+    return (
+      <div data-testid={`composer${sfx}`}>
+        <div data-testid={`prefix${sfx}`}>{prefix}</div>
+        <button data-testid={`fire-voice${sfx}`} onClick={() => onVoiceSend?.(7000, VOICE)}>voice</button>
+        <button data-testid={`fire-text${sfx}`} onClick={() => onSend?.()}>text</button>
+      </div>
+    );
+  },
 }));
 
 import { ChannelsPage } from "./channels-page";
@@ -216,9 +222,12 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
 }));
 
 const replaceSpy = vi.hoisted(() => vi.fn());
+// #838 — thread surfaces open via the `?thread=` deep link; keep it mutable so a
+// test can move between threads the way a navigation would.
+const navState = vi.hoisted(() => ({ search: new URLSearchParams() }));
 vi.mock("../../navigation/context", () => ({
   useNavigation: () => ({
-    searchParams: new URLSearchParams(),
+    searchParams: navState.search,
     replace: replaceSpy,
     getShareableUrl: (url: string) => url,
   }),
@@ -261,13 +270,18 @@ function renderPage(channelId?: string) {
       mutations: { retry: false },
     },
   });
-  return render(
+  const ui = (
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
         <ChannelsPage channelId={channelId} />
       </QueryClientProvider>
-    </I18nProvider>,
+    </I18nProvider>
   );
+  const view = render(ui);
+  // #838 — re-render against the SAME client so a test can change the `?thread=`
+  // deep link (which is read from navigation, not props) without remounting and
+  // losing the very state under test.
+  return { ...view, refresh: () => view.rerender(ui) };
 }
 
 
@@ -497,6 +511,79 @@ describe("voice send failure leaves a durable record (#838)", () => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
     expect(await screen.findByTestId("composer-pending-voice")).toBeInTheDocument();
+  });
+
+  // #838 H0 (Iris) — the channel cases above prove the map; these prove the
+  // THREAD composer is really wired to it (display, retry target, per-thread
+  // isolation), which a key-collision unit test cannot show.
+  async function openThread(view: { refresh: () => void }, rootId: string) {
+    navState.search = new URLSearchParams(`thread=${rootId}`);
+    view.refresh();
+    return screen.findByTestId("fire-voice-thread");
+  }
+
+  // ⚠️ SKIPPED — NOT COVERAGE. @iris asked for this and I could not get the
+  // thread surface to mount in this harness tonight: the `?thread=` deep link
+  // alone doesn't open it (the panel comes from `sidePanel.kind === "thread"`,
+  // which needs more of the side-panel machinery than the URL param), and the
+  // panel also persists across channel switches, so a round-trip doesn't
+  // re-drive it. The harness pieces this needs ARE in place now — the Composer
+  // mock is surface-aware (`fire-voice-thread`) and `navState.search` is
+  // mutable — what's missing is opening the panel.
+  //
+  // What IS proven meanwhile: the channel A/B sequences above (display,
+  // overwrite-resistance, retry target, delete isolation) and voice-target.test.ts
+  // (the key can't collide across channel/thread/root). The thread composer's
+  // OWN wiring to the map is therefore NOT verified end-to-end. Tracked on #838.
+  it.skip("thread A→B: B does not show A's unsent recording, and each thread keeps its own", async () => {
+    const view = renderPage("chan-random");
+    await screen.findByTestId("composer");
+
+    // Thread A fails.
+    const fireA = await openThread(view, "root-1");
+    sendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
+    fireEvent.click(fireA);
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+      ).not.toBeNull();
+    });
+
+    // Thread B: sentinel proves its composer is mounted, so "absent" is a gate.
+    const fireB = await openThread(view, "root-2");
+    expect(fireB).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+    ).toBeNull();
+
+    // B fails too — must not destroy A's.
+    sendSpy().mockRejectedValueOnce(new Error("boom-thread-b"));
+    fireEvent.click(fireB);
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+      ).not.toBeNull();
+    });
+
+    // Back to A: still there, and retry targets THIS thread.
+    await openThread(view, "root-1");
+    const item = within(screen.getByTestId("prefix-thread")).queryByTestId(
+      "composer-pending-voice",
+    );
+    expect(item).not.toBeNull();
+
+    const before = sendSpy().mock.calls.length;
+    fireEvent.click(
+      within(screen.getByTestId("prefix-thread")).getByTestId("composer-pending-voice-retry"),
+    );
+    await waitFor(() => {
+      expect(sendSpy().mock.calls.length).toBeGreaterThan(before);
+    });
+    // Thread sends go through sendChannelThreadMessage-shaped args: the thread
+    // root must be A's, not B's.
+    const payload = JSON.stringify(sendSpy().mock.calls.at(-1) ?? "");
+    expect(payload).toContain("root-1");
+    expect(payload).not.toContain("root-2");
   });
 
   it("survives the toast being dismissed — the toast is the announcement, not the storage", async () => {

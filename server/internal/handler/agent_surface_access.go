@@ -179,8 +179,10 @@ func (h *Handler) agentAttachmentVisible(ctx context.Context, workspaceID, agent
 	if err == nil && ok {
 		return true
 	}
-	// Uploader-owned secure staging: agent may view its own uploads even when
-	// still unbound (DM/thread bind at message send). Foreign agents DENY.
+	// Uploader-owned secure staging (Parker product a): ONLY truly unbound
+	// orphans — no issue/comment/chat_session/channel FK and no channel_message
+	// attachment row. After bind, visibility is reference rules only (remove
+	// membership → DENY; no permanent uploader privilege).
 	err = h.DB.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1
@@ -189,6 +191,16 @@ func (h *Handler) agentAttachmentVisible(ctx context.Context, workspaceID, agent
 			  AND a.workspace_id = $1
 			  AND a.uploader_type = 'agent'
 			  AND a.uploader_id = $2
+			  AND a.issue_id IS NULL
+			  AND a.comment_id IS NULL
+			  AND a.chat_session_id IS NULL
+			  AND a.chat_message_id IS NULL
+			  AND a.channel_id IS NULL
+			  AND NOT EXISTS (
+			    SELECT 1 FROM channel_message_attachment cma
+			    WHERE cma.attachment_id = a.id
+			      AND cma.workspace_id = a.workspace_id
+			  )
 		)`, workspaceID, agentID, attachmentID).Scan(&ok)
 	return err == nil && ok
 }

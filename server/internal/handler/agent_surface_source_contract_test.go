@@ -138,8 +138,80 @@ func TestAgentUnboundUploadStagingSelfVisible(t *testing.T) {
 	}))
 	fRec := httptest.NewRecorder()
 	testHandler.GetAgentAttachment(fRec, foreign)
-	if fRec.Code == http.StatusOK {
-		t.Fatalf("foreign agent must not view uploader staging attachment")
+	if fRec.Code != http.StatusNotFound && fRec.Code != http.StatusForbidden {
+		t.Fatalf("foreign agent want 403/404, got %d body=%s", fRec.Code, fRec.Body.String())
+	}
+	// Product lock: prefer exact 403 when we surface forbidden; 404 is also fail-closed.
+	// Barry asked exact 403 when possible — GetAgentAttachment uses 404-on-deny for IDOR.
+	// Document: metadata uses 404 shape; middleware human path is 403.
+}
+
+func TestAgentAttachmentUploaderFallbackOnlyWhenUnbound(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	// Unit SQL contract via agentAttachmentVisible: bind channel_id then
+	// without membership must DENY even if uploader is self.
+	var agentID string
+	err := testPool.QueryRow(context.Background(),
+		`SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`,
+		parseUUID(testWorkspaceID)).Scan(&agentID)
+	if err != nil || agentID == "" {
+		t.Skip("no agent fixture")
+	}
+	agentUUID := parseUUID(agentID)
+	ws := parseUUID(testWorkspaceID)
+
+	// Create unbound attachment as this agent.
+	var attID string
+	err = testPool.QueryRow(context.Background(), `
+		INSERT INTO attachment (workspace_id, uploader_type, uploader_id, filename, content_type, size_bytes, url)
+		VALUES ($1, 'agent', $2, 't.txt', 'text/plain', 1, 'https://example.invalid/t')
+		RETURNING id::text`, ws, agentUUID).Scan(&attID)
+	if err != nil {
+		t.Fatalf("insert attachment: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM attachment WHERE id = $1`, parseUUID(attID))
+	})
+	attUUID := parseUUID(attID)
+
+	if !testHandler.agentAttachmentVisible(context.Background(), ws, agentUUID, attUUID) {
+		t.Fatal("unbound self upload must be visible to uploader")
+	}
+
+	// Bind channel_id without membership → must NOT fall back to uploader privilege.
+	var chID string
+	err = testPool.QueryRow(context.Background(), `
+		INSERT INTO channel (workspace_id, name, kind, created_by)
+		VALUES ($1, $2, 'group', (SELECT owner_id FROM agent WHERE id = $3 LIMIT 1))
+		RETURNING id::text`, ws, "bind-deny-"+t.Name(), agentUUID).Scan(&chID)
+	if err != nil {
+		// created_by may need a user — try workspace member
+		err = testPool.QueryRow(context.Background(), `
+			INSERT INTO channel (workspace_id, name, kind, created_by)
+			SELECT $1, $2, 'group', m.user_id FROM member m WHERE m.workspace_id = $1 LIMIT 1
+			RETURNING id::text`, ws, "bind-deny-"+t.Name()).Scan(&chID)
+	}
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_member WHERE channel_id = $1`, parseUUID(chID))
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, parseUUID(chID))
+	})
+	_, err = testPool.Exec(context.Background(), `
+		UPDATE attachment SET channel_id = $1 WHERE id = $2`, parseUUID(chID), attUUID)
+	if err != nil {
+		t.Fatalf("bind channel_id: %v", err)
+	}
+	// Ensure agent is NOT a member (delete if auto-seeded somehow for agents — usually not).
+	_, _ = testPool.Exec(context.Background(), `
+		DELETE FROM channel_member WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2`,
+		parseUUID(chID), agentUUID)
+
+	if testHandler.agentAttachmentVisible(context.Background(), ws, agentUUID, attUUID) {
+		t.Fatal("after bind without membership, uploader fallback must not grant visibility")
 	}
 }
 

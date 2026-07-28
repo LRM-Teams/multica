@@ -18,9 +18,11 @@ const (
 	channelOwnershipTransferredEvent = "channel_ownership_transferred"
 )
 
-// testFailChannelMemberSystemEventInsert forces insertChannelMemberSystemEventExec
-// to fail. Tests only — production code never sets it.
-var testFailChannelMemberSystemEventInsert atomic.Bool
+// testFailChannelMemberSystemEventChannelID, when non-empty, forces
+// insertChannelMemberSystemEventExec to fail only for that channel id.
+// Tests only — production never sets it. Channel-scoped so parallel tests
+// on other channels are unaffected.
+var testFailChannelMemberSystemEventChannelID atomic.Value // string
 
 type channelMemberSystemEventParams struct {
 	ActorID           string `json:"actor_id,omitempty"`
@@ -97,8 +99,8 @@ func (h *Handler) insertChannelMemberSystemEventExec(
 	targetType string,
 	targetID pgtype.UUID,
 ) (ChannelMessageResponse, error) {
-	if testFailChannelMemberSystemEventInsert.Load() {
-		return ChannelMessageResponse{}, fmt.Errorf("forced channel member system event insert failure")
+	if failID, _ := testFailChannelMemberSystemEventChannelID.Load().(string); failID != "" && failID == uuidToString(channelID) {
+		return ChannelMessageResponse{}, fmt.Errorf("forced channel member system event insert failure for channel %s", failID)
 	}
 	actorRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, "user", actorID)
 	targetRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, targetType, targetID)

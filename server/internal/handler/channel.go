@@ -501,7 +501,9 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 				       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
 				       ELSE 2
 				  END,
-				  cm.created_at ASC
+				  cm.created_at ASC,
+		  cm.member_type ASC,
+		  cm.member_id ASC
 				LIMIT $3
 			) limited ON true
 			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
@@ -1335,7 +1337,9 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
 		       ELSE 2
 		  END,
-		  cm.created_at ASC`, channelID, parseUUID(workspaceID))
+		  cm.created_at ASC,
+		  cm.member_type ASC,
+		  cm.member_id ASC`, channelID, parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel members")
 		return
@@ -1545,12 +1549,17 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 
 const channelOwnerChangedCode = "owner_changed"
 
-// testRoleMutationEntryGate, when non-nil, blocks handlers after the entry
-// owner snapshot and before Begin — tests only, forces concurrent racers to
-// both observe entryWasOwner=true before contending on locks.
+// Test-only race controls (never set in production):
+//
+//	entry gate  — after entry owner snapshot, before Begin
+//	post-lock   — after channel FOR UPDATE (transfer only), before mutations
+//
+// so tests can force transfer-first / true lock contention.
 var (
-	testRoleMutationEntryGate    chan struct{}
-	testRoleMutationEntryEntered int32 // atomic via sync/atomic
+	testRoleMutationEntryGate       chan struct{}
+	testRoleMutationEntryEntered    int32
+	testRoleMutationPostLockGate    chan struct{}
+	testRoleMutationPostLockEntered int32
 )
 
 func roleMutationEntryBarrier() {
@@ -1559,6 +1568,14 @@ func roleMutationEntryBarrier() {
 	}
 	atomic.AddInt32(&testRoleMutationEntryEntered, 1)
 	<-testRoleMutationEntryGate
+}
+
+func roleMutationPostLockBarrier() {
+	if testRoleMutationPostLockGate == nil {
+		return
+	}
+	atomic.AddInt32(&testRoleMutationPostLockEntered, 1)
+	<-testRoleMutationPostLockGate
 }
 
 type updateChannelMemberRoleRequest struct {
@@ -1636,7 +1653,9 @@ func writeChannelRoleMutationErr(w http.ResponseWriter, err error) {
 // actorIsChannelOwnerRead is a non-locking entry snapshot used only to
 // classify 403 responses (plain vs owner_changed). Authorization still uses
 // the locked in-tx recheck.
-func actorIsChannelOwnerRead(ctx context.Context, exec dbExecutor, workspaceID string, channelID, actorID pgtype.UUID) bool {
+// Returns (isOwner, err). Only pgx.ErrNoRows → (false, nil) plain non-owner.
+// Other DB errors must surface as 500 — never disguise infra failure as deny.
+func actorIsChannelOwnerRead(ctx context.Context, exec dbExecutor, workspaceID string, channelID, actorID pgtype.UUID) (bool, error) {
 	var role string
 	err := exec.QueryRow(ctx, `
 		SELECT role FROM channel_member
@@ -1644,7 +1663,13 @@ func actorIsChannelOwnerRead(ctx context.Context, exec dbExecutor, workspaceID s
 		  AND member_type = 'user' AND member_id = $3`,
 		channelID, parseUUID(workspaceID), actorID,
 	).Scan(&role)
-	return err == nil && role == "owner"
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return role == "owner", nil
 }
 
 func mapOwnerAuthErr(entryWasOwner bool, lockErr error) error {
@@ -1728,7 +1753,11 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	entryWasOwner := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	entryWasOwner, entryErr := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	if entryErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load channel membership")
+		return
+	}
 	roleMutationEntryBarrier()
 
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -1840,7 +1869,11 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	entryWasOwner := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	entryWasOwner, entryErr := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	if entryErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load channel membership")
+		return
+	}
 	roleMutationEntryBarrier()
 
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -1854,6 +1887,9 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		writeChannelRoleMutationErr(w, err)
 		return
 	}
+	// Test-only: hold after channel lock so PATCH can queue on the same lock
+	// (deterministic transfer-first → PATCH owner_changed).
+	roleMutationPostLockBarrier()
 	// Serialize all membership mutations for this channel, then re-check actor
 	// is still owner after waiting for any concurrent transfer/role lock.
 	rows, err := tx.Query(r.Context(), `
@@ -6549,7 +6585,9 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
 		       ELSE 2
 		  END,
-		  cm.created_at ASC`, parseUUID(channelID), parseUUID(workspaceID))
+		  cm.created_at ASC,
+		  cm.member_type ASC,
+		  cm.member_id ASC`, parseUUID(channelID), parseUUID(workspaceID))
 	if err != nil {
 		return nil
 	}

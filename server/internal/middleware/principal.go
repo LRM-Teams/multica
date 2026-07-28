@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/prometheus/client_golang/prometheus"
@@ -78,23 +79,8 @@ func IsAgentActorSource(source string) bool {
 	}
 }
 
-// agentHumanRouteHits counts AgentPrincipal requests that hit a human data-plane
-// route. Must stay at 0 after #801 cutover. Label "site" is a stable landmark.
-//
-// IMPORTANT: this collector is registered on the *app* metrics Registry
-// (see metrics.NewRegistry → RegisterAgentHumanRouteMetrics), not the process
-// default registry. The /metrics scrape uses that custom Gatherer; registering
-// only on prometheus.DefaultRegisterer made series invisible (NO_DATA).
-var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
-	Namespace: "multica",
-	Subsystem: "agent_surface",
-	Name:      "human_route_hits_total",
-	Help:      "AgentPrincipal requests that hit human (non-/api/agent) data-plane routes. Must be 0 after #801 cutover.",
-}, []string{"site"})
-
-// Known human-route sites that can record hits. Seeded at process start so
-// scrapes always show series (value 0) instead of absent series (NO_DATA).
 // AgentHumanRouteKnownSites is the exact seeded site set (exported for tests).
+// Scrapes must show every site at process start (value 0) — never NO_DATA.
 var AgentHumanRouteKnownSites = []string{
 	"RejectAgentOnHumanAPI",
 	"ListChannels",
@@ -105,37 +91,79 @@ var AgentHumanRouteKnownSites = []string{
 	"loadProjectForResource",
 }
 
-// RegisterAgentHumanRouteMetrics registers the alias-zero counter on the given
-// registerer (each app metrics Registry) and seeds known site labels at 0.
+// Per-registry CounterVecs so each NewRegistry() gatherer starts at exact 0
+// and scrapes always see series. RecordAgentHumanRouteHit fans out to all
+// registered vecs (production has one; tests may construct several).
 //
-// The same CounterVec is shared; it must register on *every* NewRegistry()
-// gatherer so scrapes never see NO_DATA. Same-registry re-entry is idempotent
-// (AlreadyRegisteredError). A process-global one-shot must not skip later
-// registries (Barry #1297 BLOCK).
+// Do NOT use process-global one-shot registration (Barry #1297): that left
+// later app registries missing the series entirely.
+var (
+	agentHumanRouteMu   sync.Mutex
+	agentHumanRouteByReg = map[prometheus.Registerer]*prometheus.CounterVec{}
+	agentHumanRouteVecs  []*prometheus.CounterVec
+)
+
+func newAgentHumanRouteHitsVec() *prometheus.CounterVec {
+	return prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "multica",
+		Subsystem: "agent_surface",
+		Name:      "human_route_hits_total",
+		Help:      "AgentPrincipal requests that hit human (non-/api/agent) data-plane routes. Must be 0 after #801 cutover.",
+	}, []string{"site"})
+}
+
+func seedAgentHumanRouteSites(v *prometheus.CounterVec) {
+	for _, site := range AgentHumanRouteKnownSites {
+		v.WithLabelValues(site)
+	}
+}
+
+// RegisterAgentHumanRouteMetrics registers a fresh alias-zero counter on the
+// given registerer and seeds known site labels at 0. Same-registry re-entry
+// is idempotent. Each NewRegistry() must get its own collector so second
+// gatherers are never empty (Barry two-registry hard control).
 func RegisterAgentHumanRouteMetrics(reg prometheus.Registerer) {
 	if reg == nil {
 		return
 	}
-	if err := reg.Register(agentHumanRouteHits); err != nil {
+	agentHumanRouteMu.Lock()
+	defer agentHumanRouteMu.Unlock()
+
+	if v, ok := agentHumanRouteByReg[reg]; ok {
+		seedAgentHumanRouteSites(v)
+		return
+	}
+
+	v := newAgentHumanRouteHitsVec()
+	if err := reg.Register(v); err != nil {
 		var already prometheus.AlreadyRegisteredError
-		if !errors.As(err, &already) {
-			// Unexpected registration failure — surface loudly in tests/prod start.
+		if errors.As(err, &already) {
+			// Same registry already has an equivalent collector — adopt it if possible.
+			if existing, ok := already.ExistingCollector.(*prometheus.CounterVec); ok {
+				v = existing
+			} else {
+				panic("RegisterAgentHumanRouteMetrics: already registered with unexpected collector type")
+			}
+		} else {
 			panic("RegisterAgentHumanRouteMetrics: " + err.Error())
 		}
-		// Same registry already has this collector — ok (idempotent).
 	}
-	for _, site := range AgentHumanRouteKnownSites {
-		// Touch label sets so Prometheus exports series before any Inc.
-		agentHumanRouteHits.WithLabelValues(site)
-	}
+	seedAgentHumanRouteSites(v)
+	agentHumanRouteByReg[reg] = v
+	agentHumanRouteVecs = append(agentHumanRouteVecs, v)
 }
 
-// RecordAgentHumanRouteHit increments the alias-zero observation counter.
+// RecordAgentHumanRouteHit increments the alias-zero observation counter on
+// every registry-bound vec (so all live scrapers observe the hit).
 func RecordAgentHumanRouteHit(site string) {
 	if site == "" {
 		site = "unknown"
 	}
-	agentHumanRouteHits.WithLabelValues(site).Inc()
+	agentHumanRouteMu.Lock()
+	defer agentHumanRouteMu.Unlock()
+	for _, v := range agentHumanRouteVecs {
+		v.WithLabelValues(site).Inc()
+	}
 }
 
 // RequireAgentPrincipal allows only requests with AgentPrincipal in context.

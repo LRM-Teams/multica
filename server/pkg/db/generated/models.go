@@ -591,6 +591,7 @@ type EnvCheckpoint struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 	ResumeTrigger  []byte             `json:"resume_trigger"`
+	SaveMode       string             `json:"save_mode"`
 }
 
 type EnvDispatchRequest struct {
@@ -1341,6 +1342,7 @@ type SandboxSnapshot struct {
 	Metadata       []byte             `json:"metadata"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	CheckpointID   pgtype.UUID        `json:"checkpoint_id"`
 }
 
 type TrainingDispatch struct {

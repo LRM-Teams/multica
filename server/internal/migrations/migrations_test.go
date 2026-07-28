@@ -625,3 +625,90 @@ func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
 	}
 }
 
+func TestSavepointOwnershipQueriesStayWorkspaceScopedAndNonStealing(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	queriesDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "pkg", "db", "queries")
+
+	checkpoint, err := os.ReadFile(filepath.Join(queriesDir, "env_checkpoint.sql"))
+	if err != nil {
+		t.Fatalf("read env_checkpoint queries: %v", err)
+	}
+	for _, required := range []string{
+		"    save_mode\n",
+		"    @save_mode\n",
+		"-- name: UpdateEnvCheckpointSaveMode :one",
+		"SET save_mode = @save_mode, updated_at = now()",
+	} {
+		if !strings.Contains(string(checkpoint), required) {
+			t.Errorf("env_checkpoint queries missing %q", required)
+		}
+	}
+
+	sandbox, err := os.ReadFile(filepath.Join(queriesDir, "sandbox.sql"))
+	if err != nil {
+		t.Fatalf("read sandbox queries: %v", err)
+	}
+	for _, required := range []string{
+		"-- name: AttachSandboxSnapshotToCheckpoint :one",
+		// A savepoint has exactly one owner, so attaching must never reassign
+		// one that another checkpoint already owns.
+		"AND (checkpoint_id IS NULL OR checkpoint_id = @checkpoint_id)",
+		"-- name: ListSandboxSnapshotsForCheckpoint :many",
+		"WHERE checkpoint_id = @checkpoint_id AND workspace_id = @workspace_id",
+	} {
+		if !strings.Contains(string(sandbox), required) {
+			t.Errorf("sandbox queries missing %q", required)
+		}
+	}
+}
+
+// TestGeneratedSnapshotScanMatchesSelectedColumns guards the hand-maintained
+// generated code in this repository: sandbox.sql.go routes every sandbox_snapshot
+// row through one shared scan helper, so a column added to the SELECT lists
+// without a matching scan target would misalign every snapshot read at runtime,
+// which no compile check would catch.
+func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	generatedDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "pkg", "db", "generated")
+
+	sandbox, err := os.ReadFile(filepath.Join(generatedDir, "sandbox.sql.go"))
+	if err != nil {
+		t.Fatalf("read generated sandbox: %v", err)
+	}
+	contents := string(sandbox)
+	const snapshotColumns = "id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id"
+	if got := strings.Count(contents, snapshotColumns); got != 9 {
+		t.Errorf("snapshot column list appears %d times, want 9 (7 pre-existing queries plus attach and list-for-checkpoint)", got)
+	}
+	// The scan helper must end with checkpoint_id, in the same order.
+	if !strings.Contains(contents, "&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,") {
+		t.Error("scanSandboxSnapshot does not scan checkpoint_id last, so snapshot reads would misalign")
+	}
+	if strings.Count(contents, "func scanSandboxSnapshot(") != 1 {
+		t.Error("expected exactly one shared sandbox_snapshot scan helper")
+	}
+
+	checkpoint, err := os.ReadFile(filepath.Join(generatedDir, "env_checkpoint.sql.go"))
+	if err != nil {
+		t.Fatalf("read generated env_checkpoint: %v", err)
+	}
+	checkpointContents := string(checkpoint)
+	const checkpointColumns = "id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode"
+	if got := strings.Count(checkpointContents, checkpointColumns); got != 5 {
+		t.Errorf("checkpoint column list appears %d times, want 5 (4 pre-existing queries plus update-save-mode)", got)
+	}
+	// Every checkpoint scan must take save_mode after resume_trigger.
+	scans := strings.Count(checkpointContents, "&i.ResumeTrigger,")
+	saveModeScans := strings.Count(checkpointContents, "&i.ResumeTrigger,\n\t\t&i.SaveMode,") +
+		strings.Count(checkpointContents, "&i.ResumeTrigger,\n\t\t\t&i.SaveMode,")
+	if scans != saveModeScans {
+		t.Errorf("%d checkpoint scans read resume_trigger but only %d follow it with save_mode", scans, saveModeScans)
+	}
+}
+

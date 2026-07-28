@@ -345,3 +345,19 @@ RETURNING *;
 -- name: DeleteSandboxSnapshot :exec
 DELETE FROM sandbox_snapshot
 WHERE id = @id AND workspace_id = @workspace_id;
+
+-- name: AttachSandboxSnapshotToCheckpoint :one
+-- Binds a savepoint to its single owning checkpoint. Idempotent for the same
+-- owner so a retried checkpoint create does not fail, and it refuses to steal a
+-- savepoint that another checkpoint already owns.
+UPDATE sandbox_snapshot
+SET checkpoint_id = @checkpoint_id, updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+  AND (checkpoint_id IS NULL OR checkpoint_id = @checkpoint_id)
+RETURNING *;
+
+-- name: ListSandboxSnapshotsForCheckpoint :many
+SELECT *
+FROM sandbox_snapshot
+WHERE checkpoint_id = @checkpoint_id AND workspace_id = @workspace_id
+ORDER BY created_at ASC;

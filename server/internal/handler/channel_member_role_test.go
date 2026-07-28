@@ -133,3 +133,41 @@ func TestAgentCannotBeChannelOwnerCHECK(t *testing.T) {
 		t.Fatal("expected CHECK to reject agent owner")
 	}
 }
+
+// TestRemoveSoleOwnerBlocked: ordinary group cannot lose its only human owner.
+func TestRemoveSoleOwnerBlocked(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{
+		"name": "role-sole-owner-" + t.Name(),
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.CreateChannel(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var ch ChannelResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	// Self-leave as sole owner must fail.
+	del := newRequestAs(testUserID, http.MethodDelete,
+		"/api/channels/"+ch.ID+"/members/user/"+testUserID, nil)
+	del = withChannelTestWorkspaceCtx(t, del, testUserID)
+	del = withURLParam(del, "channelId", ch.ID)
+	del = withURLParam(del, "memberType", "user")
+	del = withURLParam(del, "memberId", testUserID)
+	delRec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(delRec, del)
+	if delRec.Code == http.StatusOK {
+		t.Fatalf("sole owner self-leave should be blocked, got 200: %s", delRec.Body.String())
+	}
+	var n int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM channel_member WHERE channel_id = $1 AND role = 'owner'`,
+		parseUUID(ch.ID)).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("owner still present: n=%d err=%v", n, err)
+	}
+}

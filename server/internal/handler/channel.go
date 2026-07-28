@@ -1464,7 +1464,8 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Agent removal: membership delete + revoke pending/in-flight access must
-	// share one transaction (Barry #801). User removal keeps the simple path.
+	// share one transaction (Barry #801). User removal uses a tx that also
+	// enforces ordinary-group ≥1 human owner (Barry #1286).
 	if memberType == "agent" {
 		removed, err := h.removeAgentChannelMemberAndRevokeTx(r.Context(), parseUUID(workspaceID), channelID, memberID)
 		if err != nil {
@@ -1480,11 +1481,53 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := h.DB.Exec(r.Context(), `
+	// Ordinary groups must keep ≥1 human owner (Barry #1286). Refuse removing
+	// the sole owner (self-leave or kick) so zero-owner groups cannot form.
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var kind string
+	var systemKey pgtype.Text
+	if err := tx.QueryRow(r.Context(), `
+		SELECT kind, system_key FROM channel WHERE id = $1 AND workspace_id = $2`,
+		channelID, parseUUID(workspaceID)).Scan(&kind, &systemKey); err != nil {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	ordinaryGroup := kind == "group" && !systemKey.Valid
+	if ordinaryGroup && memberType == "user" {
+		var role string
+		err := tx.QueryRow(r.Context(), `
+			SELECT role FROM channel_member
+			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+			channelID, parseUUID(workspaceID), memberID).Scan(&role)
+		if err == nil && role == "owner" {
+			var otherOwners int
+			_ = tx.QueryRow(r.Context(), `
+				SELECT count(*) FROM channel_member
+				WHERE channel_id = $1 AND workspace_id = $2
+				  AND role = 'owner' AND member_type = 'user' AND member_id <> $3`,
+				channelID, parseUUID(workspaceID), memberID).Scan(&otherOwners)
+			if otherOwners == 0 {
+				writeError(w, http.StatusConflict, "transfer channel ownership before removing the only owner")
+				return
+			}
+		}
+	}
+
+	tag, err := tx.Exec(r.Context(), `
 		DELETE FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
 		channelID, parseUUID(workspaceID), memberType, memberID)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
 		return
 	}

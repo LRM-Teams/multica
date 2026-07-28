@@ -6,3 +6,5 @@ ALTER TABLE channel_member
   CHECK (role IN ('owner', 'manager', 'member'));
 
 -- Does not re-elevate DM/system owners or re-introduce agent owners.
+DROP TRIGGER IF EXISTS trg_channel_member_preserve_human_owner ON channel_member;
+DROP FUNCTION IF EXISTS channel_member_preserve_human_owner();

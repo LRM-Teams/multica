@@ -25,6 +25,7 @@ import { useT } from "../../i18n";
 import { ChannelDetailsDetailRow } from "./channel-details-detail-row";
 import { ChannelDetailsHeroAvatar } from "./channel-details-hero-avatar";
 import { ChannelDetailsMemberStack } from "./channel-details-member-stack";
+import { MotionContent } from "../../common/motion-content";
 import { ChannelDetailsSectionCard } from "./channel-details-section-card";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
@@ -220,6 +221,10 @@ export function ChannelDetailsPanel({
       // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell title slot; remount keyed by channel/tab
       leading={leading}
     >
+      {/* #820 — cross-fade the panel content on view swap (opacity-only). The
+          keyed remount keeps semantics/focus instant and renders only the final
+          view on rapid retarget; reduced-motion drops the fade. */}
+      <MotionContent motionKey={view} className="flex min-h-0 flex-1 flex-col">
       {view === "home" ? (
         <div
           className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-muted/40 p-3"
@@ -620,6 +625,7 @@ export function ChannelDetailsPanel({
           </span>
         </div>
       ) : null}
+      </MotionContent>
     </ConversationSidePanelShell>
   );
 }

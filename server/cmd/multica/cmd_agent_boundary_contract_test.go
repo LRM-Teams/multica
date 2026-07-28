@@ -1073,14 +1073,20 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 	}
 }
 
-// TestBoundary_AttachmentUpload_AgentTokenRequiresTarget asserts mat_* CLI
-// rejects unbound upload before HTTP (Ronan a3d71c62d / Barry contract lock).
-func TestBoundary_AttachmentUpload_AgentTokenRequiresTarget(t *testing.T) {
-	// httptest that would 200 if CLI incorrectly called unbound upload.
-	called := false
+// TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging asserts mat_*
+// CLI may omit --target and still POST dedicated /api/agent/attachments
+// (Parker secure staging for DM/thread attach via --attachment-id).
+func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) {
+	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		http.Error(w, "should not reach server for unbound mat_*", http.StatusInternalServerError)
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/agent/attachments" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractAttachmentID, "filename": "x.txt",
+			})
+			return
+		}
+		http.Error(w, "unexpected path", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
 	boundaryCLIEnv(t, srv.URL)
@@ -1098,15 +1104,20 @@ func TestBoundary_AttachmentUpload_AgentTokenRequiresTarget(t *testing.T) {
 	cmd.Flags().String("path", "", "")
 	cmd.Flags().String("target", "", "")
 	_ = cmd.Flags().Set("path", path)
-	// no --target → unbound
-	err := runAttachmentUpload(cmd, nil)
-	if err == nil {
-		t.Fatal("mat_* unbound upload: want error requiring --target, got nil")
+	// no --target → unbound staging
+	if err := runAttachmentUpload(cmd, nil); err != nil {
+		t.Fatalf("mat_* unbound staging upload: %v paths=%v", err, gotPaths)
 	}
-	if !strings.Contains(err.Error(), "target") && !strings.Contains(err.Error(), "unbound") {
-		t.Fatalf("error=%v; want mention of target/unbound", err)
+	found := false
+	for _, p := range gotPaths {
+		if p == "POST /api/agent/attachments" {
+			found = true
+		}
+		if strings.Contains(p, "/api/upload-file") {
+			t.Fatalf("hit human upload path %q", p)
+		}
 	}
-	if called {
-		t.Fatal("CLI must fail closed before HTTP for mat_* unbound upload")
+	if !found {
+		t.Fatalf("paths=%v, want POST /api/agent/attachments", gotPaths)
 	}
 }

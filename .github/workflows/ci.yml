@@ -66,13 +66,37 @@ jobs:
       - name: React Doctor
         run: pnpm react:doctor
 
-      - name: Build, type check, lint, and test
+      - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.
         # Mobile remains path-filtered in mobile-verify.yml; desktop packaging
         # is out of the main release gate (#1320). Dependents of @multica/web
         # (core/ui/views) are included via the `...` selector.
-        run: pnpm exec turbo build typecheck lint test --filter='@multica/web...'
+        run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
+
+      - name: Test
+        # task #853/#855 — `test` is a SEPARATE turbo invocation, pinned to one
+        # outer task at a time. Previously all four tasks shared one command, so
+        # turbo ran several packages' `test` concurrently and EACH spawned its
+        # own pool of Vitest file workers: outer task concurrency × inner worker
+        # count. On a runner that oversubscribes the CPU badly enough to starve
+        # whichever test is unlucky enough to be mid-`waitFor` — the failure
+        # lands on a different file each time the load changes, which is why it
+        # kept reddening PRs whose diffs never touched views (#1243, #1232).
+        #
+        # `--concurrency=1` bounds only the OUTER task graph. Each package still
+        # uses its own file workers, so views' 297 files stay parallel; we are
+        # removing the multiplication, not serialising the suite.
+        #
+        # The cost is small and was measured before choosing this: views ~65s is
+        # ~89% of frontend test wall time (core 3.51s + desktop 2.53s + web 1.77s
+        # ≈ 7.8s), so giving up cross-package overlap costs ~8s at most.
+        #
+        # Deliberately NOT done here: raising any timeout. Starvation slowdown is
+        # a censored lower bound of ≥21–24×, so no timeout value is known to be
+        # sufficient — raising it would hide the symptom while leaving the
+        # contention, and turn a stable red into an intermittent one.
+        run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
 
   backend:
     runs-on: ubuntu-latest

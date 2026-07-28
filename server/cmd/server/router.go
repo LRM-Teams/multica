@@ -676,6 +676,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// Sandboxes "Add node" flow after workspace switch for
 					// non-admins with a raw "insufficient permissions" error.
 					r.Post("/sandbox/bindings", h.BindSandboxNodeToWorkspace)
+					// Read-only inventory/diagnostic for fleet update visibility
+					// (#815 companion). Does not mutate update state.
+					r.Get("/runtimes/update-inventory-diagnostic", h.GetWorkspaceUpdateInventoryDiagnostic)
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {

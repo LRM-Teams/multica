@@ -719,6 +719,103 @@ func TestBoundary_AttachmentContent_DocumentsDedicatedDownloadURL(t *testing.T) 
 	}
 }
 
+// TestBoundary_IssueList_HitsDedicatedAgentAPI asserts issue list uses
+// GET /api/agent/issues (N-gap until CLI mat_* gate).
+func TestBoundary_IssueList_HitsDedicatedAgentAPI(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodGet && r.URL.Path == "/api/agent/issues" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issues": []any{}, "total": 0,
+			})
+			return
+		}
+		http.Error(w, "human issue list forbidden for agent", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().String("status", "", "")
+	cmd.Flags().String("priority", "", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Int("offset", 0, "")
+	cmd.Flags().String("assignee", "", "")
+	cmd.Flags().String("assignee-id", "", "")
+	cmd.Flags().String("project", "", "")
+	cmd.Flags().StringSlice("metadata", nil, "")
+	cmd.Flags().Bool("with-prs", false, "")
+	cmd.Flags().Bool("with-gates", false, "")
+	cmd.Flags().Bool("full-id", false, "")
+	if err := runIssueList(cmd, nil); err != nil {
+		t.Fatalf("runIssueList: %v (paths=%v) — expect GET /api/agent/issues", err, gotPaths)
+	}
+	if len(gotPaths) < 1 || !strings.HasPrefix(gotPaths[0], "GET /api/agent/issues") {
+		t.Fatalf("paths=%v, want GET /api/agent/issues", gotPaths)
+	}
+	for _, p := range gotPaths {
+		if strings.Contains(p, "GET /api/issues") && !strings.Contains(p, "/api/agent/issues") {
+			t.Fatalf("hit human list path %q", p)
+		}
+	}
+}
+
+// TestBoundary_IssueCommentAdd_HitsDedicatedAgentAPI asserts comment create
+// posts to POST /api/agent/issues/{id}/comments (N-gap: list gated, write not).
+func TestBoundary_IssueCommentAdd_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantPost := wantGet + "/comments"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == wantPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "c1", "content": "hi"})
+		default:
+			http.Error(w, "human comment path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "add"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("content", "", "")
+	cmd.Flags().Bool("content-stdin", false, "")
+	cmd.Flags().String("content-file", "", "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().StringSlice("attachment-id", nil, "")
+	cmd.Flags().String("output", "json", "")
+	_ = cmd.Flags().Set("content", "boundary comment")
+	if err := runIssueCommentAdd(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueCommentAdd: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "POST "+wantPost {
+			found = true
+		}
+		if strings.HasPrefix(strings.SplitN(p, " ", 2)[1], "/api/issues") ||
+			strings.HasPrefix(strings.SplitN(p, " ", 2)[1], "/api/comments") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want POST %s", gotPaths, wantPost)
+	}
+}
+
 // TestBoundary_IssueMetadataList_HitsDedicatedAgentAPI asserts metadata list
 // uses GET /api/agent/issues/{id}/metadata.
 func TestBoundary_IssueMetadataList_HitsDedicatedAgentAPI(t *testing.T) {

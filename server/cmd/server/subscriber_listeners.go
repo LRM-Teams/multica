@@ -146,7 +146,20 @@ func extractIssueFields(v any) (handler.IssueResponse, bool) {
 
 // addSubscriber adds a user as an issue subscriber and publishes a
 // subscriber:added event for real-time frontend sync.
+//
+// issue_subscriber.user_type is constrained to ('member','agent'). Squad
+// product is retired: mention://squad tokens and historical assignee_type=squad
+// must not reach AddIssueSubscriber (would ERROR 23514). System authors are
+// filtered at the comment:created listener; this gate is the unified
+// write-boundary for all other callers.
 func addSubscriber(bus *events.Bus, queries *db.Queries, workspaceID, issueID, userType, userID, reason string) {
+	switch userType {
+	case "member", "agent":
+		// allowed
+	default:
+		// Squad (retired), system, or unknown — no subscriber row, no ERROR log.
+		return
+	}
 	err := queries.AddIssueSubscriber(context.Background(), db.AddIssueSubscriberParams{
 		IssueID:  parseUUID(issueID),
 		UserType: userType,

@@ -155,9 +155,19 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
   };
 });
 
+// NOTE: the store is used BOTH as a hook and imperatively —
+// `viewerAuthorFields()` in core/channels/mutations.ts calls
+// `useAuthStore.getState()` inside the send mutation's `onMutate`. A mock that
+// only provides the selector form makes `onMutate` throw a TypeError, which
+// react-query reports as a mutation error: the failure path runs, the request
+// is never sent, and a test asserting "failure produced X" passes for entirely
+// the wrong reason. (That is exactly how this file's first draft went green.)
+const authState = { user: { id: "user-1", name: "Alice" } };
 vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (selector: (s: { user: { id: string; name: string } }) => unknown) =>
-    selector({ user: { id: "user-1", name: "Alice" } }),
+  useAuthStore: Object.assign(
+    (selector: (s: typeof authState) => unknown) => selector(authState),
+    { getState: () => authState },
+  ),
 }));
 
 vi.mock("@multica/core/hooks", async (importOriginal) => ({
@@ -261,14 +271,15 @@ function renderPage(channelId?: string) {
 }
 
 
-// ⚠️ WIP — DO NOT TRUST THESE YET (see #838 notes).
-// The simulated failure is not the one being observed: `api.sendChannelMessage`
-// is never invoked (0 calls), yet the failure path runs — i.e. something inside
-// the mutation throws BEFORE the request (onMutate/optimistic path is the prime
-// suspect). So "failure → record appears" currently passes for the wrong
-// reason, and the retry's positive control (voice submit called with the SAME
-// attachment id) cannot fire. Fix the harness so the failure is attributable
-// before relying on any of this.
+// Flip-verified (whole file, `channels/components/channels-page-voice-failure`):
+//   · failure path back to conflict-only / no record  → ALL 5 red
+//   · retry rewired to the text send (the forbidden case) → the retry + "only a
+//     committed retry clears it" cases red, the other 3 stay green
+// The first draft of this file was a FALSE GREEN: `api.sendChannelMessage` was
+// never invoked at all, because the auth-store mock lacked `getState()` and
+// `onMutate` threw before the request — so "failure produced a record" passed
+// without any send happening. The positive control below (voice submit called
+// WITH the reused attachment id) is what exposed it; keep it.
 describe("voice send failure leaves a durable record (#838)", () => {
   beforeEach(() => {
     replaceSpy.mockReset();
@@ -276,7 +287,7 @@ describe("voice send failure leaves a durable record (#838)", () => {
     window.sessionStorage.clear();
     useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
     channelsFixture.current = DEFAULT_CHANNELS;
-    const api = apiMock.proxy as Record<string, ReturnType<typeof vi.fn>>;
+    const api = apiMock.proxy as Record<string, ReturnType<typeof vi.fn> | undefined>;
     api.sendChannelMessage?.mockReset?.();
   });
 
@@ -288,8 +299,9 @@ describe("voice send failure leaves a durable record (#838)", () => {
     return screen.getByTestId("fire-voice");
   }
 
-  function sendSpy() {
-    return (apiMock.proxy as Record<string, ReturnType<typeof vi.fn>>).sendChannelMessage;
+  function sendSpy(): ReturnType<typeof vi.fn> {
+    return (apiMock.proxy as Record<string, ReturnType<typeof vi.fn>>)
+      .sendChannelMessage as ReturnType<typeof vi.fn>;
   }
 
   it("a failed voice send leaves the recording on screen (the toast is not the record)", async () => {
@@ -314,7 +326,8 @@ describe("voice send failure leaves a durable record (#838)", () => {
     await waitFor(() => {
       expect(sendSpy().mock.calls.length).toBeGreaterThan(callsBefore);
     });
-    const retried = sendSpy().mock.calls.at(-1)?.[0] as { parts?: unknown; content?: string };
+    // api.sendChannelMessage(channelId, payload) — the payload is arg 1, not 0.
+    const retried = sendSpy().mock.calls.at(-1)?.[1] as { parts?: unknown; content?: string };
     expect(JSON.stringify(retried?.parts ?? "")).toContain(VOICE.id);
     // …and it is a voice payload, not the text composer's content.
     expect(retried?.content).toBe("");

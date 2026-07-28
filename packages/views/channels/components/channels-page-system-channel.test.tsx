@@ -548,5 +548,31 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       await screen.findByTestId("channel-details-home");
       expect(screen.queryByTestId("channel-details-leave")).toBeNull();
     });
+
+    it("non-group active channel (kind !== group) → no leave affordance", async () => {
+      // A real DM routes through a separate DmConversation shell (dm-list path,
+      // not exercised here); this drives the leave gate's `kind !== "group"` arm
+      // directly with a non-group active channel and proves the affordance is
+      // omitted regardless of how the pane itself renders.
+      channelsFixture.current = [
+        { ...DEFAULT_CHANNELS[0], id: "chan-dm", name: "dm", kind: "dm" },
+      ];
+      renderPage("chan-dm");
+      await screen.findByTestId("message-list");
+      expect(screen.queryByTestId("channel-details-leave")).toBeNull();
+    });
+
+    it("archived ordinary group → no leave affordance", async () => {
+      channelsFixture.current = [
+        {
+          ...DEFAULT_CHANNELS[0],
+          id: "chan-arch",
+          name: "arch",
+          archived_at: "2026-07-01T00:00:00Z",
+        },
+      ];
+      await openLeaveDanger("chan-arch");
+      expect(screen.queryByTestId("channel-details-leave")).toBeNull();
+    });
   });
 });

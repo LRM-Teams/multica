@@ -78,8 +78,10 @@ func (h *Handler) loadAttachmentForAgent(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
+	// Barry #801: known attachment id that fails visibility → exact 403
+	// (not soft 404). Distinguishes "does not exist" from "exists but denied".
 	if !h.agentAttachmentVisible(r.Context(), ws, agentID, att.ID) {
-		writeError(w, http.StatusNotFound, "attachment not found")
+		writeError(w, http.StatusForbidden, "access denied")
 		return db.Attachment{}, false
 	}
 	return att, true

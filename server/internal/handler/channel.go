@@ -480,6 +480,12 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 
 	// Second pass: members for the avatar stack, grouped by channel.
 	if len(channelIDs) > 0 {
+		// Single canonical rank for avatar stack (matches channelMemberSummaries):
+		// role → manager agent/user → created_at → member_type → member_id.
+		// LATERAL assigns stack_position via row_number; outer order is only that
+		// position (one source of truth — no production scramble for tests).
+		// member_type is required: PK is (channel_id, member_type, member_id), so
+		// user and agent may share a UUID (Barry total-order / LIMIT stability).
 		memberRows, err := h.DB.Query(r.Context(), `
 			SELECT limited.channel_id, limited.member_type, limited.member_id,
 			       COALESCE(u.name, a.name, ''),
@@ -488,31 +494,32 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			       limited.role
 			FROM unnest($1::uuid[]) AS selected(channel_id)
 			JOIN LATERAL (
-				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role
-				FROM channel_member cm
-				WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
-				ORDER BY
-				  CASE cm.role
-				    WHEN 'owner' THEN 0
-				    WHEN 'manager' THEN 1
-				    ELSE 2
-				  END,
-				  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
-				       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
-				       ELSE 2
-				  END,
-				  cm.created_at ASC
-				LIMIT $3
+				SELECT ranked.channel_id, ranked.member_type, ranked.member_id, ranked.created_at, ranked.role, ranked.stack_position
+				FROM (
+					SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role,
+					       row_number() OVER (
+					         ORDER BY
+					           CASE cm.role
+					             WHEN 'owner' THEN 0
+					             WHEN 'manager' THEN 1
+					             ELSE 2
+					           END,
+					           CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
+					                WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
+					                ELSE 2
+					           END,
+					           cm.created_at ASC,
+					           cm.member_type ASC,
+					           cm.member_id ASC
+					       ) AS stack_position
+					FROM channel_member cm
+					WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
+				) ranked
+				WHERE ranked.stack_position <= $3
 			) limited ON true
 			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
 			LEFT JOIN agent a ON limited.member_type = 'agent' AND a.id = limited.member_id
-			ORDER BY selected.channel_id,
-			  CASE limited.role
-			    WHEN 'owner' THEN 0
-			    WHEN 'manager' THEN 1
-			    ELSE 2
-			  END,
-			  limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
+			ORDER BY selected.channel_id, limited.stack_position`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
 		if err == nil {
 			defer memberRows.Close()
 			grouped := map[string][]ChannelMemberBrief{}
@@ -1335,7 +1342,9 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
 		       ELSE 2
 		  END,
-		  cm.created_at ASC`, channelID, parseUUID(workspaceID))
+		  cm.created_at ASC,
+		  cm.member_type ASC,
+		  cm.member_id ASC`, channelID, parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel members")
 		return
@@ -1545,12 +1554,20 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 
 const channelOwnerChangedCode = "owner_changed"
 
-// testRoleMutationEntryGate, when non-nil, blocks handlers after the entry
-// owner snapshot and before Begin — tests only, forces concurrent racers to
-// both observe entryWasOwner=true before contending on locks.
+// Test-only race controls (never set in production):
+//
+//	entry gate  — after entry owner snapshot, before Begin
+//	post-lock   — after channel FOR UPDATE (transfer only), before mutations
+//
+// so tests can force transfer-first / true lock contention.
 var (
-	testRoleMutationEntryGate    chan struct{}
-	testRoleMutationEntryEntered int32 // atomic via sync/atomic
+	testRoleMutationEntryGate          chan struct{}
+	testRoleMutationEntryEntered       int32
+	testRoleMutationPreBeginGate       chan struct{}
+	testRoleMutationPreBeginEntered    int32
+	testRoleMutationPostLockGate       chan struct{}
+	testRoleMutationPostLockEntered    int32
+	testRoleMutationLockAttemptEntered int32
 )
 
 func roleMutationEntryBarrier() {
@@ -1559,6 +1576,28 @@ func roleMutationEntryBarrier() {
 	}
 	atomic.AddInt32(&testRoleMutationEntryEntered, 1)
 	<-testRoleMutationEntryGate
+}
+
+func roleMutationPreBeginBarrier() {
+	if testRoleMutationPreBeginGate == nil {
+		return
+	}
+	atomic.AddInt32(&testRoleMutationPreBeginEntered, 1)
+	<-testRoleMutationPreBeginGate
+}
+
+func roleMutationPostLockBarrier() {
+	if testRoleMutationPostLockGate == nil {
+		return
+	}
+	atomic.AddInt32(&testRoleMutationPostLockEntered, 1)
+	<-testRoleMutationPostLockGate
+}
+
+// noteRoleMutationLockAttempt fires immediately before channel FOR UPDATE so
+// tests can prove a waiter entered the lock attempt (not only pre-begin).
+func noteRoleMutationLockAttempt() {
+	atomic.AddInt32(&testRoleMutationLockAttemptEntered, 1)
 }
 
 type updateChannelMemberRoleRequest struct {
@@ -1573,6 +1612,7 @@ func (h *Handler) lockOrdinaryGroupChannelTx(
 	workspaceID string,
 	channelID pgtype.UUID,
 ) error {
+	noteRoleMutationLockAttempt()
 	var kind string
 	var systemKey pgtype.Text
 	var archivedAt pgtype.Timestamptz
@@ -1636,15 +1676,23 @@ func writeChannelRoleMutationErr(w http.ResponseWriter, err error) {
 // actorIsChannelOwnerRead is a non-locking entry snapshot used only to
 // classify 403 responses (plain vs owner_changed). Authorization still uses
 // the locked in-tx recheck.
-func actorIsChannelOwnerRead(ctx context.Context, exec dbExecutor, workspaceID string, channelID, actorID pgtype.UUID) bool {
+// Returns (isOwner, err). Only pgx.ErrNoRows → (false, nil) plain non-owner.
+// Other DB errors must surface as 500 — never disguise infra failure as deny.
+func (h *Handler) actorIsChannelOwnerRead(ctx context.Context, workspaceID string, channelID, actorID pgtype.UUID) (bool, error) {
 	var role string
-	err := exec.QueryRow(ctx, `
+	err := h.DB.QueryRow(ctx, `
 		SELECT role FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2
 		  AND member_type = 'user' AND member_id = $3`,
 		channelID, parseUUID(workspaceID), actorID,
 	).Scan(&role)
-	return err == nil && role == "owner"
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return role == "owner", nil
 }
 
 func mapOwnerAuthErr(entryWasOwner bool, lockErr error) error {
@@ -1728,8 +1776,13 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	entryWasOwner := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	entryWasOwner, entryErr := h.actorIsChannelOwnerRead(r.Context(), workspaceID, channelID, parseUUID(userID))
+	if entryErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load channel membership")
+		return
+	}
 	roleMutationEntryBarrier()
+	roleMutationPreBeginBarrier()
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
@@ -1840,8 +1893,13 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	entryWasOwner := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	entryWasOwner, entryErr := h.actorIsChannelOwnerRead(r.Context(), workspaceID, channelID, parseUUID(userID))
+	if entryErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load channel membership")
+		return
+	}
 	roleMutationEntryBarrier()
+	roleMutationPreBeginBarrier()
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
@@ -1854,6 +1912,9 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		writeChannelRoleMutationErr(w, err)
 		return
 	}
+	// Test-only: hold after channel lock so PATCH can queue on the same lock
+	// (deterministic transfer-first → PATCH owner_changed).
+	roleMutationPostLockBarrier()
 	// Serialize all membership mutations for this channel, then re-check actor
 	// is still owner after waiting for any concurrent transfer/role lock.
 	rows, err := tx.Query(r.Context(), `
@@ -6549,7 +6610,9 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
 		       ELSE 2
 		  END,
-		  cm.created_at ASC`, parseUUID(channelID), parseUUID(workspaceID))
+		  cm.created_at ASC,
+		  cm.member_type ASC,
+		  cm.member_id ASC`, parseUUID(channelID), parseUUID(workspaceID))
 	if err != nil {
 		return nil
 	}

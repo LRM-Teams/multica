@@ -115,7 +115,9 @@ func (h *Handler) ListAgentChannelMembers(w http.ResponseWriter, r *http.Request
 		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
 		       ELSE 2
 		  END,
-		  cm.created_at ASC`, channelID, parseUUID(p.WorkspaceID))
+		  cm.created_at ASC,
+		  cm.member_type ASC,
+		  cm.member_id ASC`, channelID, parseUUID(p.WorkspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel members")
 		return

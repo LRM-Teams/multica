@@ -150,7 +150,9 @@ type Handler struct {
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
 	// nil Metrics as "PostHog only".
-	Metrics                     *obsmetrics.BusinessMetrics
+	Metrics *obsmetrics.BusinessMetrics
+	// Test-only injectors — production leaves these nil/empty. Per-handler so
+	// parallel tests with separate Handler values cannot cross-contaminate.
 	channelUnmentionedMessages  uint64
 	channelUnmentionedFullWakes uint64
 	PATCache                    *auth.PATCache

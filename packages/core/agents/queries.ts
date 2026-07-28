@@ -29,13 +29,30 @@ export const agentHealthKeys = {
 // workspace; all agent dots / hover cards / list rows derive presence from
 // this cache with zero additional network traffic.
 //
-// The 30s staleTime is a safety net only; the primary freshness signal is
-// WS task events, which invalidate this query immediately. Without WS,
-// presence still updates within 30s on focus / mount.
+// Freshness (post-step②): WS task events PATCH this cache in place
+// (`patchAgentTaskSnapshotStatus`) rather than invalidating it; the 30s
+// staleTime + refetchOnWindowFocus is the bounded resync that heals any missed
+// event. A whole-workspace refetch now happens only for a brand-new task
+// (coalesced) or on the staleTime/focus path — no longer once per task event.
+
+/**
+ * step② measurement hook: cumulative count of agent-task-snapshot network
+ * fetches, exposed read-only on `globalThis` so a scripted task burst can be
+ * measured before/after on a real deploy (the whole point of #1 is driving this
+ * toward ~0 for transition bursts). Cheap and side-effect-free in production.
+ */
+function countSnapshotFetch(): void {
+  const g = globalThis as { __multicaSnapshotFetches?: number };
+  g.__multicaSnapshotFetches = (g.__multicaSnapshotFetches ?? 0) + 1;
+}
+
 export function agentTaskSnapshotOptions(wsId: string) {
   return queryOptions({
     queryKey: agentTaskSnapshotKeys.list(wsId),
-    queryFn: () => api.getAgentTaskSnapshot(),
+    queryFn: () => {
+      countSnapshotFetch();
+      return api.getAgentTaskSnapshot();
+    },
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,

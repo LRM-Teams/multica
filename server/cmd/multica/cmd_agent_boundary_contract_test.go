@@ -1884,3 +1884,121 @@ func TestBoundary_IssueSearch_TOKEN_FILE_HitsAgentSearchOnly(t *testing.T) {
 		t.Fatalf("paths=%v", gotPaths)
 	}
 }
+
+// --- #812 attachment list under mat_* ---
+
+func TestBoundary_AttachmentList_Issue_TOKEN_FILE_HitsAgentPath(t *testing.T) {
+	issueID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/api/agent/issues/"+issueID+"/attachments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": boundaryContractAttachmentID, "filename": "a.png", "content_type": "image/png", "size": 12},
+			})
+		case r.URL.Path == "/api/agent/issues/"+issueID || strings.HasPrefix(r.URL.Path, "/api/agent/issues/"):
+			// resolveIssueRef may GET issue first
+			if r.URL.Path == "/api/agent/issues/"+issueID {
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": issueID, "identifier": "MUL-1", "title": "t"})
+				return
+			}
+			http.Error(w, "unexpected", 500)
+		default:
+			http.Error(w, "human path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	f := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(f, []byte("mat_att_list_issue"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("issue", "", "")
+	cmd.Flags().String("channel", "", "")
+	cmd.Flags().String("output", "json", "")
+	_ = cmd.Flags().Set("issue", issueID)
+
+	if err := runAttachmentList(cmd, nil); err != nil {
+		t.Fatalf("runAttachmentList: %v paths=%v", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		if strings.Contains(p, "/api/issues/") && !strings.Contains(p, "/api/agent/issues/") {
+			t.Fatalf("hit human path %q full=%v", p, gotPaths)
+		}
+	}
+	want := "GET /api/agent/issues/" + issueID + "/attachments"
+	found := false
+	for _, p := range gotPaths {
+		if p == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v want contain %s", gotPaths, want)
+	}
+}
+
+func TestBoundary_AttachmentList_Channel_TOKEN_FILE_HitsAgentPath(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/api/agent/channels":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": boundaryContractChannelID, "name": "ops"},
+			})
+		case "/api/agent/channels/" + boundaryContractChannelID + "/attachments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": boundaryContractAttachmentID, "filename": "b.txt", "content_type": "text/plain", "size": 3},
+			})
+		default:
+			http.Error(w, "human path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	f := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(f, []byte("mat_att_list_ch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("issue", "", "")
+	cmd.Flags().String("channel", "", "")
+	cmd.Flags().String("output", "json", "")
+	_ = cmd.Flags().Set("channel", "ops")
+
+	if err := runAttachmentList(cmd, nil); err != nil {
+		t.Fatalf("runAttachmentList: %v paths=%v", err, gotPaths)
+	}
+	want := "GET /api/agent/channels/" + boundaryContractChannelID + "/attachments"
+	found := false
+	for _, p := range gotPaths {
+		if strings.Contains(p, "/api/channels/") && !strings.Contains(p, "/api/agent/channels/") {
+			t.Fatalf("hit human %q full=%v", p, gotPaths)
+		}
+		if p == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v want %s", gotPaths, want)
+	}
+}

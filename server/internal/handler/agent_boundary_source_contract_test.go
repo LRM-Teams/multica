@@ -161,10 +161,10 @@ func TestBoundary_Directory_NoSecretInstructionValue(t *testing.T) {
 
 // --- Parker product contract (2026-07-28): uploader-owned secure staging ---
 //  (a) uploader agent may view/bind own unbound upload
-//  (b) foreign agent with the id → exact 403
+//  (b) foreign agent with the id → exact 404 (anti-IDOR; not 403 existence leak)
 //  (c) after bind, visibility follows reference rules only
 //      (uploader fallback MUST NOT survive bind + membership remove)
-// Barry 2026-07-28 SOURCE BLOCK: uploader fallback without orphan constraint.
+// Barry 2026-07-28: missing and invisible both 404; 403 only principal/human-API shape.
 
 func agentMultipartUpload(t *testing.T, agentID string, fields map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -256,9 +256,9 @@ func TestBoundary_StagingUnbound_ForeignAgentDenied(t *testing.T) {
 	getReq = withURLParam(getReq, "id", attID)
 	getRec := httptest.NewRecorder()
 	testHandler.GetAgentAttachment(getRec, getReq)
-	// Barry: product lock is exact 403 (not soft 404-or-anything).
-	if getRec.Code != http.StatusForbidden {
-		t.Fatalf("foreign agent status=%d body=%s; want exact 403 for known staging id", getRec.Code, getRec.Body.String())
+	// Barry anti-IDOR: known-but-invisible must look like missing → exact 404.
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("foreign agent status=%d body=%s; want exact 404 (no existence leak via 403)", getRec.Code, getRec.Body.String())
 	}
 }
 
@@ -327,8 +327,9 @@ func TestBoundary_StagingBindThenRemove_DeniesUploaderFallback(t *testing.T) {
 		t.Fatalf("remove agent member: %v", err)
 	}
 
-	// After remove: metadata / content / download must all 403 — not uploader fallback.
-	assert403 := func(name string, fn func(http.ResponseWriter, *http.Request)) {
+	// After remove: metadata / content / download must all 404 (anti-IDOR deny) —
+	// not uploader fallback 200, and not 403 existence leak.
+	assert404 := func(name string, fn func(http.ResponseWriter, *http.Request)) {
 		t.Helper()
 		req := newRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
 		req = withAgentPrincipal(req, uploader, testWorkspaceID, testUserID)
@@ -336,11 +337,11 @@ func TestBoundary_StagingBindThenRemove_DeniesUploaderFallback(t *testing.T) {
 		req = withURLParam(req, "id", attID)
 		rec := httptest.NewRecorder()
 		fn(rec, req)
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("after remove %s status=%d body=%s; want 403 (uploader fallback must not survive bind)", name, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("after remove %s status=%d body=%s; want 404 (uploader fallback must not survive bind)", name, rec.Code, rec.Body.String())
 		}
 	}
-	assert403("GetAgentAttachment", testHandler.GetAgentAttachment)
-	assert403("GetAgentAttachmentContent", testHandler.GetAgentAttachmentContent)
-	assert403("DownloadAgentAttachment", testHandler.DownloadAgentAttachment)
+	assert404("GetAgentAttachment", testHandler.GetAgentAttachment)
+	assert404("GetAgentAttachmentContent", testHandler.GetAgentAttachmentContent)
+	assert404("DownloadAgentAttachment", testHandler.DownloadAgentAttachment)
 }

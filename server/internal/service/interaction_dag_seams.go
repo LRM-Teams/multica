@@ -138,27 +138,12 @@ func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task d
 		return // already closed via an earlier delegation
 	}
 
-	// T9: only close the segment when this task delegated to other agents
-	// (its channel message had @-mentions — child tasks exist).  If it
-	// finished without handoff, leave the segment open for the end-session
-	// sweep (all-agents-idle → close remaining segments → end session).
-	// When Queries is nil (test harness), fall back to the legacy behaviour:
-	// always close the segment — tests can inject their own DAG assertions.
-	leaf := false
-	if s.Queries != nil {
-		childCount, err := s.Queries.CountChildTasks(ctx, task.ID)
-		if err != nil {
-			slog.Warn("interaction_dag: count child tasks failed", "task_id", runID, "err", err)
-			return
-		}
-		if childCount == 0 {
-			leaf = true
-		}
-	}
-	if leaf {
-		return // leaf task, no @-mentions — segment stays open
-	}
-
+	// One segment per task: the trajectory is complete once the task is
+	// terminal, whether or not it delegated. A task that @-mentioned someone
+	// was already closed by the delegation seam at child creation, which the
+	// SegmentIDForAgentRun guard above catches — so skipping non-delegating
+	// tasks here left the all-agents-idle sweep as the only producer of
+	// segments for them, and every rollout that never delegated produced none.
 	closingEvent := "" // leaf (root completion) by default
 	if task.ParentTaskID.Valid {
 		closingEvent = closingEventCompletion

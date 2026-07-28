@@ -538,8 +538,11 @@ func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDe
 			}
 		}
 	}
+	// agent_inbox_event has no "completed" status — the enum is
+	// pending/draining/acked/failed/suppressed and success lives in
+	// terminal_outcome, so the old status comparison always scored 0.
 	reward := 0.0
-	if task.Status == "completed" {
+	if task.Status == "acked" && task.TerminalOutcome.String != "failed" {
 		reward = 1.0
 	}
 	if rErr := deps.Closer.SetReward(ctx, cfg.APIKey, reward); rErr != nil {
@@ -558,7 +561,6 @@ func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDe
 	)
 	return nil
 }
-
 
 // RouteTerminalTrainingTask is the terminal-transition routing hook invoked at
 // complete/fail/cancel. When the terminating task is itself a critic task
@@ -669,11 +671,16 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 	if maybeCloseTrainingSessionFromCritic(ctx, s.Training, task) {
 		return // closed via critic; skip trained-terminal routing
 	}
-	projectID := pgtype.UUID{}
-	if task.IssueID.Valid {
-		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
-			projectID = issue.ProjectID
-		}
+	// Env-dispatch rollout tasks carry their project through chat_session, not
+	// issue_id; resolving only the issue shape here left every rollout task
+	// project-less and skipped the whole training route (T10 included).
+	projectID, projErr := s.terminalTaskProjectID(ctx, task)
+	if projErr != nil {
+		slog.Warn("training: terminal-route project lookup failed",
+			"task_id", util.UUIDToString(task.ID),
+			"error", projErr,
+		)
+		projectID = pgtype.UUID{}
 	}
 	if !projectID.Valid {
 		// No owning project → cannot resolve a training dispatch → D's close

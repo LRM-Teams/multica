@@ -70,7 +70,7 @@ func init() {
 // ambientTokenFromEnvOrFile returns MULTICA_TOKEN or the contents of
 // MULTICA_TOKEN_FILE (daemon agent runs unset MULTICA_TOKEN and inject
 // MULTICA_TOKEN_FILE with mat_* — see daemon cli_transport). Must stay in
-// sync with agentAPITokenFromEnv / isAgentAPIToken path selection (#801).
+// sync with isAgentAPIToken / isAgentAPITokenAmbient path selection (#801).
 func ambientTokenFromEnvOrFile() string {
 	if v := strings.TrimSpace(os.Getenv("MULTICA_TOKEN")); v != "" {
 		return v

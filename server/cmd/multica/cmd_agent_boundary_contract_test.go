@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1273,4 +1274,68 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 	if !found {
 		t.Fatalf("paths=%v, want POST /api/agent/attachments", gotPaths)
 	}
+}
+
+
+// TestBoundary_NoEnvOnlyMatTokenDetection forbids reintroducing env-only mat_*
+// detectors (the Frank 2026-07-28 class of bug). TOKEN_FILE must be considered
+// whenever MULTICA_TOKEN is consulted for agent path selection.
+func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		// tests run with cwd = package dir (server/cmd/multica)
+		t.Fatalf("readdir: %v", err)
+	}
+	// Also try relative package path from module root when needed
+	_ = entries
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// When test binary runs, cwd is the package directory.
+	bad := []string{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		// Flag bare Getenv("MULTICA_TOKEN") followed nearby by mat_ prefix check
+		// without TOKEN_FILE in the same function — heuristic on file level:
+		if !strings.Contains(src, `Getenv("MULTICA_TOKEN")`) {
+			continue
+		}
+		// ambientTokenFromEnvOrFile is the allowed single implementation.
+		if f == "cmd_auth.go" && strings.Contains(src, "func ambientTokenFromEnvOrFile") {
+			continue
+		}
+		// Any other production file that reads MULTICA_TOKEN for path selection
+		// must not pair it with mat_ without going through helpers.
+		lines := strings.Split(src, "\n")
+		for i, line := range lines {
+			if !strings.Contains(line, `Getenv("MULTICA_TOKEN")`) {
+				continue
+			}
+			// look ahead 15 lines for mat_ prefix without TOKEN_FILE on same line window
+			window := strings.Join(lines[i:min(len(lines), i+15)], "\n")
+			if strings.Contains(window, `"mat_"`) || strings.Contains(window, "mat_") {
+				if !strings.Contains(window, "MULTICA_TOKEN_FILE") && !strings.Contains(window, "ambientTokenFromEnvOrFile") && !strings.Contains(window, "resolveToken") {
+					bad = append(bad, fmt.Sprintf("%s:%d", f, i+1))
+				}
+			}
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("env-only mat_* detection reintroduced (use isAgentAPIToken / isAgentAPITokenAmbient / ambientTokenFromEnvOrFile): %v", bad)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

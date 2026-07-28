@@ -327,7 +327,7 @@ func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (re
 	}
 	var agents []map[string]any
 	path := "/api/agents"
-	if agentAPITokenFromEnv() {
+	if isAgentAPITokenAmbient() {
 		path = "/api/agent/agents"
 	} else if client.WorkspaceID != "" {
 		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
@@ -365,11 +365,22 @@ func nameMatches(name, target string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(target))
 }
 
-// isAgentAPIToken reports whether the current MULTICA_TOKEN is an agent machine
-// token (mat_*), which must use /api/agent/* dedicated paths (#801).
+// isAgentAPIToken reports whether auth is an agent machine token (mat_*),
+// which must use /api/agent/* dedicated paths (#801).
+//
+// THIS IS THE ONLY mat_* detector. Do not reimplement with bare
+// os.Getenv("MULTICA_TOKEN") — daemon injects MULTICA_TOKEN_FILE and unsets
+// MULTICA_TOKEN (cli_transport). resolveToken already reads env + file + profile.
+// Call sites without *cobra.Command must use isAgentAPITokenAmbient().
 func isAgentAPIToken(cmd *cobra.Command) bool {
-	tok := strings.TrimSpace(resolveToken(cmd))
-	return strings.HasPrefix(tok, "mat_")
+	return strings.HasPrefix(strings.TrimSpace(resolveToken(cmd)), "mat_")
+}
+
+// isAgentAPITokenAmbient is the no-cmd form for id resolvers and helpers that
+// lack *cobra.Command. Same ambient sources as resolveToken's first steps
+// (MULTICA_TOKEN, MULTICA_TOKEN_FILE). Never env-only.
+func isAgentAPITokenAmbient() bool {
+	return strings.HasPrefix(ambientTokenFromEnvOrFile(), "mat_")
 }
 
 // agentIssueAPIPath returns /api/issues/{id}{suffix} or /api/agent/issues/{id}{suffix}.

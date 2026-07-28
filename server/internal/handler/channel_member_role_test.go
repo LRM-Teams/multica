@@ -1305,45 +1305,25 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 	}
 }
 
-// TestListChannelsMemberBriefExactOrder locks the single canonical ListChannels
-// avatar-stack total order (same keys as channelMemberSummaries):
+// TestListChannelsMemberBriefExactOrder locks ListChannels avatar-stack order
+// (production: single row_number OVER five keys + outer stack_position only).
 //
-//	role-rank → manager-type-rank → created_at → member_type → member_id
+// Honest flip-red evidence (Barry: do not claim "delete any key RED" when
+// manager-type and member_type are same-direction on the manager subset):
+//   - role: delete role rank → RED (owner latest still first only with role)
+//   - created_at: delete created_at → RED (member order opposite member_id)
+//   - manager-type: swap agent/user rank constants → RED (product agent-before-human)
+//   - member_type: ordinary agent+user same UUID/role/created_at → delete member_type RED
+//   - member_id: same type/role/created_at, two fixed UUIDs → delete member_id RED
 //
-// Production uses one source: LATERAL row_number() OVER that ORDER BY, filter
-// stack_position <= limit, outer ORDER BY stack_position only (no scramble).
-//
-// Flip-red (delete any key from the OVER clause):
-//  1. role — owner has *latest* created_at but must still be first
-//  2. manager-type + member_type — agent manager before human manager sharing
-//     one UUID and created_at (PK is channel_id, member_type, member_id)
-//  3. created_at — among human members, larger member_id has earlier created_at
-//  4. member_id — secondary after created_at among human members
-//
-// Fixed UUIDs only — no random mint / size loops (Barry).
+// Independent subtests/channels so limit=5 does not force one fixture to carry all keys.
 func TestListChannelsMemberBriefExactOrder(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
 	ctx := context.Background()
-	name := "role-list-brief-order-" + uuid.NewString()[:8]
-	req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{"name": name})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannel(created, req)
-	if created.Code != http.StatusCreated {
-		t.Fatalf("create: %d %s", created.Code, created.Body.String())
-	}
-	var ch ChannelResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 
-	// Controllable identity: same UUID as agent manager + human manager locks
-	// member_type in the total order (PK is channel_id, member_type, member_id).
-	const sharedMgrID = "a1000000-0000-4000-8000-000000000001"
-	const memLargeID = "b2000000-0000-4000-8000-000000000002" // lex larger
-	const memSmallID = "b2000000-0000-4000-8000-000000000001" // lex smaller
-
-	insertFixedUser := func(id, label string) {
+	insertFixedUser := func(t *testing.T, id, label string) {
 		t.Helper()
 		if _, err := testPool.Exec(ctx, `
 INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)
@@ -1359,9 +1339,9 @@ ON CONFLICT (id) DO NOTHING`, id, label, label+"@example.com"); err != nil {
 INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'member')
 ON CONFLICT DO NOTHING`, testWorkspaceID, id)
 	}
-	insertFixedAgent := func(id, label string) {
+	insertFixedAgent := func(t *testing.T, id, label string) {
 		t.Helper()
-		handle := "ord" + id[len(id)-8:]
+		handle := "ord" + id[len(id)-8:] + uuid.NewString()[:4]
 		if _, err := testPool.Exec(ctx, `
 INSERT INTO agent (
   id, workspace_id, name, display_name, description, runtime_mode, runtime_config,
@@ -1379,82 +1359,175 @@ ON CONFLICT (id) DO NOTHING`,
 			_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE id=$1`, id)
 		})
 	}
-
-	insertFixedUser(sharedMgrID, "shared-mgr-human")
-	insertFixedAgent(sharedMgrID, "shared-mgr-agent")
-	insertFixedUser(memLargeID, "mem-large")
-	insertFixedUser(memSmallID, "mem-small")
-
-	for _, row := range []struct {
-		typ, id, role string
-	}{
-		{"agent", sharedMgrID, "manager"},
-		{"user", sharedMgrID, "manager"},
-		{"user", memLargeID, "member"},
-		{"user", memSmallID, "member"},
-	} {
+	addMember := func(t *testing.T, channelID, typ, id, role string) {
+		t.Helper()
 		if _, err := testPool.Exec(ctx, `
 INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
 VALUES ($1,$2,$3,$4,$5)
 ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role=EXCLUDED.role`,
-			parseUUID(ch.ID), parseUUID(testWorkspaceID), row.typ, parseUUID(row.id), row.role); err != nil {
-			t.Fatalf("channel_member %s/%s: %v", row.typ, row.id, err)
+			parseUUID(channelID), parseUUID(testWorkspaceID), typ, parseUUID(id), role); err != nil {
+			t.Fatalf("channel_member %s/%s: %v", typ, id, err)
 		}
 	}
-
-	// Timestamps force independent keys against stack_position:
-	// managers share mid ts (type ranks decide; same member_id);
-	// memLarge earlier than memSmall despite larger id (created_at over member_id);
-	// owner latest (role over created_at).
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2020-06-01+00' WHERE channel_id=$1 AND role='manager'`,
-		parseUUID(ch.ID))
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-01-01+00' WHERE channel_id=$1 AND member_type='user' AND member_id=$2`,
-		parseUUID(ch.ID), memLargeID)
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2021-06-01+00' WHERE channel_id=$1 AND member_type='user' AND member_id=$2`,
-		parseUUID(ch.ID), memSmallID)
-	_, _ = testPool.Exec(ctx, `UPDATE channel_member SET created_at = timestamptz '2022-01-01+00' WHERE channel_id=$1 AND member_id=$2 AND member_type='user' AND role='owner'`,
-		parseUUID(ch.ID), testUserID)
-
-	listReq := newRequestAs(testUserID, http.MethodGet, "/api/channels", nil)
-	listReq = withChannelTestWorkspaceCtx(t, listReq, testUserID)
-	listRec := httptest.NewRecorder()
-	testHandler.ListChannels(listRec, listReq)
-	if listRec.Code != http.StatusOK {
-		t.Fatalf("ListChannels: %d %s", listRec.Code, listRec.Body.String())
-	}
-	var channels []ChannelResponse
-	_ = json.Unmarshal(listRec.Body.Bytes(), &channels)
-	var found *ChannelResponse
-	for i := range channels {
-		if channels[i].Name == name {
-			found = &channels[i]
-			break
+	createGroup := func(t *testing.T) ChannelResponse {
+		t.Helper()
+		name := "role-list-ord-" + uuid.NewString()[:8]
+		req := newRequestAs(testUserID, http.MethodPost, "/api/channels", map[string]any{"name": name})
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		created := httptest.NewRecorder()
+		testHandler.CreateChannel(created, req)
+		if created.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", created.Code, created.Body.String())
 		}
+		var ch ChannelResponse
+		_ = json.Unmarshal(created.Body.Bytes(), &ch)
+		return ch
 	}
-	if found == nil {
-		t.Fatalf("channel %q not in list", name)
+	listMembers := func(t *testing.T, channelName string) []ChannelMemberBrief {
+		t.Helper()
+		listReq := newRequestAs(testUserID, http.MethodGet, "/api/channels", nil)
+		listReq = withChannelTestWorkspaceCtx(t, listReq, testUserID)
+		listRec := httptest.NewRecorder()
+		testHandler.ListChannels(listRec, listReq)
+		if listRec.Code != http.StatusOK {
+			t.Fatalf("ListChannels: %d %s", listRec.Code, listRec.Body.String())
+		}
+		var channels []ChannelResponse
+		_ = json.Unmarshal(listRec.Body.Bytes(), &channels)
+		for i := range channels {
+			if channels[i].Name == channelName {
+				return channels[i].Members
+			}
+		}
+		t.Fatalf("channel %q not in list", channelName)
+		return nil
 	}
-	if len(found.Members) != 5 {
-		t.Fatalf("members=%d want 5 %+v", len(found.Members), found.Members)
+	setTS := func(channelID, memberType, memberID, ts string) {
+		_, _ = testPool.Exec(ctx, `
+UPDATE channel_member SET created_at = $4::timestamptz
+WHERE channel_id=$1 AND member_type=$2 AND member_id=$3`,
+			parseUUID(channelID), memberType, parseUUID(memberID), ts)
 	}
-	// 0: owner despite latest created_at
-	if found.Members[0].MemberID != testUserID || found.Members[0].Role != "owner" || found.Members[0].MemberType != "user" {
-		t.Fatalf("pos0=%+v want owner", found.Members[0])
-	}
-	// 1-2: same UUID managers — agent before user (manager-type + member_type)
-	if found.Members[1].MemberID != sharedMgrID || found.Members[1].MemberType != "agent" || found.Members[1].Role != "manager" {
-		t.Fatalf("pos1=%+v want agent manager id=%s", found.Members[1], sharedMgrID)
-	}
-	if found.Members[2].MemberID != sharedMgrID || found.Members[2].MemberType != "user" || found.Members[2].Role != "manager" {
-		t.Fatalf("pos2=%+v want human manager id=%s", found.Members[2], sharedMgrID)
-	}
-	// 3-4: human members by created_at (large id earlier ts) then would be member_id
-	if found.Members[3].MemberID != memLargeID || found.Members[3].Role != "member" || found.Members[3].MemberType != "user" {
-		t.Fatalf("pos3=%+v want member %s (earlier created_at)", found.Members[3], memLargeID)
-	}
-	if found.Members[4].MemberID != memSmallID || found.Members[4].Role != "member" || found.Members[4].MemberType != "user" {
-		t.Fatalf("pos4=%+v want member %s", found.Members[4], memSmallID)
-	}
+
+	t.Run("role_and_created_at", func(t *testing.T) {
+		// role: owner latest still first. created_at: larger-id member earlier than smaller-id.
+		ch := createGroup(t)
+		const memLarge = "b2100000-0000-4000-8000-000000000002"
+		const memSmall = "b2100000-0000-4000-8000-000000000001"
+		insertFixedUser(t, memLarge, "ord-mem-large")
+		insertFixedUser(t, memSmall, "ord-mem-small")
+		addMember(t, ch.ID, "user", memLarge, "member")
+		addMember(t, ch.ID, "user", memSmall, "member")
+		setTS(ch.ID, "user", testUserID, "2022-01-01+00") // owner latest
+		setTS(ch.ID, "user", memLarge, "2021-01-01+00")
+		setTS(ch.ID, "user", memSmall, "2021-06-01+00")
+		ms := listMembers(t, ch.Name)
+		if len(ms) < 3 {
+			t.Fatalf("members=%d want >=3 %+v", len(ms), ms)
+		}
+		if ms[0].MemberID != testUserID || ms[0].Role != "owner" {
+			t.Fatalf("pos0=%+v want owner (role over latest created_at)", ms[0])
+		}
+		// after owner: memLarge then memSmall by created_at (not member_id ASC)
+		if ms[1].MemberID != memLarge || ms[1].Role != "member" {
+			t.Fatalf("pos1=%+v want %s earlier created_at", ms[1], memLarge)
+		}
+		if ms[2].MemberID != memSmall || ms[2].Role != "member" {
+			t.Fatalf("pos2=%+v want %s later created_at", ms[2], memSmall)
+		}
+	})
+
+	t.Run("manager_type_product_agent_before_human", func(t *testing.T) {
+		// Product rule agent-manager before human-manager. Same UUID so member_id
+		// cannot decide; manager-type rank and member_type ASC are same-direction —
+		// do NOT claim deleting manager-type alone RED (Barry). This subtest locks
+		// the product order; swap-rank counterfactual is for reviewer, not CI.
+		ch := createGroup(t)
+		const shared = "a1100000-0000-4000-8000-000000000001"
+		insertFixedUser(t, shared, "ord-mgr-human")
+		insertFixedAgent(t, shared, "ord-mgr-agent")
+		addMember(t, ch.ID, "agent", shared, "manager")
+		addMember(t, ch.ID, "user", shared, "manager")
+		setTS(ch.ID, "agent", shared, "2020-06-01+00")
+		setTS(ch.ID, "user", shared, "2020-06-01+00")
+		setTS(ch.ID, "user", testUserID, "2020-01-01+00")
+		ms := listMembers(t, ch.Name)
+		if len(ms) < 3 {
+			t.Fatalf("members=%d want >=3 %+v", len(ms), ms)
+		}
+		if ms[0].Role != "owner" {
+			t.Fatalf("pos0=%+v want owner", ms[0])
+		}
+		if ms[1].MemberID != shared || ms[1].MemberType != "agent" || ms[1].Role != "manager" {
+			t.Fatalf("pos1=%+v want agent manager (product agent-before-human)", ms[1])
+		}
+		if ms[2].MemberID != shared || ms[2].MemberType != "user" || ms[2].Role != "manager" {
+			t.Fatalf("pos2=%+v want human manager same UUID", ms[2])
+		}
+	})
+
+	t.Run("member_type_ordinary_same_uuid", func(t *testing.T) {
+		// Ordinary agent+user same UUID / role=member / same created_at.
+		// manager-type CASE is ELSE for both — only member_type (then id) decides.
+		// Counterfactual: drop member_type from OVER → order among equal keys unstable
+		// or id-only; assert agent before user by type.
+		ch := createGroup(t)
+		const shared = "a1200000-0000-4000-8000-000000000002"
+		insertFixedUser(t, shared, "ord-mem-human")
+		insertFixedAgent(t, shared, "ord-mem-agent")
+		addMember(t, ch.ID, "agent", shared, "member")
+		addMember(t, ch.ID, "user", shared, "member")
+		setTS(ch.ID, "user", testUserID, "2020-01-01+00")
+		setTS(ch.ID, "agent", shared, "2021-01-01+00")
+		setTS(ch.ID, "user", shared, "2021-01-01+00")
+		ms := listMembers(t, ch.Name)
+		if len(ms) < 3 {
+			t.Fatalf("members=%d want >=3 %+v", len(ms), ms)
+		}
+		// Find the same-UUID pair after owner
+		var agentPos, userPos = -1, -1
+		for i, m := range ms {
+			if m.MemberID != shared {
+				continue
+			}
+			if m.MemberType == "agent" {
+				agentPos = i
+			}
+			if m.MemberType == "user" {
+				userPos = i
+			}
+		}
+		if agentPos < 0 || userPos < 0 {
+			t.Fatalf("missing same-UUID ordinary members in %+v", ms)
+		}
+		if agentPos >= userPos {
+			t.Fatalf("member_type order: agent pos=%d user pos=%d want agent before user %+v", agentPos, userPos, ms)
+		}
+	})
+
+	t.Run("member_id_same_type_role_created_at", func(t *testing.T) {
+		// Two human members, same role/created_at, fixed UUIDs — only member_id ASC.
+		ch := createGroup(t)
+		const idA = "b2200000-0000-4000-8000-000000000001" // smaller
+		const idB = "b2200000-0000-4000-8000-000000000002" // larger
+		insertFixedUser(t, idA, "ord-id-a")
+		insertFixedUser(t, idB, "ord-id-b")
+		addMember(t, ch.ID, "user", idA, "member")
+		addMember(t, ch.ID, "user", idB, "member")
+		setTS(ch.ID, "user", testUserID, "2020-01-01+00")
+		setTS(ch.ID, "user", idA, "2021-01-01+00")
+		setTS(ch.ID, "user", idB, "2021-01-01+00")
+		ms := listMembers(t, ch.Name)
+		if len(ms) < 3 {
+			t.Fatalf("members=%d want >=3 %+v", len(ms), ms)
+		}
+		if ms[1].MemberID != idA || ms[1].Role != "member" {
+			t.Fatalf("pos1=%+v want smaller member_id %s", ms[1], idA)
+		}
+		if ms[2].MemberID != idB || ms[2].Role != "member" {
+			t.Fatalf("pos2=%+v want larger member_id %s", ms[2], idB)
+		}
+	})
 }
 
 // TestRoleMutationExactMatrixBothEndpoints locks unique status codes on PATCH+transfer.

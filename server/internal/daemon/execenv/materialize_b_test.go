@@ -116,3 +116,42 @@ func TestStartupStaticContextStripsPerTurnSurface(t *testing.T) {
 		t.Fatalf("digest changed across chat surface: %s vs %s", d1, d2)
 	}
 }
+
+// Reviewer control: slim does not write provider-native skill packages into
+// user/workspace CWD. The startup index must point at the durable agent-local
+// mirror that actually exists.
+func TestBarryMaterializeSlimSkillIndexPointsAtDurableReadableMirror(t *testing.T) {
+	agentRoot := t.TempDir()
+	workDir := filepath.Join(agentRoot, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skills := []SkillContextForEnv{{
+		Name: "review", Description: "review helper", Content: "# Review\n",
+	}}
+	if err := mirrorBoundSkillsToAgentEnabled(agentRoot, skills); err != nil {
+		t.Fatalf("mirror bound skills: %v", err)
+	}
+	realSkill := filepath.Join(agentRoot, "skills", "enabled", "review", "SKILL.md")
+	if _, err := os.Stat(realSkill); err != nil {
+		t.Fatalf("durable mirror missing: %v", err)
+	}
+
+	brief, _, err := MaterializeCanonicalTurnContextB(workDir, t.TempDir(), "grok", TaskContextForEnv{
+		AgentID:       "agent-a",
+		AgentName:     "Agent A",
+		AgentRoot:     agentRoot,
+		AgentSkillDir: filepath.Join(agentRoot, "skills"),
+		AgentSkills:   skills,
+	})
+	if err != nil {
+		t.Fatalf("materialize slim: %v", err)
+	}
+	if !strings.Contains(brief, realSkill) {
+		t.Fatalf("skill index does not point at durable readable mirror %q:\n%s", realSkill, brief)
+	}
+	if strings.Contains(brief, ".grok/skills/review/SKILL.md") {
+		t.Fatalf("skill index advertises provider-CWD path that slim never creates:\n%s", brief)
+	}
+}
+

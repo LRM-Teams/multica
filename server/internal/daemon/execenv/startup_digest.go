@@ -8,42 +8,46 @@ import (
 	"strings"
 )
 
-// StartupStaticContext returns the TaskContextForEnv subset used for
-// create-time AGENTS materialization. Per-turn fields that belong in the
-// Execute prompt are zeroed so they cannot force process recreation or
-// pollute the startup AGENTS snapshot.
+// StartupStaticContext returns the positive allowlist of durable agent×runtime
+// facts used for create-time AGENTS materialization and fingerprint digest.
 //
-// Slim D6-1b: AGENTS is agent-level static only. Chat surface, directed flag,
-// initiator, issue, project/resources, and channel/project memory dirs are
-// per-turn (prompt / CLI), not startup disk.
+// Constructed empty then filled — never "copy whole TaskContextForEnv and zero
+// some fields" (Barry #1274 CODE blocker: leak of FreshSession / user memory /
+// autopilot / quick-create / radar / squad-leader into digest + brief).
+//
+// Everything not listed here is per-turn prompt/env and must not restart the
+// resident process or land in the managed AGENTS block.
 func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
-	out := ctx
-	// Per-turn surface / speaker / issue
-	out.InitiatorType = ""
-	out.InitiatorID = ""
-	out.InitiatorName = ""
-	out.InitiatorEmail = ""
-	out.IssueID = ""
-	out.TriggerCommentID = ""
-	out.TriggerThreadID = ""
-	out.NewCommentCount = 0
-	out.NewCommentsSince = ""
-	out.AssignmentSnapshot = nil
-	out.ChatSessionID = ""
-	out.ChannelID = ""
-	out.Directed = false
-	// Task-scoped project surface (Barry allowlist: per-turn)
-	out.ProjectID = ""
-	out.ProjectTitle = ""
-	out.ProjectResources = nil
-	out.ProjectMemoryDir = ""
-	out.ChannelMemoryDir = ""
-	out.Repos = nil
-	out.SkillDirSlugByName = nil
-	// Skills: names/descriptions may stay in the brief index for lazy load;
-	// we do NOT write skill package files to workdir. Keep AgentSkills for
-	// index rendering in the managed brief.
-	return out
+	// Skills: keep name/description (+ content unused by index) for the brief
+	// skill index. Files are NOT written to user workdir on the slim path.
+	skills := make([]SkillContextForEnv, 0, len(ctx.AgentSkills))
+	for _, s := range ctx.AgentSkills {
+		skills = append(skills, SkillContextForEnv{
+			Name:        s.Name,
+			Description: s.Description,
+			// Content intentionally omitted from startup digest input: slim
+			// does not materialize SKILL.md under CWD; progressive load uses
+			// durable mirror. Description changes still rotate digest via
+			// brief text.
+		})
+	}
+	return TaskContextForEnv{
+		AgentID:           strings.TrimSpace(ctx.AgentID),
+		AgentName:         strings.TrimSpace(ctx.AgentName),
+		ManagedRole:       strings.TrimSpace(ctx.ManagedRole),
+		AgentInstructions: ctx.AgentInstructions,
+		// Multica-owned agent roots (durable, not user CWD)
+		AgentRoot:           strings.TrimSpace(ctx.AgentRoot),
+		AgentMemoryDir:      strings.TrimSpace(ctx.AgentMemoryDir),
+		AgentSkillDir:       strings.TrimSpace(ctx.AgentSkillDir),
+		AgentSkillDraftsDir: strings.TrimSpace(ctx.AgentSkillDraftsDir),
+		AgentSkills:         skills,
+		// Workspace-level standing context (not issue/chat turn)
+		WorkspaceContext: ctx.WorkspaceContext,
+		// Runtime-owner profile is process-stable for this agent binding.
+		RequestingUserName:               ctx.RequestingUserName,
+		RequestingUserProfileDescription: ctx.RequestingUserProfileDescription,
+	}
 }
 
 // StartupMaterializationPlan is the pure, zero-I/O render of create-time AGENTS.

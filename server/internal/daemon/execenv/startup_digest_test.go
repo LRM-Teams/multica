@@ -27,6 +27,69 @@ func TestStartupStaticDigestIgnoresPerTurnFields(t *testing.T) {
 	}
 }
 
+
+// Reviewer control: create-time AGENTS is a positive allowlist of durable
+// agent/runtime facts. Every value below is turn-scoped and therefore must
+// neither rotate the resident backend nor leak into its startup brief.
+func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
+	a := TaskContextForEnv{
+		AgentID:                  "agent-a",
+		AgentName:                "Agent A",
+		AgentInstructions:        "durable-agent-instructions",
+		FreshSessionNoticeReason: "fresh-alpha-review-sentinel",
+		PriorSessionResumed:      true,
+		UserMemoryDir:            "/private/user-alpha-review-sentinel",
+		AgentMemories: []MemoryContextForEnv{{
+			Name: "memory-alpha-review-sentinel", Content: "memory-alpha-review-sentinel",
+			Scope: "user", SubjectType: "member", SubjectID: "user-alpha",
+		}},
+		AutopilotRunID:          "autopilot-run-alpha-review-sentinel",
+		AutopilotID:             "autopilot-alpha-review-sentinel",
+		AutopilotTitle:          "autopilot-title-alpha-review-sentinel",
+		AutopilotDescription:    "autopilot-description-alpha-review-sentinel",
+		AutopilotSource:         "autopilot-source-alpha-review-sentinel",
+		AutopilotTriggerPayload: "autopilot-payload-alpha-review-sentinel",
+		QuickCreatePrompt:       "quick-create-alpha-review-sentinel",
+		AgentRadarPrompt:        "radar-alpha-review-sentinel",
+		IsSquadLeader:           true,
+	}
+	b := a
+	b.FreshSessionNoticeReason = "fresh-beta-review-sentinel"
+	b.PriorSessionResumed = false
+	b.UserMemoryDir = "/private/user-beta-review-sentinel"
+	b.AgentMemories = []MemoryContextForEnv{{
+		Name: "memory-beta-review-sentinel", Content: "memory-beta-review-sentinel",
+		Scope: "user", SubjectType: "member", SubjectID: "user-beta",
+	}}
+	b.AutopilotRunID = "autopilot-run-beta-review-sentinel"
+	b.AutopilotID = "autopilot-beta-review-sentinel"
+	b.AutopilotTitle = "autopilot-title-beta-review-sentinel"
+	b.AutopilotDescription = "autopilot-description-beta-review-sentinel"
+	b.AutopilotSource = "autopilot-source-beta-review-sentinel"
+	b.AutopilotTriggerPayload = "autopilot-payload-beta-review-sentinel"
+	b.QuickCreatePrompt = "quick-create-beta-review-sentinel"
+	b.AgentRadarPrompt = "radar-beta-review-sentinel"
+	b.IsSquadLeader = false
+
+	if gotA, gotB := StartupStaticDigest("grok", a), StartupStaticDigest("grok", b); gotA != gotB {
+		t.Fatalf("turn-scoped kind changed startup digest: a=%s b=%s", gotA, gotB)
+	}
+
+	brief := RenderStartupMaterializationPlan("grok", StartupStaticContext(a)).RuntimeBrief
+	for _, sentinel := range []string{
+		"fresh-alpha-review-sentinel",
+		"user-alpha-review-sentinel",
+		"memory-alpha-review-sentinel",
+		"autopilot-alpha-review-sentinel",
+		"quick-create-alpha-review-sentinel",
+		"radar-alpha-review-sentinel",
+	} {
+		if containsIgnoreCase(brief, sentinel) {
+			t.Fatalf("turn-scoped sentinel leaked into startup brief: %q", sentinel)
+		}
+	}
+}
+
 func TestStartupStaticDigestTracksSkillDescriptionNotFiles(t *testing.T) {
 	// Slim D6-1b: AGENTS brief indexes skill name+description only.
 	// Skill package Files are NOT written to workdir, so Files content must
@@ -56,28 +119,17 @@ func TestStartupStaticDigestTracksSkillDescriptionNotFiles(t *testing.T) {
 	}
 }
 
-func TestStartupStaticDigestTracksMemoryScopeMetadata(t *testing.T) {
-	// Memory scope/subject affect brief render via buildMetaSkillContent when included.
-	// Even if only Content is in brief today, Scope is part of durable memory identity
-	// that may appear in future render — plan includes memory via brief content.
+func TestStartupStaticDigestIgnoresAgentMemories(t *testing.T) {
+	// Slim: AgentMemories are per-turn / prompt facts, not create-time AGENTS.
 	a := TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c",
-		AgentMemories: []MemoryContextForEnv{{Name: "m", Content: "same", Scope: "agent", SubjectType: "agent", SubjectID: "a"}},
+		AgentID: "a", AgentInstructions: "stay",
+		AgentMemories: []MemoryContextForEnv{{Name: "m", Content: "alpha", Scope: "user", SubjectType: "member", SubjectID: "u1"}},
 	}
-	b := TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c",
-		AgentMemories: []MemoryContextForEnv{{Name: "m", Content: "same", Scope: "user", SubjectType: "member", SubjectID: "u1"}},
+	b := a
+	b.AgentMemories = []MemoryContextForEnv{{Name: "m", Content: "beta", Scope: "agent", SubjectType: "agent", SubjectID: "a"}}
+	if StartupStaticDigest("grok", a) != StartupStaticDigest("grok", b) {
+		t.Fatal("AgentMemories must not change startup digest")
 	}
-	// Content same; if brief only uses content, digests may match — that's product of brief.
-	// Scope change with content change is the hard gate:
-	c := TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c",
-		AgentMemories: []MemoryContextForEnv{{Name: "m", Content: "changed", Scope: "user", SubjectType: "member", SubjectID: "u1"}},
-	}
-	if StartupStaticDigest("grok", a) == StartupStaticDigest("grok", c) {
-		t.Fatal("memory content change must change digest")
-	}
-	_ = b
 }
 
 func TestRenderStartupPlanDigestMatchesMaterializeInput(t *testing.T) {

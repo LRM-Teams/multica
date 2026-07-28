@@ -990,7 +990,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
 
-	renderSkillIndexWithSlugs(&b, provider, ctx.AgentSkills, ctx.SkillDirSlugByName)
+	renderSkillIndexWithSlugs(&b, provider, ctx.AgentSkills, ctx.SkillDirSlugByName, ctx.AgentSkillDir)
 
 	renderRuntimeSectionHeading(&b, "Attachments")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
@@ -1195,7 +1195,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	renderRepositoryContext(b, ctx)
 	renderProjectContext(b, ctx)
-	renderSkillIndexWithSlugs(b, provider, chatRuntimeSkills(ctx), ctx.SkillDirSlugByName)
+	renderSkillIndexWithSlugs(b, provider, chatRuntimeSkills(ctx), ctx.SkillDirSlugByName, ctx.AgentSkillDir)
 
 	renderRuntimeSectionHeading(b, "Attachments")
 	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment view <id> --output <path>` (or inspect `multica attachment view --help`). Do not open Multica resource URLs directly.\n\n")
@@ -1292,27 +1292,38 @@ func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasProje
 }
 
 func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {
-	renderSkillIndexWithSlugs(b, provider, skills, nil)
+	renderSkillIndexWithSlugs(b, provider, skills, nil, "")
 }
 
 // renderSkillIndexWithSlugs uses actualDirSlugByName when set so brief index,
 // disk writer, and receipt share one resolved plan (Barry: no second sanitize).
-func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []SkillContextForEnv, actualDirSlugByName map[string]string) {
+//
+// When agentSkillDir is set (Multica agent-owned skill root), locations point at
+// the durable absolute mirror `{agentSkillDir}/enabled/<slug>/SKILL.md` — the
+// path mirrorBoundSkillsToAgentEnabled actually writes. Slim D6 does not create
+// provider-CWD packages (.grok/skills, .pi/skills, …); never advertise those
+// fake relative paths when a durable root exists (Barry #1274 CODE blocker 2).
+func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []SkillContextForEnv, actualDirSlugByName map[string]string, agentSkillDir string) {
 	if len(skills) == 0 {
 		return
 	}
+	agentSkillDir = strings.TrimSpace(agentSkillDir)
 	b.WriteString("## Skills\n\n")
 	b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
 	b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
-	switch provider {
-	case "claude", "codebuddy":
-		b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
-	case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
-		b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
-	case "gemini", "hermes":
-		b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
-	default:
-		b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+	if agentSkillDir != "" {
+		b.WriteString("Installed skills (durable agent-local mirror; open the absolute path listed):\n\n")
+	} else {
+		switch provider {
+		case "claude", "codebuddy":
+			b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
+		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
+			b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
+		case "gemini", "hermes":
+			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+		default:
+			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+		}
 	}
 	for _, skill := range skills {
 		slug := sanitizeSkillName(skill.Name)
@@ -1321,30 +1332,35 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 				slug = s
 			}
 		}
-		location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", slug)
-		switch provider {
-		case "claude", "codebuddy":
-			location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
-		case "codex":
-			location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
-		case "copilot":
-			location = fmt.Sprintf(".github/skills/%s/SKILL.md", slug)
-		case "opencode":
-			location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
-		case "openclaw":
-			location = fmt.Sprintf("skills/%s/SKILL.md", slug)
-		case "pi":
-			location = fmt.Sprintf(".pi/skills/%s/SKILL.md", slug)
-		case "cursor":
-			location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", slug)
-		case "kimi":
-			location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", slug)
-		case "kiro":
-			location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", slug)
-		case "antigravity":
-			location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
-		case "grok":
-			location = fmt.Sprintf(".grok/skills/%s/SKILL.md", slug)
+		var location string
+		if agentSkillDir != "" {
+			location = filepath.Join(agentSkillDir, "enabled", slug, "SKILL.md")
+		} else {
+			location = fmt.Sprintf(".agent_context/skills/%s/SKILL.md", slug)
+			switch provider {
+			case "claude", "codebuddy":
+				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
+			case "codex":
+				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
+			case "copilot":
+				location = fmt.Sprintf(".github/skills/%s/SKILL.md", slug)
+			case "opencode":
+				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
+			case "openclaw":
+				location = fmt.Sprintf("skills/%s/SKILL.md", slug)
+			case "pi":
+				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", slug)
+			case "cursor":
+				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", slug)
+			case "kimi":
+				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", slug)
+			case "kiro":
+				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", slug)
+			case "antigravity":
+				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
+			case "grok":
+				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", slug)
+			}
 		}
 		if desc := strings.TrimSpace(skill.Description); desc != "" {
 			fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)

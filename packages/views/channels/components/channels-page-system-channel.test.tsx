@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { useLastSelectedChannelStore } from "@multica/core/channels";
 import { ApiError } from "@multica/core/api";
@@ -574,5 +574,124 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       await openLeaveDanger("chan-arch");
       expect(screen.queryByTestId("channel-details-leave")).toBeNull();
     });
+  });
+});
+
+// #833 — the group owner could not remove ANYONE. The ⋯ menu's "Remove from
+// group" routed to a handler that only showed a toast, while the standalone
+// Remove button renders `only when there is no menu` — so the moment the menu
+// appeared (i.e. for the owner, the one person allowed to remove) the real
+// affordance disappeared and the fake one took its place. The two entry points
+// cancelled out. These pin the real contract: the menu item performs the actual
+// removal, with the same permission gate and the same mobile confirm step.
+describe("ChannelsPage — group member removal is really wired (#833)", () => {
+  const OWNER_ROSTER = [
+    {
+      member_type: "user",
+      member_id: "user-1",
+      name: "alice",
+      display_name: "Alice",
+      avatar_url: null,
+      role: "owner",
+    },
+    {
+      member_type: "user",
+      member_id: "user-2",
+      name: "bob",
+      display_name: "Bob",
+      avatar_url: null,
+      role: "member",
+    },
+  ];
+  const ORIGINAL_RANDOM = membersByChannel["chan-random"] ?? [];
+
+  beforeEach(() => {
+    replaceSpy.mockReset();
+    mobileViewport.value = false;
+    window.sessionStorage.clear();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    channelsFixture.current = DEFAULT_CHANNELS;
+    // The viewer (user-1) is the group OWNER here — that is the only role that
+    // gets the management menu, and therefore the only role that hit the bug.
+    membersByChannel["chan-random"] = OWNER_ROSTER;
+    (apiMock.proxy as Record<string, { mockClear: () => void }>).removeChannelMember?.mockClear();
+  });
+
+  afterEach(() => {
+    membersByChannel["chan-random"] = ORIGINAL_RANDOM;
+  });
+
+  async function openOwnerMemberMenu() {
+    renderPage("chan-random");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    fireEvent.click(screen.getByLabelText("View members"));
+    // Sentinel: the roster really rendered. Without it, "no menu" / "no call"
+    // assertions below could pass simply because nothing had mounted yet.
+    await screen.findByText("Bob");
+    const trigger = screen.getByLabelText("Member actions");
+    fireEvent.click(trigger);
+    return screen.findByText("Remove from group");
+  }
+
+  // Removal is irreversible, so the confirm step is not a mobile nicety — it
+  // gates BOTH platforms. Desktop used to mutate immediately, and the menu
+  // rewire would have made that one-click-and-they're-gone path primary.
+  it.each([
+    ["desktop", false],
+    ["mobile", true],
+  ])("%s: menu Remove asks first — nothing is removed before Confirm", async (_name, mobile) => {
+    mobileViewport.value = mobile;
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+
+    // The confirm step is up and NOTHING has been removed yet. This is the
+    // assertion that matters: an irreversible action must not fire on the
+    // first click.
+    const confirm = await screen.findByRole("button", { name: "Confirm remove" });
+    expect(apiMock.proxy.removeChannelMember).not.toHaveBeenCalled();
+
+    fireEvent.click(confirm);
+    await waitFor(() => {
+      expect(apiMock.proxy.removeChannelMember).toHaveBeenCalledWith(
+        "chan-random",
+        "user",
+        "user-2",
+      );
+    });
+  });
+
+  it("a FAILED removal says so — silence would read as 'my click did nothing'", async () => {
+    (
+      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
+    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
+
+    const removeItem = await openOwnerMemberMenu();
+    fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+
+    // There is no optimistic removal, so on failure nothing on screen changes —
+    // without this toast the owner cannot tell a failure from a no-op.
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+  });
+
+  it("an ARCHIVED group exposes no member-management menu at all", async () => {
+    channelsFixture.current = DEFAULT_CHANNELS.map((c) =>
+      (c as { id: string }).id === "chan-random"
+        ? { ...(c as object), archived_at: "2026-07-01T00:00:00Z" }
+        : c,
+    );
+    renderPage("chan-random");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    fireEvent.click(screen.getByLabelText("View members"));
+    // Sentinel first — the roster IS on screen, so the absence below is a real
+    // gate rather than an unmounted panel.
+    await screen.findByText("Bob");
+    expect(screen.queryByLabelText("Member actions")).toBeNull();
   });
 });

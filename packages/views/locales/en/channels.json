@@ -108,7 +108,6 @@
       "demote_human": "Remove admin role",
       "transfer": "Transfer ownership",
       "remove": "Remove from group",
-      "coming_soon": "Available once permissions are configured.",
       "role_actions_pending": "Group role management is coming soon; member roles are not changed yet."
     },
     "select_user": "Select a member",
@@ -122,6 +121,7 @@
     "remove_confirm_description": "They will immediately lose read and write access to this channel.",
     "remove_confirm": "Confirm remove",
     "remove_cancel": "Cancel",
+    "remove_failed": "Couldn't remove this member. Please try again.",
     "no_candidates": "No one left to invite",
     "invite": "Invite",
     "invite_count": "Invite ({{count}})",

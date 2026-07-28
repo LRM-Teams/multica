@@ -2282,21 +2282,18 @@ export function ChannelsPage({
   // no longer applies — removal is owner-only via the menu (→ real mutation with
   // #801). This closes the bypass where a non-channel-owner workspace admin, or
   // the owner's own row, still got the old real Remove.
+  // #833: an ARCHIVED group gets no management menu at all. Removal is a real
+  // mutation now (see handleGroupMemberAction below), and an archived channel is
+  // read-only — offering an operable "remove member" there would be an action we
+  // shouldn't honour. Role rows are pending anyway (#832/#1321), so gating the
+  // whole menu is both correct and simpler than gating each row.
   const groupMemberMenu = useMemo(
     () =>
-      active?.kind === "group" && !isActiveSystemChannel
+      active?.kind === "group" && !isActiveSystemChannel && !isActiveArchived
         ? (m: ChannelMember) =>
             groupMemberActions({ role: viewerChannelRole }, m, currentUserId ?? "")
         : undefined,
-    [active?.kind, isActiveSystemChannel, viewerChannelRole, currentUserId],
-  );
-  // Mutations land with #801. Until then, DON'T fake success — surface an honest
-  // "coming soon" instead of optimistically flipping role/removing (Iris: mock 勿假成功).
-  const handleGroupMemberAction = useCallback(
-    (_m: ChannelMember, _action: GroupMemberActionKind) => {
-      toast.info(t(($) => $.members.menu.coming_soon));
-    },
-    [t],
+    [active?.kind, isActiveSystemChannel, isActiveArchived, viewerChannelRole, currentUserId],
   );
 
   // Leave-group affordance for the channel-details danger zone. Ordinary
@@ -2356,20 +2353,39 @@ export function ChannelsPage({
     setAddPeopleDialogOpen(true);
   }, []);
 
-  const handleRemoveMemberClick = useCallback(
-    (m: ChannelMember) => {
-      if (!active) return;
-      if (isMobile) {
-        setRemoveMemberTarget(m);
-        return;
-      }
-      removeMember.mutate({
-        channelId: active.id,
-        memberType: m.member_type,
-        memberId: m.member_id,
-      });
+  // Removing someone is irreversible, so it ALWAYS goes through the confirm
+  // step — desktop included. This used to mutate immediately on desktop and only
+  // show the confirm Sheet on mobile; the menu rewire below made that immediate
+  // path the primary desktop affordance, i.e. "click a menu item and the person
+  // is gone". (Iris, #833 review.)
+  //
+  // One confirmation state and ONE mutate call site, shared by both platforms —
+  // deliberately not a second desktop-only dialog, because two destructive paths
+  // drift apart. This handler now only records the target; the actual removal
+  // (and its failure toast) lives in the confirm action.
+  const handleRemoveMemberClick = useCallback((m: ChannelMember) => {
+    setRemoveMemberTarget(m);
+  }, []);
+
+  // #833 — the menu's "remove" used to land on a no-op toast while the real
+  // Remove button was suppressed (it renders only when there is no menu), so the
+  // two entry points cancelled out and a group owner could not remove anyone at
+  // all. Route it to the SAME handler the standalone button used: identical
+  // permission gate (`canRemove` from core), identical confirm step.
+  //
+  // promote / demote / transfer have no endpoint yet and are rendered disabled
+  // (#832), so they cannot reach this handler; they get no branch here rather
+  // than a toast that reads like success. Wire them for real once **#814's
+  // role-write API is merged AND served**.
+  //
+  // The condition names the task, not a PR: PRs roll (#1321 → #1326 → #1332 …),
+  // and keying this off a since-merged predecessor would read as "already
+  // satisfied" and invite wiring these up before the API is actually live.
+  const handleGroupMemberAction = useCallback(
+    (m: ChannelMember, action: GroupMemberActionKind) => {
+      if (action === "remove") handleRemoveMemberClick(m);
     },
-    [active, isMobile, removeMember],
+    [handleRemoveMemberClick],
   );
 
   // LRM-211 — Channel details Members tab reuses the same list as the
@@ -3876,7 +3892,13 @@ export function ChannelsPage({
                     memberType: removeMemberTarget.member_type,
                     memberId: removeMemberTarget.member_id,
                   },
-                  { onSettled: () => setRemoveMemberTarget(null) },
+                  {
+                    // #833 — same reasoning as the desktop path: closing the
+                    // sheet on a failed removal would look exactly like a
+                    // successful one.
+                    onError: () => toast.error(t(($) => $.members.remove_failed)),
+                    onSettled: () => setRemoveMemberTarget(null),
+                  },
                 );
               }}
             >

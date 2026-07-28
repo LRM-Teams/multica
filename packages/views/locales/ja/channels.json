@@ -108,7 +108,6 @@
       "demote_human": "管理者を解除",
       "transfer": "オーナーを譲渡",
       "remove": "グループから削除",
-      "coming_soon": "権限の設定が完了すると利用できます。",
       "role_actions_pending": "グループ管理権限は近日提供予定です。現在メンバーのロールは変更されません。"
     },
     "select_user": "メンバーを選択",
@@ -122,6 +121,7 @@
     "remove_confirm_description": "このチャンネルの読み書き権限をすぐに失います。",
     "remove_confirm": "削除を確認",
     "remove_cancel": "キャンセル",
+    "remove_failed": "メンバーを削除できませんでした。もう一度お試しください。",
     "no_candidates": "招待できる相手がいません",
     "invite": "招待",
     "invite_count": "招待 ({{count}})",

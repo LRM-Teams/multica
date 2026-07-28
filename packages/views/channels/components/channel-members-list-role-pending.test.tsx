@@ -54,7 +54,6 @@ const dict = {
       demote_human: "Remove admin role",
       transfer: "Transfer ownership",
       remove: "Remove from group",
-      coming_soon: "Available once permissions are configured.",
       role_actions_pending:
         "Group role management is coming soon; member roles are not changed yet.",
     },

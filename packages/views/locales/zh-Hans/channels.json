@@ -108,7 +108,6 @@
       "demote_human": "取消管理员",
       "transfer": "转让群主",
       "remove": "移出群聊",
-      "coming_soon": "权限配置完成后可用",
       "role_actions_pending": "群管理权限即将推出；当前不会更改成员角色。"
     },
     "select_user": "选择人类成员",
@@ -122,6 +121,7 @@
     "remove_confirm_description": "将立即失去本频道读写权限。",
     "remove_confirm": "确认移除",
     "remove_cancel": "取消",
+    "remove_failed": "移出失败，请重试。",
     "no_candidates": "没有可邀请的成员",
     "invite": "邀请",
     "invite_count": "邀请 ({{count}})",

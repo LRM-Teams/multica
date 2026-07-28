@@ -1222,9 +1222,13 @@ function DmChannelConversation({
           onSend={handleThreadSend}
           voiceChannelId={channelId}
           voicePlaybackScope={voicePlaybackScope(channelId, threadSurfaceRoot.id)}
-          // #858 — DMs never carry a pending voice record (#838 wired channels
-          // and threads only), so that input is simply absent here; the other
-          // causes map identically.
+          // #858 — DMs do not CURRENTLY produce a pending-voice record, because
+          // #838 wired that state for channels and threads only; hence the input
+          // is absent here. NOT "a DM can never have an unsent recording": once
+          // #849 lands, the record is author-owned and keyed by
+          // `channel_id + optional thread_root_id`, and a DM is a channel — so
+          // this input becomes reachable and must be wired then. The resolver
+          // already handles the branch; only this call site needs revisiting.
           voiceBlock={{
             hasTextDraft: !threadDraftEmpty,
             hasAttachmentDraft: threadPending.pending.length > 0,
@@ -1476,7 +1480,8 @@ function DmChannelConversation({
         onSend={handleSend}
         voiceChannelId={channelId}
         voicePlaybackScope={voicePlaybackScope(channelId)}
-        // #858 — see the DM thread surface above.
+        // #858 — see the DM thread surface above, including why this input is
+        // absent today and what makes it reachable after #849.
         voiceBlock={{
           hasTextDraft: !draftEmpty,
           hasAttachmentDraft: dmPending.pending.length > 0,

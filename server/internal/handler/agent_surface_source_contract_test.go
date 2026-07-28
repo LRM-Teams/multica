@@ -13,6 +13,7 @@ import (
 )
 
 // Source-level hard controls for #801 Barry residual after ①② test PASS.
+// Unbound attachment: Parker secure staging — uploader self-visible, foreign DENY.
 
 func TestAgentDirectoryIsNarrowDTO(t *testing.T) {
 	if testHandler == nil || testPool == nil {
@@ -64,18 +65,13 @@ func TestAgentUnboundUploadStagingSelfVisible(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
+	// Never Skip on Storage nil — inject mockStorage (Barry anti-false-green).
 	prev := testHandler.Storage
-	store := &mockStorage{}
-	testHandler.Storage = store
+	testHandler.Storage = &mockStorage{}
 	t.Cleanup(func() { testHandler.Storage = prev })
 
-	var agentID, ownerID string
-	err := testPool.QueryRow(context.Background(),
-		`SELECT id::text, COALESCE(owner_id::text, '') FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		parseUUID(testWorkspaceID)).Scan(&agentID, &ownerID)
-	if err != nil || agentID == "" {
-		t.Skip("no agent fixture")
-	}
+	agentID := createHandlerTestAgent(t, "StagingSelfAgent", []byte("[]"))
+	ownerID := testUserID
 
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -119,15 +115,8 @@ func TestAgentUnboundUploadStagingSelfVisible(t *testing.T) {
 		t.Fatalf("uploader self-view want 200, got %d body=%s", viewRec.Code, viewRec.Body.String())
 	}
 
-	// Foreign agent DENY.
-	var otherAgent string
-	_ = testPool.QueryRow(context.Background(),
-		`SELECT id::text FROM agent WHERE workspace_id = $1 AND id::text <> $2 LIMIT 1`,
-		parseUUID(testWorkspaceID), agentID).Scan(&otherAgent)
-	if otherAgent == "" {
-		t.Log("no second agent fixture; skip foreign deny")
-		return
-	}
+	// Foreign agent DENY — always create second agent so no soft skip.
+	otherAgent := createHandlerTestAgent(t, "StagingForeignAgent", []byte("[]"))
 	foreign := httptest.NewRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
 	foreign = withURLParam(foreign, "id", attID)
 	foreign = foreign.WithContext(middleware.WithAgentPrincipal(foreign.Context(), middleware.AgentPrincipal{

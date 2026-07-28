@@ -34,16 +34,14 @@ import (
 //
 // The comment is inserted directly via db.Queries (not through the
 // CreateComment HTTP handler) so it bypasses the generic on_comment trigger
-// path. When the parent has an agent or squad assignee, the comment body
-// embeds a single `mention://{agent,squad}/<id>` link that targets the
-// parent assignee — Bohan's product call on MUL-2538 ("system child-done
-// comment 无脑 mention parent assignee，member/squad/agent 都覆盖", later
-// narrowed to skip member assignees outright). To keep the platform in
-// control of side effects, the cmd/server notification + subscriber
-// listeners still skip system comments wholesale, so smuggled mentions from
-// the child title cannot light up unrelated members. The parent assignee's
-// own trigger is fired explicitly by dispatchParentAssigneeTrigger below,
-// with the loop and idempotency guards documented there.
+// path. When the parent has an agent assignee, the comment body embeds a
+// single `mention://agent/<id>` link. Historical assignee_type=squad is
+// read-only: no new `mention://squad` token and no squad-leader wake
+// (squad product retired). Member assignees are skipped entirely (no
+// comment). Notification + subscriber listeners skip system comments
+// wholesale, so smuggled mentions from the child title cannot light up
+// unrelated members. The parent agent trigger is fired explicitly by
+// dispatchParentAssigneeTrigger below.
 //
 // Errors are logged at warn level and swallowed: this is a best-effort
 // notification on the side of a successful status update; failing it must
@@ -196,48 +194,25 @@ func sanitizeMentionLabel(name string) string {
 
 // dispatchParentAssigneeTrigger fires the explicit side effect that pairs
 // with the @mention link in the system comment body — an agent task for
-// agent or squad-leader assignees. Member assignees never reach this code
-// path; notifyParentOfChildDone skips them outright. The generic comment
-// listener is intentionally bypassed (it short-circuits on
-// author_type='system'), so this is the single place where the platform
-// applies loop and idempotency guards for the child-done notification.
+// agent assignees only. Member assignees never reach this path
+// (notifyParentOfChildDone skips them). Historical assignee_type=squad is
+// read-only: no mention token, no EnqueueTaskForSquadLeader / trigger
+// (squad product retired). The generic comment listener short-circuits on
+// author_type='system', so this is the single place for child-done wake.
 //
-// Side-effect semantics (intentionally narrower than a normal @mention):
-//   - agent parent: one EnqueueTaskForMention on the parent assignee, same
-//     trigger surface as a real @-mention so dedupe and readiness checks
-//     match what users already rely on.
-//   - squad parent: one EnqueueTaskForSquadLeader on the squad LEADER only.
-//     Unlike a human @squad mention, this does NOT fan out to squad members
-//     — child-done is a coordination signal, the leader decides whether
-//     and how to wake the rest of the squad. Documented here so reviewers
-//     don't read "system mention" as inheriting the full member fan-out.
-//   - notification_preference is not consulted: this is a platform routing
-//     signal targeted at the assignee that already owns the parent, not a
-//     general notification. Per-user mute settings are evaluated by the
-//     downstream agent_task / inbox pipeline once the task is dispatched.
-//   - notification_listeners.go short-circuits on author_type='system', so
-//     subscriber emails and member-inbox rows from smuggled mentions in the
-//     child title are inert — only the explicit dispatch below runs.
+// Side-effect semantics:
+//   - agent parent: one EnqueueTaskForMention on the parent assignee
+//     (same surface as a real @-mention for dedupe/readiness).
+//   - squad parent: no-op (retired product; row kept for display only).
+//   - notification_preference is not consulted: platform routing signal.
+//   - notification_listeners.go ignores system authors; only this dispatch runs.
 //
-// Guards applied here:
+// Guards:
 //   - No-op when the parent has no assignee row.
-//   - Squad loop guard (squad parent only): skip when the finished child is
-//     the same squad, or its effective owner is the parent squad's leader. A
-//     squad leader already observes same-squad work through its own
-//     coordination cycle — the worker's completion comment wakes the leader
-//     via computeAssignedSquadLeaderCommentTrigger — so the child-done trigger would
-//     be redundant; this also closes the cross-squad shared-leader loop. The
-//     AGENT parent path intentionally has NO such guard (MUL-2808): a lone
-//     agent that decomposes its parent into sub-issues it owns itself has no
-//     other wake path, and waking the parent agent when its child finishes is
-//     a serial sub-task handoff across two DIFFERENT issues — explicitly not a
-//     self-loop per isAgentRunningOnIssue, and consistent with the @mention
-//     self-trigger path (computeMentionedAgentCommentTriggers). Runaway re-triggering is
-//     bounded by the idempotency guard below, not by suppressing the trigger.
-//   - Idempotency: HasPendingTaskForIssueAndAgent dedupes rapid-fire enqueues
-//     for the same parent (e.g. two children finishing back-to-back).
-//   - Readiness: archived agents / missing runtimes are silently skipped
-//     so a closed-out agent does not surface as a phantom assignee.
+//   - AGENT parent has no same-agent self-trigger guard (MUL-2808): serial
+//     sub-task handoff across different issues is intentional; runaway is
+//     bounded by HasPendingTaskForIssueAndAgent idempotency.
+//   - Readiness: archived agents / missing runtimes are silently skipped.
 func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, child db.Issue, systemComment db.Comment, actorType, actorID string) {
 	if !parent.AssigneeType.Valid || !parent.AssigneeID.Valid {
 		return

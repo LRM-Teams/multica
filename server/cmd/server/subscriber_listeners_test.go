@@ -362,6 +362,85 @@ func TestSubscriberAddedEventPublished(t *testing.T) {
 	}
 }
 
+// Squad product retired: mention://squad must not attempt AddIssueSubscriber
+// (CHECK issue_subscriber_user_type_check only allows member|agent).
+func TestSubscriberIssueCreated_IgnoresSquadMention(t *testing.T) {
+	queries := db.New(testPool)
+	bus := events.New()
+	registerSubscriberListeners(bus, queries)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() { cleanupTestIssue(t, issueID) })
+
+	squadID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	desc := "[@FormerSquad](mention://squad/" + squadID + ")"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:          issueID,
+				WorkspaceID: testWorkspaceID,
+				Title:       "squad mention retired",
+				Status:      "todo",
+				Priority:    "medium",
+				CreatorType: "member",
+				CreatorID:   testUserID,
+				Description: &desc,
+			},
+		},
+	})
+
+	// Creator still subscribed; squad must not add a row or ERROR 23514.
+	if !isSubscribed(t, queries, issueID, "member", testUserID) {
+		t.Fatal("expected creator subscribed")
+	}
+	if count := subscriberCount(t, queries, issueID); count != 1 {
+		t.Fatalf("expected only creator subscriber, got %d", count)
+	}
+}
+
+func TestSubscriberIssueUpdated_IgnoresSquadMentionAndAssignee(t *testing.T) {
+	queries := db.New(testPool)
+	bus := events.New()
+	registerSubscriberListeners(bus, queries)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() { cleanupTestIssue(t, issueID) })
+
+	squadID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	squadType := "squad"
+	desc := "[@FormerSquad](mention://squad/" + squadID + ")"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:           issueID,
+				WorkspaceID:  testWorkspaceID,
+				Title:        "historical squad assignee",
+				Status:       "todo",
+				Priority:     "medium",
+				CreatorType:  "member",
+				CreatorID:    testUserID,
+				AssigneeType: &squadType,
+				AssigneeID:   &squadID,
+				Description:  &desc,
+			},
+			"assignee_changed":    true,
+			"description_changed": true,
+		},
+	})
+
+	if count := subscriberCount(t, queries, issueID); count != 0 {
+		t.Fatalf("expected 0 subscribers for squad assignee/mention, got %d", count)
+	}
+}
+
 // Autopilot publishes EventIssueCreated with a map[string]any payload (not handler.IssueResponse).
 // The listener must still subscribe the creator.
 func TestSubscriberIssueCreated_AutopilotMapPayload(t *testing.T) {

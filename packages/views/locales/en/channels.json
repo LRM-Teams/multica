@@ -88,6 +88,12 @@
     "working_dismiss_aria": "Dismiss {{name}}'s status",
     "settings_aria": "Group settings"
   },
+  "group_manager_hint": {
+    "title": "No group manager yet",
+    "body": "You're the group owner. You can view and manage members in the member list; once group-manager permissions are configured, you'll be able to designate one here.",
+    "cta": "View members",
+    "dismiss": "Maybe later"
+  },
   "members": {
     "role_badge": {
       "owner": "Owner",

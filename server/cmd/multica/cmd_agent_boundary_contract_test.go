@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -1279,7 +1280,6 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 	}
 }
 
-
 // multicaTokenSourceBoundaryViolations enforces Barry #1305 successor:
 //  1. BasicLit "MULTICA_TOKEN" only as value of const multicaTokenEnvKey
 //  2. identifier multicaTokenEnvKey only inside ambientTokenFromEnvOrFile
@@ -1617,7 +1617,6 @@ func TestNoAgentAPITokenFromEnvSymbol(t *testing.T) {
 	}
 }
 
-
 func TestIsMatAgentToken(t *testing.T) {
 	if !isMatAgentToken("mat_abc") {
 		t.Fatal("mat_ prefix")
@@ -1639,5 +1638,249 @@ func TestIsMatAgentToken(t *testing.T) {
 	t.Setenv("MULTICA_TOKEN_FILE", "")
 	if isAgentAPITokenAmbient() {
 		t.Fatal("no ambient token must be false")
+	}
+}
+
+// --- R1 resolver clean-cut: TOKEN_FILE-only name resolve hits /api/agent/* only ---
+
+func writeTokenFileOnly(t *testing.T, token string) {
+	t.Helper()
+	t.Setenv("MULTICA_TOKEN", "")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	dir := t.TempDir()
+	f := filepath.Join(dir, "token")
+	if err := os.WriteFile(f, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+}
+
+func TestResolver_R1_ChannelName_TOKEN_FILE_HitsAgentChannelsOnly(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/api/agent/channels" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": boundaryContractChannelID, "name": "ops"},
+			})
+			return
+		}
+		http.Error(w, "human path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	writeTokenFileOnly(t, "mat_resolver_r1_channel")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("HOME", t.TempDir())
+
+	raw, _ := os.ReadFile(os.Getenv("MULTICA_TOKEN_FILE"))
+	client := cli.NewAPIClient(srv.URL, "workspace-boundary", strings.TrimSpace(string(raw)))
+
+	id, err := resolveChannelRef(t.Context(), client, "ops")
+	if err != nil {
+		t.Fatalf("resolveChannelRef: %v paths=%v", err, gotPaths)
+	}
+	if id != boundaryContractChannelID {
+		t.Fatalf("id=%q want %s", id, boundaryContractChannelID)
+	}
+	for _, p := range gotPaths {
+		if strings.Contains(p, "/api/channels") && !strings.Contains(p, "/api/agent/channels") {
+			t.Fatalf("hit human channel path %q full=%v", p, gotPaths)
+		}
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET /api/agent/channels" {
+		t.Fatalf("paths=%v want [GET /api/agent/channels]", gotPaths)
+	}
+}
+
+func TestResolver_R1_AssigneeAgentName_TOKEN_FILE_HitsAgentAgentsOnly(t *testing.T) {
+	agentID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/api/agent/agents" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": agentID, "name": "codebot", "display_name": "Code Bot"},
+			})
+			return
+		}
+		http.Error(w, "human path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	writeTokenFileOnly(t, "mat_resolver_r1_assignee")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("HOME", t.TempDir())
+
+	raw, _ := os.ReadFile(os.Getenv("MULTICA_TOKEN_FILE"))
+	client := cli.NewAPIClient(srv.URL, "workspace-boundary", strings.TrimSpace(string(raw)))
+
+	aType, aID, err := resolveAssignee(t.Context(), client, "codebot", issueAssigneeKinds)
+	if err != nil {
+		t.Fatalf("resolveAssignee: %v paths=%v", err, gotPaths)
+	}
+	if aType != "agent" || aID != agentID {
+		t.Fatalf("got %s %s", aType, aID)
+	}
+	for _, p := range gotPaths {
+		if strings.HasPrefix(p, "GET /api/agents") || strings.Contains(p, "/members") {
+			t.Fatalf("hit human path %q full=%v", p, gotPaths)
+		}
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET /api/agent/agents" {
+		t.Fatalf("paths=%v", gotPaths)
+	}
+}
+
+func TestResolver_R1_MemberName_TOKEN_FILE_FailClosed(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/api/agent/agents" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+			return
+		}
+		http.Error(w, "human path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	writeTokenFileOnly(t, "mat_resolver_r1_member")
+	t.Setenv("HOME", t.TempDir())
+
+	raw, _ := os.ReadFile(os.Getenv("MULTICA_TOKEN_FILE"))
+	client := cli.NewAPIClient(srv.URL, "workspace-boundary", strings.TrimSpace(string(raw)))
+
+	_, _, err := resolveAssignee(t.Context(), client, "Alice", memberOrAgentKinds)
+	if err == nil {
+		t.Fatalf("want R1a fail-closed, got nil paths=%v", gotPaths)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "member name resolve is not available for agent tokens") {
+		t.Fatalf("want member fail-closed wording, got %v paths=%v", err, gotPaths)
+	}
+	// with member+agent kinds, prefer agent-miss + member lock (Ronan polish)
+	if !strings.Contains(msg, "no agent found matching") {
+		t.Fatalf("want agent-miss prefix when agent kinds enabled, got %v", err)
+	}
+	for _, p := range gotPaths {
+		if strings.Contains(p, "/members") {
+			t.Fatalf("must not hit members list: %v", gotPaths)
+		}
+	}
+}
+
+func TestResolver_R1_ProjectResourceName_TOKEN_FILE_HitsAgentResourcesOnly(t *testing.T) {
+	projectID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	resourceID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		want := "/api/agent/projects/" + projectID + "/resources"
+		if r.URL.Path == want {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resources": []map[string]any{
+					{"id": resourceID, "label": "repo-main", "resource_type": "repo"},
+				},
+			})
+			return
+		}
+		http.Error(w, "human path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	writeTokenFileOnly(t, "mat_resolver_r1_resource")
+	t.Setenv("HOME", t.TempDir())
+
+	raw, _ := os.ReadFile(os.Getenv("MULTICA_TOKEN_FILE"))
+	client := cli.NewAPIClient(srv.URL, "workspace-boundary", strings.TrimSpace(string(raw)))
+
+	// resolveProjectResourceID is UUID-prefix based (not label name); R1
+	// contract is principal-aware list path under mat_*.
+	got, err := resolveProjectResourceID(t.Context(), client, projectID, "dddddddd")
+	if err != nil {
+		t.Fatalf("resolveProjectResourceID: %v paths=%v", err, gotPaths)
+	}
+	if got.ID != resourceID {
+		t.Fatalf("id=%q", got.ID)
+	}
+	for _, p := range gotPaths {
+		if strings.Contains(p, "/api/projects/") && !strings.Contains(p, "/api/agent/projects/") {
+			t.Fatalf("hit human project path %q full=%v", p, gotPaths)
+		}
+	}
+}
+
+// TestBoundary_IssueSearch_HitsDedicatedAgentAPI: multica issue search under mat_*
+// must hit GET /api/agent/issues/search only (#812 GAP).
+func TestBoundary_IssueSearch_HitsDedicatedAgentAPI(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/api/agent/issues/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issues": []map[string]any{
+					{"id": "iss-1", "identifier": "MUL-1", "title": "login", "status": "todo", "match_source": "title"},
+				},
+			})
+		default:
+			http.Error(w, "human path forbidden for agent issue search", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "search"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Bool("include-closed", false, "")
+
+	if err := runIssueSearch(cmd, []string{"login"}); err != nil {
+		t.Fatalf("runIssueSearch: %v paths=%v", err, gotPaths)
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET /api/agent/issues/search" {
+		t.Fatalf("paths=%v want [GET /api/agent/issues/search]", gotPaths)
+	}
+}
+
+func TestBoundary_IssueSearch_TOKEN_FILE_HitsAgentSearchOnly(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/api/agent/issues/search" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"issues": []any{}})
+			return
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	f := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(f, []byte("mat_issue_search_token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := &cobra.Command{Use: "search"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Bool("include-closed", false, "")
+
+	if err := runIssueSearch(cmd, []string{"x"}); err != nil {
+		t.Fatalf("runIssueSearch TOKEN_FILE: %v paths=%v", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		if p == "GET /api/issues/search" {
+			t.Fatalf("hit human search: %v", gotPaths)
+		}
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET /api/agent/issues/search" {
+		t.Fatalf("paths=%v", gotPaths)
 	}
 }

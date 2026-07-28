@@ -208,9 +208,9 @@ func TestPostgresUpdateStoreConcurrentTerminalReportsCannotOverwriteWinner(t *te
 	}
 }
 
-func TestPostgresUpdateStoreReadyToApplyDoesNotExpireWhileDrainIsActive(t *testing.T) {
+func TestPostgresUpdateStore_ReadyWithinTTLStillBlocks(t *testing.T) {
+	// Fresh ready (and ready younger than 20m) still holds the active slot.
 	runtimeID := newPostgresUpdateTestRuntime(t)
-	unrelatedRuntimeID := newPostgresUpdateTestRuntime(t)
 	ctx := context.Background()
 	store := NewPostgresUpdateStore(testPool)
 
@@ -224,26 +224,23 @@ func TestPostgresUpdateStoreReadyToApplyDoesNotExpireWhileDrainIsActive(t *testi
 	if err := store.ReadyToApply(ctx, ready.ID, "verified"); err != nil {
 		t.Fatalf("ReadyToApply: %v", err)
 	}
+	// Still inside 20m window.
 	if _, err := testPool.Exec(ctx, `
 		UPDATE daemon_runtime_update
 		SET updated_at = now() - ($2 * interval '1 second')
 		WHERE id = $1
-	`, ready.ID, (updateTerminalRetention + time.Hour).Seconds()); err != nil {
-		t.Fatalf("age ready update: %v", err)
-	}
-
-	if _, err := store.Create(ctx, unrelatedRuntimeID, "v0.3.71"); err != nil {
-		t.Fatalf("Create unrelated update: %v", err)
+	`, ready.ID, (updateReadyTimeout - time.Minute).Seconds()); err != nil {
+		t.Fatalf("age ready update within TTL: %v", err)
 	}
 	got, err := store.Get(ctx, ready.ID)
 	if err != nil {
-		t.Fatalf("Get aged ready update: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
 	if got == nil || got.Status != UpdateReady || got.Output != "verified" {
-		t.Fatalf("aged ready update was pruned: %+v", got)
+		t.Fatalf("ready within TTL = %+v", got)
 	}
 	if _, err := store.Create(ctx, runtimeID, "v0.3.72"); !errors.Is(err, errUpdateInProgress) {
-		t.Fatalf("Create for draining runtime error = %v, want errUpdateInProgress", err)
+		t.Fatalf("Create while ready error = %v, want errUpdateInProgress", err)
 	}
 }
 
@@ -377,6 +374,55 @@ func TestPostgresUpdateStoreTimeoutReleasesActiveExclusion(t *testing.T) {
 	}
 	if _, err := store.Create(ctx, runtimeID, "v0.3.72"); err != nil {
 		t.Fatalf("Create after running timeout: %v", err)
+	}
+}
+
+func TestPostgresUpdateStore_ReadyTimeoutReleasesChannel(t *testing.T) {
+	// B0: ready_to_apply past 20m → timeout → Create succeeds (D7).
+	runtimeID := newPostgresUpdateTestRuntime(t)
+	ctx := context.Background()
+	store := NewPostgresUpdateStore(testPool)
+
+	created, err := store.Create(ctx, runtimeID, "v0.3.70")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.PopPending(ctx, runtimeID); err != nil {
+		t.Fatalf("PopPending: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, created.ID, "verified"); err != nil {
+		t.Fatalf("ReadyToApply: %v", err)
+	}
+	// Fresh ready still blocks.
+	if _, err := store.Create(ctx, runtimeID, "v0.3.71"); !errors.Is(err, errUpdateInProgress) {
+		t.Fatalf("Create while fresh ready error = %v, want errUpdateInProgress", err)
+	}
+	// Age only updated_at (clock for ready TTL).
+	if _, err := testPool.Exec(ctx, `
+		UPDATE daemon_runtime_update
+		SET updated_at = now() - ($2 * interval '1 second')
+		WHERE id = $1
+	`, created.ID, (updateReadyTimeout + time.Second).Seconds()); err != nil {
+		t.Fatalf("age ready update: %v", err)
+	}
+	timedOut, err := store.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if timedOut == nil || timedOut.Status != UpdateTimeout || timedOut.Error != updateReadyTimeoutError {
+		t.Fatalf("ready timeout = %+v", timedOut)
+	}
+	next, err := store.Create(ctx, runtimeID, "v0.3.72")
+	if err != nil {
+		t.Fatalf("Create after ready timeout: %v", err)
+	}
+	if next.Status != UpdatePending {
+		t.Fatalf("next = %+v", next)
+	}
+	// Terminal history retained.
+	got, err := store.Get(ctx, created.ID)
+	if err != nil || got == nil || got.Status != UpdateTimeout {
+		t.Fatalf("timed-out history Get = %+v err=%v", got, err)
 	}
 }
 

@@ -88,6 +88,12 @@
     "working_dismiss_aria": "关闭 {{name}} 的状态",
     "settings_aria": "群设置"
   },
+  "group_manager_hint": {
+    "title": "还未指定群管",
+    "body": "你是群主。可在成员列表中查看和管理成员；群管权限配置完成后，可在此指定群管。",
+    "cta": "查看成员",
+    "dismiss": "稍后再说"
+  },
   "members": {
     "role_badge": {
       "owner": "群主",

@@ -190,6 +190,23 @@ export function isPreviewable(contentType: string, filename: string): boolean {
   return getPreviewKind(contentType, filename) !== null;
 }
 
+// PreviewKinds that render from a URL alone — the modal builds an
+// <img>/<iframe>/<video>/<audio> straight from the URL. Text-based kinds
+// (markdown / html / text) are absent because they fetch through the ID-keyed
+// `/api/attachments/{id}/content` proxy, so they need an attachment id.
+//
+// #831: single source of truth. Anything gating a preview affordance (e.g.
+// AttachmentCard's Eye button) MUST use this predicate rather than re-listing
+// the kinds — the card previously spelled out pdf/video/audio and omitted
+// `image`, disagreeing with the modal, so a URL-only image was rendered with
+// no preview affordance even though the modal renders it fine. Lives here
+// (not in the modal) so a component file doesn't export a non-component.
+const URL_ONLY_KINDS = new Set<PreviewKind>(["image", "pdf", "video", "audio"]);
+
+export function rendersFromUrlAlone(kind: PreviewKind): boolean {
+  return URL_ONLY_KINDS.has(kind);
+}
+
 // Pick the hljs language token for a file. Returns undefined when the file
 // doesn't have a recognizable extension — callers can fall back to a plain
 // `<pre>` render. Kept tiny and ext-driven on purpose: lowlight's `common`

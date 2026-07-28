@@ -1832,20 +1832,7 @@ func (s *TaskService) completeTask(
 	if s.OnTaskCompleted != nil {
 		s.OnTaskCompleted(ctx, task)
 	}
-	// Completion/leaf event seam (D11): close this task's segment before
-	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
-	// the just-closed trajectory over the live session). One-segment-per-task;
-	// the delegation edge to the parent is recorded here at the child's close.
-	// Message dispatch roots carry their project through chat_session rather
-	// than issue_id, so resolve both task shapes before recording.
-	if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
-		slog.Warn("interaction_dag: terminal task project lookup failed",
-			"task_id", util.UUIDToString(task.ID), "error", err)
-	} else if projectID.Valid {
-		s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
-	}
-	s.RouteTerminalTrainingTask(ctx, task)
-	s.maybeCleanupEphemeralSandbox(ctx, task)
+	s.FinalizeTerminalTaskSideEffects(ctx, task)
 
 	// Invariant: every completed issue task must have at least one agent
 	// comment on the issue, so the user always sees something when a run
@@ -2676,6 +2663,36 @@ func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 // is still bound to the same pre-created runtime R', reclaim the sandbox
 // instance (stop+delete via sandboxd) and mark R' offline. Best-effort — errors
 // are logged but never fail the terminal flow.
+// FinalizeTerminalTaskSideEffects runs the post-commit side effects that every
+// terminal task owes regardless of how it reached terminal: the interaction-DAG
+// segment close (D11), RL training routing, and ephemeral sandbox teardown.
+//
+// The segment close must precede RouteTerminalTrainingTask, which ends the RL
+// session — CloseSegmentForEvent exports the just-closed trajectory over the
+// still-live session. One segment per task; the delegation edge to the parent is
+// recorded at the child's close.
+//
+// Every terminal path must call this. completeTask and failTask cover issue and
+// work tasks, but a chat-session task is acked directly by the daemon inbox
+// handler and never reaches either — and env-dispatch rollout agents always run
+// in a chat session, so they closed no segment (every assembled DAG came back
+// empty) and leaked their sandbox.
+//
+// Each step self-gates: tasks outside a project, without areal_proxy context,
+// or without an ephemeral sandbox marker are no-ops here.
+func (s *TaskService) FinalizeTerminalTaskSideEffects(ctx context.Context, task db.AgentInboxEvent) {
+	// Message dispatch roots carry their project through chat_session rather
+	// than issue_id, so resolve both task shapes before recording.
+	if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
+		slog.Warn("interaction_dag: terminal task project lookup failed",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	} else if projectID.Valid {
+		s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
+	}
+	s.RouteTerminalTrainingTask(ctx, task)
+	s.maybeCleanupEphemeralSandbox(ctx, task)
+}
+
 func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentInboxEvent) {
 	marker, ok := extractEphemeralSandbox(task.Context)
 	if !ok {

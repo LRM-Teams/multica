@@ -27,7 +27,7 @@
 import { Download, Loader2, Trash2 } from "lucide-react";
 import { FileIcon, defaultStyles } from "react-file-icon";
 import { useT } from "../i18n";
-import { getPreviewKind } from "./utils/preview";
+import { getPreviewKind, rendersFromUrlAlone } from "./utils/preview";
 import {
   formatFileSize,
   getFileExtension,
@@ -73,13 +73,17 @@ export function AttachmentCard({
   const { t } = useT("editor");
 
   const kind = filename ? getPreviewKind(contentType, filename) : null;
-  // Media kinds (pdf/video/audio) are previewable from a URL alone — the
-  // modal renders them as <video>/<audio>/<iframe src=url>. Text kinds
-  // (markdown/html/text) need the ID-keyed `/api/attachments/{id}/content`
-  // proxy, so they only preview when we have an attachmentId — otherwise
-  // the Eye button would call tryOpen, get rejected, and do nothing.
-  const isUrlPreviewableKind =
-    kind === "pdf" || kind === "video" || kind === "audio";
+  // Some kinds render from a URL alone (the modal builds <img>/<video>/<audio>
+  // straight from it); text kinds (markdown/html/text) need the ID-keyed
+  // `/api/attachments/{id}/content` proxy, so they only preview when we have an
+  // attachmentId — otherwise the Eye button would call tryOpen, get rejected,
+  // and do nothing.
+  //
+  // #831: this predicate is imported, never re-listed. It previously spelled
+  // out pdf/video/audio and omitted `image`, disagreeing with the modal's own
+  // URL_ONLY_KINDS — so a URL-only image was rendered with NO preview
+  // affordance even though tryOpen would have opened it. One list, one truth.
+  const isUrlPreviewableKind = kind !== null && rendersFromUrlAlone(kind);
   const canPreview =
     !!href && kind !== null && (!!attachmentId || isUrlPreviewableKind);
   const canDownload = !!href;

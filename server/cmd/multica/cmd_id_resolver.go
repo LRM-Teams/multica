@@ -414,7 +414,7 @@ func fetchProjectCandidates(ctx context.Context, client *cli.APIClient) ([]idCan
 func resolveProjectResourceID(ctx context.Context, client *cli.APIClient, projectID, input string) (resolvedID, error) {
 	fetch := func(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
 		var result map[string]any
-		if err := client.GetJSON(ctx, "/api/projects/"+url.PathEscape(projectID)+"/resources", &result); err != nil {
+		if err := client.GetJSON(ctx, agentProjectResourcesPathAmbient(projectID), &result); err != nil {
 			return nil, err
 		}
 		resourcesRaw, _ := result["resources"].([]any)
@@ -500,6 +500,11 @@ func (l actorDisplayLookup) loadMembers() {
 	if l.client == nil || l.client.WorkspaceID == "" {
 		return
 	}
+	// Parker R1 lock: under mat_*, never hit human members list — display
+	// degrades to UUID (actor() already falls back to type:id).
+	if isAgentAPITokenAmbient() {
+		return
+	}
 	var members []map[string]any
 	if err := l.client.GetJSON(l.ctx, "/api/workspaces/"+url.PathEscape(l.client.WorkspaceID)+"/members", &members); err == nil {
 		for _, m := range members {
@@ -520,10 +525,7 @@ func (l actorDisplayLookup) loadAgents() {
 		return
 	}
 	var agents []map[string]any
-	agentPath := "/api/agents?" + url.Values{"workspace_id": {l.client.WorkspaceID}}.Encode()
-	if isAgentAPITokenAmbient() {
-		agentPath = "/api/agent/agents"
-	}
+	agentPath := agentAgentsListPathAmbient(l.client)
 	if err := l.client.GetJSON(l.ctx, agentPath, &agents); err == nil {
 		for _, a := range agents {
 			if id := strVal(a, "id"); id != "" {

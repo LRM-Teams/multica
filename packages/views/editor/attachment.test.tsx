@@ -541,6 +541,41 @@ describe("Attachment — file-card dispatch", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  // #831 — wiring-level, not the hook in isolation. The reported bug: a
+  // markdown/txt attachment whose record ISN'T in the surrounding
+  // `attachments` prop (pasted URL, or a surface that passes none —
+  // `resolverState.attachments` is empty here, so `resolve()` misses) used to
+  // lose its id and silently degrade to a download, even though the id was
+  // sitting in the `/api/attachments/<id>/download` URL all along. The
+  // invariant: the id is recovered from the URL, so the card offers a real
+  // preview and the click opens it instead of downloading.
+  it.each([
+    ["markdown", "notes.md"],
+    ["plain text", "notes.txt"],
+  ])(
+    "%s file-card with an unresolvable record still previews — id recovered from the URL (#831)",
+    (_label, filename) => {
+      const id = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+      // Deliberately empty: the record is NOT reachable from this surface.
+      resolverState.attachments = [];
+      renderWithQuery(
+        <Attachment
+          attachment={{
+            kind: "url",
+            url: `/api/attachments/${id}/download`,
+            filename,
+          }}
+        />,
+      );
+      // The body is an Open (preview) button, not a download — and clicking it
+      // opens the preview instead of falling through to the download path.
+      fireEvent.click(screen.getByRole("button", { name: /^Open \{\{filename\}\}/ }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      expect(openByUrlMock).not.toHaveBeenCalled();
+      expect(downloadMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uploading file-card surfaces the uploading template, no Preview/Download", () => {
     renderWithQuery(
       <Attachment

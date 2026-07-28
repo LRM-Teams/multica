@@ -434,6 +434,10 @@ make check
 
 By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
 
+The main release is Web-focused: its gates are Go verification, CLI/daemon
+artifacts, backend and web images, and the Helm chart. Desktop App packaging is
+outside this release scope and must not be treated as a release gate.
+
 ## Multi-tenancy
 
 All queries filter by `workspace_id`. Membership checks gate access. `X-Workspace-ID` header routes requests to the correct workspace.

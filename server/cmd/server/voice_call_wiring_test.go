@@ -47,14 +47,12 @@ func TestLoadVoiceCallRuntimeConfigRejectsPartialOptIn(t *testing.T) {
 func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testing.T) {
 	values := completeVoiceCallEnvironment()
 	delete(values, "VOLCENGINE_RTC_CALLBACK_URL")
-	delete(values, "VOLCENGINE_RTC_LLM_URL")
 	delete(values, "VOLCENGINE_RTC_TTS_VOICE_ID")
 	values["MULTICA_PUBLIC_URL"] = "https://multica.example.com/"
 	values["DOUBAO_TTS_SPEAKER_ID"] = "shared-tts-voice"
 	values["VOLCENGINE_RTC_TOKEN_TTL"] = "45m"
 	values["VOLCENGINE_RTC_COMPENSATION_TIMEOUT"] = "12s"
 	values["VOLCENGINE_RTC_CLEANUP_TIMEOUT"] = "14s"
-	values["VOLCENGINE_RTC_AGENT_TIMEOUT"] = "75s"
 
 	config, enabled, err := loadVoiceCallRuntimeConfig(func(name string) string {
 		return values[name]
@@ -68,8 +66,12 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 	if config.CallbackURL != "https://multica.example.com/api/voice-calls/callback" {
 		t.Fatalf("callback URL = %q", config.CallbackURL)
 	}
-	if config.CustomLLMURL != "https://multica.example.com/api/voice-calls/llm" {
-		t.Fatalf("CustomLLM URL = %q", config.CustomLLMURL)
+	if config.ArkEndpointID != "ep-voice-call" || config.ArkModelName != "" {
+		t.Fatalf(
+			"Ark selection = endpoint %q model %q",
+			config.ArkEndpointID,
+			config.ArkModelName,
+		)
 	}
 	if config.TTSVoiceID != "shared-tts-voice" {
 		t.Fatalf("TTS voice = %q, want shared speech voice", config.TTSVoiceID)
@@ -79,14 +81,12 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 	}
 	if config.TokenTTL != 45*time.Minute ||
 		config.CompensationTimeout != 12*time.Second ||
-		config.CleanupTimeout != 14*time.Second ||
-		config.AgentTimeout != 75*time.Second {
+		config.CleanupTimeout != 14*time.Second {
 		t.Fatalf(
-			"durations = %s/%s/%s/%s",
+			"durations = %s/%s/%s",
 			config.TokenTTL,
 			config.CompensationTimeout,
 			config.CleanupTimeout,
-			config.AgentTimeout,
 		)
 	}
 }
@@ -109,7 +109,7 @@ func TestLoadVoiceCallRuntimeConfigPreservesExplicitAPIVersion(t *testing.T) {
 	}
 }
 
-func TestLoadVoiceCallRuntimeConfigRejectsInvalidDurationAndMissingLLMKey(t *testing.T) {
+func TestLoadVoiceCallRuntimeConfigRejectsInvalidDurationAndArkSelection(t *testing.T) {
 	t.Run("duration", func(t *testing.T) {
 		values := completeVoiceCallEnvironment()
 		values["VOLCENGINE_RTC_TOKEN_TTL"] = "forever"
@@ -121,25 +121,25 @@ func TestLoadVoiceCallRuntimeConfigRejectsInvalidDurationAndMissingLLMKey(t *tes
 		}
 	})
 
-	t.Run("agent timeout", func(t *testing.T) {
+	t.Run("missing Ark selection", func(t *testing.T) {
 		values := completeVoiceCallEnvironment()
-		values["VOLCENGINE_RTC_AGENT_TIMEOUT"] = "0s"
+		delete(values, "VOLCENGINE_RTC_ARK_ENDPOINT_ID")
 		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
 			return values[name]
 		})
-		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_AGENT_TIMEOUT") {
-			t.Fatalf("invalid Agent timeout error = %v", err)
+		if err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Fatalf("missing Ark selection error = %v", err)
 		}
 	})
 
-	t.Run("missing LLM key", func(t *testing.T) {
+	t.Run("ambiguous Ark selection", func(t *testing.T) {
 		values := completeVoiceCallEnvironment()
-		delete(values, "VOLCENGINE_RTC_LLM_API_KEY")
+		values["VOLCENGINE_RTC_ARK_MODEL_NAME"] = "Doubao-Seed-1.6｜250615"
 		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
 			return values[name]
 		})
-		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_LLM_API_KEY") {
-			t.Fatalf("missing LLM key error = %v", err)
+		if err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Fatalf("ambiguous Ark selection error = %v", err)
 		}
 	})
 }
@@ -185,11 +185,8 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 	if handler.VoiceCallCallbackSignature != values["VOLCENGINE_RTC_CALLBACK_SIGNATURE"] {
 		t.Fatal("voice call callback signature was not attached to handler")
 	}
-	if handler.VoiceCallLLMAPIKey != values["VOLCENGINE_RTC_LLM_API_KEY"] {
-		t.Fatal("voice call LLM API key was not attached to handler")
-	}
-	if handler.VoiceCallLLMProcessor == nil {
-		t.Fatal("voice call LLM processor was not attached to handler")
+	if handler.VoiceCallLLMAPIKey != "" || handler.VoiceCallLLMProcessor != nil {
+		t.Fatal("obsolete CustomLLM bridge was attached to direct Ark runtime")
 	}
 }
 
@@ -199,14 +196,12 @@ func completeVoiceCallEnvironment() map[string]string {
 		"VOLCENGINE_RTC_APP_KEY":              "app-key",
 		"VOLCENGINE_RTC_ACCESS_KEY_ID":        "access-key-id",
 		"VOLCENGINE_RTC_SECRET_ACCESS_KEY":    "secret-access-key",
-		"VOLCENGINE_RTC_LLM_URL":              "https://multica.example.com/api/voice-calls/llm",
-		"VOLCENGINE_RTC_LLM_API_KEY":          "llm-secret",
+		"VOLCENGINE_RTC_ARK_ENDPOINT_ID":      "ep-voice-call",
 		"VOLCENGINE_RTC_TTS_VOICE_ID":         "voice-id",
 		"VOLCENGINE_RTC_CALLBACK_URL":         "https://multica.example.com/api/voice-calls/callback",
 		"VOLCENGINE_RTC_CALLBACK_SIGNATURE":   "callback-signature",
 		"VOLCENGINE_RTC_TOKEN_TTL":            "30m",
 		"VOLCENGINE_RTC_COMPENSATION_TIMEOUT": "10s",
 		"VOLCENGINE_RTC_CLEANUP_TIMEOUT":      "10s",
-		"VOLCENGINE_RTC_AGENT_TIMEOUT":        "90s",
 	}
 }

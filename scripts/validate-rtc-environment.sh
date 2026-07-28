@@ -6,7 +6,6 @@ required_names=(
   VOLCENGINE_RTC_APP_KEY
   VOLCENGINE_RTC_ACCESS_KEY_ID
   VOLCENGINE_RTC_SECRET_ACCESS_KEY
-  VOLCENGINE_RTC_LLM_API_KEY
   VOLCENGINE_RTC_CALLBACK_SIGNATURE
 )
 opt_in_names=(
@@ -14,7 +13,8 @@ opt_in_names=(
   VOLCENGINE_RTC_SESSION_TOKEN
   VOLCENGINE_RTC_ENDPOINT
   VOLCENGINE_RTC_REGION
-  VOLCENGINE_RTC_LLM_URL
+  VOLCENGINE_RTC_ARK_ENDPOINT_ID
+  VOLCENGINE_RTC_ARK_MODEL_NAME
   VOLCENGINE_RTC_TTS_VOICE_ID
   VOLCENGINE_RTC_CALLBACK_URL
 )
@@ -46,6 +46,16 @@ if [[ "${#missing_names[@]}" -gt 0 ]]; then
   printf 'Volcengine RTC secrets must be configured together; missing:' >&2
   printf ' %s' "${missing_names[@]}" >&2
   printf '\n' >&2
+  exit 1
+fi
+
+ark_endpoint_id="${VOLCENGINE_RTC_ARK_ENDPOINT_ID-}"
+ark_endpoint_id="${ark_endpoint_id//[[:space:]]/}"
+ark_model_name="${VOLCENGINE_RTC_ARK_MODEL_NAME-}"
+ark_model_name="${ark_model_name//[[:space:]]/}"
+if [[ -z "$ark_endpoint_id" && -z "$ark_model_name" ]] ||
+  [[ -n "$ark_endpoint_id" && -n "$ark_model_name" ]]; then
+  echo "Volcengine RTC requires exactly one VOLCENGINE_RTC_ARK_ENDPOINT_ID or VOLCENGINE_RTC_ARK_MODEL_NAME." >&2
   exit 1
 fi
 

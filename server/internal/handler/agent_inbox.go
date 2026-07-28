@@ -791,6 +791,10 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 			return
 		}
+		// The chat-session branch acks the delivery itself and never reaches
+		// completeTask, so it owes the terminal side effects the work-task
+		// branch gets for free. Rollout agents always run in a chat session.
+		h.TaskService.FinalizeTerminalTaskSideEffects(r.Context(), event)
 	}
 	h.publishAgentTransportFreshnessResolutions(r.Context(), freshnessResolutionPublications)
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
@@ -1235,6 +1239,14 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
+	}
+	if event.ChatSessionID.Valid {
+		// Same gap as the completion path: a chat-session failure is acked here
+		// and never reaches failTask. A failed rollout still has to close its
+		// segment (an unclosed one makes the whole assembled DAG unusable) and
+		// release its sandbox. Work-task failures route via failTask instead, so
+		// they are excluded to avoid closing twice.
+		h.TaskService.FinalizeTerminalTaskSideEffects(r.Context(), event)
 	}
 	h.finishFailedAgentInboxEvent(
 		w, r, event, deliveryID, errText, failureReason, reasonCode, alreadyReplied, collaborationWakes, ackedSeq,

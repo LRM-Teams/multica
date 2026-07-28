@@ -93,6 +93,16 @@
       "manager_agent": "Group manager",
       "manager_human": "Admin"
     },
+    "menu": {
+      "aria": "Member actions",
+      "promote_agent": "Set as group manager",
+      "promote_human": "Set as admin",
+      "demote_agent": "Remove group manager role",
+      "demote_human": "Remove admin role",
+      "transfer": "Transfer ownership",
+      "remove": "Remove from group",
+      "coming_soon": "Available once permissions are configured."
+    },
     "select_user": "Select a member",
     "select_agent": "Select an agent",
     "join": "Add",

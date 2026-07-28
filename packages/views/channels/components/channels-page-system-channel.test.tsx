@@ -304,7 +304,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     expect(screen.queryByText("Invite")).toBeNull();
   });
 
-  it("keeps the per-member remove button for a normal channel's member panel", async () => {
+  it("drops the legacy per-member Remove for a normal group's member panel (owner-only menu now; #801)", async () => {
     renderPage("chan-random");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
@@ -312,7 +312,11 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     // Presence stack opens the Members (browse) tab directly.
     fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
-    expect(screen.getByLabelText("Remove member")).toBeTruthy();
+    // Ordinary groups route removal through the owner-only management menu (mock
+    // to #801). The ungated legacy per-member Remove must NOT remain reachable —
+    // it let a non-channel-owner (or the owner's own row) remove members outside
+    // the gate. This viewer's channel role is fail-closed to member, so no ⋯ menu.
+    expect(screen.queryByLabelText("Remove member")).toBeNull();
   });
 
   it("hides the mobile details Settings row for the system channel", async () => {
@@ -444,6 +448,9 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     expect(await screen.findByTestId("channel-details-settings")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
-    expect(screen.getByLabelText("Remove member")).toBeTruthy();
+    // "Mutable" is evidenced by the Settings surface (asserted above); the system
+    // channel hides it. The legacy per-member Remove is gone for ordinary groups
+    // (owner-only menu; #801), so it must NOT be present here either.
+    expect(screen.queryByLabelText("Remove member")).toBeNull();
   });
 });

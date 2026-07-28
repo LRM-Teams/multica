@@ -93,6 +93,16 @@
       "manager_agent": "群管",
       "manager_human": "管理员"
     },
+    "menu": {
+      "aria": "成员操作",
+      "promote_agent": "设为群管",
+      "promote_human": "设为管理员",
+      "demote_agent": "取消群管",
+      "demote_human": "取消管理员",
+      "transfer": "转让群主",
+      "remove": "移出群聊",
+      "coming_soon": "权限配置完成后可用"
+    },
     "select_user": "选择人类成员",
     "select_agent": "选择智能体",
     "join": "加入",

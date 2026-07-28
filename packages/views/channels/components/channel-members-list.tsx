@@ -5,11 +5,22 @@ import {
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type { ChannelMember } from "@multica/core/types";
-import type { ChannelMemberBadge } from "@multica/core/channels";
+import type {
+  ChannelMemberBadge,
+  GroupMemberActions,
+  GroupMemberActionKind,
+} from "@multica/core/channels";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, MoreHorizontal } from "lucide-react";
 import { useMemo } from "react";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
@@ -34,6 +45,8 @@ function MemberRow({
   m,
   roleForMember,
   badgeForMember,
+  memberMenu,
+  onGroupMemberAction,
   canRemove,
   isMobile,
   currentUserId,
@@ -46,6 +59,8 @@ function MemberRow({
   m: ChannelMember;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
   badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
+  memberMenu?: (member: ChannelMember) => GroupMemberActions | null;
+  onGroupMemberAction?: (member: ChannelMember, action: GroupMemberActionKind) => void;
   canRemove: boolean;
   isMobile: boolean;
   currentUserId: string;
@@ -93,6 +108,20 @@ function MemberRow({
           onOpenMember(m.member_id);
         }
       : undefined;
+
+  // Owner-only management menu (group settings). `memberMenu` returns the
+  // available actions for this row; a non-owner viewer / own row yields no
+  // actions (fail-closed in core), so the ⋯ trigger only renders for the owner.
+  // When the menu is active it OWNS removal — the standalone Remove button is
+  // suppressed to avoid a duplicate kick affordance.
+  const menuActions = memberMenu?.(m) ?? null;
+  const hasMenu =
+    !!menuActions &&
+    !!onGroupMemberAction &&
+    (menuActions.canPromoteToManager ||
+      menuActions.canDemoteToMember ||
+      menuActions.canTransferOwnership ||
+      menuActions.canRemove);
 
   return (
     <div
@@ -154,7 +183,52 @@ function MemberRow({
           <MessageSquare className="size-3.5" />
         </button>
       )}
-      {canRemove && onRemove && (
+      {hasMenu && menuActions && onGroupMemberAction && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={t(($) => $.members.menu.aria)}
+            className={cn(
+              "shrink-0 rounded p-1.5 text-muted-foreground transition hover:text-foreground",
+              isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+            )}
+          >
+            <MoreHorizontal className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {menuActions.canPromoteToManager && (
+              <DropdownMenuItem onClick={() => onGroupMemberAction(m, "promote")}>
+                {isAgent
+                  ? t(($) => $.members.menu.promote_agent)
+                  : t(($) => $.members.menu.promote_human)}
+              </DropdownMenuItem>
+            )}
+            {menuActions.canDemoteToMember && (
+              <DropdownMenuItem onClick={() => onGroupMemberAction(m, "demote")}>
+                {isAgent
+                  ? t(($) => $.members.menu.demote_agent)
+                  : t(($) => $.members.menu.demote_human)}
+              </DropdownMenuItem>
+            )}
+            {menuActions.canTransferOwnership && (
+              <DropdownMenuItem onClick={() => onGroupMemberAction(m, "transfer")}>
+                {t(($) => $.members.menu.transfer)}
+              </DropdownMenuItem>
+            )}
+            {menuActions.canRemove && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => onGroupMemberAction(m, "remove")}
+                >
+                  {t(($) => $.members.menu.remove)}
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      {canRemove && onRemove && !memberMenu && (
         <button
           type="button"
           onClick={() => onRemove(m)}
@@ -184,6 +258,8 @@ export function ChannelMembersList({
   noResultsLabel,
   roleForMember,
   badgeForMember,
+  memberMenu,
+  onGroupMemberAction,
   canRemove,
   isMobile,
   currentUserId,
@@ -200,6 +276,8 @@ export function ChannelMembersList({
   noResultsLabel: string;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
   badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
+  memberMenu?: (member: ChannelMember) => GroupMemberActions | null;
+  onGroupMemberAction?: (member: ChannelMember, action: GroupMemberActionKind) => void;
   canRemove: boolean;
   isMobile: boolean;
   currentUserId: string;
@@ -273,6 +351,8 @@ export function ChannelMembersList({
                 m={m}
                 roleForMember={roleForMember}
                 badgeForMember={badgeForMember}
+                memberMenu={memberMenu}
+                onGroupMemberAction={onGroupMemberAction}
                 canRemove={canRemove}
                 isMobile={isMobile}
                 currentUserId={currentUserId}
@@ -296,6 +376,8 @@ export function ChannelMembersList({
                 m={m}
                 roleForMember={roleForMember}
                 badgeForMember={badgeForMember}
+                memberMenu={memberMenu}
+                onGroupMemberAction={onGroupMemberAction}
                 canRemove={canRemove}
                 isMobile={isMobile}
                 currentUserId={currentUserId}

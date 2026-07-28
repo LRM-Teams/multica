@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMember } from "@multica/core/types";
+import type { GroupMemberActions } from "@multica/core/channels";
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelMembersList } from "./channel-members-list";
 
@@ -22,6 +24,16 @@ vi.mock("../../i18n/use-t", () => ({
           title: "Member",
           remove: "Remove",
           remove_aria: "Remove member",
+          menu: {
+            aria: "Member actions",
+            promote_agent: "Set as group manager",
+            promote_human: "Set as admin",
+            demote_agent: "Remove group manager role",
+            demote_human: "Remove admin role",
+            transfer: "Transfer ownership",
+            remove: "Remove from group",
+            coming_soon: "coming soon",
+          },
         },
         message: { agent_badge: "Agent" },
         profile_popover: {
@@ -242,5 +254,120 @@ describe("ChannelMembersList (LRM-650)", () => {
     const remove = screen.getByRole("button", { name: /remove member/i });
     expect(remove.className).toMatch(/min-h-11/);
     expect(remove.className).toMatch(/opacity-100/);
+  });
+});
+
+const ALL_ACTIONS: GroupMemberActions = {
+  canPromoteToManager: true,
+  canDemoteToMember: true,
+  canTransferOwnership: true,
+  canRemove: true,
+};
+const NO_ACTIONS: GroupMemberActions = {
+  canPromoteToManager: false,
+  canDemoteToMember: false,
+  canTransferOwnership: false,
+  canRemove: false,
+};
+
+describe("ChannelMembersList — owner-only management menu", () => {
+  it("owner viewer: shows the ⋯ menu and suppresses the standalone Remove button", () => {
+    render(
+      <ChannelMembersList
+        members={[member("u-1", "Bob", "user")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        memberMenu={() => ALL_ACTIONS}
+        onGroupMemberAction={() => {}}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+        onRemove={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /member actions/i }),
+    ).toBeInTheDocument();
+    // The menu owns removal — no duplicate standalone Remove.
+    expect(
+      screen.queryByRole("button", { name: /remove member/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("non-group surface (no memberMenu): legacy Remove stays for DM/other surfaces", () => {
+    render(
+      <ChannelMembersList
+        members={[member("u-1", "Bob", "user")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+        onRemove={() => {}}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /member actions/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /remove member/i }),
+    ).toBeInTheDocument();
+  });
+
+  // Regression guard for the bypass Iris caught: on a group-managed surface
+  // (memberMenu supplied) a row with zero actions — a non-owner viewer, or the
+  // owner's OWN row — must show NO ⋯ trigger AND NO legacy Remove, even though
+  // canRemove + onRemove are passed. Removal is owner-only via the menu (#801);
+  // the ungated legacy control must not remain reachable.
+  it("group surface, zero-action row: no ⋯ AND legacy Remove suppressed (bypass closed)", () => {
+    const onRemove = vi.fn();
+    render(
+      <ChannelMembersList
+        members={[member("u-1", "Bob", "user")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        memberMenu={() => NO_ACTIONS}
+        onGroupMemberAction={() => {}}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+        onRemove={onRemove}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /member actions/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /remove member/i }),
+    ).not.toBeInTheDocument();
+    expect(onRemove).not.toHaveBeenCalled();
+  });
+
+  it("agent row: opening the menu and clicking promote fires (member, 'promote')", async () => {
+    const onAction = vi.fn();
+    const user = userEvent.setup();
+    const agent = member("a-1", "Helper", "agent");
+    render(
+      <ChannelMembersList
+        members={[agent]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "agent"}
+        memberMenu={() => ({ ...NO_ACTIONS, canPromoteToManager: true })}
+        onGroupMemberAction={onAction}
+        canRemove={false}
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /member actions/i }));
+    // Agent promote label = "Set as group manager" (设为群管).
+    await user.click(
+      await screen.findByText("Set as group manager"),
+    );
+    expect(onAction).toHaveBeenCalledWith(agent, "promote");
   });
 });

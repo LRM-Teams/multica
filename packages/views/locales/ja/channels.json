@@ -93,6 +93,16 @@
       "manager_agent": "マネージャー",
       "manager_human": "管理者"
     },
+    "menu": {
+      "aria": "メンバー操作",
+      "promote_agent": "グループ管理者に設定",
+      "promote_human": "管理者に設定",
+      "demote_agent": "グループ管理者を解除",
+      "demote_human": "管理者を解除",
+      "transfer": "オーナーを譲渡",
+      "remove": "グループから削除",
+      "coming_soon": "権限の設定が完了すると利用できます。"
+    },
     "select_user": "メンバーを選択",
     "select_agent": "エージェントを選択",
     "join": "追加",

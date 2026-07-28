@@ -14,6 +14,9 @@ import {
  * V1 rule: only the group **owner** manages members. Every non-owner viewer —
  * and a viewer whose role is missing — gets zero actions (fail-closed).
  */
+/** The mutating actions a group owner can invoke from a member's menu. */
+export type GroupMemberActionKind = "promote" | "demote" | "transfer" | "remove";
+
 export interface GroupMemberActions {
   /** member → manager (群管 for agents, 管理员 for humans). */
   canPromoteToManager: boolean;

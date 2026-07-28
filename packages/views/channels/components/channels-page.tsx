@@ -63,6 +63,9 @@ import {
   useLastSelectedChannelStore,
   isImmutableSystemChannel,
   channelMemberBadge,
+  channelMemberRole,
+  groupMemberActions,
+  type GroupMemberActionKind,
   type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
@@ -2230,6 +2233,42 @@ export function ChannelsPage({
       ? channelMemberBadge
       : undefined;
 
+  // The viewer's OWN channel role (owner|manager|member) drives the owner-only
+  // management menu. Fail-closed: absent membership / missing role → "member".
+  const viewerChannelRole = useMemo(
+    () =>
+      channelMemberRole(
+        channelMembers.find(
+          (m) => m.member_type === "user" && m.member_id === currentUserId,
+        ) ?? {},
+      ),
+    [channelMembers, currentUserId],
+  );
+  // Group-managed surface: supply the menu for EVERY viewer of an ordinary
+  // non-system group (same fail-closed gate as the badge). groupMemberActions
+  // returns zero actions for non-owners → they get no ⋯ trigger; the owner-only
+  // check lives inside it. Crucially, the mere PRESENCE of `memberMenu` tells the
+  // row this is a group-managed surface where the legacy workspace-admin Remove
+  // no longer applies — removal is owner-only via the menu (→ real mutation with
+  // #801). This closes the bypass where a non-channel-owner workspace admin, or
+  // the owner's own row, still got the old real Remove.
+  const groupMemberMenu = useMemo(
+    () =>
+      active?.kind === "group" && !isActiveSystemChannel
+        ? (m: ChannelMember) =>
+            groupMemberActions({ role: viewerChannelRole }, m, currentUserId ?? "")
+        : undefined,
+    [active?.kind, isActiveSystemChannel, viewerChannelRole, currentUserId],
+  );
+  // Mutations land with #801. Until then, DON'T fake success — surface an honest
+  // "coming soon" instead of optimistically flipping role/removing (Iris: mock 勿假成功).
+  const handleGroupMemberAction = useCallback(
+    (_m: ChannelMember, _action: GroupMemberActionKind) => {
+      toast.info(t(($) => $.members.menu.coming_soon));
+    },
+    [t],
+  );
+
   const openMembersDialog = useCallback(() => {
     setMembersQuery("");
     setMembersDialogOpen(true);
@@ -2294,6 +2333,8 @@ export function ChannelsPage({
         noResultsLabel={t(($) => $.members.no_results)}
         roleForMember={roleForChannelMember}
         badgeForMember={groupBadgeForMember}
+        memberMenu={groupMemberMenu}
+        onGroupMemberAction={handleGroupMemberAction}
         canRemove={!isActiveSystemChannel && canArchive(active)}
         isMobile={isMobile}
         currentUserId={currentUserId ?? ""}
@@ -3694,6 +3735,8 @@ export function ChannelsPage({
           onQueryChange={setMembersQuery}
           roleForMember={roleForChannelMember}
           badgeForMember={groupBadgeForMember}
+          memberMenu={groupMemberMenu}
+          onGroupMemberAction={handleGroupMemberAction}
           canManage={!isActiveSystemChannel && canArchive(active)}
           isMobile={isMobile}
           currentUserId={currentUserId ?? ""}

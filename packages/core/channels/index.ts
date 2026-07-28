@@ -82,6 +82,7 @@ export {
   groupMemberActions,
   canLeaveGroup,
   type GroupMemberActions,
+  type GroupMemberActionKind,
 } from "./group-member-actions";
 export {
   contentMentionsViewer,

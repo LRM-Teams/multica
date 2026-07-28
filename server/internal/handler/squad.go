@@ -967,4 +967,3 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 	_ = authorType
 	_ = authorID
 }
-

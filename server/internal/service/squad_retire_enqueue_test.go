@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,12 +18,29 @@ func TestEnqueueTaskForSquadLeaderRetired(t *testing.T) {
 	}
 }
 
-func TestDispatchAutopilotRejectsSquadAssigneeBeforeWork(t *testing.T) {
-	// Structural guard: squad assignee must be rejected by name at entry.
-	// Full DispatchAutopilot needs DB; we assert the fail-closed error string
-	// is the public contract used by DispatchAutopilot / dispatchCreateIssue.
-	const want = "squad autopilots retired"
-	if want == "" {
-		t.Fatal("contract empty")
+// TestDispatchCreateIssueSquadRejectsBeforeDB proves the entry guard runs with
+// a nil Queries/TxStarter — if it reached any DB call it would panic.
+func TestDispatchCreateIssueSquadRejectsBeforeDB(t *testing.T) {
+	s := &AutopilotService{} // nil Queries / TxStarter
+	ap := db.Autopilot{AssigneeType: "squad"}
+	run := &db.AutopilotRun{}
+	err := s.dispatchCreateIssue(context.Background(), ap, run, "")
+	if err == nil || !strings.Contains(err.Error(), "squad autopilots retired") {
+		t.Fatalf("dispatchCreateIssue want retired error before DB, got %v", err)
+	}
+}
+
+// TestDispatchRunOnlySquadRejectsBeforeDB same contract for run_only path.
+func TestDispatchRunOnlySquadRejectsBeforeDB(t *testing.T) {
+	s := &AutopilotService{}
+	ap := db.Autopilot{AssigneeType: "squad"}
+	run := &db.AutopilotRun{}
+	err := s.dispatchRunOnly(context.Background(), ap, run)
+	var skipped *errDispatchSkipped
+	if !errors.As(err, &skipped) {
+		t.Fatalf("dispatchRunOnly want errDispatchSkipped, got %v", err)
+	}
+	if !strings.Contains(skipped.reason, "squad autopilots retired") {
+		t.Fatalf("skip reason = %q, want retired", skipped.reason)
 	}
 }

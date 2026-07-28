@@ -174,14 +174,9 @@ func (h *Handler) resolveAssigneeMentionLabel(ctx context.Context, workspaceID p
 		}
 		return sanitizeMentionLabel(agentDisplayName(agent)), true
 	case "squad":
-		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-			ID:          assigneeID,
-			WorkspaceID: workspaceID,
-		})
-		if err != nil {
-			return "", false
-		}
-		return sanitizeMentionLabel(squad.Name), true
+		// Squad product retired: never emit mention://squad in new system comments.
+		// Historical assignee_type=squad stays on the issue row for read-only display.
+		return "", false
 	}
 	return "", false
 }
@@ -252,7 +247,9 @@ func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, chi
 	case "agent":
 		h.triggerChildDoneAgent(ctx, parent, systemComment.ID)
 	case "squad":
-		h.triggerChildDoneSquad(ctx, parent, child, systemComment.ID, actorType, actorID)
+		// Squad product retired: no child-done wake / no new squad side effects.
+		// Historical assignee_type=squad remains read-only on the parent issue.
+		return
 	}
 }
 

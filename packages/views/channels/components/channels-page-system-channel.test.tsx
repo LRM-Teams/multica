@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { useLastSelectedChannelStore } from "@multica/core/channels";
+import { ApiError } from "@multica/core/api";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelsPage } from "./channels-page";
@@ -28,7 +29,19 @@ const apiMock = vi.hoisted(() => {
   });
   return { proxy };
 });
-vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
+// Keep the real module's other exports (notably `ApiError`, used by the leave
+// handler's 409 check) while swapping the `api` singleton for the spy proxy.
+vi.mock("@multica/core/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/api")>()),
+  api: apiMock.proxy,
+}));
+
+const toastMock = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), toastMock) }));
 
 // This suite renders the FULL ChannelsPage with the real react-virtuoso message
 // list (intentionally unmocked, to exercise real sidebar/selection wiring). That
@@ -452,5 +465,114 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     // channel hides it. The legacy per-member Remove is gone for ordinary groups
     // (owner-only menu; #801), so it must NOT be present here either.
     expect(screen.queryByLabelText("Remove member")).toBeNull();
+  });
+
+  describe("group leave affordance — real page wiring (#1298)", () => {
+    beforeEach(() => {
+      toastMock.success.mockClear();
+      toastMock.error.mockClear();
+      toastMock.info.mockClear();
+      const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
+      remove.mockReset();
+      remove.mockResolvedValue(undefined);
+    });
+
+    async function openLeaveDanger(channelId: string) {
+      renderPage(channelId);
+      await screen.findByTestId("message-list");
+      fireEvent.click(screen.getByLabelText("Open channel details"));
+      fireEvent.click(await screen.findByTestId("channel-details-settings"));
+    }
+
+    it("actionable leave → exact self removeChannelMember + deselect + success toast", async () => {
+      const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
+      await openLeaveDanger("chan-random");
+      const leave = await screen.findByTestId("channel-details-leave");
+      fireEvent.click(within(leave).getByRole("button"));
+      await waitFor(() =>
+        expect(remove).toHaveBeenCalledWith("chan-random", "user", "user-1"),
+      );
+      await waitFor(() => expect(toastMock.success).toHaveBeenCalledTimes(1));
+      // Deselected off the channel just left.
+      await waitFor(() =>
+        expect(screen.getByTestId("active-title")).not.toHaveTextContent("random"),
+      );
+      expect(toastMock.error).not.toHaveBeenCalled();
+    });
+
+    it("409 → retain the selected channel, transfer-first toast, no success/deselect", async () => {
+      const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
+      remove.mockReset();
+      remove.mockRejectedValue(new ApiError("only owner", 409, "Conflict"));
+      await openLeaveDanger("chan-random");
+      fireEvent.click(
+        within(await screen.findByTestId("channel-details-leave")).getByRole("button"),
+      );
+      await waitFor(() =>
+        expect(remove).toHaveBeenCalledWith("chan-random", "user", "user-1"),
+      );
+      await waitFor(() =>
+        expect(toastMock.error).toHaveBeenCalledWith(
+          "Transfer ownership before leaving the group.",
+        ),
+      );
+      expect(toastMock.success).not.toHaveBeenCalled();
+      // Channel retained — never navigate away on a server rejection.
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+
+    it("sole human owner → disabled Leave (no button)", async () => {
+      membersByChannel["chan-owned"] = [
+        {
+          member_type: "user",
+          member_id: "user-1",
+          name: "alice",
+          display_name: "Alice",
+          avatar_url: null,
+          role: "owner",
+        },
+      ];
+      channelsFixture.current = [
+        { ...DEFAULT_CHANNELS[0], id: "chan-owned", name: "owned" },
+      ];
+      await openLeaveDanger("chan-owned");
+      const leave = await screen.findByTestId("channel-details-leave");
+      expect(leave).toHaveTextContent("Leave group");
+      expect(within(leave).queryByRole("button")).toBeNull();
+    });
+
+    it("system channel → no leave affordance", async () => {
+      renderPage("chan-general");
+      await screen.findByTestId("message-list");
+      fireEvent.click(screen.getByLabelText("Open channel details"));
+      await screen.findByTestId("channel-details-home");
+      expect(screen.queryByTestId("channel-details-leave")).toBeNull();
+    });
+
+    it("non-group active channel (kind !== group) → no leave affordance", async () => {
+      // A real DM routes through a separate DmConversation shell (dm-list path,
+      // not exercised here); this drives the leave gate's `kind !== "group"` arm
+      // directly with a non-group active channel and proves the affordance is
+      // omitted regardless of how the pane itself renders.
+      channelsFixture.current = [
+        { ...DEFAULT_CHANNELS[0], id: "chan-dm", name: "dm", kind: "dm" },
+      ];
+      renderPage("chan-dm");
+      await screen.findByTestId("message-list");
+      expect(screen.queryByTestId("channel-details-leave")).toBeNull();
+    });
+
+    it("archived ordinary group → no leave affordance", async () => {
+      channelsFixture.current = [
+        {
+          ...DEFAULT_CHANNELS[0],
+          id: "chan-arch",
+          name: "arch",
+          archived_at: "2026-07-01T00:00:00Z",
+        },
+      ];
+      await openLeaveDanger("chan-arch");
+      expect(screen.queryByTestId("channel-details-leave")).toBeNull();
+    });
   });
 });

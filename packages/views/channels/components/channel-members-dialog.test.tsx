@@ -371,3 +371,27 @@ describe("ChannelMembersList — owner-only management menu", () => {
     expect(onAction).toHaveBeenCalledWith(agent, "promote");
   });
 });
+
+describe("ChannelMembersList — headerSlot (group-manager onboarding hint mount)", () => {
+  it("renders headerSlot inside the roster, above the HUMANS section", () => {
+    render(
+      <ChannelMembersList
+        members={[member("u-1", "Bob", "user")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        headerSlot={<div data-testid="hint-slot">hint</div>}
+        canRemove={false}
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+    const slot = screen.getByTestId("hint-slot");
+    expect(screen.getByTestId("channel-members-list")).toContainElement(slot);
+    // Slot precedes the HUMANS section header in document order.
+    const humans = screen.getByTestId("channel-members-section-humans");
+    expect(
+      slot.compareDocumentPosition(humans) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

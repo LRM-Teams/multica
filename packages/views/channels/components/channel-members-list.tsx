@@ -21,7 +21,7 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare, MoreHorizontal } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n";
@@ -268,6 +268,7 @@ export function ChannelMembersList({
   onOpenMember,
   onRemove,
   dmPending,
+  headerSlot,
   className,
 }: {
   members: ChannelMember[];
@@ -279,6 +280,13 @@ export function ChannelMembersList({
   memberMenu?: (member: ChannelMember) => GroupMemberActions | null;
   onGroupMemberAction?: (member: ChannelMember, action: GroupMemberActionKind) => void;
   canRemove: boolean;
+  /**
+   * Optional content rendered at the top of the roster (above the HUMANS
+   * section, inside the scroll area). The group-manager onboarding hint mounts
+   * here — it self-fetches members + viewer channel role and owns its own
+   * owner-only / 0-manager / dismiss logic; this component only lends the slot.
+   */
+  headerSlot?: ReactNode;
   isMobile: boolean;
   currentUserId: string;
   onOpenDm?: (member: ChannelMember) => void;
@@ -341,6 +349,7 @@ export function ChannelMembersList({
       )}
       data-testid="channel-members-list"
     >
+      {headerSlot}
       {humans.length > 0 ? (
         <>
           <SectionHeader label="HUMANS" count={humans.length} />

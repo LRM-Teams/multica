@@ -2286,6 +2286,56 @@ export function ChannelsPage({
     [t],
   );
 
+  // Leave-group affordance for the channel-details danger zone. Ordinary
+  // non-system, non-archived groups only (DM / system / archived → none). BE
+  // #1286 (Nash) confirmed self-leave = DELETE .../members/user/{selfId}, and a
+  // sole human owner leaving returns a server-authoritative 409. So a
+  // confidently-detected SOLE human owner is pre-disabled with "transfer first"
+  // (Nash/Iris prefer disabled over a click that 409s); everyone else — member,
+  // manager, or a non-sole owner — gets a real clickable self-leave. The 409 is
+  // the backstop when role data is too thin to detect sole-ownership up front:
+  // it surfaces the same transfer-first message rather than a fake success.
+  const handleLeaveGroup = useCallback(() => {
+    if (!active || !currentUserId) return;
+    const channelId = active.id;
+    removeMember.mutate(
+      { channelId, memberType: "user", memberId: currentUserId },
+      {
+        onSuccess: () => {
+          if (channelId === activeId) setActiveId(null);
+          toast.success(t(($) => $.details.leave_success));
+        },
+        onError: (err) => {
+          toast.error(
+            err instanceof ApiError && err.status === 409
+              ? t(($) => $.details.leave_owner_reason)
+              : t(($) => $.details.leave_failed),
+          );
+        },
+      },
+    );
+  }, [active, activeId, currentUserId, removeMember, t]);
+  const groupLeaveAffordance = useMemo(() => {
+    if (active?.kind !== "group" || isActiveSystemChannel || active?.archived_at) {
+      return undefined;
+    }
+    const humanOwnerCount = channelMembers.filter(
+      (m) => m.member_type === "user" && channelMemberRole(m) === "owner",
+    ).length;
+    const isSoleOwner = viewerChannelRole === "owner" && humanOwnerCount <= 1;
+    return isSoleOwner
+      ? { disabledReason: t(($) => $.details.leave_owner_reason) }
+      : { onLeave: handleLeaveGroup };
+  }, [
+    active?.kind,
+    active?.archived_at,
+    isActiveSystemChannel,
+    viewerChannelRole,
+    channelMembers,
+    handleLeaveGroup,
+    t,
+  ]);
+
   const openMembersDialog = useCallback(() => {
     setMembersQuery("");
     setMembersDialogOpen(true);
@@ -3019,6 +3069,7 @@ export function ChannelsPage({
     ? {
         channel: active,
         members: channelMembers,
+        groupLeave: groupLeaveAffordance,
         wsId,
         projectId: channelProjectId || null,
         onChangeProject: (projectId: string | null) => setChannelProject.mutate(projectId),

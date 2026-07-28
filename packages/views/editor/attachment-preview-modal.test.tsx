@@ -119,7 +119,12 @@ import {
   AttachmentPreviewModal,
   useAttachmentPreview,
 } from "./attachment-preview-modal";
+import { rendersFromUrlAlone } from "./utils/preview";
 import { renderHook, act as hookAct } from "@testing-library/react";
+
+// A real UUID literal — `attachmentIdFromDownloadURL` validates the shape, so
+// the "recovered from the URL" cases must use one that actually parses.
+const ATTACHMENT_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
 
 // Fresh QueryClient per render — no retries (preview errors are typed,
 // not transient) and no caching across tests so each scenario is hermetic.
@@ -695,4 +700,65 @@ describe("useAttachmentPreview — tryOpen gate", () => {
     });
     expect(opened).toBe(false);
   });
+
+  // #831 — the reported bug: markdown/txt "can't be previewed in the modal".
+  // The modal always supported them; the source degraded to download because
+  // the attachment record wasn't in the current entity's `attachments` prop,
+  // so no id was passed — even when the URL itself carried one. The invariant
+  // is "previewable whenever an id is OBTAINABLE", not "whenever the record
+  // was in the prop", so these gate on the id, not on the source shape.
+  it.each([
+    ["markdown", "notes.md"],
+    ["plain text", "notes.txt"],
+  ])(
+    "accepts a URL source for a %s kind when the id was recovered from the URL (#831)",
+    (_label, filename) => {
+      const { result } = renderHook(() => useAttachmentPreview());
+      let opened = false;
+      hookAct(() => {
+        opened = result.current.tryOpen({
+          kind: "url",
+          url: `/api/attachments/${ATTACHMENT_ID}/download`,
+          filename,
+          attachmentId: ATTACHMENT_ID,
+        });
+      });
+      expect(opened).toBe(true);
+    },
+  );
+
+  it("still rejects a text kind when no id is obtainable — the /content proxy is unaddressable (#831)", () => {
+    const { result } = renderHook(() => useAttachmentPreview());
+    let opened = true;
+    hookAct(() => {
+      opened = result.current.tryOpen({
+        kind: "url",
+        url: "https://cdn.example.test/pasted.md",
+        filename: "pasted.md",
+      });
+    });
+    expect(opened).toBe(false);
+  });
+});
+
+// #831 — the second defect: AttachmentCard re-listed the URL-previewable kinds
+// and omitted `image`, so a URL-only image was rendered with no preview
+// affordance even though the modal renders images from a URL fine. The card
+// now imports this predicate instead of re-listing, so the affordance and the
+// modal can't drift apart. Aimed at the invariant (the two agree), not at
+// either one's spelling.
+describe("rendersFromUrlAlone — single source of truth for URL-only previewability (#831)", () => {
+  it.each(["image", "pdf", "video", "audio"] as const)(
+    "%s renders from a URL alone",
+    (kind) => {
+      expect(rendersFromUrlAlone(kind)).toBe(true);
+    },
+  );
+
+  it.each(["markdown", "html", "text"] as const)(
+    "%s does NOT render from a URL alone — it needs the ID-keyed /content proxy",
+    (kind) => {
+      expect(rendersFromUrlAlone(kind)).toBe(false);
+    },
+  );
 });

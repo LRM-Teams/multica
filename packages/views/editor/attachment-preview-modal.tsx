@@ -53,6 +53,7 @@ import { ReadonlyContent } from "./readonly-content";
 import {
   extensionToLanguage,
   getPreviewKind,
+  rendersFromUrlAlone,
   type PreviewKind,
 } from "./utils/preview";
 import { useDownloadAttachment } from "./use-download-attachment";
@@ -67,20 +68,22 @@ import { CodeBlockStatic } from "./code-block-static";
 // `full` carries the resolved Attachment record and supports every PreviewKind
 // (text types require the attachment id to call /api/attachments/{id}/content).
 //
-// `url` carries just the signed URL + filename. It is what NodeViews fall back
+// `url` carries the signed URL + filename. It is what NodeViews fall back
 // to when `resolveAttachment(href)` returns undefined — typical when the URL
 // was copy-pasted across comments so the attachment record isn't reachable
-// from the current entity's `attachments` prop. Only media kinds (pdf / video
-// / audio) can be opened from a `url` source because those render directly
-// from the URL without hitting the text-content proxy.
+// from the current entity's `attachments` prop.
+//
+// #831: a URL-only source MAY still carry `attachmentId`. A stable
+// `/api/attachments/<id>/download` URL contains the id even when the record
+// isn't in the current `attachments` prop, and the text `/content` proxy only
+// needs that id — not the whole record. Callers pass it (via
+// `attachmentIdFromDownloadURL`) so markdown / txt / html previews work from a
+// pasted URL instead of silently degrading to a download. Without an id, text
+// kinds remain ungated-out because the proxy is unaddressable.
 
 export type PreviewSource =
   | { kind: "full"; attachment: Attachment }
-  | { kind: "url"; url: string; filename: string };
-
-// PreviewKinds that can render from a URL-only source. Text-based kinds
-// (markdown / html / text) need the /content proxy which is ID-keyed.
-const URL_ONLY_KINDS = new Set<PreviewKind>(["image", "pdf", "video", "audio"]);
+  | { kind: "url"; url: string; filename: string; attachmentId?: string };
 
 // Normalized view used everywhere downstream of `useAttachmentPreview`.
 // `attachmentId === null` signals URL-only mode (download falls back to
@@ -116,7 +119,9 @@ function normalize(source: PreviewSource): PreviewState {
     filename: source.filename,
     contentType: "",
     mediaUrl: resolvePublicFileUrl(source.url) ?? source.url,
-    attachmentId: null,
+    // #831: keep the id when the caller could recover one from the URL — it
+    // unlocks the text `/content` proxy and the re-signing download path.
+    attachmentId: source.attachmentId ?? null,
   };
 }
 
@@ -186,8 +191,11 @@ export function useAttachmentPreview(): AttachmentPreviewHandle {
     const state = normalize(source);
     const kind = getPreviewKind(state.contentType, state.filename);
     if (!kind) return false;
-    // URL-only sources cannot drive text kinds — the /content proxy is ID-keyed.
-    if (source.kind === "url" && !URL_ONLY_KINDS.has(kind)) return false;
+    // #831: gate on whether we actually have an attachment id, not on the
+    // source shape. Text kinds need the ID-keyed /content proxy; a URL-only
+    // source that recovered its id from `/api/attachments/<id>/download` can
+    // drive them just fine. Only a truly id-less source is turned away.
+    if (!state.attachmentId && !rendersFromUrlAlone(kind)) return false;
     dispatchPreviewSource(source, setCurrent);
     return true;
   }, []);

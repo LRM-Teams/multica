@@ -46,6 +46,12 @@ function renderHint(onOpenMembers = vi.fn()) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  // Seed the roster into the cache so the first render already has it. Without
+  // this, a "hint is hidden" assertion could pass simply because the query
+  // hadn't resolved yet — the gate under test would never have been evaluated.
+  // (Caught by flip-verifying: the partial-role test passed even with the fix
+  // removed, i.e. it wasn't discriminating.)
+  qc.setQueryData(["channel-members"], membersMock.current);
   render(
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
@@ -82,6 +88,18 @@ describe("GroupManagerHint (#808 — owner, zero managers)", () => {
 
   it("hides for a non-owner viewer (member / manager)", async () => {
     membersMock.current = [member("me", "member"), member("alice", "owner")];
+    renderHint();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("group-manager-hint")).toBeNull();
+  });
+
+  it("fails closed on PARTIAL role data — an omitted role must not read as 'no manager' (Iris/Wren)", async () => {
+    // The viewer's own role is present and is owner, so the viewer gate passes;
+    // the other member's role is missing. That member may well be the manager —
+    // counting them as an ordinary member would announce "no manager yet" to a
+    // group that has one. This is the live state while the server's role data is
+    // still partial, so the hint must stay hidden.
+    membersMock.current = [member("me", "owner"), member("bob", undefined)];
     renderHint();
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId("group-manager-hint")).toBeNull();

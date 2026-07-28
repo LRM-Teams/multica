@@ -43,6 +43,15 @@ export function GroupManagerHint({
 
   if (dismissed || !members) return null;
 
+  // Roster role data must be COMPLETE before we can claim "there is no manager".
+  // Read the raw field: `channelMemberRole` collapses a missing role to
+  // "member", which is exactly the distinction that matters here — a real
+  // manager whose role the server omitted would otherwise be counted as an
+  // ordinary member and the hint would announce "no manager yet" to a group
+  // that has one. Partial role data is the live state while #814 is in flight,
+  // so this is the case, not a theoretical one. (Iris/Wren review catch.)
+  if (members.some((m) => m.role === undefined)) return null;
+
   const viewer = members.find(
     (m) => m.member_type === "user" && m.member_id === currentUserId,
   );

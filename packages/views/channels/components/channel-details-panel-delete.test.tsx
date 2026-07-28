@@ -1,5 +1,5 @@
 import { type ComponentProps } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
@@ -174,5 +174,39 @@ describe("ChannelDetailsPanel Slack overview (LRM-494)", () => {
       },
     });
     expect(screen.getByTestId("channel-details-invite")).toBeDisabled();
+  });
+});
+
+describe("ChannelDetailsPanel — group leave affordance (danger zone)", () => {
+  async function openDanger(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByTestId("channel-details-settings"));
+  }
+
+  it("owner: disabled Leave with a transfer-first reason, not clickable", async () => {
+    const user = userEvent.setup();
+    renderPanel({ groupLeave: { disabledReason: "Transfer ownership first." } });
+    await openDanger(user);
+    const leave = screen.getByTestId("channel-details-leave");
+    expect(leave).toHaveTextContent("Leave group");
+    expect(leave).toHaveTextContent("Transfer ownership first.");
+    expect(within(leave).queryByRole("button")).toBeNull();
+  });
+
+  it("when onLeave is provided: clickable destructive Leave invokes it", async () => {
+    const user = userEvent.setup();
+    const onLeave = vi.fn();
+    renderPanel({ groupLeave: { onLeave } });
+    await openDanger(user);
+    await user.click(
+      within(screen.getByTestId("channel-details-leave")).getByRole("button"),
+    );
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("no groupLeave (DM / system / non-group): Leave row not rendered", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await openDanger(user);
+    expect(screen.queryByTestId("channel-details-leave")).toBeNull();
   });
 });

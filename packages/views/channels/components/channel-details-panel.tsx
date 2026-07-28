@@ -90,6 +90,7 @@ export function ChannelDetailsPanel({
   stopAllDisabledReason,
   notifyPrefLabel,
   onOpenNotificationPrefs,
+  groupLeave,
 }: {
   channel: Channel;
   members: ChannelMemberBrief[];
@@ -128,6 +129,14 @@ export function ChannelDetailsPanel({
   /** LRM-494 — live preference label from workspace notify settings (LRM-414). */
   notifyPrefLabel: string;
   onOpenNotificationPrefs?: () => void;
+  /**
+   * Group leave affordance (group management), rendered in the danger zone.
+   * `onLeave` present → destructive + clickable. Only `disabledReason` → shown
+   * disabled with that reason (owner must transfer ownership first; or member
+   * self-leave not yet wired — real mutation lands once BE confirms self-DELETE,
+   * per Iris we never fake-click). Omit → not rendered (DM / system / non-group).
+   */
+  groupLeave?: { onLeave?: () => void; disabledReason?: string };
 }) {
   const { t } = useT("channels");
   const {
@@ -574,6 +583,33 @@ export function ChannelDetailsPanel({
                   </div>
                 )}
               </div>
+              {groupLeave ? (
+                <div className="py-2.5" data-testid="channel-details-leave">
+                  {groupLeave.onLeave ? (
+                    <button
+                      type="button"
+                      onClick={groupLeave.onLeave}
+                      className="w-full text-left hover:opacity-80"
+                    >
+                      <p className="text-sm font-semibold text-destructive">
+                        {t(($) => $.details.leave_group)}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {t(($) => $.details.leave_description)}
+                      </p>
+                    </button>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-semibold text-ink opacity-50">
+                        {t(($) => $.details.leave_group)}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {groupLeave.disabledReason}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
           {/* Keep projectBound referenced so callers' subtitle contract stays used. */}

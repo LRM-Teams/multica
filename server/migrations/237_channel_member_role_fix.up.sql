@@ -340,4 +340,3 @@ CREATE CONSTRAINT TRIGGER trg_workspace_member_assert_channel_owner
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW
   EXECUTE FUNCTION workspace_member_assert_channel_owner_final();
-

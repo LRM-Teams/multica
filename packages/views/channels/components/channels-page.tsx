@@ -175,6 +175,7 @@ import {
 } from "./composer-send-error-bar";
 import {
   ComposerPendingVoice,
+  voiceTargetId,
   type PendingVoiceState,
 } from "./composer-pending-voice";
 import {
@@ -924,6 +925,13 @@ export function ChannelsPage({
   const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
   const activeDraftEmpty = !activeDraft.trim();
+  // #838 H0 — the record only exists for the surface it was recorded on. The
+  // state outlives channel switches, so without this a failure in A would show
+  // (and retry) in B. Compare against the IMMUTABLE target it was bound to.
+  const channelPendingVoiceHere =
+    channelPendingVoice && active && channelPendingVoice.targetId === voiceTargetId(active.id)
+      ? channelPendingVoice
+      : null;
   const quoteChannelId = active?.id ?? null;
   const quoteThreadRootId = openThreadRoot?.id ?? null;
   if (quoteState.channelId !== quoteChannelId || quoteState.threadRootId !== quoteThreadRootId) {
@@ -991,6 +999,15 @@ export function ChannelsPage({
         : null,
     [activeChannelId, messages, openThreadRoot],
   );
+  // #838 H0 — same rule for threads: bound to channel + thread root, so a
+  // failure in thread A never surfaces (or retries) in thread B.
+  const threadPendingVoiceHere =
+    threadPendingVoice &&
+    active &&
+    threadRoot &&
+    threadPendingVoice.targetId === voiceTargetId(active.id, threadRoot.id)
+      ? threadPendingVoice
+      : null;
   const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(activeChannelId, threadRoot?.id ?? ""),
   );
@@ -2046,16 +2063,16 @@ export function ChannelsPage({
   // Retry must replay this exact action (Iris): same already-uploaded
   // attachment, real voice send path, never the text send and never a re-record.
   const submitChannelVoice = (
+    channelId: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
-    if (!active) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = channelSend.send({
       payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
-        channelId: active.id,
+        channelId,
         content,
         parts,
         quoteMessageId: quoteTarget?.id ?? undefined,
@@ -2076,7 +2093,12 @@ export function ChannelsPage({
         // The toast is the announcement; THIS is the record. It survives the
         // toast being dismissed, and only a successful retry or an explicit
         // delete removes it (no timer, never overwritten by a new recording).
-        setChannelPendingVoice({ durationMs, attachment });
+        setChannelPendingVoice({
+          targetId: voiceTargetId(channelId),
+          channelId,
+          durationMs,
+          attachment,
+        });
       },
     });
     if (dispatched) {
@@ -2099,17 +2121,22 @@ export function ChannelsPage({
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!active || !activeDraftEmpty || channelPending.pending.length > 0) return false;
-    if (channelPendingVoice) return false;
-    return submitChannelVoice(durationMs, attachment);
+    if (channelPendingVoiceHere) return false;
+    return submitChannelVoice(active.id, durationMs, attachment);
   };
 
   // Retry deliberately skips the compose-time guards: they exist to stop you
   // starting a NEW recording over unsent work, which is exactly what this is
   // resolving. The payload carries content:"" either way, so text typed since
   // the failure doesn't conflict with re-sending the recording.
+  // Re-sends to the recording's OWN channel, not whatever is on screen now.
   const retryChannelVoice = () => {
-    if (!channelPendingVoice) return;
-    submitChannelVoice(channelPendingVoice.durationMs, channelPendingVoice.attachment);
+    if (!channelPendingVoiceHere) return;
+    submitChannelVoice(
+      channelPendingVoiceHere.channelId,
+      channelPendingVoiceHere.durationMs,
+      channelPendingVoiceHere.attachment,
+    );
   };
 
   const handleThreadSend = () => {
@@ -2162,21 +2189,22 @@ export function ChannelsPage({
   // #838 — see submitChannelVoice: submit split out so a retry replays this
   // exact action with the same already-uploaded attachment.
   const submitThreadVoice = (
+    channelId: string,
+    threadRootId: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
-    if (!active || !threadRoot) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
         [attachment.id],
-        `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
+        `${threadRootId}:voice:${threadQuoteTarget?.id ?? ""}`,
       ),
       buildVars: (clientMessageId) => ({
-        channelId: active.id,
-        messageId: threadRoot.id,
+        channelId,
+        messageId: threadRootId,
         content,
         parts,
         quoteMessageId: threadQuoteTarget?.id ?? undefined,
@@ -2192,7 +2220,13 @@ export function ChannelsPage({
             ? t(($) => $.composer.send_failed_too_long)
             : t(($) => $.thread.send_failed),
         );
-        setThreadPendingVoice({ durationMs, attachment });
+        setThreadPendingVoice({
+          targetId: voiceTargetId(channelId, threadRootId),
+          channelId,
+          threadRootId,
+          durationMs,
+          attachment,
+        });
       },
     });
     if (dispatched) {
@@ -2208,13 +2242,19 @@ export function ChannelsPage({
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!active || !threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
-    if (threadPendingVoice) return false;
-    return submitThreadVoice(durationMs, attachment);
+    if (threadPendingVoiceHere) return false;
+    return submitThreadVoice(active.id, threadRoot.id, durationMs, attachment);
   };
 
+  // Re-sends to the recording's OWN channel + thread root.
   const retryThreadVoice = () => {
-    if (!threadPendingVoice) return;
-    submitThreadVoice(threadPendingVoice.durationMs, threadPendingVoice.attachment);
+    if (!threadPendingVoiceHere) return;
+    submitThreadVoice(
+      threadPendingVoiceHere.channelId,
+      threadPendingVoiceHere.threadRootId ?? "",
+      threadPendingVoiceHere.durationMs,
+      threadPendingVoiceHere.attachment,
+    );
   };
 
   // #772 restore-previous (conflicted case: composer held new text).
@@ -3115,12 +3155,12 @@ export function ChannelsPage({
         }
         onSend={handleThreadSend}
         voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
-        voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0 || !!threadPendingVoice}
+        voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0 || !!threadPendingVoiceHere}
         onVoiceSend={handleThreadVoiceSend}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
         composerPrefixExtra={
           <ComposerPendingVoice
-            pending={threadPendingVoice}
+            pending={threadPendingVoiceHere}
             retrying={sendThreadMessage.isPending}
             onRetry={retryThreadVoice}
             onDelete={() => setThreadPendingVoice(null)}
@@ -3657,12 +3697,12 @@ export function ChannelsPage({
                       channelPending.pending.length > 0 ||
                       // #838 — an unsent recording must be retried or deleted
                       // first; a new one must never silently replace it.
-                      !!channelPendingVoice
+                      !!channelPendingVoiceHere
                     }
                     onVoiceSend={handleVoiceSend}
                     isMobile={isMobile}
                     // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-                    prefix={channelSendError || quoteTarget || channelPendingVoice ? (
+                    prefix={channelSendError || quoteTarget || channelPendingVoiceHere ? (
                       <>
                         <ComposerSendErrorBar
                           error={channelSendError}
@@ -3670,7 +3710,7 @@ export function ChannelsPage({
                           onRestore={handleRestorePrevious}
                         />
                         <ComposerPendingVoice
-                          pending={channelPendingVoice}
+                          pending={channelPendingVoiceHere}
                           retrying={sendMessage.isPending}
                           onRetry={retryChannelVoice}
                           onDelete={() => setChannelPendingVoice(null)}

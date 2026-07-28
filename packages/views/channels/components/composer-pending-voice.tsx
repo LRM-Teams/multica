@@ -8,8 +8,29 @@ import type { VoiceRecordingAttachment } from "../lib/voice-audio";
  * never re-records and we never re-upload.
  */
 export interface PendingVoiceState {
+  /**
+   * The IMMUTABLE target this recording was meant for — channel id, or
+   * `channelId:threadRootId` for a thread reply.
+   *
+   * #838 H0 (Iris): this state lives on the whole page, which outlives the
+   * user's current channel. Keyed only by "there is a pending voice", a failure
+   * in channel A would render on channel B's composer and — far worse — retry
+   * would send A's recording into B. The record is therefore bound to where it
+   * was going, it only renders when that matches the surface on screen, and
+   * retry re-sends to the STORED target, never to whatever is active now.
+   */
+  targetId: string;
+  /** Channel the send goes to on retry (never re-read from `active`). */
+  channelId: string;
+  /** Thread root for a thread reply; absent for a top-level channel send. */
+  threadRootId?: string;
   durationMs: number;
   attachment: VoiceRecordingAttachment;
+}
+
+/** Stable target key: a channel composer, or one specific thread's composer. */
+export function voiceTargetId(channelId: string, threadRootId?: string): string {
+  return threadRootId ? `${channelId}:${threadRootId}` : channelId;
 }
 
 /** `0:07` — seconds only; recordings are capped at 60s (MAX_VOICE_RECORDING_MS). */

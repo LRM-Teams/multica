@@ -303,6 +303,15 @@ describe("voice send failure leaves a durable record (#838)", () => {
     return screen.getByTestId("fire-voice");
   }
 
+  /** Click the real sidebar row for a channel (no invented test hooks). */
+  function switchTo(name: string) {
+    const row = screen
+      .getAllByRole("button")
+      .find((el) => el.textContent?.includes(name));
+    if (!row) throw new Error(`sidebar row not found: ${name}`);
+    fireEvent.click(row);
+  }
+
   function sendSpy(): ReturnType<typeof vi.fn> {
     return (apiMock.proxy as Record<string, ReturnType<typeof vi.fn>>)
       .sendChannelMessage as ReturnType<typeof vi.fn>;
@@ -361,6 +370,61 @@ describe("voice send failure leaves a durable record (#838)", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("composer-pending-voice")).toBeNull();
     });
+  });
+
+  // #838 H0 (Iris) — the record lives on the page, which outlives the current
+  // channel. Bound only to "a voice is pending", a failure in A would render on
+  // B's composer and retry would send A's recording INTO B. These pin the
+  // isolation in both directions: invisible in B, still retryable back in A.
+  it("a failure in channel A does not surface in channel B", async () => {
+    sendSpy().mockRejectedValueOnce(new Error("boom"));
+    const fire = await openChannel();
+    fireEvent.click(fire);
+    await screen.findByTestId("composer-pending-voice");
+
+    // …switch to the other channel.
+    switchTo("general");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+
+    // Sentinel first: the composer really is mounted here, so "absent" below is
+    // a real gate and not an unmounted surface.
+    expect(screen.getByTestId("composer")).toBeInTheDocument();
+    expect(screen.queryByTestId("composer-pending-voice")).toBeNull();
+  });
+
+  // NOTE on what this does and does NOT catch: reintroducing the H0 reddens the
+  // A→B case above, but NOT this one — back in A the stored channel and the
+  // active channel coincide, so "retry sent to chan-random" holds either way.
+  // This is a round-trip control (the record survives leaving and returning, and
+  // retry names the right channel), not an H0 detector. The wrong-channel send
+  // is prevented structurally: once the item is invisible outside its own
+  // surface there is no retry button to press there.
+  it("switching back to channel A still shows it, and retry sends to A", async () => {
+    sendSpy().mockRejectedValueOnce(new Error("boom"));
+    const fire = await openChannel();
+    fireEvent.click(fire);
+    await screen.findByTestId("composer-pending-voice");
+
+    switchTo("general");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+    switchTo("random");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+
+    expect(await screen.findByTestId("composer-pending-voice")).toBeInTheDocument();
+
+    const before = sendSpy().mock.calls.length;
+    fireEvent.click(screen.getByTestId("composer-pending-voice-retry"));
+    await waitFor(() => {
+      expect(sendSpy().mock.calls.length).toBeGreaterThan(before);
+    });
+    // Sent to the recording's OWN channel — not whatever happened to be active.
+    expect(sendSpy().mock.calls.at(-1)?.[0]).toBe("chan-random");
   });
 
   it("survives the toast being dismissed — the toast is the announcement, not the storage", async () => {

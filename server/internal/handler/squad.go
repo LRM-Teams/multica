@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
-	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -952,59 +951,20 @@ func (h *Handler) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db
 }
 
 func (h *Handler) isSquadLeaderReady(ctx context.Context, issue db.Issue) bool {
-	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "squad" || !issue.AssigneeID.Valid {
-		return false
-	}
-	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-		ID:          issue.AssigneeID,
-		WorkspaceID: issue.WorkspaceID,
-	})
-	if err != nil {
-		return false
-	}
-	agent, err := h.Queries.GetAgent(ctx, squad.LeaderID)
-	if err != nil {
-		return false
-	}
-	ready, _, err := service.AgentReadiness(ctx, h.Queries, agent)
-	if err != nil {
-		// Fail closed when we can't tell — same posture as the rest of
-		// this function (any error path returns false).
-		return false
-	}
-	return ready
+	// Squad product retired (Frank 2026-07-28): never ready for enqueue —
+	// covers backlog→active promotion paths that call this directly.
+	_ = ctx
+	_ = issue
+	return false
 }
 
-// enqueueSquadLeaderTask triggers the squad leader agent for an issue assigned
-// to a squad. Assign and backlog-promotion paths use this directly; comment
-// paths go through computeCommentAgentTriggers so preview and create share the
-// same trigger set.
+
 func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string) {
-	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-		ID:          issue.AssigneeID,
-		WorkspaceID: issue.WorkspaceID,
-	})
-	if err != nil {
-		return
-	}
-
-	if !h.canEnqueueSquadLeader(ctx, squad.LeaderID, authorType, authorID, uuidToString(issue.WorkspaceID)) {
-		return
-	}
-
-	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: issue.ID,
-		AgentID: squad.LeaderID,
-	})
-	if err != nil || hasPending {
-		return
-	}
-
-	if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, triggerCommentID); err != nil {
-		slog.Warn("enqueue squad leader task failed",
-			"issue_id", uuidToString(issue.ID),
-			"squad_id", uuidToString(squad.ID),
-			"leader_id", uuidToString(squad.LeaderID),
-			"error", err)
-	}
+	// Squad product retired: never enqueue leader tasks.
+	_ = ctx
+	_ = issue
+	_ = triggerCommentID
+	_ = authorType
+	_ = authorID
 }
+

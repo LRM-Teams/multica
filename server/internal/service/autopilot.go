@@ -232,15 +232,10 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	// MUL-2429); agent-assigned autopilots go through the standard issue
 	// path. Both code paths land in agent_inbox_event with agent_id = leader.
 	if ap.AssigneeType == "squad" {
-		// Fail-closed private-leader gate: if the leader is private, verify
-		// the autopilot creator still has access. This catches illegitimate
-		// configs that were saved before the save-time gate was added.
-		if leader.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, leader) {
-			return fmt.Errorf("autopilot creator cannot access private squad leader")
-		}
-		if _, err := s.TaskSvc.EnqueueTaskForSquadLeader(ctx, issue, leader.ID, pgtype.UUID{}); err != nil {
-			return fmt.Errorf("enqueue squad leader task: %w", err)
-		}
+		// Squad product retired (Frank 2026-07-28): never enqueue leader tasks
+		// for legacy squad autopilots. Fail closed so the run is marked failed
+		// rather than silently creating squad-assigned work.
+		return fmt.Errorf("squad autopilots retired: reassign autopilot to an agent")
 	} else {
 		if _, err := s.TaskSvc.EnqueueTaskForIssue(ctx, issue); err != nil {
 			return fmt.Errorf("enqueue task for issue: %w", err)

@@ -622,6 +622,7 @@
   },
   "view_tabs": {
     "chat": "Chat",
+    "dm_chat": "Chat",
     "tasks": "Issues",
     "files": "Files"
   }

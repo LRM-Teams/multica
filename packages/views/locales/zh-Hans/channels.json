@@ -622,6 +622,7 @@
   },
   "view_tabs": {
     "chat": "对话",
+    "dm_chat": "聊天",
     "tasks": "Issues",
     "files": "文件"
   }

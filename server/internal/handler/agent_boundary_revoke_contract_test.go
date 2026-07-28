@@ -328,29 +328,20 @@ func TestBoundary_LeaseBlocksOnSharedRevokeAdvisory(t *testing.T) {
 	assertMembershipRevokedFourTuple(t, loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID))
 }
 
-// TestBoundary_RemoveBlocksOnSharedRevokeAdvisoryAndBeatsLease proves remove
-// takes the same advisory key and, when remove enters the critical section
-// first, lease ends with ErrNoRows and the 4-tuple stays closed (no resurrection).
+// TestBoundary_RemoveBlocksOnSharedRevokeAdvisory proves remove takes the same
+// advisory key as lease (200ms hold window must block — early return Fatal).
 //
-// Sequence (Barry 615ca7a3 #2):
-//  1. holder takes same advisory
-//  2. start RemoveChannelMember — must NOT return within 200ms
-//  3. start lease (will queue behind remove once hold is released, after remove
-//     acquires the key — fixed order: release hold, remove already waiting so
-//     it acquires first when using fair/xact wait; we release only after both
-//     waiters are launched)
-//  4. release holder
-//  5. remove must be 200; lease must be ErrNoRows; exact 4-tuple
+// After release, both waiters may complete in either order (PG wake order is
+// not fixed here — we do NOT claim dynamic remove-first). Security contract
+// covered:
+//   - remove takes agent_channel_membership_revoke(channel,agent) (hard block)
+//   - any linearization ends with exact membership_revoked 4-tuple
+//   - post-remove production lease returns ErrNoRows (no resurrection)
 //
-// Waiter order after release is PG-dependent. We force remove-first by:
-// starting remove under hold (blocked), releasing hold so remove runs to
-// completion before starting lease. That still proves remove takes the key
-// (step 2 hard block). Resurrection is covered by post-remove lease ErrNoRows.
-//
-// A separate sub-path starts lease while remove is still blocked (both waiters),
-// then releases — if remove finishes first we require lease ErrNoRows + tuple;
-// if lease wrongly wins under hold we already Fatal at step 2 for remove.
-func TestBoundary_RemoveBlocksOnSharedRevokeAdvisoryAndBeatsLease(t *testing.T) {
+// For a true remove-first interleaving proof, add a test hook/barrier that
+// signals "remove acquired advisory" before releasing a lease waiter; that
+// is optional follow-up, not required for expand-surface gate (Barry 6a3f7103).
+func TestBoundary_RemoveBlocksOnSharedRevokeAdvisory(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -429,8 +420,10 @@ func TestBoundary_RemoveBlocksOnSharedRevokeAdvisoryAndBeatsLease(t *testing.T) 
 
 	// If lease ran after remove, it must be ErrNoRows. If lease ran before remove
 	// finished, remove still must close the 4-tuple (assert below).
+	// Either linearization is OK: lease-then-remove (leaseErr nil, then remove
+	// closes tuple) or remove-then-lease (leaseErr == ErrNoRows). Not a fixed order.
 	if leaseErr != nil && !errors.Is(leaseErr, pgx.ErrNoRows) {
-		t.Fatalf("lease err=%v; want nil (leased then revoked) or ErrNoRows (remove-first)", leaseErr)
+		t.Fatalf("lease err=%v; want nil (leased then revoked) or ErrNoRows (remove closed first)", leaseErr)
 	}
 
 	assertMembershipRevokedFourTuple(t, loadAgentChannelRevokeTuple(t, seed.channelID, seed.agentID, seed.eventID))

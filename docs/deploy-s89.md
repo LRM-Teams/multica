@@ -1,13 +1,23 @@
-# s89 deployment and runner operations
+# s89 runner / host operations
 
-The `dev` deployment uses a self-hosted GitHub Actions runner on s89. The
-runner reaches GitHub through the host-local `sing-box` proxy at
-`http://127.0.0.1:7893`; image builds stay on GitHub-hosted runners, while the
-s89 runner pulls the finished images and restarts the local Compose stack.
+> **Continuous deploy authority (shared Multica `dev` stack):**  
+> `.github/workflows/deploy.yml` deploys to the **Aliyun** host
+> (`101.200.210.144`, self-hosted runner label `aliyun`, protected Environment
+> `aliyun-dev`, stack under `/data/multica`). Image builds stay on
+> GitHub-hosted runners; the Aliyun runner pulls GHCR images and restarts
+> Compose. See `docker-compose.aliyun.yml` and `deploy/aliyun/`.
+>
+> **This document is not the CD contract.** It is the host-side runbook for
+> the residual **s89** self-hosted runner and related TLS/proxy triage. The
+> s89 runner service may still be installed and active; that does **not**
+> mean `dev` pushes deploy Multica there. Do not treat `https://82.157.184.89`
+> as the shared product dev environment unless an infra owner has re-pointed
+> CD (check `deploy.yml` `runs-on` first).
 
-This document covers the host-side checks that are intentionally outside the
-workflow. Do not put credentials, proxy configuration, or database passwords in
-workflow logs or this repository.
+The s89 runner reaches GitHub through the host-local `sing-box` proxy at
+`http://127.0.0.1:7893` when that path is in use. Host-side checks below are
+intentionally outside the deploy workflow. Do not put credentials, proxy
+configuration, or database passwords in workflow logs or this repository.
 
 ## Services and paths
 
@@ -23,10 +33,10 @@ workflow logs or this repository.
 | Daemon/API HTTP entrypoint | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
 | Caddy config source | `deploy/s89/Caddyfile` |
 
-The deploy workflow runs only after `dev` changes (or an explicit manual
-dispatch). A failure during `Set up job` happens before checkout and before any
-Multica deploy script, so it is not evidence of an application, Compose, image,
-or migration failure.
+The **Aliyun** deploy workflow runs only after `dev` changes (or an explicit
+manual dispatch) on runners labeled `aliyun`. If a job fails during
+`Set up job` on **this** s89 runner, that is runner/proxy/TLS triage for s89 —
+not evidence about the Aliyun Multica Compose stack, images, or migrations.
 
 ## TLS/action-download incident signature
 

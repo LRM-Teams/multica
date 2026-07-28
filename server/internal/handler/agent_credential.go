@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -18,9 +20,14 @@ import (
 const agentCredentialActivityCreated = "agent_credential_created"
 const agentCredentialActivityDaemonEnsured = "agent_credential_daemon_ensured"
 const daemonAgentCredentialTTL = 24 * time.Hour
+const daemonAgentCredentialRefreshBeforeExpiry = time.Hour
 
 type CreateAgentCredentialRequest struct {
 	ExpiresInDays *int `json:"expires_in_days"`
+}
+
+type EnsureDaemonAgentCredentialRequest struct {
+	CredentialID string `json:"credential_id,omitempty"`
 }
 
 type AgentCredentialResponse struct {
@@ -34,7 +41,9 @@ type AgentCredentialResponse struct {
 
 type CreateAgentCredentialResponse struct {
 	AgentCredentialResponse
-	Token string `json:"token"`
+	Token          string `json:"token,omitempty"`
+	Reused         bool   `json:"reused,omitempty"`
+	RotationReason string `json:"rotation_reason,omitempty"`
 }
 
 func agentCredentialToResponse(credential db.AgentCredential) AgentCredentialResponse {
@@ -149,6 +158,10 @@ func (h *Handler) CreateAgentCredential(w http.ResponseWriter, r *http.Request) 
 		ExpiresAt:   expiresAt,
 	})
 	if err != nil {
+		if isCheckViolation(err) {
+			writeError(w, http.StatusConflict, "agent credential subject is no longer active")
+			return
+		}
 		slog.Error("agent credential create: insert failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent credential")
@@ -213,6 +226,12 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	var ensureReq EnsureDaemonAgentCredentialRequest
+	if err := json.NewDecoder(r.Body).Decode(&ensureReq); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
 	agentIDParam := chi.URLParam(r, "agentId")
 	agentUUID, ok := parseUUIDOrBadRequest(w, agentIDParam, "agent_id")
 	if !ok {
@@ -238,12 +257,6 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	rawToken, err := auth.GenerateAgentCredentialToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate agent credential")
-		return
-	}
-
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		slog.Error("daemon agent credential ensure: begin tx failed",
@@ -254,6 +267,87 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
+	rotationReason := "missing_cached_credential"
+	if _, err := qtx.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+		UserID:      runtime.OwnerID,
+		WorkspaceID: runtime.WorkspaceID,
+	}); err != nil {
+		if isNotFound(err) {
+			writeError(w, http.StatusNotFound, "agent owner is no longer a workspace member")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate agent owner membership")
+		return
+	}
+	if ensureReq.CredentialID != "" {
+		credentialID, parseErr := parseUUIDString(ensureReq.CredentialID)
+		if parseErr != nil {
+			rotationReason = "invalid_credential_id"
+		} else {
+			cached, lookupErr := qtx.GetAgentCredentialForDaemonEnsure(r.Context(), db.GetAgentCredentialForDaemonEnsureParams{
+				ID:          credentialID,
+				AgentID:     agent.ID,
+				WorkspaceID: agent.WorkspaceID,
+				UserID:      runtime.OwnerID,
+			})
+			switch {
+			case lookupErr != nil && !isNotFound(lookupErr):
+				slog.Error("daemon agent credential ensure: cached credential lookup failed",
+					append(logger.RequestAttrs(r), "error", lookupErr, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+				writeError(w, http.StatusInternalServerError, "failed to validate agent credential")
+				return
+			case isNotFound(lookupErr):
+				rotationReason = "not_found_or_scope_mismatch"
+			case cached.RevokedAt.Valid:
+				rotationReason = "revoked"
+			case cached.DisabledAt.Valid:
+				rotationReason = "disabled"
+			case !cached.ExpiresAt.Valid || !cached.ExpiresAt.Time.After(time.Now()):
+				rotationReason = "expired"
+			case !cached.ExpiresAt.Time.After(time.Now().Add(daemonAgentCredentialRefreshBeforeExpiry)):
+				rotationReason = "near_expiry"
+			default:
+				details, _ := json.Marshal(map[string]any{
+					"source":              "daemon_runtime_ensure",
+					"daemon_id":           daemonID,
+					"runtime_id":          uuidToString(runtime.ID),
+					"agent_id":            uuidToString(agent.ID),
+					"agent_name":          agentDisplayName(agent),
+					"agent_credential_id": uuidToString(cached.ID),
+					"reused":              true,
+				})
+				if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
+					WorkspaceID: agent.WorkspaceID,
+					IssueID:     pgtype.UUID{},
+					ActorType:   pgtype.Text{String: "system", Valid: true},
+					ActorID:     pgtype.UUID{},
+					Action:      agentCredentialActivityDaemonEnsured,
+					Details:     details,
+				}); err != nil {
+					slog.Error("daemon agent credential ensure: reuse audit failed; rolling back",
+						append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+					writeError(w, http.StatusInternalServerError, "audit log write failed; credential validation rolled back")
+					return
+				}
+				if err := tx.Commit(r.Context()); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to validate agent credential")
+					return
+				}
+				writeJSON(w, http.StatusOK, CreateAgentCredentialResponse{
+					AgentCredentialResponse: agentCredentialToResponse(cached),
+					Reused:                  true,
+				})
+				return
+			}
+		}
+	}
+
+	rawToken, err := auth.GenerateAgentCredentialToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate agent credential")
+		return
+	}
+
 	credential, err := qtx.CreateAgentCredential(r.Context(), db.CreateAgentCredentialParams{
 		TokenHash:   auth.HashToken(rawToken),
 		TokenPrefix: tokenPrefix(rawToken),
@@ -263,6 +357,10 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(daemonAgentCredentialTTL), Valid: true},
 	})
 	if err != nil {
+		if isCheckViolation(err) {
+			writeError(w, http.StatusNotFound, "agent or owner membership is no longer active")
+			return
+		}
 		slog.Error("daemon agent credential ensure: insert failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent credential")
@@ -278,6 +376,8 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		"agent_credential_id":     uuidToString(credential.ID),
 		"agent_credential_prefix": credential.TokenPrefix,
 		"expires_at":              timestampToPtr(credential.ExpiresAt),
+		"reused":                  false,
+		"rotation_reason":         rotationReason,
 	})
 	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
 		WorkspaceID: agent.WorkspaceID,
@@ -303,5 +403,6 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, CreateAgentCredentialResponse{
 		AgentCredentialResponse: agentCredentialToResponse(credential),
 		Token:                   rawToken,
+		RotationReason:          rotationReason,
 	})
 }

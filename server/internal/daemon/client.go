@@ -299,16 +299,22 @@ func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*AgentI
 }
 
 type AgentCredentialResponse struct {
-	ID        string  `json:"id"`
-	AgentID   string  `json:"agent_id"`
-	Prefix    string  `json:"token_prefix"`
-	ExpiresAt *string `json:"expires_at"`
-	Token     string  `json:"token"`
+	ID             string  `json:"id"`
+	AgentID        string  `json:"agent_id"`
+	Prefix         string  `json:"token_prefix"`
+	ExpiresAt      *string `json:"expires_at"`
+	Token          string  `json:"token"`
+	Reused         bool    `json:"reused"`
+	RotationReason string  `json:"rotation_reason"`
 }
 
-func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID string) (*AgentCredentialResponse, error) {
+func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID, credentialID string) (*AgentCredentialResponse, error) {
 	var resp AgentCredentialResponse
-	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/credential", runtimeID, agentID), map[string]any{}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
+	body := map[string]any{}
+	if credentialID != "" {
+		body["credential_id"] = credentialID
+	}
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/credential", runtimeID, agentID), body, &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
 	return &resp, nil

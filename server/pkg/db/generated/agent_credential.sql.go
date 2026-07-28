@@ -53,6 +53,28 @@ func (q *Queries) CreateAgentCredential(ctx context.Context, arg CreateAgentCred
 	return i, err
 }
 
+const deleteExpiredAgentCredentials = `-- name: DeleteExpiredAgentCredentials :execrows
+WITH expired AS (
+  SELECT candidate.id
+  FROM agent_credential AS candidate
+  WHERE candidate.expires_at < $1
+    AND candidate.updated_at < $1
+  ORDER BY candidate.expires_at ASC
+  LIMIT 500
+)
+DELETE FROM agent_credential AS ac
+USING expired
+WHERE ac.id = expired.id
+`
+
+func (q *Queries) DeleteExpiredAgentCredentials(ctx context.Context, expiresAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAgentCredentials, expiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const disableAgentCredentialsByAgent = `-- name: DisableAgentCredentialsByAgent :exec
 UPDATE agent_credential
 SET disabled_at = COALESCE(disabled_at, now()), updated_at = now()
@@ -65,15 +87,64 @@ func (q *Queries) DisableAgentCredentialsByAgent(ctx context.Context, agentID pg
 }
 
 const getAgentCredentialByHash = `-- name: GetAgentCredentialByHash :one
-SELECT id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at FROM agent_credential
-WHERE token_hash = $1
-  AND revoked_at IS NULL
-  AND disabled_at IS NULL
-  AND (expires_at IS NULL OR expires_at > now())
+SELECT ac.id, ac.token_hash, ac.token_prefix, ac.agent_id, ac.workspace_id, ac.user_id, ac.expires_at, ac.revoked_at, ac.disabled_at, ac.last_used_at, ac.created_at, ac.updated_at
+FROM agent_credential AS ac
+JOIN agent AS a
+  ON a.id = ac.agent_id
+ AND a.workspace_id = ac.workspace_id
+ AND a.archived_at IS NULL
+JOIN member AS m
+  ON m.workspace_id = ac.workspace_id
+ AND m.user_id = ac.user_id
+WHERE ac.token_hash = $1
+  AND ac.revoked_at IS NULL
+  AND ac.disabled_at IS NULL
+  AND (ac.expires_at IS NULL OR ac.expires_at > now())
 `
 
 func (q *Queries) GetAgentCredentialByHash(ctx context.Context, tokenHash string) (AgentCredential, error) {
 	row := q.db.QueryRow(ctx, getAgentCredentialByHash, tokenHash)
+	var i AgentCredential
+	err := row.Scan(
+		&i.ID,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.AgentID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.DisabledAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getAgentCredentialForDaemonEnsure = `-- name: GetAgentCredentialForDaemonEnsure :one
+SELECT id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at
+FROM agent_credential
+WHERE id = $1
+  AND agent_id = $2
+  AND workspace_id = $3
+  AND user_id = $4
+`
+
+type GetAgentCredentialForDaemonEnsureParams struct {
+	ID          pgtype.UUID `json:"id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetAgentCredentialForDaemonEnsure(ctx context.Context, arg GetAgentCredentialForDaemonEnsureParams) (AgentCredential, error) {
+	row := q.db.QueryRow(ctx, getAgentCredentialForDaemonEnsure,
+		arg.ID,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+	)
 	var i AgentCredential
 	err := row.Scan(
 		&i.ID,

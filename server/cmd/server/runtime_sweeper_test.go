@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,76 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestGCExpiredAgentCredentialsHonorsRetention(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	var agentID, userID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.id, m.user_id
+		FROM agent AS a
+		JOIN member AS m ON m.workspace_id = a.workspace_id
+		WHERE a.workspace_id = $1
+		  AND a.archived_at IS NULL
+		LIMIT 1
+	`, testWorkspaceID).Scan(&agentID, &userID); err != nil {
+		t.Fatalf("load active credential subject: %v", err)
+	}
+
+	insertExpired := func(label, age string) string {
+		t.Helper()
+		var id string
+		query := fmt.Sprintf(`
+			INSERT INTO agent_credential (
+				token_hash,
+				token_prefix,
+				agent_id,
+				workspace_id,
+				user_id,
+				created_at,
+				updated_at,
+				expires_at
+			)
+			VALUES (
+				gen_random_uuid()::text,
+				$1,
+				$2,
+				$3,
+				$4,
+				now() - interval '%s',
+				now() - interval '%s',
+				now() - interval '%s'
+			)
+			RETURNING id
+		`, age, age, label)
+		if err := testPool.QueryRow(ctx, query, "mat_gc_"+label, agentID, testWorkspaceID, userID).Scan(&id); err != nil {
+			t.Fatalf("insert %s expired credential: %v", label, err)
+		}
+		return id
+	}
+
+	oldID := insertExpired("8 days", "10 days")
+	recentID := insertExpired("1 day", "2 days")
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_credential WHERE id = ANY($1::uuid[])`, []string{oldID, recentID})
+	})
+
+	gcExpiredAgentCredentials(ctx, db.New(testPool))
+
+	var oldExists, recentExists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_credential WHERE id = $1)`, oldID).Scan(&oldExists); err != nil {
+		t.Fatalf("check old credential: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_credential WHERE id = $1)`, recentID).Scan(&recentExists); err != nil {
+		t.Fatalf("check recent credential: %v", err)
+	}
+	if oldExists || !recentExists {
+		t.Fatalf("gc retention old/recent exists = %v/%v, want false/true", oldExists, recentExists)
+	}
+}
 
 // setupSweeperTestFixture creates an issue and a task in the given status with
 // timestamps old enough to trigger the sweeper. Returns (issueID, agentID, taskID).

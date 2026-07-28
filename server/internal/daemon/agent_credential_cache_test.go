@@ -2,9 +2,15 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -121,6 +127,53 @@ func TestEnsureTaskAgentCredentialMissingBindingFailsBeforeFallback(t *testing.T
 	d := &Daemon{cfg: Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: "https://api.example.test"}}
 	if _, err := d.ensureTaskAgentCredential(context.Background(), Task{WorkspaceID: "workspace-1", RuntimeID: "", AgentID: "agent-1"}, nil); err == nil {
 		t.Fatal("expected missing runtime binding to fail")
+	}
+}
+
+func TestEnsureTaskAgentCredentialValidatesCachedCredentialEveryRun(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339)
+
+	var calls atomic.Int32
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode ensure body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"credential-1","agent_id":"agent-1","token_prefix":"mat_cached","expires_at":"` + expiresAt + `","reused":true}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: srv.URL}
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID:        "credential-1",
+		AgentID:   "agent-1",
+		Prefix:    "mat_cached",
+		ExpiresAt: &expiresAt,
+		Token:     "mat_cached_secret",
+	}, now); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+	d := &Daemon{cfg: cfg, client: NewClient(srv.URL)}
+	token, err := d.ensureTaskAgentCredential(
+		context.Background(),
+		Task{WorkspaceID: "workspace-1", RuntimeID: "runtime-1", AgentID: "agent-1"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("ensure cached credential: %v", err)
+	}
+	if token != "mat_cached_secret" {
+		t.Fatalf("token = %q, want cached raw token", token)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("ensure calls = %d, want 1 live validation per run", calls.Load())
+	}
+	if got, _ := body["credential_id"].(string); got != "credential-1" {
+		t.Fatalf("credential_id = %q, want credential-1", got)
 	}
 }
 

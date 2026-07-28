@@ -1,22 +1,19 @@
-# s89 runner / host operations
+# s89 CI runner / host operations
 
-> **Continuous deploy authority (shared Multica `dev` stack):**  
-> `.github/workflows/deploy.yml` deploys to the **Aliyun** host
-> (`101.200.210.144`, self-hosted runner label `aliyun`, protected Environment
-> `aliyun-dev`, stack under `/data/multica`). Image builds stay on
-> GitHub-hosted runners; the Aliyun runner pulls GHCR images and restarts
-> Compose. See `docker-compose.aliyun.yml` and `deploy/aliyun/`.
+> **Authoritative roles (Frank, 2026-07-28):**
 >
-> **This document is not the CD contract.** It is the host-side runbook for
-> the residual **s89** self-hosted runner and related TLS/proxy triage. The
-> s89 runner service may still be installed and active; that does **not**
-> mean `dev` pushes deploy Multica there. Do not treat `https://82.157.184.89`
-> as the shared product dev environment unless an infra owner has re-pointed
-> CD (check `deploy.yml` `runs-on` first).
+> | Role | Host |
+> | --- | --- |
+> | **Shared Multica `dev` deploy target** | **Aliyun** `101.200.210.144` (**leagent.me**); workflow `.github/workflows/deploy.yml` (`runs-on: [self-hosted, aliyun]`, Environment `aliyun-dev`, stack `/data/multica`). See `docker-compose.aliyun.yml` and `deploy/aliyun/`. |
+> | **s89** | **CI runner host**, not the deploy target. It may still run jobs / hold residual services; that does **not** make it the product dev environment. |
+>
+> **Do not write that s89 is decommissioned** — it can remain as a runner.  
+> **Do not use** `https://82.157.184.89` / s89 as “the dev stack” for product verification; use **leagent.me** / Aliyun. Confirm CD with `deploy.yml` if unsure.
 
-The s89 runner reaches GitHub through the host-local `sing-box` proxy at
-`http://127.0.0.1:7893` when that path is in use. Host-side checks below are
-intentionally outside the deploy workflow. Do not put credentials, proxy
+This document is the host-side runbook for the **s89** self-hosted runner and
+related TLS/proxy triage — **not** the continuous-deploy contract. The s89
+runner reaches GitHub through the host-local `sing-box` proxy at
+`http://127.0.0.1:7893` when that path is in use. Do not put credentials, proxy
 configuration, or database passwords in workflow logs or this repository.
 
 ## Services and paths
@@ -29,9 +26,10 @@ configuration, or database passwords in workflow logs or this repository.
 | Runner diagnostics | `/home/gha/actions-runner/_diag` |
 | Outbound proxy service | `sing-box.service` |
 | Outbound proxy address | `http://127.0.0.1:7893` |
-| Browser entrypoint | `https://82.157.184.89` |
-| Daemon/API HTTP entrypoint | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
-| Caddy config source | `deploy/s89/Caddyfile` |
+| Historical browser entry (not shared dev CD) | `https://82.157.184.89` |
+| Historical daemon/API HTTP entry | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
+| Caddy config source (s89 host) | `deploy/s89/Caddyfile` |
+| Shared dev product URL | **https://leagent.me** (Aliyun CD) |
 
 The **Aliyun** deploy workflow runs only after `dev` changes (or an explicit
 manual dispatch) on runners labeled `aliyun`. If a job fails during

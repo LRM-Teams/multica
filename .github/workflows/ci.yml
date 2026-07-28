@@ -67,12 +67,12 @@ jobs:
         run: pnpm react:doctor
 
       - name: Build, type check, lint, and test
-        # Mobile lives in a parallel mobile-verify workflow (path-filtered
-        # to apps/mobile/** + packages/core/types/**) so it doesn't add
-        # ~50s of expo-lint + tsc to every web/desktop PR. Keep this
-        # filter in sync with the root package.json scripts, which also
-        # exclude @multica/mobile.
-        run: pnpm exec turbo build typecheck lint test --filter='!@multica/docs' --filter='!@multica/mobile'
+        # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
+        # frontend job so CI stays on the product surface that still ships.
+        # Mobile remains path-filtered in mobile-verify.yml; desktop packaging
+        # is out of the main release gate (#1320). Dependents of @multica/web
+        # (core/ui/views) are included via the `...` selector.
+        run: pnpm exec turbo build typecheck lint test --filter='@multica/web...'
 
   backend:
     runs-on: ubuntu-latest

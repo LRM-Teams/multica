@@ -2280,21 +2280,18 @@ export function ChannelsPage({
   // no longer applies — removal is owner-only via the menu (→ real mutation with
   // #801). This closes the bypass where a non-channel-owner workspace admin, or
   // the owner's own row, still got the old real Remove.
+  // #833: an ARCHIVED group gets no management menu at all. Removal is a real
+  // mutation now (see handleGroupMemberAction below), and an archived channel is
+  // read-only — offering an operable "remove member" there would be an action we
+  // shouldn't honour. Role rows are pending anyway (#832/#1321), so gating the
+  // whole menu is both correct and simpler than gating each row.
   const groupMemberMenu = useMemo(
     () =>
-      active?.kind === "group" && !isActiveSystemChannel
+      active?.kind === "group" && !isActiveSystemChannel && !isActiveArchived
         ? (m: ChannelMember) =>
             groupMemberActions({ role: viewerChannelRole }, m, currentUserId ?? "")
         : undefined,
-    [active?.kind, isActiveSystemChannel, viewerChannelRole, currentUserId],
-  );
-  // Mutations land with #801. Until then, DON'T fake success — surface an honest
-  // "coming soon" instead of optimistically flipping role/removing (Iris: mock 勿假成功).
-  const handleGroupMemberAction = useCallback(
-    (_m: ChannelMember, _action: GroupMemberActionKind) => {
-      toast.info(t(($) => $.members.menu.coming_soon));
-    },
-    [t],
+    [active?.kind, isActiveSystemChannel, isActiveArchived, viewerChannelRole, currentUserId],
   );
 
   // Leave-group affordance for the channel-details danger zone. Ordinary
@@ -2368,6 +2365,22 @@ export function ChannelsPage({
       });
     },
     [active, isMobile, removeMember],
+  );
+
+  // #833 — the menu's "remove" used to land on a no-op toast while the real
+  // Remove button was suppressed (it renders only when there is no menu), so the
+  // two entry points cancelled out and a group owner could not remove anyone at
+  // all. Route it to the SAME handler the standalone button used: identical
+  // permission gate (`canRemove` from core), identical mobile confirm step.
+  //
+  // promote / demote / transfer have no endpoint yet and are rendered disabled
+  // (#832), so they cannot reach this handler; they get no branch here rather
+  // than a toast that reads like success. Wire them for real with #1321.
+  const handleGroupMemberAction = useCallback(
+    (m: ChannelMember, action: GroupMemberActionKind) => {
+      if (action === "remove") handleRemoveMemberClick(m);
+    },
+    [handleRemoveMemberClick],
   );
 
   // LRM-211 — Channel details Members tab reuses the same list as the

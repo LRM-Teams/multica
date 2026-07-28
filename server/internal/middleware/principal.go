@@ -87,6 +87,22 @@ func RequireAgentPrincipal(next http.Handler) http.Handler {
 	})
 }
 
+// RejectAgentOnHumanAPI fails closed when AgentPrincipal hits any non-/api/agent/*
+// route (admin, labels CRUD, human issues, etc.). #801 completion: 403 surfaces
+// must actually 403. Dedicated agent data-plane stays under /api/agent/*.
+func RejectAgentOnHumanAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := AgentPrincipalFromContext(r.Context()); ok {
+			path := r.URL.Path
+			if path != "/api/agent" && !strings.HasPrefix(path, "/api/agent/") {
+				http.Error(w, `{"error":"agent must use dedicated /api/agent/* route"}`, http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // AgentPrincipalAgentUUID parses AgentID as pgtype.UUID.
 func (p AgentPrincipal) AgentUUID() (pgtype.UUID, bool) {
 	return parseHeaderUUID(p.AgentID)

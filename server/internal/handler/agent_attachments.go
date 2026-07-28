@@ -227,6 +227,13 @@ func (h *Handler) UploadAgentAttachment(w http.ResponseWriter, r *http.Request) 
 		params.ChannelID = chUUID
 	}
 
+	// Barry: refuse unbound uploads that would 200 then immediately 404 on
+	// agent view (no issue/comment/chat_session/channel provenance).
+	if !params.IssueID.Valid && !params.CommentID.Valid && !params.ChatSessionID.Valid && !params.ChannelID.Valid {
+		writeError(w, http.StatusBadRequest, "attachment requires issue_id, comment_id, chat_session_id, or channel_id")
+		return
+	}
+
 	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 	if err != nil {
 		slog.Error("agent file upload failed", "error", err)

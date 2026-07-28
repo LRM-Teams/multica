@@ -11,11 +11,12 @@ import enCommon from "../locales/en/common.json";
 import enAgents from "../locales/en/agents.json";
 import enModals from "../locales/en/modals.json";
 
-const { listChannels, createAgent, createAgentDraft, listRuntimes, listMembers } =
+const { listChannels, createAgent, createAgentDraft, createChannel, listRuntimes, listMembers } =
   vi.hoisted(() => ({
     listChannels: vi.fn(),
     createAgent: vi.fn(),
     createAgentDraft: vi.fn(),
+    createChannel: vi.fn(),
     listRuntimes: vi.fn(),
     listMembers: vi.fn(),
   }));
@@ -71,6 +72,7 @@ vi.mock("@multica/core/api", () => ({
     listChannels: (...args: unknown[]) => listChannels(...args),
     createAgent: (...args: unknown[]) => createAgent(...args),
     createAgentDraft: (...args: unknown[]) => createAgentDraft(...args),
+    createChannel: (...args: unknown[]) => createChannel(...args),
   },
 }));
 
@@ -212,13 +214,18 @@ describe("Windy hire card discoverability (LRM-399)", () => {
     });
   });
 
-  it("disables 仅本群 when workspace has no groups", async () => {
+  it("keeps 仅本群 enabled with no groups and defaults to create-new-home", async () => {
     listChannels.mockResolvedValue([]);
     createAgentDraft.mockResolvedValue(makeDraft({ channel_id: null }));
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
-      expect(screen.getByRole("radio", { name: /仅本群/ })).toBeDisabled();
+      expect(screen.getByRole("radio", { name: /仅本群/ })).not.toBeDisabled();
     });
+    fireEvent.click(screen.getByRole("radio", { name: /仅本群/ }));
+    expect(
+      screen.getByRole("radio", { name: /仅本群/ }).getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(screen.getByLabelText(/New group name/i)).toBeTruthy();
   });
 });

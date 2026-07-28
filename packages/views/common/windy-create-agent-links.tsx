@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, CheckCircle2, Globe, Hash, Lock, Loader2, Sparkles, X } from "lucide-react";
+import { Bot, CheckCircle2, Globe, Hash, Lock, Loader2, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
@@ -10,7 +10,7 @@ import {
   VISIBILITY_LABEL,
   VISIBILITY_OPTIONS,
 } from "@multica/core/agents";
-import { channelsOptions } from "@multica/core/channels";
+import { channelsOptions, channelKeys } from "@multica/core/channels";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
@@ -35,7 +35,10 @@ import { Label } from "@multica/ui/components/ui/label";
 import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
-import { HomeChannelBindChip } from "../agents/components/home-channel-bind-chip";
+import {
+  HomeChannelBindPanel,
+  type HomeChannelMode,
+} from "../agents/components/home-channel-bind-panel";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
@@ -167,15 +170,20 @@ function InlineCreateAgentDialog({
     () => channels.filter((c) => c.kind === "group" && !c.archived_at),
     [channels],
   );
-  const channelOptionDisabled = !channelsLoading && groups.length === 0;
+  const hasGroups = groups.length > 0;
 
   const [visibility, setVisibility] = React.useState<AgentVisibility>(() =>
     seedVisibility(draft),
   );
+  const [homeMode, setHomeMode] = React.useState<HomeChannelMode>(() => {
+    if (draft.channel_id) return "existing";
+    return "existing";
+  });
   const [homeChannelId, setHomeChannelId] = React.useState<string | null>(() => {
     if (draft.channel_id) return draft.channel_id;
     return null;
   });
+  const [newChannelName, setNewChannelName] = React.useState(() => draft.name || "");
   const [homeInvalid, setHomeInvalid] = React.useState(false);
   const [selectedRuntimeId, setSelectedRuntimeId] = React.useState(() => {
     const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
@@ -195,15 +203,20 @@ function InlineCreateAgentDialog({
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
 
   const pickVisibility = (next: AgentVisibility) => {
-    if (next === "channel" && channelOptionDisabled) return;
     setVisibility(next);
     setHomeInvalid(false);
     if (next === "channel") {
-      setHomeChannelId((prev) => {
-        if (prev) return prev;
-        if (draft.channel_id) return draft.channel_id;
-        return groups[0]?.id ?? null;
-      });
+      if (!hasGroups) {
+        setHomeMode("new");
+        if (!newChannelName.trim()) setNewChannelName(draft.name || "");
+      } else {
+        setHomeMode((prev) => prev);
+        setHomeChannelId((prev) => {
+          if (prev) return prev;
+          if (draft.channel_id) return draft.channel_id;
+          return groups[0]?.id ?? null;
+        });
+      }
     } else {
       setHomeChannelId(null);
     }
@@ -211,15 +224,30 @@ function InlineCreateAgentDialog({
 
   const handleCreate = async () => {
     if (!selectedRuntime || creating) return;
-    // Channel without home is an explicit hard stop — never silently
-    // rewrite to private/workspace (LRM-238 / LRM-399).
-    if (visibility === "channel" && !homeChannelId) {
-      setHomeInvalid(true);
-      toast.error(t(($) => $.visibility_bind.home_required));
-      return;
+    const useNewHome = visibility === "channel" && (homeMode === "new" || !hasGroups);
+    if (visibility === "channel") {
+      if (useNewHome) {
+        if (!newChannelName.trim()) {
+          setHomeInvalid(true);
+          toast.error(t(($) => $.visibility_bind.new_channel_name_required));
+          return;
+        }
+      } else if (!homeChannelId) {
+        setHomeInvalid(true);
+        toast.error(t(($) => $.visibility_bind.home_required));
+        return;
+      }
     }
     setCreating(true);
     try {
+      let resolvedHomeId = homeChannelId;
+      if (visibility === "channel" && useNewHome) {
+        const createdChannel = await api.createChannel({
+          name: newChannelName.trim(),
+        });
+        resolvedHomeId = createdChannel.id;
+        await qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      }
       const payload: CreateAgentRequest = {
         display_name: draft.name,
         description: draft.description,
@@ -229,7 +257,7 @@ function InlineCreateAgentDialog({
         // records it as `assigned`. draft.avatar_url is a preview-only
         // suggestion string; it must never be resubmitted as a raw URL.
         visibility,
-        home_channel_id: visibility === "channel" ? homeChannelId : undefined,
+        home_channel_id: visibility === "channel" ? resolvedHomeId : undefined,
         runtime_id: selectedRuntime.id,
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
@@ -253,47 +281,45 @@ function InlineCreateAgentDialog({
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="bottom-2 top-auto flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[min(940px,calc(100vw-1rem))] translate-y-0 flex-col gap-0 overflow-hidden border-0 bg-background p-0 shadow-2xl sm:top-1/2 sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-[min(940px,calc(100vw-2rem))] sm:-translate-y-1/2 sm:rounded-3xl"
+        className="bottom-2 top-auto flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[min(940px,calc(100vw-1rem))] translate-y-0 flex-col gap-0 overflow-hidden border bg-background p-0 shadow-lg sm:top-1/2 sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-[min(940px,calc(100vw-2rem))] sm:-translate-y-1/2 sm:rounded-xl"
       >
-        <DialogHeader className="relative shrink-0 overflow-hidden border-b bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.15),transparent_32%),linear-gradient(135deg,hsl(var(--muted)/0.72),hsl(var(--background))_62%)] px-4 py-4 pr-14 sm:px-6 sm:py-5">
-          <div className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-primary/10 blur-3xl" />
+        <DialogHeader className="relative shrink-0 border-b bg-muted/30 px-4 py-4 pr-14 sm:px-6 sm:py-5">
           <DialogClose
             render={
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                className="absolute right-3 top-3 z-10 rounded-full bg-background/80 text-muted-foreground shadow-sm ring-1 ring-border/70 backdrop-blur hover:bg-background hover:text-foreground"
+                className="absolute right-3 top-3 z-10 text-muted-foreground hover:text-foreground"
               />
             }
           >
             <X className="size-4" />
             <span className="sr-only">{tModals(($) => $.common.close)}</span>
           </DialogClose>
-          <div className="relative flex min-w-0 items-start gap-3 sm:gap-4">
-            <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-background text-muted-foreground">
               <Bot className="size-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border bg-background/75 px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
-                <Sparkles className="size-3 text-primary" />
+              <p className="mb-1 text-xs font-medium text-muted-foreground">
                 {t(($) => $.windy.hiring_card_badge)}
-              </div>
+              </p>
               <DialogTitle className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
-              <DialogDescription className="mt-2 max-w-2xl text-sm leading-6">
+              <DialogDescription className="mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">
                 {t(($) => $.windy.create_description)}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:space-y-5 sm:px-6 sm:py-5">
-          <div className="rounded-2xl border bg-card p-4 shadow-sm">
+          <div className="rounded-lg border bg-card p-4">
             <div className="mb-3 min-w-0">
               <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
               <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
             </div>
             {draft.instructions && (
-              <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
                 {draft.instructions}
               </p>
             )}
@@ -310,21 +336,18 @@ function InlineCreateAgentDialog({
             >
               {VISIBILITY_OPTIONS.map((option) => {
                 const selected = visibility === option;
-                const disabled = option === "channel" && channelOptionDisabled;
                 return (
                   <button
                     key={option}
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    disabled={disabled}
                     onClick={() => pickVisibility(option)}
                     className={cn(
                       "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors",
                       selected
                         ? "border-primary bg-primary/5"
                         : "border-border hover:bg-muted",
-                      disabled && "cursor-not-allowed opacity-50",
                     )}
                   >
                     <span
@@ -349,19 +372,28 @@ function InlineCreateAgentDialog({
                       </div>
                       {option === "channel" && selected ? (
                         <div className="mt-2">
-                          <HomeChannelBindChip
-                            value={homeChannelId}
-                            invalid={homeInvalid}
-                            onChange={(id) => {
+                          <HomeChannelBindPanel
+                            mode={!channelsLoading && !hasGroups ? "new" : homeMode}
+                            onModeChange={(next) => {
+                              setHomeMode(next);
+                              setHomeInvalid(false);
+                              if (next === "new" && !newChannelName.trim()) {
+                                setNewChannelName(draft.name || "");
+                              }
+                            }}
+                            existingChannelId={homeChannelId}
+                            onExistingChannelChange={(id) => {
                               setHomeChannelId(id);
                               setHomeInvalid(false);
                             }}
+                            newChannelName={newChannelName}
+                            onNewChannelNameChange={(name) => {
+                              setNewChannelName(name);
+                              setHomeInvalid(false);
+                            }}
+                            invalid={homeInvalid}
+                            hasGroups={hasGroups || channelsLoading}
                           />
-                        </div>
-                      ) : null}
-                      {option === "channel" && disabled ? (
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {t(($) => $.visibility_bind.no_groups)}
                         </div>
                       ) : null}
                     </div>
@@ -375,7 +407,7 @@ function InlineCreateAgentDialog({
           </div>
 
           {!hasUsableRuntime && !runtimesLoading ? (
-            <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
+            <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
               {t(($) => $.windy.runtime_required)}
             </div>
           ) : (

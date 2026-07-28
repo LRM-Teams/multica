@@ -105,6 +105,10 @@ func (h *Handler) validateAgentHomeChannel(ctx context.Context, w http.ResponseW
 // applyAgentHomeChannel persists home_channel_id to match visibility. Call after
 // CreateAgent/UpdateAgent so the CHECK constraint sees a consistent pair.
 // visibility=channel requires a valid home; other visibilities clear the column.
+//
+// For channel visibility it also ensures the agent is a channel_member of the
+// home group. Binding home_channel_id alone does not put the agent in the room
+// (Wendy hire / Create Agent used to stop at the column write).
 func (h *Handler) applyAgentHomeChannel(ctx context.Context, agentID pgtype.UUID, binding agentChannelVisibilityBinding) error {
 	if binding.Visibility == agentVisibilityChannel {
 		_, err := h.DB.Exec(ctx, `
@@ -112,7 +116,15 @@ func (h *Handler) applyAgentHomeChannel(ctx context.Context, agentID pgtype.UUID
 			SET visibility = $2, home_channel_id = $3, updated_at = now()
 			WHERE id = $1
 		`, agentID, binding.Visibility, binding.HomeChannelID)
-		return err
+		if err != nil {
+			return err
+		}
+		var workspaceID pgtype.UUID
+		if err := h.DB.QueryRow(ctx, `SELECT workspace_id FROM agent WHERE id = $1`, agentID).Scan(&workspaceID); err != nil {
+			return err
+		}
+		h.ensureChannelAgentMember(ctx, workspaceID, binding.HomeChannelID, agentID)
+		return nil
 	}
 	_, err := h.DB.Exec(ctx, `
 		UPDATE agent

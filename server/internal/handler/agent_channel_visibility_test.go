@@ -78,6 +78,17 @@ func TestAgentChannelVisibility_CreateListInviteMention(t *testing.T) {
 		t.Fatalf("home_channel_id=%v want %s", created.HomeChannelID, homeID)
 	}
 
+	var memberCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2
+	`, homeID, created.ID).Scan(&memberCount); err != nil {
+		t.Fatalf("count channel_member: %v", err)
+	}
+	if memberCount != 1 {
+		t.Fatalf("channel agent membership count=%d want 1 (home bind must add member)", memberCount)
+	}
+
 	// Workspace directory (no channel_id): channel agent hidden.
 	listRec := httptest.NewRecorder()
 	testHandler.ListAgents(listRec, newRequest(http.MethodGet, "/api/agents", nil))

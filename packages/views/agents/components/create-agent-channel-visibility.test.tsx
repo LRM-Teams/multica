@@ -212,15 +212,14 @@ describe("CreateAgentDialog channel visibility (LRM-371 方案 A)", () => {
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. Deep Research/i), {
       target: { value: "Group Bot" },
     });
-    // No groups → channel option disabled; stay on workspace and ensure
-    // we never invent a silent private remap via create payload.
+    // No groups → 仅本群 stays available via create-new-home; default remains workspace.
     fireEvent.click(screen.getByRole("button", { name: /^Create$/i }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0]?.[0]?.visibility).toBe("workspace");
     expect(onCreate.mock.calls[0]?.[0]?.home_channel_id).toBeUndefined();
   });
 
-  it("toasts when 仅本群 has no home_channel_id (no private fallback)", async () => {
+  it("allows 仅本群 with no groups via new group name field", async () => {
     listChannels.mockResolvedValue([]);
     const onCreate = vi.fn(async (_data: CreateAgentRequest) => undefined);
     renderDialog({ onCreate });
@@ -229,11 +228,11 @@ describe("CreateAgentDialog channel visibility (LRM-371 方案 A)", () => {
     });
     const channelRadio = screen.getByRole("radio", { name: /仅本群/ });
     await waitFor(() => {
-      expect(channelRadio).toBeDisabled();
+      expect(channelRadio).not.toBeDisabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: /^Create$/i }));
-    await waitFor(() => expect(onCreate).toHaveBeenCalled());
-    expect(onCreate.mock.calls[0]?.[0]?.visibility).not.toBe("private");
+    fireEvent.click(channelRadio);
+    expect(channelRadio.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByLabelText(/New group name/i)).toBeTruthy();
   });
 });
 

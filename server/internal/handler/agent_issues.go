@@ -224,6 +224,17 @@ func (h *Handler) ListAgentIssueTaskRuns(w http.ResponseWriter, r *http.Request)
 	h.ListTasksByIssue(w, r)
 }
 
+// ListAgentIssuePullRequests — GET /api/agent/issues/{id}/pull-requests
+// Dedicated agent read of linked PRs. Human URL remains fail-closed.
+func (h *Handler) ListAgentIssuePullRequests(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+		return
+	}
+	// ListPullRequestsForIssue uses loadIssueForUser → agent principal uses
+	// loadIssueForAgent when not rejected (agent routes only).
+	h.ListPullRequestsForIssue(w, r)
+}
+
 func (h *Handler) RerunAgentIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAgentPrincipal(w, r); !ok {
 		return

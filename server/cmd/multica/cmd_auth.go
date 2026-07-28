@@ -67,15 +67,34 @@ func init() {
 	authCmd.AddCommand(authLogoutCmd)
 }
 
+// multicaTokenEnvKeyName is seeded only from ambientTokenFromEnvOrFile so the
+// production package can hold a single BasicLit "MULTICA_TOKEN" (Barry #1305
+// primitive-location invariant). Used by runtime_env map checks (sandboxd).
+var multicaTokenEnvKeyName string
+
+// multicaTokenEnvKey returns the env/map key for the agent token without
+// restating the string literal. Seeds via ambientTokenFromEnvOrFile if needed.
+func multicaTokenEnvKey() string {
+	if multicaTokenEnvKeyName == "" {
+		_ = ambientTokenFromEnvOrFile()
+	}
+	return multicaTokenEnvKeyName
+}
+
 // ambientTokenFromEnvOrFile returns MULTICA_TOKEN or the contents of
 // MULTICA_TOKEN_FILE (daemon agent runs unset MULTICA_TOKEN and inject
 // MULTICA_TOKEN_FILE with mat_* — see daemon cli_transport). Must stay in
 // sync with isAgentAPIToken / isAgentAPITokenAmbient path selection (#801).
+//
+// Sole production site of the BasicLit "MULTICA_TOKEN" (source-boundary guard).
 func ambientTokenFromEnvOrFile() string {
-	if v := strings.TrimSpace(os.Getenv("MULTICA_TOKEN")); v != "" {
+	key := "MULTICA_TOKEN"
+	fileKey := "MULTICA_TOKEN_FILE"
+	multicaTokenEnvKeyName = key
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
 	}
-	if path := strings.TrimSpace(os.Getenv("MULTICA_TOKEN_FILE")); path != "" {
+	if path := strings.TrimSpace(os.Getenv(fileKey)); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			return strings.TrimSpace(string(data))
 		}

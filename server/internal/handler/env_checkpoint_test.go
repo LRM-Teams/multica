@@ -130,6 +130,54 @@ func TestCreateEnvCheckpointReturnsCreatedWhenSaveCompletes(t *testing.T) {
 	}
 }
 
+func TestCreateEnvCheckpointPassesSaveModeThroughAndReportsIt(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		createCP: service.EnvCheckpoint{
+			ID:          "cp-1",
+			WorkspaceID: "ws1",
+			ProjectID:   validUUID,
+			SaveMode:    service.SaveModeSnapshot,
+			SaveStatus:  service.EnvCheckpointSaveComplete,
+		},
+	}
+	h := newCheckpointHandler(fake)
+	body := `{"project_id":"` + validUUID + `","event_ref":"evt","kind":"structural","save_mode":"snapshot","sandbox_refs":[{"instance_id":"inst-1","workspace_id":"ws1"}]}`
+	w := httptest.NewRecorder()
+	h.CreateEnvCheckpoint(w, authedCheckpointRequest("POST", "/api/v1/env-checkpoints", body))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.createCalls) != 1 {
+		t.Fatalf("want 1 create call, got %d", len(fake.createCalls))
+	}
+	if fake.createCalls[0].SaveMode != service.SaveModeSnapshot {
+		t.Fatalf("save mode reaching the service = %q, want snapshot", fake.createCalls[0].SaveMode)
+	}
+	if !strings.Contains(w.Body.String(), `"save_mode":"snapshot"`) {
+		t.Fatalf("response does not report the save mode: %s", w.Body.String())
+	}
+}
+
+func TestCreateEnvCheckpointWithoutSaveModeLeavesItUnset(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		createCP: service.EnvCheckpoint{ID: "cp-1", WorkspaceID: "ws1", ProjectID: validUUID},
+	}
+	h := newCheckpointHandler(fake)
+	body := `{"project_id":"` + validUUID + `","event_ref":"evt","kind":"structural"}`
+	w := httptest.NewRecorder()
+	h.CreateEnvCheckpoint(w, authedCheckpointRequest("POST", "/api/v1/env-checkpoints", body))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	// The handler must not invent a mode: the service normalizes an empty one
+	// to pause_in_place, which is what keeps existing clients unchanged.
+	if fake.createCalls[0].SaveMode != "" {
+		t.Fatalf("save mode = %q, want it left empty for the service to normalize", fake.createCalls[0].SaveMode)
+	}
+}
+
 func TestCreateEnvCheckpointTimeoutMapsToConflict(t *testing.T) {
 	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
 	fake := &fakeEnvCheckpointService{

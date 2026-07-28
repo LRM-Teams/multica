@@ -172,6 +172,27 @@ type SandboxInstanceSaver interface {
 	Save(ctx context.Context, ref SandboxInstanceRef, actorUserID string) error
 }
 
+// Savepoint is one immutable snapshot record owned by a checkpoint.
+type Savepoint struct {
+	SnapshotID     string
+	CubeSnapshotID string
+	InstanceID     string
+	Status         string // creating | ready | failed | deleting
+}
+
+// SavepointCreator creates a savepoint from a live sandbox instance through the
+// existing create_template job and blocks until the snapshot record reaches a
+// terminal state. Unlike SandboxInstanceSaver, the source instance is left
+// running, which is what lets a snapshot-mode checkpoint be materialized more
+// than once.
+type SavepointCreator interface {
+	CreateSavepoint(ctx context.Context, ref SandboxInstanceRef, checkpointID, actorUserID string) (Savepoint, error)
+}
+
+// ErrSavepointFailed reports a savepoint that reached a non-ready terminal
+// state, which fails the whole checkpoint save.
+var ErrSavepointFailed = errors.New("savepoint_failed")
+
 // SandboxInstanceResumer resumes a previously-saved sandbox instance. The
 // production adapter wraps EnvSandboxLifecycleService.Resume (enqueue resume
 // job). Unlike Save, Resume is fire-and-forget: the job is enqueued and the
@@ -206,10 +227,20 @@ type EnvCheckpointService struct {
 	snapshot      ProjectSnapshotReader
 	inFlight      InFlightTaskResolver
 	continuations ContinuationRegistry
+	savepoints    SavepointCreator
 }
 
 func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader, inFlight InFlightTaskResolver, continuations ContinuationRegistry) *EnvCheckpointService {
 	return &EnvCheckpointService{repo: repo, saver: saver, resumer: resumer, snapshot: snapshot, inFlight: inFlight, continuations: continuations}
+}
+
+// WithSavepointCreator injects the snapshot-mode savepoint seam. Without one,
+// snapshot-mode create is refused as unconfigured rather than silently
+// downgraded to pause_in_place, which would stop instances the caller expected
+// to keep running. pause_in_place is unaffected.
+func (s *EnvCheckpointService) WithSavepointCreator(c SavepointCreator) *EnvCheckpointService {
+	s.savepoints = c
+	return s
 }
 
 // Create records a checkpoint candidate, saves each sandbox instance with the
@@ -229,6 +260,20 @@ func (s *EnvCheckpointService) Create(ctx context.Context, in EnvCheckpointCreat
 	// with no refs is a Fleet-only env, which is not checkpointable (D7).
 	if len(in.SandboxRefs) == 0 {
 		return EnvCheckpoint{}, fmt.Errorf("validation_failed: checkpoint requires sandbox_instance refs (Fleet-only envs are not checkpointable)")
+	}
+	// An absent mode is pause_in_place, so existing callers keep their
+	// behavior. Normalizing here also keeps an unknown mode from reaching the
+	// save_mode CHECK constraint as an opaque database error.
+	if in.SaveMode == "" {
+		in.SaveMode = SaveModePauseInPlace
+	}
+	switch in.SaveMode {
+	case SaveModePauseInPlace, SaveModeSnapshot:
+	default:
+		return EnvCheckpoint{}, fmt.Errorf("validation_failed: save_mode must be pause_in_place or snapshot")
+	}
+	if in.SaveMode == SaveModeSnapshot && s.savepoints == nil {
+		return EnvCheckpoint{}, fmt.Errorf("validation_failed: snapshot save_mode requires a savepoint creator")
 	}
 
 	snapshot, err := s.snapshot.CaptureProjectSnapshot(ctx, in.WorkspaceID, in.ProjectID)
@@ -266,7 +311,19 @@ func (s *EnvCheckpointService) Create(ctx context.Context, in EnvCheckpointCreat
 	status := EnvCheckpointSaveComplete
 	var saveErr string
 	for _, ref := range in.SandboxRefs {
-		if err := s.saver.Save(saveCtx, ref, in.ActorUserID); err != nil {
+		var err error
+		if in.SaveMode == SaveModeSnapshot {
+			// One savepoint per source instance, owned by this checkpoint. The
+			// source is left running.
+			var sp Savepoint
+			sp, err = s.savepoints.CreateSavepoint(saveCtx, ref, cp.ID, in.ActorUserID)
+			if err == nil && sp.Status != "ready" {
+				err = fmt.Errorf("%w: savepoint %s status %s", ErrSavepointFailed, sp.SnapshotID, sp.Status)
+			}
+		} else {
+			err = s.saver.Save(saveCtx, ref, in.ActorUserID)
+		}
+		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				status = EnvCheckpointSaveTimedOut
 			} else {

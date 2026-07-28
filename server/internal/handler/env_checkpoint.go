@@ -27,9 +27,12 @@ func envCheckpointsEnabled() bool {
 
 // CreateEnvCheckpointRequest is the HTTP request body for POST /api/v1/env-checkpoints.
 type CreateEnvCheckpointRequest struct {
-	ProjectID     string                       `json:"project_id"`
-	EventRef      string                       `json:"event_ref"`
-	Kind          string                       `json:"kind"`
+	ProjectID string `json:"project_id"`
+	EventRef  string `json:"event_ref"`
+	Kind      string `json:"kind"`
+	// SaveMode is pause_in_place or snapshot. Omitting it keeps the
+	// pause_in_place behavior every existing client relies on.
+	SaveMode      string                       `json:"save_mode,omitempty"`
 	EnvIDMap      map[string]string            `json:"env_id_map,omitempty"`
 	SandboxRefs   []service.SandboxInstanceRef `json:"sandbox_refs,omitempty"`
 	EntropyScore  *float64                     `json:"entropy_score,omitempty"`
@@ -43,6 +46,7 @@ type EnvCheckpointResponse struct {
 	ProjectID     string                       `json:"project_id"`
 	EventRef      string                       `json:"event_ref"`
 	Kind          string                       `json:"kind"`
+	SaveMode      string                       `json:"save_mode"`
 	EnvIDMap      map[string]string            `json:"env_id_map,omitempty"`
 	SandboxRefs   []service.SandboxInstanceRef `json:"sandbox_refs,omitempty"`
 	DBSnapshot    json.RawMessage              `json:"db_snapshot,omitempty"`
@@ -105,6 +109,7 @@ func (h *Handler) CreateEnvCheckpoint(w http.ResponseWriter, r *http.Request) {
 		ProjectID:    req.ProjectID,
 		EventRef:     req.EventRef,
 		Kind:         req.Kind,
+		SaveMode:     service.EnvCheckpointSaveMode(req.SaveMode),
 		EnvIDMap:     req.EnvIDMap,
 		SandboxRefs:  req.SandboxRefs,
 		EntropyScore: req.EntropyScore,
@@ -202,6 +207,7 @@ func mapEnvCheckpointResponse(cp service.EnvCheckpoint) EnvCheckpointResponse {
 		ProjectID:     cp.ProjectID,
 		EventRef:      cp.EventRef,
 		Kind:          cp.Kind,
+		SaveMode:      string(cp.SaveMode),
 		EnvIDMap:      cp.EnvIDMap,
 		SandboxRefs:   cp.SandboxRefs,
 		DBSnapshot:    cp.DBSnapshot,

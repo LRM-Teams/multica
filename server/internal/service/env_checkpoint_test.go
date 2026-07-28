@@ -55,6 +55,7 @@ func (r *fakeCheckpointRepo) CreateCheckpoint(_ context.Context, in EnvCheckpoin
 		ProjectID:     in.ProjectID,
 		EventRef:      in.EventRef,
 		Kind:          in.Kind,
+		SaveMode:      in.SaveMode,
 		EnvIDMap:      in.EnvIDMap,
 		SandboxRefs:   in.SandboxRefs,
 		DBSnapshot:    in.DBSnapshot,
@@ -176,6 +177,31 @@ func (f *fakeContinuationStrategy) ResumeAgentRun(_ context.Context, req Continu
 		return ContinuationOutcome{Status: TriggerExecuted, TaskID: req.Trigger.TaskID}, nil
 	}
 	return f.outcome, nil
+}
+
+type fakeSavepointCreator struct {
+	calls    []SandboxInstanceRef
+	checkpts []string
+	status   string // defaults to "ready"
+	err      error
+}
+
+func (f *fakeSavepointCreator) CreateSavepoint(_ context.Context, ref SandboxInstanceRef, checkpointID, _ string) (Savepoint, error) {
+	f.calls = append(f.calls, ref)
+	f.checkpts = append(f.checkpts, checkpointID)
+	if f.err != nil {
+		return Savepoint{}, f.err
+	}
+	status := f.status
+	if status == "" {
+		status = "ready"
+	}
+	return Savepoint{
+		SnapshotID:     fmt.Sprintf("snap-%d", len(f.calls)),
+		CubeSnapshotID: fmt.Sprintf("cube-%d", len(f.calls)),
+		InstanceID:     ref.InstanceID,
+		Status:         status,
+	}, nil
 }
 
 // --- tests ---
@@ -704,5 +730,146 @@ func TestResumeReportsForkedStrategyOutcomeStatus(t *testing.T) {
 	}
 	if res.TriggerStatus != TriggerSkippedLegacy {
 		t.Fatalf("status = %s, want the strategy's reported outcome", res.TriggerStatus)
+	}
+}
+
+func newSnapshotModeService(repo *fakeCheckpointRepo, saver *fakeCheckpointSaver, creator *fakeSavepointCreator) *EnvCheckpointService {
+	return NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{},
+		&fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)},
+		&fakeInFlightResolver{}, ContinuationRegistry{}).WithSavepointCreator(creator)
+}
+
+func TestSnapshotModeCreateOwnsReadySavepointAndLeavesSourceRunning(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	saver := &fakeCheckpointSaver{}
+	creator := &fakeSavepointCreator{}
+	svc := newSnapshotModeService(repo, saver, creator)
+
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj", SaveMode: SaveModeSnapshot,
+		SandboxRefs: []SandboxInstanceRef{
+			{InstanceID: "inst-1", WorkspaceID: "ws"},
+			{InstanceID: "inst-2", WorkspaceID: "ws"},
+		},
+		ActorUserID: "u", SaveTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if cp.SaveStatus != EnvCheckpointSaveComplete {
+		t.Fatalf("status = %s, want complete", cp.SaveStatus)
+	}
+	if len(creator.calls) != 2 {
+		t.Fatalf("want one savepoint per source instance (2), got %d", len(creator.calls))
+	}
+	if len(saver.calls) != 0 {
+		t.Fatalf("snapshot mode must not stop any source instance, got %d stops", len(saver.calls))
+	}
+	for _, id := range creator.checkpts {
+		if id != cp.ID {
+			t.Fatalf("savepoint owner = %q, want %q", id, cp.ID)
+		}
+	}
+}
+
+func TestSnapshotModeCreateFailsWhenSavepointReachesFailed(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	svc := newSnapshotModeService(repo, &fakeCheckpointSaver{}, &fakeSavepointCreator{status: "failed"})
+
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj", SaveMode: SaveModeSnapshot,
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "inst-1", WorkspaceID: "ws"}},
+		ActorUserID: "u", SaveTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create should record the failure, not return it: %v", err)
+	}
+	if cp.SaveStatus != EnvCheckpointSaveFailed {
+		t.Fatalf("status = %s, want failed", cp.SaveStatus)
+	}
+	if !strings.Contains(cp.SaveError, "savepoint_failed") {
+		t.Fatalf("save error = %q, want it to name the savepoint failure", cp.SaveError)
+	}
+}
+
+func TestSnapshotModeCreateRecordsTimeoutStatus(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	svc := newSnapshotModeService(repo, &fakeCheckpointSaver{}, &fakeSavepointCreator{err: context.DeadlineExceeded})
+
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj", SaveMode: SaveModeSnapshot,
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "inst-1", WorkspaceID: "ws"}},
+		ActorUserID: "u", SaveTimeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if cp.SaveStatus != EnvCheckpointSaveTimedOut {
+		t.Fatalf("status = %s, want timed_out", cp.SaveStatus)
+	}
+}
+
+func TestSnapshotModeCreateRejectedWithoutSavepointCreator(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{},
+		&fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)},
+		&fakeInFlightResolver{}, ContinuationRegistry{})
+
+	_, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj", SaveMode: SaveModeSnapshot,
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "inst-1", WorkspaceID: "ws"}},
+		ActorUserID: "u", SaveTimeout: 5 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("snapshot mode without a savepoint creator must be refused, not silently downgraded")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("error = %v, want a validation_failed rejection", err)
+	}
+	if len(repo.createCalls) != 0 {
+		t.Fatalf("refusal must happen before persisting a checkpoint, got %d creates", len(repo.createCalls))
+	}
+}
+
+func TestCreateRejectsUnknownSaveMode(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	svc := newSnapshotModeService(repo, &fakeCheckpointSaver{}, &fakeSavepointCreator{})
+
+	_, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj", SaveMode: EnvCheckpointSaveMode("bogus"),
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "inst-1", WorkspaceID: "ws"}},
+		ActorUserID: "u", SaveTimeout: 5 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("an unknown save mode must be refused before it can reach the CHECK constraint")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("error = %v, want a validation_failed rejection", err)
+	}
+}
+
+func TestPauseInPlaceCreateStaysOnTheStopPath(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	saver := &fakeCheckpointSaver{}
+	creator := &fakeSavepointCreator{}
+	// SaveMode omitted, so it must normalize to pause_in_place.
+	svc := newSnapshotModeService(repo, saver, creator)
+
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws", ProjectID: "proj",
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "inst-1", WorkspaceID: "ws"}},
+		ActorUserID: "u", SaveTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if cp.SaveMode != SaveModePauseInPlace {
+		t.Fatalf("save mode = %q, want pause_in_place", cp.SaveMode)
+	}
+	if len(saver.calls) != 1 {
+		t.Fatalf("pause_in_place must stop the source, stops = %d", len(saver.calls))
+	}
+	if len(creator.calls) != 0 {
+		t.Fatalf("pause_in_place must take no savepoint, got %d", len(creator.calls))
 	}
 }

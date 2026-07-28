@@ -1443,6 +1443,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
 		return
 	}
+	if _, ok := rawFields["workspace_role"]; ok {
+		writeError(w, http.StatusBadRequest, "workspace_role is not accepted on this endpoint; use PATCH /api/workspaces/{workspaceId}/agents/{agentId}/role")
+		return
+	}
 	if !h.canUpdateAgent(w, r, existing, rawFields) {
 		return
 	}

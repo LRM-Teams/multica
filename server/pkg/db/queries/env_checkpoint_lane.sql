@@ -63,9 +63,25 @@ WHERE checkpoint_id = @checkpoint_id
   AND workspace_id = @workspace_id
   AND status = 'provisioning';
 
--- name: ListStaleProvisioningEnvCheckpointLanes :many
--- Deliberately not workspace-scoped: the sweeper runs across all workspaces.
-SELECT * FROM env_checkpoint_lane
-WHERE status = 'provisioning' AND updated_at < @stale_before
-ORDER BY updated_at ASC
-LIMIT @row_limit;
+-- name: SweepStaleProvisioningEnvCheckpointLanes :many
+-- Fails lanes abandoned mid-materialization, in one statement so the staleness
+-- test and the write cannot come apart. Listing candidates and failing them in a
+-- second round trip would leave a window in which a lane its owner just drove to
+-- `ready` gets marked failed anyway; here the `provisioning` predicate is part of
+-- the write, and Postgres re-checks it if the row changed under us.
+--
+-- Deliberately not workspace-scoped: the sweeper runs across all workspaces. The
+-- LIMIT bounds one tick's work, and RETURNING gives the caller the swept rows
+-- for the audit record. The rows keep their per-step ids so the sandboxes they
+-- built stay attributable; releasing those belongs to checkpoint deletion.
+UPDATE env_checkpoint_lane AS l
+SET status = 'failed', error = @error, updated_at = now()
+WHERE l.status = 'provisioning'
+  AND l.updated_at < @stale_before
+  AND l.id IN (
+      SELECT c.id FROM env_checkpoint_lane c
+      WHERE c.status = 'provisioning' AND c.updated_at < @stale_before
+      ORDER BY c.updated_at ASC
+      LIMIT @row_limit
+  )
+RETURNING *;

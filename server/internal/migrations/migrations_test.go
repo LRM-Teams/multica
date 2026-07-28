@@ -737,6 +737,55 @@ func TestLaneQueriesClaimIdempotentlyAndStayWorkspaceScoped(t *testing.T) {
 	}
 }
 
+// TestLaneSweepFailsStaleLanesInOneStatement guards the property that makes the
+// sweeper safe to run against live traffic. If the staleness test and the write
+// are ever split into a list followed by per-row updates, a lane its owner drove
+// to `ready` in between is failed while healthy — and nothing else in the suite
+// would notice, because the fakes cannot reproduce the race.
+func TestLaneSweepFailsStaleLanesInOneStatement(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..",
+		"pkg", "db", "queries", "env_checkpoint_lane.sql"))
+	if err != nil {
+		t.Fatalf("read lane queries: %v", err)
+	}
+	contents := string(raw)
+
+	idx := strings.Index(contents, "-- name: SweepStaleProvisioningEnvCheckpointLanes :many")
+	if idx < 0 {
+		t.Fatal("lane queries missing the sweeper")
+	}
+	stmt := contents[idx:]
+	if end := strings.Index(stmt[1:], "\n-- name: "); end >= 0 {
+		stmt = stmt[:end+1]
+	}
+	// The write itself must carry the predicate, not just the candidate subquery:
+	// Postgres re-checks the outer WHERE when the row changed underneath.
+	for _, required := range []string{
+		"UPDATE env_checkpoint_lane AS l",
+		"SET status = 'failed'",
+		"WHERE l.status = 'provisioning'",
+		"AND l.updated_at < @stale_before",
+		"LIMIT @row_limit",
+		"RETURNING *",
+	} {
+		if !strings.Contains(stmt, required) {
+			t.Errorf("sweeper missing %q", required)
+		}
+	}
+	// The sweeper is the one lane query that must span workspaces; scoping it
+	// would leave lanes stuck forever in whichever workspaces went unswept.
+	if strings.Contains(stmt, "workspace_id = @workspace_id") {
+		t.Error("the sweeper must not be workspace scoped")
+	}
+	if strings.Contains(contents, "-- name: ListStaleProvisioningEnvCheckpointLanes") {
+		t.Error("the list-then-mark sweeper query is gone; reintroducing it reopens the race")
+	}
+}
+
 func TestSavepointOwnershipQueriesStayWorkspaceScopedAndNonStealing(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

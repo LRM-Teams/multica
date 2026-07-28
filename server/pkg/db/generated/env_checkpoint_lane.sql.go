@@ -165,56 +165,6 @@ func (q *Queries) ListEnvCheckpointLanes(ctx context.Context, arg ListEnvCheckpo
 	return items, nil
 }
 
-const listStaleProvisioningEnvCheckpointLanes = `-- name: ListStaleProvisioningEnvCheckpointLanes :many
-SELECT id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at FROM env_checkpoint_lane
-WHERE status = 'provisioning' AND updated_at < $1
-ORDER BY updated_at ASC
-LIMIT $2
-`
-
-type ListStaleProvisioningEnvCheckpointLanesParams struct {
-	StaleBefore pgtype.Timestamptz `json:"stale_before"`
-	RowLimit    int32              `json:"row_limit"`
-}
-
-// Deliberately not workspace-scoped: the sweeper runs across all workspaces.
-func (q *Queries) ListStaleProvisioningEnvCheckpointLanes(ctx context.Context, arg ListStaleProvisioningEnvCheckpointLanesParams) ([]EnvCheckpointLane, error) {
-	rows, err := q.db.Query(ctx, listStaleProvisioningEnvCheckpointLanes, arg.StaleBefore, arg.RowLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []EnvCheckpointLane{}
-	for rows.Next() {
-		var i EnvCheckpointLane
-		if err := rows.Scan(
-			&i.ID,
-			&i.CheckpointID,
-			&i.WorkspaceID,
-			&i.LaneKey,
-			&i.Status,
-			&i.InstanceID,
-			&i.ProjectID,
-			&i.RuntimeID,
-			&i.TaskID,
-			&i.EnvID,
-			&i.ChannelID,
-			&i.ChatSessionID,
-			&i.SourceMessageID,
-			&i.Error,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const markEnvCheckpointLaneFailed = `-- name: MarkEnvCheckpointLaneFailed :one
 UPDATE env_checkpoint_lane
 SET status = 'failed', error = $1, updated_at = now()
@@ -286,6 +236,73 @@ func (q *Queries) MarkEnvCheckpointLaneReady(ctx context.Context, arg MarkEnvChe
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const sweepStaleProvisioningEnvCheckpointLanes = `-- name: SweepStaleProvisioningEnvCheckpointLanes :many
+UPDATE env_checkpoint_lane AS l
+SET status = 'failed', error = $1, updated_at = now()
+WHERE l.status = 'provisioning'
+  AND l.updated_at < $2
+  AND l.id IN (
+      SELECT c.id FROM env_checkpoint_lane c
+      WHERE c.status = 'provisioning' AND c.updated_at < $2
+      ORDER BY c.updated_at ASC
+      LIMIT $3
+  )
+RETURNING id, checkpoint_id, workspace_id, lane_key, status, instance_id, project_id, runtime_id, task_id, env_id, channel_id, chat_session_id, source_message_id, error, created_at, updated_at
+`
+
+type SweepStaleProvisioningEnvCheckpointLanesParams struct {
+	Error       pgtype.Text        `json:"error"`
+	StaleBefore pgtype.Timestamptz `json:"stale_before"`
+	RowLimit    int32              `json:"row_limit"`
+}
+
+// Fails lanes abandoned mid-materialization, in one statement so the staleness
+// test and the write cannot come apart. Listing candidates and failing them in a
+// second round trip would leave a window in which a lane its owner just drove to
+// `ready` gets marked failed anyway; here the `provisioning` predicate is part of
+// the write, and Postgres re-checks it if the row changed under us.
+//
+// Deliberately not workspace-scoped: the sweeper runs across all workspaces. The
+// LIMIT bounds one tick's work, and RETURNING gives the caller the swept rows
+// for the audit record. The rows keep their per-step ids so the sandboxes they
+// built stay attributable; releasing those belongs to checkpoint deletion.
+func (q *Queries) SweepStaleProvisioningEnvCheckpointLanes(ctx context.Context, arg SweepStaleProvisioningEnvCheckpointLanesParams) ([]EnvCheckpointLane, error) {
+	rows, err := q.db.Query(ctx, sweepStaleProvisioningEnvCheckpointLanes, arg.Error, arg.StaleBefore, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EnvCheckpointLane{}
+	for rows.Next() {
+		var i EnvCheckpointLane
+		if err := rows.Scan(
+			&i.ID,
+			&i.CheckpointID,
+			&i.WorkspaceID,
+			&i.LaneKey,
+			&i.Status,
+			&i.InstanceID,
+			&i.ProjectID,
+			&i.RuntimeID,
+			&i.TaskID,
+			&i.EnvID,
+			&i.ChannelID,
+			&i.ChatSessionID,
+			&i.SourceMessageID,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateEnvCheckpointLaneStep = `-- name: UpdateEnvCheckpointLaneStep :one

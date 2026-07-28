@@ -486,6 +486,11 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
+	if err := schedulerMgr.Register(scheduler.EnvCheckpointLaneSweepJob(pool)); err != nil {
+		slog.Warn("scheduler: failed to register env checkpoint lane sweep job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)

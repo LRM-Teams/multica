@@ -72,11 +72,14 @@ ALTER TABLE channel_member
     AND (role <> 'owner' OR member_type = 'user')
   );
 
--- 5. Repair empty ordinary groups: insert created_by as human owner when the
---    channel has no human members at all (orphan rows after 236).
+-- 5. Repair empty ordinary groups: insert created_by as human owner only when
+--    they are still a workspace member (Barry: no ghost owners).
 INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
 SELECT c.id, c.workspace_id, 'user', c.created_by, 'owner'
 FROM channel c
+JOIN member m
+  ON m.workspace_id = c.workspace_id
+ AND m.user_id = c.created_by
 WHERE c.kind = 'group'
   AND c.system_key IS NULL
   AND c.created_by IS NOT NULL
@@ -86,7 +89,7 @@ WHERE c.kind = 'group'
   )
 ON CONFLICT DO NOTHING;
 
--- Re-run owner backfill for those freshly inserted members.
+-- Re-run owner backfill for those freshly inserted members / existing members.
 UPDATE channel_member cm
 SET role = 'owner'
 FROM channel c
@@ -122,69 +125,64 @@ BEGIN
   END IF;
 END $$;
 
--- 7. Write boundary: ordinary groups cannot lose their last human owner
---    via DELETE or role demotion (Parker: invariant on every path).
-CREATE OR REPLACE FUNCTION channel_member_preserve_human_owner()
+-- 7. Final-state invariant for ordinary groups (Barry P0):
+--    - max 1 human owner: partial unique index from 236
+--    - min 1 human owner: DEFERRABLE constraint trigger so
+--      * DELETE channel / workspace cascade is legal (no surviving group)
+--      * atomic transfer (demote old + promote new) can commit
+--      * sole-owner leave / demote still fails at commit
+--
+-- Drop the eager BEFORE trigger if a prior tip of this PR created it.
+DROP TRIGGER IF EXISTS trg_channel_member_preserve_human_owner ON channel_member;
+DROP FUNCTION IF EXISTS channel_member_preserve_human_owner();
+
+CREATE OR REPLACE FUNCTION channel_member_assert_human_owner_final()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  ch uuid;
   ordinary boolean;
-  remaining int;
+  n int;
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    ch := OLD.channel_id;
+  ELSE
+    ch := NEW.channel_id;
+  END IF;
+
   SELECT (c.kind = 'group' AND c.system_key IS NULL)
   INTO ordinary
   FROM channel c
-  WHERE c.id = COALESCE(OLD.channel_id, NEW.channel_id);
+  WHERE c.id = ch;
+
+  IF NOT FOUND THEN
+    -- Channel already deleted (cascade cleanup): no surviving ordinary group.
+    RETURN NULL;
+  END IF;
 
   IF NOT ordinary THEN
-    IF TG_OP = 'DELETE' THEN
-      RETURN OLD;
-    END IF;
-    RETURN NEW;
+    RETURN NULL;
   END IF;
 
-  -- Only care when we remove or demote a human owner.
-  IF TG_OP = 'DELETE' THEN
-    IF OLD.role = 'owner' AND OLD.member_type = 'user' THEN
-      -- BEFORE DELETE: OLD is still visible; exclude self explicitly.
-      SELECT count(*) INTO remaining
-      FROM channel_member
-      WHERE channel_id = OLD.channel_id
-        AND role = 'owner'
-        AND member_type = 'user'
-        AND member_id IS DISTINCT FROM OLD.member_id;
-      IF remaining = 0 THEN
-        RAISE EXCEPTION 'cannot remove the only human owner of an ordinary group channel'
-          USING ERRCODE = 'check_violation';
-      END IF;
-    END IF;
-    RETURN OLD;
-  END IF;
+  SELECT count(*) INTO n
+  FROM channel_member
+  WHERE channel_id = ch
+    AND role = 'owner'
+    AND member_type = 'user';
 
-  IF TG_OP = 'UPDATE' THEN
-    IF OLD.role = 'owner' AND OLD.member_type = 'user'
-       AND (NEW.role IS DISTINCT FROM 'owner' OR NEW.member_type IS DISTINCT FROM 'user') THEN
-      SELECT count(*) INTO remaining
-      FROM channel_member
-      WHERE channel_id = OLD.channel_id
-        AND role = 'owner'
-        AND member_type = 'user'
-        AND member_id IS DISTINCT FROM OLD.member_id;
-      IF remaining = 0 THEN
-        RAISE EXCEPTION 'cannot demote the only human owner of an ordinary group channel'
-          USING ERRCODE = 'check_violation';
-      END IF;
-    END IF;
-    RETURN NEW;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'ordinary group must have at least one human owner'
+      USING ERRCODE = 'check_violation';
   END IF;
-
-  RETURN NEW;
+  -- max-one is also enforced by channel_member_one_owner unique index
+  RETURN NULL;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_channel_member_preserve_human_owner ON channel_member;
-CREATE TRIGGER trg_channel_member_preserve_human_owner
-  BEFORE DELETE OR UPDATE OF role, member_type ON channel_member
+DROP TRIGGER IF EXISTS trg_channel_member_assert_human_owner ON channel_member;
+CREATE CONSTRAINT TRIGGER trg_channel_member_assert_human_owner
+  AFTER INSERT OR UPDATE OF role, member_type OR DELETE ON channel_member
+  DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW
-  EXECUTE FUNCTION channel_member_preserve_human_owner();
+  EXECUTE FUNCTION channel_member_assert_human_owner_final();

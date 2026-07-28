@@ -23,6 +23,7 @@ import {
   agentRunCountsKeys,
   agentTasksKeys,
 } from "../agents/queries";
+import { patchAgentTaskSnapshotStatus } from "../agents/task-snapshot-updaters";
 import { githubKeys } from "../github/queries";
 import { larkKeys } from "../lark/queries";
 import {
@@ -94,6 +95,7 @@ import type {
   TaskCompletedPayload,
   TaskFailedPayload,
   TaskCancelledPayload,
+  AgentTask,
   ChatDonePayload,
   ChatMessage,
   ChatPendingTask,
@@ -613,7 +615,11 @@ export function useRealtimeSync(
       task: () => {
         const wsId = getCurrentWsId();
         if (!wsId) return;
-        qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.list(wsId) });
+        // NOTE (step②): the agent-task-snapshot is NO LONGER invalidated here.
+        // A whole-workspace refetch on every task event (×every client) was the
+        // p95 amplifier. Its status is now patched in place from the payload by
+        // the task lifecycle ws.on handlers below (patchAgentTaskSnapshotStatus),
+        // with a single coalesced refetch only when a brand-new task appears.
         // 30d activity series shares the same lifecycle signal — any task
         // completion / failure shifts the histogram. (Dispatch alone
         // doesn't change a completed_at-anchored series, but invalidating
@@ -656,7 +662,14 @@ export function useRealtimeSync(
     // is not latency-critical to ~2s. Other prefixes stay snappy at 100ms.
     // (Immediate mitigation; the durable fix is WS-delta in-place snapshot
     // updates instead of event→full-refetch.)
-    const DEBOUNCE_MS_BY_PREFIX: Record<string, number> = { task: 2000 };
+    // `task-snapshot-newrow`: step② coalesces the single snapshot refetch that
+    // a brand-new (not-yet-cached) task requires, so a burst of new tasks
+    // collapses to ONE refetch instead of one per event (Parker's guardrail:
+    // never trade one whole-table refetch for fifty single fetches).
+    const DEBOUNCE_MS_BY_PREFIX: Record<string, number> = {
+      task: 2000,
+      "task-snapshot-newrow": 500,
+    };
     const debouncedRefresh = (prefix: string, fn: () => void) => {
       const existing = timers.get(prefix);
       if (existing) clearTimeout(existing);
@@ -667,6 +680,23 @@ export function useRealtimeSync(
           fn();
         }, DEBOUNCE_MS_BY_PREFIX[prefix] ?? 100),
       );
+    };
+
+    // step②: patch the agent-task-snapshot in place from a task lifecycle
+    // event. Returns nothing; when the task isn't cached yet (a brand-new task
+    // whose full AgentTask row the event payload can't supply) it coalesces one
+    // snapshot refetch per burst instead of the old per-event full refetch.
+    const applyTaskStatusToSnapshot = (
+      taskId: string,
+      status: AgentTask["status"],
+    ) => {
+      const wsId = getCurrentWsId();
+      if (!wsId) return;
+      if (!patchAgentTaskSnapshotStatus(qc, wsId, taskId, status)) {
+        debouncedRefresh("task-snapshot-newrow", () =>
+          qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.list(wsId) }),
+        );
+      }
     };
 
     // Event types handled by specific handlers below -- skip generic refresh
@@ -1043,6 +1073,7 @@ export function useRealtimeSync(
     // when reconnect replays the event for an already-running task).
     const unsubTaskQueued = ws.on("task:queued", (p) => {
       const payload = p as TaskQueuedPayload;
+      applyTaskStatusToSnapshot(payload.task_id, "queued");
       if (!payload.chat_session_id) return;
       qc.setQueryData<ChatPendingTask>(
         chatKeys.pendingTask(payload.chat_session_id),
@@ -1063,6 +1094,7 @@ export function useRealtimeSync(
     // taskMessages → "Thinking · Ns".
     const unsubTaskDispatch = ws.on("task:dispatch", (p) => {
       const payload = p as TaskDispatchPayload;
+      applyTaskStatusToSnapshot(payload.task_id, "dispatched");
       if (!payload.chat_session_id) return;
       qc.setQueryData<ChatPendingTask>(
         chatKeys.pendingTask(payload.chat_session_id),
@@ -1080,6 +1112,7 @@ export function useRealtimeSync(
     // would stay parked even after the daemon resumed work.
     const unsubTaskRunning = ws.on("task:running", (p) => {
       const payload = p as TaskRunningPayload;
+      applyTaskStatusToSnapshot(payload.task_id, "running");
       if (!payload.chat_session_id) return;
       qc.setQueryData<ChatPendingTask>(
         chatKeys.pendingTask(payload.chat_session_id),
@@ -1099,6 +1132,7 @@ export function useRealtimeSync(
       "task:waiting_local_directory",
       (p) => {
         const payload = p as TaskWaitingLocalDirectoryPayload;
+        applyTaskStatusToSnapshot(payload.task_id, "waiting_local_directory");
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
@@ -1120,6 +1154,7 @@ export function useRealtimeSync(
     // message page along with clearing pending.
     const unsubTaskCancelled = ws.on("task:cancelled", (p) => {
       const payload = p as TaskCancelledPayload;
+      applyTaskStatusToSnapshot(payload.task_id, "cancelled");
       if (!payload.chat_session_id) return;
       chatWsLogger.info("task:cancelled (global, chat)", {
         task_id: payload.task_id,
@@ -1140,6 +1175,7 @@ export function useRealtimeSync(
 
     const unsubTaskCompleted = ws.on("task:completed", (p) => {
       const payload = p as TaskCompletedPayload;
+      applyTaskStatusToSnapshot(payload.task_id, "completed");
       if (!payload.chat_session_id) return; // issue tasks handled elsewhere
       chatWsLogger.info("task:completed (global, chat)", {
         task_id: payload.task_id,
@@ -1156,6 +1192,7 @@ export function useRealtimeSync(
 
     const unsubTaskFailed = ws.on("task:failed", (p) => {
       const payload = p as TaskFailedPayload;
+      applyTaskStatusToSnapshot(payload.task_id, "failed");
       if (!payload.chat_session_id) return;
       chatWsLogger.warn("task:failed (global, chat)", {
         task_id: payload.task_id,

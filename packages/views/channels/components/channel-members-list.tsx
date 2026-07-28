@@ -20,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
-import { MessageSquare, MoreHorizontal } from "lucide-react";
+import { MessageSquare, MoreHorizontal, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
@@ -55,8 +55,21 @@ function MemberRow({
   onOpenMember,
   onRemove,
   dmPending,
+  removeFailure,
 }: {
   m: ChannelMember;
+  /**
+   * #836 — in-row record of a failed removal for THIS member (undefined when
+   * there is none). Supplied per row so one member's failure can never render
+   * on another's; `onRetry` must re-open the confirmation, not remove directly.
+   */
+  removeFailure?: {
+    message: string;
+    retryLabel: string;
+    dismissLabel: string;
+    onRetry: () => void;
+    onDismiss: () => void;
+  };
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
   badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
   memberMenu?: (member: ChannelMember) => GroupMemberActions | null;
@@ -150,10 +163,14 @@ function MemberRow({
 
   return (
     <div
-      className="group flex min-h-[52px] items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-hover"
+      className="rounded-lg"
       data-testid="channel-members-row"
       data-member-type={m.member_type}
     >
+      {/* #836 — the identity line keeps its own layout; a failure notice (below)
+          is a second line inside the SAME row, so the failure stays attached to
+          the member it belongs to rather than becoming a global banner. */}
+      <div className="group flex min-h-[52px] items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-hover">
       <ActorProfileTrigger
         memberType={profileMemberType}
         memberId={m.member_id}
@@ -296,6 +313,44 @@ function MemberRow({
           {t(($) => $.members.remove)}
         </button>
       )}
+      </div>
+      {/* #836 — durable in-row record of a failed removal. The toast is the
+          immediate announcement and can be dismissed; this stays until the
+          member is actually gone or the user clears it, so "it failed" is still
+          discoverable afterwards. `重试` re-opens the named confirmation — it
+          never re-fires the mutation directly (Iris: the second confirmation
+          remains the destructive commitment point). */}
+      {removeFailure ? (
+        <output
+          className="mx-2.5 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+          data-testid="channel-members-row-remove-failed"
+        >
+          <span className="min-w-0 flex-1">{removeFailure.message}</span>
+          <button
+            type="button"
+            onClick={removeFailure.onRetry}
+            className={cn(
+              "shrink-0 font-semibold underline underline-offset-2 hover:no-underline",
+              isMobile && "min-h-11 px-1",
+            )}
+            data-testid="channel-members-row-remove-retry"
+          >
+            {removeFailure.retryLabel}
+          </button>
+          <button
+            type="button"
+            onClick={removeFailure.onDismiss}
+            aria-label={removeFailure.dismissLabel}
+            className={cn(
+              "shrink-0 text-muted-foreground hover:text-foreground",
+              isMobile && "min-h-11 px-1",
+            )}
+            data-testid="channel-members-row-remove-dismiss"
+          >
+            <X className="size-3.5" />
+          </button>
+        </output>
+      ) : null}
     </div>
   );
 }
@@ -322,8 +377,21 @@ export function ChannelMembersList({
   onRemove,
   dmPending,
   headerSlot,
+  removeFailureFor,
   className,
 }: {
+  /**
+   * #836 — returns the in-row failure notice for a member, or undefined. Given
+   * per member (not a single "last error") so a second failure cannot silently
+   * replace an unresolved first one.
+   */
+  removeFailureFor?: (member: ChannelMember) => {
+    message: string;
+    retryLabel: string;
+    dismissLabel: string;
+    onRetry: () => void;
+    onDismiss: () => void;
+  } | undefined;
   members: ChannelMember[];
   loading?: boolean;
   emptyLabel: string;
@@ -423,6 +491,7 @@ export function ChannelMembersList({
                 onOpenMember={onOpenMember}
                 onRemove={onRemove}
                 dmPending={dmPending}
+                removeFailure={removeFailureFor?.(m)}
               />
             ))}
           </div>
@@ -448,6 +517,7 @@ export function ChannelMembersList({
                 onOpenMember={onOpenMember}
                 onRemove={onRemove}
                 dmPending={dmPending}
+                removeFailure={removeFailureFor?.(m)}
               />
             ))}
           </div>

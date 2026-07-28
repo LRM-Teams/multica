@@ -122,6 +122,8 @@
     "remove_confirm": "削除を確認",
     "remove_cancel": "キャンセル",
     "remove_failed": "メンバーを削除できませんでした。もう一度お試しください。",
+    "remove_retry": "再試行",
+    "remove_failed_dismiss": "閉じる",
     "no_candidates": "招待できる相手がいません",
     "invite": "招待",
     "invite_count": "招待 ({{count}})",

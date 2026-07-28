@@ -145,6 +145,80 @@ func TestMaterializeBResolveFailureLeavesNoSkillResidue(t *testing.T) {
 	}
 }
 
+func TestMaterializeBStagingDoesNotDeleteUserOwnedSibling(t *testing.T) {
+	workDir, ledgerRoot := materializeLayout(t)
+	// User owns a path that would collide with the old fixed staging name.
+	userStage := filepath.Join(workDir, ".grok", "skills", "review.multica-staging", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(userStage), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userStage, []byte("USER_STAGE_BYTES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
+		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentSkills: []SkillContextForEnv{{Name: "review", Content: "MANAGED"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(userStage)
+	if err != nil || string(raw) != "USER_STAGE_BYTES" {
+		t.Fatalf("user staging sibling deleted/clobbered: %v %q", err, raw)
+	}
+}
+
+func TestMaterializeBReservesSlugsAcrossAssignedSkills(t *testing.T) {
+	workDir, ledgerRoot := materializeLayout(t)
+	_, receipt, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
+		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentSkills: []SkillContextForEnv{
+			{Name: "Review", Content: "BODY_A"},
+			{Name: "review!", Content: "BODY_B"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt.Skills) != 2 {
+		t.Fatalf("want 2 skills, got %d", len(receipt.Skills))
+	}
+	if receipt.Skills[0].ActualSlug == receipt.Skills[1].ActualSlug {
+		t.Fatalf("slugs must differ: %+v", receipt.Skills)
+	}
+	for _, sk := range receipt.Skills {
+		p := filepath.Join(workDir, ".grok", "skills", sk.ActualSlug, "SKILL.md")
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("missing skill package %s: %v", sk.ActualSlug, err)
+		}
+	}
+}
+
+func TestMaterializeBSupportingFileCannotEscapePackage(t *testing.T) {
+	workDir, ledgerRoot := materializeLayout(t)
+	// Pre-seed a file that escape would clobber.
+	target := filepath.Join(workDir, ".grok", "skills", "USER_OWNED.txt")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("USER_BYTES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
+		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentSkills: []SkillContextForEnv{{
+			Name: "safe", Content: "body",
+			Files: []SkillFileContextForEnv{{Path: "../USER_OWNED.txt", Content: "CLOBBERED"}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected reject escaping supporting path")
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil || string(raw) != "USER_BYTES" {
+		t.Fatalf("user file clobbered: %v %q", err, raw)
+	}
+}
+
 func TestMaterializeBRefusesAgentContextSymlink(t *testing.T) {
 	workDir, ledgerRoot := materializeLayout(t)
 	outside := t.TempDir()

@@ -565,3 +565,63 @@ func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 	}
 }
 
+func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "244_env_checkpoint_save_mode.up.sql"))
+	if err != nil {
+		t.Fatalf("read 244 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS save_mode text NOT NULL DEFAULT 'pause_in_place'",
+		"env_checkpoint_save_mode_check",
+		"CHECK (save_mode IN ('pause_in_place', 'snapshot'))",
+		"ALTER TABLE sandbox_snapshot",
+		"ADD COLUMN IF NOT EXISTS checkpoint_id uuid",
+		"REFERENCES env_checkpoint(id) ON DELETE CASCADE",
+		"CREATE INDEX IF NOT EXISTS sandbox_snapshot_checkpoint_idx",
+		"WHERE checkpoint_id IS NOT NULL",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("244 up missing %q", required)
+		}
+	}
+	// The default carries every pre-existing row, so no data migration is
+	// needed and none may be smuggled in here.
+	for _, forbidden := range []string{
+		"UPDATE env_checkpoint",
+		"UPDATE sandbox_snapshot",
+		"DELETE FROM",
+		"DROP TABLE",
+	} {
+		if strings.Contains(contents, forbidden) {
+			t.Errorf("244 up must not backfill or destroy data; found %q", forbidden)
+		}
+	}
+	// A savepoint nobody owns must stay legal, so the ownership column cannot
+	// be NOT NULL.
+	if strings.Contains(contents, "checkpoint_id uuid NOT NULL") {
+		t.Error("244 up must leave checkpoint_id nullable for unowned snapshots")
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "244_env_checkpoint_save_mode.down.sql"))
+	if err != nil {
+		t.Fatalf("read 244 down: %v", err)
+	}
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS sandbox_snapshot_checkpoint_idx",
+		"DROP COLUMN IF EXISTS checkpoint_id",
+		"DROP CONSTRAINT IF EXISTS env_checkpoint_save_mode_check",
+		"DROP COLUMN IF EXISTS save_mode",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("244 down missing %q", required)
+		}
+	}
+}
+

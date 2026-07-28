@@ -1280,19 +1280,44 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 }
 
 
-// multicaTokenLiteralOutsideAmbient returns descriptions of every BasicLit
-// whose exact value is "MULTICA_TOKEN" and whose position is NOT inside the
-// body of ambientTokenFromEnvOrFile.
-//
-// Barry/Parker #1305 primitive-location invariant: do not enumerate Getenv
-// call shapes (import alias / const key / func var all share one string lit).
-func multicaTokenLiteralOutsideAmbient(filename, src string) ([]string, error) {
+// multicaTokenSourceBoundaryViolations enforces Barry #1305 successor:
+//  1. BasicLit "MULTICA_TOKEN" only as value of const multicaTokenEnvKey
+//  2. identifier multicaTokenEnvKey only inside ambientTokenFromEnvOrFile
+//     and pure runtimeEnvToken (no mutable package global)
+func multicaTokenSourceBoundaryViolations(filename, src string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filename, src, 0)
 	if err != nil {
 		return nil, err
 	}
-	var ambientBody *ast.BlockStmt
+
+	// Positions of the canonical const declaration Ident + its BasicLit value.
+	canonicalLit := map[token.Pos]bool{}
+	canonicalDeclIdent := map[token.Pos]bool{}
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if name.Name != "multicaTokenEnvKey" {
+					continue
+				}
+				canonicalDeclIdent[name.Pos()] = true
+				if i < len(vs.Values) {
+					if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"MULTICA_TOKEN"` {
+						canonicalLit[lit.Pos()] = true
+					}
+				}
+			}
+		}
+	}
+
 	type fnSpan struct {
 		name string
 		body *ast.BlockStmt
@@ -1304,31 +1329,48 @@ func multicaTokenLiteralOutsideAmbient(filename, src string) ([]string, error) {
 			continue
 		}
 		spans = append(spans, fnSpan{name: fn.Name.Name, body: fn.Body})
-		if fn.Name.Name == "ambientTokenFromEnvOrFile" {
-			ambientBody = fn.Body
-		}
 	}
-	var bad []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return true
-		}
-		if lit.Value != `"MULTICA_TOKEN"` {
-			return true
-		}
-		if ambientBody != nil && lit.Pos() >= ambientBody.Lbrace && lit.Pos() < ambientBody.Rbrace {
-			return true
-		}
-		encl := "<package-level>"
+	enclosing := func(pos token.Pos) string {
 		for _, sp := range spans {
-			if lit.Pos() >= sp.body.Lbrace && lit.Pos() < sp.body.Rbrace {
-				encl = "func " + sp.name
-				break
+			if pos >= sp.body.Lbrace && pos < sp.body.Rbrace {
+				return sp.name
 			}
 		}
-		pos := fset.Position(lit.Pos())
-		bad = append(bad, fmt.Sprintf("%s:%d: %s", filename, pos.Line, encl))
+		return ""
+	}
+	allowedIdentUse := map[string]bool{
+		"ambientTokenFromEnvOrFile": true,
+		"runtimeEnvToken":           true,
+	}
+
+	var bad []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BasicLit:
+			if x.Kind != token.STRING || x.Value != `"MULTICA_TOKEN"` {
+				return true
+			}
+			if !canonicalLit[x.Pos()] {
+				pos := fset.Position(x.Pos())
+				bad = append(bad, fmt.Sprintf("%s:%d: BasicLit MULTICA_TOKEN not on const multicaTokenEnvKey", filename, pos.Line))
+			}
+		case *ast.Ident:
+			if x.Name != "multicaTokenEnvKey" {
+				return true
+			}
+			if canonicalDeclIdent[x.Pos()] {
+				return true
+			}
+			fn := enclosing(x.Pos())
+			if !allowedIdentUse[fn] {
+				pos := fset.Position(x.Pos())
+				where := fn
+				if where == "" {
+					where = "<package-level>"
+				}
+				bad = append(bad, fmt.Sprintf("%s:%d: multicaTokenEnvKey used in %s (only ambientTokenFromEnvOrFile / runtimeEnvToken)", filename, pos.Line, where))
+			}
+		}
 		return true
 	})
 	return bad, nil
@@ -1364,9 +1406,9 @@ func ambientTokenFromEnvOrFileReadsTokenFile(src string) (bool, error) {
 	return false, fmt.Errorf("ambientTokenFromEnvOrFile not found")
 }
 
-// TestBoundary_NoEnvOnlyMatTokenDetection enforces Barry invariant: production
-// BasicLit "MULTICA_TOKEN" may only appear inside ambientTokenFromEnvOrFile;
-// that function must also read MULTICA_TOKEN_FILE.
+// TestBoundary_NoEnvOnlyMatTokenDetection enforces Barry invariant: sole
+// BasicLit "MULTICA_TOKEN" on const multicaTokenEnvKey; identifier only in
+// ambientTokenFromEnvOrFile + runtimeEnvToken; ambient must read TOKEN_FILE.
 func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -1374,6 +1416,7 @@ func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 	}
 	var bad []string
 	var authSrc string
+	var sawCanonicalConst bool
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -1386,14 +1429,20 @@ func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 		if f == "cmd_auth.go" {
 			authSrc = src
 		}
-		hits, err := multicaTokenLiteralOutsideAmbient(f, src)
+		hits, err := multicaTokenSourceBoundaryViolations(f, src)
 		if err != nil {
 			t.Fatalf("parse %s: %v", f, err)
 		}
 		bad = append(bad, hits...)
+		if strings.Contains(src, "const multicaTokenEnvKey") && strings.Contains(src, `"MULTICA_TOKEN"`) {
+			sawCanonicalConst = true
+		}
 	}
 	if len(bad) > 0 {
-		t.Fatalf("MULTICA_TOKEN string literal outside ambientTokenFromEnvOrFile (use ambientTokenFromEnvOrFile / multicaTokenEnvKey): %v", bad)
+		t.Fatalf("MULTICA_TOKEN source-boundary violations: %v", bad)
+	}
+	if !sawCanonicalConst {
+		t.Fatal("missing const multicaTokenEnvKey = \"MULTICA_TOKEN\" in production package")
 	}
 	if authSrc == "" {
 		t.Fatal("cmd_auth.go not found in package dir")
@@ -1408,33 +1457,33 @@ func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 }
 
 // TestBoundary_NoEnvOnlyMatTokenDetection_Counterfactuals hard-proves the
-// primitive-location scanner fails closed for Barry's bypass classes.
+// source-boundary scanner fails closed for Barry's bypass classes.
 func TestBoundary_NoEnvOnlyMatTokenDetection_Counterfactuals(t *testing.T) {
 	mustFlag := func(t *testing.T, name, src string) {
 		t.Helper()
-		hits, err := multicaTokenLiteralOutsideAmbient(name, src)
+		hits, err := multicaTokenSourceBoundaryViolations(name, src)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(hits) == 0 {
-			t.Fatalf("%s: expected MULTICA_TOKEN literal outside ambient to FAIL; got 0 hits", name)
+			t.Fatalf("%s: expected source-boundary FAIL; got 0 hits", name)
 		}
 	}
 
-	// 1) const key alias — Getenv shape scanners miss this
+	// 1) wrong const name still carries the literal
 	mustFlag(t, "const_alias.go", `package main
 import "os"
 const key = "MULTICA_TOKEN"
 func badConst() string { return os.Getenv(key) }
 `)
 
-	// 2) import alias — selector is o.Getenv, not os.Getenv
+	// 2) import alias + raw literal
 	mustFlag(t, "import_alias.go", `package main
 import o "os"
 func badImport() string { return o.Getenv("MULTICA_TOKEN") }
 `)
 
-	// 3) indirect func var
+	// 3) indirect func var + raw literal
 	mustFlag(t, "func_var.go", `package main
 import "os"
 func badVar() string {
@@ -1443,7 +1492,7 @@ func badVar() string {
 }
 `)
 
-	// 4) legacy: isMatAgentToken(os.Getenv) compose still red
+	// 4) compose isMatAgentToken(os.Getenv) still red
 	mustFlag(t, "compose.go", `package main
 import "os"
 func isMatAgentToken(token string) bool { return len(token) > 0 }
@@ -1453,30 +1502,45 @@ func badCompose() bool { return isMatAgentToken(os.Getenv("MULTICA_TOKEN")) }
 	// 5) bare HasPrefix still red
 	mustFlag(t, "hasprefix.go", `package main
 import ("os"; "strings")
+const multicaTokenEnvKey = "MULTICA_TOKEN"
 func ambientTokenFromEnvOrFile() string {
 	_ = os.Getenv("MULTICA_TOKEN_FILE")
-	return os.Getenv("MULTICA_TOKEN")
+	return os.Getenv(multicaTokenEnvKey)
 }
 func bad() bool {
 	return strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_")
 }
 `)
 
-	// 6) control: only ambient holds the literal + TOKEN_FILE → clean
+	// 6) canonical const used outside ambient/runtimeEnvToken
+	mustFlag(t, "ident_leak.go", `package main
+import "os"
+const multicaTokenEnvKey = "MULTICA_TOKEN"
+func ambientTokenFromEnvOrFile() string { return os.Getenv(multicaTokenEnvKey) }
+func runtimeEnvToken(env map[string]string) string { return env[multicaTokenEnvKey] }
+func badLeak() string { return os.Getenv(multicaTokenEnvKey) }
+`)
+
+	// 7) control: const + ambient + pure map helper → clean
 	clean := `package main
 import ("os"; "strings")
+const multicaTokenEnvKey = "MULTICA_TOKEN"
 func ambientTokenFromEnvOrFile() string {
-	key := "MULTICA_TOKEN"
-	fileKey := "MULTICA_TOKEN_FILE"
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+	if v := strings.TrimSpace(os.Getenv(multicaTokenEnvKey)); v != "" {
 		return v
 	}
-	if path := strings.TrimSpace(os.Getenv(fileKey)); path != "" {
+	if path := strings.TrimSpace(os.Getenv("MULTICA_TOKEN_FILE")); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			return strings.TrimSpace(string(data))
 		}
 	}
 	return ""
+}
+func runtimeEnvToken(env map[string]string) string {
+	if env == nil {
+		return ""
+	}
+	return strings.TrimSpace(env[multicaTokenEnvKey])
 }
 func isMatAgentToken(token string) bool {
 	return strings.HasPrefix(strings.TrimSpace(token), "mat_")
@@ -1485,16 +1549,50 @@ func isAgentAPITokenAmbient() bool {
 	return isMatAgentToken(ambientTokenFromEnvOrFile())
 }
 `
-	hits, err := multicaTokenLiteralOutsideAmbient("cmd_auth.go", clean)
+	hits, err := multicaTokenSourceBoundaryViolations("cmd_auth.go", clean)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(hits) != 0 {
-		t.Fatalf("clean ambient control must be green; got %v", hits)
+		t.Fatalf("clean control must be green; got %v", hits)
 	}
 	ok, err := ambientTokenFromEnvOrFileReadsTokenFile(clean)
 	if err != nil || !ok {
 		t.Fatalf("clean ambient must read TOKEN_FILE: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestBoundary_MulticaTokenEnvKey_NoRace freezes Barry's reviewer race probe:
+// concurrent ambientTokenFromEnvOrFile + runtimeEnvToken must be race-free
+// (no package-level mutable key cache).
+func TestBoundary_MulticaTokenEnvKey_NoRace(t *testing.T) {
+	env := map[string]string{multicaTokenEnvKey: "mat_race_probe_token"}
+	const workers = 32
+	done := make(chan struct{}, workers*2)
+	for i := 0; i < workers; i++ {
+		go func() {
+			for j := 0; j < 200; j++ {
+				_ = ambientTokenFromEnvOrFile()
+			}
+			done <- struct{}{}
+		}()
+		go func() {
+			for j := 0; j < 200; j++ {
+				if runtimeEnvToken(env) == "" {
+					t.Error("runtimeEnvToken empty under concurrency")
+				}
+			}
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < workers*2; i++ {
+		<-done
+	}
+	if got := runtimeEnvToken(env); got != "mat_race_probe_token" {
+		t.Fatalf("runtimeEnvToken = %q", got)
+	}
+	if got := runtimeEnvToken(nil); got != "" {
+		t.Fatalf("nil env = %q", got)
 	}
 }
 

@@ -108,7 +108,6 @@
       "demote_human": "管理者を解除",
       "transfer": "オーナーを譲渡",
       "remove": "グループから削除",
-      "coming_soon": "権限の設定が完了すると利用できます。",
       "role_actions_pending": "グループ管理権限は近日提供予定です。現在メンバーのロールは変更されません。"
     },
     "select_user": "メンバーを選択",

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,5 +156,110 @@ func TestBoundary_Directory_NoSecretInstructionValue(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), secret) {
 		t.Fatalf("directory response body contains secret instructions for public agent %s", victimID)
+	}
+}
+
+// --- Parker product contract (2026-07-28): uploader-owned secure staging ---
+//  (a) uploader agent may view/bind own unbound upload
+//  (b) foreign agent with the id → 403/404 deny
+//  (c) after bind to a surface, visibility follows reference rules
+// These are intentional hard controls; red until Ronan staging tip lands.
+
+func agentMultipartUpload(t *testing.T, agentID string, fields map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	fw, err := w.CreateFormFile("file", "stage.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte("staging-bytes")); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/attachments", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req = withAgentPrincipal(req, agentID, testWorkspaceID, testUserID)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.UploadAgentAttachment(rec, req)
+	return rec
+}
+
+// TestBoundary_StagingUnbound_UploaderCanViewOwn asserts mat agent may upload
+// unbound and then GET metadata for that attachment (secure staging).
+func TestBoundary_StagingUnbound_UploaderCanViewOwn(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prev := testHandler.Storage
+	testHandler.Storage = &mockStorage{}
+	t.Cleanup(func() { testHandler.Storage = prev })
+
+	uploader := createHandlerTestAgent(t, "StageUploader", []byte("[]"))
+	upRec := agentMultipartUpload(t, uploader, nil)
+	if upRec.Code != http.StatusOK && upRec.Code != http.StatusCreated {
+		t.Fatalf("uploader unbound upload status=%d body=%s; want 200 (Parker secure staging)", upRec.Code, upRec.Body.String())
+	}
+	var att map[string]any
+	if err := json.Unmarshal(upRec.Body.Bytes(), &att); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	attID, _ := att["id"].(string)
+	if attID == "" {
+		t.Fatalf("upload response missing id: %s", upRec.Body.String())
+	}
+
+	getReq := newRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
+	getReq = withAgentPrincipal(getReq, uploader, testWorkspaceID, testUserID)
+	getReq = withChannelTestWorkspaceCtx(t, getReq, testUserID)
+	getReq = withURLParam(getReq, "id", attID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetAgentAttachment(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("uploader GET own unbound attachment status=%d body=%s; want 200", getRec.Code, getRec.Body.String())
+	}
+}
+
+// TestBoundary_StagingUnbound_ForeignAgentDenied asserts another agent cannot
+// view an unbound attachment even when it knows the id.
+func TestBoundary_StagingUnbound_ForeignAgentDenied(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prev := testHandler.Storage
+	testHandler.Storage = &mockStorage{}
+	t.Cleanup(func() { testHandler.Storage = prev })
+
+	uploader := createHandlerTestAgent(t, "StageOwner", []byte("[]"))
+	foreign := createHandlerTestAgent(t, "StageForeign", []byte("[]"))
+	upRec := agentMultipartUpload(t, uploader, nil)
+	if upRec.Code != http.StatusOK && upRec.Code != http.StatusCreated {
+		t.Fatalf("uploader unbound upload status=%d body=%s; want 200 first", upRec.Code, upRec.Body.String())
+	}
+	var att map[string]any
+	_ = json.Unmarshal(upRec.Body.Bytes(), &att)
+	attID, _ := att["id"].(string)
+	if attID == "" {
+		t.Fatalf("missing id: %s", upRec.Body.String())
+	}
+
+	getReq := newRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
+	getReq = withAgentPrincipal(getReq, foreign, testWorkspaceID, testUserID)
+	getReq = withChannelTestWorkspaceCtx(t, getReq, testUserID)
+	getReq = withURLParam(getReq, "id", attID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetAgentAttachment(getRec, getReq)
+	// 403 or 404 both fail-closed; must not 200.
+	if getRec.Code == http.StatusOK {
+		t.Fatalf("foreign agent viewed unbound attachment %s — want deny", attID)
+	}
+	if getRec.Code != http.StatusForbidden && getRec.Code != http.StatusNotFound {
+		t.Logf("foreign deny status=%d body=%s (403/404 preferred)", getRec.Code, getRec.Body.String())
 	}
 }

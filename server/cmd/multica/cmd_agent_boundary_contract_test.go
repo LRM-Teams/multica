@@ -499,6 +499,70 @@ func TestBoundary_IssueCreate_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_ReminderList_AlreadyDedicated keeps reminder list on dedicated path.
+func TestBoundary_ReminderList_AlreadyDedicated(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.URL.Path != "/api/agent/reminders/list" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"reminders": []any{}})
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("status", "", "")
+	if err := runReminderList(cmd, nil); err != nil {
+		t.Fatalf("runReminderList: %v", err)
+	}
+	if gotPath != "/api/agent/reminders/list" {
+		t.Fatalf("path = %q, want /api/agent/reminders/list", gotPath)
+	}
+}
+
+// TestBoundary_SquadMemberSetRole_HitsDedicatedAgentAPI asserts set-role uses
+// PATCH /api/agent/squads/{id}/members/role (leader authority still server-side).
+func TestBoundary_SquadMemberSetRole_HitsDedicatedAgentAPI(t *testing.T) {
+	squadID := "s1111111-2222-3333-4444-555555555555"
+	wantPath := "/api/agent/squads/" + squadID + "/members/role"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPatch && r.URL.Path == wantPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		http.Error(w, "human squad path forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "set-role"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("member-id", "", "")
+	cmd.Flags().String("member-type", "", "")
+	cmd.Flags().String("role", "", "")
+	cmd.Flags().String("output", "json", "")
+	_ = cmd.Flags().Set("member-id", "agent-1")
+	_ = cmd.Flags().Set("member-type", "agent")
+	_ = cmd.Flags().Set("role", "member")
+
+	if err := runSquadMemberSetRole(cmd, []string{squadID}); err != nil {
+		t.Fatalf("runSquadMemberSetRole: %v (paths=%v)", err, gotPaths)
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "PATCH "+wantPath {
+		t.Fatalf("paths = %v, want [PATCH %s]", gotPaths, wantPath)
+	}
+}
+
 // TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI asserts resource list
 // uses GET /api/agent/projects/{id}/resources.
 func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {

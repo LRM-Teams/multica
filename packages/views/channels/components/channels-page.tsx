@@ -1963,6 +1963,10 @@ export function ChannelsPage({
     const parts = buildChatMessageParts(content, channelPending.readyAttachmentParts);
     if (parts.length === 0) return;
     const attachmentIds = channelPending.readyAttachmentParts.map((p) => p.attachment_id);
+    // #1276 INV-1 — capture the draft key at dispatch: onCommitted/onVisibleError
+    // fire async, so a channel switch mid-flight must not clear/restore the wrong
+    // channel's draft.
+    const draftKey = activeDraftKey;
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
@@ -1975,9 +1979,16 @@ export function ChannelsPage({
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
-      // Composer clears on optimistic dispatch (LRM-222); onCommitted stays a
-      // no-op safety net if a future path skips the early clear.
-      onCommitted: () => setChannelSendError(null),
+      // #1276 INV-1: the input is cleared on optimistic dispatch (below), but the
+      // PERSISTED draft is cleared ONLY here, on confirmed success — never on
+      // dispatch. Optimistic UI may DISPLAY optimistically (empty composer +
+      // pending bubble) but must not DELETE the user's text before the send
+      // commits; otherwise a failure/abort (up to the 30s send timeout) or a
+      // reload/channel-switch mid-flight loses it.
+      onCommitted: () => {
+        setChannelSendError(null);
+        if (draftKey) storeClearComposerDraft(draftKey);
+      },
       // #772: no permanent failed bubble. Restore the failed text into the
       // composer (unless it already holds new text → keep + offer Restore) and
       // show the inline error bar; bump the editor remount-nonce so it re-reads
@@ -1986,8 +1997,8 @@ export function ChannelsPage({
         const currentText = editorRef.current?.getMarkdown()?.trim() ?? "";
         const conflicted = currentText.length > 0 && currentText !== content;
         channelFailedContentRef.current = content;
-        if (!conflicted && activeDraftKey) {
-          setConversationDraft(activeDraftKey, content);
+        if (!conflicted && draftKey) {
+          setConversationDraft(draftKey, content);
           setChannelRestoreNonce((n) => n + 1);
         }
         setChannelSendError({ conflicted });
@@ -1999,7 +2010,9 @@ export function ChannelsPage({
       editorRef.current?.clearContent();
       channelPending.clear();
       setQuoteTarget(null);
-      if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
+      // NB: the persisted draft is intentionally NOT cleared here (#1276 INV-1) —
+      // it is cleared in onCommitted (confirmed success) so the text survives any
+      // non-success outcome, including a reload/switch during the in-flight window.
       if (typingStartedRef.current) {
         typingStartedRef.current = false;
         publishTyping(false);

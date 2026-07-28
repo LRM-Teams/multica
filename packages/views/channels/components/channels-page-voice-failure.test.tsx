@@ -522,25 +522,34 @@ describe("voice send failure leaves a durable record (#838)", () => {
     return screen.findByTestId("fire-voice-thread");
   }
 
-  // ⚠️ SKIPPED — NOT COVERAGE. @iris asked for this and I could not get the
-  // thread surface to mount in this harness tonight: the `?thread=` deep link
-  // alone doesn't open it (the panel comes from `sidePanel.kind === "thread"`,
-  // which needs more of the side-panel machinery than the URL param), and the
-  // panel also persists across channel switches, so a round-trip doesn't
-  // re-drive it. The harness pieces this needs ARE in place now — the Composer
-  // mock is surface-aware (`fire-voice-thread`) and `navState.search` is
-  // mutable — what's missing is opening the panel.
+  // ⚠️ SKIPPED — NOT COVERAGE. Two findings from probing it (so the next
+  // attempt doesn't repeat them):
+  //   1. The thread composer DOES mount — but only when `?thread=` is present
+  //      at MOUNT. `threadDeepLinkId` seeds from a mount-time `useState`; setting
+  //      the param afterwards and re-rendering did not open it here.
+  //   2. Switching threads mid-test is the actual blocker, and my helper hid it:
+  //      `fire-voice-thread` exists for EITHER thread, so `findByTestId` after a
+  //      switch proves nothing — it matches thread A's composer just as happily.
+  //      A real switch needs thread-identifying evidence in the DOM (the mocked
+  //      Composer receives no root id; ThreadPanel has it).
+  // Not a data-leak risk either way: `threadRoot` is nulled whenever
+  // `activeChannelId !== openThreadRoot.channel_id` (channels-page ~977), so a
+  // thread's content cannot render under another channel (verified by Felix) —
+  // which is also why this case must NOT switch threads by switching channels:
+  // that clearing is correct behaviour and would be misread as "won't mount".
   //
   // What IS proven meanwhile: the channel A/B sequences above (display,
   // overwrite-resistance, retry target, delete isolation) and voice-target.test.ts
   // (the key can't collide across channel/thread/root). The thread composer's
   // OWN wiring to the map is therefore NOT verified end-to-end. Tracked on #838.
   it.skip("thread A→B: B does not show A's unsent recording, and each thread keeps its own", async () => {
+    navState.search = new URLSearchParams("thread=root-1");
     const view = renderPage("chan-random");
     await screen.findByTestId("composer");
-
-    // Thread A fails.
-    const fireA = await openThread(view, "root-1");
+    // PROBE: does the thread composer mount at all when the deep link is
+    // present from the very first render?
+    const fireA = await screen.findByTestId("fire-voice-thread");
+    void view;
     sendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
     fireEvent.click(fireA);
     await waitFor(() => {

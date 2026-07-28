@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -217,6 +216,9 @@ type Daemon struct {
 	// would re-exec and confirms it already reports targetVersion. Set to
 	// d.verifyUpdatedBinary by New() and overridable in tests.
 	verifyUpdatedBinaryFn func(targetVersion, updateOutput string) (string, error)
+	// activateStagedFn CAS-commits staged Active and returns re-exec path.
+	// Nil → commitStagedActivation. Tests may no-op with ("", nil).
+	activateStagedFn func(ctx context.Context, updateID, updateOutput string) (string, error)
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
@@ -2057,22 +2059,11 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	d.triggerRestart()
 }
 
-// runUpdate executes the direct LRM release-download upgrade against targetVersion and
-// returns the human-readable output (always populated, even on failure when
-// the updater gives us a useful diagnostic). The caller is responsible for the
-// `updating` CAS guard and for reporting status back to the server / triggering
-// the restart. Daemon self-update intentionally bypasses Homebrew taps so the
-// authoritative source is always LRM-Teams/multica release assets.
+// runUpdate stages targetVersion into the immutable VersionStore. It does not
+// self-replace the process executable (#815 B-cutover). Activation/CAS and
+// restart from the staged path are owned by handleUpdate / activate path.
 func (d *Daemon) runUpdate(targetVersion string) (string, error) {
-	if cli.IsBrewInstall() {
-		d.logger.Info("Homebrew install detected; daemon self-update uses direct LRM release download")
-	}
-	d.logger.Info("updating CLI via direct download...", "target_version", targetVersion)
-	out, err := cli.UpdateViaDownload(targetVersion)
-	if err != nil {
-		return out, fmt.Errorf("download update failed: %w", err)
-	}
-	return out, nil
+	return d.runStageUpdate(targetVersion)
 }
 
 func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, output string) bool {
@@ -2092,6 +2083,14 @@ func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, ou
 
 const stagedUpdateOpportunisticIdleWindow = 10 * time.Minute
 
+// stagedUpdateHardDrainExtra is T_hard − T_idle (design D6). After the
+// opportunistic idle window the barrier is forced; if still not drained by
+// T_hard the attempt is abandoned with typed drain_timeout (path A).
+const stagedUpdateHardDrainExtra = 5 * time.Minute
+
+// stagedUpdateHardDrainTotal is T_hard from T0 (stage ready / ready_to_apply).
+const stagedUpdateHardDrainTotal = stagedUpdateOpportunisticIdleWindow + stagedUpdateHardDrainExtra
+
 func (d *Daemon) abortStagedRestartIfCanceled(
 	ctx context.Context,
 	runtimeID, updateID string,
@@ -2108,6 +2107,28 @@ func (d *Daemon) abortStagedRestartIfCanceled(
 	return true
 }
 
+// abandonStagedUpdatePathA releases the barrier, reports failed+drain_timeout,
+// and leaves the committed Active binary untouched (CUT-T1/T2). Used at T_hard.
+func (d *Daemon) abandonStagedUpdatePathA(ctx context.Context, runtimeID, updateID, output string) {
+	d.releaseClaimBarrier()
+	d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_failed", "", "drain_timeout", "Activation abandoned: drain did not complete within T_hard.")
+	d.logger.Warn("CLI update path A abandon at T_hard (drain_timeout); committed Active unchanged",
+		"runtime_id", runtimeID, "update_id", updateID, "output", compactUpdateOutput(output))
+	if d.client == nil {
+		return
+	}
+	_ = d.reportUpdateResult(ctx, runtimeID, updateID, map[string]any{
+		"status": "failed",
+		"error":  handlerDrainTimeoutError(),
+	})
+}
+
+// handlerDrainTimeoutError returns the stable machine string for path A.
+// Defined as a function so daemon does not import handler package.
+func handlerDrainTimeoutError() string {
+	return "drain_timeout"
+}
+
 func (d *Daemon) finishUpdateObservationWithoutRestart() {
 	if d.updateObservation == nil {
 		return
@@ -2121,22 +2142,83 @@ func (d *Daemon) waitForSafeRestartWithWindow(
 	runtimeID, updateID, output string,
 	opportunisticWindow, interval time.Duration,
 ) bool {
+	return d.waitForSafeRestartWithWindows(
+		ctx,
+		runtimeID,
+		updateID,
+		output,
+		opportunisticWindow,
+		stagedUpdateHardDrainExtra,
+		interval,
+	)
+}
+
+// waitForSafeRestartWithWindows is the testable form with explicit T_idle and
+// T_hard−T_idle windows. At T_hard without drain → path A abandon (no restart).
+func (d *Daemon) waitForSafeRestartWithWindows(
+	ctx context.Context,
+	runtimeID, updateID, output string,
+	opportunisticWindow, hardExtra, interval time.Duration,
+) bool {
 	if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, false) {
 		return false
+	}
+	// opportunisticWindow may be 0 (tests: fire idle deadline immediately).
+	// Only negative means "use production default".
+	if opportunisticWindow < 0 {
+		opportunisticWindow = stagedUpdateOpportunisticIdleWindow
+	}
+	if hardExtra <= 0 {
+		hardExtra = stagedUpdateHardDrainExtra
+	}
+	if interval <= 0 {
+		interval = 5 * time.Second
 	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	deadline := time.NewTimer(opportunisticWindow)
-	defer deadline.Stop()
+	idleDeadline := time.NewTimer(opportunisticWindow)
+	defer idleDeadline.Stop()
+	hardDeadline := time.NewTimer(opportunisticWindow + hardExtra)
+	defer hardDeadline.Stop()
 	draining := false
+
+	tryRestart := func(barrierHeld bool) bool {
+		if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, barrierHeld) {
+			return false
+		}
+		// Thin activate: CAS staged tag to Active, then re-exec staged path.
+		// Full candidate health/register is a follow-up; path A already safe.
+		activate := d.activateStagedFn
+		if activate == nil {
+			activate = d.commitStagedActivation
+		}
+		if path, err := activate(ctx, updateID, output); err != nil {
+			d.logger.Error("CLI update activate CAS failed; path A abandon", "error", err, "runtime_id", runtimeID, "update_id", updateID)
+			d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
+			return false
+		} else if path != "" {
+			d.restartBinary = path
+		}
+		d.logger.Info("CLI update ready; daemon drained, restarting from staged Active", "runtime_id", runtimeID, "update_id", updateID, "output", output, "binary", d.restartBinary)
+		d.triggerRestart()
+		return true
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, draining)
 			return false
-		case <-deadline.C:
+		case <-hardDeadline.C:
+			// D6 path A: T_hard reached without successful restart.
+			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, draining) {
+				return false
+			}
+			d.logger.Warn("CLI update T_hard reached without drain complete", "runtime_id", runtimeID, "update_id", updateID)
+			d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
+			return false
+		case <-idleDeadline.C:
 			d.setClaimBarrier()
 			draining = true
 			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
@@ -2146,33 +2228,18 @@ func (d *Daemon) waitForSafeRestartWithWindow(
 			if !d.claimBarrierDrained() {
 				continue
 			}
-			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
-				return false
-			}
-			d.logger.Info("CLI update ready; daemon drained, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
-			d.triggerRestart()
-			return true
+			return tryRestart(true)
 		case <-ticker.C:
 			if draining {
 				if !d.claimBarrierDrained() {
 					continue
 				}
-				if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
-					return false
-				}
-				d.logger.Info("CLI update ready; daemon drained, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
-				d.triggerRestart()
-				return true
+				return tryRestart(true)
 			}
 			if !d.trySetClaimBarrier() {
 				continue
 			}
-			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
-				return false
-			}
-			d.logger.Info("CLI update ready; daemon reached an idle opportunity before the deadline, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
-			d.triggerRestart()
-			return true
+			return tryRestart(true)
 		}
 	}
 }
@@ -2190,39 +2257,9 @@ func (d *Daemon) verifyUpdatedBinaryVersion(targetVersion, updateOutput string) 
 }
 
 func (d *Daemon) verifyUpdatedBinary(targetVersion, updateOutput string) (string, error) {
-	binaryPath, err := d.restartBinaryPath()
-	if err != nil {
-		return "", fmt.Errorf("resolve updated binary for version check: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), updatedBinaryVersionCheckTimeout)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("updated binary version check timed out for %s", binaryPath)
-	}
-	if err != nil {
-		return "", fmt.Errorf("updated binary version check failed for %s: %w: %s", binaryPath, err, compactUpdateOutput(string(out)))
-	}
-
-	actualVersion, err := parseMulticaVersionOutput(string(out))
-	if err != nil {
-		return "", fmt.Errorf("updated binary version check failed for %s: %w: %s", binaryPath, err, compactUpdateOutput(string(out)))
-	}
-	if !versionStringsMatch(actualVersion, targetVersion) {
-		msg := fmt.Sprintf(
-			"binary_version_mismatch_after_update: %s --version reported %s, expected %s",
-			binaryPath,
-			actualVersion,
-			targetVersion,
-		)
-		if updateSummary := compactUpdateOutput(updateOutput); updateSummary != "" {
-			msg += "; updater output: " + updateSummary
-		}
-		return actualVersion, errors.New(msg)
-	}
-	return actualVersion, nil
+	// #815: after StageRelease, truth is the immutable staged binary — not the
+	// still-running process executable (which must remain committed Active).
+	return d.verifyStagedBinary(targetVersion, updateOutput)
 }
 
 func parseMulticaVersionOutput(output string) (string, error) {
@@ -2379,15 +2416,18 @@ func (d *Daemon) releaseClaimBarrier() {
 }
 
 // triggerRestart initiates a graceful daemon restart after a successful CLI update.
-// For brew installs, it keeps the symlink path (e.g. /opt/homebrew/bin/multica)
-// so the restarted daemon picks up the new Cellar version automatically.
-// For non-brew installs, it resolves to the absolute path of the replaced binary.
+// If restartBinary was already set (e.g. staged VersionStore Active path), that
+// path is preferred. Otherwise falls back to brew symlink / current executable.
 // The caller (cmd_daemon.go) checks RestartBinary() and launches the new process.
 func (d *Daemon) triggerRestart() {
-	newBin, err := d.restartBinaryPath()
-	if err != nil {
-		d.logger.Error("could not resolve executable path for restart", "error", err)
-		return
+	newBin := strings.TrimSpace(d.restartBinary)
+	if newBin == "" {
+		var err error
+		newBin, err = d.restartBinaryPath()
+		if err != nil {
+			d.logger.Error("could not resolve executable path for restart", "error", err)
+			return
+		}
 	}
 
 	d.logger.Info("scheduling daemon restart", "new_binary", newBin)

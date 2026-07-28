@@ -365,6 +365,12 @@ func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 			}
 			return "Warning: multica-ai/tap/multica 0.3.35 already installed", nil
 		},
+		verifyUpdatedBinaryFn: func(targetVersion, updateOutput string) (string, error) {
+			return "0.3.35", errors.New(
+				"binary_version_mismatch_after_update: reported 0.3.35, expected " + targetVersion +
+					"; updater output: " + updateOutput,
+			)
+		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
@@ -437,6 +443,10 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 			}
 			return "0.3.36", nil
 		},
+		// Tests that mock stage/verify skip real VersionStore CAS.
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
+		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
@@ -493,6 +503,9 @@ func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *tes
 		},
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
 		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
@@ -553,6 +566,9 @@ func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
 		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
+		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
@@ -609,6 +625,9 @@ func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
 		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
+		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
@@ -656,6 +675,9 @@ func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testin
 		},
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
 		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
@@ -708,6 +730,9 @@ func TestHandleUpdateOldServerBusyDoesNotClaimRestartPending(t *testing.T) {
 		},
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
 		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
@@ -762,6 +787,9 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
 		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
+		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
@@ -795,6 +823,9 @@ func TestWaitForSafeRestartAllowsClaimsBeforeDeadlineThenStopsAndDrains(t *testi
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		cancelFunc: func() {
 			restartCalls.Add(1)
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
 		},
 	}
 	d.activeTasks.Store(1)
@@ -852,6 +883,9 @@ func TestWaitForSafeRestartDeadlineDrainsClaimAlreadyInFlight(t *testing.T) {
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
+		},
 	}
 	if !d.tryEnterClaim() {
 		t.Fatal("initial claim unexpectedly rejected")
@@ -897,6 +931,9 @@ func TestWaitForSafeRestartContextCancellationNeverForcesActiveTaskRestart(t *te
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
+		},
 	}
 	d.activeTasks.Store(1)
 
@@ -937,6 +974,9 @@ func TestWaitForSafeRestartPreCanceledZeroDeadlineNeverRestarts(t *testing.T) {
 			cancelFunc: func() {
 				restartCalls.Add(1)
 			},
+			activateStagedFn: func(context.Context, string, string) (string, error) {
+				return "", nil
+			},
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -968,6 +1008,9 @@ func TestWaitForSafeRestartCancelRacingFinalDrainNeverRestarts(t *testing.T) {
 			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 			cancelFunc: func() {
 				restartCalls.Add(1)
+			},
+			activateStagedFn: func(context.Context, string, string) (string, error) {
+				return "", nil
 			},
 		}
 		d.activeTasks.Store(1)
@@ -1011,6 +1054,9 @@ func TestWaitForSafeRestartUsesIdleOpportunityBeforeDeadline(t *testing.T) {
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		cancelFunc: func() {
 			restartCalls.Add(1)
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
 		},
 	}
 	d.activeTasks.Store(1)
@@ -1087,6 +1133,9 @@ func TestHandleUpdateFailsSafelyWhenBusyAndServerDoesNotSupportReadyToApply(t *t
 		},
 		verifyUpdatedBinaryFn: func(string, string) (string, error) {
 			return "0.3.36", nil
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "", nil
 		},
 		cancelFunc: func() {
 			restartCalls.Add(1)

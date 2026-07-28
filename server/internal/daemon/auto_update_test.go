@@ -36,6 +36,10 @@ func newAutoUpdateTestDaemon(t *testing.T, currentVersion string) (*Daemon, *ato
 	d.verifyUpdatedBinaryFn = func(targetVersion, _ string) (string, error) {
 		return targetVersion, nil
 	}
+	// Skip real VersionStore CAS in unit tests; success path only needs restart.
+	d.activateStagedFn = func(context.Context, string, string) (string, error) {
+		return "", nil
+	}
 	return d, &restartCalls
 }
 

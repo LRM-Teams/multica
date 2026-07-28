@@ -21,14 +21,28 @@ vi.mock("../../i18n/use-t", () => ({
         voice_start: string;
         voice_stop: string;
         voice_uploading: string;
-        voice_blocked: string;
+        voice_blocked_uploading: string;
+        voice_blocked_pending_voice: string;
+        voice_blocked_sending: string;
+        voice_blocked_text_draft: string;
+        voice_blocked_attachment_draft: string;
+        voice_blocked_text_and_attachment_draft: string;
       };
     }) => string) => selector({
       composer: {
         voice_start: "Record voice message",
         voice_stop: "Stop recording",
         voice_uploading: "Uploading voice message",
-        voice_blocked: "Finish the current draft first",
+        // Distinct sentinels — asserting the RIGHT one appears is only
+        // meaningful if a wrong one would look different. (The retired
+        // `voice_blocked` sentinel lived here saying "Finish the current draft
+        // first", which never matched the real string it stood in for.)
+        voice_blocked_uploading: "COPY_UPLOADING",
+        voice_blocked_pending_voice: "COPY_PENDING_VOICE",
+        voice_blocked_sending: "COPY_SENDING",
+        voice_blocked_text_draft: "COPY_TEXT",
+        voice_blocked_attachment_draft: "COPY_ATTACHMENT",
+        voice_blocked_text_and_attachment_draft: "COPY_TEXT_AND_ATTACHMENT",
       },
     }),
   }),
@@ -249,5 +263,122 @@ describe("Composer", () => {
       expect(submit?.className).toContain("text-muted-foreground");
       expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
     });
+  });
+});
+
+// #858 — every reachable cause of a disabled mic renders a VISIBLE explanation,
+// on all four surfaces that have a mic. The retired `composer.voice_blocked`
+// said one sentence for every cause, so it was true for at most one of them;
+// worse, it lived in a `title`, and a natively-disabled button fires no hover
+// events, so it reached nobody at all.
+describe("Composer — voice block reason (#858)", () => {
+  const base = {
+    editor: <div data-testid="composer-editor">Editor</div>,
+    sendLabel: "Send",
+    onSend: vi.fn(),
+    isMobile: false,
+    sendDisabled: false,
+    voiceChannelId: "chan-1",
+    voicePlaybackScope: "scope-1",
+    onVoiceSend: () => true,
+  };
+
+  const NONE = { hasTextDraft: false, hasAttachmentDraft: false };
+
+  function status() {
+    return document.querySelector('[data-slot="composer-voice-block-status"]');
+  }
+  function mic() {
+    return screen.getByRole("button", { name: "Record voice message" });
+  }
+
+  // All four surfaces that mount a mic. DMs were NOT in the original contract
+  // and were found by grepping the call sites: had they been left out while
+  // `voice_blocked` was retired, their mics would have gone grey with no
+  // explanation at all — the very defect this ticket removes.
+  const SURFACES = ["channel", "thread", "dm_channel", "legacy_dm"] as const;
+
+  describe.each(SURFACES)("surface=%s", (surface) => {
+    it("explains a blocked mic in a visible role=status the mic points at, and keeps the mic natively disabled", () => {
+      render(
+        <Composer
+          surface={surface}
+          {...base}
+          voiceBlock={{ hasTextDraft: true, hasAttachmentDraft: false }}
+        />,
+      );
+      const line = status();
+      expect(line).not.toBeNull();
+      // Computed role, not the literal attribute: `<output>` maps to
+      // role="status" implicitly, and what matters is what AT resolves.
+      expect(screen.getByRole("status")).toBe(line);
+      expect(line).toHaveTextContent("COPY_TEXT");
+
+      const button = mic();
+      // Natively disabled — NOT aria-disabled, which stays clickable and lies
+      // to assistive tech in a different way (Iris).
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAttribute("aria-disabled");
+      // The accessible NAME stays the action; the reason is a description.
+      expect(button).toHaveAccessibleName("Record voice message");
+      expect(button.getAttribute("aria-describedby")).toBe(line?.getAttribute("id"));
+    });
+
+    it("renders no status and no description link when recording is available — the inverse half", () => {
+      render(<Composer surface={surface} {...base} voiceBlock={NONE} />);
+      expect(status()).toBeNull();
+      const button = mic();
+      expect(button).not.toBeDisabled();
+      expect(button).not.toHaveAttribute("aria-describedby");
+    });
+
+    it.each([
+      ["text only", { hasTextDraft: true, hasAttachmentDraft: false }, "COPY_TEXT"],
+      ["attachment only", { hasTextDraft: false, hasAttachmentDraft: true }, "COPY_ATTACHMENT"],
+      // Its own sentence, never one of the singles: naming only the text leaves
+      // the mic disabled after the user clears it.
+      ["text + attachment", { hasTextDraft: true, hasAttachmentDraft: true }, "COPY_TEXT_AND_ATTACHMENT"],
+    ])("says the true sentence for %s", (_label, voiceBlock, expected) => {
+      render(<Composer surface={surface} {...base} voiceBlock={voiceBlock} />);
+      expect(status()).toHaveTextContent(expected);
+    });
+  });
+
+  it("a send in flight is explained on its own real prop, not only in the resolver", () => {
+    render(<Composer surface="channel" {...base} sending voiceBlock={NONE} />);
+    expect(status()).toHaveTextContent("COPY_SENDING");
+    expect(mic()).toBeDisabled();
+  });
+
+  it("an unsent recording outranks a text draft", () => {
+    render(
+      <Composer
+        surface="channel"
+        {...base}
+        voiceBlock={{ pendingVoice: true, hasTextDraft: true, hasAttachmentDraft: false }}
+      />,
+    );
+    expect(status()).toHaveTextContent("COPY_PENDING_VOICE");
+  });
+
+  it("an attachment upload is never described as a voice upload", () => {
+    // The tray's `hasUploading` is a subset of `pending`, so an uploading PDF
+    // arrives as `hasAttachmentDraft`. Calling that "uploading your voice
+    // message" would be a new false sentence in place of the old one.
+    render(
+      <Composer
+        surface="channel"
+        {...base}
+        voiceBlock={{ hasTextDraft: false, hasAttachmentDraft: true }}
+      />,
+    );
+    expect(status()).toHaveTextContent("COPY_ATTACHMENT");
+    expect(status()).not.toHaveTextContent("COPY_UPLOADING");
+  });
+
+  it("omitting voiceBlock leaves the mic enabled with no status — surfaces without the feature are untouched", () => {
+    render(<Composer surface="channel" {...base} />);
+    expect(status()).toBeNull();
+    expect(mic()).not.toBeDisabled();
   });
 });

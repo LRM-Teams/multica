@@ -1,12 +1,18 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import { Send } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { VoiceInputButton } from "./voice-input-button";
 import type { VoiceRecordingAttachment } from "../lib/voice-audio";
+import {
+  resolveVoiceBlockReason,
+  type VoiceBlockReason,
+  type VoiceCapturePhase,
+} from "./voice-block-reason";
+import { useT } from "../../i18n/use-t";
 
 /**
  * The conversation surface a composer belongs to. The composer shell is
@@ -34,9 +40,21 @@ export interface ComposerProps {
   /** Optional speech input shared by channel, DM, and thread composers. */
   voiceChannelId?: string;
   voicePlaybackScope?: string;
-  voiceDisabled?: boolean;
-  /** #838 — specific reason for `voiceDisabled`, when the caller knows one. */
-  voiceBlockedReason?: string;
+  /**
+   * #858 — the conditions that block voice recording, so the composer can both
+   * disable the mic AND say why in one place. Deliberately the raw conditions
+   * rather than a `disabled` boolean: deriving both from one source is what
+   * makes "disabled but unexplained" unrepresentable, which was the whole bug.
+   *
+   * Omit entirely on surfaces with no mic.
+   */
+  voiceBlock?: {
+    /** An unsent recording waits for THIS target. DMs pass nothing (#838 only wired channels/threads). */
+    pendingVoice?: boolean;
+    hasTextDraft: boolean;
+    /** Any tray item, uploaded or not — `pending.length > 0`, not `hasUploading`. */
+    hasAttachmentDraft: boolean;
+  };
   onVoiceSend?: (
     durationMs: number,
     attachment: VoiceRecordingAttachment,
@@ -81,13 +99,64 @@ export function Composer({
   leadingActions,
   voiceChannelId,
   voicePlaybackScope,
-  voiceDisabled = false,
-  voiceBlockedReason,
+  voiceBlock,
   onVoiceSend,
   tray,
   readOnly = false,
   readOnlyContent,
 }: ComposerProps) {
+  const { t } = useT("channels");
+  const voiceStatusId = useId();
+  // The mic's OWN upload — only this may resolve to "uploading". An attachment
+  // upload arrives as `hasAttachmentDraft` and gets the attachment sentence
+  // (Iris, #858): calling a PDF upload "uploading your voice message" would be
+  // the same class of lie this ticket removes.
+  const [capturePhase, setCapturePhase] = useState<VoiceCapturePhase>("idle");
+  const handleCapturePhaseChange = useCallback((phase: VoiceCapturePhase) => setCapturePhase(phase), []);
+
+  const voiceBlockReason: VoiceBlockReason | null = voiceBlock
+    ? resolveVoiceBlockReason({
+        capturePhase,
+        pendingVoice: voiceBlock.pendingVoice ?? false,
+        sending,
+        hasTextDraft: voiceBlock.hasTextDraft,
+        hasAttachmentDraft: voiceBlock.hasAttachmentDraft,
+      })
+    : null;
+  // One source for both. A separate `disabled` prop could drift out of step with
+  // the reason and put us back to a mic that is grey for an unstated cause.
+  const voiceBlocked = voiceBlockReason !== null;
+  // One sentence per reason, no shared fallback. A single string covering
+  // several causes is true for at most one of them — that is exactly how the
+  // retired `composer.voice_blocked` came to tell users with an empty composer
+  // to clear text and attachments.
+  let voiceBlockText: string | null = null;
+  switch (voiceBlockReason) {
+    case "starting":
+      voiceBlockText = t(($) => $.composer.voice_blocked_starting);
+      break;
+    case "uploading":
+      voiceBlockText = t(($) => $.composer.voice_blocked_uploading);
+      break;
+    case "pending_voice":
+      voiceBlockText = t(($) => $.composer.voice_blocked_pending_voice);
+      break;
+    case "sending":
+      voiceBlockText = t(($) => $.composer.voice_blocked_sending);
+      break;
+    case "text_draft":
+      voiceBlockText = t(($) => $.composer.voice_blocked_text_draft);
+      break;
+    case "attachment_draft":
+      voiceBlockText = t(($) => $.composer.voice_blocked_attachment_draft);
+      break;
+    case "text_and_attachment_draft":
+      voiceBlockText = t(($) => $.composer.voice_blocked_text_and_attachment_draft);
+      break;
+    default:
+      voiceBlockText = null;
+  }
+
   if (readOnly) {
     return <ReadOnlyConversationBanner>{readOnlyContent}</ReadOnlyConversationBanner>;
   }
@@ -122,6 +191,27 @@ export function Composer({
         >
           {editor}
         </div>
+        {/* #858 — the explanation is VISIBLE and lives in the shell, not in a
+            `title`. A native-disabled button fires no hover events, so a tooltip
+            reaches nobody; and a visible line is the same explanation for
+            touch, mouse, keyboard and screen readers rather than only one of
+            them. Rendered ONLY when a cause exists — "recordable" must show
+            nothing at all. */}
+        {voiceBlockText ? (
+          <output
+            id={voiceStatusId}
+            // `<output>` already maps to role="status" — an explicit attribute
+            // is redundant (react-doctor prefer-tag-over-role). The tests assert
+            // the COMPUTED role via getByRole("status"), which is the stronger
+            // check anyway: it verifies what assistive tech resolves, not that a
+            // literal string is present.
+            className="px-4 pb-1 text-xs text-muted-foreground"
+            data-slot="composer-voice-block-status"
+            data-voice-block-reason={voiceBlockReason}
+          >
+            {voiceBlockText}
+          </output>
+        ) : null}
         <div
           className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}
           data-slot="composer-action-row"
@@ -139,8 +229,9 @@ export function Composer({
             {voiceChannelId && voicePlaybackScope && onVoiceSend ? (
               <VoiceInputButton
                 channelId={voiceChannelId}
-                disabled={voiceDisabled || sending}
-                blockedReason={voiceBlockedReason}
+                disabled={voiceBlocked}
+                describedById={voiceBlockText ? voiceStatusId : undefined}
+                onCapturePhaseChange={handleCapturePhaseChange}
                 isMobile={isMobile}
                 playbackScope={voicePlaybackScope}
                 onVoiceSend={onVoiceSend}

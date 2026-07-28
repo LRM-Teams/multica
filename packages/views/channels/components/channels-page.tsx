@@ -2375,10 +2375,12 @@ export function ChannelsPage({
   //
   // promote / demote / transfer have no endpoint yet and are rendered disabled
   // (#832), so they cannot reach this handler; they get no branch here rather
-  // than a toast that reads like success. Wire them for real once the final
-  // role-write contract for #814 lands and is served (currently PR #1332;
-  // #1321/#1326 are merged predecessors, not the contract — don't key work off
-  // them).
+  // than a toast that reads like success. Wire them for real once **#814's
+  // role-write API is merged AND served**.
+  //
+  // The condition names the task, not a PR: PRs roll (#1321 → #1326 → #1332 …),
+  // and keying this off a since-merged predecessor would read as "already
+  // satisfied" and invite wiring these up before the API is actually live.
   const handleGroupMemberAction = useCallback(
     (m: ChannelMember, action: GroupMemberActionKind) => {
       if (action === "remove") handleRemoveMemberClick(m);

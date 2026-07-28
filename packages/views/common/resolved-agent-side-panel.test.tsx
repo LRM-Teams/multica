@@ -239,6 +239,7 @@ describe("ResolvedAgentSidePanel (LRM-292)", () => {
     await waitFor(() => {
       expect(toastError).toHaveBeenCalledWith(
         "You don't have permission to view this member's profile",
+        expect.objectContaining({ duration: Infinity, closeButton: true }),
       );
     });
     expect(screen.getByText("Agent unavailable")).toBeInTheDocument();

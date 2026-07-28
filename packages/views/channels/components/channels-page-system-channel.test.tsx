@@ -514,6 +514,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       await waitFor(() =>
         expect(toastMock.error).toHaveBeenCalledWith(
           "Transfer ownership before leaving the group.",
+          expect.objectContaining({ duration: Infinity, closeButton: true }),
         ),
       );
       expect(toastMock.success).not.toHaveBeenCalled();

@@ -115,7 +115,10 @@ describe("AgentProfileAvatarEditor", () => {
     fireEvent.change(input, {
       target: { files: [new File(["x"], "note.txt", { type: "text/plain" })] },
     });
-    expect(toastError).toHaveBeenCalledWith("Please choose a PNG or JPG image.");
+    expect(toastError).toHaveBeenCalledWith(
+      "Please choose a PNG or JPG image.",
+      expect.objectContaining({ duration: Infinity, closeButton: true }),
+    );
     expect(upload).not.toHaveBeenCalled();
   });
 
@@ -128,7 +131,10 @@ describe("AgentProfileAvatarEditor", () => {
       type: "image/png",
     });
     fireEvent.change(input, { target: { files: [big] } });
-    expect(toastError).toHaveBeenCalledWith("Image must be 5 MB or smaller.");
+    expect(toastError).toHaveBeenCalledWith(
+      "Image must be 5 MB or smaller.",
+      expect.objectContaining({ duration: Infinity, closeButton: true }),
+    );
     expect(upload).not.toHaveBeenCalled();
   });
 });

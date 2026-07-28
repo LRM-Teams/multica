@@ -472,7 +472,10 @@ describe("CreateIssueModal", () => {
     await user.click(screen.getByRole("button", { name: "Create Issue" }));
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith("Backend says title is taken");
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Backend says title is taken",
+      expect.objectContaining({ duration: Infinity, closeButton: true }),
+    );
     expect(mockToastCustom).not.toHaveBeenCalled();
   });
 
@@ -487,7 +490,10 @@ describe("CreateIssueModal", () => {
     await user.click(screen.getByRole("button", { name: "Create Issue" }));
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith("Server is overloaded, try again");
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Server is overloaded, try again",
+      expect.objectContaining({ duration: Infinity, closeButton: true }),
+    );
   });
 
   // Non-Error throws (string, plain object) have no `.message`. Fall back to
@@ -501,7 +507,10 @@ describe("CreateIssueModal", () => {
     await user.click(screen.getByRole("button", { name: "Create Issue" }));
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith("Failed to create issue");
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to create issue",
+      expect.objectContaining({ duration: Infinity, closeButton: true }),
+    );
   });
 
   it("forwards the picked project when switching to agent mode", async () => {

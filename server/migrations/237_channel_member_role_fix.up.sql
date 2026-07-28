@@ -125,30 +125,36 @@ BEGIN
   END IF;
 END $$;
 
--- 7. Final-state invariant for ordinary groups (Barry P0):
+-- 7. Final-state invariant for ordinary groups (Barry P0 / re-BLOCK):
 --    - max 1 human owner: partial unique index from 236
---    - min 1 human owner: DEFERRABLE constraint trigger so
+--    - min 1 human owner: DEFERRABLE constraint triggers so
 --      * DELETE channel / workspace cascade is legal (no surviving group)
 --      * atomic transfer (demote old + promote new) can commit
 --      * sole-owner leave / demote still fails at commit
+--      * bare channel INSERT (0 members) fails at commit for ordinary groups
+--      * dm/system → ordinary conversion with 0 owners fails at commit
+--      * moving sole owner via channel_id update fails at commit
 --
+-- Two fact sources must both be covered:
+--   A) channel INSERT / kind|system_key|workspace_id change
+--   B) channel_member INSERT/DELETE and channel_id|role|member_type|workspace_id change
+--      (UPDATE checks OLD∪NEW channel, de-duplicated)
+
 -- Drop the eager BEFORE trigger if a prior tip of this PR created it.
 DROP TRIGGER IF EXISTS trg_channel_member_preserve_human_owner ON channel_member;
 DROP FUNCTION IF EXISTS channel_member_preserve_human_owner();
 
-CREATE OR REPLACE FUNCTION channel_member_assert_human_owner_final()
-RETURNS trigger
+-- Shared helper: assert one surviving ordinary group has ≥1 human owner.
+CREATE OR REPLACE FUNCTION assert_ordinary_group_has_human_owner(ch uuid)
+RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  ch uuid;
   ordinary boolean;
   n int;
 BEGIN
-  IF TG_OP = 'DELETE' THEN
-    ch := OLD.channel_id;
-  ELSE
-    ch := NEW.channel_id;
+  IF ch IS NULL THEN
+    RETURN;
   END IF;
 
   SELECT (c.kind = 'group' AND c.system_key IS NULL)
@@ -158,11 +164,11 @@ BEGIN
 
   IF NOT FOUND THEN
     -- Channel already deleted (cascade cleanup): no surviving ordinary group.
-    RETURN NULL;
+    RETURN;
   END IF;
 
   IF NOT ordinary THEN
-    RETURN NULL;
+    RETURN;
   END IF;
 
   SELECT count(*) INTO n
@@ -175,14 +181,88 @@ BEGIN
     RAISE EXCEPTION 'ordinary group must have at least one human owner'
       USING ERRCODE = 'check_violation';
   END IF;
-  -- max-one is also enforced by channel_member_one_owner unique index
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION channel_member_assert_human_owner_final()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM assert_ordinary_group_has_human_owner(OLD.channel_id);
+  ELSIF TG_OP = 'UPDATE' THEN
+    PERFORM assert_ordinary_group_has_human_owner(NEW.channel_id);
+    -- Moving a member between channels must re-check the source channel too.
+    IF OLD.channel_id IS DISTINCT FROM NEW.channel_id THEN
+      PERFORM assert_ordinary_group_has_human_owner(OLD.channel_id);
+    END IF;
+  ELSE
+    -- INSERT
+    PERFORM assert_ordinary_group_has_human_owner(NEW.channel_id);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+
+-- Auto-seed human owner on ordinary group INSERT when created_by is a current
+-- workspace member. Closes the "bare INSERT leaves 0 owners" hole without
+-- accepting ghost owners. Final deferred check still fails when created_by is
+-- missing / not a workspace member / agent-only roster.
+CREATE OR REPLACE FUNCTION channel_seed_human_owner_on_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.kind = 'group' AND NEW.system_key IS NULL AND NEW.created_by IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1 FROM member m
+      WHERE m.workspace_id = NEW.workspace_id
+        AND m.user_id = NEW.created_by
+    ) THEN
+      INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+      VALUES (NEW.id, NEW.workspace_id, 'user', NEW.created_by, 'owner')
+      ON CONFLICT (channel_id, member_type, member_id) DO UPDATE
+        SET role = CASE
+          WHEN channel_member.role = 'owner' THEN channel_member.role
+          ELSE 'owner'
+        END;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_channel_seed_human_owner_on_insert ON channel;
+CREATE TRIGGER trg_channel_seed_human_owner_on_insert
+  AFTER INSERT ON channel
+  FOR EACH ROW
+  EXECUTE FUNCTION channel_seed_human_owner_on_insert();
+
+CREATE OR REPLACE FUNCTION channel_assert_human_owner_final()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- INSERT / UPDATE of kind|system_key|workspace_id: final state of NEW must
+  -- hold a human owner when NEW is an ordinary group. DELETE is not needed —
+  -- a deleted channel is not a surviving ordinary group.
+  PERFORM assert_ordinary_group_has_human_owner(NEW.id);
   RETURN NULL;
 END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_channel_member_assert_human_owner ON channel_member;
 CREATE CONSTRAINT TRIGGER trg_channel_member_assert_human_owner
-  AFTER INSERT OR UPDATE OF role, member_type OR DELETE ON channel_member
+  AFTER INSERT OR UPDATE OF role, member_type, channel_id, workspace_id OR DELETE ON channel_member
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW
   EXECUTE FUNCTION channel_member_assert_human_owner_final();
+
+DROP TRIGGER IF EXISTS trg_channel_assert_human_owner ON channel;
+CREATE CONSTRAINT TRIGGER trg_channel_assert_human_owner
+  AFTER INSERT OR UPDATE OF kind, system_key, workspace_id ON channel
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION channel_assert_human_owner_final();

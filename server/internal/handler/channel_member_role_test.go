@@ -156,9 +156,7 @@ func TestRemoveSoleOwnerBlocked(t *testing.T) {
 	del := newRequestAs(testUserID, http.MethodDelete,
 		"/api/channels/"+ch.ID+"/members/user/"+testUserID, nil)
 	del = withChannelTestWorkspaceCtx(t, del, testUserID)
-	del = withURLParam(del, "channelId", ch.ID)
-	del = withURLParam(del, "memberType", "user")
-	del = withURLParam(del, "memberId", testUserID)
+	del = withRouteParams(del, "channelId", ch.ID, "memberType", "user", "memberId", testUserID)
 	delRec := httptest.NewRecorder()
 	testHandler.RemoveChannelMember(delRec, del)
 	if delRec.Code != http.StatusConflict {

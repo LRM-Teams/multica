@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -38,16 +37,17 @@ func createOrdinaryGroupWithOwnerTx(
 }
 
 // insertChannelHumanOwnerTx inserts the sole human owner membership for a channel.
+// Idempotent: migration 237/239 may already auto-seed created_by as owner on
+// ordinary group INSERT; ON CONFLICT re-asserts role=owner.
 func insertChannelHumanOwnerTx(ctx context.Context, tx pgx.Tx, channelID string, workspaceID, userID pgtype.UUID) error {
-	tag, err := tx.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1::uuid, $2, 'user', $3, 'owner')`,
+		VALUES ($1::uuid, $2, 'user', $3, 'owner')
+		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE
+		SET role = 'owner'`,
 		channelID, workspaceID, userID)
 	if err != nil {
 		return fmt.Errorf("insert channel owner: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return errors.New("insert channel owner: expected 1 row")
 	}
 	return nil
 }

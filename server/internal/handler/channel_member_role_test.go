@@ -791,8 +791,10 @@ func TestOwnerReadDBErrorReturns500(t *testing.T) {
 	}
 }
 
-// TestListAgentChannelMembersIncludesRoleAndOrder forces tie-break: two human
-// members share role+created_at; order must follow member_id ASC.
+// TestListAgentChannelMembersIncludesRoleAndOrder locks agent-route roster
+// order: role → created_at → member_type → member_id (same as human ListChannels).
+// Earlier human manager before later agent manager proves no agent-first manager rank
+// on /api/agent/channels/.../members (Barry #1344 successor).
 func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -807,30 +809,33 @@ func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
 	var ch ChannelResponse
 	_ = json.Unmarshal(created.Body.Bytes(), &ch)
 
-	// Two members with identical role and created_at — only member_id breaks ties.
+	humanMgr := insertChannelPeerUser(t, ch.ID, "manager")
 	m1 := insertChannelPeerUser(t, ch.ID, "member")
 	m2 := insertChannelPeerUser(t, ch.ID, "member")
 	agentMgr := createHandlerTestAgent(t, "OrdAgent"+uuid.NewString()[:6], []byte("[]"))
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1,$2,'agent',$3,'manager')
-		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
+INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+VALUES ($1,$2,'agent',$3,'manager')
+ON CONFLICT (channel_id, member_type, member_id) DO UPDATE SET role='manager'`,
 		parseUUID(ch.ID), parseUUID(testWorkspaceID), parseUUID(agentMgr)); err != nil {
 		t.Fatalf("agent: %v", err)
 	}
-	// Same timestamp for both human members (tie-break key under test).
+	// owner earliest role rank; human manager earlier than agent manager (created_at);
+	// two members same ts → member_id ASC.
 	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-01-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), testUserID)
+UPDATE channel_member SET created_at = timestamptz '2020-01-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), testUserID)
 	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2020-06-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='agent'`, parseUUID(ch.ID))
+UPDATE channel_member SET created_at = timestamptz '2020-06-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='user' AND member_id=$2`, parseUUID(ch.ID), humanMgr)
 	_, _ = testPool.Exec(ctx, `
-		UPDATE channel_member SET created_at = timestamptz '2021-01-01 00:00:00+00'
-		WHERE channel_id=$1 AND member_type='user' AND member_id = ANY($2::uuid[])`,
+UPDATE channel_member SET created_at = timestamptz '2020-09-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='agent' AND member_id=$2`, parseUUID(ch.ID), agentMgr)
+	_, _ = testPool.Exec(ctx, `
+UPDATE channel_member SET created_at = timestamptz '2021-01-01 00:00:00+00'
+WHERE channel_id=$1 AND member_type='user' AND member_id = ANY($2::uuid[])`,
 		parseUUID(ch.ID), []string{m1, m2})
 
-	// Expected member order by member_id string among m1,m2
 	first, second := m1, m2
 	if second < first {
 		first, second = second, first
@@ -847,16 +852,19 @@ func TestListAgentChannelMembersIncludesRoleAndOrder(t *testing.T) {
 	}
 	var members []ChannelMemberResponse
 	_ = json.Unmarshal(memRec.Body.Bytes(), &members)
-	wantIDs := []string{testUserID, agentMgr, first, second}
-	wantRoles := []string{"owner", "manager", "member", "member"}
-	if len(members) != 4 {
-		t.Fatalf("len=%d want 4 %+v", len(members), members)
+	wantIDs := []string{testUserID, humanMgr, agentMgr, first, second}
+	wantRoles := []string{"owner", "manager", "manager", "member", "member"}
+	if len(members) != 5 {
+		t.Fatalf("len=%d want 5 %+v", len(members), members)
 	}
 	for i := range wantIDs {
 		if members[i].MemberID != wantIDs[i] || members[i].Role != wantRoles[i] || members[i].Role == "" {
 			t.Fatalf("pos %d got id=%s role=%q want id=%s role=%q full=%+v",
 				i, members[i].MemberID, members[i].Role, wantIDs[i], wantRoles[i], members)
 		}
+	}
+	if members[1].MemberType != "user" || members[2].MemberType != "agent" {
+		t.Fatalf("managers want human then agent by created_at got %+v %+v", members[1], members[2])
 	}
 }
 
@@ -1306,16 +1314,18 @@ func TestRoleMutationNegativeMatrix(t *testing.T) {
 }
 
 // TestListChannelsMemberBriefExactOrder locks ListChannels avatar-stack order
-// (production: single row_number OVER five keys + outer stack_position only).
+// (production: single row_number OVER role → created_at → member_type → member_id).
 //
-// Honest flip-red evidence (Barry: do not claim "delete any key RED" when
-// manager-type and member_type are same-direction on the manager subset):
+// Iris/Parker product: managers are same-rank regardless of human/agent — no
+// manager-type priority before created_at. member_type is only a last identity
+// tie-break with member_id (same UUID agent+user possible).
+//
+// Honest flip-red:
 //   - role: delete role rank → RED (owner latest still first only with role)
-//   - created_at: delete created_at → RED (member order opposite member_id)
-//   - manager-type: swap agent/user rank constants → RED (product agent-before-human)
-//   - member_type: ordinary agent+user same UUID/role/created_at → delete member_type RED
+//   - created_at: delete created_at → RED (member order opposite member_id;
+//     among managers, earlier human before later agent proves no agent-priority)
+//   - member_type: ordinary agent+user same UUID/role/created_at → drop type RED
 //   - member_id: same type/role/created_at, two fixed UUIDs → ASC→DESC flip RED
-//     (locks direction; delete alone is planner-undefined, not evidence — Barry)
 //
 // Independent subtests/channels so limit=5 does not force one fixture to carry all keys.
 func TestListChannelsMemberBriefExactOrder(t *testing.T) {
@@ -1438,20 +1448,20 @@ WHERE channel_id=$1 AND member_type=$2 AND member_id=$3`,
 		}
 	})
 
-	t.Run("manager_type_product_agent_before_human", func(t *testing.T) {
-		// Product rule agent-manager before human-manager. Same UUID so member_id
-		// cannot decide; manager-type rank and member_type ASC are same-direction —
-		// do NOT claim deleting manager-type alone RED (Barry). This subtest locks
-		// the product order; swap-rank counterfactual is for reviewer, not CI.
+	t.Run("managers_same_role_rank_by_created_at", func(t *testing.T) {
+		// Same role=manager: order by created_at, not agent-before-human rank.
+		// Human manager earlier + agent manager later → human first (would RED
+		// if agent-priority rank still existed before created_at).
 		ch := createGroup(t)
-		const shared = "a1100000-0000-4000-8000-000000000001"
-		insertFixedUser(t, shared, "ord-mgr-human")
-		insertFixedAgent(t, shared, "ord-mgr-agent")
-		addMember(t, ch.ID, "agent", shared, "manager")
-		addMember(t, ch.ID, "user", shared, "manager")
-		setTS(ch.ID, "agent", shared, "2020-06-01+00")
-		setTS(ch.ID, "user", shared, "2020-06-01+00")
+		const humanMgr = "a1300000-0000-4000-8000-000000000001"
+		const agentMgr = "a1300000-0000-4000-8000-000000000002"
+		insertFixedUser(t, humanMgr, "mgr-human-early")
+		insertFixedAgent(t, agentMgr, "mgr-agent-late")
+		addMember(t, ch.ID, "user", humanMgr, "manager")
+		addMember(t, ch.ID, "agent", agentMgr, "manager")
 		setTS(ch.ID, "user", testUserID, "2020-01-01+00")
+		setTS(ch.ID, "user", humanMgr, "2020-06-01+00")  // earlier manager
+		setTS(ch.ID, "agent", agentMgr, "2020-09-01+00") // later manager
 		ms := listMembers(t, ch.Name)
 		if len(ms) < 3 {
 			t.Fatalf("members=%d want >=3 %+v", len(ms), ms)
@@ -1459,11 +1469,11 @@ WHERE channel_id=$1 AND member_type=$2 AND member_id=$3`,
 		if ms[0].Role != "owner" {
 			t.Fatalf("pos0=%+v want owner", ms[0])
 		}
-		if ms[1].MemberID != shared || ms[1].MemberType != "agent" || ms[1].Role != "manager" {
-			t.Fatalf("pos1=%+v want agent manager (product agent-before-human)", ms[1])
+		if ms[1].MemberID != humanMgr || ms[1].MemberType != "user" || ms[1].Role != "manager" {
+			t.Fatalf("pos1=%+v want earlier human manager (created_at, not agent rank)", ms[1])
 		}
-		if ms[2].MemberID != shared || ms[2].MemberType != "user" || ms[2].Role != "manager" {
-			t.Fatalf("pos2=%+v want human manager same UUID", ms[2])
+		if ms[2].MemberID != agentMgr || ms[2].MemberType != "agent" || ms[2].Role != "manager" {
+			t.Fatalf("pos2=%+v want later agent manager", ms[2])
 		}
 	})
 

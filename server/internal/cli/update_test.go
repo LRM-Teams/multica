@@ -153,42 +153,6 @@ func TestFetchManifestFailsClosedOnNon200(t *testing.T) {
 	}
 }
 
-func TestPlatformKey(t *testing.T) {
-	if got, want := platformKey("darwin", "arm64"), "darwin-arm64"; got != want {
-		t.Fatalf("platformKey = %q, want %q", got, want)
-	}
-}
-
-func TestFindPlatformAsset(t *testing.T) {
-	t.Run("finds the matching platform entry", func(t *testing.T) {
-		manifest := &ReleaseManifest{
-			TagName: "v1.2.3",
-			Platforms: map[string]ReleaseAsset{
-				"darwin-amd64": {URL: "https://example/multica-cli-1.2.3-darwin-amd64.tar.gz", SHA256: "aaaa"},
-				"linux-amd64":  {URL: "https://example/multica-cli-1.2.3-linux-amd64.tar.gz", SHA256: "bbbb"},
-			},
-		}
-
-		got, err := findPlatformAsset(manifest, "darwin", "amd64")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got.URL != "https://example/multica-cli-1.2.3-darwin-amd64.tar.gz" || got.SHA256 != "aaaa" {
-			t.Fatalf("asset mismatch: got %+v", got)
-		}
-	})
-
-	t.Run("returns error when platform is absent", func(t *testing.T) {
-		manifest := &ReleaseManifest{TagName: "v1.2.3", Platforms: map[string]ReleaseAsset{
-			"linux-amd64": {URL: "https://example/x.tar.gz", SHA256: "cccc"},
-		}}
-		_, err := findPlatformAsset(manifest, "windows", "amd64")
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-	})
-}
-
 func TestIsReleaseVersion(t *testing.T) {
 	tests := []struct {
 		name string

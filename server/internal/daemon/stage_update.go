@@ -84,18 +84,16 @@ func (d *Daemon) verifyStagedBinary(targetVersion, updateOutput string) (string,
 	return staged.Version, nil
 }
 
-// commitStagedActivation performs the thin activate path after stage+verify:
-// prepare journal → CAS Active to candidate → journal committed.
-// Returns the staged binary path for re-exec. Full candidate health/register
-// (design §3.3 steps 4–5) is a follow-up; this keeps Active immutable until CAS.
+// commitStagedActivation activates a staged release via OfflineActivateStaged:
+// prepare → candidate_running → real --version probe (+ attempt_id env) →
+// candidate_healthy → CAS → committed. Full health+register is still a follow-up;
+// we do not mark healthy without a successful candidate binary probe.
 func (d *Daemon) commitStagedActivation(ctx context.Context, updateID, updateOutput string) (string, error) {
-	// Target version is best-effort recovered from observation or updateOutput.
 	target := ""
 	if d.updateObservation != nil {
 		target = strings.TrimSpace(d.updateObservation.Snapshot().TargetVersion)
 	}
 	if target == "" {
-		// Fall back: parse "Staged vX.Y.Z" style messages from StageReleaseBytes.
 		target = parseStagedVersionFromOutput(updateOutput)
 	}
 	if target == "" {
@@ -110,50 +108,15 @@ func (d *Daemon) commitStagedActivation(ctx context.Context, updateID, updateOut
 	if err != nil {
 		return "", err
 	}
-	staged, err := store.ResolveStagedVersion(target)
-	if err != nil {
-		return "", err
-	}
-	// Ensure staged binary still verifies.
-	if err := cli.VerifyStagedBinaryVersion(ctx, staged.BinaryPath, staged.Version); err != nil {
-		return "", fmt.Errorf("pre-CAS verify: %w", err)
-	}
-
-	state, err := store.ReadActivationState()
-	if err != nil {
-		return "", err
-	}
 	attemptID := strings.TrimSpace(updateID)
 	if attemptID == "" {
 		attemptID = uuid.NewString()
 	}
-	if _, err := store.PrepareActivationAttempt(
-		attemptID,
-		state.Generation,
-		state.ActiveVersion,
-		staged.Version,
-	); err != nil {
-		return "", fmt.Errorf("prepare journal: %w", err)
-	}
-	// Thin path: skip real candidate_running process; advance to healthy then CAS.
-	if _, err := store.AdvanceActivationPhase(attemptID, cli.ActivationPhaseCandidateRunning, ""); err != nil {
-		_, _ = store.AdvanceActivationPhase(attemptID, cli.ActivationPhaseAborted, "activate_phase_failed")
-		return "", err
-	}
-	if _, err := store.AdvanceActivationPhase(attemptID, cli.ActivationPhaseCandidateHealthy, ""); err != nil {
-		_, _ = store.AdvanceActivationPhase(attemptID, cli.ActivationPhaseAborted, "activate_phase_failed")
-		return "", err
-	}
-	next, err := store.CompareAndSwapActivation(ctx, state.Generation, staged.Version)
+	_, path, err := store.OfflineActivateStaged(ctx, target, attemptID)
 	if err != nil {
-		_, _ = store.AdvanceActivationPhase(attemptID, cli.ActivationPhaseAborted, "activation_cas_failed")
-		return "", fmt.Errorf("CAS Active: %w", err)
+		return "", err
 	}
-	if _, err := store.AdvanceActivationPhase(attemptID, cli.ActivationPhaseCommitted, ""); err != nil {
-		// CAS already rotated Active — mark committed best-effort; do not roll back Active.
-		d.logger.Warn("journal commit phase after successful CAS failed", "error", err, "generation", next.Generation)
-	}
-	return staged.BinaryPath, nil
+	return path, nil
 }
 
 func parseStagedVersionFromOutput(output string) string {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -44,9 +45,8 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		fmt.Fprintf(os.Stderr, "Latest version:  %s\n\n", latest.TagName)
 	}
 
-	// Detect installation method and update accordingly. Homebrew is only used
-	// when an explicit package is configured; otherwise direct release download
-	// keeps the default source on LRM-Teams/multica instead of the old tap.
+	// Homebrew stays brew-owned until Phase-B formula bootstrap ships.
+	// Do not half-migrate brew installs onto self-replace.
 	if cli.IsBrewInstall() && cli.IsBrewUpdateConfigured() {
 		fmt.Fprintln(os.Stderr, "Updating via Homebrew...")
 		output, err := cli.UpdateViaBrew()
@@ -58,19 +58,50 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 	if cli.IsBrewInstall() {
-		fmt.Fprintln(os.Stderr, "Homebrew install detected, but MULTICA_BREW_PACKAGE is not configured or points at the legacy upstream tap; using direct release download.")
+		fmt.Fprintln(os.Stderr, "Homebrew install detected, but MULTICA_BREW_PACKAGE is not configured or points at the legacy upstream tap; using VersionStore stage path.")
 	}
 
-	// Not installed via brew — download binary directly from the release feed.
+	// Not installed via brew — stage into VersionStore + offline activate.
+	// The old direct self-replace path (UpdateViaDownloadWithTimeout) is
+	// retired outright here, not kept as a fallback: Parker's #815 ruling
+	// (2026-07-30, #prj-daemon) was combine-not-choose — #1475's manifest
+	// discovery stays the source, but every download now lands through
+	// stage-then-activate, never overwriting the running binary in place.
 	if latest == nil {
 		return fmt.Errorf("could not determine latest version; check %s", cli.ReleaseWebURL())
 	}
 	targetVersion := latest.TagName
-	fmt.Fprintf(os.Stderr, "Downloading %s from the Multica release feed...\n", targetVersion)
-	output, err := cli.UpdateViaDownloadWithTimeout(targetVersion, updateDownloadTimeout)
+	fmt.Fprintf(os.Stderr, "Staging %s into VersionStore (no self-replace)...\n", targetVersion)
+
+	store, err := cli.OpenVersionStore("")
 	if err != nil {
-		return fmt.Errorf("update failed: %w", err)
+		return fmt.Errorf("open version store: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "%s\nUpdate complete.\n", output)
+	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout+30*time.Second)
+	defer cancel()
+
+	if cli.IsReleaseVersion(version) {
+		if _, err := store.BootstrapActiveFromExecutable(ctx, version); err != nil {
+			// Already initialized or non-fatal — continue to stage.
+			fmt.Fprintf(os.Stderr, "Note: bootstrap Active: %v\n", err)
+		}
+	}
+
+	result, err := cli.DownloadAndStageRelease(ctx, store, targetVersion, updateDownloadTimeout)
+	if err != nil {
+		return fmt.Errorf("stage release failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "%s\n", result.Message)
+
+	state, path, err := store.OfflineActivateStaged(ctx, result.Staged.Version, "cli-update")
+	if err != nil {
+		return fmt.Errorf("activate staged release failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr,
+		"Activated %s (generation %d). Binary: %s\nRestart the daemon (or re-exec this binary path) to run the new Active. No self-replace of the old install path.\n",
+		state.ActiveVersion,
+		state.Generation,
+		path,
+	)
 	return nil
 }

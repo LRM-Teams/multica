@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"path"
 	"runtime"
 	"time"
 )
@@ -75,36 +76,28 @@ func StageReleaseBytes(
 	}, nil
 }
 
-// downloadReleaseBinary downloads and extracts the multica binary for tag.
-// Shared by StageRelease and legacy UpdateViaDownload (until callers cut over).
+// downloadReleaseBinary downloads and extracts the multica binary for tag
+// from the Multica release feed (#1475/#1526's manifest, not the retired
+// unauthenticated GitHub API path). The manifest carries each platform's
+// SHA-256 inline (ReleaseAsset.SHA256), so unlike the old GitHub-asset flow
+// this needs no separate checksum-manifest fetch/parse step.
 func downloadReleaseBinary(tag string, downloadTimeout time.Duration) ([]byte, string, error) {
 	tag = normalizeReleaseTag(tag)
 	release, err := fetchReleaseByTag(tag)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch release metadata: %w", err)
 	}
-	asset, err := findReleaseAsset(release.Assets, tag, runtime.GOOS, runtime.GOARCH)
+	asset, err := findPlatformAsset(release, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return nil, "", err
 	}
-	manifestAsset, err := findChecksumManifestAsset(release.Assets)
-	if err != nil {
-		return nil, "", err
-	}
+	assetName := path.Base(asset.URL)
 	timeout := updateDownloadTimeoutOrDefault(downloadTimeout)
-	manifestData, err := fetchURLBytes(manifestAsset.BrowserDownloadURL, timeout)
-	if err != nil {
-		return nil, "", fmt.Errorf("download checksum manifest: %w", err)
-	}
-	expectedSum, err := parseChecksumManifest(manifestData, asset.Name)
-	if err != nil {
-		return nil, "", fmt.Errorf("parse checksum manifest: %w", err)
-	}
-	archiveData, err := fetchURLBytes(asset.BrowserDownloadURL, timeout)
+	archiveData, err := fetchURLBytes(asset.URL, timeout)
 	if err != nil {
 		return nil, "", fmt.Errorf("download failed: %w", err)
 	}
-	if err := verifyAssetSHA256(archiveData, expectedSum, asset.Name); err != nil {
+	if err := verifyAssetSHA256(archiveData, asset.SHA256, assetName); err != nil {
 		return nil, "", fmt.Errorf("verify download: %w", err)
 	}
 	binaryName := "multica"
@@ -120,5 +113,5 @@ func downloadReleaseBinary(tag string, downloadTimeout time.Duration) ([]byte, s
 	if err != nil {
 		return nil, "", fmt.Errorf("extract binary: %w", err)
 	}
-	return binaryData, asset.Name, nil
+	return binaryData, assetName, nil
 }

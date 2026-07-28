@@ -179,13 +179,19 @@ func TestCancelAgentTask_TaskIDMismatchAndMissingAreIndistinguishable404(t *test
 	agentID := createHandlerTestAgent(t, "Agent Cancel Task ID Boundary", []byte("[]"))
 	principalTaskID := createHandlerTestTaskForAgent(t, agentID)
 	otherOwnedTaskID := createHandlerTestTaskForAgent(t, agentID)
+	missingTaskID := uuid.NewString()
 	principal := taskScopedCancelPrincipal(agentID, principalTaskID, "task_token")
-	tokenHash := "cancel-denied-task-mismatch-" + uuid.NewString()
-	seedTaskCancelCredential(t, "task_token", tokenHash, otherOwnedTaskID, "", agentID)
-	cancelledEvents := subscribeTaskCancelCount(otherOwnedTaskID)
+	principalTokenHash := "cancel-denied-principal-task-" + uuid.NewString()
+	targetTokenHash := "cancel-denied-target-task-" + uuid.NewString()
+	seedTaskCancelCredential(t, "task_token", principalTokenHash, principalTaskID, "", agentID)
+	seedTaskCancelCredential(t, "task_token", targetTokenHash, otherOwnedTaskID, "", agentID)
+	cancelledEvents := 0
+	testHandler.Bus.Subscribe(protocol.EventTaskCancelled, func(events.Event) {
+		cancelledEvents++
+	})
 
 	var bodies []string
-	for _, targetTaskID := range []string{otherOwnedTaskID, uuid.NewString()} {
+	for _, targetTaskID := range []string{otherOwnedTaskID, missingTaskID} {
 		rec := httptest.NewRecorder()
 		callAgentTaskCancel(t, testHandler, rec, agentTaskCancelRequest(targetTaskID, &principal))
 		assertExactHTTPError(t, rec, http.StatusNotFound, "{\"error\":\"task not found\"}\n")
@@ -194,12 +200,16 @@ func TestCancelAgentTask_TaskIDMismatchAndMissingAreIndistinguishable404(t *test
 	if bodies[0] != bodies[1] {
 		t.Fatalf("existing-invisible body %q differs from missing body %q", bodies[0], bodies[1])
 	}
-	if got := taskStatus(t, otherOwnedTaskID); got != "draining" {
-		t.Fatalf("TaskID mismatch mutated task: status=%q", got)
+	if got := taskStatus(t, principalTaskID); got != "draining" {
+		t.Fatalf("TaskID mismatch mutated principal task: status=%q", got)
 	}
-	assertTaskCancelCredentialCount(t, "task_token", tokenHash, 1)
-	if *cancelledEvents != 0 {
-		t.Fatalf("TaskID mismatch published task:cancelled %d times, want 0", *cancelledEvents)
+	if got := taskStatus(t, otherOwnedTaskID); got != "draining" {
+		t.Fatalf("TaskID mismatch mutated target task: status=%q", got)
+	}
+	assertTaskCancelCredentialCount(t, "task_token", principalTokenHash, 1)
+	assertTaskCancelCredentialCount(t, "task_token", targetTokenHash, 1)
+	if cancelledEvents != 0 {
+		t.Fatalf("TaskID mismatch denial calls published task:cancelled %d times, want 0", cancelledEvents)
 	}
 }
 

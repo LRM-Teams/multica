@@ -93,6 +93,58 @@ func TestMaterializeBAgentsFinalHashDiffersByUserPrefix(t *testing.T) {
 	}
 }
 
+func TestMaterializeBResolvedSlugDrivesBriefAndReceipt(t *testing.T) {
+	workDir, ledgerRoot := materializeLayout(t)
+	userSkill := filepath.Join(workDir, ".grok", "skills", "review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(userSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userSkill, []byte("USER_OWNED_SKILL"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	brief, receipt, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
+		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentSkills: []SkillContextForEnv{{Name: "review", Description: "d", Content: "MANAGED"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt.Skills) != 1 || receipt.Skills[0].ActualSlug == "review" {
+		t.Fatalf("receipt: %+v", receipt.Skills)
+	}
+	wantLoc := ".grok/skills/" + receipt.Skills[0].ActualSlug + "/SKILL.md"
+	if !strings.Contains(brief, wantLoc) {
+		t.Fatalf("brief must index actual slug %s:\n%s", wantLoc, brief)
+	}
+	if strings.Contains(brief, ".grok/skills/review/SKILL.md") {
+		t.Fatal("brief must not point at user-owned review path")
+	}
+}
+
+func TestMaterializeBResolveFailureLeavesNoSkillResidue(t *testing.T) {
+	// AGENTS as symlink → fail before apply; resolve must not leave skill dirs.
+	workDir, ledgerRoot := materializeLayout(t)
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workDir, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
+		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentSkills: []SkillContextForEnv{{Name: "review", Content: "body"}},
+	})
+	if err == nil {
+		t.Fatal("expected AGENTS symlink failure")
+	}
+	// No skill package under .grok/skills
+	skillsRoot := filepath.Join(workDir, ".grok", "skills")
+	if entries, err := os.ReadDir(skillsRoot); err == nil && len(entries) > 0 {
+		t.Fatalf("resolve/preflight failure left skill residue: %v", entries)
+	}
+}
+
 func TestMaterializeBRefusesAgentContextSymlink(t *testing.T) {
 	workDir, ledgerRoot := materializeLayout(t)
 	outside := t.TempDir()

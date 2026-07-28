@@ -12,8 +12,8 @@ import (
 	"strings"
 )
 
-// MaterializationReceipt records what create-time materialize actually did
-// (Barry B contract). Not used for reuse fingerprint — only diagnostics / gates.
+// MaterializationReceipt records create-time materialize actions (Barry B).
+// Not used for reuse fingerprint.
 type MaterializationReceipt struct {
 	AgentsFinalSHA256    string                     `json:"agents_final_sha256,omitempty"`
 	ResourcesFinalSHA256 string                     `json:"resources_final_sha256,omitempty"`
@@ -29,15 +29,38 @@ type MaterializedSkillReceipt struct {
 	Files       []MaterializedFile `json:"files"`
 }
 
-// MaterializedFile is one file written under a managed skill package.
+// MaterializedFile is one file under a managed skill package.
 type MaterializedFile struct {
 	RelPath string `json:"rel_path"`
 	SHA256  string `json:"sha256"`
 }
 
-// MaterializeCanonicalTurnContextB implements Barry B: single resolved plan,
-// fail-closed cleanup, collision-free skills, atomic AGENTS, MaterializationReceipt.
-// Returns managed brief body (for logging) + receipt.
+// ResolvedSkillPackage is one skill in the single ResolvedMaterializationPlan.
+type ResolvedSkillPackage struct {
+	LogicalName string
+	ActualSlug  string
+	Decision    string // created | sibling
+	Files       []ResolvedSkillFile
+}
+
+// ResolvedSkillFile is one file body to write under ActualSlug.
+type ResolvedSkillFile struct {
+	RelPath string
+	Body    []byte
+}
+
+// ResolvedMaterializationPlan is the single create-time plan consumed by
+// brief skill index, disk writer, and MaterializationReceipt — no second slug math.
+type ResolvedMaterializationPlan struct {
+	Provider    string
+	Brief       string // managed brief including skill index with actual slugs
+	AgentsFinal []byte // full AGENTS/CLAUDE file after synthesis
+	Skills      []ResolvedSkillPackage
+	Resources   []byte // resources.json body or nil
+	InputDigest string
+}
+
+// MaterializeCanonicalTurnContextB implements Barry B with one resolved plan.
 func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx TaskContextForEnv) (brief string, receipt MaterializationReceipt, err error) {
 	workDir = strings.TrimSpace(workDir)
 	ledgerRoot = strings.TrimSpace(ledgerRoot)
@@ -69,7 +92,7 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 	staticCtx := StartupStaticContext(ctx)
 	receipt.ManagedInputDigest = ManagedStartupInputDigest(provider, staticCtx)
 
-	// Fail-closed cleanup (no swallowed errors).
+	// --- Phase 1: fail-closed cleanup (writes only reclaim Multica-owned) ---
 	if err := CleanupSidecarsConfined(absLedger, absWork); err != nil {
 		return "", receipt, fmt.Errorf("cleanup prior sidecars: %w", err)
 	}
@@ -83,124 +106,90 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 		return "", receipt, fmt.Errorf("reclaim legacy issue_context: %w", err)
 	}
 
-	// Resolve one write plan (slug collisions need FS).
-	type skillFile struct {
-		rel  string
-		body []byte
+	// --- Phase 2: resolve plan (read-only slug planning; no apply writes) ---
+	plan, err := resolveMaterializationPlan(absWork, provider, staticCtx)
+	if err != nil {
+		return "", receipt, fmt.Errorf("resolve materialization plan: %w", err)
 	}
-	type resolvedSkill struct {
-		logical  string
-		slug     string
-		decision string
-		files    []skillFile
-	}
-	var skills []resolvedSkill
-	if len(staticCtx.AgentSkills) > 0 && provider != "codex" {
-		skillsDir := skillsDirPath(absWork, provider)
-		if err := mkdirAllWithoutSymlink(absWork, skillsDir, 0o755); err != nil {
-			return "", receipt, fmt.Errorf("create skills dir: %w", err)
-		}
-		if err := validatePathUnderWorkDirNoSymlink(absWork, skillsDir); err != nil {
-			return "", receipt, fmt.Errorf("skills dir unsafe: %w", err)
-		}
-		for _, sk := range staticCtx.AgentSkills {
-			baseSlug := sanitizeSkillName(sk.Name)
-			slug, dir, err := allocateCollisionFreeSkillDir(skillsDir, baseSlug)
-			if err != nil {
-				return "", receipt, fmt.Errorf("allocate skill dir %q: %w", sk.Name, err)
-			}
-			decision := "created"
-			if slug != baseSlug {
-				decision = "sibling"
-			}
-			// allocateCollisionFreeSkillDir may remove managed reclaim — ensure empty dir
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return "", receipt, err
-			}
-			body := ensureSkillFrontmatter(sk.Content, slug, sk.Description)
-			files := []skillFile{
-				{rel: "SKILL.md", body: []byte(body)},
-				{rel: managedSkillMarker, body: []byte(sk.Name + "\n")},
-			}
-			for _, f := range sk.Files {
-				rel := strings.TrimPrefix(filepath.ToSlash(f.Path), "/")
-				if rel == "" || rel == "SKILL.md" {
-					continue
-				}
-				files = append(files, skillFile{rel: rel, body: []byte(f.Content)})
-			}
-			skills = append(skills, resolvedSkill{
-				logical: sk.Name, slug: slug, decision: decision, files: files,
-			})
-		}
-	}
+	receipt.ManagedInputDigest = plan.InputDigest
+	brief = plan.Brief
 
-	// Managed brief (logical overlay — same renderer as input digest path).
-	brief = buildMetaSkillContent(provider, staticCtx)
-
-	// Synthesize final AGENTS bytes in memory, then atomic write.
-	agentsPath := runtimeConfigPath(absWork, provider)
-	var agentsFinal []byte
-	if agentsPath != "" {
-		if err := validatePathUnderWorkDirNoSymlink(absWork, filepath.Dir(agentsPath)); err != nil {
-			return "", receipt, fmt.Errorf("AGENTS parent unsafe: %w", err)
-		}
-		if info, err := os.Lstat(agentsPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return "", receipt, fmt.Errorf("refusing symlink AGENTS path: %s", agentsPath)
-		}
-		agentsFinal, err = synthesizeRuntimeConfigBytes(agentsPath, brief)
-		if err != nil {
-			return "", receipt, err
-		}
-	}
-
+	// --- Phase 3: apply resolved plan only ---
 	manifest := &sidecarManifest{}
-
-	// Apply AGENTS atomic replace.
-	if agentsPath != "" && agentsFinal != nil {
-		if err := atomicWriteFilePreserveMode(agentsPath, agentsFinal, 0o644); err != nil {
+	if len(plan.AgentsFinal) > 0 {
+		agentsPath := runtimeConfigPath(absWork, provider)
+		if err := atomicWriteFilePreserveMode(agentsPath, plan.AgentsFinal, 0o644); err != nil {
 			return "", receipt, fmt.Errorf("write AGENTS: %w", err)
 		}
-		receipt.AgentsFinalSHA256 = sha256Hex(agentsFinal)
+		receipt.AgentsFinalSHA256 = sha256Hex(plan.AgentsFinal)
 	}
 
-	// Apply skills from resolved plan only.
-	for _, sk := range skills {
-		skillDir := filepath.Join(skillsDirPath(absWork, provider), sk.slug)
-		if err := mkdirAllWithoutSymlink(absWork, skillDir, 0o755); err != nil {
+	skillsParent := skillsDirPath(absWork, provider)
+	for _, sk := range plan.Skills {
+		// Package staging: write all files under .tmp then rename into place.
+		finalDir := filepath.Join(skillsParent, sk.ActualSlug)
+		stageDir := finalDir + ".multica-staging"
+		_ = os.RemoveAll(stageDir)
+		if err := mkdirAllWithoutSymlink(absWork, stageDir, 0o755); err != nil {
+			return "", receipt, err
+		}
+		// Marker first inside staging.
+		markerBody := []byte(sk.LogicalName + "\n")
+		if err := os.WriteFile(filepath.Join(stageDir, managedSkillMarker), markerBody, 0o644); err != nil {
+			_ = os.RemoveAll(stageDir)
 			return "", receipt, err
 		}
 		rec := MaterializedSkillReceipt{
-			LogicalName: sk.logical,
-			ActualSlug:  sk.slug,
-			Decision:    sk.decision,
+			LogicalName: sk.LogicalName,
+			ActualSlug:  sk.ActualSlug,
+			Decision:    sk.Decision,
+			Files: []MaterializedFile{
+				{RelPath: managedSkillMarker, SHA256: sha256Hex(markerBody)},
+			},
 		}
-		for _, f := range sk.files {
-			full := filepath.Join(skillDir, filepath.FromSlash(f.rel))
-			if err := mkdirAllWithoutSymlink(absWork, filepath.Dir(full), 0o755); err != nil {
+		for _, f := range sk.Files {
+			full := filepath.Join(stageDir, filepath.FromSlash(f.RelPath))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				_ = os.RemoveAll(stageDir)
 				return "", receipt, err
 			}
-			if err := writeNewFileNoSymlink(absWork, full, f.body, 0o644, manifest); err != nil {
-				return "", receipt, fmt.Errorf("write skill %s/%s: %w", sk.slug, f.rel, err)
+			if err := os.WriteFile(full, f.Body, 0o644); err != nil {
+				_ = os.RemoveAll(stageDir)
+				return "", receipt, err
 			}
-			rec.Files = append(rec.Files, MaterializedFile{RelPath: f.rel, SHA256: sha256Hex(f.body)})
+			rec.Files = append(rec.Files, MaterializedFile{RelPath: f.RelPath, SHA256: sha256Hex(f.Body)})
+		}
+		// Reclaim final if managed leftover, then atomic rename staging → final.
+		if err := validatePathUnderWorkDirNoSymlink(absWork, filepath.Dir(finalDir)); err != nil {
+			_ = os.RemoveAll(stageDir)
+			return "", receipt, err
+		}
+		if isManagedSkillDir(finalDir) {
+			if err := os.RemoveAll(finalDir); err != nil {
+				_ = os.RemoveAll(stageDir)
+				return "", receipt, err
+			}
+		}
+		if _, err := os.Lstat(finalDir); err == nil {
+			// Unmarked collision should have been resolved to sibling; fail closed.
+			_ = os.RemoveAll(stageDir)
+			return "", receipt, fmt.Errorf("skill final dir still exists after resolve: %s", finalDir)
+		}
+		if err := os.Rename(stageDir, finalDir); err != nil {
+			_ = os.RemoveAll(stageDir)
+			return "", receipt, fmt.Errorf("activate skill package %s: %w", sk.ActualSlug, err)
+		}
+		// Record package root in manifest for cleanup.
+		if manifest != nil {
+			manifest.Dirs = append(manifest.Dirs, finalDir)
+			for _, f := range rec.Files {
+				manifest.Files = append(manifest.Files, filepath.Join(finalDir, filepath.FromSlash(f.RelPath)))
+			}
 		}
 		receipt.Skills = append(receipt.Skills, rec)
 	}
 
-	// Project resources.
-	if staticCtx.ProjectID != "" || len(staticCtx.ProjectResources) > 0 {
-		resources := staticCtx.ProjectResources
-		if resources == nil {
-			resources = []ProjectResourceForEnv{}
-		}
-		data, err := json.MarshalIndent(projectResourceFile{
-			ProjectID: staticCtx.ProjectID, ProjectTitle: staticCtx.ProjectTitle, Resources: resources,
-		}, "", "  ")
-		if err != nil {
-			return "", receipt, err
-		}
-		data = append(data, '\n')
+	if len(plan.Resources) > 0 {
 		projDir := filepath.Join(absWork, ".multica", "project")
 		if err := mkdirAllWithoutSymlink(absWork, projDir, 0o755); err != nil {
 			return "", receipt, err
@@ -210,20 +199,132 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 		if err := writeNewFileNoSymlink(absWork, marker, []byte("resources.json\n"), 0o644, manifest); err != nil {
 			return "", receipt, err
 		}
-		if err := writeNewFileNoSymlink(absWork, resPath, data, 0o644, manifest); err != nil {
+		if err := writeNewFileNoSymlink(absWork, resPath, plan.Resources, 0o644, manifest); err != nil {
 			return "", receipt, err
 		}
-		receipt.ResourcesFinalSHA256 = sha256Hex(data)
+		receipt.ResourcesFinalSHA256 = sha256Hex(plan.Resources)
 	}
 
 	if err := writeSidecarManifestAtomic(absLedger, manifest); err != nil {
 		return "", receipt, fmt.Errorf("write ledger: %w", err)
 	}
-	// Persist receipt next to ledger (atomic).
 	if err := writeReceiptAtomic(absLedger, receipt); err != nil {
 		return "", receipt, fmt.Errorf("write receipt: %w", err)
 	}
 	return brief, receipt, nil
+}
+
+// resolveMaterializationPlan is read-only for skill slug planning (no apply).
+// Cleanup must already have run. Builds one plan for brief + writer + receipt.
+func resolveMaterializationPlan(absWork, provider string, staticCtx TaskContextForEnv) (ResolvedMaterializationPlan, error) {
+	plan := ResolvedMaterializationPlan{
+		Provider:    provider,
+		InputDigest: ManagedStartupInputDigest(provider, staticCtx),
+	}
+
+	slugByName := map[string]string{}
+	if len(staticCtx.AgentSkills) > 0 && provider != "codex" {
+		skillsDir := skillsDirPath(absWork, provider)
+		// Parent may not exist yet — planning only Lstats candidates.
+		for _, sk := range staticCtx.AgentSkills {
+			baseSlug := sanitizeSkillName(sk.Name)
+			slug, decision, err := planCollisionFreeSkillSlug(skillsDir, baseSlug)
+			if err != nil {
+				return plan, fmt.Errorf("plan skill slug %q: %w", sk.Name, err)
+			}
+			slugByName[sk.Name] = slug
+			body := ensureSkillFrontmatter(sk.Content, slug, sk.Description)
+			files := []ResolvedSkillFile{{RelPath: "SKILL.md", Body: []byte(body)}}
+			for _, f := range sk.Files {
+				rel := strings.TrimPrefix(filepath.ToSlash(f.Path), "/")
+				if rel == "" || rel == "SKILL.md" {
+					continue
+				}
+				files = append(files, ResolvedSkillFile{RelPath: rel, Body: []byte(f.Content)})
+			}
+			plan.Skills = append(plan.Skills, ResolvedSkillPackage{
+				LogicalName: sk.Name,
+				ActualSlug:  slug,
+				Decision:    decision,
+				Files:       files,
+			})
+		}
+	}
+
+	// Brief index uses the same actual slugs (single plan — no second sanitize).
+	staticCtx.SkillDirSlugByName = slugByName
+	plan.Brief = buildMetaSkillContent(provider, staticCtx)
+
+	agentsPath := runtimeConfigPath(absWork, provider)
+	if agentsPath != "" {
+		if err := validatePathUnderWorkDirNoSymlink(absWork, filepath.Dir(agentsPath)); err != nil {
+			return plan, fmt.Errorf("AGENTS parent unsafe: %w", err)
+		}
+		if info, err := os.Lstat(agentsPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return plan, fmt.Errorf("refusing symlink AGENTS path: %s", agentsPath)
+		}
+		final, err := synthesizeRuntimeConfigBytes(agentsPath, plan.Brief)
+		if err != nil {
+			return plan, err
+		}
+		plan.AgentsFinal = final
+	}
+
+	if staticCtx.ProjectID != "" || len(staticCtx.ProjectResources) > 0 {
+		resources := staticCtx.ProjectResources
+		if resources == nil {
+			resources = []ProjectResourceForEnv{}
+		}
+		data, err := json.MarshalIndent(projectResourceFile{
+			ProjectID: staticCtx.ProjectID, ProjectTitle: staticCtx.ProjectTitle, Resources: resources,
+		}, "", "  ")
+		if err != nil {
+			return plan, err
+		}
+		plan.Resources = append(data, '\n')
+	}
+	return plan, nil
+}
+
+// planCollisionFreeSkillSlug chooses a slug without mutating the filesystem.
+// Managed leftover dirs are treated as reclaimable (decision "created").
+// Unmarked existing dirs force sibling allocation.
+func planCollisionFreeSkillSlug(skillsParent, baseSlug string) (slug, decision string, err error) {
+	const maxAttempts = 64
+	for i := 0; i < maxAttempts; i++ {
+		var candidate string
+		switch {
+		case i == 0:
+			candidate = baseSlug
+		case i == 1:
+			candidate = baseSlug + "-multica"
+		default:
+			candidate = fmt.Sprintf("%s-multica-%d", baseSlug, i)
+		}
+		path := filepath.Join(skillsParent, candidate)
+		st, statErr := os.Lstat(path)
+		if statErr != nil {
+			if errors.Is(statErr, fs.ErrNotExist) {
+				if i == 0 {
+					return candidate, "created", nil
+				}
+				return candidate, "sibling", nil
+			}
+			return "", "", statErr
+		}
+		if !st.IsDir() {
+			continue
+		}
+		if isManagedSkillDir(path) {
+			// Apply will RemoveAll then rename staging here.
+			if i == 0 {
+				return candidate, "created", nil
+			}
+			return candidate, "sibling", nil
+		}
+		// Unmarked user-owned — try next slug.
+	}
+	return "", "", fmt.Errorf("exhausted %d skill slug attempts for %q", maxAttempts, baseSlug)
 }
 
 const materializationReceiptFile = "materialization_receipt.json"
@@ -234,22 +335,7 @@ func writeReceiptAtomic(ledgerRoot string, receipt MaterializationReceipt) error
 		return err
 	}
 	data = append(data, '\n')
-	final := filepath.Join(ledgerRoot, materializationReceiptFile)
-	tmp, err := os.CreateTemp(ledgerRoot, ".receipt-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, final)
+	return atomicWriteFilePreserveMode(filepath.Join(ledgerRoot, materializationReceiptFile), data, 0o644)
 }
 
 func sha256Hex(b []byte) string {
@@ -257,8 +343,6 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// synthesizeRuntimeConfigBytes returns final AGENTS/CLAUDE file bytes after
-// Multica managed block inject (same logic as writeRuntimeConfigFile, pure).
 func synthesizeRuntimeConfigBytes(path, brief string) ([]byte, error) {
 	block := runtimeMarkerBegin + "\n" + strings.TrimRight(brief, "\n") + "\n" + runtimeMarkerEnd + "\n"
 	existing, err := os.ReadFile(path)
@@ -275,7 +359,7 @@ func synthesizeRuntimeConfigBytes(path, brief string) ([]byte, error) {
 	return []byte(existingStr + runtimeManagedSeparator + block), nil
 }
 
-// atomicWriteFilePreserveMode writes via temp+rename; keeps existing mode.
+// atomicWriteFilePreserveMode: temp write → Sync → Close → Rename; keep mode.
 func atomicWriteFilePreserveMode(path string, data []byte, defaultMode os.FileMode) error {
 	mode := defaultMode
 	if info, err := os.Lstat(path); err == nil {
@@ -306,6 +390,10 @@ func atomicWriteFilePreserveMode(path string, data []byte, defaultMode os.FileMo
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -313,10 +401,14 @@ func atomicWriteFilePreserveMode(path string, data []byte, defaultMode os.FileMo
 		return err
 	}
 	cleanup = false
+	// Best-effort directory durability (platform-dependent).
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 
-// writeNewFileNoSymlink creates a new file only (fail if exists or symlink).
 func writeNewFileNoSymlink(workDir, path string, data []byte, perm os.FileMode, m *sidecarManifest) error {
 	if err := validatePathUnderWorkDirNoSymlink(workDir, filepath.Dir(path)); err != nil {
 		return fmt.Errorf("unsafe parent: %w", err)
@@ -329,8 +421,6 @@ func writeNewFileNoSymlink(workDir, path string, data []byte, perm os.FileMode, 
 	return recordWriteFile(path, data, perm, m)
 }
 
-// reclaimLegacyIssueContextOrphan removes Multica-owned issue_context without
-// marker (pre-B crash orphans). Symlink parent → error.
 func reclaimLegacyIssueContextOrphan(workDir string) error {
 	ctxDir := filepath.Join(workDir, ".agent_context")
 	path := filepath.Join(ctxDir, "issue_context.md")
@@ -341,18 +431,15 @@ func reclaimLegacyIssueContextOrphan(workDir string) error {
 		}
 		return err
 	}
-	// Parent chain symlink check.
 	if err := validatePathUnderWorkDirNoSymlink(workDir, ctxDir); err != nil {
 		return fmt.Errorf("legacy issue_context parent unsafe: %w", err)
 	}
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("legacy issue_context is symlink: %s", path)
 	}
-	// If marker present, reclaimMarked handles it.
 	if _, err := os.Lstat(marker); err == nil {
 		return nil
 	}
-	// No marker: Multica-owned historical orphan — delete.
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

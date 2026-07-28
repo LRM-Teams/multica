@@ -130,6 +130,10 @@ type TaskContextForEnv struct {
 	InitiatorID    string
 	InitiatorName  string
 	InitiatorEmail string
+	// SkillDirSlugByName is materialize-only: maps logical skill name → actual
+	// on-disk directory slug after collision resolution. Brief skill index,
+	// writer, and receipt must share these values (Barry resolved-plan gate).
+	SkillDirSlugByName map[string]string
 }
 
 type MemoryContextForEnv struct {

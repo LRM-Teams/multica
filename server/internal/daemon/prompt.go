@@ -373,9 +373,10 @@ func buildChatPrompt(task Task, agentRoot string) string {
 			fmt.Fprintf(&b, "- ID: %s\n", id)
 		}
 		// Member email was previously only in AGENTS brief; option A static strip
-		// removes it from startup — must live in the per-turn envelope.
+		// removes it from startup — must live in the per-turn envelope with the
+		// same sanitizer (Parker: migration keeps the guard).
 		if task.InitiatorType == "member" {
-			if email := strings.TrimSpace(task.InitiatorEmail); email != "" {
+			if email := execenv.SanitizeEmailForBrief(task.InitiatorEmail); email != "" {
 				fmt.Fprintf(&b, "- Email: %s\n", email)
 			}
 		}

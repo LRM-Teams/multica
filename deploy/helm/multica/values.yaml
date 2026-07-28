@@ -178,4 +178,7 @@ monitoring:
     samplerQueryErrorsFor: 5m
     samplerQueryLatencyFor: 10m
     freshnessHoldResolutionFor: 0m
+    # Frank SLO: served HTTP p95 (middleware wall clock), not SQL time.
+    httpP95Seconds: 1
+    httpP95For: 2m
     severity: warning

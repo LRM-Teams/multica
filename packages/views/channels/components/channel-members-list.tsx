@@ -123,6 +123,27 @@ function MemberRow({
       menuActions.canTransferOwnership ||
       menuActions.canRemove);
 
+  // #832 — TEMPORARY, delete wholesale when #1321 lands.
+  //
+  // The role mutations (promote / demote / transfer) have no write endpoint
+  // yet, so these rows used to be clickable and answer with an info toast.
+  // Frank set a group manager, saw the toast, and believed it had worked — the
+  // click itself promises the action is available, and a toast that disappears
+  // is not a substitute for saying so up front. Until the real mutation is
+  // wired, they render DISABLED with a persistent adjacent note.
+  //
+  // When #1321 is served: delete this constant, the note, and the `disabled`
+  // props, and wire the rows to the real authorized mutation. Do NOT keep the
+  // disabled branch alongside the real one — no double path (Parker).
+  const ROLE_MUTATIONS_AVAILABLE = false;
+  const rolePendingNoteId = `group-member-role-pending-${m.member_type}-${m.member_id}`;
+  const showRolePendingNote =
+    !ROLE_MUTATIONS_AVAILABLE &&
+    !!menuActions &&
+    (menuActions.canPromoteToManager ||
+      menuActions.canDemoteToMember ||
+      menuActions.canTransferOwnership);
+
   return (
     <div
       className="group flex min-h-[52px] items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-hover"
@@ -196,29 +217,57 @@ function MemberRow({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {menuActions.canPromoteToManager && (
-              <DropdownMenuItem onClick={() => onGroupMemberAction(m, "promote")}>
+              <DropdownMenuItem
+                disabled
+                aria-describedby={rolePendingNoteId}
+                data-testid="group-member-menu-promote"
+              >
                 {isAgent
                   ? t(($) => $.members.menu.promote_agent)
                   : t(($) => $.members.menu.promote_human)}
               </DropdownMenuItem>
             )}
             {menuActions.canDemoteToMember && (
-              <DropdownMenuItem onClick={() => onGroupMemberAction(m, "demote")}>
+              <DropdownMenuItem
+                disabled
+                aria-describedby={rolePendingNoteId}
+                data-testid="group-member-menu-demote"
+              >
                 {isAgent
                   ? t(($) => $.members.menu.demote_agent)
                   : t(($) => $.members.menu.demote_human)}
               </DropdownMenuItem>
             )}
             {menuActions.canTransferOwnership && (
-              <DropdownMenuItem onClick={() => onGroupMemberAction(m, "transfer")}>
+              <DropdownMenuItem
+                disabled
+                aria-describedby={rolePendingNoteId}
+                data-testid="group-member-menu-transfer"
+              >
                 {t(($) => $.members.menu.transfer)}
               </DropdownMenuItem>
+            )}
+            {showRolePendingNote && (
+              // #832 — persistent, always-visible explanation. NOT a tooltip and
+              // NOT a post-click toast: the user must see "this can't be done
+              // yet" BEFORE reaching for it. Rendered as a real text node (and
+              // referenced by each disabled row's aria-describedby) so assistive
+              // tech announces the reason together with the row, rather than
+              // just "dimmed".
+              <p
+                id={rolePendingNoteId}
+                data-testid="group-member-menu-role-pending"
+                className="px-2 py-1.5 text-xs leading-relaxed text-muted-foreground"
+              >
+                {t(($) => $.members.menu.role_actions_pending)}
+              </p>
             )}
             {menuActions.canRemove && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   variant="destructive"
+                  data-testid="group-member-menu-remove"
                   onClick={() => onGroupMemberAction(m, "remove")}
                 >
                   {t(($) => $.members.menu.remove)}

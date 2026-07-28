@@ -1,5 +1,6 @@
 import { Cloud, Monitor, Wifi, WifiHigh, WifiOff } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { cn } from "@multica/ui/lib/utils";
 import type { RuntimeHealth, RuntimeHealthPresentation } from "@multica/core/runtimes";
 import { ProviderLogo } from "./provider-logo";
 import { useT } from "../../i18n/use-t";
@@ -24,12 +25,35 @@ export function ProviderChip({ provider }: { provider: string }) {
 }
 
 // Maps each derived 4-state runtime health to a semantic colour class.
+// `dot`  — bare dot fill (sidebar rows, connectivity status).
+// `tone` — badge bg+text (HealthBadge / RuntimeHealthStateBadge).
+// `text` — solid text tone for the borderless connectivity status
+//          (LRM-624 Plan A: title row shows connectivity once, no chip wall).
 // Labels flow through useT — see useHealthLabel below.
-const HEALTH_VISUAL: Record<RuntimeHealth, { dot: string; tone: string }> = {
-  online: { dot: "bg-success", tone: "bg-success/10 text-success" },
-  recently_lost: { dot: "bg-warning", tone: "bg-warning/10 text-warning" },
-  offline: { dot: "bg-muted-foreground/40", tone: "bg-muted text-muted-foreground" },
-  about_to_gc: { dot: "bg-destructive", tone: "bg-destructive/10 text-destructive" },
+const HEALTH_VISUAL: Record<
+  RuntimeHealth,
+  { dot: string; tone: string; text: string }
+> = {
+  online: {
+    dot: "bg-success",
+    tone: "bg-success/10 text-success",
+    text: "text-success",
+  },
+  recently_lost: {
+    dot: "bg-warning",
+    tone: "bg-warning/10 text-warning",
+    text: "text-warning",
+  },
+  offline: {
+    dot: "bg-muted-foreground/40",
+    tone: "bg-muted text-muted-foreground",
+    text: "text-muted-foreground",
+  },
+  about_to_gc: {
+    dot: "bg-destructive",
+    tone: "bg-destructive/10 text-destructive",
+    text: "text-destructive",
+  },
 };
 
 export function HealthDot({
@@ -109,6 +133,51 @@ export function useHealthLabel(): (health: RuntimeHealth | "loading") => string 
     if (health === "loading") return "—";
     return t(($) => $.health[health].label);
   };
+}
+
+/**
+ * Borderless single-point connectivity status: a coloured dot + label, no
+ * bordered chip / wifi-icon wall. Plan A (LRM-624) for the machine-detail
+ * title row — connectivity is expressed exactly once. The secondary
+ * runtimeHealth badge alongside it is reserved for incremental update
+ * states only (see `headerRuntimeHealthBadge`), never a second "Offline".
+ */
+export function RuntimeConnectivityStatus({
+  health,
+  className,
+}: {
+  health: RuntimeHealth | "loading";
+  className?: string;
+}) {
+  const labelOf = useHealthLabel();
+  if (health === "loading") {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
+          className,
+        )}
+        title="—"
+      >
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+        —
+      </span>
+    );
+  }
+  const v = HEALTH_VISUAL[health];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 text-xs font-medium",
+        v.text,
+        className,
+      )}
+      title={labelOf(health)}
+    >
+      <span className={cn("h-2 w-2 rounded-full", v.dot)} />
+      {labelOf(health)}
+    </span>
+  );
 }
 
 export function HealthBadge({

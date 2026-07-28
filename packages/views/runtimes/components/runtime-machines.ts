@@ -78,6 +78,36 @@ const HEALTH_SEVERITY: Record<RuntimeHealth, number> = {
   about_to_gc: 3,
 };
 
+// Connectivity states that already read as "this machine is unreachable".
+// When the title row already shows one of these via the single connectivity
+// dot+label, a second `runtimeHealth === "offline"` badge is a duplicate and
+// must be suppressed (LRM-624 / Plan A).
+const OFFLINE_CONNECTIVITY: ReadonlySet<RuntimeHealth> = new Set([
+  "offline",
+  "recently_lost",
+  "about_to_gc",
+]);
+
+/**
+ * Selects the runtimeHealth value (if any) the machine-detail title row should
+ * render as a secondary badge. Plan A (LRM-624): the title carries a single
+ * connectivity dot+label, so the secondary badge is reserved for *incremental*
+ * information only — `update_available` / `ready_to_apply` / `updating` /
+ * `failed`. When `runtimeHealth` is `offline` and connectivity is already
+ * `offline` / `recently_lost` / `about_to_gc`, rendering another "Offline" is a
+ * duplicate, so it is suppressed (returns null). `ok` / null never badge.
+ */
+export function headerRuntimeHealthBadge(
+  runtimeHealth: RuntimeHealthPresentation | null,
+  connectivity: RuntimeHealth,
+): RuntimeHealthPresentation | null {
+  if (!runtimeHealth || runtimeHealth === "ok") return null;
+  if (runtimeHealth === "offline" && OFFLINE_CONNECTIVITY.has(connectivity)) {
+    return null;
+  }
+  return runtimeHealth;
+}
+
 export function splitRuntimeName(name: string): {
   base: string;
   hostname: string | null;

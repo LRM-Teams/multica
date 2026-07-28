@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/turntransport"
 )
 
 func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) {
@@ -144,6 +145,35 @@ func TestAgentRuntimeTurnCoordinatorRejectsConcurrentSameSlot(t *testing.T) {
 	}
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close(second): %v", err)
+	}
+}
+
+func TestAgentRuntimeTurnCoordinatorStripsLegacyCredentialTransportBeforeSplit(t *testing.T) {
+	// Barry #1274 CODE BLOCK: legacy agentEnv may still carry MULTICA_TOKEN_FILE
+	// for the CLI wrapper. Begin must strip before D3 SplitEnvironment so
+	// production does not fail-closed; provider stable env never sees secrets;
+	// Bind still writes request.Token for the wrapper.
+	root := t.TempDir()
+	request := testAgentRuntimeTurnRequest(t, root)
+	request.Environment["MULTICA_TOKEN"] = "mat_must_not_enter_provider"
+	request.Environment["MULTICA_TOKEN_FILE"] = "/tmp/must-not-enter-provider"
+	request.Environment[turntransport.EnvelopePathEnv] = "/tmp/envelope-must-not-enter"
+
+	coordinator := newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger())
+	turn, err := coordinator.Begin(request)
+	if err != nil {
+		t.Fatalf("Begin with legacy credential keys: %v", err)
+	}
+	defer turn.Close()
+
+	for _, key := range []string{"MULTICA_TOKEN", "MULTICA_TOKEN_FILE", turntransport.EnvelopePathEnv} {
+		if _, ok := turn.StableEnvironment[key]; ok {
+			t.Fatalf("stable provider env leaked %s", key)
+		}
+	}
+	raw, readErr := os.ReadFile(turn.binding.TokenFile)
+	if readErr != nil || string(raw) != request.Token {
+		t.Fatalf("Bind token file = %q err=%v, want request.Token", raw, readErr)
 	}
 }
 

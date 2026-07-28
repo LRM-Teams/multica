@@ -61,6 +61,10 @@ func (d *Daemon) tryCanonicalChatBackend(
 		return nil, nil, nil, false, fmt.Errorf("canonical chat requires exec options")
 	}
 
+	// Caller-boundary clean cut: legacy runTask still stuffs MULTICA_TOKEN_FILE
+	// into agentEnv for the CLI wrapper. Provider process identity must not see
+	// raw credential keys — Bind(request.Token) is the only secret channel.
+	// SplitEnvironment remains fail-closed if anything still leaks past this strip.
 	turn, err = d.agentRuntimeTurns.Begin(agentRuntimeTurnRequest{
 		WorkspaceID:            task.WorkspaceID,
 		AgentID:                agentID,
@@ -70,7 +74,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		RuntimeStateGeneration: task.RuntimeStateGeneration,
 		MulticaBinary:          selfBin,
 		Token:                  agentToken,
-		Environment:            cloneEnvironment(agentEnv),
+		Environment:            stripProviderCredentialTransport(agentEnv),
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical turn begin: %w", err)

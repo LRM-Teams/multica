@@ -79,6 +79,11 @@ export {
   type ChannelMemberBadge,
 } from "./member-role";
 export {
+  groupMemberActions,
+  canLeaveGroup,
+  type GroupMemberActions,
+} from "./group-member-actions";
+export {
   contentMentionsViewer,
   messageMentionsViewer,
 } from "./mentions-viewer";

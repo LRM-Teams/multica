@@ -116,6 +116,15 @@ export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
+    // #1276: React Query's default networkMode "online" PAUSES a mutation while
+    // offline — the fetch never runs, so there is no reject and no
+    // AbortSignal.timeout to fire (it guards a fetch that never started). The
+    // send-failure path (onError → onVisibleError → restore draft + error bar)
+    // therefore never fires and the composer sits on a stuck "Sending…" with the
+    // text only in the in-memory pending bubble. "always" makes an offline send
+    // ATTEMPT the fetch, which rejects fast (TypeError) → the failure path runs,
+    // the text is restored, and a real POST attempt shows in the network trace.
+    networkMode: "always",
     mutationFn: ({
       channelId,
       content,
@@ -233,6 +242,9 @@ export function useSendChannelThreadMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
+    // #1276: attempt the send even offline so the failure path fires instead of
+    // pausing on a stuck "Sending…" (see useSendChannelMessage for the full why).
+    networkMode: "always",
     mutationFn: ({
       channelId,
       messageId,

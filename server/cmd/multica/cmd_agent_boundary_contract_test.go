@@ -258,6 +258,7 @@ func TestBoundary_AttachmentView_HitsDedicatedAgentAPI(t *testing.T) {
 
 // TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI asserts upload goes to
 // dedicated agent upload surface, not human /api/upload-file.
+// mat_* requires --target (unbound rejected — #801 Barry/Ronan lock).
 func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "up.txt")
 	if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
@@ -266,17 +267,21 @@ func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
-		// Accept either nested or flat dedicated upload names once Ronan lands them.
-		if r.Method == http.MethodPost && (r.URL.Path == "/api/agent/attachments" ||
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agent/channels":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": boundaryContractChannelID, "name": "eng"},
+			})
+		case r.Method == http.MethodPost && (r.URL.Path == "/api/agent/attachments" ||
 			r.URL.Path == "/api/agent/attachments/upload" ||
-			r.URL.Path == "/api/agent/upload-file") {
+			r.URL.Path == "/api/agent/upload-file"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":       boundaryContractAttachmentID,
 				"filename": "up.txt",
 			})
-			return
+		default:
+			http.Error(w, "human upload path forbidden", http.StatusForbidden)
 		}
-		http.Error(w, "human upload path forbidden", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
 	boundaryCLIEnv(t, srv.URL)
@@ -288,11 +293,13 @@ func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 	cmd.Flags().String("path", "", "")
 	cmd.Flags().String("target", "", "")
 	_ = cmd.Flags().Set("path", src)
+	_ = cmd.Flags().Set("target", "#eng")
 
 	err := runAttachmentUpload(cmd, nil)
 	if err != nil {
 		t.Fatalf("runAttachmentUpload: %v (paths=%v) — expect dedicated /api/agent/attachments*", err, gotPaths)
 	}
+	foundUpload := false
 	for _, p := range gotPaths {
 		path := strings.SplitN(p, " ", 2)[1]
 		if path == "/api/upload-file" || strings.HasPrefix(path, "/api/attachments/") {
@@ -301,6 +308,12 @@ func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 		if !strings.HasPrefix(path, "/api/agent/") {
 			t.Fatalf("upload path %q is not under /api/agent/; full=%v", p, gotPaths)
 		}
+		if path == "/api/agent/attachments" || path == "/api/agent/attachments/upload" || path == "/api/agent/upload-file" {
+			foundUpload = true
+		}
+	}
+	if !foundUpload {
+		t.Fatalf("paths=%v, want dedicated agent upload POST", gotPaths)
 	}
 }
 
@@ -1057,5 +1070,43 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 				t.Fatalf("%s path %q: squad surfaces are product-removed", r.capability, p)
 			}
 		}
+	}
+}
+
+// TestBoundary_AttachmentUpload_AgentTokenRequiresTarget asserts mat_* CLI
+// rejects unbound upload before HTTP (Ronan a3d71c62d / Barry contract lock).
+func TestBoundary_AttachmentUpload_AgentTokenRequiresTarget(t *testing.T) {
+	// httptest that would 200 if CLI incorrectly called unbound upload.
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not reach server for unbound mat_*", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "x.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{Use: "upload"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("path", "", "")
+	cmd.Flags().String("target", "", "")
+	_ = cmd.Flags().Set("path", path)
+	// no --target → unbound
+	err := runAttachmentUpload(cmd, nil)
+	if err == nil {
+		t.Fatal("mat_* unbound upload: want error requiring --target, got nil")
+	}
+	if !strings.Contains(err.Error(), "target") && !strings.Contains(err.Error(), "unbound") {
+		t.Fatalf("error=%v; want mention of target/unbound", err)
+	}
+	if called {
+		t.Fatal("CLI must fail closed before HTTP for mat_* unbound upload")
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestAgentPrincipalRoundTrip(t *testing.T) {
@@ -201,5 +203,28 @@ func TestRejectAgentOnHumanAPI_IssueLabelsVsGlobalLabels(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("issue labels attach status=%d want 204 (necessary; not global CRUD)", rec.Code)
+	}
+}
+
+// TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric hard-asserts the
+// human_route_hits_total counter increments on reject (Barry: metric not just source-looking-right).
+func TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric(t *testing.T) {
+	ensureAgentHumanRouteMetrics()
+	before := testutil.ToFloat64(agentHumanRouteHits.WithLabelValues("RejectAgentOnHumanAPI"))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := RejectAgentOnHumanAPI(inner)
+	rec := httptest.NewRecorder()
+	req := agentPrincipalCtx(httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want 403", rec.Code)
+	}
+
+	after := testutil.ToFloat64(agentHumanRouteHits.WithLabelValues("RejectAgentOnHumanAPI"))
+	if after < before+1 {
+		t.Fatalf("human_route_hits_total{site=RejectAgentOnHumanAPI} before=%v after=%v; want +1", before, after)
 	}
 }

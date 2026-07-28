@@ -550,10 +550,10 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	req.MustReplyFailure = h.isChannelAgentTask(r.Context(), task) &&
-		task.Priority >= 2 &&
-		req.TransportAttempted &&
-		!h.chatTaskHasAgentTransportVisibleOutput(r.Context(), task)
+	directedChannelTask := h.isChannelAgentTask(r.Context(), task) && task.Priority >= 2
+	req.MustReplyFailure = directedChannelTask &&
+		!h.chatTaskHasAgentTransportVisibleOutput(r.Context(), task) &&
+		(req.TransportAttempted || h.agentInboxEventHasHumanSource(r.Context(), event))
 	result, err := json.Marshal(req.TaskCompleteRequest)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")

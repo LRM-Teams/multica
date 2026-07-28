@@ -801,7 +801,18 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	desc := trimTextPtr(req.Description)
 	larkChatID := trimTextPtr(req.LarkChatID)
-	row := h.DB.QueryRow(r.Context(), `
+
+	// channel row + owner membership MUST be atomic. Swallowing the owner
+	// INSERT (former `_, _ = h.DB.Exec`) left zero-owner groups that nobody
+	// can administer (Barry #1284 SOURCE BLOCK).
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create channel")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	row := tx.QueryRow(r.Context(), `
 		INSERT INTO channel (workspace_id, name, description, lark_chat_id, project_id, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, system_key, archived_at, archived_by`,
@@ -815,10 +826,23 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create channel")
 		return
 	}
-	_, _ = h.DB.Exec(r.Context(), `
+	tag, err := tx.Exec(r.Context(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1, $2, 'user', $3, 'owner')
-		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
+		VALUES ($1, $2, 'user', $3, 'owner')`,
+		parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create channel owner membership")
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		writeError(w, http.StatusInternalServerError, "failed to create channel owner membership")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create channel")
+		return
+	}
+
 	// LRM-397/398: do NOT auto-provision 贝克汉姆 / group_manager on channel create.
 	// Group managers enter via Wendy hire or POST .../group-manager (InviteGroupManager),
 	// with visibility=channel + home_channel_id bound to that group.

@@ -560,7 +560,16 @@
     "delete_dialog_cancel": "キャンセル",
     "delete_dialog_confirm": "削除",
     "agent_deleted_toast": "エージェントを削除しました",
-    "delete_failed_toast": "エージェントを削除できませんでした"
+    "delete_failed_toast": "エージェントを削除できませんでした",
+    "change_avatar_aria": "アバターを変更",
+    "avatar_updated_toast": "アバターを更新しました",
+    "avatar_crop_title": "アバターを切り抜く",
+    "avatar_crop_cancel": "キャンセル",
+    "avatar_crop_save": "保存",
+    "avatar_crop_zoom_aria": "ズーム",
+    "avatar_err_type": "PNG または JPG 画像を選択してください。",
+    "avatar_err_size": "画像は 5 MB 以下にしてください。",
+    "avatar_err_dimensions": "画像は 256×256 ピクセル以上にしてください。"
   },
   "restart_modal": {
     "trigger": "再起動…",

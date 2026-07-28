@@ -578,7 +578,16 @@
     "delete_dialog_cancel": "Cancel",
     "delete_dialog_confirm": "Delete",
     "agent_deleted_toast": "Agent deleted",
-    "delete_failed_toast": "Failed to delete agent"
+    "delete_failed_toast": "Failed to delete agent",
+    "change_avatar_aria": "Change avatar",
+    "avatar_updated_toast": "Avatar updated",
+    "avatar_crop_title": "Crop avatar",
+    "avatar_crop_cancel": "Cancel",
+    "avatar_crop_save": "Save",
+    "avatar_crop_zoom_aria": "Zoom",
+    "avatar_err_type": "Please choose a PNG or JPG image.",
+    "avatar_err_size": "Image must be 5 MB or smaller.",
+    "avatar_err_dimensions": "Image must be at least 256×256 pixels."
   },
   "restart_modal": {
     "trigger": "Restart…",

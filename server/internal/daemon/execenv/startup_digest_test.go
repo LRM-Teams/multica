@@ -27,7 +27,10 @@ func TestStartupStaticDigestIgnoresPerTurnFields(t *testing.T) {
 	}
 }
 
-func TestStartupStaticDigestTracksSkillDescriptionAndFiles(t *testing.T) {
+func TestStartupStaticDigestTracksSkillDescriptionNotFiles(t *testing.T) {
+	// Slim D6-1b: AGENTS brief indexes skill name+description only.
+	// Skill package Files are NOT written to workdir, so Files content must
+	// not force AGENTS rewrite / process recreation via digest.
 	base := TaskContextForEnv{
 		AgentID: "a", ChatSessionID: "c",
 		AgentSkills: []SkillContextForEnv{{
@@ -48,8 +51,8 @@ func TestStartupStaticDigestTracksSkillDescriptionAndFiles(t *testing.T) {
 		Name: "s1", Description: "desc-a", Content: "body",
 		Files: []SkillFileContextForEnv{{Path: "extra.md", Content: "v2"}},
 	}}
-	if StartupStaticDigest("grok", base) == StartupStaticDigest("grok", changedFile) {
-		t.Fatal("skill Files content change must change digest")
+	if StartupStaticDigest("grok", base) != StartupStaticDigest("grok", changedFile) {
+		t.Fatal("slim: skill Files content must not change startup digest")
 	}
 }
 

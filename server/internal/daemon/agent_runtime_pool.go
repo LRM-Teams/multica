@@ -28,10 +28,9 @@ const (
 // The logical slot is always agent×runtime. The fingerprint decides whether
 // that slot's provider backend must restart; it never creates another slot.
 //
-// ContextKey is Multica ChatSessionID (not task.ID). When it changes the
-// resident process must dispose and start a fresh provider session — Pi/Grok
-// load AGENTS/context at process start only, so cross-chat file rewrite alone
-// leaves the old task's in-memory context (Parker/Barry real-Pi proof).
+// Product (Frank/Parker 2026-07-28): one long-lived resident session per
+// agent×runtime across channel/DM/thread. ChatSessionID / Directed / Initiator
+// are per-turn prompt facts — never fingerprint / force-fresh inputs.
 type canonicalAgentRuntimeIdentity struct {
 	AgentID      string
 	RuntimeID    string
@@ -45,15 +44,13 @@ type canonicalAgentRuntimeIdentity struct {
 	CustomArgs   []string
 	Environment  map[string]string
 
-	// Hard-instruction / context boundary fields (fingerprint). Prefer rotate
-	// when unsure; never put task.ID, Initiator, or other per-turn prompt fields.
-	ContextKey          string // ChatSessionID
+	// Slow-changing process boundary (fingerprint). Prefer restart when unsure;
+	// never put ChatSessionID, Directed, Initiator, Issue, or other per-turn fields.
 	WorkspaceID         string
-	Directed            bool
 	ManagedRole         string
 	AgentInstructions   string
 	WorkspaceContext    string
-	StartupStaticDigest string // canonical hash of slow-changing startup bundle bytes
+	StartupStaticDigest string // hash of create-time AGENTS managed brief bytes
 }
 
 type canonicalAgentRuntimeIdentityParams canonicalAgentRuntimeIdentity
@@ -85,7 +82,7 @@ func newCanonicalAgentRuntimeIdentity(params canonicalAgentRuntimeIdentityParams
 	if len(currentTurn) != 0 {
 		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime identity contains current-turn environment")
 	}
-	identity := canonicalAgentRuntimeIdentity{
+	return canonicalAgentRuntimeIdentity{
 		AgentID:             strings.TrimSpace(params.AgentID),
 		RuntimeID:           strings.TrimSpace(params.RuntimeID),
 		Provider:            strings.TrimSpace(params.Provider),
@@ -97,18 +94,12 @@ func newCanonicalAgentRuntimeIdentity(params canonicalAgentRuntimeIdentityParams
 		MCP:                 params.MCP,
 		CustomArgs:          append([]string(nil), params.CustomArgs...),
 		Environment:         cloneStringMap(stable),
-		ContextKey:          strings.TrimSpace(params.ContextKey),
 		WorkspaceID:         strings.TrimSpace(params.WorkspaceID),
-		Directed:            params.Directed,
 		ManagedRole:         strings.TrimSpace(params.ManagedRole),
 		AgentInstructions:   params.AgentInstructions,
 		WorkspaceContext:    params.WorkspaceContext,
 		StartupStaticDigest: strings.TrimSpace(params.StartupStaticDigest),
-	}
-	if identity.ContextKey == "" {
-		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime context_key (chat_session_id) is required")
-	}
-	return identity, nil
+	}, nil
 }
 
 func (i canonicalAgentRuntimeIdentity) slotKey() string {
@@ -126,9 +117,7 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		MCP                 string      `json:"mcp"`
 		CustomArgs          []string    `json:"custom_args"`
 		Environment         [][2]string `json:"environment"`
-		ContextKey          string      `json:"context_key"`
 		WorkspaceID         string      `json:"workspace_id"`
-		Directed            bool        `json:"directed"`
 		ManagedRole         string      `json:"managed_role"`
 		AgentInstructions   string      `json:"agent_instructions"`
 		WorkspaceContext    string      `json:"workspace_context"`
@@ -153,9 +142,7 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		MCP:                 i.MCP,
 		CustomArgs:          append([]string(nil), i.CustomArgs...),
 		Environment:         environment,
-		ContextKey:          i.ContextKey,
 		WorkspaceID:         i.WorkspaceID,
-		Directed:            i.Directed,
 		ManagedRole:         i.ManagedRole,
 		AgentInstructions:   i.AgentInstructions,
 		WorkspaceContext:    i.WorkspaceContext,
@@ -199,9 +186,8 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	BackendConfig      agent.Config
 	Factory            canonicalRuntimeBackendFactory
 	// BeforeCreate runs only when a new backend will be factory-created
-	// (not on resident reuse). Used for option-A startup materialize — zero
-	// filesystem I/O on the reuse path. Must not leave a half-created slot
-	// if it fails (acquire rolls running back before return).
+	// (not on resident reuse). Create-only AGENTS write — zero filesystem I/O
+	// on the reuse path. Must not leave a half-created slot if it fails.
 	BeforeCreate func() error
 	Now          time.Time
 }
@@ -212,14 +198,13 @@ type canonicalAgentRuntimePool struct {
 }
 
 type canonicalAgentRuntimeSlot struct {
-	mu             sync.Mutex
-	fingerprint    string
-	mode           canonicalRuntimeMode
-	lastContextKey string // last ChatSessionID bound to this resident process
-	running        bool
-	idleSince      time.Time
-	backend        agent.Backend
-	close          func()
+	mu          sync.Mutex
+	fingerprint string
+	mode        canonicalRuntimeMode
+	running     bool
+	idleSince   time.Time
+	backend     agent.Backend
+	close       func()
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -261,7 +246,7 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, errors.New("canonical runtime provider, executable, and work_dir are required")
 	}
 	fingerprint := request.Identity.fingerprint()
-	contextKey := strings.TrimSpace(request.Identity.ContextKey)
+	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
 	now := request.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -281,23 +266,13 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
 
-	// lastContextKey is the last *healthy* context only (committed on release(true)).
-	// Compare against it so a failed B turn does not drop the cross-chat fresh fence
-	// on retry (Barry: acquire must not optimistically commit B before healthy).
-	contextRotated := slot.lastContextKey != "" && slot.lastContextKey != contextKey
-	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
-	if contextRotated {
-		// Never resume PriorSessionID from chat A when starting chat B.
-		resumeSessionID = ""
-	}
-
+	// Fingerprint drift (slow config / AGENTS digest) → dispose process and recreate.
+	// Cross-surface chat change alone does NOT dispose or force-fresh Prior.
 	configDrift := slot.fingerprint != "" &&
 		(slot.fingerprint != fingerprint || slot.mode != request.Mode)
-	if configDrift || contextRotated {
+	if configDrift {
 		slot.closeBackend()
 	}
-	// Process config may update optimistically for this attempt; context key
-	// identity for force-fresh stays on last healthy until release(true).
 	prevFingerprint := slot.fingerprint
 	prevMode := slot.mode
 	slot.fingerprint = fingerprint
@@ -306,12 +281,12 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 
 	var backend agent.Backend
 	var closeBackend func()
-	reused := request.Mode == canonicalRuntimeResident && !configDrift && !contextRotated && slot.backend != nil
+	reused := request.Mode == canonicalRuntimeResident && !configDrift && slot.backend != nil
 	if reused {
 		backend = slot.backend
 		closeBackend = slot.close
 	} else {
-		// Option A: startup materialize only on the create path (Barry structure gate).
+		// Create-only: AGENTS (and any future startup disk) only on process create.
 		if request.BeforeCreate != nil {
 			if err := request.BeforeCreate(); err != nil {
 				slot.running = false
@@ -326,9 +301,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		created, closeFn, err := request.Factory(config)
 		if err != nil {
 			slot.running = false
-			// Roll back optimistic process identity so a partial B does not
-			// look "already on B" for later drift decisions; lastContextKey
-			// was never advanced.
 			slot.fingerprint = prevFingerprint
 			slot.mode = prevMode
 			return nil, fmt.Errorf("create canonical runtime backend: %w", err)
@@ -355,11 +327,10 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		canonicalSessionID: resumeSessionID,
 	}
 	return &canonicalAgentRuntimeLease{
-		slot:              slot,
-		backend:           wrapped,
-		mode:              request.Mode,
-		pendingContextKey: contextKey,
-		turnClose:         closeBackend,
+		slot:      slot,
+		backend:   wrapped,
+		mode:      request.Mode,
+		turnClose: closeBackend,
 	}, nil
 }
 
@@ -397,12 +368,11 @@ func clearCanonicalResumeIfPresent(backend agent.Backend) {
 }
 
 type canonicalAgentRuntimeLease struct {
-	slot              *canonicalAgentRuntimeSlot
-	backend           agent.Backend
-	mode              canonicalRuntimeMode
-	pendingContextKey string // committed to slot.lastContextKey only on healthy release
-	turnClose         func()
-	once              sync.Once
+	slot      *canonicalAgentRuntimeSlot
+	backend   agent.Backend
+	mode      canonicalRuntimeMode
+	turnClose func()
+	once      sync.Once
 }
 
 func (l *canonicalAgentRuntimeLease) release(healthy bool) {
@@ -433,13 +403,6 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 			}
 		} else if !healthy {
 			l.slot.closeBackend()
-		}
-		// Commit context key only after a healthy turn — failed B leaves last
-		// healthy A so retry B still sees contextRotated and force-fresh.
-		if healthy {
-			if key := strings.TrimSpace(l.pendingContextKey); key != "" {
-				l.slot.lastContextKey = key
-			}
 		}
 		l.slot.running = false
 		l.slot.idleSince = now
@@ -492,7 +455,6 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 	slot.closeBackend()
 	slot.fingerprint = ""
 	slot.mode = ""
-	slot.lastContextKey = ""
 	slot.idleSince = time.Time{}
 	return nil
 }

@@ -5,17 +5,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"sort"
 	"strings"
 )
 
 // StartupStaticContext returns the TaskContextForEnv subset used for
-// provider-startup materialization (option A). Per-turn fields that belong in
-// the Execute prompt are zeroed so they cannot force process recreation or
-// pollute the startup AGENTS/context snapshot.
+// create-time AGENTS materialization. Per-turn fields that belong in the
+// Execute prompt are zeroed so they cannot force process recreation or
+// pollute the startup AGENTS snapshot.
+//
+// Slim D6-1b: AGENTS is agent-level static only. Chat surface, directed flag,
+// initiator, issue, project/resources, and channel/project memory dirs are
+// per-turn (prompt / CLI), not startup disk.
 func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 	out := ctx
+	// Per-turn surface / speaker / issue
 	out.InitiatorType = ""
 	out.InitiatorID = ""
 	out.InitiatorName = ""
@@ -26,89 +29,49 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 	out.NewCommentCount = 0
 	out.NewCommentsSince = ""
 	out.AssignmentSnapshot = nil
-	out.SkillDirSlugByName = nil // resolved only after FS plan; not input digest
-	// ChatSessionID / Directed / ChannelID / ManagedRole / memories / skills stay.
+	out.ChatSessionID = ""
+	out.ChannelID = ""
+	out.Directed = false
+	// Task-scoped project surface (Barry allowlist: per-turn)
+	out.ProjectID = ""
+	out.ProjectTitle = ""
+	out.ProjectResources = nil
+	out.ProjectMemoryDir = ""
+	out.ChannelMemoryDir = ""
+	out.Repos = nil
+	out.SkillDirSlugByName = nil
+	// Skills: names/descriptions may stay in the brief index for lazy load;
+	// we do NOT write skill package files to workdir. Keep AgentSkills for
+	// index rendering in the managed brief.
 	return out
 }
 
-// StartupMaterializationPlan is the pure, zero-I/O render of everything the
-// daemon will write on process create. Digest is over these exact bytes
-// (产物即证据) — not a hand-picked field subset.
+// StartupMaterializationPlan is the pure, zero-I/O render of create-time AGENTS.
+// Slim: only RuntimeBrief — no skill files, issue_context, or resources.json.
 type StartupMaterializationPlan struct {
-	Provider         string
-	RuntimeBrief     string            // buildMetaSkillContent body (before marker wrap)
-	IssueContext     string            // usually empty after StartupStaticContext
-	SkillFiles       map[string]string // path under skills parent -> final file bytes
-	ProjectResources string            // resources.json body or empty
+	Provider     string
+	RuntimeBrief string // buildMetaSkillContent body (before marker wrap)
 }
 
-// RenderStartupMaterializationPlan pure-renders the create-time snapshot.
+// RenderStartupMaterializationPlan pure-renders the create-time AGENTS brief.
 // Prefer StartupStaticContext(ctx) as input.
 func RenderStartupMaterializationPlan(provider string, ctx TaskContextForEnv) StartupMaterializationPlan {
-	plan := StartupMaterializationPlan{
+	return StartupMaterializationPlan{
 		Provider:     provider,
 		RuntimeBrief: buildMetaSkillContent(provider, ctx),
-		SkillFiles:   map[string]string{},
 	}
-	if strings.TrimSpace(ctx.IssueID) != "" || ctx.AssignmentSnapshot != nil {
-		plan.IssueContext = renderIssueContext(provider, ctx)
-	}
-	if len(ctx.AgentSkills) > 0 && provider != "codex" {
-		for _, sk := range ctx.AgentSkills {
-			baseSlug := sanitizeSkillName(sk.Name)
-			// Pure plan uses natural slug (collision allocation needs FS).
-			// Content bytes match writeSkillFiles after frontmatter ensure.
-			body := ensureSkillFrontmatter(sk.Content, baseSlug, sk.Description)
-			plan.SkillFiles[baseSlug+"/SKILL.md"] = body
-			plan.SkillFiles[baseSlug+"/"+managedSkillMarker] = sk.Name + "\n"
-			for _, f := range sk.Files {
-				rel := strings.TrimPrefix(filepath.ToSlash(f.Path), "/")
-				if rel == "" || rel == "SKILL.md" {
-					continue
-				}
-				plan.SkillFiles[baseSlug+"/"+rel] = f.Content
-			}
-		}
-	}
-	if ctx.ProjectID != "" || len(ctx.ProjectResources) > 0 {
-		resources := ctx.ProjectResources
-		if resources == nil {
-			resources = []ProjectResourceForEnv{}
-		}
-		data, err := json.MarshalIndent(projectResourceFile{
-			ProjectID: ctx.ProjectID, ProjectTitle: ctx.ProjectTitle, Resources: resources,
-		}, "", "  ")
-		if err == nil {
-			plan.ProjectResources = string(data) + "\n"
-		}
-	}
-	return plan
 }
 
 // Digest returns sha256 of the canonical encoding of the plan.
 func (p StartupMaterializationPlan) Digest() string {
-	type fileEntry struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	}
 	type wire struct {
-		Provider         string      `json:"provider"`
-		RuntimeBrief     string      `json:"runtime_brief"`
-		IssueContext     string      `json:"issue_context,omitempty"`
-		SkillFiles       []fileEntry `json:"skill_files,omitempty"`
-		ProjectResources string      `json:"project_resources,omitempty"`
+		Provider     string `json:"provider"`
+		RuntimeBrief string `json:"runtime_brief"`
 	}
-	w := wire{
-		Provider:         p.Provider,
-		RuntimeBrief:     p.RuntimeBrief,
-		IssueContext:     p.IssueContext,
-		ProjectResources: p.ProjectResources,
-	}
-	for path, content := range p.SkillFiles {
-		w.SkillFiles = append(w.SkillFiles, fileEntry{Path: path, Content: content})
-	}
-	sort.Slice(w.SkillFiles, func(i, j int) bool { return w.SkillFiles[i].Path < w.SkillFiles[j].Path })
-	raw, err := json.Marshal(w)
+	raw, err := json.Marshal(wire{
+		Provider:     p.Provider,
+		RuntimeBrief: p.RuntimeBrief,
+	})
 	if err != nil {
 		return fmt.Sprintf("sha256:error:%s", strings.TrimSpace(err.Error()))
 	}

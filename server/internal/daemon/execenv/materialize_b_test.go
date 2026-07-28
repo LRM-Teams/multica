@@ -7,233 +7,112 @@ import (
 	"testing"
 )
 
-func TestMaterializeBClearsLegacyOrphanIssueContext(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
-	ctxDir := filepath.Join(workDir, ".agent_context")
-	if err := os.MkdirAll(ctxDir, 0o755); err != nil {
+func TestMaterializeSlimWritesOnlyAgentsManagedBlock(t *testing.T) {
+	workDir := t.TempDir()
+	ledgerRoot := t.TempDir()
+	userPrefix := "# user AGENTS prefix\n\nKeep me.\n"
+	if err := os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte(userPrefix), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	orphan := filepath.Join(ctxDir, "issue_context.md")
-	if err := os.WriteFile(orphan, []byte("ISSUE_A_STALE_ORPHAN"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", AgentName: "A", ChatSessionID: "c", Directed: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatalf("legacy orphan should be reclaimed: %v", err)
-	}
-}
-
-func TestMaterializeBSkillCollisionKeepsUserAndManagedSibling(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
+	// User skill tree must not be touched / no Multica package written.
 	userSkill := filepath.Join(workDir, ".grok", "skills", "review", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(userSkill), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(userSkill, []byte("USER_OWNED_SKILL"), 0o644); err != nil {
+	if err := os.WriteFile(userSkill, []byte("user skill body\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, receipt, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
-		AgentSkills: []SkillContextForEnv{{
-			Name: "review", Description: "managed", Content: "MANAGED_SKILL_BYTES",
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	userRaw, err := os.ReadFile(userSkill)
-	if err != nil || string(userRaw) != "USER_OWNED_SKILL" {
-		t.Fatalf("user skill clobbered: %v %q", err, userRaw)
-	}
-	if len(receipt.Skills) != 1 {
-		t.Fatalf("receipt skills=%d", len(receipt.Skills))
-	}
-	if receipt.Skills[0].Decision != "sibling" || receipt.Skills[0].ActualSlug == "review" {
-		t.Fatalf("want sibling slug, got %+v", receipt.Skills[0])
-	}
-	managed := filepath.Join(workDir, ".grok", "skills", receipt.Skills[0].ActualSlug, "SKILL.md")
-	body, err := os.ReadFile(managed)
-	if err != nil || !strings.Contains(string(body), "MANAGED_SKILL_BYTES") {
-		t.Fatalf("managed sibling missing: %v %s", err, body)
-	}
-}
 
-func TestMaterializeBAgentsFinalHashDiffersByUserPrefix(t *testing.T) {
-	// Same managed input, different user AGENTS prefix → input digest same, receipt hash differs.
-	mk := func(prefix string) (digest, finalHash string) {
-		workDir, ledgerRoot := materializeLayout(t)
-		if err := os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte(prefix), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		ctx := TaskContextForEnv{AgentID: "a", AgentName: "A", ChatSessionID: "c", Directed: true}
-		_, receipt, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, err := os.ReadFile(filepath.Join(workDir, "AGENTS.md"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if receipt.AgentsFinalSHA256 != sha256Hex(raw) {
-			t.Fatalf("receipt hash mismatch disk")
-		}
-		return StartupStaticDigest("grok", ctx), receipt.AgentsFinalSHA256
-	}
-	d1, h1 := mk("USER_PREFIX_ONE\n")
-	d2, h2 := mk("USER_PREFIX_TWO\n")
-	if d1 != d2 {
-		t.Fatal("managed input digest should ignore user AGENTS prefix")
-	}
-	if h1 == h2 {
-		t.Fatal("final AGENTS hash must differ for different user prefixes")
-	}
-}
-
-func TestMaterializeBResolvedSlugDrivesBriefAndReceipt(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
-	userSkill := filepath.Join(workDir, ".grok", "skills", "review", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(userSkill), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(userSkill, []byte("USER_OWNED_SKILL"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	brief, receipt, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
-		AgentSkills: []SkillContextForEnv{{Name: "review", Description: "d", Content: "MANAGED"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipt.Skills) != 1 || receipt.Skills[0].ActualSlug == "review" {
-		t.Fatalf("receipt: %+v", receipt.Skills)
-	}
-	wantLoc := ".grok/skills/" + receipt.Skills[0].ActualSlug + "/SKILL.md"
-	if !strings.Contains(brief, wantLoc) {
-		t.Fatalf("brief must index actual slug %s:\n%s", wantLoc, brief)
-	}
-	if strings.Contains(brief, ".grok/skills/review/SKILL.md") {
-		t.Fatal("brief must not point at user-owned review path")
-	}
-}
-
-func TestMaterializeBResolveFailureLeavesNoSkillResidue(t *testing.T) {
-	// AGENTS as symlink → fail before apply; resolve must not leave skill dirs.
-	workDir, ledgerRoot := materializeLayout(t)
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(workDir, "AGENTS.md")); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
-		AgentSkills: []SkillContextForEnv{{Name: "review", Content: "body"}},
-	})
-	if err == nil {
-		t.Fatal("expected AGENTS symlink failure")
-	}
-	// No skill package under .grok/skills
-	skillsRoot := filepath.Join(workDir, ".grok", "skills")
-	if entries, err := os.ReadDir(skillsRoot); err == nil && len(entries) > 0 {
-		t.Fatalf("resolve/preflight failure left skill residue: %v", entries)
-	}
-}
-
-func TestMaterializeBStagingDoesNotDeleteUserOwnedSibling(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
-	// User owns a path that would collide with the old fixed staging name.
-	userStage := filepath.Join(workDir, ".grok", "skills", "review.multica-staging", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(userStage), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(userStage, []byte("USER_STAGE_BYTES"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
-		AgentSkills: []SkillContextForEnv{{Name: "review", Content: "MANAGED"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(userStage)
-	if err != nil || string(raw) != "USER_STAGE_BYTES" {
-		t.Fatalf("user staging sibling deleted/clobbered: %v %q", err, raw)
-	}
-}
-
-func TestMaterializeBReservesSlugsAcrossAssignedSkills(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
-	_, receipt, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
-		AgentSkills: []SkillContextForEnv{
-			{Name: "Review", Content: "BODY_A"},
-			{Name: "review!", Content: "BODY_B"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipt.Skills) != 2 {
-		t.Fatalf("want 2 skills, got %d", len(receipt.Skills))
-	}
-	if receipt.Skills[0].ActualSlug == receipt.Skills[1].ActualSlug {
-		t.Fatalf("slugs must differ: %+v", receipt.Skills)
-	}
-	for _, sk := range receipt.Skills {
-		p := filepath.Join(workDir, ".grok", "skills", sk.ActualSlug, "SKILL.md")
-		if _, err := os.Stat(p); err != nil {
-			t.Fatalf("missing skill package %s: %v", sk.ActualSlug, err)
-		}
-	}
-}
-
-func TestMaterializeBSupportingFileCannotEscapePackage(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
-	// Pre-seed a file that escape would clobber.
-	target := filepath.Join(workDir, ".grok", "skills", "USER_OWNED.txt")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(target, []byte("USER_BYTES"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentID:           "agent-a",
+		AgentName:         "Agent A",
+		AgentInstructions: "be helpful",
+		ChatSessionID:     "chat-should-not-force-disk",
+		Directed:          true,
 		AgentSkills: []SkillContextForEnv{{
-			Name: "safe", Content: "body",
-			Files: []SkillFileContextForEnv{{Path: "../USER_OWNED.txt", Content: "CLOBBERED"}},
+			Name: "review", Description: "d", Content: "managed skill should not land on disk\n",
 		}},
 	})
-	if err == nil {
-		t.Fatal("expected reject escaping supporting path")
+	if err != nil {
+		t.Fatalf("MaterializeCanonicalTurnContextB: %v", err)
 	}
-	raw, err := os.ReadFile(target)
-	if err != nil || string(raw) != "USER_BYTES" {
-		t.Fatalf("user file clobbered: %v %q", err, raw)
+	if strings.TrimSpace(brief) == "" {
+		t.Fatal("expected non-empty runtime brief")
+	}
+	if receipt.AgentsFinalSHA256 == "" || receipt.ManagedInputDigest == "" {
+		t.Fatalf("receipt incomplete: %+v", receipt)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(workDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "Keep me.") {
+		t.Fatalf("user prefix not preserved:\n%s", s)
+	}
+	if !strings.Contains(s, runtimeMarkerBegin) || !strings.Contains(s, runtimeMarkerEnd) {
+		t.Fatalf("missing managed markers:\n%s", s)
+	}
+	// Slim: no skill packages under workdir
+	if _, err := os.Stat(filepath.Join(workDir, ".grok", "skills", "review-multica")); !os.IsNotExist(err) {
+		t.Fatalf("expected no managed skill package on disk, err=%v", err)
+	}
+	userBody, err := os.ReadFile(userSkill)
+	if err != nil || string(userBody) != "user skill body\n" {
+		t.Fatalf("user skill mutated: %v %q", err, userBody)
+	}
+	// No issue_context / resources written
+	if _, err := os.Stat(filepath.Join(workDir, ".agent_context")); !os.IsNotExist(err) {
+		t.Fatal("unexpected .agent_context written")
 	}
 }
 
-func TestMaterializeBRefusesAgentContextSymlink(t *testing.T) {
-	workDir, ledgerRoot := materializeLayout(t)
-	outside := t.TempDir()
-	// Symlink .agent_context to outside — legacy reclaim or mkdir should fail closed.
-	if err := os.Symlink(outside, filepath.Join(workDir, ".agent_context")); err != nil {
+func TestMaterializeSlimRefusesSymlinkAgents(t *testing.T) {
+	workDir := t.TempDir()
+	ledgerRoot := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Seed orphan that would trigger reclaim path
-	if err := os.WriteFile(filepath.Join(outside, "issue_context.md"), []byte("ORPHAN"), 0o644); err != nil {
+	agents := filepath.Join(workDir, "AGENTS.md")
+	if err := os.Symlink(outside, agents); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, "grok", TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c", Directed: true,
+		AgentID: "a", AgentName: "A",
 	})
-	if err == nil {
-		t.Fatal("expected fail-closed on .agent_context symlink")
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("want symlink refusal, got %v", err)
+	}
+	// outside file must not be clobbered
+	raw, err := os.ReadFile(outside)
+	if err != nil || string(raw) != "outside\n" {
+		t.Fatalf("outside file changed: %v %q", err, raw)
+	}
+}
+
+func TestStartupStaticContextStripsPerTurnSurface(t *testing.T) {
+	in := TaskContextForEnv{
+		AgentID: "a", AgentName: "A", AgentInstructions: "stay",
+		ChatSessionID: "chat-1", ChannelID: "ch-1", Directed: true,
+		ProjectID: "p1", ProjectTitle: "P", Repos: []RepoContextForEnv{{URL: "https://example.com/r.git"}},
+		InitiatorName: "Bob", IssueID: "iss",
+	}
+	out := StartupStaticContext(in)
+	if out.ChatSessionID != "" || out.ChannelID != "" || out.Directed || out.ProjectID != "" || out.IssueID != "" || out.InitiatorName != "" {
+		t.Fatalf("per-turn fields leaked into static: %+v", out)
+	}
+	if out.AgentID != "a" || out.AgentInstructions != "stay" {
+		t.Fatalf("static agent fields lost: %+v", out)
+	}
+	// Digest ignores chat surface differences
+	d1 := ManagedStartupInputDigest("grok", in)
+	in2 := in
+	in2.ChatSessionID = "chat-2"
+	in2.Directed = false
+	d2 := ManagedStartupInputDigest("grok", in2)
+	if d1 != d2 {
+		t.Fatalf("digest changed across chat surface: %s vs %s", d1, d2)
 	}
 }

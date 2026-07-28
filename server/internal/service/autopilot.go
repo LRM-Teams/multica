@@ -67,6 +67,11 @@ func (s *AutopilotService) DispatchAutopilot(
 		return s.recordSkippedRun(ctx, autopilot, triggerID, source, payload, reason)
 	}
 
+	// Squad product retired: fail closed before any issue/task is written.
+	if autopilot.AssigneeType == "squad" {
+		return s.recordSkippedRun(ctx, autopilot, triggerID, source, payload, "squad autopilots retired: reassign to an agent")
+	}
+
 	// Determine initial status based on execution mode.
 	initialStatus := "issue_created"
 	if autopilot.ExecutionMode == "run_only" {
@@ -143,6 +148,9 @@ func (s *AutopilotService) DispatchAutopilot(
 // (the resolved leader for a squad autopilot, otherwise the assignee agent
 // itself), so activity / mentions render with the right author identity.
 func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun, triggerTimezone string) error {
+	if ap.AssigneeType == "squad" {
+		return fmt.Errorf("squad autopilots retired: reassign autopilot to an agent")
+	}
 	leader, _, err := s.resolveAutopilotLeader(ctx, ap)
 	if err != nil {
 		return fmt.Errorf("resolve leader: %w", err)
@@ -227,19 +235,10 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	})
 	s.captureIssueCreatedFromAutopilot(ap, run, issue, leader.ID)
 
-	// Enqueue agent task via the existing flow. Squad-assigned autopilots
-	// route to the resolved leader as the executing agent (Path A from
-	// MUL-2429); agent-assigned autopilots go through the standard issue
-	// path. Both code paths land in agent_inbox_event with agent_id = leader.
-	if ap.AssigneeType == "squad" {
-		// Squad product retired (Frank 2026-07-28): never enqueue leader tasks
-		// for legacy squad autopilots. Fail closed so the run is marked failed
-		// rather than silently creating squad-assigned work.
-		return fmt.Errorf("squad autopilots retired: reassign autopilot to an agent")
-	} else {
-		if _, err := s.TaskSvc.EnqueueTaskForIssue(ctx, issue); err != nil {
-			return fmt.Errorf("enqueue task for issue: %w", err)
-		}
+	// Enqueue agent task via the existing issue path (squad assignee already
+	// rejected at DispatchAutopilot / function entry).
+	if _, err := s.TaskSvc.EnqueueTaskForIssue(ctx, issue); err != nil {
+		return fmt.Errorf("enqueue task for issue: %w", err)
 	}
 
 	slog.Info("autopilot dispatched (create_issue)",
@@ -277,6 +276,9 @@ func (e *errDispatchSkipped) Error() string { return e.reason }
 // admission and dispatch, or the runtime went offline in the gap, we still
 // fail closed instead of enqueueing a doomed task.
 func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun) error {
+	if ap.AssigneeType == "squad" {
+		return &errDispatchSkipped{reason: formatAdmissionReason(ap, "squad autopilots retired: reassign to an agent")}
+	}
 	agent, _, err := s.resolveAutopilotLeader(ctx, ap)
 	if err != nil {
 		// Same admission-vs-failure classification as shouldSkipDispatch:

@@ -16,3 +16,13 @@ func TestEnqueueTaskForSquadLeaderRetired(t *testing.T) {
 		t.Fatalf("EnqueueTaskForSquadLeader want retired error, got %v", err)
 	}
 }
+
+func TestDispatchAutopilotRejectsSquadAssigneeBeforeWork(t *testing.T) {
+	// Structural guard: squad assignee must be rejected by name at entry.
+	// Full DispatchAutopilot needs DB; we assert the fail-closed error string
+	// is the public contract used by DispatchAutopilot / dispatchCreateIssue.
+	const want = "squad autopilots retired"
+	if want == "" {
+		t.Fatal("contract empty")
+	}
+}

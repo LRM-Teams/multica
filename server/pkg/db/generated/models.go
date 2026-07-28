@@ -594,6 +594,22 @@ type EnvCheckpoint struct {
 	SaveMode       string             `json:"save_mode"`
 }
 
+type EnvCheckpointLane struct {
+	ID           pgtype.UUID        `json:"id"`
+	CheckpointID pgtype.UUID        `json:"checkpoint_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	LaneKey      string             `json:"lane_key"`
+	Status       string             `json:"status"`
+	InstanceID   pgtype.UUID        `json:"instance_id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	RuntimeID    pgtype.UUID        `json:"runtime_id"`
+	TaskID       pgtype.UUID        `json:"task_id"`
+	EnvID        pgtype.UUID        `json:"env_id"`
+	Error        pgtype.Text        `json:"error"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EnvDispatchRequest struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

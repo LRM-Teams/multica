@@ -625,6 +625,106 @@ func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
 	}
 }
 
+func TestMigration245CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "245_env_checkpoint_lane.up.sql"))
+	if err != nil {
+		t.Fatalf("read 245 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS env_checkpoint_lane",
+		"checkpoint_id UUID NOT NULL REFERENCES env_checkpoint(id) ON DELETE CASCADE",
+		"workspace_id UUID NOT NULL",
+		"lane_key TEXT NOT NULL",
+		"CHECK (status IN ('provisioning', 'ready', 'failed'))",
+		// The unique index is the idempotency mechanism, not an optimization.
+		"UNIQUE (checkpoint_id, lane_key)",
+		"CREATE INDEX IF NOT EXISTS env_checkpoint_lane_provisioning_idx",
+		"WHERE status = 'provisioning'",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("245 up missing %q", required)
+		}
+	}
+	// The per-step ids must stay nullable: a lane interrupted partway is
+	// continued from its first unfilled step, which is impossible if they are
+	// required up front.
+	for _, step := range []string{"instance_id", "project_id", "runtime_id", "task_id", "env_id"} {
+		if strings.Contains(contents, step+" UUID NOT NULL") {
+			t.Errorf("245 up makes %s NOT NULL, which breaks continuing an interrupted lane", step)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "245_env_checkpoint_lane.down.sql"))
+	if err != nil {
+		t.Fatalf("read 245 down: %v", err)
+	}
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS env_checkpoint_lane_provisioning_idx",
+		"DROP TABLE IF EXISTS env_checkpoint_lane",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("245 down missing %q", required)
+		}
+	}
+}
+
+func TestLaneQueriesClaimIdempotentlyAndStayWorkspaceScoped(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	body, err := os.ReadFile(filepath.Join(
+		filepath.Dir(thisFile), "..", "..", "pkg", "db", "queries", "env_checkpoint_lane.sql"))
+	if err != nil {
+		t.Fatalf("read lane queries: %v", err)
+	}
+	contents := string(body)
+	for _, required := range []string{
+		"ON CONFLICT (checkpoint_id, lane_key) DO NOTHING",
+		// The lane's workspace comes from its checkpoint, so a lane cannot land
+		// in a different workspace than the checkpoint it belongs to.
+		"SELECT c.id, c.workspace_id, @lane_key, 'provisioning'",
+		"COALESCE(sqlc.narg(instance_id), instance_id)",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("lane queries missing %q", required)
+		}
+	}
+	if strings.Contains(contents, "VALUES (@checkpoint_id, @workspace_id, @lane_key") {
+		t.Error("claim must derive workspace_id from the checkpoint, not accept it from the caller")
+	}
+	// Every lane query except the cross-workspace sweeper must be workspace
+	// scoped.
+	for _, name := range []string{
+		"GetEnvCheckpointLane",
+		"ListEnvCheckpointLanes",
+		"UpdateEnvCheckpointLaneStep",
+		"MarkEnvCheckpointLaneReady",
+		"MarkEnvCheckpointLaneFailed",
+		"CountProvisioningEnvCheckpointLanes",
+	} {
+		idx := strings.Index(contents, "-- name: "+name+" :")
+		if idx < 0 {
+			t.Errorf("lane queries missing %q", name)
+			continue
+		}
+		stmt := contents[idx:]
+		if end := strings.Index(stmt[1:], "\n-- name: "); end >= 0 {
+			stmt = stmt[:end+1]
+		}
+		if !strings.Contains(stmt, "workspace_id = @workspace_id") {
+			t.Errorf("%s is not workspace scoped", name)
+		}
+	}
+}
+
 func TestSavepointOwnershipQueriesStayWorkspaceScopedAndNonStealing(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

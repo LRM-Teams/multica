@@ -1,11 +1,29 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestRegisterWebPushListenersDoesNotSubscribeInboxNew(t *testing.T) {
+	bus := events.New()
+	registerWebPushListeners(bus, nil, handler.Config{
+		WebPushVAPIDPublicKey:  "public",
+		WebPushVAPIDPrivateKey: "private",
+		WebPushVAPIDSubject:    "mailto:test@example.com",
+	})
+
+	if got := busListenerCount(bus, protocol.EventInboxNew); got != 0 {
+		t.Fatalf("inbox:new must not fan out to desktop web push, got %d listeners", got)
+	}
+	if got := busListenerCount(bus, protocol.EventChannelMessage); got != 1 {
+		t.Fatalf("channel:message should keep desktop web push fanout, got %d listeners", got)
+	}
+}
 
 func TestShouldDeliverChannelMessageWebPushLRM411(t *testing.T) {
 	authorID := "user-author"
@@ -46,6 +64,15 @@ func TestShouldDeliverChannelMessageWebPushLRM411(t *testing.T) {
 			}
 		})
 	}
+}
+
+func busListenerCount(bus *events.Bus, eventType string) int {
+	listeners := reflect.ValueOf(bus).Elem().FieldByName("listeners")
+	registered := listeners.MapIndex(reflect.ValueOf(eventType))
+	if !registered.IsValid() {
+		return 0
+	}
+	return registered.Len()
 }
 
 func withMemberMention(msg handler.ChannelMessageResponse, recipientID string) handler.ChannelMessageResponse {

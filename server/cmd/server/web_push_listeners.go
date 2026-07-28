@@ -112,47 +112,6 @@ func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, acto
 	return channelMessageMentionsRecipient(msg, recipientID)
 }
 
-func deliverWebPushInbox(queries *db.Queries, sender *webpush.Sender, cfg handler.Config, item handler.InboxItemResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if isSystemNotificationMuted(ctx, queries, item.WorkspaceID, item.RecipientID) {
-		return
-	}
-	subs, err := queries.ListActiveWebPushSubscriptions(ctx, parseUUID(item.RecipientID))
-	if err != nil || len(subs) == 0 {
-		if err != nil {
-			slog.Error("web push: list subscriptions failed", "error", err)
-		}
-		return
-	}
-	payload := buildWebPushInboxPayload(ctx, queries, item, cfg)
-	deliverWebPushToSubscriptions(ctx, queries, sender, parseUUID(item.RecipientID), subs, payload)
-}
-
-func extractInboxItem(payload any) (handler.InboxItemResponse, bool) {
-	if wrapper, ok := payload.(map[string]any); ok {
-		if item, ok := wrapper["item"]; ok {
-			return decodeInboxItem(item)
-		}
-	}
-	return decodeInboxItem(payload)
-}
-
-func decodeInboxItem(raw any) (handler.InboxItemResponse, bool) {
-	if item, ok := raw.(handler.InboxItemResponse); ok {
-		return item, true
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return handler.InboxItemResponse{}, false
-	}
-	var item handler.InboxItemResponse
-	if err := json.Unmarshal(b, &item); err != nil {
-		return handler.InboxItemResponse{}, false
-	}
-	return item, item.ID != ""
-}
-
 func isSystemNotificationMuted(ctx context.Context, queries *db.Queries, workspaceID, userID string) bool {
 	pref, err := queries.GetNotificationPreference(ctx, db.GetNotificationPreferenceParams{
 		WorkspaceID: parseUUID(workspaceID),
@@ -166,36 +125,6 @@ func isSystemNotificationMuted(ctx context.Context, queries *db.Queries, workspa
 		return false
 	}
 	return prefs["system_notifications"] == "muted"
-}
-
-func buildWebPushInboxPayload(ctx context.Context, queries *db.Queries, item handler.InboxItemResponse, cfg handler.Config) webPushInboxPayload {
-	slug := ""
-	if ws, err := queries.GetWorkspace(ctx, parseUUID(item.WorkspaceID)); err == nil {
-		slug = ws.Slug
-	}
-	issueKey := item.ID
-	if item.IssueID != nil && *item.IssueID != "" {
-		issueKey = *item.IssueID
-	}
-	body := ""
-	if item.Body != nil {
-		body = strings.TrimSpace(*item.Body)
-		if runes := []rune(body); len(runes) > 180 {
-			body = string(runes[:180])
-		}
-	}
-	path := ""
-	if slug != "" {
-		path = "/" + slug + "/inbox?issue=" + urlQueryEscape(issueKey)
-	}
-	return webPushInboxPayload{
-		Slug:     slug,
-		ItemID:   item.ID,
-		IssueKey: issueKey,
-		Title:    item.Title,
-		Body:     body,
-		URL:      webPushAbsoluteURL(cfg, path),
-	}
 }
 
 func extractChannelMessage(payload any) (handler.ChannelMessageResponse, bool) {
@@ -345,8 +274,4 @@ func uniqueStringList(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func urlQueryEscape(value string) string {
-	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
 }

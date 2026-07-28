@@ -1542,6 +1542,393 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+const channelOwnerChangedCode = "owner_changed"
+
+type updateChannelMemberRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// lockOrdinaryGroupChannelTx locks the channel row and validates ordinary
+// non-system, non-archived group. Caller must already hold a transaction.
+func (h *Handler) lockOrdinaryGroupChannelTx(
+	ctx context.Context,
+	tx dbExecutor,
+	workspaceID string,
+	channelID pgtype.UUID,
+) error {
+	var kind string
+	var systemKey pgtype.Text
+	var archivedAt pgtype.Timestamptz
+	err := tx.QueryRow(ctx, `
+		SELECT kind, system_key, archived_at
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2
+		FOR UPDATE`,
+		channelID, parseUUID(workspaceID),
+	).Scan(&kind, &systemKey, &archivedAt)
+	if err != nil {
+		return errChannelNotFound
+	}
+	if kind != "group" {
+		return errChannelNotGroup
+	}
+	if systemKey.Valid {
+		return errChannelSystemProtected
+	}
+	if archivedAt.Valid {
+		return errChannelArchived
+	}
+	return nil
+}
+
+var (
+	errChannelNotFound        = errors.New("channel not found")
+	errChannelNotGroup        = errors.New("channel is not a group")
+	errChannelSystemProtected = errors.New("system channel is managed automatically")
+	errChannelArchived        = errors.New("channel is archived")
+	errNotChannelOwner        = errors.New("not channel owner")
+	errChannelMemberNotFound  = errors.New("channel member not found")
+)
+
+func writeChannelRoleMutationErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errChannelNotFound):
+		writeError(w, http.StatusNotFound, "channel not found")
+	case errors.Is(err, errChannelNotGroup):
+		writeError(w, http.StatusNotFound, "channel not found")
+	case errors.Is(err, errChannelSystemProtected):
+		writeSystemChannelProtected(w)
+	case errors.Is(err, errChannelArchived):
+		writeError(w, http.StatusConflict, "channel is archived")
+	case errors.Is(err, errNotChannelOwner):
+		writeCodedError(w, http.StatusForbidden, channelOwnerChangedCode,
+			"channel ownership has changed; only the current channel owner can manage roles")
+	case errors.Is(err, errChannelMemberNotFound):
+		writeError(w, http.StatusNotFound, "channel member not found")
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to update channel member role")
+	}
+}
+
+// requireActorChannelOwnerTx locks actor membership and requires role=owner.
+// Must run after channel row lock in the same transaction.
+func requireActorChannelOwnerTx(
+	ctx context.Context,
+	tx dbExecutor,
+	workspaceID string,
+	channelID, actorID pgtype.UUID,
+) error {
+	var role string
+	err := tx.QueryRow(ctx, `
+		SELECT role FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'user' AND member_id = $3
+		FOR UPDATE`,
+		channelID, parseUUID(workspaceID), actorID,
+	).Scan(&role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotChannelOwner
+		}
+		return err
+	}
+	if role != "owner" {
+		return errNotChannelOwner
+	}
+	return nil
+}
+
+// UpdateChannelMemberRole — PATCH /api/channels/{channelId}/members/{memberType}/{memberId}
+// Promote/demote only: role must be manager|member.
+// Ownership transfer uses POST …/transfer-ownership (Iris/Barry separate op).
+func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "UpdateChannelMemberRole") {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	memberType := chi.URLParam(r, "memberType")
+	memberID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "memberId"), "member id")
+	if !ok {
+		return
+	}
+	if memberType != "user" && memberType != "agent" {
+		writeError(w, http.StatusBadRequest, "member_type must be user or agent")
+		return
+	}
+	var req updateChannelMemberRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	newRole := strings.TrimSpace(req.Role)
+	if newRole == "owner" {
+		writeError(w, http.StatusBadRequest, "use POST .../transfer-ownership to transfer channel ownership")
+		return
+	}
+	if newRole != "manager" && newRole != "member" {
+		writeError(w, http.StatusBadRequest, "role must be manager or member")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update member role")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	if err := h.lockOrdinaryGroupChannelTx(r.Context(), tx, workspaceID, channelID); err != nil {
+		writeChannelRoleMutationErr(w, err)
+		return
+	}
+	if err := requireActorChannelOwnerTx(r.Context(), tx, workspaceID, channelID, parseUUID(userID)); err != nil {
+		writeChannelRoleMutationErr(w, err)
+		return
+	}
+
+	var currentRole string
+	err = tx.QueryRow(r.Context(), `
+		SELECT role FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4
+		FOR UPDATE`,
+		channelID, parseUUID(workspaceID), memberType, memberID,
+	).Scan(&currentRole)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "channel member not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load channel member")
+		return
+	}
+	if currentRole == newRole {
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update member role")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "ok",
+			"member_type": memberType,
+			"member_id":   uuidToString(memberID),
+			"role":        newRole,
+		})
+		return
+	}
+	if currentRole == "owner" {
+		var otherOwners int
+		_ = tx.QueryRow(r.Context(), `
+			SELECT count(*) FROM channel_member
+			WHERE channel_id = $1 AND workspace_id = $2
+			  AND role = 'owner' AND member_type = 'user' AND member_id <> $3`,
+			channelID, parseUUID(workspaceID), memberID,
+		).Scan(&otherOwners)
+		if otherOwners == 0 {
+			writeError(w, http.StatusConflict, "transfer channel ownership before changing the only owner's role")
+			return
+		}
+	}
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE channel_member
+		SET role = $5
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
+		channelID, parseUUID(workspaceID), memberType, memberID, newRole)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid channel member role")
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, "channel member not found")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update member role")
+		return
+	}
+	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"member_type": memberType,
+		"member_id":   uuidToString(memberID),
+		"role":        newRole,
+	})
+}
+
+// TransferChannelOwnership — POST /api/channels/{channelId}/members/{memberType}/{memberId}/transfer-ownership
+// Explicit ownership handoff (Iris). Target must be human. Prior owner(s) → manager.
+// Ownership UPDATEs and channel_ownership_transferred system row share one transaction.
+func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "TransferChannelOwnership") {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	memberType := chi.URLParam(r, "memberType")
+	memberID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "memberId"), "member id")
+	if !ok {
+		return
+	}
+	if memberType != "user" {
+		writeError(w, http.StatusBadRequest, "only human members can receive channel ownership")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	if err := h.lockOrdinaryGroupChannelTx(r.Context(), tx, workspaceID, channelID); err != nil {
+		writeChannelRoleMutationErr(w, err)
+		return
+	}
+	// Serialize all membership mutations for this channel, then re-check actor
+	// is still owner after waiting for any concurrent transfer/role lock.
+	rows, err := tx.Query(r.Context(), `
+		SELECT member_type, member_id, role
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2
+		FOR UPDATE`,
+		channelID, parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock channel members")
+		return
+	}
+	var (
+		actorRole      string
+		actorFound     bool
+		targetFound    bool
+		targetRole     string
+		previousOwners []string
+	)
+	actorUUID := parseUUID(userID)
+	for rows.Next() {
+		var typ, role string
+		var id pgtype.UUID
+		if err := rows.Scan(&typ, &id, &role); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "failed to read channel members")
+			return
+		}
+		if typ == "user" && id == actorUUID {
+			actorFound = true
+			actorRole = role
+		}
+		if typ == "user" && id == memberID {
+			targetFound = true
+			targetRole = role
+		}
+		if role == "owner" && typ == "user" {
+			previousOwners = append(previousOwners, uuidToString(id))
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read channel members")
+		return
+	}
+	if !actorFound || actorRole != "owner" {
+		writeCodedError(w, http.StatusForbidden, channelOwnerChangedCode,
+			"channel ownership has changed; only the current channel owner can transfer ownership")
+		return
+	}
+	if !targetFound {
+		writeError(w, http.StatusNotFound, "channel member not found")
+		return
+	}
+	if targetRole == "owner" {
+		// Idempotent: already owner.
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":            "ok",
+			"member_type":       "user",
+			"member_id":         uuidToString(memberID),
+			"role":              "owner",
+			"previous_owner_id": uuidToString(memberID),
+		})
+		return
+	}
+
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE channel_member
+		SET role = 'manager'
+		WHERE channel_id = $1 AND workspace_id = $2 AND role = 'owner'`,
+		channelID, parseUUID(workspaceID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE channel_member
+		SET role = 'owner'
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+		channelID, parseUUID(workspaceID), memberID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, "channel member not found")
+		return
+	}
+
+	// Durable audit in the same transaction (Parker/Iris: transfer ⇔ audit).
+	auditMsg, err := h.insertChannelMemberSystemEventExec(
+		r.Context(), tx, workspaceID, channelID,
+		channelOwnershipTransferredEvent, actorUUID, "user", memberID,
+	)
+	if err != nil {
+		// Fail closed: do not commit ownership without audit row.
+		writeError(w, http.StatusInternalServerError, "failed to record ownership transfer")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
+		return
+	}
+
+	// Realtime only after durable commit.
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "system", "", channelID, auditMsg)
+	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	prev := userID
+	if len(previousOwners) > 0 {
+		prev = previousOwners[0]
+	}
+	slog.Info("channel ownership transferred",
+		"workspace_id", workspaceID,
+		"channel_id", uuidToString(channelID),
+		"previous_owner_id", prev,
+		"new_owner_id", uuidToString(memberID),
+		"actor_id", userID,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":            "ok",
+		"member_type":       "user",
+		"member_id":         uuidToString(memberID),
+		"role":              "owner",
+		"previous_owner_id": prev,
+	})
+}
+
 func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

@@ -80,17 +80,23 @@ func TestChannelMemberActorProvenanceMigration245BackfillsAndSurvivesDownUp(t *t
 	assertMigratedOnboardingActor(t, ctx, pool,
 		"7a000000-0000-4000-8000-000000000007", "system", "")
 
-	// Introduce an actor shape that the old user-only schema cannot represent.
-	// Down must explicitly collapse it to NULL; the following up must then
-	// classify that historical NULL as system rather than inventing a user.
+	// Introduce membership and onboarding actor shapes that the old user-only
+	// schema cannot represent. Down must explicitly collapse both to NULL; the
+	// following up must then classify both historical NULLs as system rather
+	// than inventing a user.
 	if _, err := pool.Exec(ctx, `
 		UPDATE channel_member
 		SET added_by_type = 'agent',
 		    added_by_id = '7a000000-0000-4000-8000-000000000006'
 		WHERE channel_id = '7a000000-0000-4000-8000-000000000005'
 		  AND member_type = 'agent'
-		  AND member_id = '7a000000-0000-4000-8000-000000000007'`); err != nil {
-		t.Fatalf("seed agent-authored row before lossy down: %v", err)
+		  AND member_id = '7a000000-0000-4000-8000-000000000007';
+
+		UPDATE channel_agent_onboarding
+		SET source_actor_type = 'agent',
+		    source_actor_id = '7a000000-0000-4000-8000-000000000006'
+		WHERE agent_id = '7a000000-0000-4000-8000-000000000006'`); err != nil {
+		t.Fatalf("seed agent-authored rows before lossy down: %v", err)
 	}
 	if err := runMigrations(ctx, pool, runOptions{
 		Direction:       "down",
@@ -112,6 +118,19 @@ func TestChannelMemberActorProvenanceMigration245BackfillsAndSurvivesDownUp(t *t
 	if legacyAddedBy != nil {
 		t.Fatalf("agent provenance down-converted to added_by=%v, want NULL", *legacyAddedBy)
 	}
+	var legacySourceActorID *string
+	if err := pool.QueryRow(ctx, `
+		SELECT source_actor_id::text
+		FROM channel_agent_onboarding
+		WHERE agent_id = '7a000000-0000-4000-8000-000000000006'`).Scan(&legacySourceActorID); err != nil {
+		t.Fatalf("load lossy down onboarding row: %v", err)
+	}
+	if legacySourceActorID != nil {
+		t.Fatalf(
+			"agent onboarding provenance down-converted to source_actor_id=%v, want NULL",
+			*legacySourceActorID,
+		)
+	}
 
 	if err := runMigrations(ctx, pool, runOptions{
 		Direction:       "up",
@@ -124,6 +143,8 @@ func TestChannelMemberActorProvenanceMigration245BackfillsAndSurvivesDownUp(t *t
 	assertMigratedChannelMemberActor(t, ctx, pool,
 		"7a000000-0000-4000-8000-000000000005", "agent",
 		"7a000000-0000-4000-8000-000000000007", "system", "")
+	assertMigratedOnboardingActor(t, ctx, pool,
+		"7a000000-0000-4000-8000-000000000006", "system", "")
 }
 
 func assertMigratedChannelMemberActor(

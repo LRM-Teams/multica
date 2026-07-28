@@ -199,7 +199,7 @@ func TestExistingChannelMemberWritersRecordCanonicalActorProvenance(t *testing.T
 	})
 }
 
-func TestChannelMemberActorBoundaryRejectsUnknownAndCrossWorkspaceActorsBeforeWrites(t *testing.T) {
+func TestChannelMemberActorResolverRejectsUnknownAndCrossWorkspaceActors(t *testing.T) {
 	requireChannelMemberActorProvenanceSchema(t)
 	foreignWorkspace := createOtherTestWorkspace(t)
 	foreignUser := insertUserAndMember(t, foreignWorkspace)
@@ -217,51 +217,18 @@ func TestChannelMemberActorBoundaryRejectsUnknownAndCrossWorkspaceActorsBeforeWr
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			channelID := seedChannelForTest(t, "invalid-actor-boundary-"+uuid.NewString(), testUserID)
-			targetAgent := createHandlerTestAgent(t, "Invalid Actor Target "+uuid.NewString()[:8], nil)
-			var membersBefore, onboardingsBefore, messagesBefore int
-			if err := testPool.QueryRow(ctx, `
-				SELECT
-				  (SELECT count(*) FROM channel_member WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2),
-				  (SELECT count(*) FROM channel_agent_onboarding WHERE channel_id = $1 AND agent_id = $2),
-				  (SELECT count(*) FROM channel_message WHERE channel_id = $1)`,
-				channelID, targetAgent).Scan(&membersBefore, &onboardingsBefore, &messagesBefore); err != nil {
-				t.Fatalf("count invalid-actor baseline: %v", err)
-			}
-
-			// The future shared write boundary must use this actor resolver
-			// before membership/onboarding/event writes. A non-empty ref for an
-			// unknown or foreign actor is therefore a contract failure.
+			// This locks only the production resolver's actor-existence
+			// contract. Transactional zero-side-effects and proof that every
+			// future writer invokes the shared boundary belong to the GREEN
+			// write-service/adapter slice; this test does not synthesize a
+			// writer call and must not be reported as that proof.
 			actorRef := testHandler.channelMemberSystemEventActorRefWithExec(
 				ctx, testPool, testWorkspaceID, tc.actorType, parseUUID(tc.actorID),
 			)
 			if actorRef.Type != "" {
-				_, _ = testPool.Exec(ctx, `
-					INSERT INTO channel_member (
-					  channel_id, workspace_id, member_type, member_id, role,
-					  added_by_type, added_by_id, join_source
-					)
-					VALUES ($1, $2, 'agent', $3, 'member', $4, $5, 'manual')`,
-					channelID, testWorkspaceID, targetAgent, tc.actorType, tc.actorID)
-			}
-
-			var membersAfter, onboardingsAfter, messagesAfter int
-			if err := testPool.QueryRow(ctx, `
-				SELECT
-				  (SELECT count(*) FROM channel_member WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2),
-				  (SELECT count(*) FROM channel_agent_onboarding WHERE channel_id = $1 AND agent_id = $2),
-				  (SELECT count(*) FROM channel_message WHERE channel_id = $1)`,
-				channelID, targetAgent).Scan(&membersAfter, &onboardingsAfter, &messagesAfter); err != nil {
-				t.Fatalf("count invalid-actor side effects: %v", err)
-			}
-			if actorRef.Type != "" ||
-				membersAfter != membersBefore ||
-				onboardingsAfter != onboardingsBefore ||
-				messagesAfter != messagesBefore {
 				t.Fatalf(
-					"invalid actor %s/%s resolved=%q and mutated member=%d->%d onboarding=%d->%d message=%d->%d",
+					"invalid actor %s/%s resolved=%q, want empty actor ref",
 					tc.actorType, tc.actorID, actorRef.Type,
-					membersBefore, membersAfter, onboardingsBefore, onboardingsAfter, messagesBefore, messagesAfter,
 				)
 			}
 		})
@@ -531,7 +498,15 @@ func materializeChannelOnboardingWithDuplicateOwnerShadow(
 	if err != nil {
 		t.Fatalf("acquire isolated duplicate-owner connection: %v", err)
 	}
-	defer conn.Release()
+	defer func() {
+		if _, dropErr := conn.Exec(
+			context.Background(),
+			`DROP TABLE IF EXISTS pg_temp.channel_member`,
+		); dropErr != nil {
+			t.Errorf("drop isolated channel_member shadow: %v", dropErr)
+		}
+		conn.Release()
+	}()
 
 	var schema string
 	if err := conn.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {

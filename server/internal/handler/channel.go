@@ -481,11 +481,10 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	// Second pass: members for the avatar stack, grouped by channel.
 	if len(channelIDs) > 0 {
 		// Single canonical rank for avatar stack (matches channelMemberSummaries):
-		// role → manager agent/user → created_at → member_type → member_id.
-		// LATERAL assigns stack_position via row_number; outer order is only that
-		// position (one source of truth — no production scramble for tests).
-		// member_type is required: PK is (channel_id, member_type, member_id), so
-		// user and agent may share a UUID (Barry total-order / LIMIT stability).
+		// role (owner/manager/member) → created_at → member_type → member_id.
+		// No manager agent-before-human priority: same role = same rank (Iris/Parker
+		// same-rights product); member_type only last identity tie-break with member_id.
+		// LATERAL row_number is the sole order source; outer sorts by stack_position.
 		memberRows, err := h.DB.Query(r.Context(), `
 			SELECT limited.channel_id, limited.member_type, limited.member_id,
 			       COALESCE(u.name, a.name, ''),
@@ -503,10 +502,6 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 					             WHEN 'owner' THEN 0
 					             WHEN 'manager' THEN 1
 					             ELSE 2
-					           END,
-					           CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
-					                WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
-					                ELSE 2
 					           END,
 					           cm.created_at ASC,
 					           cm.member_type ASC,
@@ -1337,10 +1332,6 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 		    WHEN 'owner' THEN 0
 		    WHEN 'manager' THEN 1
 		    ELSE 2
-		  END,
-		  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
-		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
-		       ELSE 2
 		  END,
 		  cm.created_at ASC,
 		  cm.member_type ASC,
@@ -6605,10 +6596,6 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 		    WHEN 'owner' THEN 0
 		    WHEN 'manager' THEN 1
 		    ELSE 2
-		  END,
-		  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
-		       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
-		       ELSE 2
 		  END,
 		  cm.created_at ASC,
 		  cm.member_type ASC,

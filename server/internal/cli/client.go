@@ -420,10 +420,13 @@ type AttachmentResponse struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-// UploadFileOptions controls optional multipart fields on /api/upload-file.
+// UploadFileOptions controls optional multipart fields on upload.
 type UploadFileOptions struct {
 	IssueID   string // optional issue UUID to bind at upload time
 	ChannelID string // optional channel UUID to bind at upload time
+	// Path overrides the upload endpoint. Empty means /api/upload-file.
+	// Agent CLI uses /api/agent/attachments (#801).
+	Path string
 }
 
 // UploadFile uploads a file via multipart form to /api/upload-file.
@@ -462,7 +465,11 @@ func (c *APIClient) UploadFileOpts(ctx context.Context, fileData []byte, filenam
 		return "", fmt.Errorf("close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/upload-file", &body)
+	uploadPath := strings.TrimSpace(opts.Path)
+	if uploadPath == "" {
+		uploadPath = "/api/upload-file"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+uploadPath, &body)
 	if err != nil {
 		return "", err
 	}
@@ -477,7 +484,7 @@ func (c *APIClient) UploadFileOpts(ctx context.Context, fileData []byte, filenam
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return "", newHTTPError(http.MethodPost, "/api/upload-file", resp)
+		return "", newHTTPError(http.MethodPost, uploadPath, resp)
 	}
 
 	var result map[string]any

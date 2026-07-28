@@ -178,7 +178,11 @@ func runIssueMetadataList(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/metadata", &result); err != nil {
+	metaPath := "/api/issues/" + issueRef.ID + "/metadata"
+	if isAgentAPIToken(cmd) {
+		metaPath = "/api/agent/issues/" + issueRef.ID + "/metadata"
+	}
+	if err := client.GetJSON(ctx, metaPath, &result); err != nil {
 		// Best-effort degradation: when the server does not expose the
 		// per-issue metadata endpoint (self-hosted backends running an
 		// older build, missing migration, or routing issues that surface
@@ -229,7 +233,11 @@ func runIssueMetadataGet(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/metadata", &result); err != nil {
+	metaPath := "/api/issues/" + issueRef.ID + "/metadata"
+	if isAgentAPIToken(cmd) {
+		metaPath = "/api/agent/issues/" + issueRef.ID + "/metadata"
+	}
+	if err := client.GetJSON(ctx, metaPath, &result); err != nil {
 		return fmt.Errorf("get metadata: %w", err)
 	}
 	metadata, _ := result["metadata"].(map[string]any)
@@ -278,6 +286,9 @@ func runIssueMetadataSet(cmd *cobra.Command, args []string) error {
 	body := map[string]any{"value": value}
 	var result map[string]any
 	path := "/api/issues/" + issueRef.ID + "/metadata/" + key
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/issues/" + issueRef.ID + "/metadata/" + key
+	}
 	if err := client.PutJSON(ctx, path, body, &result); err != nil {
 		return fmt.Errorf("set metadata: %w", err)
 	}
@@ -310,6 +321,9 @@ func runIssueMetadataDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	path := "/api/issues/" + issueRef.ID + "/metadata/" + key
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/issues/" + issueRef.ID + "/metadata/" + key
+	}
 	if err := client.DeleteJSON(ctx, path); err != nil {
 		return fmt.Errorf("delete metadata: %w", err)
 	}
@@ -317,7 +331,11 @@ func runIssueMetadataDelete(cmd *cobra.Command, args []string) error {
 	// Refresh the metadata so the user sees the result.
 	var result map[string]any
 	output, _ := cmd.Flags().GetString("output")
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/metadata", &result); err != nil {
+	metaPath := "/api/issues/" + issueRef.ID + "/metadata"
+	if isAgentAPIToken(cmd) {
+		metaPath = "/api/agent/issues/" + issueRef.ID + "/metadata"
+	}
+	if err := client.GetJSON(ctx, metaPath, &result); err != nil {
 		if output == "json" {
 			return cli.PrintJSON(os.Stdout, map[string]any{"deleted": true})
 		}

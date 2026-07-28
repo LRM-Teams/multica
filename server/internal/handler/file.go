@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -592,6 +593,16 @@ func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Reques
 		return db.Attachment{}, false
 	}
 
+	// #801: agent principal — visible-reference OR gate; orphan deny.
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		agentID, aok := p.AgentUUID()
+		ws, wok := p.WorkspaceUUID()
+		if !aok || !wok || !h.agentAttachmentVisible(r.Context(), ws, agentID, att.ID) {
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return db.Attachment{}, false
+		}
+	}
+
 	return att, true
 }
 
@@ -626,6 +637,17 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 		// canReadWorkspaceUpload deny path.
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
+	}
+
+	// #801: agent principal — re-check visible references every download.
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		agentID, aok := p.AgentUUID()
+		ws, wok := p.WorkspaceUUID()
+		if !aok || !wok || !h.agentAttachmentVisible(r.Context(), ws, agentID, att.ID) {
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return db.Attachment{}, false
+		}
+		return att, true
 	}
 
 	userID, ok := requireUserID(w, r)

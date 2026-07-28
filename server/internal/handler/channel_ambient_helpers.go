@@ -224,6 +224,30 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			}
 			return db.AgentEventDelivery{}, err
 		}
+
+		// #801 lock order (shared with remove):
+		// 1) read channel_id (no row lock yet)
+		// 2) advisory(channel×agent)
+		// 3) FOR UPDATE agent + event
+		// 4) membership check on same tx
+		// Taking advisory after FOR UPDATE event deadlocks with remove.
+		var eventChannelID pgtype.UUID
+		var eventWorkspaceID pgtype.UUID
+		if err := tx.QueryRow(ctx, `
+			SELECT workspace_id, channel_id FROM agent_inbox_event WHERE id = $1`, eventID).
+			Scan(&eventWorkspaceID, &eventChannelID); err != nil {
+			return db.AgentEventDelivery{}, err
+		}
+		if eventChannelID.Valid {
+			if _, err := tx.Exec(ctx, `
+				SELECT pg_advisory_xact_lock(
+					hashtext('agent_channel_membership_revoke'),
+					hashtext($1 || ':' || $2)
+				)`, uuidToString(eventChannelID), uuidToString(agentID)); err != nil {
+				return db.AgentEventDelivery{}, err
+			}
+		}
+
 		if err := tx.QueryRow(ctx, `
 			SELECT id
 			FROM agent
@@ -267,6 +291,22 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 				return db.AgentEventDelivery{}, commitNoDelivery()
 			}
 			return db.AgentEventDelivery{}, err
+		}
+
+		if eventChannelID.Valid {
+			if !agentHasDirectChannelMembership(ctx, tx, eventWorkspaceID, agentID, eventChannelID) {
+				terminalized, termErr := terminalizeUnauthorizedMembershipInboxEventTx(ctx, tx, eventID)
+				if termErr != nil {
+					return db.AgentEventDelivery{}, termErr
+				}
+				if terminalized {
+					terminalizedCount++
+				}
+				if attempt == maxPoisonTerminalizations {
+					return db.AgentEventDelivery{}, commitNoDelivery()
+				}
+				continue
+			}
 		}
 
 		// Hard gate: only proceed to delivery INSERT when the row actually
@@ -342,6 +382,51 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		return delivery, nil
 	}
 	return db.AgentEventDelivery{}, commitNoDelivery()
+}
+
+// terminalizeUnauthorizedMembershipInboxEventTx permanently fails a pending/
+// failed inbox event whose agent is no longer a channel member (#801).
+func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID) (bool, error) {
+	var terminalizedID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		UPDATE agent_inbox_event e
+		SET status = 'acked',
+		    completed_at = now(),
+		    terminal_at = now(),
+		    acked_at = now(),
+		    terminal_outcome = 'failed',
+		    error = 'agent is not a channel member',
+		    failure_reason = 'membership_revoked',
+		    updated_at = now()
+		WHERE e.id = $1
+		  AND e.status IN ('pending', 'failed', 'draining')
+		  AND e.terminal_outcome IS NULL
+		RETURNING e.id`, eventID).Scan(&terminalizedID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_event_delivery d
+		SET status = 'failed',
+		    last_error = 'agent is not a channel member',
+		    updated_at = now()
+		WHERE d.inbox_event_id = $1
+		  AND d.status IN ('leased', 'processing')`, eventID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_execution x
+		SET status = 'failed',
+		    completed_at = COALESCE(completed_at, now())
+		WHERE x.source_kind = 'inbox'
+		  AND x.source_event_id = $1
+		  AND x.status = 'running'`, eventID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // terminalizeUnauthorizedRadarInboxEventTx permanently fails a still-pending

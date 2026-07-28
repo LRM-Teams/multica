@@ -104,7 +104,11 @@ func runAttachmentView(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	var att map[string]any
-	if err := client.GetJSON(ctx, "/api/attachments/"+id, &att); err != nil {
+	attPath := "/api/attachments/" + id
+	if isAgentAPIToken(cmd) {
+		attPath = "/api/agent/attachments/" + id
+	}
+	if err := client.GetJSON(ctx, attPath, &att); err != nil {
 		return fmt.Errorf("get attachment: %w", err)
 	}
 
@@ -177,7 +181,11 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read file: %w", err)
 	}
 
-	id, err := client.UploadFileOpts(ctx, data, path, cli.UploadFileOptions{ChannelID: channelID})
+	uploadOpts := cli.UploadFileOptions{ChannelID: channelID}
+	if isAgentAPIToken(cmd) {
+		uploadOpts.Path = "/api/agent/attachments"
+	}
+	id, err := client.UploadFileOpts(ctx, data, path, uploadOpts)
 	if err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
@@ -228,7 +236,11 @@ func resolveChannelIDFromUploadTarget(ctx context.Context, client *cli.APIClient
 	}
 
 	var channels []map[string]any
-	if err := client.GetJSON(ctx, "/api/channels", &channels); err != nil {
+	listPath := "/api/channels"
+	if strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_") {
+		listPath = "/api/agent/channels"
+	}
+	if err := client.GetJSON(ctx, listPath, &channels); err != nil {
 		return "", fmt.Errorf("list channels: %w", err)
 	}
 

@@ -747,7 +747,11 @@ func runIssueGet(cmd *cobra.Command, args []string) error {
 	}
 
 	var issue map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID, &issue); err != nil {
+	issuePath := "/api/issues/" + issueRef.ID
+	if isAgentAPIToken(cmd) {
+		issuePath = "/api/agent/issues/" + issueRef.ID
+	}
+	if err := client.GetJSON(ctx, issuePath, &issue); err != nil {
 		return fmt.Errorf("get issue: %w", err)
 	}
 
@@ -920,7 +924,11 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	}
 
 	var result map[string]any
-	if err := client.PostJSON(ctx, "/api/issues", body, &result); err != nil {
+	createPath := "/api/issues"
+	if isAgentAPIToken(cmd) {
+		createPath = "/api/agent/issues"
+	}
+	if err := client.PostJSON(ctx, createPath, body, &result); err != nil {
 		if msg, ok := activeDuplicateIssueCreateMessage(err); ok {
 			return errors.New(msg)
 		}
@@ -1195,7 +1203,11 @@ func runIssueStatus(cmd *cobra.Command, args []string) error {
 
 	body := map[string]any{"status": status}
 	var result map[string]any
-	if err := client.PutJSON(ctx, "/api/issues/"+issueRef.ID, body, &result); err != nil {
+	issuePath := "/api/issues/" + issueRef.ID
+	if isAgentAPIToken(cmd) {
+		issuePath = "/api/agent/issues/" + issueRef.ID
+	}
+	if err := client.PutJSON(ctx, issuePath, body, &result); err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
 
@@ -1303,6 +1315,9 @@ func runIssueCommentList(cmd *cobra.Command, args []string) error {
 	}
 
 	path := "/api/issues/" + issueRef.ID + "/comments"
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/issues/" + issueRef.ID + "/comments"
+	}
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}

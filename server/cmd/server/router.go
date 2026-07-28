@@ -1209,6 +1209,33 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Agent task-token chat transport. These routes intentionally live
 			// on the regular Auth API so task tokens use the same workspace and
 			// permission chain as other channel operations.
+			// Agent data-plane API (#801). RequireAgentPrincipal is enforced in
+			// handlers via context; routes are agent-only contracts.
+			r.Route("/api/agent", func(r chi.Router) {
+				r.Use(middleware.RequireAgentPrincipal)
+				r.Get("/channels", h.ListAgentChannels)
+				r.Get("/channels/{channelId}/members", h.ListAgentChannelMembers)
+				r.Put("/channels/{channelId}/mute", h.MuteAgentChannel)
+				r.Delete("/channels/{channelId}/mute", h.UnmuteAgentChannel)
+				r.Get("/attachments/{id}", h.GetAgentAttachment)
+				r.Get("/attachments/{id}/download", h.DownloadAgentAttachment)
+				r.Get("/attachments/{id}/content", h.GetAgentAttachmentContent)
+				r.Post("/attachments", h.UploadAgentAttachment)
+				// Issues / projects / workspace / squad (necessary batch)
+				r.Get("/issues", h.ListAgentIssues)
+				r.Get("/issues/{id}", h.GetAgentIssue)
+				r.Post("/issues", h.CreateAgentIssue)
+				r.Put("/issues/{id}", h.UpdateAgentIssue)
+				r.Get("/issues/{id}/comments", h.ListAgentIssueComments)
+				r.Post("/issues/{id}/comments", h.CreateAgentIssueComment)
+				r.Get("/issues/{id}/metadata", h.ListAgentIssueMetadata)
+				r.Put("/issues/{id}/metadata/{key}", h.SetAgentIssueMetadataKey)
+				r.Delete("/issues/{id}/metadata/{key}", h.DeleteAgentIssueMetadataKey)
+				r.Get("/projects/{id}/resources", h.ListAgentProjectResources)
+				r.Get("/workspace", h.GetAgentWorkspace)
+				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)
+				r.Patch("/squads/{id}/members/role", h.AgentSquadMemberSetRole)
+			})
 			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)

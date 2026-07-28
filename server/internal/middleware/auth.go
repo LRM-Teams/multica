@@ -79,6 +79,9 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				hash := auth.HashToken(tokenString)
 				tt, err := queries.GetTaskTokenByHash(r.Context(), hash)
 				if err == nil {
+					// Transitional dual-path (S1a): still stamp X-User-ID=owner so
+					// legacy human handlers keep working until S1c reject. New
+					// code must use AgentPrincipal from context, never owner as viewer.
 					r.Header.Set("X-User-ID", uuidToString(tt.UserID))
 					r.Header.Set("X-Agent-ID", uuidToString(tt.AgentID))
 					r.Header.Set("X-Task-ID", uuidToString(tt.TaskID))
@@ -89,7 +92,14 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					// this header is allowed to carry — strip anything else a
 					// client tried to send.
 					r.Header.Set("X-Actor-Source", "task_token")
-					next.ServeHTTP(w, r)
+					ctx := WithAgentPrincipal(r.Context(), AgentPrincipal{
+						AgentID:     uuidToString(tt.AgentID),
+						WorkspaceID: uuidToString(tt.WorkspaceID),
+						OwnerUserID: uuidToString(tt.UserID),
+						ActorSource: "task_token",
+						TaskID:      uuidToString(tt.TaskID),
+					})
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 				if !errors.Is(err, pgx.ErrNoRows) {
@@ -106,7 +116,16 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					r.Header.Set("X-Agent-Inbox-Delivery-ID", uuidToString(it.DeliveryID))
 					r.Header.Set("X-Workspace-ID", uuidToString(it.WorkspaceID))
 					r.Header.Set("X-Actor-Source", "agent_inbox_token")
-					next.ServeHTTP(w, r)
+					ctx := WithAgentPrincipal(r.Context(), AgentPrincipal{
+						AgentID:      uuidToString(it.AgentID),
+						WorkspaceID:  uuidToString(it.WorkspaceID),
+						OwnerUserID:  uuidToString(it.UserID),
+						ActorSource:  "agent_inbox_token",
+						InboxEventID: uuidToString(it.InboxEventID),
+						DeliveryID:   uuidToString(it.DeliveryID),
+						TaskID:       uuidToString(it.InboxEventID),
+					})
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 				if !errors.Is(err, pgx.ErrNoRows) {
@@ -128,7 +147,14 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				if err := queries.TouchAgentCredentialLastUsed(r.Context(), credential.ID); err != nil {
 					slog.Warn("auth: failed to touch agent credential last used", "credential_id", uuidToString(credential.ID), "error", err)
 				}
-				next.ServeHTTP(w, r)
+				ctx := WithAgentPrincipal(r.Context(), AgentPrincipal{
+					AgentID:      uuidToString(credential.AgentID),
+					WorkspaceID:  uuidToString(credential.WorkspaceID),
+					OwnerUserID:  uuidToString(credential.UserID),
+					ActorSource:  "agent_credential",
+					CredentialID: uuidToString(credential.ID),
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -199,7 +225,8 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				// UPDATE — last_used_at is bumped once per TTL window.
 				if userID, ok := patCache.Get(r.Context(), hash); ok {
 					r.Header.Set("X-User-ID", userID)
-					next.ServeHTTP(w, r)
+					ctx := WithHumanPrincipal(r.Context(), HumanPrincipal{UserID: userID})
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 
@@ -231,7 +258,8 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				// within the TTL window skip this write entirely.
 				go queries.UpdatePersonalAccessTokenLastUsed(context.Background(), pat.ID)
 
-				next.ServeHTTP(w, r)
+				ctx := WithHumanPrincipal(r.Context(), HumanPrincipal{UserID: userID})
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -266,7 +294,8 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				r.Header.Set("X-User-Email", email)
 			}
 
-			next.ServeHTTP(w, r)
+			ctx := WithHumanPrincipal(r.Context(), HumanPrincipal{UserID: sub})
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

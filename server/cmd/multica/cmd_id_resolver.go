@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,6 +128,10 @@ func ambiguousIDPrefixError(kind, input string, matches []idCandidate) error {
 	return fmt.Errorf("ambiguous %s id prefix %q; matches:\n%s\nUse more characters or run the list command with --full-id", kind, input, strings.Join(parts, "\n"))
 }
 
+func agentAPITokenFromEnv() bool {
+	return strings.HasPrefix(strings.TrimSpace(os.Getenv("MULTICA_TOKEN")), "mat_")
+}
+
 func resolveIssueRef(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
@@ -147,7 +152,11 @@ func resolveIssueRef(ctx context.Context, client *cli.APIClient, input string) (
 
 func fetchIssueRef(ctx context.Context, client *cli.APIClient, ref string) (resolvedID, error) {
 	var issue map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/"+url.PathEscape(ref), &issue); err != nil {
+	issuePath := "/api/issues/" + url.PathEscape(ref)
+	if agentAPITokenFromEnv() {
+		issuePath = "/api/agent/issues/" + url.PathEscape(ref)
+	}
+	if err := client.GetJSON(ctx, issuePath, &issue); err != nil {
 		return resolvedID{}, err
 	}
 	c := issueCandidate(issue)
@@ -348,7 +357,30 @@ func resolveAutopilotTriggerID(ctx context.Context, client *cli.APIClient, autop
 }
 
 func resolveProjectID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
+	trimmed := strings.TrimSpace(input)
+	if uuidRegexp.MatchString(trimmed) || looksLikeFullUUID(trimmed) {
+		return resolvedID{ID: trimmed, Display: trimmed}, nil
+	}
 	return resolveIDByPrefix(ctx, client, "project", input, fetchProjectCandidates)
+}
+
+func looksLikeFullUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func fetchProjectCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {

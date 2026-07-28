@@ -64,6 +64,11 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 		if !found || ch.ArchivedAt != nil {
 			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 		}
+		// Default origin still requires current agent surface access (no stale
+		// channel_agent_session after membership removal).
+		if !h.agentHasSurfaceAccess(ctx, origin.workspaceID, origin.agentID, parseUUID(ch.ID)) {
+			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
+		}
 		return resolvedChatOutputTarget{kind: chatOutputTargetChannel, channel: ch}, nil
 	}
 	if strings.HasPrefix(target, "dm:@") {
@@ -198,16 +203,18 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 	if err != nil {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
-	// A direct channel_member match is the common case. Env-dispatch is the
-	// exception: the derived execution agent that actually runs the task is
-	// intentionally NOT the channel_member — ReplaceDispatchChannelMember keeps
-	// the source agent as the stable @alias while the derived agent owns the
-	// channel_agent_session. Without the source-agent fallback the derived
-	// agent's `#channel` reply is rejected as an invalid target and it can only
-	// fall back to dm:@<user>, landing the reply in a DM the dispatcher never
-	// sees.
-	if !h.channelHasAgentMember(ctx, origin.workspaceID, parseUUID(ch.ID), origin.agentID) &&
-		!h.channelHasSourceAgentMember(ctx, origin.workspaceID, parseUUID(ch.ID), origin.agentID) {
+	// A direct channel_member match is the common case. Env-dispatch is a narrow
+	// exception: derived execution agents are not channel_members (source agent
+	// keeps the @alias). #801: source_agent fallback may ONLY target the current
+	// inbox/origin channel — never other channels where the source is also a
+	// member (that was a cross-channel borrow hole).
+	targetID := parseUUID(ch.ID)
+	if h.channelHasAgentMember(ctx, origin.workspaceID, targetID, origin.agentID) {
+		// ok: direct member
+	} else if origin.channelID.Valid && targetID == origin.channelID &&
+		h.channelHasSourceAgentMember(ctx, origin.workspaceID, targetID, origin.agentID) {
+		// ok: derived agent on this env-dispatch origin surface only
+	} else {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
 	if !hasMessageID {

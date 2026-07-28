@@ -518,7 +518,11 @@ func runProjectResourceList(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	if err := client.GetJSON(ctx, "/api/projects/"+projectRef.ID+"/resources", &result); err != nil {
+	resPath := "/api/projects/" + projectRef.ID + "/resources"
+	if isAgentAPIToken(cmd) {
+		resPath = "/api/agent/projects/" + projectRef.ID + "/resources"
+	}
+	if err := client.GetJSON(ctx, resPath, &result); err != nil {
 		return fmt.Errorf("list project resources: %w", err)
 	}
 	resourcesRaw, _ := result["resources"].([]any)

@@ -74,12 +74,16 @@ type LaneRef struct {
 	SourceMessageID string
 }
 
-// ContinuationRequest is the uniform input of the continuation seam.
+// ContinuationRequest is the uniform input of the continuation seam. Trigger
+// describes same-runtime continuation and is unused by forked continuation,
+// which is described entirely by Lane.
 type ContinuationRequest struct {
 	Trigger     ResumeTrigger
 	Lane        LaneRef
 	WorkspaceID string
 	ActorUserID string
+	// Index is the caller's rollout index, passed through to the enqueue seam.
+	Index int
 }
 
 // ContinuationOutcome is the uniform result of the continuation seam, so a

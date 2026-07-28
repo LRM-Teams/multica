@@ -866,6 +866,53 @@ func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
 	}
 }
 
+func TestBranchContinuationGoesThroughTheSeam(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+	f.branchSourceSandbox = "source-sandbox-leader"
+	seam := &fakeContinuationStrategy{
+		mode:    SaveModeSnapshot,
+		outcome: ContinuationOutcome{Status: TriggerExecuted, TaskID: "run-seam"},
+	}
+
+	svc := NewEnvDispatchService(f, 1).WithForkedContinuation(seam)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "continue"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(seam.calls) != 1 {
+		t.Fatalf("branch continuation must go through the seam, calls = %d", len(seam.calls))
+	}
+	lane := seam.calls[0].Lane
+	if lane.RuntimeID == "" || lane.RuntimeID == "source-runtime-1" {
+		t.Fatalf("seam must receive the newly provisioned lane runtime, got %q", lane.RuntimeID)
+	}
+	if lane.InstanceID == "" || lane.AgentID != "leader" {
+		t.Fatalf("seam must receive the lane sandbox/agent binding: %+v", lane)
+	}
+	// The injected seam replaces the direct enqueue rather than adding to it.
+	if len(f.channelRuns) != 0 {
+		t.Fatalf("enqueue must happen through the seam only, got %d direct runs", len(f.channelRuns))
+	}
+	if res.Rollouts[0].LeaderRunID != "run-seam" {
+		t.Fatalf("rollout must carry the seam's run id, got %q", res.Rollouts[0].LeaderRunID)
+	}
+}
+
 func TestBranchLeavesNonTriggeredAgentsPendingWithCloneSources(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	const stateEnv = "state-env-1"

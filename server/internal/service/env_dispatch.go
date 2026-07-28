@@ -483,9 +483,10 @@ type IssueRow struct {
 
 // EnvDispatchService orchestrates reset → dispatch (spec §7).
 type EnvDispatchService struct {
-	deps        EnvDispatchDeps
-	concurrency int
-	lifecycle   SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
+	deps               EnvDispatchDeps
+	concurrency        int
+	lifecycle          SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
+	forkedContinuation ResumeAgentRunner      // optional; nil ⇒ built from deps
 }
 
 // SandboxInstanceCreator creates a sandbox_instance-backed environment
@@ -517,6 +518,15 @@ func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchSe
 // Fleet fork path. Returns the service for chaining.
 func (s *EnvDispatchService) WithSandboxLifecycle(lc SandboxInstanceCreator) *EnvDispatchService {
 	s.lifecycle = lc
+	return s
+}
+
+// WithForkedContinuation injects the forked-runtime continuation strategy so
+// branch dispatch re-engages its lane agents through the single continuation
+// seam instead of provisioning-local enqueue logic. Returns the service for
+// chaining.
+func (s *EnvDispatchService) WithForkedContinuation(strategy ResumeAgentRunner) *EnvDispatchService {
+	s.forkedContinuation = strategy
 	return s
 }
 
@@ -1503,21 +1513,34 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
-	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:           provisioned.AgentID,
-		ChannelID:         r.ChannelID,
-		ProjectID:         r.ProjectID,
-		EnvID:             r.EnvID,
-		ChatSessionID:     provisioned.ChatSessionID,
-		SandboxInstanceID: provisioned.SandboxInstanceID,
-		RuntimeID:         provisioned.RuntimeID,
-		SourceMessageID:   dst.SourceMessageID,
-	}, idx)
+	// A branch lane is forked continuation: it re-engages an agent in a runtime
+	// other than the source's, so it goes through the continuation seam rather
+	// than enqueueing here.
+	strategy := s.forkedContinuation
+	if strategy == nil {
+		strategy = NewForkedRuntimeContinuation(s.deps)
+	}
+	outcome, err := strategy.ResumeAgentRun(ctx, ContinuationRequest{
+		WorkspaceID: in.WorkspaceID,
+		ActorUserID: in.UserID,
+		Index:       idx,
+		Lane: LaneRef{
+			LaneKey:         r.EnvID,
+			InstanceID:      provisioned.SandboxInstanceID,
+			ProjectID:       r.ProjectID,
+			RuntimeID:       provisioned.RuntimeID,
+			AgentID:         provisioned.AgentID,
+			ChannelID:       r.ChannelID,
+			ChatSessionID:   provisioned.ChatSessionID,
+			SourceMessageID: dst.SourceMessageID,
+		},
+	})
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue branch trigger: %v", err)
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
+	runID := outcome.TaskID
 	dst.ChatSessionID = provisioned.ChatSessionID
 	dst.TaskID = runID
 	dst.RuntimeID = provisioned.RuntimeID

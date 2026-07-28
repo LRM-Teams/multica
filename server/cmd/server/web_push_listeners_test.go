@@ -7,7 +7,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestShouldDeliverChannelMessageWebPushV0Policy(t *testing.T) {
+func TestShouldDeliverChannelMessageWebPushLRM411(t *testing.T) {
 	authorID := "user-author"
 	recipientID := "user-recipient"
 	base := handler.ChannelMessageResponse{
@@ -21,27 +21,26 @@ func TestShouldDeliverChannelMessageWebPushV0Policy(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		message       handler.ChannelMessageResponse
-		actorType     string
-		actorID       string
-		kind          string
-		relatedThread bool
-		want          bool
+		name      string
+		message   handler.ChannelMessageResponse
+		actorType string
+		actorID   string
+		kind      string
+		muted     bool
+		want      bool
 	}{
-		{name: "group ordinary message suppressed", message: base, actorType: "member", actorID: authorID, kind: "channel", want: false},
-		{name: "group direct member mention delivers", message: withMemberMention(base, recipientID), actorType: "member", actorID: authorID, kind: "channel", want: true},
-		{name: "group all mention delivers", message: withContent(base, "[@all](mention://all/all) heads up"), actorType: "member", actorID: authorID, kind: "channel", want: true},
-		{name: "related thread reply delivers", message: base, actorType: "member", actorID: authorID, kind: "channel", relatedThread: true, want: true},
-		{name: "unrelated thread reply suppressed", message: base, actorType: "member", actorID: authorID, kind: "channel", relatedThread: false, want: false},
-		{name: "dm ordinary message delivers", message: base, actorType: "member", actorID: authorID, kind: "dm", want: true},
+		{name: "unmuted group ordinary message delivers", message: base, actorType: "member", actorID: authorID, kind: "channel", want: true},
+		{name: "muted group ordinary message suppressed", message: base, actorType: "member", actorID: authorID, kind: "channel", muted: true, want: false},
+		{name: "muted group mention still delivers", message: withMemberMention(base, recipientID), actorType: "member", actorID: authorID, kind: "channel", muted: true, want: true},
+		{name: "muted group all mention delivers", message: withContent(base, "[@all](mention://all/all) heads up"), actorType: "member", actorID: authorID, kind: "channel", muted: true, want: true},
+		{name: "dm ordinary message delivers even if muted flag set", message: base, actorType: "member", actorID: authorID, kind: "dm", muted: true, want: true},
 		{name: "self sent user message suppressed", message: withAuthor(base, recipientID), actorType: "member", actorID: recipientID, kind: "dm", want: false},
 		{name: "system message suppressed", message: withType(base, "system"), actorType: "system", actorID: "system", kind: "channel", want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldDeliverChannelMessageWebPush(tt.message, tt.actorType, tt.actorID, recipientID, tt.kind, tt.relatedThread)
+			got := shouldDeliverChannelMessageWebPush(tt.message, tt.actorType, tt.actorID, recipientID, tt.kind, tt.muted)
 			if got != tt.want {
 				t.Fatalf("shouldDeliverChannelMessageWebPush() = %v, want %v", got, tt.want)
 			}

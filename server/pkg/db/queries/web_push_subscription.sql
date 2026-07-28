@@ -58,33 +58,3 @@ WHERE ch.workspace_id = $1 AND ch.id = $2;
 SELECT member_id::text
 FROM channel_member
 WHERE workspace_id = $1 AND channel_id = $2 AND member_type = 'user';
-
--- name: IsWebPushRelatedThreadMember :one
--- True when the human is still following the thread, authored the root, or
--- previously posted in the thread (V0 "related thread" desktop push gate).
-SELECT (
-  EXISTS (
-    SELECT 1
-    FROM thread_participant tp
-    WHERE tp.root_message_id = $1
-      AND tp.member_type = 'user'
-      AND tp.member_id = $2
-      AND tp.wake_state NOT IN ('unfollowed', 'removed')
-  )
-  OR EXISTS (
-    SELECT 1
-    FROM channel_message m
-    WHERE m.id = $1
-      AND m.author_type = 'user'
-      AND m.author_id = $2
-      AND m.deleted_at IS NULL
-  )
-  OR EXISTS (
-    SELECT 1
-    FROM channel_message m
-    WHERE m.thread_root_message_id = $1
-      AND m.author_type = 'user'
-      AND m.author_id = $2
-      AND m.deleted_at IS NULL
-  )
-)::bool AS related;

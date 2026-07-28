@@ -1280,7 +1280,6 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 	}
 }
 
-
 // multicaTokenSourceBoundaryViolations enforces Barry #1305 successor:
 //  1. BasicLit "MULTICA_TOKEN" only as value of const multicaTokenEnvKey
 //  2. identifier multicaTokenEnvKey only inside ambientTokenFromEnvOrFile
@@ -1618,7 +1617,6 @@ func TestNoAgentAPITokenFromEnvSymbol(t *testing.T) {
 	}
 }
 
-
 func TestIsMatAgentToken(t *testing.T) {
 	if !isMatAgentToken("mat_abc") {
 		t.Fatal("mat_ prefix")
@@ -1808,7 +1806,6 @@ func TestResolver_R1_ProjectResourceName_TOKEN_FILE_HitsAgentResourcesOnly(t *te
 		}
 	}
 }
-
 
 // TestBoundary_IssueSearch_HitsDedicatedAgentAPI: multica issue search under mat_*
 // must hit GET /api/agent/issues/search only (#812 GAP).

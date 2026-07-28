@@ -251,3 +251,80 @@ func (h *Handler) UploadAgentAttachment(w http.ResponseWriter, r *http.Request) 
 	resp.DownloadURL = "/api/agent/attachments/" + uuidToString(att.ID) + "/download"
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// ListAgentIssueAttachments — GET /api/agent/issues/{id}/attachments
+// Principal-native: loadIssueForAgent workspace only; rewrite download URLs
+// to /api/agent/attachments/... so clients never hold human download paths.
+func (h *Handler) ListAgentIssueAttachments(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	issueID := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForAgent(w, r, p, issueID)
+	if !ok {
+		return
+	}
+	attachments, err := h.Queries.ListAttachmentsByIssue(r.Context(), db.ListAttachmentsByIssueParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		slog.Error("failed to list agent issue attachments", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list attachments")
+		return
+	}
+	resp := make([]AttachmentResponse, len(attachments))
+	for i, a := range attachments {
+		resp[i] = h.agentAttachmentListItem(a)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// ListAgentChannelAttachments — GET /api/agent/channels/{channelId}/attachments
+// Surface membership via agentHasSurfaceAccess; never owner channel membership.
+func (h *Handler) ListAgentChannelAttachments(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	ws, wok := p.WorkspaceUUID()
+	agentID, aok := p.AgentUUID()
+	if !wok || !aok {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+	if !h.channelExists(r.Context(), p.WorkspaceID, channelID) {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !h.agentHasSurfaceAccess(r.Context(), ws, agentID, channelID) {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	attachments, err := h.Queries.ListAttachmentsByChannel(r.Context(), db.ListAttachmentsByChannelParams{
+		ChannelID:   channelID,
+		WorkspaceID: ws,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel attachments")
+		return
+	}
+	out := make([]AttachmentResponse, 0, len(attachments))
+	for _, a := range attachments {
+		out = append(out, h.agentAttachmentListItem(a))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) agentAttachmentListItem(a db.Attachment) AttachmentResponse {
+	resp := h.attachmentToResponse(a)
+	id := uuidToString(a.ID)
+	// Dedicated agent download path — same rewrite as GetAgentAttachment.
+	resp.DownloadURL = "/api/agent/attachments/" + id + "/download"
+	return resp
+}

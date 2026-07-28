@@ -1,13 +1,20 @@
-# s89 deployment and runner operations
+# s89 CI runner / host operations
 
-The `dev` deployment uses a self-hosted GitHub Actions runner on s89. The
+> **Authoritative roles (Frank, 2026-07-28):**
+>
+> | Role | Host |
+> | --- | --- |
+> | **Shared Multica `dev` deploy target** | **Aliyun** `101.200.210.144` (**leagent.me**); workflow `.github/workflows/deploy.yml` (`runs-on: [self-hosted, aliyun]`, Environment `aliyun-dev`, stack `/data/multica`). See `docker-compose.aliyun.yml` and `deploy/aliyun/`. |
+> | **s89** | **CI runner host**, not the deploy target. It may still run jobs / hold residual services; that does **not** make it the product dev environment. |
+>
+> **Do not write that s89 is decommissioned** — it can remain as a runner.  
+> **Do not use** `https://82.157.184.89` / s89 as “the dev stack” for product verification; use **leagent.me** / Aliyun. Confirm CD with `deploy.yml` if unsure.
+
+This document is the host-side runbook for the **s89** self-hosted runner and
+related TLS/proxy triage — **not** the continuous-deploy contract. The s89
 runner reaches GitHub through the host-local `sing-box` proxy at
-`http://127.0.0.1:7893`; image builds stay on GitHub-hosted runners, while the
-s89 runner pulls the finished images and restarts the local Compose stack.
-
-This document covers the host-side checks that are intentionally outside the
-workflow. Do not put credentials, proxy configuration, or database passwords in
-workflow logs or this repository.
+`http://127.0.0.1:7893` when that path is in use. Do not put credentials, proxy
+configuration, or database passwords in workflow logs or this repository.
 
 ## Services and paths
 
@@ -19,14 +26,15 @@ workflow logs or this repository.
 | Runner diagnostics | `/home/gha/actions-runner/_diag` |
 | Outbound proxy service | `sing-box.service` |
 | Outbound proxy address | `http://127.0.0.1:7893` |
-| Browser entrypoint | `https://82.157.184.89` |
-| Daemon/API HTTP entrypoint | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
-| Caddy config source | `deploy/s89/Caddyfile` |
+| Historical browser entry (not shared dev CD) | `https://82.157.184.89` |
+| Historical daemon/API HTTP entry | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
+| Caddy config source (s89 host) | `deploy/s89/Caddyfile` |
+| Shared dev product URL | **https://leagent.me** (Aliyun CD) |
 
-The deploy workflow runs only after `dev` changes (or an explicit manual
-dispatch). A failure during `Set up job` happens before checkout and before any
-Multica deploy script, so it is not evidence of an application, Compose, image,
-or migration failure.
+The **Aliyun** deploy workflow runs only after `dev` changes (or an explicit
+manual dispatch) on runners labeled `aliyun`. If a job fails during
+`Set up job` on **this** s89 runner, that is runner/proxy/TLS triage for s89 —
+not evidence about the Aliyun Multica Compose stack, images, or migrations.
 
 ## TLS/action-download incident signature
 

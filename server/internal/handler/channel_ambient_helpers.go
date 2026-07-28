@@ -145,10 +145,10 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 		sourceMessageID, seqFrom, seqTo).Scan(&eventID)
 }
 
-// leaseAgentInboxEventForRuntime admits one eligible per-agent FIFO head.
-// Candidate discovery may prioritize across different agents; after locking
-// the chosen agent, a second statement revalidates that agent's oldest event
-// and active-delivery predicates against a fresh READ COMMITTED snapshot.
+// leaseAgentInboxEventForRuntime admits one eligible per-agent priority head.
+// Pending events use priority DESC and FIFO within equal priority. After
+// locking the chosen agent, a second statement revalidates that same ordering
+// and the active-delivery predicate against a fresh READ COMMITTED snapshot.
 //
 // The pending→draining transition is hard-gated on UPDATE ... RETURNING: a
 // BEFORE trigger (Radar authorization guard) may suppress the row change with
@@ -200,13 +200,19 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			  AND event.status IN ('pending', 'failed')
 			  AND NOT EXISTS (
 			    SELECT 1
-			    FROM agent_inbox_event older_event
-			    JOIN agent_session older_session
-			      ON older_session.id = older_event.agent_session_id
-			    WHERE older_event.agent_id = event.agent_id
-			      AND older_session.status = 'active'
-			      AND older_event.status IN ('pending', 'failed')
-			      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
+			    FROM agent_inbox_event blocking_event
+			    JOIN agent_session blocking_session
+			      ON blocking_session.id = blocking_event.agent_session_id
+			    WHERE blocking_event.agent_id = event.agent_id
+			      AND blocking_session.status = 'active'
+			      AND blocking_event.status IN ('pending', 'failed')
+			      AND (
+			        blocking_event.priority > event.priority
+			        OR (
+			          blocking_event.priority = event.priority
+			          AND (blocking_event.created_at, blocking_event.id) < (event.created_at, event.id)
+			        )
+			      )
 			  )
 			  AND NOT EXISTS (
 			    SELECT 1
@@ -269,13 +275,19 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			  AND event.status IN ('pending', 'failed')
 			  AND NOT EXISTS (
 			    SELECT 1
-			    FROM agent_inbox_event older_event
-			    JOIN agent_session older_session
-			      ON older_session.id = older_event.agent_session_id
-			    WHERE older_event.agent_id = event.agent_id
-			      AND older_session.status = 'active'
-			      AND older_event.status IN ('pending', 'failed')
-			      AND (older_event.created_at, older_event.id) < (event.created_at, event.id)
+			    FROM agent_inbox_event blocking_event
+			    JOIN agent_session blocking_session
+			      ON blocking_session.id = blocking_event.agent_session_id
+			    WHERE blocking_event.agent_id = event.agent_id
+			      AND blocking_session.status = 'active'
+			      AND blocking_event.status IN ('pending', 'failed')
+			      AND (
+			        blocking_event.priority > event.priority
+			        OR (
+			          blocking_event.priority = event.priority
+			          AND (blocking_event.created_at, blocking_event.id) < (event.created_at, event.id)
+			        )
+			      )
 			  )
 			  AND NOT EXISTS (
 			    SELECT 1

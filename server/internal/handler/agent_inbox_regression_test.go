@@ -173,7 +173,7 @@ ON CONFLICT DO NOTHING`, secondChannelID, testWorkspaceID, secondAgentID); err !
 	}
 }
 
-func TestAgentInboxDrainPreservesPerAgentFIFOAcrossRuntimes(t *testing.T) {
+func TestAgentInboxDrainPrioritizesPendingWakeAcrossRuntimes(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -216,20 +216,37 @@ func TestAgentInboxDrainPreservesPerAgentFIFOAcrossRuntimes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load current runtime: %v", err)
 	}
-	if delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, currentRuntime); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("newer runtime leased %+v before older runtime event, err=%v", delivery, err)
+	highPriorityDelivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, currentRuntime)
+	if err != nil {
+		t.Fatalf("lease newer high-priority event: %v", err)
+	}
+	if highPriorityDelivery.InboxEventID != newer.ID {
+		t.Fatalf(
+			"leased event %s, want newer high-priority event %s",
+			uuidToString(highPriorityDelivery.InboxEventID),
+			uuidToString(newer.ID),
+		)
 	}
 
 	olderRuntime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(olderRuntimeID))
 	if err != nil {
 		t.Fatalf("load older runtime: %v", err)
 	}
+	if delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, olderRuntime); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("older low-priority event bypassed active high-priority event: delivery=%+v err=%v", delivery, err)
+	}
+
+	settleClaimedInboxEventForTest(t, uuidToString(newer.ID))
 	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, olderRuntime)
 	if err != nil {
-		t.Fatalf("lease older cross-runtime event: %v", err)
+		t.Fatalf("lease older low-priority event after high-priority completion: %v", err)
 	}
 	if delivery.InboxEventID != older.ID {
-		t.Fatalf("leased event %s, want older cross-runtime event %s", uuidToString(delivery.InboxEventID), uuidToString(older.ID))
+		t.Fatalf(
+			"leased event %s, want remaining low-priority event %s",
+			uuidToString(delivery.InboxEventID),
+			uuidToString(older.ID),
+		)
 	}
 }
 

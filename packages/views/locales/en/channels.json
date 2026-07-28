@@ -571,6 +571,7 @@
     "autoplay_blocked": "Your browser paused {{name}}'s audio.",
     "stop_failed": "The call could not be ended. Try hanging up again.",
     "media_failed": "Voice connection failed. Check microphone permission and network.",
+    "rtc_diagnostic_code": "RTC diagnostic code: {{code}}",
     "create_failed": "Couldn't start the call. Try again.",
     "server_failed": "The call ended because the voice service failed.",
     "close": "Close"

@@ -146,6 +146,24 @@ describe("VoiceCallPanel", () => {
     expect(props.onRetry).toHaveBeenCalledOnce();
   });
 
+  it("shows a bounded RTC diagnostic code without exposing provider details", () => {
+    renderPanel({
+      phase: "failed",
+      error: {
+        source: "media",
+        code: "provider_error",
+        message: "provider response with account details",
+        providerCode: "-1000",
+      },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "RTC diagnostic code: -1000",
+    );
+    expect(screen.queryByText("provider response with account details"))
+      .not.toBeInTheDocument();
+  });
+
   it("lets the user resume browser-blocked remote audio", async () => {
     const user = userEvent.setup();
     const props = renderPanel({ autoplayBlocked: true });

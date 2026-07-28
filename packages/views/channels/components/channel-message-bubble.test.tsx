@@ -1,9 +1,9 @@
-import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { stickerCatalogKeys } from "@multica/core/stickers";
 import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
@@ -2289,5 +2289,81 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
     expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('3″'));
+  });
+});
+
+describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function pending() {
+    return makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "Alice",
+      id: "c-1",
+      client_message_id: "c-1",
+      local_send_status: "pending",
+      content: "hi",
+    });
+  }
+
+  it("stays silent while pending under 1.0s (LRM-271/273 no-flash preserved)", () => {
+    render(
+      <ChannelMessageBubble
+        message={pending()}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(999));
+    expect(screen.queryByTestId("message-sending")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sending/i)).not.toBeInTheDocument();
+  });
+
+  it("reveals a low-emphasis Sending… in a role=status region once pending crosses 1.0s", () => {
+    render(
+      <ChannelMessageBubble
+        message={pending()}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByTestId("message-sending")).toHaveTextContent("Sending…");
+    // <output> is an implicit role=status live region (announced politely).
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "data-testid",
+      "message-send-status",
+    );
+  });
+
+  it("replaces Sending… with Failed in the same status region on failure (never dual sent/sending)", () => {
+    const msg = pending();
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={msg}
+        currentUserId="user-1"
+        onRetrySend={vi.fn()}
+        onReact={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByTestId("message-sending")).toBeInTheDocument();
+    rerender(
+      <ChannelMessageBubble
+        message={{ ...msg, local_send_status: "failed" }}
+        currentUserId="user-1"
+        onRetrySend={vi.fn()}
+        onReact={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("message-sending")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-send-failed")).toBeInTheDocument();
+    expect(screen.getByTestId("message-send-status")).toBeInTheDocument();
   });
 });

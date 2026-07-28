@@ -11,7 +11,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
+import { Copy, Loader2, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -323,6 +323,22 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const contentExpanded = expandedForIdentity === collapseIdentity;
   const [contentOverflows, setContentOverflows] = useState(false);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
+  // #1276 INV-3: a slow in-flight send must not stay silent (looking exactly like
+  // a delivered message). ACK within ~1s stays silent (LRM-271/273 no-flash); once
+  // pending crosses 1.0s — the point a user starts to doubt it landed — reveal a
+  // low-emphasis "Sending…" (updated in place through the failed terminal so the
+  // a11y live region announces the transition). Must sit above the early return
+  // below (rules-of-hooks), so it reads local_send_status off the message directly.
+  const [sendingRevealed, setSendingRevealed] = useState(false);
+  const isPendingSend = (message.local_send_status ?? null) === "pending";
+  useEffect(() => {
+    if (!isPendingSend) {
+      setSendingRevealed(false);
+      return;
+    }
+    const id = setTimeout(() => setSendingRevealed(true), 1000);
+    return () => clearTimeout(id);
+  }, [isPendingSend]);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
@@ -942,20 +958,42 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               presentation={voicePresentation}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
             />
-            {isLocalFailed && onRetrySend && (
-              <div
-                data-testid="message-send-failed"
-                className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive"
+            {/* #1276 INV-3: one persistent status live region per local send —
+                empty (silent) → "Sending…" (pending ≥1.0s) → "Failed" — updated
+                in place so screen readers announce the transition and the body
+                is never disguised as a delivered message. */}
+            {isLocalSend && (
+              <output
+                aria-live="polite"
+                data-testid="message-send-status"
+                className="block"
               >
-                <span>{t(($) => $.message.send_failed)}</span>
-                <button
-                  type="button"
-                  onClick={() => onRetrySend(message)}
-                  className="inline-flex h-7 items-center rounded-md border border-destructive/40 bg-destructive/10 px-2.5 font-medium text-destructive transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {t(($) => $.message.retry_send)}
-                </button>
-              </div>
+                {isLocalFailed ? (
+                  <span
+                    data-testid="message-send-failed"
+                    className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive"
+                  >
+                    <span>{t(($) => $.message.send_failed)}</span>
+                    {onRetrySend && (
+                      <button
+                        type="button"
+                        onClick={() => onRetrySend(message)}
+                        className="inline-flex h-7 items-center rounded-md border border-destructive/40 bg-destructive/10 px-2.5 font-medium text-destructive transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        {t(($) => $.message.retry_send)}
+                      </button>
+                    )}
+                  </span>
+                ) : sendingRevealed ? (
+                  <span
+                    data-testid="message-sending"
+                    className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <Loader2 className="size-3 animate-spin" aria-hidden />
+                    <span>{t(($) => $.message.sending)}</span>
+                  </span>
+                ) : null}
+              </output>
             )}
             {isContentCollapsed && (
               <div

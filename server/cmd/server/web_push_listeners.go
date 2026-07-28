@@ -44,13 +44,10 @@ func registerWebPushListeners(bus *events.Bus, queries *db.Queries, cfg handler.
 		return
 	}
 
-	bus.Subscribe(protocol.EventInboxNew, func(e events.Event) {
-		item, ok := extractInboxItem(e.Payload)
-		if !ok || item.RecipientType != "member" || item.RecipientID == "" {
-			return
-		}
-		go deliverWebPushInbox(queries, sender, cfg, item)
-	})
+	// LRM-411 channel path: unmuted = all messages, muted = @ only, DM always.
+	// inbox:new intentionally not registered for desktop Web Push (V0: issue
+	// assign etc. stay out until product expands).
+
 	bus.Subscribe(protocol.EventChannelMessage, func(e events.Event) {
 		msg, ok := extractChannelMessage(e.Payload)
 		if !ok {
@@ -78,7 +75,7 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 		slog.Warn("web push: channel recipient lookup failed", "workspace_id", msg.WorkspaceID, "channel_id", msg.ChannelID, "recipient_id", recipientID, "error", err)
 		return
 	}
-	if !shouldDeliverChannelMessageWebPush(msg, event.ActorType, event.ActorID, recipientID, info.Muted) {
+	if !shouldDeliverChannelMessageWebPush(msg, event.ActorType, event.ActorID, recipientID, info.Kind, info.Muted) {
 		return
 	}
 	subs, err := queries.ListActiveWebPushSubscriptions(ctx, parseUUID(recipientID))
@@ -92,7 +89,11 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 	deliverWebPushToSubscriptions(ctx, queries, sender, parseUUID(recipientID), subs, payload)
 }
 
-func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, actorType, actorID, recipientID string, muted bool) bool {
+// shouldDeliverChannelMessageWebPush implements LRM-411:
+// - DM: always (except self / system / edit / delete)
+// - unmuted group: all member messages
+// - muted group: @ / @all only
+func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, actorType, actorID, recipientID, channelKind string, muted bool) bool {
 	if msg.Type == "system" || msg.DeletedAt != nil || msg.EditedAt != nil {
 		return false
 	}
@@ -101,6 +102,9 @@ func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, acto
 	}
 	if actorType == "member" && actorID == recipientID {
 		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(channelKind), "dm") {
+		return true
 	}
 	if !muted {
 		return true

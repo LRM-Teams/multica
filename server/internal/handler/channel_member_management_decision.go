@@ -59,7 +59,6 @@ type MemberManagementTarget struct {
 	Kind                     PrincipalKind
 	ID                       pgtype.UUID
 	Role                     ChannelRole
-	IsSelf                   bool
 	WouldBreakOwnerInvariant bool
 }
 
@@ -98,6 +97,10 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 	if !validPrincipalKind(req.Principal.Kind) {
 		return denyMemberManagement(MemberManagementCodeForbidden)
 	}
+	if !validMemberManagementUUID(req.Principal.ID) ||
+		!validMemberManagementUUID(req.Principal.WorkspaceID) {
+		return denyMemberManagement(MemberManagementCodeForbidden)
+	}
 	if !validWorkspaceRole(req.Principal.WorkspaceRole) || !validChannelRole(req.Principal.ChannelRole) {
 		return denyMemberManagement(MemberManagementCodeForbidden)
 	}
@@ -113,7 +116,7 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 			return allowMemberManagement()
 		}
 	case MemberManagementRemoveMember:
-		if !validMemberManagementTarget(req.Target) || req.Target.IsSelf {
+		if !validMemberManagementTarget(req.Target) || sameMemberManagementIdentity(req.Principal, *req.Target) {
 			return denyMemberManagement(MemberManagementCodeForbidden)
 		}
 		if req.Target.Role != ChannelRoleMember {
@@ -126,8 +129,7 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 		}
 	case MemberManagementLeave:
 		if !validMemberManagementTarget(req.Target) ||
-			!req.Target.IsSelf ||
-			req.Target.Kind != req.Principal.Kind ||
+			!sameMemberManagementIdentity(req.Principal, *req.Target) ||
 			req.Target.Role != req.Principal.ChannelRole {
 			return denyMemberManagement(MemberManagementCodeForbidden)
 		}
@@ -140,7 +142,7 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 			return denyMemberManagement(MemberManagementCodeForbidden)
 		}
 		if validMemberManagementTarget(req.Target) &&
-			!req.Target.IsSelf &&
+			!sameMemberManagementIdentity(req.Principal, *req.Target) &&
 			req.Target.Role == ChannelRoleMember {
 			return allowMemberManagement()
 		}
@@ -149,7 +151,7 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 			return denyMemberManagement(MemberManagementCodeForbidden)
 		}
 		if validMemberManagementTarget(req.Target) &&
-			!req.Target.IsSelf &&
+			!sameMemberManagementIdentity(req.Principal, *req.Target) &&
 			req.Target.Role == ChannelRoleManager {
 			return allowMemberManagement()
 		}
@@ -163,7 +165,7 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 		if req.Target.Kind == PrincipalKindAgent {
 			return denyMemberManagement(MemberManagementCodeAgentCannotBeWorkspaceOwner)
 		}
-		if !req.Target.IsSelf &&
+		if !sameMemberManagementIdentity(req.Principal, *req.Target) &&
 			(req.Target.Role == ChannelRoleMember || req.Target.Role == ChannelRoleManager) {
 			return allowMemberManagement()
 		}
@@ -192,8 +194,17 @@ func hasWorkspaceManagementAuthority(role WorkspaceRole) bool {
 func validMemberManagementTarget(target *MemberManagementTarget) bool {
 	return target != nil &&
 		validPrincipalKind(target.Kind) &&
+		validMemberManagementUUID(target.ID) &&
 		validChannelRole(target.Role) &&
 		target.Role != ChannelRoleNone
+}
+
+func validMemberManagementUUID(id pgtype.UUID) bool {
+	return id.Valid && id.Bytes != [16]byte{}
+}
+
+func sameMemberManagementIdentity(principal MemberManagementPrincipal, target MemberManagementTarget) bool {
+	return principal.Kind == target.Kind && principal.ID.Bytes == target.ID.Bytes
 }
 
 func isHumanChannelOwner(principal MemberManagementPrincipal) bool {

@@ -1,27 +1,44 @@
 package handler
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+func memberManagementTestUUID(seed byte) pgtype.UUID {
+	var bytes [16]byte
+	bytes[15] = seed
+	return pgtype.UUID{Bytes: bytes, Valid: true}
+}
+
+func memberManagementTestPrincipal(
+	kind PrincipalKind,
+	workspaceRole WorkspaceRole,
+	channelRole ChannelRole,
+	idSeed byte,
+) MemberManagementPrincipal {
+	return MemberManagementPrincipal{
+		Kind:          kind,
+		ID:            memberManagementTestUUID(idSeed),
+		WorkspaceID:   memberManagementTestUUID(100),
+		WorkspaceRole: workspaceRole,
+		ChannelRole:   channelRole,
+	}
+}
 
 func TestDecideMemberManagementMatrix(t *testing.T) {
 	user := func(workspaceRole WorkspaceRole, channelRole ChannelRole) MemberManagementPrincipal {
-		return MemberManagementPrincipal{
-			Kind:          PrincipalKindUser,
-			WorkspaceRole: workspaceRole,
-			ChannelRole:   channelRole,
-		}
+		return memberManagementTestPrincipal(PrincipalKindUser, workspaceRole, channelRole, 1)
 	}
 	agent := func(workspaceRole WorkspaceRole, channelRole ChannelRole) MemberManagementPrincipal {
-		return MemberManagementPrincipal{
-			Kind:          PrincipalKindAgent,
-			WorkspaceRole: workspaceRole,
-			ChannelRole:   channelRole,
-		}
+		return memberManagementTestPrincipal(PrincipalKindAgent, workspaceRole, channelRole, 2)
 	}
-	ordinary := &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleMember}
-	manager := &MemberManagementTarget{Kind: PrincipalKindAgent, Role: ChannelRoleManager}
-	owner := &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleOwner}
-	self := func(kind PrincipalKind, role ChannelRole) *MemberManagementTarget {
-		return &MemberManagementTarget{Kind: kind, Role: role, IsSelf: true}
+	ordinary := &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(3), Role: ChannelRoleMember}
+	manager := &MemberManagementTarget{Kind: PrincipalKindAgent, ID: memberManagementTestUUID(4), Role: ChannelRoleManager}
+	owner := &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(5), Role: ChannelRoleOwner}
+	self := func(principal MemberManagementPrincipal) *MemberManagementTarget {
+		return &MemberManagementTarget{Kind: principal.Kind, ID: principal.ID, Role: principal.ChannelRole}
 	}
 
 	tests := []struct {
@@ -89,7 +106,7 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 		{
 			name: "self remove is not leave", principal: user(WorkspaceRoleAdmin, ChannelRoleManager),
 			action:  MemberManagementRemoveMember,
-			target:  &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleMember, IsSelf: true},
+			target:  &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(1), Role: ChannelRoleMember},
 			visible: true, writable: true, code: MemberManagementCodeForbidden,
 		},
 		{
@@ -104,17 +121,20 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 		},
 		{
 			name: "ordinary member may leave", principal: user(WorkspaceRoleMember, ChannelRoleMember),
-			action: MemberManagementLeave, target: self(PrincipalKindUser, ChannelRoleMember),
+			action: MemberManagementLeave, target: self(user(WorkspaceRoleMember, ChannelRoleMember)),
 			visible: true, writable: true, allowed: true,
 		},
 		{
 			name: "agent manager may leave", principal: agent(WorkspaceRoleMember, ChannelRoleManager),
-			action: MemberManagementLeave, target: self(PrincipalKindAgent, ChannelRoleManager),
+			action: MemberManagementLeave, target: self(agent(WorkspaceRoleMember, ChannelRoleManager)),
 			visible: true, writable: true, allowed: true,
 		},
 		{
 			name: "nonmember admin cannot leave", principal: user(WorkspaceRoleAdmin, ChannelRoleNone),
-			action: MemberManagementLeave, target: self(PrincipalKindUser, ChannelRoleNone),
+			action: MemberManagementLeave,
+			target: &MemberManagementTarget{
+				Kind: PrincipalKindUser, ID: memberManagementTestUUID(1), Role: ChannelRoleNone,
+			},
 			visible: true, writable: true,
 			code: MemberManagementCodeForbidden,
 		},
@@ -122,14 +142,14 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 			name: "sole human owner cannot leave", principal: user(WorkspaceRoleOwner, ChannelRoleOwner),
 			action: MemberManagementLeave,
 			target: &MemberManagementTarget{
-				Kind: PrincipalKindUser, Role: ChannelRoleOwner, IsSelf: true,
+				Kind: PrincipalKindUser, ID: memberManagementTestUUID(1), Role: ChannelRoleOwner,
 				WouldBreakOwnerInvariant: true,
 			},
 			visible: true, writable: true, code: MemberManagementCodeOwnerInvariant,
 		},
 		{
 			name: "human owner may leave when owner invariant survives", principal: user(WorkspaceRoleOwner, ChannelRoleOwner),
-			action: MemberManagementLeave, target: self(PrincipalKindUser, ChannelRoleOwner),
+			action: MemberManagementLeave, target: self(user(WorkspaceRoleOwner, ChannelRoleOwner)),
 			visible: true, writable: true, allowed: true,
 		},
 		{
@@ -172,7 +192,7 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 		{
 			name: "human channel owner may transfer to human manager", principal: user(WorkspaceRoleMember, ChannelRoleOwner),
 			action:  MemberManagementTransferOwnership,
-			target:  &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleManager},
+			target:  &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(6), Role: ChannelRoleManager},
 			visible: true, writable: true, allowed: true,
 		},
 		{
@@ -188,7 +208,7 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 		{
 			name: "human channel owner may not transfer to agent", principal: user(WorkspaceRoleMember, ChannelRoleOwner),
 			action:  MemberManagementTransferOwnership,
-			target:  &MemberManagementTarget{Kind: PrincipalKindAgent, Role: ChannelRoleMember},
+			target:  &MemberManagementTarget{Kind: PrincipalKindAgent, ID: memberManagementTestUUID(7), Role: ChannelRoleMember},
 			visible: true, writable: true, code: MemberManagementCodeAgentCannotBeWorkspaceOwner,
 		},
 		{
@@ -220,10 +240,12 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 }
 
 func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
-	validPrincipal := MemberManagementPrincipal{
-		Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleMember,
+	validPrincipal := memberManagementTestPrincipal(
+		PrincipalKindUser, WorkspaceRoleMember, ChannelRoleMember, 1,
+	)
+	validTarget := &MemberManagementTarget{
+		Kind: PrincipalKindUser, ID: memberManagementTestUUID(3), Role: ChannelRoleMember,
 	}
-	validTarget := &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleMember}
 	tests := []struct {
 		name string
 		req  MemberManagementRequest
@@ -231,7 +253,7 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 		{
 			name: "unknown principal kind",
 			req: MemberManagementRequest{
-				Principal:       MemberManagementPrincipal{Kind: "system", WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleMember},
+				Principal:       memberManagementTestPrincipal("system", WorkspaceRoleMember, ChannelRoleMember, 1),
 				Action:          MemberManagementAddMember,
 				ChannelVisible:  true,
 				ChannelWritable: true,
@@ -240,7 +262,7 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 		{
 			name: "unknown workspace role",
 			req: MemberManagementRequest{
-				Principal:       MemberManagementPrincipal{Kind: PrincipalKindUser, WorkspaceRole: "manager", ChannelRole: ChannelRoleMember},
+				Principal:       memberManagementTestPrincipal(PrincipalKindUser, "manager", ChannelRoleMember, 1),
 				Action:          MemberManagementAddMember,
 				ChannelVisible:  true,
 				ChannelWritable: true,
@@ -249,7 +271,7 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 		{
 			name: "unknown channel role",
 			req: MemberManagementRequest{
-				Principal:       MemberManagementPrincipal{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleMember, ChannelRole: "admin"},
+				Principal:       memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleMember, "admin", 1),
 				Action:          MemberManagementAddMember,
 				ChannelVisible:  true,
 				ChannelWritable: true,
@@ -265,10 +287,49 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 			},
 		},
 		{
+			name: "zero principal id",
+			req: MemberManagementRequest{
+				Principal: MemberManagementPrincipal{
+					Kind:          PrincipalKindUser,
+					ID:            pgtype.UUID{Valid: true},
+					WorkspaceID:   memberManagementTestUUID(100),
+					WorkspaceRole: WorkspaceRoleMember,
+					ChannelRole:   ChannelRoleMember,
+				},
+				Action:          MemberManagementAddMember,
+				ChannelVisible:  true,
+				ChannelWritable: true,
+			},
+		},
+		{
+			name: "invalid workspace id",
+			req: MemberManagementRequest{
+				Principal: MemberManagementPrincipal{
+					Kind:          PrincipalKindUser,
+					ID:            memberManagementTestUUID(1),
+					WorkspaceRole: WorkspaceRoleMember,
+					ChannelRole:   ChannelRoleMember,
+				},
+				Action:          MemberManagementAddMember,
+				ChannelVisible:  true,
+				ChannelWritable: true,
+			},
+		},
+		{
 			name: "remove without target",
 			req: MemberManagementRequest{
-				Principal:       MemberManagementPrincipal{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone},
+				Principal:       memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleAdmin, ChannelRoleNone, 1),
 				Action:          MemberManagementRemoveMember,
+				ChannelVisible:  true,
+				ChannelWritable: true,
+			},
+		},
+		{
+			name: "remove target with zero id",
+			req: MemberManagementRequest{
+				Principal:       memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleAdmin, ChannelRoleNone, 1),
+				Action:          MemberManagementRemoveMember,
+				Target:          &MemberManagementTarget{Kind: PrincipalKindUser, ID: pgtype.UUID{Valid: true}, Role: ChannelRoleMember},
 				ChannelVisible:  true,
 				ChannelWritable: true,
 			},
@@ -276,9 +337,9 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 		{
 			name: "remove target with unknown kind",
 			req: MemberManagementRequest{
-				Principal:       MemberManagementPrincipal{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone},
+				Principal:       memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleAdmin, ChannelRoleNone, 1),
 				Action:          MemberManagementRemoveMember,
-				Target:          &MemberManagementTarget{Kind: "system", Role: ChannelRoleMember},
+				Target:          &MemberManagementTarget{Kind: "system", ID: memberManagementTestUUID(3), Role: ChannelRoleMember},
 				ChannelVisible:  true,
 				ChannelWritable: true,
 			},
@@ -307,7 +368,7 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 			req: MemberManagementRequest{
 				Principal:       validPrincipal,
 				Action:          MemberManagementLeave,
-				Target:          &MemberManagementTarget{Kind: PrincipalKindAgent, Role: ChannelRoleMember, IsSelf: true},
+				Target:          &MemberManagementTarget{Kind: PrincipalKindAgent, ID: validPrincipal.ID, Role: ChannelRoleMember},
 				ChannelVisible:  true,
 				ChannelWritable: true,
 			},
@@ -317,7 +378,7 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 			req: MemberManagementRequest{
 				Principal:       validPrincipal,
 				Action:          MemberManagementLeave,
-				Target:          &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleManager, IsSelf: true},
+				Target:          &MemberManagementTarget{Kind: PrincipalKindUser, ID: validPrincipal.ID, Role: ChannelRoleManager},
 				ChannelVisible:  true,
 				ChannelWritable: true,
 			},
@@ -334,14 +395,50 @@ func TestDecideMemberManagementFailsClosedOnMalformedState(t *testing.T) {
 	}
 }
 
+func TestDecideMemberManagementDerivesSelfFromCanonicalIdentity(t *testing.T) {
+	principal := memberManagementTestPrincipal(
+		PrincipalKindAgent, WorkspaceRoleMember, ChannelRoleManager, 2,
+	)
+
+	t.Run("same identity cannot use remove member", func(t *testing.T) {
+		got := DecideMemberManagement(MemberManagementRequest{
+			Principal: principal,
+			Action:    MemberManagementRemoveMember,
+			Target: &MemberManagementTarget{
+				Kind: principal.Kind, ID: principal.ID, Role: ChannelRoleMember,
+			},
+			ChannelVisible:  true,
+			ChannelWritable: true,
+		})
+		if got.Allowed || got.Code != MemberManagementCodeForbidden {
+			t.Fatalf("decision = %+v, want denied code=%q", got, MemberManagementCodeForbidden)
+		}
+	})
+
+	t.Run("different identity cannot use leave", func(t *testing.T) {
+		got := DecideMemberManagement(MemberManagementRequest{
+			Principal: principal,
+			Action:    MemberManagementLeave,
+			Target: &MemberManagementTarget{
+				Kind: principal.Kind, ID: memberManagementTestUUID(3), Role: principal.ChannelRole,
+			},
+			ChannelVisible:  true,
+			ChannelWritable: true,
+		})
+		if got.Allowed || got.Code != MemberManagementCodeForbidden {
+			t.Fatalf("decision = %+v, want denied code=%q", got, MemberManagementCodeForbidden)
+		}
+	})
+}
+
 func TestDecideMemberManagementArchivedChannelDeniesEveryActor(t *testing.T) {
 	actors := []MemberManagementPrincipal{
-		{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleMember},
-		{Kind: PrincipalKindAgent, WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleManager},
-		{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleOwner},
-		{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone},
-		{Kind: PrincipalKindAgent, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone},
-		{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleOwner, ChannelRole: ChannelRoleNone},
+		memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleMember, ChannelRoleMember, 1),
+		memberManagementTestPrincipal(PrincipalKindAgent, WorkspaceRoleMember, ChannelRoleManager, 2),
+		memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleMember, ChannelRoleOwner, 1),
+		memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleAdmin, ChannelRoleNone, 1),
+		memberManagementTestPrincipal(PrincipalKindAgent, WorkspaceRoleAdmin, ChannelRoleNone, 2),
+		memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleOwner, ChannelRoleNone, 1),
 	}
 	for _, principal := range actors {
 		for _, action := range []MemberManagementAction{
@@ -351,7 +448,7 @@ func TestDecideMemberManagementArchivedChannelDeniesEveryActor(t *testing.T) {
 			got := DecideMemberManagement(MemberManagementRequest{
 				Principal:       principal,
 				Action:          action,
-				Target:          &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleMember},
+				Target:          &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(3), Role: ChannelRoleMember},
 				ChannelVisible:  true,
 				ChannelWritable: false,
 			})
@@ -365,10 +462,10 @@ func TestDecideMemberManagementArchivedChannelDeniesEveryActor(t *testing.T) {
 
 func TestDecideMemberManagementTargetKindParity(t *testing.T) {
 	for _, principal := range []MemberManagementPrincipal{
-		{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleManager},
-		{Kind: PrincipalKindAgent, WorkspaceRole: WorkspaceRoleMember, ChannelRole: ChannelRoleManager},
-		{Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone},
-		{Kind: PrincipalKindAgent, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone},
+		memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleMember, ChannelRoleManager, 1),
+		memberManagementTestPrincipal(PrincipalKindAgent, WorkspaceRoleMember, ChannelRoleManager, 2),
+		memberManagementTestPrincipal(PrincipalKindUser, WorkspaceRoleAdmin, ChannelRoleNone, 1),
+		memberManagementTestPrincipal(PrincipalKindAgent, WorkspaceRoleAdmin, ChannelRoleNone, 2),
 	} {
 		for _, targetRole := range []ChannelRole{
 			ChannelRoleMember,
@@ -380,7 +477,7 @@ func TestDecideMemberManagementTargetKindParity(t *testing.T) {
 				decisions = append(decisions, DecideMemberManagement(MemberManagementRequest{
 					Principal:       principal,
 					Action:          MemberManagementRemoveMember,
-					Target:          &MemberManagementTarget{Kind: targetKind, Role: targetRole},
+					Target:          &MemberManagementTarget{Kind: targetKind, ID: memberManagementTestUUID(3), Role: targetRole},
 					ChannelVisible:  true,
 					ChannelWritable: true,
 				}))
@@ -396,19 +493,19 @@ func TestDecideMemberManagementTargetKindParity(t *testing.T) {
 func TestDecideMemberManagementHumanAgentParity(t *testing.T) {
 	for _, role := range []ChannelRole{ChannelRoleManager, ChannelRoleMember} {
 		human := DecideMemberManagement(MemberManagementRequest{
-			Principal: MemberManagementPrincipal{
-				Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleMember, ChannelRole: role,
-			},
+			Principal: memberManagementTestPrincipal(
+				PrincipalKindUser, WorkspaceRoleMember, role, 1,
+			),
 			Action:         MemberManagementRemoveMember,
-			Target:         &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleMember},
+			Target:         &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(3), Role: ChannelRoleMember},
 			ChannelVisible: true, ChannelWritable: true,
 		})
 		agent := DecideMemberManagement(MemberManagementRequest{
-			Principal: MemberManagementPrincipal{
-				Kind: PrincipalKindAgent, WorkspaceRole: WorkspaceRoleMember, ChannelRole: role,
-			},
+			Principal: memberManagementTestPrincipal(
+				PrincipalKindAgent, WorkspaceRoleMember, role, 2,
+			),
 			Action:         MemberManagementRemoveMember,
-			Target:         &MemberManagementTarget{Kind: PrincipalKindUser, Role: ChannelRoleMember},
+			Target:         &MemberManagementTarget{Kind: PrincipalKindUser, ID: memberManagementTestUUID(3), Role: ChannelRoleMember},
 			ChannelVisible: true, ChannelWritable: true,
 		})
 		if human != agent {
@@ -417,19 +514,19 @@ func TestDecideMemberManagementHumanAgentParity(t *testing.T) {
 	}
 
 	humanAdmin := DecideMemberManagement(MemberManagementRequest{
-		Principal: MemberManagementPrincipal{
-			Kind: PrincipalKindUser, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone,
-		},
+		Principal: memberManagementTestPrincipal(
+			PrincipalKindUser, WorkspaceRoleAdmin, ChannelRoleNone, 1,
+		),
 		Action:         MemberManagementRemoveMember,
-		Target:         &MemberManagementTarget{Kind: PrincipalKindAgent, Role: ChannelRoleMember},
+		Target:         &MemberManagementTarget{Kind: PrincipalKindAgent, ID: memberManagementTestUUID(3), Role: ChannelRoleMember},
 		ChannelVisible: true, ChannelWritable: true,
 	})
 	agentAdmin := DecideMemberManagement(MemberManagementRequest{
-		Principal: MemberManagementPrincipal{
-			Kind: PrincipalKindAgent, WorkspaceRole: WorkspaceRoleAdmin, ChannelRole: ChannelRoleNone,
-		},
+		Principal: memberManagementTestPrincipal(
+			PrincipalKindAgent, WorkspaceRoleAdmin, ChannelRoleNone, 2,
+		),
 		Action:         MemberManagementRemoveMember,
-		Target:         &MemberManagementTarget{Kind: PrincipalKindAgent, Role: ChannelRoleMember},
+		Target:         &MemberManagementTarget{Kind: PrincipalKindAgent, ID: memberManagementTestUUID(3), Role: ChannelRoleMember},
 		ChannelVisible: true, ChannelWritable: true,
 	})
 	if humanAdmin != agentAdmin {

@@ -1312,6 +1312,48 @@ func TestBoundary_IssueCancelTask_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_IssueCancelTask_HumanAuthKeepsHumanAPI is the inverse control
+// for the agent final-hop test above. The #856 migration is additive: a human
+// credential must continue to cancel through the existing human route.
+func TestBoundary_IssueCancelTask_HumanAuthKeepsHumanAPI(t *testing.T) {
+	taskID := "99999999-8888-7777-6666-555555555555"
+	wantCancel := "/api/tasks/" + taskID + "/cancel"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost && r.URL.Path == wantCancel {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": taskID, "status": "cancelled",
+			})
+			return
+		}
+		http.Error(w, "agent task cancel path forbidden for human auth", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "mul_human_boundary_contract_token")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	cmd := &cobra.Command{Use: "cancel-task"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().String("issue", "", "")
+	if err := runIssueCancelTask(cmd, []string{taskID}); err != nil {
+		t.Fatalf("runIssueCancelTask human auth: %v (paths=%v)", err, gotPaths)
+	}
+
+	if len(gotPaths) != 1 || gotPaths[0] != "POST "+wantCancel {
+		t.Fatalf("requests=%v, want exact [POST %s]", gotPaths, wantCancel)
+	}
+}
+
 // TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets is a living map of
 // necessary capabilities → dedicated paths (Ronan table). Fails if a required
 // capability loses its dedicated target string (typo / table drift).

@@ -53,6 +53,54 @@ func assertExactHTTPError(t *testing.T, rec *httptest.ResponseRecorder, status i
 	}
 }
 
+func seedTaskCancelCredential(t *testing.T, source, tokenHash, taskID, deliveryID, agentID string) {
+	t.Helper()
+	if source == "task_token" {
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO task_token (token_hash, task_id, agent_id, workspace_id, user_id, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			tokenHash, taskID, agentID, testWorkspaceID, testUserID, time.Now().Add(time.Hour),
+		); err != nil {
+			t.Fatalf("seed task token: %v", err)
+		}
+		return
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_inbox_token (token_hash, inbox_event_id, delivery_id, agent_id, workspace_id, user_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		tokenHash, taskID, deliveryID, agentID, testWorkspaceID, testUserID, time.Now().Add(time.Hour),
+	); err != nil {
+		t.Fatalf("seed inbox token: %v", err)
+	}
+}
+
+func assertTaskCancelCredentialCount(t *testing.T, source, tokenHash string, want int) {
+	t.Helper()
+	tokenTable := "task_token"
+	if source == "agent_inbox_token" {
+		tokenTable = "agent_inbox_token"
+	}
+	var count int
+	if err := testPool.QueryRow(context.Background(),
+		"SELECT count(*) FROM "+tokenTable+" WHERE token_hash = $1", tokenHash,
+	).Scan(&count); err != nil {
+		t.Fatalf("count %s credential: %v", source, err)
+	}
+	if count != want {
+		t.Fatalf("%s credential count=%d, want %d", source, count, want)
+	}
+}
+
+func subscribeTaskCancelCount(taskID string) *int {
+	count := 0
+	testHandler.Bus.Subscribe(protocol.EventTaskCancelled, func(event events.Event) {
+		if event.TaskID == taskID {
+			count++
+		}
+	})
+	return &count
+}
+
 func TestCancelAgentTask_RequiresAgentPrincipalExact403(t *testing.T) {
 	taskID := uuid.NewString()
 	rec := httptest.NewRecorder()
@@ -132,6 +180,9 @@ func TestCancelAgentTask_TaskIDMismatchAndMissingAreIndistinguishable404(t *test
 	principalTaskID := createHandlerTestTaskForAgent(t, agentID)
 	otherOwnedTaskID := createHandlerTestTaskForAgent(t, agentID)
 	principal := taskScopedCancelPrincipal(agentID, principalTaskID, "task_token")
+	tokenHash := "cancel-denied-task-mismatch-" + uuid.NewString()
+	seedTaskCancelCredential(t, "task_token", tokenHash, otherOwnedTaskID, "", agentID)
+	cancelledEvents := subscribeTaskCancelCount(otherOwnedTaskID)
 
 	var bodies []string
 	for _, targetTaskID := range []string{otherOwnedTaskID, uuid.NewString()} {
@@ -146,6 +197,10 @@ func TestCancelAgentTask_TaskIDMismatchAndMissingAreIndistinguishable404(t *test
 	if got := taskStatus(t, otherOwnedTaskID); got != "draining" {
 		t.Fatalf("TaskID mismatch mutated task: status=%q", got)
 	}
+	assertTaskCancelCredentialCount(t, "task_token", tokenHash, 1)
+	if *cancelledEvents != 0 {
+		t.Fatalf("TaskID mismatch published task:cancelled %d times, want 0", *cancelledEvents)
+	}
 }
 
 func TestCancelAgentTask_AgentIDMismatchReturnsSame404WithoutMutation(t *testing.T) {
@@ -157,6 +212,9 @@ func TestCancelAgentTask_AgentIDMismatchReturnsSame404WithoutMutation(t *testing
 	foreignAgentID := createHandlerTestAgent(t, "Agent Cancel Foreign Principal", []byte("[]"))
 	taskID := createHandlerTestTaskForAgent(t, ownerAgentID)
 	principal := taskScopedCancelPrincipal(foreignAgentID, taskID, "task_token")
+	tokenHash := "cancel-denied-agent-mismatch-" + uuid.NewString()
+	seedTaskCancelCredential(t, "task_token", tokenHash, taskID, "", ownerAgentID)
+	cancelledEvents := subscribeTaskCancelCount(taskID)
 	rec := httptest.NewRecorder()
 
 	callAgentTaskCancel(t, testHandler, rec, agentTaskCancelRequest(taskID, &principal))
@@ -164,6 +222,10 @@ func TestCancelAgentTask_AgentIDMismatchReturnsSame404WithoutMutation(t *testing
 	assertExactHTTPError(t, rec, http.StatusNotFound, "{\"error\":\"task not found\"}\n")
 	if got := taskStatus(t, taskID); got != "draining" {
 		t.Fatalf("AgentID mismatch mutated task: status=%q", got)
+	}
+	assertTaskCancelCredentialCount(t, "task_token", tokenHash, 1)
+	if *cancelledEvents != 0 {
+		t.Fatalf("AgentID mismatch published task:cancelled %d times, want 0", *cancelledEvents)
 	}
 }
 
@@ -191,23 +253,7 @@ func TestCancelAgentTask_OwnTaskScopedTokenCancelsAndRevokesCredential(t *testin
 				taskID, deliveryID = seedChannelInboxWakeWithDelivery(t, channelID, agentID, source)
 			}
 			tokenHash := "cancel-self-" + source + "-" + uuid.NewString()
-			if source == "task_token" {
-				if _, err := testPool.Exec(context.Background(), `
-					INSERT INTO task_token (token_hash, task_id, agent_id, workspace_id, user_id, expires_at)
-					VALUES ($1, $2, $3, $4, $5, $6)`,
-					tokenHash, taskID, agentID, testWorkspaceID, testUserID, time.Now().Add(time.Hour),
-				); err != nil {
-					t.Fatalf("seed task token: %v", err)
-				}
-			} else {
-				if _, err := testPool.Exec(context.Background(), `
-					INSERT INTO agent_inbox_token (token_hash, inbox_event_id, delivery_id, agent_id, workspace_id, user_id, expires_at)
-					VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-					tokenHash, taskID, deliveryID, agentID, testWorkspaceID, testUserID, time.Now().Add(time.Hour),
-				); err != nil {
-					t.Fatalf("seed inbox token: %v", err)
-				}
-			}
+			seedTaskCancelCredential(t, source, tokenHash, taskID, deliveryID, agentID)
 
 			principal := taskScopedCancelPrincipal(agentID, taskID, source)
 			rec := httptest.NewRecorder()
@@ -236,19 +282,7 @@ func TestCancelAgentTask_OwnTaskScopedTokenCancelsAndRevokesCredential(t *testin
 				t.Fatalf("task terminal state=(%q, %q), want (suppressed, cancelled)", status, outcome)
 			}
 
-			tokenTable := "task_token"
-			if source == "agent_inbox_token" {
-				tokenTable = "agent_inbox_token"
-			}
-			var count int
-			if err := testPool.QueryRow(context.Background(),
-				"SELECT count(*) FROM "+tokenTable+" WHERE token_hash = $1", tokenHash,
-			).Scan(&count); err != nil {
-				t.Fatalf("count remaining credential: %v", err)
-			}
-			if count != 0 {
-				t.Fatalf("%s credential remains after self-cancel: count=%d", source, count)
-			}
+			assertTaskCancelCredentialCount(t, source, tokenHash, 0)
 		})
 	}
 }
@@ -258,57 +292,55 @@ func TestCancelAgentTask_TerminalOwnTaskIsIdempotent200(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	agentID := createHandlerTestAgent(t, "Agent Cancel Terminal", []byte("[]"))
-	taskID := createHandlerTestTaskForAgent(t, agentID)
-	cancelledEvents := 0
-	testHandler.Bus.Subscribe(protocol.EventTaskCancelled, func(event events.Event) {
-		payload, ok := event.Payload.(map[string]any)
-		if ok && payload["task_id"] == taskID {
-			cancelledEvents++
-		}
-	})
-	principal := taskScopedCancelPrincipal(agentID, taskID, "task_token")
-	rec := httptest.NewRecorder()
+	for _, source := range []string{"task_token", "agent_inbox_token"} {
+		t.Run(source, func(t *testing.T) {
+			agentID := createHandlerTestAgent(t, "Agent Cancel Terminal "+source, []byte("[]"))
+			taskID := ""
+			deliveryID := ""
+			if source == "task_token" {
+				taskID = createHandlerTestTaskForAgent(t, agentID)
+			} else {
+				channelID := seedChannelForTest(t, "agent-terminal-cancel-"+uuid.NewString(), testUserID)
+				if _, err := testPool.Exec(context.Background(), `
+					INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+					VALUES ($1, $2, 'agent', $3)
+					ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID,
+				); err != nil {
+					t.Fatalf("seed agent channel membership: %v", err)
+				}
+				taskID, deliveryID = seedChannelInboxWakeWithDelivery(t, channelID, agentID, source)
+			}
+			cancelledEvents := subscribeTaskCancelCount(taskID)
+			principal := taskScopedCancelPrincipal(agentID, taskID, source)
+			rec := httptest.NewRecorder()
 
-	callAgentTaskCancel(t, testHandler, rec, agentTaskCancelRequest(taskID, &principal))
+			callAgentTaskCancel(t, testHandler, rec, agentTaskCancelRequest(taskID, &principal))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("response=(%d, %q), want idempotent 200", rec.Code, rec.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
-	}
-	if body["id"] != taskID || body["status"] != "cancelled" {
-		t.Fatalf("response identity/status=%v", body)
-	}
-	if cancelledEvents != 1 {
-		t.Fatalf("first cancellation published task:cancelled %d times, want 1", cancelledEvents)
-	}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("response=(%d, %q), want idempotent 200", rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+			}
+			if body["id"] != taskID || body["status"] != "cancelled" {
+				t.Fatalf("response identity/status=%v", body)
+			}
+			if *cancelledEvents != 1 {
+				t.Fatalf("first cancellation published task:cancelled %d times, want 1", *cancelledEvents)
+			}
 
-	tokenHash := "terminal-reissue-" + uuid.NewString()
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO task_token (token_hash, task_id, agent_id, workspace_id, user_id, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		tokenHash, taskID, agentID, testWorkspaceID, testUserID, time.Now().Add(time.Hour),
-	); err != nil {
-		t.Fatalf("seed credential before idempotent retry: %v", err)
-	}
-	second := httptest.NewRecorder()
-	callAgentTaskCancel(t, testHandler, second, agentTaskCancelRequest(taskID, &principal))
-	if second.Code != http.StatusOK {
-		t.Fatalf("second response=(%d, %q), want idempotent 200", second.Code, second.Body.String())
-	}
-	if cancelledEvents != 1 {
-		t.Fatalf("idempotent retry changed task:cancelled count to %d, want 1", cancelledEvents)
-	}
-	var remaining int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM task_token WHERE token_hash = $1`, tokenHash,
-	).Scan(&remaining); err != nil {
-		t.Fatalf("count credential after idempotent retry: %v", err)
-	}
-	if remaining != 1 {
-		t.Fatalf("idempotent retry revoked a fresh credential: remaining=%d, want 1", remaining)
+			tokenHash := "terminal-reissue-" + source + "-" + uuid.NewString()
+			seedTaskCancelCredential(t, source, tokenHash, taskID, deliveryID, agentID)
+			second := httptest.NewRecorder()
+			callAgentTaskCancel(t, testHandler, second, agentTaskCancelRequest(taskID, &principal))
+			if second.Code != http.StatusOK {
+				t.Fatalf("second response=(%d, %q), want idempotent 200", second.Code, second.Body.String())
+			}
+			if *cancelledEvents != 1 {
+				t.Fatalf("idempotent retry changed task:cancelled count to %d, want 1", *cancelledEvents)
+			}
+			assertTaskCancelCredentialCount(t, source, tokenHash, 1)
+		})
 	}
 }

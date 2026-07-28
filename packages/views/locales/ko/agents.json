@@ -578,7 +578,16 @@
     "delete_dialog_cancel": "취소",
     "delete_dialog_confirm": "삭제",
     "agent_deleted_toast": "에이전트를 삭제했습니다",
-    "delete_failed_toast": "에이전트를 삭제하지 못했습니다"
+    "delete_failed_toast": "에이전트를 삭제하지 못했습니다",
+    "change_avatar_aria": "아바타 변경",
+    "avatar_updated_toast": "아바타가 업데이트되었습니다",
+    "avatar_crop_title": "아바타 자르기",
+    "avatar_crop_cancel": "취소",
+    "avatar_crop_save": "저장",
+    "avatar_crop_zoom_aria": "확대/축소",
+    "avatar_err_type": "PNG 또는 JPG 이미지를 선택해 주세요.",
+    "avatar_err_size": "이미지는 5 MB 이하여야 합니다.",
+    "avatar_err_dimensions": "이미지는 최소 256×256 픽셀이어야 합니다."
   },
   "restart_modal": {
     "trigger": "재시작…",

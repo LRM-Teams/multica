@@ -568,7 +568,16 @@
     "delete_dialog_cancel": "取消",
     "delete_dialog_confirm": "删除",
     "agent_deleted_toast": "已删除智能体",
-    "delete_failed_toast": "删除智能体失败"
+    "delete_failed_toast": "删除智能体失败",
+    "change_avatar_aria": "更换头像",
+    "avatar_updated_toast": "头像已更新",
+    "avatar_crop_title": "裁剪头像",
+    "avatar_crop_cancel": "取消",
+    "avatar_crop_save": "保存",
+    "avatar_crop_zoom_aria": "缩放",
+    "avatar_err_type": "请选择 PNG 或 JPG 图片。",
+    "avatar_err_size": "图片大小不能超过 5 MB。",
+    "avatar_err_dimensions": "图片尺寸至少为 256×256 像素。"
   },
   "restart_modal": {
     "trigger": "重启…",

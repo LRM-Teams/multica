@@ -80,6 +80,18 @@ vi.mock("../../agents/components/agent-xp-burst", () => ({
   AgentXpBurst: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// LRM-542: the header avatar editor has its own test file. Stub it here so the
+// panel test stays focused on header structure + permission gating, and so the
+// editor's heavy deps (useFileUpload / canvas crop / query client) don't leak in.
+vi.mock("../../agents/components/agent-profile-avatar-editor", () => ({
+  AgentProfileAvatarEditor: ({ canEdit }: { canEdit: boolean }) => (
+    <div
+      data-testid="agent-profile-avatar"
+      data-can-edit={String(canEdit)}
+    />
+  ),
+}));
+
 vi.mock("../../agents/components/char-counter", () => ({
   CharCounter: () => null,
 }));
@@ -317,11 +329,38 @@ describe("AgentSidePanel", () => {
   it("header shows avatar badge only — no Online/Offline name-row text (LRM-248)", () => {
     renderPanel();
     expect(screen.getByTestId("agent-profile-identity")).toHaveTextContent("Atlas");
-    expect(screen.getByTestId("agent-presence-overlay")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-avatar")).toBeInTheDocument();
     expect(screen.queryByText("Online")).toBeNull();
     expect(screen.queryByText("Offline")).toBeNull();
     expect(screen.queryByTestId("presence-status")).toBeNull();
     expect(screen.queryByTestId("agent-live-status")).toBeNull();
+  });
+
+  it("LRM-542: renders a floating close button + tightened identity row (no separate close bar)", () => {
+    renderPanel();
+    // × floats top-right instead of living in its own bordered header row.
+    expect(screen.getByRole("button", { name: "Close panel" })).toBeInTheDocument();
+    const identity = screen.getByTestId("agent-profile-identity");
+    // Avatar + name share one centered row; top padding tightened to ~14px.
+    expect(identity).toHaveClass("items-center", "pt-3.5");
+  });
+
+  it("LRM-542: renders the avatar read-only when the edit permission is denied", () => {
+    permission.allowed = false;
+    renderPanel("user-owner");
+    expect(screen.getByTestId("agent-profile-avatar")).toHaveAttribute(
+      "data-can-edit",
+      "false",
+    );
+  });
+
+  it("LRM-542: enables the header avatar editor when the edit permission is granted", () => {
+    permission.allowed = true;
+    renderPanel("user-owner");
+    expect(screen.getByTestId("agent-profile-avatar")).toHaveAttribute(
+      "data-can-edit",
+      "true",
+    );
   });
 
   it("puts Message in vertical Actions — not between header and tabs (LRM-448)", () => {

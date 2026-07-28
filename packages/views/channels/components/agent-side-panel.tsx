@@ -8,7 +8,6 @@ import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
 import { deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -16,11 +15,10 @@ import {
 } from "@multica/core/identity";
 import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
-import { AgentXpBurst } from "../../agents/components/agent-xp-burst";
+import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-avatar-editor";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
@@ -30,9 +28,7 @@ import { AgentProfileActions } from "../../agents/components/agent-profile-actio
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
-import { initialsOf } from "../../common/initials";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
-import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
@@ -99,7 +95,12 @@ export function AgentSidePanel({
   const tabScrollTopRef = useRef<Partial<Record<OwnerTab, number>>>({});
   const displayName = resolveActorDisplayName(agent, agent.id);
   const handleLabel = formatActorHandleLabel(resolveActorHandle(agent));
-  const initials = initialsOf(displayName);
+  // LRM-542: the header avatar is now editable. Compute the edit permission
+  // once here so the header avatar and the Profile tab share one decision.
+  const { canEdit } = useAgentPermissions(agent, agent.workspace_id);
+  // LRM-542: header avatar is editable, so the outer panel needs the same
+  // update handle the Profile tab already uses.
+  const handleUpdate = useUpdateAgent(agent.workspace_id);
   const selectTab = (nextTab: OwnerTab) => {
     if (nextTab === tab) return;
     if (variant === "page" && tabBodyRef.current) {
@@ -120,38 +121,31 @@ export function AgentSidePanel({
     tabBodyRef.current.scrollTop = tabScrollTopRef.current[tab] ?? 0;
   }, [tab, variant]);
 
-  // LRM-448: header chrome is Close-only. Identity lives below (Computer IA).
-  const leading = useMemo(() => <span className="sr-only">{displayName}</span>, [displayName]);
+  // LRM-542: header chrome is a floating close (no separate bar) — the
+  // identity row (avatar + name) IS the header, per the locked SoT.
 
   return (
     <ConversationSidePanelShell
       variant={variant}
+      header="floating"
       onClose={onClose}
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
-      leading={leading}
     >
       <div
         className={cn(
-          "flex shrink-0 items-start gap-3 px-4 pb-3 pt-1",
-          variant === "page" && "px-0",
+          "flex shrink-0 items-center gap-3 pb-3 pl-4 pr-10 pt-3.5",
+          variant === "page" && "pl-0 pr-10",
         )}
         data-testid="agent-profile-identity"
       >
-        <AgentXpBurst agentId={agent.id}>
-          <AgentPresenceOverlay agentId={agent.id} size={56}>
-            <ActorAvatarBase
-              name={displayName}
-              initials={initials}
-              avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-              isAgent
-              size={56}
-              className={agent.archived_at ? "opacity-50 grayscale" : undefined}
-            />
-          </AgentPresenceOverlay>
-        </AgentXpBurst>
-        <div className="min-w-0 flex-1 pt-0.5">
-          <p className="truncate text-lg font-bold leading-tight">{displayName}</p>
-          <p className="mt-1 truncate text-xs text-muted-foreground">
+        <AgentProfileAvatarEditor
+          agent={agent}
+          canEdit={canEdit.allowed}
+          onUpdate={handleUpdate}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-base font-bold leading-tight">{displayName}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {handleLabel || `@${agent.name}`}
             {agent.archived_at ? (
               <span className="ml-2">{t(($) => $.row.archived)}</span>

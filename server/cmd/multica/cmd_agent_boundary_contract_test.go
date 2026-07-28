@@ -1277,23 +1277,52 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 }
 
 
-// TestBoundary_NoEnvOnlyMatTokenDetection forbids reintroducing env-only mat_*
-// detectors (the Frank 2026-07-28 class of bug). TOKEN_FILE must be considered
-// whenever MULTICA_TOKEN is consulted for agent path selection.
-func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		// tests run with cwd = package dir (server/cmd/multica)
-		t.Fatalf("readdir: %v", err)
+// envOnlyMatTokenDetections scans production-like Go source for env-only mat_*
+// classification: Getenv("MULTICA_TOKEN") near "mat_" without TOKEN_FILE /
+// ambientTokenFromEnvOrFile / resolveToken / isMatAgentToken / isAgentAPIToken
+// in the look-ahead window.
+//
+// Never skips whole files. cmd_auth.go hosts ambientTokenFromEnvOrFile and is
+// the highest-risk place to reintroduce a bare detector (Barry counterfactual).
+func envOnlyMatTokenDetections(filename, src string) []string {
+	var bad []string
+	if !strings.Contains(src, `Getenv("MULTICA_TOKEN")`) {
+		return nil
 	}
-	// Also try relative package path from module root when needed
-	_ = entries
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, `Getenv("MULTICA_TOKEN")`) {
+			continue
+		}
+		end := i + 15
+		if end > len(lines) {
+			end = len(lines)
+		}
+		window := strings.Join(lines[i:end], "\n")
+		if !(strings.Contains(window, `"mat_"`) || strings.Contains(window, "mat_")) {
+			continue
+		}
+		if strings.Contains(window, "MULTICA_TOKEN_FILE") ||
+			strings.Contains(window, "ambientTokenFromEnvOrFile") ||
+			strings.Contains(window, "resolveToken") ||
+			strings.Contains(window, "isMatAgentToken") ||
+			strings.Contains(window, "isAgentAPIToken") {
+			continue
+		}
+		bad = append(bad, fmt.Sprintf("%s:%d", filename, i+1))
+	}
+	return bad
+}
+
+// TestBoundary_NoEnvOnlyMatTokenDetection forbids reintroducing env-only mat_*
+// detectors (Frank 2026-07-28). Scans all non-test package files with no
+// whole-file exemption for cmd_auth.go.
+func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// When test binary runs, cwd is the package directory.
-	bad := []string{}
+	var bad []string
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -1302,44 +1331,51 @@ func TestBoundary_NoEnvOnlyMatTokenDetection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		src := string(b)
-		// Flag bare Getenv("MULTICA_TOKEN") followed nearby by mat_ prefix check
-		// without TOKEN_FILE in the same function — heuristic on file level:
-		if !strings.Contains(src, `Getenv("MULTICA_TOKEN")`) {
-			continue
-		}
-		// ambientTokenFromEnvOrFile is the allowed single implementation.
-		if f == "cmd_auth.go" && strings.Contains(src, "func ambientTokenFromEnvOrFile") {
-			continue
-		}
-		// Any other production file that reads MULTICA_TOKEN for path selection
-		// must not pair it with mat_ without going through helpers.
-		lines := strings.Split(src, "\n")
-		for i, line := range lines {
-			if !strings.Contains(line, `Getenv("MULTICA_TOKEN")`) {
-				continue
-			}
-			// look ahead 15 lines for mat_ prefix without TOKEN_FILE on same line window
-			window := strings.Join(lines[i:min(len(lines), i+15)], "\n")
-			if strings.Contains(window, `"mat_"`) || strings.Contains(window, "mat_") {
-				if !strings.Contains(window, "MULTICA_TOKEN_FILE") && !strings.Contains(window, "ambientTokenFromEnvOrFile") && !strings.Contains(window, "resolveToken") {
-					bad = append(bad, fmt.Sprintf("%s:%d", f, i+1))
-				}
-			}
-		}
+		bad = append(bad, envOnlyMatTokenDetections(f, string(b))...)
 	}
 	if len(bad) > 0 {
-		t.Fatalf("env-only mat_* detection reintroduced (use isAgentAPIToken / isAgentAPITokenAmbient / ambientTokenFromEnvOrFile): %v", bad)
+		t.Fatalf("env-only mat_* detection reintroduced (use isMatAgentToken / isAgentAPIToken / ambientTokenFromEnvOrFile): %v", bad)
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// TestBoundary_NoEnvOnlyMatTokenDetection_AuthFileCounterfactual hard-proves the
+// scanner fails closed on Barry's reviewer counterfactual: bare mat_ check in
+// cmd_auth.go next to Getenv("MULTICA_TOKEN") must be flagged even when
+// ambientTokenFromEnvOrFile also exists in that file (no whole-file skip).
+func TestBoundary_NoEnvOnlyMatTokenDetection_AuthFileCounterfactual(t *testing.T) {
+	synthetic := "package main\n" +
+		"import (\"os\"; \"strings\")\n" +
+		"func ambientTokenFromEnvOrFile() string {\n" +
+		"\tif v := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN\")); v != \"\" {\n" +
+		"\t\treturn v\n" +
+		"\t}\n" +
+		"\tif path := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN_FILE\")); path != \"\" {\n" +
+		"\t\treturn path\n" +
+		"\t}\n" +
+		"\treturn \"\"\n" +
+		"}\n" +
+		"func bad() bool {\n" +
+		"\treturn strings.HasPrefix(strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN\")), \"mat_\")\n" +
+		"}\n"
+	hits := envOnlyMatTokenDetections("cmd_auth.go", synthetic)
+	if len(hits) == 0 {
+		t.Fatal("expected env-only mat_ detector in synthetic cmd_auth.go to FAIL closed; whole-file skip false-green")
 	}
-	return b
+	// Control: ambient helper only (reads env+file, no mat_ classify) must be clean
+	clean := "package main\n" +
+		"func ambientTokenFromEnvOrFile() string {\n" +
+		"\tif v := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN\")); v != \"\" {\n" +
+		"\t\treturn v\n" +
+		"\t}\n" +
+		"\tif path := strings.TrimSpace(os.Getenv(\"MULTICA_TOKEN_FILE\")); path != \"\" {\n" +
+		"\t\treturn path\n" +
+		"\t}\n" +
+		"\treturn \"\"\n" +
+		"}\n"
+	if got := envOnlyMatTokenDetections("cmd_auth.go", clean); len(got) != 0 {
+		t.Fatalf("ambient-only source should not flag: %v", got)
+	}
 }
-
 
 // TestNoAgentAPITokenFromEnvSymbol hard-forbids the deleted dual detector name
 // (Parker: delete, do not keep same-semantics twin).

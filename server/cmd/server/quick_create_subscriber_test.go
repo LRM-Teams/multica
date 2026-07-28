@@ -404,7 +404,7 @@ func TestQuickCreateCompletion_SourcePermissionDeniedRecordsSkippedReturn(t *tes
 	var otherUserID string
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
-		"qc-other-owner", "qc-other-"+uuid.NewString()[:8]+"@test.local").Scan(&otherUserID); err != nil {
+		"qc-other-owner-"+uuid.NewString()[:8], "qc-other-"+uuid.NewString()[:8]+"@test.local").Scan(&otherUserID); err != nil {
 		t.Fatalf("seed other user: %v", err)
 	}
 	t.Cleanup(func() {

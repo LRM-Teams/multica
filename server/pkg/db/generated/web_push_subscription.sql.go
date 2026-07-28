@@ -200,6 +200,47 @@ func (q *Queries) ListWebPushChannelHumanMemberIDs(ctx context.Context, arg List
 	return items, nil
 }
 
+const isWebPushRelatedThreadMember = `-- name: IsWebPushRelatedThreadMember :one
+SELECT (
+  EXISTS (
+    SELECT 1
+    FROM thread_participant tp
+    WHERE tp.root_message_id = $1
+      AND tp.member_type = 'user'
+      AND tp.member_id = $2
+      AND tp.wake_state NOT IN ('unfollowed', 'removed')
+  )
+  OR EXISTS (
+    SELECT 1
+    FROM channel_message m
+    WHERE m.id = $1
+      AND m.author_type = 'user'
+      AND m.author_id = $2
+      AND m.deleted_at IS NULL
+  )
+  OR EXISTS (
+    SELECT 1
+    FROM channel_message m
+    WHERE m.thread_root_message_id = $1
+      AND m.author_type = 'user'
+      AND m.author_id = $2
+      AND m.deleted_at IS NULL
+  )
+)::bool AS related
+`
+
+type IsWebPushRelatedThreadMemberParams struct {
+	RootMessageID pgtype.UUID `json:"root_message_id"`
+	MemberID      pgtype.UUID `json:"member_id"`
+}
+
+func (q *Queries) IsWebPushRelatedThreadMember(ctx context.Context, arg IsWebPushRelatedThreadMemberParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isWebPushRelatedThreadMember, arg.RootMessageID, arg.MemberID)
+	var related bool
+	err := row.Scan(&related)
+	return related, err
+}
+
 const upsertWebPushSubscription = `-- name: UpsertWebPushSubscription :one
 INSERT INTO web_push_subscription (
     workspace_id, user_id, endpoint, p256dh, auth,

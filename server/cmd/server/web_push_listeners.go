@@ -44,13 +44,10 @@ func registerWebPushListeners(bus *events.Bus, queries *db.Queries, cfg handler.
 		return
 	}
 
-	bus.Subscribe(protocol.EventInboxNew, func(e events.Event) {
-		item, ok := extractInboxItem(e.Payload)
-		if !ok || item.RecipientType != "member" || item.RecipientID == "" {
-			return
-		}
-		go deliverWebPushInbox(queries, sender, cfg, item)
-	})
+	// V0 desktop push policy (Frank): only @ / related thread / DM via
+	// channel:message. inbox:new (issue assignment etc.) intentionally not
+	// registered for desktop Web Push until product expands the list.
+
 	bus.Subscribe(protocol.EventChannelMessage, func(e events.Event) {
 		msg, ok := extractChannelMessage(e.Payload)
 		if !ok {
@@ -78,7 +75,11 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 		slog.Warn("web push: channel recipient lookup failed", "workspace_id", msg.WorkspaceID, "channel_id", msg.ChannelID, "recipient_id", recipientID, "error", err)
 		return
 	}
-	if !shouldDeliverChannelMessageWebPush(msg, event.ActorType, event.ActorID, recipientID, info.Muted) {
+	relatedThread := false
+	if info.Kind != "dm" {
+		relatedThread = isWebPushRelatedThreadForRecipient(ctx, queries, msg, recipientID)
+	}
+	if !shouldDeliverChannelMessageWebPush(msg, event.ActorType, event.ActorID, recipientID, info.Kind, relatedThread) {
 		return
 	}
 	subs, err := queries.ListActiveWebPushSubscriptions(ctx, parseUUID(recipientID))
@@ -92,7 +93,10 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 	deliverWebPushToSubscriptions(ctx, queries, sender, parseUUID(recipientID), subs, payload)
 }
 
-func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, actorType, actorID, recipientID string, muted bool) bool {
+// shouldDeliverChannelMessageWebPush implements V0 desktop push policy:
+// DM, @mention (incl. @all), or replies in a thread related to the recipient.
+// Group channel ordinary messages no longer fan out to every member.
+func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, actorType, actorID, recipientID, channelKind string, relatedThread bool) bool {
 	if msg.Type == "system" || msg.DeletedAt != nil || msg.EditedAt != nil {
 		return false
 	}
@@ -102,10 +106,33 @@ func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, acto
 	if actorType == "member" && actorID == recipientID {
 		return false
 	}
-	if !muted {
+	if strings.EqualFold(strings.TrimSpace(channelKind), "dm") {
 		return true
 	}
-	return channelMessageMentionsRecipient(msg, recipientID)
+	if channelMessageMentionsRecipient(msg, recipientID) {
+		return true
+	}
+	return relatedThread
+}
+
+func isWebPushRelatedThreadForRecipient(ctx context.Context, queries *db.Queries, msg handler.ChannelMessageResponse, recipientID string) bool {
+	rootID := ""
+	if msg.ThreadRootMessageID != nil {
+		rootID = strings.TrimSpace(*msg.ThreadRootMessageID)
+	}
+	// Main-channel posts (not a thread reply) are never "related thread".
+	if rootID == "" {
+		return false
+	}
+	related, err := queries.IsWebPushRelatedThreadMember(ctx, db.IsWebPushRelatedThreadMemberParams{
+		RootMessageID: parseUUID(rootID),
+		MemberID:      parseUUID(recipientID),
+	})
+	if err != nil {
+		slog.Warn("web push: related thread lookup failed", "root_message_id", rootID, "recipient_id", recipientID, "error", err)
+		return false
+	}
+	return related
 }
 
 func deliverWebPushInbox(queries *db.Queries, sender *webpush.Sender, cfg handler.Config, item handler.InboxItemResponse) {

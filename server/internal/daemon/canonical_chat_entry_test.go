@@ -124,7 +124,7 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 
 	issueA := "issue-marker-task-A-" + uuid.NewString()
 	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, sharedChat, issueA, "provider-session-shared", true)
-	userSibling := filepath.Join(stableWorkDir, ".agent_context", "user_notes.md")
+	userSibling := filepath.Join(stableWorkDir, "user_notes.md")
 	if err := os.WriteFile(userSibling, []byte("USER_OWNED_NOTES"), 0o644); err != nil {
 		t.Fatal(err)
 	}

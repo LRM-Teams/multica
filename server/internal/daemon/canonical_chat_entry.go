@@ -112,7 +112,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		ManagedRole:         taskCtx.ManagedRole,
 		AgentInstructions:   taskCtx.AgentInstructions,
 		WorkspaceContext:    task.WorkspaceContext,
-		StartupStaticDigest: execenv.StartupStaticDigest(taskCtx),
+		StartupStaticDigest: execenv.StartupStaticDigest(provider, taskCtx),
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical identity: %w", err)

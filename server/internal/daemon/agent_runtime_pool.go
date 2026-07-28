@@ -165,37 +165,6 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// willReuseResident reports whether acquire would reuse an existing resident
-// backend without factory create (same fingerprint + mode + idle backend).
-// Used so option-A materialize runs only before process create, not on reuse.
-func (p *canonicalAgentRuntimePool) willReuseResident(identity canonicalAgentRuntimeIdentity, mode canonicalRuntimeMode) bool {
-	if p == nil || mode != canonicalRuntimeResident {
-		return false
-	}
-	key := identity.slotKey()
-	fingerprint := identity.fingerprint()
-	p.mu.Lock()
-	slot := p.slots[key]
-	if slot == nil {
-		p.mu.Unlock()
-		return false
-	}
-	slot.mu.Lock()
-	p.mu.Unlock()
-	defer slot.mu.Unlock()
-	if slot.running || slot.backend == nil {
-		return false
-	}
-	if slot.fingerprint == "" || slot.fingerprint != fingerprint || slot.mode != mode {
-		return false
-	}
-	// Context key rotate always creates a new process path.
-	if slot.lastContextKey != "" && slot.lastContextKey != identity.ContextKey {
-		return false
-	}
-	return true
-}
-
 func cloneStringMap(source map[string]string) map[string]string {
 	if len(source) == 0 {
 		return map[string]string{}

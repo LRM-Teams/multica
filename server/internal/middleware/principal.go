@@ -2,9 +2,9 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/prometheus/client_golang/prometheus"
@@ -94,7 +94,8 @@ var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
 
 // Known human-route sites that can record hits. Seeded at process start so
 // scrapes always show series (value 0) instead of absent series (NO_DATA).
-var agentHumanRouteKnownSites = []string{
+// AgentHumanRouteKnownSites is the exact seeded site set (exported for tests).
+var AgentHumanRouteKnownSites = []string{
 	"RejectAgentOnHumanAPI",
 	"ListChannels",
 	"ListChannelMembers",
@@ -104,20 +105,26 @@ var agentHumanRouteKnownSites = []string{
 	"loadProjectForResource",
 }
 
-var agentHumanRouteMetricsRegistered atomic.Bool
-
 // RegisterAgentHumanRouteMetrics registers the alias-zero counter on the given
-// registerer (the served /metrics registry) and seeds known site labels at 0.
-// Safe to call once at process start; subsequent calls are no-ops.
+// registerer (each app metrics Registry) and seeds known site labels at 0.
+//
+// The same CounterVec is shared; it must register on *every* NewRegistry()
+// gatherer so scrapes never see NO_DATA. Same-registry re-entry is idempotent
+// (AlreadyRegisteredError). A process-global one-shot must not skip later
+// registries (Barry #1297 BLOCK).
 func RegisterAgentHumanRouteMetrics(reg prometheus.Registerer) {
 	if reg == nil {
 		return
 	}
-	if agentHumanRouteMetricsRegistered.Swap(true) {
-		return
+	if err := reg.Register(agentHumanRouteHits); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			// Unexpected registration failure — surface loudly in tests/prod start.
+			panic("RegisterAgentHumanRouteMetrics: " + err.Error())
+		}
+		// Same registry already has this collector — ok (idempotent).
 	}
-	reg.MustRegister(agentHumanRouteHits)
-	for _, site := range agentHumanRouteKnownSites {
+	for _, site := range AgentHumanRouteKnownSites {
 		// Touch label sets so Prometheus exports series before any Inc.
 		agentHumanRouteHits.WithLabelValues(site)
 	}

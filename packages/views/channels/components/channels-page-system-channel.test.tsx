@@ -635,25 +635,20 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     return screen.findByText("Remove from group");
   }
 
-  it("the owner's menu Remove performs the real removal (it used to only toast)", async () => {
+  // Removal is irreversible, so the confirm step is not a mobile nicety — it
+  // gates BOTH platforms. Desktop used to mutate immediately, and the menu
+  // rewire would have made that one-click-and-they're-gone path primary.
+  it.each([
+    ["desktop", false],
+    ["mobile", true],
+  ])("%s: menu Remove asks first — nothing is removed before Confirm", async (_name, mobile) => {
+    mobileViewport.value = mobile;
     const removeItem = await openOwnerMemberMenu();
     fireEvent.click(removeItem);
 
-    await waitFor(() => {
-      expect(apiMock.proxy.removeChannelMember).toHaveBeenCalledWith(
-        "chan-random",
-        "user",
-        "user-2",
-      );
-    });
-  });
-
-  it("on mobile it opens the confirm step first, and only then removes", async () => {
-    mobileViewport.value = true;
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-
-    // Confirm step is shown and NOTHING has been removed yet.
+    // The confirm step is up and NOTHING has been removed yet. This is the
+    // assertion that matters: an irreversible action must not fire on the
+    // first click.
     const confirm = await screen.findByRole("button", { name: "Confirm remove" });
     expect(apiMock.proxy.removeChannelMember).not.toHaveBeenCalled();
 
@@ -674,6 +669,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
 
     const removeItem = await openOwnerMemberMenu();
     fireEvent.click(removeItem);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
 
     // There is no optimistic removal, so on failure nothing on screen changes —
     // without this toast the owner cannot tell a failure from a no-op.

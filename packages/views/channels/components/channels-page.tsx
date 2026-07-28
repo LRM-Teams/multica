@@ -2353,41 +2353,32 @@ export function ChannelsPage({
     setAddPeopleDialogOpen(true);
   }, []);
 
-  const handleRemoveMemberClick = useCallback(
-    (m: ChannelMember) => {
-      if (!active) return;
-      if (isMobile) {
-        setRemoveMemberTarget(m);
-        return;
-      }
-      removeMember.mutate(
-        {
-          channelId: active.id,
-          memberType: m.member_type,
-          memberId: m.member_id,
-        },
-        // #833: a failure has to say so. There is no optimistic removal, so on
-        // error NOTHING on screen changes — the member simply stays in the
-        // list, which reads as "my click did nothing" rather than "it failed".
-        // Self-leave already surfaces both outcomes through this same mutation;
-        // removing someone else was the silent one, and this fix is what makes
-        // that path reachable for an owner in the first place. Success needs no
-        // toast: the row disappearing is the feedback.
-        { onError: () => toast.error(t(($) => $.members.remove_failed)) },
-      );
-    },
-    [active, isMobile, removeMember, t],
-  );
+  // Removing someone is irreversible, so it ALWAYS goes through the confirm
+  // step — desktop included. This used to mutate immediately on desktop and only
+  // show the confirm Sheet on mobile; the menu rewire below made that immediate
+  // path the primary desktop affordance, i.e. "click a menu item and the person
+  // is gone". (Iris, #833 review.)
+  //
+  // One confirmation state and ONE mutate call site, shared by both platforms —
+  // deliberately not a second desktop-only dialog, because two destructive paths
+  // drift apart. This handler now only records the target; the actual removal
+  // (and its failure toast) lives in the confirm action.
+  const handleRemoveMemberClick = useCallback((m: ChannelMember) => {
+    setRemoveMemberTarget(m);
+  }, []);
 
   // #833 — the menu's "remove" used to land on a no-op toast while the real
   // Remove button was suppressed (it renders only when there is no menu), so the
   // two entry points cancelled out and a group owner could not remove anyone at
   // all. Route it to the SAME handler the standalone button used: identical
-  // permission gate (`canRemove` from core), identical mobile confirm step.
+  // permission gate (`canRemove` from core), identical confirm step.
   //
   // promote / demote / transfer have no endpoint yet and are rendered disabled
   // (#832), so they cannot reach this handler; they get no branch here rather
-  // than a toast that reads like success. Wire them for real with #1321.
+  // than a toast that reads like success. Wire them for real once the final
+  // role-write contract for #814 lands and is served (currently PR #1332;
+  // #1321/#1326 are merged predecessors, not the contract — don't key work off
+  // them).
   const handleGroupMemberAction = useCallback(
     (m: ChannelMember, action: GroupMemberActionKind) => {
       if (action === "remove") handleRemoveMemberClick(m);

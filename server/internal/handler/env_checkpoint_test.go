@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,7 @@ type fakeEnvCheckpointService struct {
 	createCalls  []service.EnvCheckpointCreateInput
 	getCalls     []envCheckpointGetCall
 	listCalls    []envCheckpointListCall
-	resumeCalls  []envCheckpointResumeCall
+	resumeCalls  []service.ResumeFromCheckpointInput
 }
 
 type envCheckpointGetCall struct {
@@ -41,12 +42,6 @@ type envCheckpointGetCall struct {
 type envCheckpointListCall struct {
 	workspaceID string
 	projectID   string
-}
-
-type envCheckpointResumeCall struct {
-	workspaceID  string
-	checkpointID string
-	actorUserID  string
 }
 
 func (f *fakeEnvCheckpointService) Create(_ context.Context, in service.EnvCheckpointCreateInput) (service.EnvCheckpoint, error) {
@@ -64,8 +59,8 @@ func (f *fakeEnvCheckpointService) List(_ context.Context, workspaceID, projectI
 	return f.listCPs, f.listErr
 }
 
-func (f *fakeEnvCheckpointService) ResumeFromCheckpoint(_ context.Context, workspaceID, checkpointID, actorUserID string) (service.ResumeFromCheckpointResult, error) {
-	f.resumeCalls = append(f.resumeCalls, envCheckpointResumeCall{workspaceID, checkpointID, actorUserID})
+func (f *fakeEnvCheckpointService) ResumeFromCheckpoint(_ context.Context, in service.ResumeFromCheckpointInput) (service.ResumeFromCheckpointResult, error) {
+	f.resumeCalls = append(f.resumeCalls, in)
 	return f.resumeResult, f.resumeErr
 }
 
@@ -297,7 +292,137 @@ func TestResumeFromCheckpointCrossWorkspaceRejected(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (cross-workspace); body=%s", w.Code, w.Body.String())
 	}
-	if len(fake.resumeCalls) != 1 || fake.resumeCalls[0].workspaceID != "ws1" {
+	if len(fake.resumeCalls) != 1 || fake.resumeCalls[0].WorkspaceID != "ws1" {
 		t.Fatalf("expected 1 resume call scoped to ws1, got %+v", fake.resumeCalls)
+	}
+}
+
+// resumeRequest issues a resume with an optional request body.
+func resumeRequest(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := authedCheckpointRequest("POST", "/api/v1/env-checkpoints/"+validUUID+"/resume", body)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("checkpointID", validUUID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.ResumeEnvCheckpoint(w, r)
+	return w
+}
+
+// A pre-change caller sends no body at all, and must still get its single-lane
+// resume anchored on something stable across retries.
+func TestResumeWithoutBodyRequestsOneLaneAnchoredOnTheCheckpoint(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{}
+	if w := resumeRequest(t, newCheckpointHandler(fake), ""); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.resumeCalls) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(fake.resumeCalls))
+	}
+	got := fake.resumeCalls[0]
+	if got.LaneCount != 1 {
+		t.Fatalf("lane count = %d, want 1 for a bodyless request", got.LaneCount)
+	}
+	if got.LaneKeyAnchor != validUUID {
+		t.Fatalf("lane anchor = %q, want the checkpoint id", got.LaneKeyAnchor)
+	}
+}
+
+func TestResumeForwardsRequestedLaneCountAndAnchor(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{}
+	w := resumeRequest(t, newCheckpointHandler(fake), `{"lane_count":4,"lane_key":"dispatch-7"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := fake.resumeCalls[0]
+	if got.LaneCount != 4 || got.LaneKeyAnchor != "dispatch-7" {
+		t.Fatalf("forwarded %+v, want lane_count=4 anchor=dispatch-7", got)
+	}
+}
+
+// A bad lane count is the caller's mistake, so it must not be reported as a
+// checkpoint that cannot be resumed: one is worth retrying with a fixed request,
+// the other never is.
+func TestResumeMapsInvalidLaneCountToBadRequest(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeErr: fmt.Errorf("validation_failed: %w: pause_in_place cannot fan out (lane_count=3)", service.ErrLaneCountInvalid),
+	}
+	if w := resumeRequest(t, newCheckpointHandler(fake), `{"lane_count":3}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestResumeMapsNotResumableToConflict(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeErr: fmt.Errorf("validation_failed: %w: save_status is timed_out", service.ErrCheckpointNotResumable),
+	}
+	if w := resumeRequest(t, newCheckpointHandler(fake), ""); w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestResumeRejectsMalformedBody(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{}
+	if w := resumeRequest(t, newCheckpointHandler(fake), `{"lane_count":`); w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.resumeCalls) != 0 {
+		t.Fatalf("a malformed body must not reach the service, got %d calls", len(fake.resumeCalls))
+	}
+}
+
+// A pause-in-place resume has no lanes, and its response must stay identical to
+// the pre-change contract rather than gaining an empty lanes array.
+func TestPauseInPlaceResumeResponseOmitsLanes(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeResult: service.ResumeFromCheckpointResult{
+			CheckpointID:  validUUID,
+			RolloutHandle: "resume:" + validUUID,
+			TriggerStatus: service.TriggerExecuted,
+		},
+	}
+	w := resumeRequest(t, newCheckpointHandler(fake), "")
+	if strings.Contains(w.Body.String(), "lanes") {
+		t.Fatalf("a lane-less resume must not serialize lanes; body=%s", w.Body.String())
+	}
+}
+
+func TestFanOutResumeSerializesLanes(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeResult: service.ResumeFromCheckpointResult{
+			CheckpointID:  validUUID,
+			RolloutHandle: "resume:" + validUUID,
+			TriggerStatus: service.TriggerExecuted,
+			Lanes: []service.ResumeLane{
+				{LaneKey: "anchor-0", Status: "ready", InstanceID: "inst-0", TaskID: "task-0"},
+				{LaneKey: "anchor-1", Status: "failed", Error: "snapshot gone"},
+			},
+		},
+	}
+	w := resumeRequest(t, newCheckpointHandler(fake), `{"lane_count":2,"lane_key":"anchor"}`)
+	var body struct {
+		Lanes []struct {
+			LaneKey string `json:"lane_key"`
+			Status  string `json:"status"`
+			Error   string `json:"error"`
+		} `json:"lanes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if len(body.Lanes) != 2 {
+		t.Fatalf("lanes = %d, want 2; body=%s", len(body.Lanes), w.Body.String())
+	}
+	// A failed lane must be reported rather than dropped, since the caller is the
+	// one that decides whether a partial fan-out is usable.
+	if body.Lanes[1].Status != "failed" || body.Lanes[1].Error != "snapshot gone" {
+		t.Fatalf("failed lane not reported: %+v", body.Lanes[1])
 	}
 }

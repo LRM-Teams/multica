@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -373,7 +374,7 @@ func TestResumeFromCheckpointResumesCompletedSandboxRefs(t *testing.T) {
 	resumer := &fakeCheckpointResumer{}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -397,7 +398,7 @@ func TestResumeFromCheckpointRejectsTimedOutCheckpoint(t *testing.T) {
 	resumer := &fakeCheckpointResumer{}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
 
-	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	_, err := resumeOneLane(svc, "cp-1")
 	if err == nil {
 		t.Fatalf("expected error for timed_out checkpoint, got nil")
 	}
@@ -418,7 +419,7 @@ func TestResumeFromCheckpointRejectsFailedCheckpoint(t *testing.T) {
 	resumer := &fakeCheckpointResumer{}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
 
-	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	_, err := resumeOneLane(svc, "cp-1")
 	if err == nil {
 		t.Fatalf("expected error for failed checkpoint, got nil")
 	}
@@ -435,7 +436,7 @@ func TestResumeFromCheckpointNotFound(t *testing.T) {
 	resumer := &fakeCheckpointResumer{}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
 
-	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "missing", "u")
+	_, err := resumeOneLane(svc, "missing")
 	if err == nil {
 		t.Fatalf("expected error for missing checkpoint, got nil")
 	}
@@ -462,7 +463,7 @@ func TestResumeFromCheckpointPreservesPerAgentSandboxRefs(t *testing.T) {
 	resumer := &fakeCheckpointResumer{}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -542,7 +543,7 @@ func TestResumeFromCheckpointExecutesTriggerAfterSandboxResume(t *testing.T) {
 	runner := &fakeContinuationStrategy{mode: SaveModePauseInPlace}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{SameRuntime: runner})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -564,7 +565,7 @@ func TestResumeFromCheckpointSkipsLegacyEmptyTrigger(t *testing.T) {
 	runner := &fakeContinuationStrategy{mode: SaveModePauseInPlace}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{SameRuntime: runner})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -586,7 +587,7 @@ func TestResumeFromCheckpointTriggerFailureIsPartialResume(t *testing.T) {
 	runner := &fakeContinuationStrategy{mode: SaveModePauseInPlace, err: ErrTriggerTaskNotResumable}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{SameRuntime: runner})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err == nil {
 		t.Fatal("expected partial-resume error")
 	}
@@ -604,7 +605,7 @@ func TestResumeFromCheckpointRejectsTriggerWithoutRunner(t *testing.T) {
 	}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
 
-	if _, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u"); err == nil {
+	if _, err := resumeOneLane(svc, "cp-1"); err == nil {
 		t.Fatal("expected error for non-empty trigger with nil runner")
 	}
 }
@@ -623,7 +624,7 @@ func TestResumeSelectsSameRuntimeStrategyForPauseInPlace(t *testing.T) {
 		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
 		ContinuationRegistry{SameRuntime: same, Forked: forked})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -638,7 +639,13 @@ func TestResumeSelectsSameRuntimeStrategyForPauseInPlace(t *testing.T) {
 	}
 }
 
-func TestResumeSelectsForkedStrategyForSnapshot(t *testing.T) {
+// A snapshot-mode checkpoint left its source instances running, so resuming
+// those instances would be meaningless at best and would disturb live work at
+// worst. Its resume must leave the sources alone and never reach the
+// same-runtime strategy, no matter how the lane path is implemented. Task 3's
+// lane path adds the positive assertion that each lane reaches the forked
+// strategy.
+func TestSnapshotResumeNeverTakesThePauseInPlacePath(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	repo.checkpoints["cp-1"] = EnvCheckpoint{
 		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
@@ -648,15 +655,15 @@ func TestResumeSelectsForkedStrategyForSnapshot(t *testing.T) {
 	}
 	same := &fakeContinuationStrategy{mode: SaveModePauseInPlace}
 	forked := &fakeContinuationStrategy{mode: SaveModeSnapshot}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{},
+	resumer := &fakeCheckpointResumer{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer,
 		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
 		ContinuationRegistry{SameRuntime: same, Forked: forked})
 
-	if _, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u"); err != nil {
-		t.Fatalf("resume: %v", err)
-	}
-	if len(forked.calls) != 1 {
-		t.Fatalf("forked strategy calls = %d, want 1", len(forked.calls))
+	_, _ = resumeOneLane(svc, "cp-1")
+
+	if len(resumer.calls) != 0 {
+		t.Fatalf("snapshot resume must not resume its still-running sources, got %d", len(resumer.calls))
 	}
 	if len(same.calls) != 0 {
 		t.Fatalf("same-runtime strategy must not be invoked for snapshot, got %d", len(same.calls))
@@ -676,7 +683,7 @@ func TestResumeDefaultsToSameRuntimeStrategyForLegacyRowsWithoutSaveMode(t *test
 		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
 		ContinuationRegistry{SameRuntime: same})
 
-	if _, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u"); err != nil {
+	if _, err := resumeOneLane(svc, "cp-1"); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	if len(same.calls) != 1 {
@@ -696,7 +703,7 @@ func TestResumeReportsSkippedWhenNoContinuationDescriptor(t *testing.T) {
 		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
 		ContinuationRegistry{SameRuntime: same})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -708,29 +715,43 @@ func TestResumeReportsSkippedWhenNoContinuationDescriptor(t *testing.T) {
 	}
 }
 
-func TestResumeReportsForkedStrategyOutcomeStatus(t *testing.T) {
+// The reported trigger status must come from the strategy rather than being
+// hardcoded to "executed" once the strategy returns without error.
+func TestResumeReportsStrategyOutcomeStatus(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	repo.checkpoints["cp-1"] = EnvCheckpoint{
 		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
-		SaveMode:      SaveModeSnapshot,
+		SaveMode:      SaveModePauseInPlace,
 		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
 		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","runtime_id":"r-1","kind":"issue"}`),
 	}
-	forked := &fakeContinuationStrategy{
-		mode:    SaveModeSnapshot,
+	same := &fakeContinuationStrategy{
+		mode:    SaveModePauseInPlace,
 		outcome: ContinuationOutcome{Status: TriggerSkippedLegacy, LaneKey: "lane-1"},
 	}
 	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{},
 		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
-		ContinuationRegistry{Forked: forked})
+		ContinuationRegistry{SameRuntime: same})
 
-	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	res, err := resumeOneLane(svc, "cp-1")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	if res.TriggerStatus != TriggerSkippedLegacy {
 		t.Fatalf("status = %s, want the strategy's reported outcome", res.TriggerStatus)
 	}
+}
+
+// resumeOneLane is the single-lane resume every pre-existing test performs, kept
+// in one place so the request shape lives in one spot rather than fourteen.
+func resumeOneLane(svc *EnvCheckpointService, checkpointID string) (ResumeFromCheckpointResult, error) {
+	return svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID:   "ws",
+		CheckpointID:  checkpointID,
+		ActorUserID:   "u",
+		LaneCount:     1,
+		LaneKeyAnchor: checkpointID,
+	})
 }
 
 func newSnapshotModeService(repo *fakeCheckpointRepo, saver *fakeCheckpointSaver, creator *fakeSavepointCreator) *EnvCheckpointService {
@@ -871,5 +892,122 @@ func TestPauseInPlaceCreateStaysOnTheStopPath(t *testing.T) {
 	}
 	if len(creator.calls) != 0 {
 		t.Fatalf("pause_in_place must take no savepoint, got %d", len(creator.calls))
+	}
+}
+
+func newResumeService(repo *fakeCheckpointRepo, resumer *fakeCheckpointResumer) *EnvCheckpointService {
+	return NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer,
+		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, ContinuationRegistry{})
+}
+
+func putResumableCheckpoint(repo *fakeCheckpointRepo, mode EnvCheckpointSaveMode, status EnvCheckpointStatus, refs ...SandboxInstanceRef) {
+	if len(refs) == 0 {
+		refs = []SandboxInstanceRef{{InstanceID: "inst-1", WorkspaceID: "ws"}}
+	}
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
+		SaveMode: mode, SaveStatus: status, SandboxRefs: refs,
+	}
+}
+
+func TestResumeRejectsZeroLaneCount(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	putResumableCheckpoint(repo, SaveModeSnapshot, EnvCheckpointSaveComplete)
+	resumer := &fakeCheckpointResumer{}
+	svc := newResumeService(repo, resumer)
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: "cp-1", ActorUserID: "u",
+		LaneCount: 0, LaneKeyAnchor: "anchor",
+	})
+	if !errors.Is(err, ErrLaneCountInvalid) {
+		t.Fatalf("expected ErrLaneCountInvalid, got %v", err)
+	}
+	if len(resumer.calls) != 0 {
+		t.Fatalf("zero lane count must create nothing, resume calls = %d", len(resumer.calls))
+	}
+}
+
+func TestResumeRejectsFanOutForPauseInPlace(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	putResumableCheckpoint(repo, SaveModePauseInPlace, EnvCheckpointSaveComplete)
+	resumer := &fakeCheckpointResumer{}
+	svc := newResumeService(repo, resumer)
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: "cp-1", ActorUserID: "u",
+		LaneCount: 3, LaneKeyAnchor: "anchor",
+	})
+	if !errors.Is(err, ErrLaneCountInvalid) {
+		t.Fatalf("expected ErrLaneCountInvalid for pause_in_place fan-out, got %v", err)
+	}
+	if len(resumer.calls) != 0 {
+		t.Fatalf("rejected fan-out must not resume anything, got %d", len(resumer.calls))
+	}
+}
+
+func TestResumeRejectsTimedOutCheckpointWithTypedError(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	putResumableCheckpoint(repo, SaveModeSnapshot, EnvCheckpointSaveTimedOut)
+	svc := newResumeService(repo, &fakeCheckpointResumer{})
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: "cp-1", ActorUserID: "u",
+		LaneCount: 1, LaneKeyAnchor: "a",
+	})
+	if !errors.Is(err, ErrCheckpointNotResumable) {
+		t.Fatalf("expected ErrCheckpointNotResumable, got %v", err)
+	}
+	// A non-resumable checkpoint is a permanent state, so it must be
+	// distinguishable from a transient failure.
+	if errors.Is(err, ErrLaneCountInvalid) {
+		t.Fatal("not-resumable must not be conflated with invalid lane count")
+	}
+}
+
+func TestPauseInPlaceLaneCountOneResumesSameInstances(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	putResumableCheckpoint(repo, SaveModePauseInPlace, EnvCheckpointSaveComplete,
+		SandboxInstanceRef{InstanceID: "inst-1", WorkspaceID: "ws"},
+		SandboxInstanceRef{InstanceID: "inst-2", WorkspaceID: "ws"})
+	resumer := &fakeCheckpointResumer{}
+	svc := newResumeService(repo, resumer)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: "cp-1", ActorUserID: "u",
+		LaneCount: 1, LaneKeyAnchor: "a",
+	})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(resumer.calls) != 2 {
+		t.Fatalf("pause_in_place must resume both instances, got %d", len(resumer.calls))
+	}
+	if len(res.Lanes) != 0 {
+		t.Fatalf("pause_in_place resume must report no lanes, got %d", len(res.Lanes))
+	}
+}
+
+func TestLegacyCheckpointWithoutSaveModeResumesInPlace(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	// An empty save mode is a pre-change row: it must resume in place, and it
+	// must not be treated as a snapshot capable of fanning out.
+	putResumableCheckpoint(repo, "", EnvCheckpointSaveComplete)
+	resumer := &fakeCheckpointResumer{}
+	svc := newResumeService(repo, resumer)
+
+	if _, err := resumeOneLane(svc, "cp-1"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(resumer.calls) != 1 {
+		t.Fatalf("legacy checkpoint must resume its instance, got %d", len(resumer.calls))
+	}
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
+		WorkspaceID: "ws", CheckpointID: "cp-1", ActorUserID: "u",
+		LaneCount: 2, LaneKeyAnchor: "a",
+	})
+	if !errors.Is(err, ErrLaneCountInvalid) {
+		t.Fatalf("a legacy checkpoint must refuse fan-out, got %v", err)
 	}
 }

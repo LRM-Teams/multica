@@ -207,9 +207,40 @@ type ProjectSnapshotReader interface {
 	CaptureProjectSnapshot(ctx context.Context, workspaceID, projectID string) (json.RawMessage, error)
 }
 
+// ResumeFromCheckpointInput is the service-layer input for resuming a
+// checkpoint. LaneCount is how many independent continuations to materialize:
+// pause_in_place can only ever produce one, since materializing it consumes the
+// paused instances, while snapshot can produce any number from its savepoints.
+//
+// LaneKeyAnchor must be stable across retries of the same logical request, since
+// lane keys derive from it and the per-lane unique index is what makes a retried
+// resume idempotent rather than duplicative.
+type ResumeFromCheckpointInput struct {
+	WorkspaceID   string
+	CheckpointID  string
+	ActorUserID   string
+	LaneCount     int
+	LaneKeyAnchor string
+}
+
+// ResumeLane is one materialized continuation of a snapshot-mode checkpoint.
+type ResumeLane struct {
+	LaneKey       string
+	Status        string // provisioning | ready | failed
+	InstanceID    string
+	ProjectID     string
+	RuntimeID     string
+	TaskID        string
+	EnvID         string
+	ChatSessionID string
+	TriggerStatus TriggerStatus
+	Error         string
+}
+
 // ResumeFromCheckpointResult is the continuation handle returned by
 // ResumeFromCheckpoint. AReaL uses RolloutHandle to re-enter the rollout;
-// TriggerStatus reports whether the agent runtime was re-engaged.
+// TriggerStatus reports whether the agent runtime was re-engaged. Lanes is
+// additive and stays empty for pause_in_place, which has nothing to fan out.
 type ResumeFromCheckpointResult struct {
 	CheckpointID  string
 	ProjectID     string
@@ -217,7 +248,17 @@ type ResumeFromCheckpointResult struct {
 	SandboxRefs   []SandboxInstanceRef
 	RolloutHandle string
 	TriggerStatus TriggerStatus
+	Lanes         []ResumeLane
 }
+
+var (
+	// ErrCheckpointNotResumable marks a permanent rejection: the checkpoint's
+	// state can never satisfy this resume, so retrying is pointless. Callers
+	// must be able to tell it apart from a transient failure.
+	ErrCheckpointNotResumable = errors.New("checkpoint_not_resumable")
+	// ErrLaneCountInvalid marks a bad request rather than a bad checkpoint.
+	ErrLaneCountInvalid = errors.New("lane_count_invalid")
+)
 
 // EnvCheckpointService orchestrates checkpoint creation, save, and retrieval.
 type EnvCheckpointService struct {
@@ -363,17 +404,51 @@ func (s *EnvCheckpointService) List(ctx context.Context, workspaceID, projectID 
 // (pre-change / no in-flight task) degrades to sandbox-only resume and reports
 // TriggerSkippedLegacy; a trigger failure reports TriggerFailed (partial
 // resume: sandboxes resumed, agent runtime not re-engaged).
-func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, workspaceID, checkpointID, actorUserID string) (ResumeFromCheckpointResult, error) {
+// Fan-out (LaneCount > 1) is only available to snapshot mode; pause_in_place is
+// rejected with ErrLaneCountInvalid, since materializing it consumes the paused
+// instances and so can only happen once.
+func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, in ResumeFromCheckpointInput) (ResumeFromCheckpointResult, error) {
 	if s.resumer == nil {
 		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: resume is not configured (no sandbox resumer)")
 	}
-	cp, err := s.repo.GetCheckpoint(ctx, checkpointID, workspaceID)
+	// Validated before the checkpoint is even loaded, so a bad lane count can
+	// never have a side effect.
+	if in.LaneCount < 1 {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: %w: lane_count must be at least 1, got %d", ErrLaneCountInvalid, in.LaneCount)
+	}
+	cp, err := s.repo.GetCheckpoint(ctx, in.CheckpointID, in.WorkspaceID)
 	if err != nil {
 		return ResumeFromCheckpointResult{}, fmt.Errorf("not found: %w", err)
 	}
 	if cp.SaveStatus != EnvCheckpointSaveComplete {
-		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: checkpoint save_status is %s, must be complete to resume", cp.SaveStatus)
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: %w: save_status is %s, must be complete to resume", ErrCheckpointNotResumable, cp.SaveStatus)
 	}
+	// An empty save mode is a pre-change row, which resolves to pause_in_place
+	// so existing checkpoints keep their behavior — including their inability to
+	// fan out.
+	mode := cp.SaveMode
+	if mode == "" {
+		mode = SaveModePauseInPlace
+	}
+	if mode == SaveModePauseInPlace && in.LaneCount > 1 {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: %w: pause_in_place cannot fan out (lane_count=%d)", ErrLaneCountInvalid, in.LaneCount)
+	}
+	if mode == SaveModeSnapshot {
+		return s.resumeSnapshotLanes(ctx, cp, in)
+	}
+	return s.resumePauseInPlace(ctx, cp, in)
+}
+
+// resumeSnapshotLanes materializes one independent lane per requested lane from
+// the checkpoint's savepoints.
+func (s *EnvCheckpointService) resumeSnapshotLanes(_ context.Context, _ EnvCheckpoint, _ ResumeFromCheckpointInput) (ResumeFromCheckpointResult, error) {
+	return ResumeFromCheckpointResult{}, fmt.Errorf("not_implemented: snapshot fan-out resume")
+}
+
+// resumePauseInPlace resumes the paused instances themselves. This is the
+// pre-existing resume path, unchanged.
+func (s *EnvCheckpointService) resumePauseInPlace(ctx context.Context, cp EnvCheckpoint, in ResumeFromCheckpointInput) (ResumeFromCheckpointResult, error) {
+	workspaceID, actorUserID := in.WorkspaceID, in.ActorUserID
 	for _, ref := range cp.SandboxRefs {
 		if err := s.resumer.Resume(ctx, ref, actorUserID); err != nil {
 			return ResumeFromCheckpointResult{}, fmt.Errorf("resume sandbox %s: %w", ref.InstanceID, err)

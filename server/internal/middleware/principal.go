@@ -80,6 +80,11 @@ func IsAgentActorSource(source string) bool {
 
 // agentHumanRouteHits counts AgentPrincipal requests that hit a human data-plane
 // route. Must stay at 0 after #801 cutover. Label "site" is a stable landmark.
+//
+// IMPORTANT: this collector is registered on the *app* metrics Registry
+// (see metrics.NewRegistry → RegisterAgentHumanRouteMetrics), not the process
+// default registry. The /metrics scrape uses that custom Gatherer; registering
+// only on prometheus.DefaultRegisterer made series invisible (NO_DATA).
 var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: "multica",
 	Subsystem: "agent_surface",
@@ -87,18 +92,39 @@ var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help:      "AgentPrincipal requests that hit human (non-/api/agent) data-plane routes. Must be 0 after #801 cutover.",
 }, []string{"site"})
 
+// Known human-route sites that can record hits. Seeded at process start so
+// scrapes always show series (value 0) instead of absent series (NO_DATA).
+var agentHumanRouteKnownSites = []string{
+	"RejectAgentOnHumanAPI",
+	"ListChannels",
+	"ListChannelMembers",
+	"loadAttachmentForRequest",
+	"loadAttachmentForDownload",
+	"loadIssueForUser",
+	"loadProjectForResource",
+}
+
 var agentHumanRouteMetricsRegistered atomic.Bool
 
-func ensureAgentHumanRouteMetrics() {
+// RegisterAgentHumanRouteMetrics registers the alias-zero counter on the given
+// registerer (the served /metrics registry) and seeds known site labels at 0.
+// Safe to call once at process start; subsequent calls are no-ops.
+func RegisterAgentHumanRouteMetrics(reg prometheus.Registerer) {
+	if reg == nil {
+		return
+	}
 	if agentHumanRouteMetricsRegistered.Swap(true) {
 		return
 	}
-	_ = prometheus.Register(agentHumanRouteHits)
+	reg.MustRegister(agentHumanRouteHits)
+	for _, site := range agentHumanRouteKnownSites {
+		// Touch label sets so Prometheus exports series before any Inc.
+		agentHumanRouteHits.WithLabelValues(site)
+	}
 }
 
 // RecordAgentHumanRouteHit increments the alias-zero observation counter.
 func RecordAgentHumanRouteHit(site string) {
-	ensureAgentHumanRouteMetrics()
 	if site == "" {
 		site = "unknown"
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -209,7 +210,9 @@ func TestRejectAgentOnHumanAPI_IssueLabelsVsGlobalLabels(t *testing.T) {
 // TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric hard-asserts the
 // human_route_hits_total counter increments on reject (Barry: metric not just source-looking-right).
 func TestRejectAgentOnHumanAPI_IncrementsAliasZeroMetric(t *testing.T) {
-	ensureAgentHumanRouteMetrics()
+	// Register on a throwaway registry so CounterVec is initialized the same
+	// way production does via metrics.NewRegistry (not DefaultRegisterer).
+	RegisterAgentHumanRouteMetrics(prometheus.NewRegistry())
 	before := testutil.ToFloat64(agentHumanRouteHits.WithLabelValues("RejectAgentOnHumanAPI"))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

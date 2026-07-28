@@ -161,9 +161,10 @@ func TestBoundary_Directory_NoSecretInstructionValue(t *testing.T) {
 
 // --- Parker product contract (2026-07-28): uploader-owned secure staging ---
 //  (a) uploader agent may view/bind own unbound upload
-//  (b) foreign agent with the id → 403/404 deny
-//  (c) after bind to a surface, visibility follows reference rules
-// These are intentional hard controls; red until Ronan staging tip lands.
+//  (b) foreign agent with the id → exact 403
+//  (c) after bind, visibility follows reference rules only
+//      (uploader fallback MUST NOT survive bind + membership remove)
+// Barry 2026-07-28 SOURCE BLOCK: uploader fallback without orphan constraint.
 
 func agentMultipartUpload(t *testing.T, agentID string, fields map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -255,11 +256,91 @@ func TestBoundary_StagingUnbound_ForeignAgentDenied(t *testing.T) {
 	getReq = withURLParam(getReq, "id", attID)
 	getRec := httptest.NewRecorder()
 	testHandler.GetAgentAttachment(getRec, getReq)
-	// 403 or 404 both fail-closed; must not 200.
-	if getRec.Code == http.StatusOK {
-		t.Fatalf("foreign agent viewed unbound attachment %s — want deny", attID)
+	// Barry: product lock is exact 403 (not soft 404-or-anything).
+	if getRec.Code != http.StatusForbidden {
+		t.Fatalf("foreign agent status=%d body=%s; want exact 403 for known staging id", getRec.Code, getRec.Body.String())
 	}
-	if getRec.Code != http.StatusForbidden && getRec.Code != http.StatusNotFound {
-		t.Logf("foreign deny status=%d body=%s (403/404 preferred)", getRec.Code, getRec.Body.String())
+}
+
+// TestBoundary_StagingBindThenRemove_DeniesUploaderFallback:
+// self unbound 200 → bind to ordinary group → member 200 → remove membership →
+// metadata/content/download all 403. Uploader fallback must not bypass revoke.
+func TestBoundary_StagingBindThenRemove_DeniesUploaderFallback(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
 	}
+	prev := testHandler.Storage
+	testHandler.Storage = &mockStorage{}
+	t.Cleanup(func() { testHandler.Storage = prev })
+	ctx := context.Background()
+
+	uploader := createHandlerTestAgent(t, "StageBindAgent", []byte("[]"))
+	upRec := agentMultipartUpload(t, uploader, nil)
+	if upRec.Code != http.StatusOK && upRec.Code != http.StatusCreated {
+		t.Fatalf("unbound upload status=%d body=%s", upRec.Code, upRec.Body.String())
+	}
+	var att map[string]any
+	if err := json.Unmarshal(upRec.Body.Bytes(), &att); err != nil {
+		t.Fatal(err)
+	}
+	attID, _ := att["id"].(string)
+	if attID == "" {
+		t.Fatalf("missing id: %s", upRec.Body.String())
+	}
+
+	// Ordinary group with human owner (auto-seed) + agent member.
+	channelID := seedChannelForTest(t, "stage-bind-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'agent', $3, 'member')
+		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, uploader); err != nil {
+		t.Fatalf("add agent member: %v", err)
+	}
+	// Bind attachment to channel (message-send bind simulation).
+	if _, err := testPool.Exec(ctx, `
+		UPDATE attachment SET channel_id = $1
+		WHERE id = $2 AND workspace_id = $3`,
+		channelID, attID, testWorkspaceID); err != nil {
+		t.Fatalf("bind attachment to channel: %v", err)
+	}
+
+	// While member: metadata OK.
+	getWhileMember := func() int {
+		req := newRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
+		req = withAgentPrincipal(req, uploader, testWorkspaceID, testUserID)
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		req = withURLParam(req, "id", attID)
+		rec := httptest.NewRecorder()
+		testHandler.GetAgentAttachment(rec, req)
+		return rec.Code
+	}
+	if code := getWhileMember(); code != http.StatusOK {
+		t.Fatalf("member GET bound attachment status=%d; want 200", code)
+	}
+
+	// Remove agent membership (revoke surface).
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'agent' AND member_id = $3`,
+		channelID, testWorkspaceID, uploader); err != nil {
+		t.Fatalf("remove agent member: %v", err)
+	}
+
+	// After remove: metadata / content / download must all 403 — not uploader fallback.
+	assert403 := func(name string, fn func(http.ResponseWriter, *http.Request)) {
+		t.Helper()
+		req := newRequest(http.MethodGet, "/api/agent/attachments/"+attID, nil)
+		req = withAgentPrincipal(req, uploader, testWorkspaceID, testUserID)
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		req = withURLParam(req, "id", attID)
+		rec := httptest.NewRecorder()
+		fn(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("after remove %s status=%d body=%s; want 403 (uploader fallback must not survive bind)", name, rec.Code, rec.Body.String())
+		}
+	}
+	assert403("GetAgentAttachment", testHandler.GetAgentAttachment)
+	assert403("GetAgentAttachmentContent", testHandler.GetAgentAttachmentContent)
+	assert403("DownloadAgentAttachment", testHandler.DownloadAgentAttachment)
 }

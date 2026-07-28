@@ -568,6 +568,16 @@ export function ChannelsPage({
   // → B overwrites A and A's recording is gone when the user returns. An unsent
   // recording may only disappear via a committed retry or an explicit delete,
   // so every target keeps its own entry.
+  //
+  // ⚠️ IN-MEMORY ONLY — LOST ON REFRESH. Persistence is task #850.
+  // The contract says an unsent recording disappears only on a committed retry
+  // or an explicit delete; a page refresh is a silent third way, which this
+  // does NOT yet satisfy (Felix). It matters beyond a missing notice: the
+  // attachment is already uploaded, so a refresh costs the user their only
+  // route back to that recording and leaves an orphaned attachment server-side.
+  // #850 covers the real fix (server-side author-owned pending voice draft,
+  // projected back when the channel/thread is opened) — do not read this state
+  // as durable across reloads.
   const [pendingVoices, setPendingVoices] = useState<Record<string, PendingVoiceState>>({});
   const rememberPendingVoice = useCallback((rec: PendingVoiceState) => {
     setPendingVoices((prev) => ({ ...prev, [rec.targetId]: rec }));

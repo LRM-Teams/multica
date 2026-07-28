@@ -1751,8 +1751,16 @@ func TestResolver_R1_MemberName_TOKEN_FILE_FailClosed(t *testing.T) {
 	client := cli.NewAPIClient(srv.URL, "workspace-boundary", strings.TrimSpace(string(raw)))
 
 	_, _, err := resolveAssignee(t.Context(), client, "Alice", memberOrAgentKinds)
-	if err == nil || !strings.Contains(err.Error(), "member name resolve is not available for agent tokens") {
-		t.Fatalf("want R1a fail-closed, got %v paths=%v", err, gotPaths)
+	if err == nil {
+		t.Fatalf("want R1a fail-closed, got nil paths=%v", gotPaths)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "member name resolve is not available for agent tokens") {
+		t.Fatalf("want member fail-closed wording, got %v paths=%v", err, gotPaths)
+	}
+	// with member+agent kinds, prefer agent-miss + member lock (Ronan polish)
+	if !strings.Contains(msg, "no agent found matching") {
+		t.Fatalf("want agent-miss prefix when agent kinds enabled, got %v", err)
 	}
 	for _, p := range gotPaths {
 		if strings.Contains(p, "/members") {

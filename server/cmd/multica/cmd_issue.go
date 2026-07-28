@@ -1967,7 +1967,11 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string, ki
 		}
 	}
 	if kinds.member && isAgentAPITokenAmbient() {
-		return "", "", fmt.Errorf("member name resolve is not available for agent tokens; pass a member UUID via the id flag, or assign an agent by name (looked up via /api/agent/agents)")
+		// Prefer agent-miss wording when agent lookup ran; still fail-closed on members.
+		if kinds.agent {
+			return "", "", fmt.Errorf("no agent found matching %q; member name resolve is not available for agent tokens (use a member UUID via the id flag)", input)
+		}
+		return "", "", fmt.Errorf("member name resolve is not available for agent tokens; pass a member UUID via the id flag")
 	}
 	return "", "", fmt.Errorf("no %s found matching %q", kinds.describe(), input)
 }

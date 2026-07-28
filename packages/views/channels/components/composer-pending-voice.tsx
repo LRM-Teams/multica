@@ -28,11 +28,6 @@ export interface PendingVoiceState {
   attachment: VoiceRecordingAttachment;
 }
 
-/** Stable target key: a channel composer, or one specific thread's composer. */
-export function voiceTargetId(channelId: string, threadRootId?: string): string {
-  return threadRootId ? `${channelId}:${threadRootId}` : channelId;
-}
-
 /** `0:07` — seconds only; recordings are capped at 60s (MAX_VOICE_RECORDING_MS). */
 function formatDuration(durationMs: number): string {
   const total = Math.max(0, Math.round(durationMs / 1000));

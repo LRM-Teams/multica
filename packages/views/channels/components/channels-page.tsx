@@ -175,9 +175,9 @@ import {
 } from "./composer-send-error-bar";
 import {
   ComposerPendingVoice,
-  voiceTargetId,
   type PendingVoiceState,
 } from "./composer-pending-voice";
+import { voiceTargetId } from "./voice-target";
 import {
   buildChatMessageParts,
   useComposerPendingAttachments,

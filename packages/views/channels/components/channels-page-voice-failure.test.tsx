@@ -179,7 +179,14 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
     channelMessageThreadOptions: () => options(["channel-thread"], { messages: [] }),
     channelMessagesPageOptions: () => ({
       queryKey: ["channel-messages"],
-      queryFn: async () => ({ items: [], next_cursor: null }),
+      queryFn: async () => ({ messages: [
+        { id: "root-1", channel_id: "chan-random", workspace_id: "ws-1", seq: 1, type: "user",
+          author_id: "user-2", author_name: "bob", content: "THREADROOTONE", source: "multica",
+          external_message_id: null, client_message_id: null, created_at: "2026-06-17T09:01:00Z" },
+        { id: "root-2", channel_id: "chan-random", workspace_id: "ws-1", seq: 2, type: "user",
+          author_id: "user-2", author_name: "bob", content: "THREADROOTTWO", source: "multica",
+          external_message_id: null, client_message_id: null, created_at: "2026-06-17T09:02:00Z" },
+      ], next_cursor: null }),
       initialPageParam: null,
       getNextPageParam: () => undefined,
     }),
@@ -267,7 +274,17 @@ vi.mock("../../common/project-picker-button", () => ({
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div data-testid="dm-conversation" /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
 vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
-vi.mock("./channel-message-list", () => ({ ChannelMessageList: () => <div data-testid="message-list" /> }));
+// #838 thread A→B — `header` MUST be rendered. ThreadPanel passes the pinned
+// ThreadRootPreview through it (thread-panel.tsx:262), so a mock that drops
+// `header` also drops the only per-thread evidence in the DOM. The previous
+// stub took no props at all, which is why switching threads looked unobservable:
+// `fire-voice-thread` matches whichever thread is open, and the root — the one
+// thing that differs — was being thrown away by the mock, not by the page.
+vi.mock("./channel-message-list", () => ({
+  ChannelMessageList: ({ header }: { header?: React.ReactNode }) => (
+    <div data-testid="message-list">{header}</div>
+  ),
+}));
 
 vi.mock("./conversation-surface", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./conversation-surface")>()),
@@ -295,18 +312,22 @@ function renderPage(channelId?: string) {
       mutations: { retry: false },
     },
   });
-  const ui = (
+  // Built FRESH on every call, never reused. Re-rendering the identical element
+  // object lets React bail out of the subtree, so `?thread=` changes were never
+  // observed — the page kept showing the first thread and the switch looked
+  // impossible. A new element with the same props forces the re-render.
+  const ui = () => (
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
         <ChannelsPage channelId={channelId} />
       </QueryClientProvider>
     </I18nProvider>
   );
-  const view = render(ui);
+  const view = render(ui());
   // #838 — re-render against the SAME client so a test can change the `?thread=`
   // deep link (which is read from navigation, not props) without remounting and
   // losing the very state under test.
-  return { ...view, refresh: () => view.rerender(ui) };
+  return { ...view, refresh: () => view.rerender(ui()) };
 }
 
 
@@ -332,6 +353,13 @@ describe("voice send failure leaves a durable record (#838)", () => {
     // nothing and the tests keep passing for a different reason. Address it
     // directly so a rename is a hard failure.
     sendSpy().mockReset();
+    threadSendSpy().mockReset();
+    // `navState` is module-level and MUTABLE, so a test that deep-links into a
+    // thread leaves `?thread=` set for every test after it — those then render
+    // ThreadPanel too, and its header is a second `active-title`, so
+    // `getByTestId` throws "found multiple elements" in tests that never
+    // mentioned threads. Latent until the thread case stopped being skipped.
+    navState.search = new URLSearchParams();
   });
 
   async function openChannel() {
@@ -349,6 +377,17 @@ describe("voice send failure leaves a durable record (#838)", () => {
       .find((el) => el.textContent?.includes(name));
     if (!row) throw new Error(`sidebar row not found: ${name}`);
     fireEvent.click(row);
+  }
+
+  // Thread sends go through a DIFFERENT api method than channel sends
+  // (core/channels/mutations.ts:261 `api.sendChannelThreadMessage`). Injecting a
+  // rejection into `sendChannelMessage` therefore does NOT fail a thread send —
+  // the auto-spy proxy resolves `undefined` instead, which fails downstream for
+  // its own reasons. The failure path still runs, so the test LOOKS right while
+  // exercising an incidental error rather than the one it meant to simulate.
+  function threadSendSpy(): ReturnType<typeof vi.fn> {
+    return (apiMock.proxy as Record<string, ReturnType<typeof vi.fn>>)
+      .sendChannelThreadMessage as ReturnType<typeof vi.fn>;
   }
 
   function sendSpy(): ReturnType<typeof vi.fn> {
@@ -541,10 +580,20 @@ describe("voice send failure leaves a durable record (#838)", () => {
   // #838 H0 (Iris) — the channel cases above prove the map; these prove the
   // THREAD composer is really wired to it (display, retry target, per-thread
   // isolation), which a key-collision unit test cannot show.
-  async function openThread(view: { refresh: () => void }, rootId: string) {
+  // Waits on the pinned ROOT TEXT, never on `fire-voice-thread`: that testid
+  // exists for whichever thread is open, so awaiting it after a switch is
+  // satisfied by the thread we were already on — it cannot tell "B opened" from
+  // "the switch silently did nothing". The root preview (ThreadPanel passes it
+  // as ChannelMessageList's `header`) is the only per-thread evidence in the DOM.
+  async function openThread(
+    view: { refresh: () => void },
+    rootId: string,
+    rootText: string,
+  ) {
     navState.search = new URLSearchParams(`thread=${rootId}`);
     view.refresh();
-    return screen.findByTestId("fire-voice-thread");
+    await screen.findByText(rootText);
+    return screen.getByTestId("fire-voice-thread");
   }
 
   // ⚠️ SKIPPED — NOT COVERAGE. Two findings from probing it (so the next
@@ -567,7 +616,7 @@ describe("voice send failure leaves a durable record (#838)", () => {
   // overwrite-resistance, retry target, delete isolation) and voice-target.test.ts
   // (the key can't collide across channel/thread/root). The thread composer's
   // OWN wiring to the map is therefore NOT verified end-to-end. Tracked on #838.
-  it.skip("thread A→B: B does not show A's unsent recording, and each thread keeps its own", async () => {
+  it("thread A→B: B does not show A's unsent recording, and each thread keeps its own", async () => {
     navState.search = new URLSearchParams("thread=root-1");
     const view = renderPage("chan-random");
     await screen.findByTestId("composer");
@@ -575,7 +624,8 @@ describe("voice send failure leaves a durable record (#838)", () => {
     // present from the very first render?
     const fireA = await screen.findByTestId("fire-voice-thread");
     void view;
-    sendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
+    await screen.findByText("THREADROOTONE");
+    threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
     fireEvent.click(fireA);
     await waitFor(() => {
       expect(
@@ -584,14 +634,14 @@ describe("voice send failure leaves a durable record (#838)", () => {
     });
 
     // Thread B: sentinel proves its composer is mounted, so "absent" is a gate.
-    const fireB = await openThread(view, "root-2");
+    const fireB = await openThread(view, "root-2", "THREADROOTTWO");
     expect(fireB).toBeInTheDocument();
     expect(
       within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
     ).toBeNull();
 
     // B fails too — must not destroy A's.
-    sendSpy().mockRejectedValueOnce(new Error("boom-thread-b"));
+    threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-b"));
     fireEvent.click(fireB);
     await waitFor(() => {
       expect(
@@ -600,22 +650,22 @@ describe("voice send failure leaves a durable record (#838)", () => {
     });
 
     // Back to A: still there, and retry targets THIS thread.
-    await openThread(view, "root-1");
+    await openThread(view, "root-1", "THREADROOTONE");
     const item = within(screen.getByTestId("prefix-thread")).queryByTestId(
       "composer-pending-voice",
     );
     expect(item).not.toBeNull();
 
-    const before = sendSpy().mock.calls.length;
+    const before = threadSendSpy().mock.calls.length;
     fireEvent.click(
       within(screen.getByTestId("prefix-thread")).getByTestId("composer-pending-voice-retry"),
     );
     await waitFor(() => {
-      expect(sendSpy().mock.calls.length).toBeGreaterThan(before);
+      expect(threadSendSpy().mock.calls.length).toBeGreaterThan(before);
     });
     // Thread sends go through sendChannelThreadMessage-shaped args: the thread
     // root must be A's, not B's.
-    const payload = JSON.stringify(sendSpy().mock.calls.at(-1) ?? "");
+    const payload = JSON.stringify(threadSendSpy().mock.calls.at(-1) ?? "");
     expect(payload).toContain("root-1");
     expect(payload).not.toContain("root-2");
   });

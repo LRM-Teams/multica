@@ -210,7 +210,7 @@ func channelMemberSystemEventPublicType(memberType string) string {
 	switch memberType {
 	case channelMemberActorAgent:
 		return "agent"
-	case channelMemberActorUser:
+	case channelMemberActorUser, "member":
 		return "human"
 	case channelMemberActorSystem:
 		return "system"

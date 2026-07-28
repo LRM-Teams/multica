@@ -235,6 +235,61 @@ func TestChannelMemberActorResolverRejectsUnknownAndCrossWorkspaceActors(t *test
 	}
 }
 
+func TestValidateChannelMemberActorRejectsUnknownAndCrossWorkspaceActors(t *testing.T) {
+	requireChannelMemberActorProvenanceSchema(t)
+	foreignWorkspace := createOtherTestWorkspace(t)
+	foreignUser := insertUserAndMember(t, foreignWorkspace)
+	foreignAgent := createForeignWorkspaceAgent(t)
+
+	for _, tc := range []struct {
+		name      string
+		actorType string
+		actorID   string
+	}{
+		{name: "nonexistent user", actorType: channelMemberActorUser, actorID: uuid.NewString()},
+		{name: "cross workspace user", actorType: channelMemberActorUser, actorID: foreignUser},
+		{name: "nonexistent agent", actorType: channelMemberActorAgent, actorID: uuid.NewString()},
+		{name: "cross workspace agent", actorType: channelMemberActorAgent, actorID: foreignAgent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateChannelMemberActorWithExec(
+				context.Background(),
+				testPool,
+				testWorkspaceID,
+				channelMemberActor{Type: tc.actorType, ID: parseUUID(tc.actorID)},
+			)
+			if err == nil || !strings.Contains(err.Error(), "not an existing same-workspace actor") {
+				t.Fatalf(
+					"validate actor %s/%s error = %v, want same-workspace rejection",
+					tc.actorType,
+					tc.actorID,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestChannelMemberSystemEventPublicTypePreservesEventActorVocabulary(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		actorType string
+		want      string
+	}{
+		{name: "canonical provenance user", actorType: channelMemberActorUser, want: "human"},
+		{name: "existing event member", actorType: "member", want: "human"},
+		{name: "canonical provenance agent", actorType: channelMemberActorAgent, want: "agent"},
+		{name: "canonical provenance system", actorType: channelMemberActorSystem, want: "system"},
+		{name: "unknown actor stays rejected", actorType: "owner", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := channelMemberSystemEventPublicType(tc.actorType); got != tc.want {
+				t.Fatalf("public actor type for %q = %q, want %q", tc.actorType, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestChannelMemberActorProvenanceShapeFailsClosed(t *testing.T) {
 	requireChannelMemberActorProvenanceSchema(t)
 	channelID := seedChannelForTest(t, "actor-shape-"+uuid.NewString(), testUserID)

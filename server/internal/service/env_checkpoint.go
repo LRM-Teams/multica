@@ -18,6 +18,18 @@ const (
 	EnvCheckpointSaveTimedOut EnvCheckpointStatus = "timed_out"
 )
 
+// EnvCheckpointSaveMode is how a checkpoint captured its environment.
+// pause_in_place stops the source instances and resumes them later, so the
+// checkpoint can be materialized exactly once. snapshot captures an immutable
+// savepoint and leaves the source running, so the checkpoint can be
+// materialized into any number of independent lanes.
+type EnvCheckpointSaveMode string
+
+const (
+	SaveModePauseInPlace EnvCheckpointSaveMode = "pause_in_place"
+	SaveModeSnapshot     EnvCheckpointSaveMode = "snapshot"
+)
+
 // ResumeTrigger names the in-flight agent task/runtime to re-engage on resume.
 // Captured at checkpoint-create time (server-side resolved from the project's
 // in-flight task) and executed by ResumeFromCheckpoint after the sandbox
@@ -49,12 +61,60 @@ type InFlightTaskResolver interface {
 	ListInFlightTasksForProject(ctx context.Context, workspaceID, projectID string) ([]ResumeTrigger, error)
 }
 
-// ResumeAgentRunner re-activates an existing in-flight task against its resumed
-// agent_runtime. Mirrors SandboxInstanceResumer injection. A nil runner is a
-// loud error for non-empty triggers (resume without a runner would silently
-// no-op and return a handle AReaL cannot actually use).
+// LaneRef identifies one materialized lane for forked continuation. The zero
+// value means "no lane", which is same-runtime continuation.
+type LaneRef struct {
+	LaneKey         string
+	InstanceID      string
+	ProjectID       string
+	RuntimeID       string
+	AgentID         string
+	ChannelID       string
+	ChatSessionID   string
+	SourceMessageID string
+}
+
+// ContinuationRequest is the uniform input of the continuation seam.
+type ContinuationRequest struct {
+	Trigger     ResumeTrigger
+	Lane        LaneRef
+	WorkspaceID string
+	ActorUserID string
+}
+
+// ContinuationOutcome is the uniform result of the continuation seam, so a
+// failed continuation after a successful restore stays visible as a partial
+// resume instead of being reported as an outright failure.
+type ContinuationOutcome struct {
+	Status  TriggerStatus
+	TaskID  string
+	LaneKey string
+}
+
+// ResumeAgentRunner is the single continuation seam for re-engaging an agent
+// after its environment is restored. Exactly one strategy is selected per
+// resume, by the checkpoint's save mode. A nil strategy is a loud error for
+// non-empty triggers (resume without one would silently no-op and return a
+// handle AReaL cannot actually use).
 type ResumeAgentRunner interface {
-	ResumeAgentRun(ctx context.Context, trigger ResumeTrigger) error
+	Mode() EnvCheckpointSaveMode
+	ResumeAgentRun(ctx context.Context, req ContinuationRequest) (ContinuationOutcome, error)
+}
+
+// ContinuationRegistry holds one strategy per save mode.
+type ContinuationRegistry struct {
+	SameRuntime ResumeAgentRunner
+	Forked      ResumeAgentRunner
+}
+
+// For selects the single strategy for a save mode. An empty mode is a
+// pre-change row and resolves to pause_in_place, so existing checkpoints keep
+// their behavior.
+func (r ContinuationRegistry) For(mode EnvCheckpointSaveMode) ResumeAgentRunner {
+	if mode == SaveModeSnapshot {
+		return r.Forked
+	}
+	return r.SameRuntime
 }
 
 // EnvCheckpointCreateInput is the service-layer input for creating a checkpoint.
@@ -63,6 +123,7 @@ type EnvCheckpointCreateInput struct {
 	ProjectID     string
 	EventRef      string
 	Kind          string
+	SaveMode      EnvCheckpointSaveMode
 	EnvIDMap      map[string]string
 	SandboxRefs   []SandboxInstanceRef
 	DBSnapshot    json.RawMessage
@@ -79,6 +140,7 @@ type EnvCheckpoint struct {
 	ProjectID     string
 	EventRef      string
 	Kind          string
+	SaveMode      EnvCheckpointSaveMode
 	EnvIDMap      map[string]string
 	SandboxRefs   []SandboxInstanceRef
 	DBSnapshot    json.RawMessage
@@ -134,16 +196,16 @@ type ResumeFromCheckpointResult struct {
 
 // EnvCheckpointService orchestrates checkpoint creation, save, and retrieval.
 type EnvCheckpointService struct {
-	repo        EnvCheckpointRepository
-	saver       SandboxInstanceSaver
-	resumer     SandboxInstanceResumer
-	snapshot    ProjectSnapshotReader
-	inFlight    InFlightTaskResolver
-	resumeAgent ResumeAgentRunner
+	repo          EnvCheckpointRepository
+	saver         SandboxInstanceSaver
+	resumer       SandboxInstanceResumer
+	snapshot      ProjectSnapshotReader
+	inFlight      InFlightTaskResolver
+	continuations ContinuationRegistry
 }
 
-func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader, inFlight InFlightTaskResolver, resumeAgent ResumeAgentRunner) *EnvCheckpointService {
-	return &EnvCheckpointService{repo: repo, saver: saver, resumer: resumer, snapshot: snapshot, inFlight: inFlight, resumeAgent: resumeAgent}
+func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader, inFlight InFlightTaskResolver, continuations ContinuationRegistry) *EnvCheckpointService {
+	return &EnvCheckpointService{repo: repo, saver: saver, resumer: resumer, snapshot: snapshot, inFlight: inFlight, continuations: continuations}
 }
 
 // Create records a checkpoint candidate, saves each sandbox instance with the
@@ -268,21 +330,27 @@ func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, workspa
 		result.TriggerStatus = TriggerSkippedLegacy
 		return result, nil
 	}
-	// Non-empty trigger requires a runner; nil is a loud error (would no-op and
-	// return a handle AReaL cannot use). Sandboxes are already resumed above, so
-	// this is a partial-resume error.
-	if s.resumeAgent == nil {
-		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: non-empty resume_trigger but no resume agent runner configured")
+	// Non-empty trigger requires a strategy; nil is a loud error (would no-op
+	// and return a handle AReaL cannot use). Sandboxes are already resumed
+	// above, so this is a partial-resume error.
+	strategy := s.continuations.For(cp.SaveMode)
+	if strategy == nil {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: non-empty resume_trigger but no continuation strategy configured for save_mode %q", cp.SaveMode)
 	}
 	var trigger ResumeTrigger
 	if err := json.Unmarshal(cp.ResumeTrigger, &trigger); err != nil {
 		result.TriggerStatus = TriggerFailed
 		return result, fmt.Errorf("unmarshal resume_trigger: %w", err)
 	}
-	if err := s.resumeAgent.ResumeAgentRun(ctx, trigger); err != nil {
+	outcome, err := strategy.ResumeAgentRun(ctx, ContinuationRequest{
+		Trigger:     trigger,
+		WorkspaceID: workspaceID,
+		ActorUserID: actorUserID,
+	})
+	if err != nil {
 		result.TriggerStatus = TriggerFailed
 		return result, fmt.Errorf("resume agent run: %w", err)
 	}
-	result.TriggerStatus = TriggerExecuted
+	result.TriggerStatus = outcome.Status
 	return result, nil
 }

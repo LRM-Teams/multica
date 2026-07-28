@@ -46,6 +46,7 @@ import {
   HomeChannelBindPanel,
   type HomeChannelMode,
 } from "./home-channel-bind-panel";
+import { randomPickedAvatarSelection } from "./avatar-preset";
 import { useT } from "../../i18n";
 
 function VisibilityOptionIcon({
@@ -138,25 +139,28 @@ export function CreateAgentDialog({
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
-  // #599: avatar is server-owned provenance now. Duplicate never inherits
-  // the template's avatar (a clone gets its own fresh assigned default, not
-  // a copy). A draft's `avatar_url` is never seeded either: it's a raw,
-  // client-writable field promotion no longer honors (Parker's provenance
-  // ruling — showing it here would promise an avatar the agent won't
-  // actually get). The dialog always starts blank; submit only ever sends
-  // avatar_selection when the user actively picks/uploads their own.
-  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  // #599: never submit draft.avatar_url as a raw client URL. Preview it when
+  // present; create with draft_id lets the server apply it as assigned. User
+  // uploads go through avatar_selection; clearing a draft preview sends a
+  // random picked preset so create does not re-apply the draft face.
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(
+    () => (draft?.avatar_url?.trim() ? draft.avatar_url : null),
+  );
   // Never rendered — only read at submit time — so a ref avoids a redraw
   // on every avatar change.
   const avatarSelectionRef = useRef<AgentAvatarSelection | null>(null);
+  const draftAvatarUrl = draft?.avatar_url?.trim() || null;
   const handleAvatarChange = (selection: AvatarPickerSelection | null) => {
     if (selection) {
       setAvatarPreviewUrl(selection.previewUrl);
       avatarSelectionRef.current = { kind: "uploaded", attachment_id: selection.attachmentId };
-    } else {
-      setAvatarPreviewUrl(null);
-      avatarSelectionRef.current = null;
+      return;
     }
+    setAvatarPreviewUrl(null);
+    // Clearing a draft-seeded face must override draft_id avatar application.
+    avatarSelectionRef.current = draftAvatarUrl
+      ? randomPickedAvatarSelection()
+      : null;
   };
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),

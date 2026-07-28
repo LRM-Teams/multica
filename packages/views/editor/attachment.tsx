@@ -39,6 +39,7 @@ import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
+import { attachmentIdFromDownloadURL } from "@multica/core/types/attachment-url";
 import { useT } from "../i18n";
 import { useNavigation } from "../navigation";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
@@ -165,7 +166,14 @@ function normalize(
     url: absolutizeMediaURL(
       record ? pickInlineMediaURL(record, input.url, cdnDomain) : input.url,
     ),
-    attachmentId: record?.id,
+    // #831: fall back to the id embedded in a stable
+    // `/api/attachments/<id>/download` URL. `resolve()` only finds records
+    // present in the surrounding `attachments` prop, so a URL pasted across
+    // comments (or a surface that passes no attachments at all) used to yield
+    // `undefined` here — even though the id was sitting in the URL. That lost
+    // id is what silently downgraded markdown/txt previews to a download and
+    // disabled the card's preview affordance.
+    attachmentId: record?.id ?? attachmentIdFromDownloadURL(input.url),
     sizeBytes: record?.size_bytes,
     record,
     uploading: !!input.uploading,
@@ -341,6 +349,9 @@ export function Attachment({
         kind: "url",
         url: state.url,
         filename: state.filename,
+        // #831: carry the URL-recovered id so text kinds reach the /content
+        // proxy instead of falling through to a download.
+        attachmentId: state.attachmentId,
       });
     }
   };

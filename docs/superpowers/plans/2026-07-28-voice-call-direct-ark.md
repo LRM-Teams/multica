@@ -40,7 +40,8 @@ Cursor development queue.
   `204_system_general_channel` after a missing historical trigger. Production
   has already applied this migration, and this PR does not alter migrations, so
   the unrelated test-database repair is not included here.
-- [ ] Push one independent branch and open one PR into `dev`.
+- [x] Push one independent branch and open PR
+  [#1315](https://github.com/LRM-Teams/multica/pull/1315) into `dev`.
 
 ## Boundaries
 

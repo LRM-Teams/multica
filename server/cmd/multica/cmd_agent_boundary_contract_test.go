@@ -609,6 +609,116 @@ func TestBoundary_SquadMemberSetRole_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
+// TestBoundary_IssueStatus_HitsDedicatedAgentAPI asserts status update uses
+// PUT /api/agent/issues/{id} (not human /api/issues).
+func TestBoundary_IssueStatus_HitsDedicatedAgentAPI(t *testing.T) {
+	wantPath := "/api/agent/issues/" + boundaryContractIssueID
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantPath:
+			// resolveIssueRef may GET first
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1", "status": "todo",
+			})
+		case r.Method == http.MethodPut && r.URL.Path == wantPath:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1", "status": "in_progress",
+			})
+		default:
+			http.Error(w, "human issue path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "status"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := runIssueStatus(cmd, []string{boundaryContractIssueID, "in_progress"}); err != nil {
+		t.Fatalf("runIssueStatus: %v (paths=%v)", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		path := strings.SplitN(p, " ", 2)[1]
+		if strings.HasPrefix(path, "/api/issues") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
+	}
+	foundPut := false
+	for _, p := range gotPaths {
+		if p == "PUT "+wantPath {
+			foundPut = true
+		}
+	}
+	if !foundPut {
+		t.Fatalf("paths=%v, want PUT %s", gotPaths, wantPath)
+	}
+}
+
+// TestBoundary_IssueCommentList_HitsDedicatedAgentAPI asserts comment list uses
+// GET /api/agent/issues/{id}/comments.
+func TestBoundary_IssueCommentList_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantComments := wantGet + "/comments"
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case wantComments:
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			http.Error(w, "human issue path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+	if err := runIssueCommentList(cmd, []string{boundaryContractIssueID}); err != nil {
+		t.Fatalf("runIssueCommentList: %v (paths=%v)", err, gotPaths)
+	}
+	found := false
+	for _, p := range gotPaths {
+		if p == "GET "+wantComments {
+			found = true
+		}
+		if strings.HasPrefix(strings.SplitN(p, " ", 2)[1], "/api/issues") {
+			t.Fatalf("hit human path %q", p)
+		}
+	}
+	if !found {
+		t.Fatalf("paths=%v, want GET %s", gotPaths, wantComments)
+	}
+}
+
+// TestBoundary_AttachmentContent_DocumentsDedicatedDownloadURL is a path-table
+// lock for content/download under /api/agent/attachments (Ronan attachment cut).
+func TestBoundary_AttachmentContent_DocumentsDedicatedDownloadURL(t *testing.T) {
+	// download_url returned by agent attachment view must stay under /api/agent/
+	// (not CloudFront / human /api/attachments/.../download that bypasses ACL).
+	allowed := []string{
+		"/api/agent/attachments/" + boundaryContractAttachmentID + "/download",
+		"/api/agent/attachments/" + boundaryContractAttachmentID + "/content",
+	}
+	for _, p := range allowed {
+		if !strings.HasPrefix(p, "/api/agent/attachments/") {
+			t.Fatalf("path %q not under agent attachments", p)
+		}
+	}
+}
+
 // TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI asserts resource list
 // uses GET /api/agent/projects/{id}/resources.
 func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {

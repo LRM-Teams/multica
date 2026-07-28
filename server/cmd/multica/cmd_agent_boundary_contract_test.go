@@ -1808,3 +1808,82 @@ func TestResolver_R1_ProjectResourceName_TOKEN_FILE_HitsAgentResourcesOnly(t *te
 		}
 	}
 }
+
+
+// TestBoundary_IssueSearch_HitsDedicatedAgentAPI: multica issue search under mat_*
+// must hit GET /api/agent/issues/search only (#812 GAP).
+func TestBoundary_IssueSearch_HitsDedicatedAgentAPI(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/api/agent/issues/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issues": []map[string]any{
+					{"id": "iss-1", "identifier": "MUL-1", "title": "login", "status": "todo", "match_source": "title"},
+				},
+			})
+		default:
+			http.Error(w, "human path forbidden for agent issue search", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnv(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "search"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Bool("include-closed", false, "")
+
+	if err := runIssueSearch(cmd, []string{"login"}); err != nil {
+		t.Fatalf("runIssueSearch: %v paths=%v", err, gotPaths)
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET /api/agent/issues/search" {
+		t.Fatalf("paths=%v want [GET /api/agent/issues/search]", gotPaths)
+	}
+}
+
+func TestBoundary_IssueSearch_TOKEN_FILE_HitsAgentSearchOnly(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/api/agent/issues/search" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"issues": []any{}})
+			return
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	f := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(f, []byte("mat_issue_search_token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", f)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := &cobra.Command{Use: "search"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Bool("include-closed", false, "")
+
+	if err := runIssueSearch(cmd, []string{"x"}); err != nil {
+		t.Fatalf("runIssueSearch TOKEN_FILE: %v paths=%v", err, gotPaths)
+	}
+	for _, p := range gotPaths {
+		if p == "GET /api/issues/search" {
+			t.Fatalf("hit human search: %v", gotPaths)
+		}
+	}
+	if len(gotPaths) != 1 || gotPaths[0] != "GET /api/agent/issues/search" {
+		t.Fatalf("paths=%v", gotPaths)
+	}
+}

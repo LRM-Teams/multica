@@ -43,13 +43,21 @@ const toastMock = vi.hoisted(() => ({
 }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), toastMock) }));
 
-// This suite renders the FULL ChannelsPage with the real react-virtuoso message
-// list (intentionally unmocked, to exercise real sidebar/selection wiring). That
-// render is heavy in jsdom, so under full-suite PARALLEL CI load a single test's
-// `findByTestId("message-list")` can exceed vitest's 5s default and flake — this
-// has repeatedly reddened UNRELATED PRs (e.g. #1243, #1232, whose diffs don't
-// touch views). The tests are correct and pass in isolation; give the render
-// timeout headroom under load rather than mask a real failure.
+// This suite renders the FULL ChannelsPage, which is heavy in jsdom: under
+// full-suite PARALLEL CI load a single test's `findByTestId("message-list")` can
+// exceed vitest's 5s default and flake — this has repeatedly reddened UNRELATED
+// PRs (e.g. #1243, #1232, whose diffs don't touch views). The tests are correct
+// and pass in isolation; give the render timeout headroom under load rather than
+// mask a real failure.
+//
+// CORRECTION (task #853, 2026-07-28): this comment used to say the suite ran
+// "the real react-virtuoso message list (intentionally unmocked)". That is NOT
+// true of this file — `./channel-message-list` (the only place react-virtuoso is
+// imported) is mocked wholesale below, so virtuoso never runs here and
+// `message-list` is a stub div. The weight is ChannelsPage itself — providers,
+// queries and context — not the windowed list. The stale claim misled three of
+// us while triaging this exact flake, so: the cost being bought here is
+// FULL-PAGE RENDER time, and any fix should target that, not the list.
 vi.setConfig({ testTimeout: 20000 });
 
 // The system channel is deliberately NOT first in this array — ordering

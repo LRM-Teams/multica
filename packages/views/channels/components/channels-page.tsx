@@ -563,8 +563,23 @@ export function ChannelsPage({
   // surface (channel / thread) because each has its own composer; the toast is
   // the announcement, this is the durable record. Cleared ONLY by a committed
   // retry or an explicit delete — never a timer.
-  const [channelPendingVoice, setChannelPendingVoice] = useState<PendingVoiceState | null>(null);
-  const [threadPendingVoice, setThreadPendingVoice] = useState<PendingVoiceState | null>(null);
+  // #838 H0 (Iris, 2nd pass) — keyed BY target, not "one record that knows its
+  // target". A single slot still loses data: fail in A, switch to B, fail in B
+  // → B overwrites A and A's recording is gone when the user returns. An unsent
+  // recording may only disappear via a committed retry or an explicit delete,
+  // so every target keeps its own entry.
+  const [pendingVoices, setPendingVoices] = useState<Record<string, PendingVoiceState>>({});
+  const rememberPendingVoice = useCallback((rec: PendingVoiceState) => {
+    setPendingVoices((prev) => ({ ...prev, [rec.targetId]: rec }));
+  }, []);
+  const forgetPendingVoice = useCallback((targetId: string) => {
+    setPendingVoices((prev) => {
+      if (!(targetId in prev)) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+  }, []);
   // #839 — durable in-row record of a failed removal, keyed by member identity.
   // The toast is the immediate announcement; it is NOT storage — it can be
   // dismissed (and expires on its own), and losing it must not erase the fact
@@ -928,10 +943,9 @@ export function ChannelsPage({
   // #838 H0 — the record only exists for the surface it was recorded on. The
   // state outlives channel switches, so without this a failure in A would show
   // (and retry) in B. Compare against the IMMUTABLE target it was bound to.
-  const channelPendingVoiceHere =
-    channelPendingVoice && active && channelPendingVoice.targetId === voiceTargetId(active.id)
-      ? channelPendingVoice
-      : null;
+  const channelPendingVoiceHere = active
+    ? pendingVoices[voiceTargetId(active.id)] ?? null
+    : null;
   const quoteChannelId = active?.id ?? null;
   const quoteThreadRootId = openThreadRoot?.id ?? null;
   if (quoteState.channelId !== quoteChannelId || quoteState.threadRootId !== quoteThreadRootId) {
@@ -1002,11 +1016,8 @@ export function ChannelsPage({
   // #838 H0 — same rule for threads: bound to channel + thread root, so a
   // failure in thread A never surfaces (or retries) in thread B.
   const threadPendingVoiceHere =
-    threadPendingVoice &&
-    active &&
-    threadRoot &&
-    threadPendingVoice.targetId === voiceTargetId(active.id, threadRoot.id)
-      ? threadPendingVoice
+    active && threadRoot
+      ? pendingVoices[voiceTargetId(active.id, threadRoot.id)] ?? null
       : null;
   const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(activeChannelId, threadRoot?.id ?? ""),
@@ -2080,7 +2091,7 @@ export function ChannelsPage({
       }),
       mutate: sendMessage.mutate,
       // Only a send that actually committed clears the record.
-      onCommitted: () => setChannelPendingVoice(null),
+      onCommitted: () => forgetPendingVoice(voiceTargetId(channelId)),
       onVisibleError: (kind) => {
         // EVERY failure kind lands here now. Previously only `conflict` said
         // anything, so a retry/timeout/too-long voice send — the common cases —
@@ -2093,7 +2104,7 @@ export function ChannelsPage({
         // The toast is the announcement; THIS is the record. It survives the
         // toast being dismissed, and only a successful retry or an explicit
         // delete removes it (no timer, never overwritten by a new recording).
-        setChannelPendingVoice({
+        rememberPendingVoice({
           targetId: voiceTargetId(channelId),
           channelId,
           durationMs,
@@ -2211,7 +2222,7 @@ export function ChannelsPage({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => setThreadPendingVoice(null),
+      onCommitted: () => forgetPendingVoice(voiceTargetId(channelId, threadRootId)),
       onVisibleError: (kind) => {
         // #838 — same gap as the channel path: only `conflict` used to speak,
         // so retry/timeout/too-long failures lost the recording in silence.
@@ -2220,7 +2231,7 @@ export function ChannelsPage({
             ? t(($) => $.composer.send_failed_too_long)
             : t(($) => $.thread.send_failed),
         );
-        setThreadPendingVoice({
+        rememberPendingVoice({
           targetId: voiceTargetId(channelId, threadRootId),
           channelId,
           threadRootId,
@@ -3163,7 +3174,9 @@ export function ChannelsPage({
             pending={threadPendingVoiceHere}
             retrying={sendThreadMessage.isPending}
             onRetry={retryThreadVoice}
-            onDelete={() => setThreadPendingVoice(null)}
+            onDelete={() =>
+              threadPendingVoiceHere && forgetPendingVoice(threadPendingVoiceHere.targetId)
+            }
           />
         }
         sendDisabled={
@@ -3713,7 +3726,10 @@ export function ChannelsPage({
                           pending={channelPendingVoiceHere}
                           retrying={sendMessage.isPending}
                           onRetry={retryChannelVoice}
-                          onDelete={() => setChannelPendingVoice(null)}
+                          onDelete={() =>
+                            channelPendingVoiceHere &&
+                            forgetPendingVoice(channelPendingVoiceHere.targetId)
+                          }
                         />
                         {quoteTarget ? (
                           <ComposerQuotePreview

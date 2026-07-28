@@ -427,6 +427,78 @@ describe("voice send failure leaves a durable record (#838)", () => {
     expect(sendSpy().mock.calls.at(-1)?.[0]).toBe("chan-random");
   });
 
+  // #838 H0 (Iris, 2nd pass) — the previous fix tagged ONE record with its
+  // target, which hid it correctly but still let a later failure overwrite it:
+  // fail in A, fail in B, and A's recording was gone on return. An unsent
+  // recording may only vanish via a committed retry or an explicit delete, so
+  // each target keeps its own entry.
+  it("a failure in B does not destroy the unsent recording in A", async () => {
+    sendSpy().mockRejectedValueOnce(new Error("boom-a"));
+    const fire = await openChannel();
+    fireEvent.click(fire);
+    await screen.findByTestId("composer-pending-voice");
+
+    switchTo("general");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+    // B is free to record — and to fail on its own.
+    expect(screen.queryByTestId("composer-pending-voice")).toBeNull();
+    sendSpy().mockRejectedValueOnce(new Error("boom-b"));
+    fireEvent.click(screen.getByTestId("fire-voice"));
+    await screen.findByTestId("composer-pending-voice");
+
+    // Back in A: still there. (Before the map, B's failure had overwritten it.)
+    switchTo("random");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    expect(await screen.findByTestId("composer-pending-voice")).toBeInTheDocument();
+
+    // …and retrying A targets A, not B.
+    const before = sendSpy().mock.calls.length;
+    fireEvent.click(screen.getByTestId("composer-pending-voice-retry"));
+    await waitFor(() => {
+      expect(sendSpy().mock.calls.length).toBeGreaterThan(before);
+    });
+    expect(sendSpy().mock.calls.at(-1)?.[0]).toBe("chan-random");
+
+    // B's own record is independent and still waiting.
+    switchTo("general");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+    expect(await screen.findByTestId("composer-pending-voice")).toBeInTheDocument();
+  });
+
+  it("deleting the record in A leaves B's untouched", async () => {
+    sendSpy().mockRejectedValueOnce(new Error("boom-a"));
+    const fire = await openChannel();
+    fireEvent.click(fire);
+    await screen.findByTestId("composer-pending-voice");
+
+    switchTo("general");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+    sendSpy().mockRejectedValueOnce(new Error("boom-b"));
+    fireEvent.click(screen.getByTestId("fire-voice"));
+    await screen.findByTestId("composer-pending-voice");
+
+    // Explicitly discard B's…
+    fireEvent.click(screen.getByTestId("composer-pending-voice-delete"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("composer-pending-voice")).toBeNull();
+    });
+
+    // …A's is untouched.
+    switchTo("random");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    expect(await screen.findByTestId("composer-pending-voice")).toBeInTheDocument();
+  });
+
   it("survives the toast being dismissed — the toast is the announcement, not the storage", async () => {
     sendSpy().mockRejectedValueOnce(new Error("boom"));
     const fire = await openChannel();

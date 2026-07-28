@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -1544,6 +1545,22 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 
 const channelOwnerChangedCode = "owner_changed"
 
+// testRoleMutationEntryGate, when non-nil, blocks handlers after the entry
+// owner snapshot and before Begin — tests only, forces concurrent racers to
+// both observe entryWasOwner=true before contending on locks.
+var (
+	testRoleMutationEntryGate    chan struct{}
+	testRoleMutationEntryEntered int32 // atomic via sync/atomic
+)
+
+func roleMutationEntryBarrier() {
+	if testRoleMutationEntryGate == nil {
+		return
+	}
+	atomic.AddInt32(&testRoleMutationEntryEntered, 1)
+	<-testRoleMutationEntryGate
+}
+
 type updateChannelMemberRoleRequest struct {
 	Role string `json:"role"`
 }
@@ -1587,6 +1604,7 @@ var (
 	errChannelSystemProtected = errors.New("system channel is managed automatically")
 	errChannelArchived        = errors.New("channel is archived")
 	errNotChannelOwner        = errors.New("not channel owner")
+	errOwnerChanged           = errors.New("channel owner changed")
 	errChannelMemberNotFound  = errors.New("channel member not found")
 )
 
@@ -1600,14 +1618,46 @@ func writeChannelRoleMutationErr(w http.ResponseWriter, err error) {
 		writeSystemChannelProtected(w)
 	case errors.Is(err, errChannelArchived):
 		writeError(w, http.StatusConflict, "channel is archived")
-	case errors.Is(err, errNotChannelOwner):
+	case errors.Is(err, errOwnerChanged):
+		// Race loser who entered as owner but lost ownership under lock.
+		// FE: code=owner_changed → refresh roster, do not retry as generic 403.
 		writeCodedError(w, http.StatusForbidden, channelOwnerChangedCode,
-			"channel ownership has changed; only the current channel owner can manage roles")
+			"群主权限已变更，成员列表已刷新。")
+	case errors.Is(err, errNotChannelOwner):
+		// Plain non-owner — no owner_changed code (Wren must not collapse).
+		writeError(w, http.StatusForbidden, "only the channel owner can manage member roles")
 	case errors.Is(err, errChannelMemberNotFound):
 		writeError(w, http.StatusNotFound, "channel member not found")
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to update channel member role")
 	}
+}
+
+// actorIsChannelOwnerRead is a non-locking entry snapshot used only to
+// classify 403 responses (plain vs owner_changed). Authorization still uses
+// the locked in-tx recheck.
+func actorIsChannelOwnerRead(ctx context.Context, exec dbExecutor, workspaceID string, channelID, actorID pgtype.UUID) bool {
+	var role string
+	err := exec.QueryRow(ctx, `
+		SELECT role FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'user' AND member_id = $3`,
+		channelID, parseUUID(workspaceID), actorID,
+	).Scan(&role)
+	return err == nil && role == "owner"
+}
+
+func mapOwnerAuthErr(entryWasOwner bool, lockErr error) error {
+	if lockErr == nil {
+		return nil
+	}
+	if !errors.Is(lockErr, errNotChannelOwner) {
+		return lockErr
+	}
+	if entryWasOwner {
+		return errOwnerChanged
+	}
+	return errNotChannelOwner
 }
 
 // requireActorChannelOwnerTx locks actor membership and requires role=owner.
@@ -1678,6 +1728,9 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	entryWasOwner := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	roleMutationEntryBarrier()
+
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update member role")
@@ -1690,7 +1743,7 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := requireActorChannelOwnerTx(r.Context(), tx, workspaceID, channelID, parseUUID(userID)); err != nil {
-		writeChannelRoleMutationErr(w, err)
+		writeChannelRoleMutationErr(w, mapOwnerAuthErr(entryWasOwner, err))
 		return
 	}
 
@@ -1787,6 +1840,9 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	entryWasOwner := actorIsChannelOwnerRead(r.Context(), h.DB, workspaceID, channelID, parseUUID(userID))
+	roleMutationEntryBarrier()
+
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to transfer ownership")
@@ -1844,8 +1900,7 @@ func (h *Handler) TransferChannelOwnership(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !actorFound || actorRole != "owner" {
-		writeCodedError(w, http.StatusForbidden, channelOwnerChangedCode,
-			"channel ownership has changed; only the current channel owner can transfer ownership")
+		writeChannelRoleMutationErr(w, mapOwnerAuthErr(entryWasOwner, errNotChannelOwner))
 		return
 	}
 	if !targetFound {

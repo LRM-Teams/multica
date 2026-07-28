@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -16,6 +17,10 @@ const (
 	channelMemberLeftEvent           = "channel_member_left"
 	channelOwnershipTransferredEvent = "channel_ownership_transferred"
 )
+
+// testFailChannelMemberSystemEventInsert forces insertChannelMemberSystemEventExec
+// to fail. Tests only — production code never sets it.
+var testFailChannelMemberSystemEventInsert atomic.Bool
 
 type channelMemberSystemEventParams struct {
 	ActorID           string `json:"actor_id,omitempty"`
@@ -92,6 +97,9 @@ func (h *Handler) insertChannelMemberSystemEventExec(
 	targetType string,
 	targetID pgtype.UUID,
 ) (ChannelMessageResponse, error) {
+	if testFailChannelMemberSystemEventInsert.Load() {
+		return ChannelMessageResponse{}, fmt.Errorf("forced channel member system event insert failure")
+	}
 	actorRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, "user", actorID)
 	targetRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, targetType, targetID)
 	params := channelMemberSystemEventParams{

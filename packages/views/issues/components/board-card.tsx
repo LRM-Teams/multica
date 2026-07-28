@@ -5,7 +5,7 @@ import { AppLink } from "../../navigation";
 import { useSortable, defaultAnimateLayoutChanges } from "@dnd-kit/sortable";
 import type { AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
 import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { CalendarClock, CalendarDays } from "lucide-react";
@@ -106,7 +106,7 @@ export const BoardCardContent = memo(function BoardCardContent({
         { id: issue.id, ...updates },
         {
           onError: (err) =>
-            toast.error(
+            showErrorToast(
               err instanceof Error && err.message
                 ? err.message
                 : t(($) => $.card.update_failed),

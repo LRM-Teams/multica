@@ -31,6 +31,7 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n";
 import type {
   WebhookDelivery,
@@ -444,7 +445,7 @@ function CodeBlock({ label, value }: { label: string; value: string }) {
       toast.success(t(($) => $.webhook_payload.copied));
       setTimeout(() => setCopied(false), 1500);
     } else {
-      toast.error(t(($) => $.webhook_payload.copy_failed));
+      showErrorToast(t(($) => $.webhook_payload.copy_failed));
     }
   };
 
@@ -535,7 +536,7 @@ function ReplayButton({
         e instanceof Error
           ? e.message
           : t(($) => $.deliveries.replay.toast_failed);
-      toast.error(message);
+      showErrorToast(message);
     }
   };
 

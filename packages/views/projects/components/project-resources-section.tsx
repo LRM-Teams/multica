@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   projectResourcesOptions,
   useCreateProjectResource,
@@ -119,7 +120,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       toast.success(t(($) => $.resources.toast_attached));
     } catch (err) {
       const msg = err instanceof Error ? err.message : t(($) => $.resources.toast_attach_failed);
-      toast.error(msg);
+      showErrorToast(msg);
     }
   };
 
@@ -128,20 +129,20 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
     setPicking(true);
     try {
       if (!localDaemonId || !daemonStatus.running) {
-        toast.error(t(($) => $.resources.toast_local_daemon_not_running));
+        showErrorToast(t(($) => $.resources.toast_local_daemon_not_running));
         return;
       }
       // Race guard: the button gates on this already, but if the picker
       // is opened while a concurrent resource-create lands the user
       // would otherwise see a 409. Surface a clearer message instead.
       if (attachedLocalPaths.size > 0) {
-        toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
+        showErrorToast(t(($) => $.resources.toast_local_daemon_already_attached));
         return;
       }
       const picked = await pickDirectory();
       if (!picked.ok) {
         if (picked.reason && picked.reason !== "cancelled") {
-          toast.error(
+          showErrorToast(
             picked.error ?? t(($) => $.resources.toast_local_pick_failed),
           );
         }
@@ -150,12 +151,12 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       const path = picked.path ?? "";
       const fallbackLabel = picked.basename ?? path;
       if (attachedLocalPaths.has(path)) {
-        toast.error(t(($) => $.resources.toast_local_already_attached));
+        showErrorToast(t(($) => $.resources.toast_local_already_attached));
         return;
       }
       const validation = await validateLocalDirectory(path);
       if (!validation.ok) {
-        toast.error(
+        showErrorToast(
           localValidationMessage(validation, {
             not_absolute: t(($) => $.resources.local_validate_not_absolute),
             not_found: t(($) => $.resources.local_validate_not_found),
@@ -183,7 +184,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
         err instanceof Error
           ? err.message
           : t(($) => $.resources.toast_local_pick_failed);
-      toast.error(msg);
+      showErrorToast(msg);
     } finally {
       setPicking(false);
     }
@@ -194,7 +195,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       await deleteResource.mutateAsync(resource.id);
       toast.success(t(($) => $.resources.toast_removed));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.resources.toast_remove_failed),
@@ -225,7 +226,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
         err instanceof Error
           ? err.message
           : t(($) => $.resources.toast_local_rename_failed);
-      toast.error(msg);
+      showErrorToast(msg);
     }
   };
 

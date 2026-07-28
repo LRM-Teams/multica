@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { X, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   AlertDialog,
@@ -54,7 +55,7 @@ export function BatchActionToolbar({
       await batchUpdate.mutateAsync({ ids, updates });
       toast.success(t(($) => $.batch.update_success, { count }));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.batch.update_failed),
@@ -68,7 +69,7 @@ export function BatchActionToolbar({
       clear();
       toast.success(t(($) => $.batch.delete_success, { count }));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.batch.delete_failed),

@@ -1075,7 +1075,7 @@ export function ChannelsPage({
         followed,
       },
       {
-        onError: () => toast.error(
+        onError: () => showErrorToast(
           t(($) => followed ? $.thread.follow_failed : $.thread.unfollow_failed),
         ),
       },
@@ -1086,13 +1086,13 @@ export function ChannelsPage({
   const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
     editChannelMessage.mutate(
       { channelId: message.channel_id, messageId: message.id, content },
-      { onError: () => toast.error(t(($) => $.message.edit_failed_toast)) },
+      { onError: () => showErrorToast(t(($) => $.message.edit_failed_toast)) },
     );
   }, [editChannelMessage, t]);
   const handleDeleteMessage = useCallback((message: ChannelMessage) => {
     deleteChannelMessage.mutate(
       { channelId: message.channel_id, messageId: message.id },
-      { onError: () => toast.error(t(($) => $.message.delete_failed_toast)) },
+      { onError: () => showErrorToast(t(($) => $.message.delete_failed_toast)) },
     );
   }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
@@ -1529,7 +1529,7 @@ export function ChannelsPage({
         setConvSearchTotal(res.total);
         setConvSearchIndex(0);
       } catch {
-        toast.error(t(($) => $.conv_search.error));
+        showErrorToast(t(($) => $.conv_search.error));
       }
     }, 300);
     return () => clearTimeout(timer);
@@ -1712,7 +1712,7 @@ export function ChannelsPage({
         onError: (err) => {
           // Duplicate (workspace, name) comes back as a 409 with a stable code;
           // localise off the code, not the server's English string.
-          toast.error(
+          showErrorToast(
             isChannelNameTakenError(err)
               ? t(($) => $.sidebar.create_name_taken)
               : t(($) => $.sidebar.create_failed),
@@ -1752,7 +1752,7 @@ export function ChannelsPage({
       { peer_type: member.member_type, peer_id: member.member_id },
       {
         onSuccess: (dm) => selectDm(dm),
-        onError: () => toast.error(t(($) => $.dm.open_failed)),
+        onError: () => showErrorToast(t(($) => $.dm.open_failed)),
       },
     );
   };
@@ -1790,7 +1790,7 @@ export function ChannelsPage({
       onError: (err) => {
         const reason =
           err instanceof ApiError && err.message.trim() ? err.message.trim() : null;
-        toast.error(reason ?? t(($) => $.delete_dialog.toast_failed));
+        showErrorToast(reason ?? t(($) => $.delete_dialog.toast_failed));
       },
     });
   };
@@ -1803,13 +1803,13 @@ export function ChannelsPage({
         if (target.id === activeId) setActiveId(null);
         setArchiveTarget(null);
       },
-      onError: () => toast.error(t(($) => $.archive_dialog.error)),
+      onError: () => showErrorToast(t(($) => $.archive_dialog.error)),
     });
   };
 
   const handleRestoreChannel = (channelId: string) => {
     restoreChannel.mutate(channelId, {
-      onError: () => toast.error(t(($) => $.archive_dialog.restore_error)),
+      onError: () => showErrorToast(t(($) => $.archive_dialog.restore_error)),
     });
   };
 
@@ -1822,7 +1822,7 @@ export function ChannelsPage({
     // to /api/tasks/{id}/cancel for channel wakes (that path returns 409).
     const inboxEventId = task.inbox_event_id?.trim();
     if (!inboxEventId) {
-      toast.error(t(($) => $.agent_status.stop_failed));
+      showErrorToast(t(($) => $.agent_status.stop_failed));
       return;
     }
     setStoppingChannelTaskId(task.task_id);
@@ -1835,7 +1835,7 @@ export function ChannelsPage({
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     } catch {
-      toast.error(t(($) => $.agent_status.stop_failed));
+      showErrorToast(t(($) => $.agent_status.stop_failed));
     } finally {
       setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
     }
@@ -1851,10 +1851,10 @@ export function ChannelsPage({
       if (stopped > 0) {
         toast.success(t(($) => $.agent_status.stop_all_success, { count: stopped }));
       } else {
-        toast.error(t(($) => $.agent_status.stop_failed));
+        showErrorToast(t(($) => $.agent_status.stop_failed));
       }
     } catch {
-      toast.error(t(($) => $.agent_status.stop_failed));
+      showErrorToast(t(($) => $.agent_status.stop_failed));
     }
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -1877,13 +1877,13 @@ export function ChannelsPage({
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
       { channelId: channel.id, pinned: !channel.pinned_at },
-      { onError: () => toast.error(t(($) => $.dm.action_failed)) },
+      { onError: () => showErrorToast(t(($) => $.dm.action_failed)) },
     );
   };
 
   const handleMarkChannelUnread = (channelId: string) => {
     markChannelUnread.mutate(channelId, {
-      onError: () => toast.error(t(($) => $.dm.action_failed)),
+      onError: () => showErrorToast(t(($) => $.dm.action_failed)),
     });
   };
 
@@ -1892,7 +1892,7 @@ export function ChannelsPage({
   const handleToggleChannelMute = (channel: Channel) => {
     muteChannel.mutate(
       { channelId: channel.id, muted: !isConversationMuted(channel) },
-      { onError: () => toast.error(t(($) => $.dm.action_failed)) },
+      { onError: () => showErrorToast(t(($) => $.dm.action_failed)) },
     );
   };
 
@@ -1903,7 +1903,7 @@ export function ChannelsPage({
       await navigator.clipboard.writeText(url);
       toast.success(t(($) => $.share.copied));
     } catch {
-      toast.error(t(($) => $.share.copy_failed));
+      showErrorToast(t(($) => $.share.copy_failed));
     }
   };
 
@@ -2248,7 +2248,7 @@ export function ChannelsPage({
           setInviteQuery("");
           setAddPeopleDialogOpen(false);
         },
-        onError: () => toast.error(t(($) => $.members.invite_failed)),
+        onError: () => showErrorToast(t(($) => $.members.invite_failed)),
       },
     );
   };
@@ -2328,7 +2328,7 @@ export function ChannelsPage({
           toast.success(t(($) => $.details.leave_success));
         },
         onError: (err) => {
-          toast.error(
+          showErrorToast(
             err instanceof ApiError && err.status === 409
               ? t(($) => $.details.leave_owner_reason)
               : t(($) => $.details.leave_failed),
@@ -2516,7 +2516,7 @@ export function ChannelsPage({
                 <TooltipTrigger>
                   <ContextMenuItem
                     aria-disabled
-                    onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                    onClick={() => showErrorToast(t(($) => $.sidebar.archive_permission))}
                     className="opacity-50"
                   >
                     <Archive className="size-4" />
@@ -2627,7 +2627,7 @@ export function ChannelsPage({
                       <TooltipTrigger>
                         <DropdownMenuItem
                           aria-disabled
-                          onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                          onClick={() => showErrorToast(t(($) => $.sidebar.archive_permission))}
                           className="opacity-50"
                         >
                           <Archive className="size-4" />
@@ -2910,7 +2910,7 @@ export function ChannelsPage({
                                     <TooltipTrigger>
                                       <DropdownMenuItem
                                         aria-disabled
-                                        onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                                        onClick={() => showErrorToast(t(($) => $.sidebar.restore_permission))}
                                         className="opacity-50"
                                       >
                                         <ArchiveRestore className="size-4" />
@@ -2937,7 +2937,7 @@ export function ChannelsPage({
                                 <TooltipTrigger>
                                   <ContextMenuItem
                                     aria-disabled
-                                    onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                                    onClick={() => showErrorToast(t(($) => $.sidebar.restore_permission))}
                                     className="opacity-50"
                                   >
                                     <ArchiveRestore className="size-4" />
@@ -2997,7 +2997,7 @@ export function ChannelsPage({
         onViewParent={() => {
           if (embedded) {
             if (!onOpenInChannels) {
-              toast.error(t(($) => $.thread.view_in_channel_failed));
+              showErrorToast(t(($) => $.thread.view_in_channel_failed));
               return;
             }
             onOpenInChannels({
@@ -3115,7 +3115,7 @@ export function ChannelsPage({
                 setSelectedMemberPanelId(null);
                 selectDm(dm);
               },
-              onError: () => toast.error(t(($) => $.dm.open_failed)),
+              onError: () => showErrorToast(t(($) => $.dm.open_failed)),
             },
           );
         }}
@@ -3173,7 +3173,7 @@ export function ChannelsPage({
             { channelId: active.id, name },
             {
               onSuccess: () => toast.success(t(($) => $.settings.rename_success)),
-              onError: () => toast.error(t(($) => $.settings.rename_failed)),
+              onError: () => showErrorToast(t(($) => $.settings.rename_failed)),
             },
           );
         },
@@ -3182,7 +3182,7 @@ export function ChannelsPage({
             { channelId: active.id, description },
             {
               onSuccess: () => toast.success(t(($) => $.settings.description_success)),
-              onError: () => toast.error(t(($) => $.settings.description_failed)),
+              onError: () => showErrorToast(t(($) => $.settings.description_failed)),
             },
           );
         },
@@ -3191,7 +3191,7 @@ export function ChannelsPage({
             { channelId: active.id, lark_chat_id: larkChatId },
             {
               onSuccess: () => toast.success(t(($) => $.settings.lark_success)),
-              onError: () => toast.error(t(($) => $.settings.lark_failed)),
+              onError: () => showErrorToast(t(($) => $.settings.lark_failed)),
             },
           );
         },
@@ -3546,7 +3546,7 @@ export function ChannelsPage({
                           size="sm"
                           aria-disabled
                           className="cursor-default opacity-50"
-                          onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                          onClick={() => showErrorToast(t(($) => $.sidebar.restore_permission))}
                         >
                           <ArchiveRestore className="size-3.5" />
                           {t(($) => $.sidebar.archived_restore)}

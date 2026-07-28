@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -68,7 +69,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
         { id: issueId, ...updates },
         {
           onError: (err) =>
-            toast.error(
+            showErrorToast(
               err instanceof Error && err.message
                 ? err.message
                 : t(($) => $.detail.update_failed),
@@ -105,7 +106,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     if (await copyText(url)) {
       toast.success(t(($) => $.detail.link_copied));
     } else {
-      toast.error(t(($) => $.detail.link_copy_failed));
+      showErrorToast(t(($) => $.detail.link_copy_failed));
     }
   }, [paths, issueId, navigation, t]);
 

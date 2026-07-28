@@ -7,7 +7,7 @@ import { useUpdateNotificationPreferences } from "@multica/core/notification-pre
 import type { NotificationGroupKey, NotificationPreferences } from "@multica/core/types";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Switch } from "@multica/ui/components/ui/switch";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n";
 import { BrowserNotificationSetting } from "./browser-notification-setting";
 
@@ -41,7 +41,7 @@ export function NotificationsTab() {
     }
     mutation.mutate(updated, {
       onError: (err) =>
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.notifications.toast_failed),

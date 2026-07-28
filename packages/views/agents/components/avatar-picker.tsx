@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Camera, ImagePlus, Loader2, X } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -80,21 +80,21 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
     e.target.value = ""; // allow re-selecting the same file
     const type = file.type.toLowerCase();
     if (type !== "image/png" && type !== "image/jpeg") {
-      toast.error(t(($) => $.side_panel.avatar_err_type));
+      showErrorToast(t(($) => $.side_panel.avatar_err_type));
       return;
     }
     if (file.size > AVATAR_MAX_BYTES) {
-      toast.error(t(($) => $.side_panel.avatar_err_size));
+      showErrorToast(t(($) => $.side_panel.avatar_err_size));
       return;
     }
     try {
       const dims = await readImageDimensions(file);
       if (dims.width < AVATAR_MIN_DIMENSION || dims.height < AVATAR_MIN_DIMENSION) {
-        toast.error(t(($) => $.side_panel.avatar_err_dimensions));
+        showErrorToast(t(($) => $.side_panel.avatar_err_dimensions));
         return;
       }
     } catch {
-      toast.error(t(($) => $.side_panel.avatar_err_type));
+      showErrorToast(t(($) => $.side_panel.avatar_err_type));
       return;
     }
     const url = URL.createObjectURL(file);
@@ -123,7 +123,7 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
       setPreviewError(false);
       onChange({ attachmentId: result.id, previewUrl: result.link });
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error
           ? err.message
           : t(($) => $.create_dialog.avatar.upload_failed_toast),

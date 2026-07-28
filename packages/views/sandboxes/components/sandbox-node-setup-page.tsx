@@ -24,6 +24,7 @@ import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
@@ -326,7 +327,7 @@ function DefaultTemplateTab({ node }: { node: SandboxNode }) {
       setDraft(null);
       toast.success(t(($) => $.sandboxes_page.default_template_save_success));
     } catch (e) {
-      toast.error(
+      showErrorToast(
         e instanceof Error ? e.message : t(($) => $.sandboxes_page.default_template_save_failed),
       );
     } finally {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Button } from "@multica/ui/components/ui/button";
@@ -64,10 +64,10 @@ export function CreateWorkspaceForm({ onSuccess }: CreateWorkspaceFormProps) {
         onError: (error) => {
           if (isWorkspaceSlugConflict(error)) {
             setSlugServerError(t(($) => $.create_form.errors.slug_taken));
-            toast.error(t(($) => $.create_form.errors.slug_conflict_toast));
+            showErrorToast(t(($) => $.create_form.errors.slug_conflict_toast));
             return;
           }
-          toast.error(
+          showErrorToast(
             error instanceof Error && error.message
               ? error.message
               : t(($) => $.create_form.errors.create_failed),

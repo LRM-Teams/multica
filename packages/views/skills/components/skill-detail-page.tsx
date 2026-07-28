@@ -23,6 +23,7 @@ import type {
   UpdateSkillRequest,
 } from "@multica/core/types";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useTimeAgo } from "../../i18n";
@@ -428,7 +429,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.detail.toast_saved));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.detail.toast_save_failed));
+      showErrorToast(err instanceof Error ? err.message : t(($) => $.detail.toast_save_failed));
     } finally {
       setSaving(false);
     }
@@ -454,7 +455,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.detail.toast_deleted));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error ? err.message : t(($) => $.detail.toast_delete_failed),
       );
       setDeleting(false);

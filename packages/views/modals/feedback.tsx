@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   Dialog,
   DialogContent,
@@ -92,7 +93,7 @@ export function FeedbackModal({
     const latest = editorRef.current?.getMarkdown()?.trim() ?? "";
     if (!latest) return;
     if (latest.length > MAX_MESSAGE_LEN) {
-      toast.error(t(($) => $.feedback.toast_too_long));
+      showErrorToast(t(($) => $.feedback.toast_too_long));
       return;
     }
     try {
@@ -109,7 +110,7 @@ export function FeedbackModal({
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.feedback.toast_failed);
-      toast.error(msg);
+      showErrorToast(msg);
     }
   };
 

@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   Select,
   SelectContent,
@@ -249,7 +250,7 @@ function TimezoneSection() {
       const updated = await api.updateMe({ timezone: payload });
       setUser(updated);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.preferences.timezone.sync_failed),

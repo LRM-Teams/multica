@@ -5,7 +5,7 @@ import { LoaderCircle, Mic, Square } from "lucide-react";
 import { api } from "@multica/core/api";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n/use-t";
 import {
   downmixAudioBuffer,
@@ -93,7 +93,7 @@ export function VoiceInputButton({
       const pcm = await decodeRecording(blob);
       if (pcm.byteLength === 0) {
         cancelVoicePlayback(playbackScope);
-        toast.error(t(($) => $.composer.voice_no_speech));
+        showErrorToast(t(($) => $.composer.voice_no_speech));
         return;
       }
       const { attachment } = await deliverVoiceRecording(pcm, channelId);
@@ -107,14 +107,14 @@ export function VoiceInputButton({
         if (attachment.id) await api.deleteAttachment(attachment.id).catch(() => undefined);
         uploadedAttachmentId = null;
         cancelVoicePlayback(playbackScope);
-        toast.error(t(($) => $.composer.send_failed));
+        showErrorToast(t(($) => $.composer.send_failed));
       }
     } catch {
       if (uploadedAttachmentId) {
         await api.deleteAttachment(uploadedAttachmentId).catch(() => undefined);
       }
       cancelVoicePlayback(playbackScope);
-      if (mountedRef.current) toast.error(t(($) => $.composer.voice_upload_failed));
+      if (mountedRef.current) showErrorToast(t(($) => $.composer.voice_upload_failed));
     } finally {
       if (mountedRef.current) {
         setElapsedSeconds(0);
@@ -127,7 +127,7 @@ export function VoiceInputButton({
     if (disabled || state !== "idle") return;
     const unavailableReason = voiceCaptureUnavailableReason();
     if (unavailableReason) {
-      toast.error(t(($) => unavailableReason === "insecure-context"
+      showErrorToast(t(($) => unavailableReason === "insecure-context"
         ? $.composer.voice_secure_context_required
         : $.composer.voice_unavailable));
       return;
@@ -161,7 +161,7 @@ export function VoiceInputButton({
         streamRef.current = null;
         if (mountedRef.current) {
           setState("idle");
-          toast.error(t(($) => $.composer.voice_recording_failed));
+          showErrorToast(t(($) => $.composer.voice_recording_failed));
         }
       };
       recorder.onstop = () => {
@@ -184,9 +184,9 @@ export function VoiceInputButton({
       if (!mountedRef.current) return;
       setState("idle");
       if (error instanceof DOMException && error.name === "NotAllowedError") {
-        toast.error(t(($) => $.composer.voice_permission_denied));
+        showErrorToast(t(($) => $.composer.voice_permission_denied));
       } else {
-        toast.error(t(($) => $.composer.voice_unavailable));
+        showErrorToast(t(($) => $.composer.voice_unavailable));
       }
     }
   }, [clearMaxTimer, disabled, finishCapture, playbackScope, processRecording, state, t]);

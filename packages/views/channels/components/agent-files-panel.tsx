@@ -12,6 +12,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
 import { Eye, EyeOff, Save, X } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useAgentPresenceDetail } from "@multica/core/agents";
 import type { Agent, AgentFileContentResponse, MemberWithUser } from "@multica/core/types";
@@ -210,7 +211,7 @@ function AgentFileEditorForm({
     },
     onSuccess: async (resp) => {
       if (resp.conflict) {
-        toast.error("File changed on disk. Reload before saving again.");
+        showErrorToast("File changed on disk. Reload before saving again.");
         return;
       }
       toast.success("File saved");
@@ -222,9 +223,9 @@ function AgentFileEditorForm({
     },
     onError: (err) => {
       if (err instanceof Error && err.message) {
-        toast.error(err.message);
+        showErrorToast(err.message);
       } else {
-        toast.error("Failed to save file");
+        showErrorToast("Failed to save file");
       }
     },
   });

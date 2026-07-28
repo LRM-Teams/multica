@@ -1,7 +1,7 @@
 "use client";
 
 import { PauseCircle, PlayCircle } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
@@ -37,7 +37,7 @@ export function AgentDMGlobalPauseSection() {
   const paused = control.paused;
   const toggle = () => {
     globalControl.mutate(paused ? "resume_global" : "pause_global", {
-      onError: () => toast.error(t(($) => $.dm.agent_pair.action_failed)),
+      onError: () => showErrorToast(t(($) => $.dm.agent_pair.action_failed)),
     });
   };
 

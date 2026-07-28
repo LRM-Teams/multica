@@ -31,6 +31,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   Dialog,
   DialogContent,
@@ -267,7 +268,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
       toast.success(t(($) => $.trigger_row.toast_deleted));
       setConfirmOpen(false);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.trigger_row.toast_delete_failed),
@@ -297,7 +298,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
       toast.success(t(($) => $.trigger_row.url_copied));
       setTimeout(() => setCopied(false), 1500);
     } else {
-      toast.error(t(($) => $.trigger_row.url_copy_failed));
+      showErrorToast(t(($) => $.trigger_row.url_copy_failed));
     }
   };
 
@@ -307,7 +308,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
       toast.success(t(($) => $.trigger_row.toast_rotated));
       setRotateOpen(false);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.trigger_row.toast_rotate_failed),
@@ -491,7 +492,7 @@ function AddTriggerDialog({
       setConfig(getDefaultTriggerConfig());
       setLabel("");
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.add_trigger_dialog.toast_add_failed),
@@ -650,7 +651,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
       await triggerAutopilot.mutateAsync(autopilotId);
       toast.success(t(($) => $.detail.toast_triggered));
     } catch (e: any) {
-      toast.error(e?.message || t(($) => $.detail.toast_trigger_failed));
+      showErrorToast(e?.message || t(($) => $.detail.toast_trigger_failed));
     }
   };
 
@@ -661,7 +662,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
       toast.success(t(($) => $.detail.toast_deleted));
       router.push(wsPaths.autopilots());
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.detail.toast_delete_failed),

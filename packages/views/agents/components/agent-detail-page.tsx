@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import {
@@ -118,7 +119,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.detail.agent_archived_toast));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.detail.archive_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.detail.archive_failed_toast));
     }
   };
 
@@ -128,7 +129,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.detail.agent_restored_toast));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.detail.restore_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.detail.restore_failed_toast));
     }
   };
 

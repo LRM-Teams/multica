@@ -35,6 +35,7 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useT } from "../../i18n";
 
@@ -67,7 +68,7 @@ export function TokensTab() {
       const list = await api.listPersonalAccessTokens();
       setTokens(list);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.toast_load_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.toast_load_failed));
     } finally {
       setTokensLoading(false);
     }
@@ -78,7 +79,7 @@ export function TokensTab() {
       const list = await api.listSandboxNodes();
       setSandboxNodes(list);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_load_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_load_failed));
     } finally {
       setSandboxNodesLoading(false);
     }
@@ -97,7 +98,7 @@ export function TokensTab() {
       setTokenExpiry("90");
       await loadTokens();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.toast_create_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.toast_create_failed));
     } finally {
       setTokenCreating(false);
     }
@@ -110,7 +111,7 @@ export function TokensTab() {
       await loadTokens();
       toast.success(t(($) => $.tokens.toast_revoked));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.toast_revoke_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.toast_revoke_failed));
     } finally {
       setTokenRevoking(null);
     }
@@ -132,7 +133,7 @@ export function TokensTab() {
       await loadSandboxNodes();
       toast.success(t(($) => $.tokens.sandbox_keys.toast_created));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_create_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_create_failed));
     } finally {
       setSandboxNodeCreating(false);
     }
@@ -147,7 +148,7 @@ export function TokensTab() {
       await loadSandboxNodes();
       toast.success(t(($) => $.tokens.sandbox_keys.toast_updated));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_update_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_update_failed));
     } finally {
       setSavingNodeId(null);
     }
@@ -168,7 +169,7 @@ export function TokensTab() {
       await loadSandboxNodes();
       toast.success(t(($) => $.tokens.sandbox_keys.toast_deleted));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_delete_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_delete_failed));
     } finally {
       setDeletingNodeId(null);
     }

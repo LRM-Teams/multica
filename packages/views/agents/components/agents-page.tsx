@@ -68,6 +68,7 @@ import { useWindyEntryAction } from "../../workspace/use-wendy-entry-action";
 import { estimateCost } from "../../runtimes/utils";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 
 // Filter axes:
 //
@@ -209,7 +210,7 @@ export function AgentsPage({
         setShowCreate(true);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : "Failed to load Wendy draft");
+          showErrorToast(err instanceof Error ? err.message : "Failed to load Wendy draft");
         }
       }
     })();
@@ -543,7 +544,7 @@ export function AgentsPage({
       toast.success(t(($) => $.dashboard.delete_success));
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message ? err.message : t(($) => $.dashboard.delete_failed),
       );
     }

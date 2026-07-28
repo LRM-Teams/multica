@@ -6,6 +6,7 @@ import {
 } from "react";
 import { Camera, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type {
   Agent,
   AgentRuntime,
@@ -306,7 +307,7 @@ function AvatarEditor({
       await onUpdate({ avatar_selection: { kind: "uploaded", attachment_id: result.id } });
       toast.success(t(($) => $.inspector.avatar_updated_toast));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.inspector.avatar_upload_failed_toast));
+      showErrorToast(err instanceof Error ? err.message : t(($) => $.inspector.avatar_upload_failed_toast));
     }
   };
 

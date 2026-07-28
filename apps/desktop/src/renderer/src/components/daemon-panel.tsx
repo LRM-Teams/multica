@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { DaemonStatus } from "../../../shared/daemon-types";
 import {
   DAEMON_STATE_COLORS,
@@ -200,7 +201,7 @@ export function DaemonPanel({
         `Copied ${filtered.length} line${filtered.length === 1 ? "" : "s"}`,
       );
     } else {
-      toast.error("Failed to copy");
+      showErrorToast("Failed to copy");
     }
   }, [filtered]);
 

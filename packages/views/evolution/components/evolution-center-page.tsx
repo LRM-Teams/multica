@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -1069,7 +1070,7 @@ function CuratorProfileCard({
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : copy("configureProfile")),
+    onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("configureProfile")),
   });
   const run = useMutation({
     mutationFn: () => api.startMemoryCurationRun(wsId, {
@@ -1085,7 +1086,7 @@ function CuratorProfileCard({
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : copy("configureProfile")),
+    onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("configureProfile")),
   });
   const backfill = useMutation({
     mutationFn: () => api.startMemoryCurationBackfill(wsId, {
@@ -1100,7 +1101,7 @@ function CuratorProfileCard({
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : copy("configureProfile")),
+    onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("configureProfile")),
   });
 
   const toggleTarget = (agentId: string, checked: boolean) => {

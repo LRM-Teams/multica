@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowRight, Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -49,7 +50,7 @@ export function CloudWaitlistExpand({
       toast.success(t(($) => $.cloud_waitlist.success_toast));
       onSubmitted();
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error ? err.message : t(($) => $.cloud_waitlist.failed_toast),
       );
     } finally {

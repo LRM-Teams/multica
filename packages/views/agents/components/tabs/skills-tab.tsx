@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, FileText, Minus, Plus, Trash2, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent, AgentSkillSuggestion } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -59,7 +60,7 @@ export function SkillsTab({
       if (context?.previous) {
         qc.setQueryData(queryKey, context.previous);
       }
-      toast.error(e instanceof Error ? e.message : t(($) => $.tab_body.skills.suggestion_decision_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tab_body.skills.suggestion_decision_failed_toast));
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: agentSkillSuggestionKeys.list(wsId, agent.id) });
@@ -76,7 +77,7 @@ export function SkillsTab({
       await api.setAgentSkills(agent.id, { skill_ids: newIds });
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tab_body.skills.remove_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tab_body.skills.remove_failed_toast));
     } finally {
       setRemoving(false);
     }

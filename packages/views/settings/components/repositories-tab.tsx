@@ -6,6 +6,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -62,7 +63,7 @@ export function RepositoriesTab() {
       setEditingIndices(new Set());
       toast.success(t(($) => $.repositories.toast_saved));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.repositories.toast_save_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.repositories.toast_save_failed));
     } finally {
       setSaving(false);
     }

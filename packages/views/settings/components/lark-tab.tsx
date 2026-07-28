@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChevronRight, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 // Named import, NOT default: react-qr-code is CJS, and electron-vite's
 // dep-optimizer default-import interop handed back the module namespace
@@ -99,7 +100,7 @@ export function LarkTab() {
       toast.success(t(($) => $.lark.toast_disconnected));
       setDisconnectTarget(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.lark.toast_disconnect_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.lark.toast_disconnect_failed));
     } finally {
       setDisconnecting(false);
     }
@@ -526,7 +527,7 @@ function LarkAgentBotConnectedBadge({
       toast.success(t(($) => $.lark.toast_disconnected));
       setConfirmOpen(false);
     } catch (e) {
-      toast.error(
+      showErrorToast(
         e instanceof Error ? e.message : t(($) => $.lark.toast_disconnect_failed),
       );
     } finally {

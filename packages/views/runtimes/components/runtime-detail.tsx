@@ -9,6 +9,7 @@ import {
   Lock,
 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentRuntime, Agent, MemberWithUser } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
@@ -554,7 +555,7 @@ function VisibilityEditor({ runtime }: { runtime: AgentRuntime }) {
             }),
           ),
         onError: (err) =>
-          toast.error(
+          showErrorToast(
             err instanceof Error && err.message
               ? err.message
               : t(($) => $.detail.visibility_toast_failed),

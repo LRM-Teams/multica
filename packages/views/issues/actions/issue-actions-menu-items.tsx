@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   ArrowDown,
   ArrowUp,
@@ -135,12 +136,12 @@ export function IssueActionsMenuItems({
   const handleCopyWorkdirPath = useCallback(() => {
     const latestWorkDir = pickLatestWorkDir(tasks);
     if (!latestWorkDir) {
-      toast.error(t(($) => $.detail.workdir_path_unavailable));
+      showErrorToast(t(($) => $.detail.workdir_path_unavailable));
       return;
     }
     void copyText(latestWorkDir).then((ok) => {
       if (ok) toast.success(t(($) => $.detail.workdir_path_copied));
-      else toast.error(t(($) => $.detail.workdir_path_copy_failed));
+      else showErrorToast(t(($) => $.detail.workdir_path_copy_failed));
     });
   }, [tasks, t]);
 

@@ -15,6 +15,7 @@ import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../../i18n";
 
 // Env values never reach this component until the user clicks
@@ -97,7 +98,7 @@ export function EnvTab({
       setOriginalMap(env);
       setRevealed(envMapToEntries(env));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.tab_body.env.reveal_failed_toast),
@@ -143,7 +144,7 @@ export function EnvTab({
     const keys = revealed.filter((e) => e.key.trim()).map((e) => e.key.trim());
     const uniqueKeys = new Set(keys);
     if (uniqueKeys.size < keys.length) {
-      toast.error(t(($) => $.tab_body.env.duplicate_keys_toast));
+      showErrorToast(t(($) => $.tab_body.env.duplicate_keys_toast));
       return;
     }
 
@@ -158,7 +159,7 @@ export function EnvTab({
       toast.success(t(($) => $.tab_body.env.saved_toast));
       onSaved?.();
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.tab_body.env.save_failed_toast),

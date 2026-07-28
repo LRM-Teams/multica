@@ -25,7 +25,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, RefreshCw, ExternalLink } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   billingBalanceOptions,
   billingBatchesOptions,
@@ -265,7 +265,7 @@ function BuyAndPortalSection() {
     try {
       const { url } = await createCheckout.mutateAsync({ tier_id: tier.id });
       if (!url) {
-        toast.error(t(($) => $.buy.toast_no_url));
+        showErrorToast(t(($) => $.buy.toast_no_url));
         return;
       }
       // Redirect via window.location instead of window.open so the
@@ -274,7 +274,7 @@ function BuyAndPortalSection() {
       // SPA-like behaviour from there.
       window.location.href = url;
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error ? err.message : t(($) => $.buy.toast_checkout_failed),
       );
     } finally {
@@ -286,7 +286,7 @@ function BuyAndPortalSection() {
     try {
       const { url } = await createPortal.mutateAsync();
       if (!url) {
-        toast.error(t(($) => $.buy.toast_no_portal_url));
+        showErrorToast(t(($) => $.buy.toast_no_portal_url));
         return;
       }
       // Open in a new tab — the portal is a customer self-service
@@ -297,7 +297,7 @@ function BuyAndPortalSection() {
       // 400 is the documented "no Stripe customer yet" case from
       // upstream. Surface the body verbatim — it's the most useful
       // signal during testing.
-      toast.error(
+      showErrorToast(
         err instanceof Error ? err.message : t(($) => $.buy.toast_portal_failed),
       );
     }

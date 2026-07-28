@@ -3,6 +3,7 @@
 import { useMemo, useReducer, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
@@ -207,7 +208,7 @@ export function DeleteComputerDialog({
 
   const handleConfirm = async () => {
     if (!canDelete) {
-      toast.error(t(($) => $.list.delete_permission_hint));
+      showErrorToast(t(($) => $.list.delete_permission_hint));
       return;
     }
     if (!machine.daemonId) {
@@ -247,7 +248,7 @@ export function DeleteComputerDialog({
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.machine.delete_computer.operation_failed.title);
-      toast.error(message, {
+      showErrorToast(message, {
         description: t(($) => $.machine.delete_computer.operation_failed.description, {
           name: machine.title,
         }),
@@ -289,7 +290,7 @@ export function DeleteComputerDialog({
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.machine.delete_computer.operation_failed.title);
-      toast.error(message, {
+      showErrorToast(message, {
         description: t(($) => $.machine.delete_computer.operation_failed.description, {
           name: machine.title,
         }),

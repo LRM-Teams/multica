@@ -6,6 +6,7 @@ import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../../i18n";
 
 // `null` and the empty string are the two ways the user can mean "no
@@ -108,7 +109,7 @@ export function McpConfigTab({
       setText(configToText(parseResult.value));
       toast.success(t(($) => $.tab_body.mcp_config.saved_toast));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.tab_body.mcp_config.save_failed_toast),

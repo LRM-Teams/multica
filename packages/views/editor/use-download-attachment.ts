@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useWorkspaceSlug } from "@multica/core/paths";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -72,7 +72,7 @@ export function useDownloadAttachment(): (attachmentId: string) => Promise<void>
   const workspaceSlug = useWorkspaceSlug();
   return useCallback(
     async (attachmentId: string) => {
-      const failed = () => toast.error(t(($) => $.attachment.download_failed));
+      const failed = () => showErrorToast(t(($) => $.attachment.download_failed));
 
       if (hasDesktopDownloadBridge()) {
         try {

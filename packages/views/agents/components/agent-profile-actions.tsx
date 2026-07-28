@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { AlertCircle, Loader2, MessageSquare, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import {
@@ -109,7 +110,7 @@ export function AgentProfileActions({
       invalidateAgents();
       toast.success(t(($) => $.side_panel.agent_deleted_toast));
     } catch (e) {
-      toast.error(
+      showErrorToast(
         e instanceof Error ? e.message : t(($) => $.side_panel.delete_failed_toast),
       );
     } finally {
@@ -121,7 +122,7 @@ export function AgentProfileActions({
     if (!dmChannelId || !stoppableTask || stopping) return;
     const inboxEventId = stoppableTask.inbox_event_id?.trim();
     if (!inboxEventId) {
-      toast.error(t(($) => $.side_panel.actions_stop_failed));
+      showErrorToast(t(($) => $.side_panel.actions_stop_failed));
       return;
     }
     setStopping(true);
@@ -135,7 +136,7 @@ export function AgentProfileActions({
       });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     } catch {
-      toast.error(t(($) => $.side_panel.actions_stop_failed));
+      showErrorToast(t(($) => $.side_panel.actions_stop_failed));
     } finally {
       setStopping(false);
     }

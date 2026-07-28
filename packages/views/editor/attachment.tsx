@@ -33,6 +33,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { api } from "@multica/core/api";
@@ -542,7 +543,7 @@ function ImageAttachmentView({
     if (await copyText(src)) {
       toast.success(t(($) => $.image.link_copied));
     } else {
-      toast.error(t(($) => $.image.copy_link_failed));
+      showErrorToast(t(($) => $.image.copy_link_failed));
     }
   };
 

@@ -1,6 +1,16 @@
 import { toast } from "sonner";
 
 /**
+ * Presentation extras a failure may carry. Deliberately NOT sonner's full
+ * `ExternalToast`: `duration`, `closeButton` and friends are the invariant this
+ * helper owns, and re-exposing them would let a call site opt back out of it.
+ */
+export interface ErrorToastOptions {
+  /** Secondary line under the message — the specific cause, not a restatement. */
+  description?: string;
+}
+
+/**
  * #835/#839 — the one place a failure is announced.
  *
  * sonner's defaults (`TOAST_LIFETIME` 4s, 3 visible) were never chosen by us:
@@ -18,6 +28,14 @@ import { toast } from "sonner";
  * not be the only trace of a failure — the failing surface still owes a durable
  * state (inline failed row, retry affordance, …) that survives dismissal.
  */
-export function showErrorToast(message: string): void {
-  toast.error(message, { duration: Infinity, closeButton: true });
+export function showErrorToast(
+  message: string,
+  options?: ErrorToastOptions,
+): void {
+  // The persistence guarantee is applied AFTER the caller's options on purpose:
+  // `duration`/`closeButton` are the whole reason this helper exists, so a call
+  // site must not be able to hand back a 4s-and-gone error by passing its own
+  // `duration`. Presentation extras (a secondary `description` line) are the
+  // caller's to choose; the invariant is not.
+  toast.error(message, { ...options, duration: Infinity, closeButton: true });
 }

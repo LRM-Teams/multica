@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { cn } from "@multica/ui/lib/utils";
@@ -115,7 +115,7 @@ export function StepAgent({
       const agent = await api.createAgent(req);
       await onCreated(agent);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error ? err.message : t(($) => $.step_agent.create_failed),
       );
       setCreating(false);

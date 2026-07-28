@@ -33,6 +33,7 @@ import {
   DropdownMenuSeparator,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -226,7 +227,7 @@ export function MembersTab() {
       qc.invalidateQueries({ queryKey: workspaceKeys.invitations(wsId) });
       toast.success(t(($) => $.members.toast_invitation_sent));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_invitation_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.members.toast_invitation_failed));
     } finally {
       setInviteLoading(false);
     }
@@ -245,7 +246,7 @@ export function MembersTab() {
           qc.invalidateQueries({ queryKey: workspaceKeys.invitations(wsId) });
           toast.success(t(($) => $.members.toast_invitation_revoked));
         } catch (e) {
-          toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_invitation_revoke_failed));
+          showErrorToast(e instanceof Error ? e.message : t(($) => $.members.toast_invitation_revoke_failed));
         } finally {
           setInvitationActionId(null);
         }
@@ -262,7 +263,7 @@ export function MembersTab() {
       toast.success(t(($) => $.members.toast_role_updated));
       setRoleEditMember(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_role_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.members.toast_role_failed));
     } finally {
       setMemberActionId(null);
     }
@@ -298,7 +299,7 @@ export function MembersTab() {
           qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
           toast.success(t(($) => $.members.toast_member_removed));
         } catch (e) {
-          toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_member_remove_failed));
+          showErrorToast(e instanceof Error ? e.message : t(($) => $.members.toast_member_remove_failed));
         } finally {
           setMemberActionId(null);
         }

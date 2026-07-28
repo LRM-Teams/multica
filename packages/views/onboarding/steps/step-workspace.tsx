@@ -15,7 +15,7 @@ import {
   Plus,
   Zap,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -150,10 +150,10 @@ export function StepWorkspace({
         onError: (error) => {
           if (isWorkspaceSlugConflict(error)) {
             setSlugServerError(t(($) => $.step_workspace.slug_taken_error));
-            toast.error(t(($) => $.step_workspace.slug_conflict_toast));
+            showErrorToast(t(($) => $.step_workspace.slug_conflict_toast));
             return;
           }
-          toast.error(
+          showErrorToast(
             error instanceof Error && error.message
               ? error.message
               : t(($) => $.step_workspace.create_failed_toast),

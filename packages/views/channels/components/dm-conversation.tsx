@@ -39,7 +39,7 @@ import type {
 import { Button } from "@multica/ui/components/ui/button";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
@@ -503,13 +503,13 @@ function DmChannelConversation({
   const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
     editChannelMessage.mutate(
       { channelId: message.channel_id, messageId: message.id, content },
-      { onError: () => toast.error(t(($) => $.message.edit_failed_toast)) },
+      { onError: () => showErrorToast(t(($) => $.message.edit_failed_toast)) },
     );
   }, [editChannelMessage, t]);
   const handleDeleteMessage = useCallback((message: ChannelMessage) => {
     deleteChannelMessage.mutate(
       { channelId: message.channel_id, messageId: message.id },
-      { onError: () => toast.error(t(($) => $.message.delete_failed_toast)) },
+      { onError: () => showErrorToast(t(($) => $.message.delete_failed_toast)) },
     );
   }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
@@ -583,7 +583,7 @@ function DmChannelConversation({
         followed,
       },
       {
-        onError: () => toast.error(
+        onError: () => showErrorToast(
           t(($) => followed ? $.thread.follow_failed : $.thread.unfollow_failed),
         ),
       },
@@ -714,7 +714,7 @@ function DmChannelConversation({
           total: res.total,
         });
       } catch {
-        toast.error(t(($) => $.conv_search.error));
+        showErrorToast(t(($) => $.conv_search.error));
       }
     }, 300);
     return () => clearTimeout(timer);
@@ -956,7 +956,7 @@ function DmChannelConversation({
       mutate: sendMessage.mutate,
       onCommitted: () => {},
       onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+        if (kind === "conflict") showErrorToast(t(($) => $.composer.send_failed));
       },
     });
     if (dispatched) {
@@ -1040,7 +1040,7 @@ function DmChannelConversation({
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {},
       onVisibleError: (kind) => {
-        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+        if (kind === "conflict") showErrorToast(t(($) => $.thread.send_failed));
       },
     });
     if (dispatched) {

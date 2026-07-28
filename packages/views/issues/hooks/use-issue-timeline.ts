@@ -35,7 +35,7 @@ import {
 } from "@multica/core/issues/mutations";
 import { sortTimelineEntriesAsc } from "@multica/core/issues/timeline-sort";
 import { useWSEvent, useWSReconnect } from "@multica/core/realtime";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n";
 
 type TLCache = TimelineEntry[];
@@ -264,7 +264,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       try {
         await createComment({ content, attachmentIds, suppressAgentIds });
       } catch (err) {
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.comment.send_failed),
@@ -286,7 +286,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           suppressAgentIds,
         });
       } catch (err) {
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.comment.send_reply_failed),
@@ -301,7 +301,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       try {
         await updateComment({ commentId, content, attachmentIds });
       } catch (err) {
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.comment.update_failed),
@@ -316,7 +316,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       try {
         await deleteCommentAsync(commentId);
       } catch (err) {
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.comment.delete_failed),
@@ -331,7 +331,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       try {
         await resolveCommentAsync({ commentId, resolved });
       } catch (err) {
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : resolved

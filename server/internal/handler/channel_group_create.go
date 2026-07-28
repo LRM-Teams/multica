@@ -1,0 +1,53 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+// createOrdinaryGroupWithOwnerTx inserts a kind=group channel (system_key NULL)
+// and exactly one human owner membership in the same transaction.
+//
+// All ordinary-group creation entry points MUST use this (or call
+// insertChannelHumanOwnerTx after their own channel INSERT). Do not open-code
+// channel_member inserts with default role=member for group creators.
+func createOrdinaryGroupWithOwnerTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, createdBy pgtype.UUID,
+	name string,
+	description, larkChatID *string,
+	projectID pgtype.UUID,
+) (channelID string, err error) {
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, description, lark_chat_id, project_id, created_by, kind)
+		VALUES ($1, $2, $3, $4, $5, $6, 'group')
+		RETURNING id::text`,
+		workspaceID, name, description, larkChatID, projectID, createdBy,
+	).Scan(&channelID); err != nil {
+		return "", err
+	}
+	if err := insertChannelHumanOwnerTx(ctx, tx, channelID, workspaceID, createdBy); err != nil {
+		return "", err
+	}
+	return channelID, nil
+}
+
+// insertChannelHumanOwnerTx inserts the sole human owner membership for a channel.
+func insertChannelHumanOwnerTx(ctx context.Context, tx pgx.Tx, channelID string, workspaceID, userID pgtype.UUID) error {
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1::uuid, $2, 'user', $3, 'owner')`,
+		channelID, workspaceID, userID)
+	if err != nil {
+		return fmt.Errorf("insert channel owner: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("insert channel owner: expected 1 row")
+	}
+	return nil
+}

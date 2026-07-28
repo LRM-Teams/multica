@@ -797,14 +797,13 @@ func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, w
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	var channelID string
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO channel (workspace_id, name, kind, project_id, created_by)
-		VALUES ($1, $2, 'group', $3, $4) RETURNING id::text`,
-		workspaceID, "env-dispatch-"+uuid.NewString(), projectID, userID).Scan(&channelID); err != nil {
-		return "", err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id) VALUES ($1, $2, 'user', $3)`, channelID, workspaceID, userID); err != nil {
+	channelID, err := createOrdinaryGroupWithOwnerTx(
+		ctx, tx,
+		parseUUID(workspaceID), parseUUID(userID),
+		"env-dispatch-"+uuid.NewString(),
+		nil, nil, parseUUID(projectID),
+	)
+	if err != nil {
 		return "", err
 	}
 	store := envDispatchChannelStore{}

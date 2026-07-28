@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_agent_inbox_event_ws_completed_activity;

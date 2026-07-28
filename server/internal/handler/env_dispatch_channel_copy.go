@@ -35,10 +35,30 @@ func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourc
 		return channelCopyMap{}, fmt.Errorf("create copied env-dispatch channel: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, created_at)
-		SELECT $2, workspace_id, member_type, member_id, created_at
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role, created_at)
+		SELECT $2, workspace_id, member_type, member_id, role, created_at
 		FROM channel_member WHERE channel_id = $1`, sourceChannelID, destinationChannelID); err != nil {
 		return channelCopyMap{}, fmt.Errorf("copy channel members: %w", err)
+	}
+	// Guarantee human owner after copy (source may have been pre-236 zero-owner).
+	var ownerCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1::uuid AND role = 'owner' AND member_type = 'user'`,
+		destinationChannelID).Scan(&ownerCount); err != nil {
+		return channelCopyMap{}, err
+	}
+	if ownerCount == 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE channel_member cm
+			SET role = 'owner'
+			FROM channel c
+			WHERE cm.channel_id = c.id
+			  AND c.id = $1::uuid
+			  AND cm.member_type = 'user'
+			  AND cm.member_id = c.created_by`, destinationChannelID); err != nil {
+			return channelCopyMap{}, fmt.Errorf("ensure copied channel owner: %w", err)
+		}
 	}
 
 	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE env_dispatch_channel_message_map (source_id uuid PRIMARY KEY, destination_id uuid NOT NULL) ON COMMIT DROP`); err != nil {

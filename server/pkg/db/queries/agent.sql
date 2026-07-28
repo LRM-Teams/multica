@@ -780,8 +780,7 @@ SELECT
     COUNT(*)::int AS task_count,
     COUNT(*) FILTER (WHERE atq.status = 'acked' AND atq.terminal_outcome = 'failed')::int AS failed_count
 FROM agent_inbox_event atq
-JOIN agent a ON a.id = atq.agent_id
-WHERE a.workspace_id = $1
+WHERE atq.workspace_id = $1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at > now() - INTERVAL '30 days'
   AND COALESCE(atq.context->>'type', '') <> 'agent_radar'

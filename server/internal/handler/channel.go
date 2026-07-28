@@ -483,30 +483,50 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			SELECT limited.channel_id, limited.member_type, limited.member_id,
 			       COALESCE(u.name, a.name, ''),
 			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
-			       CASE WHEN limited.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
+			       CASE WHEN limited.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
+			       limited.role
 			FROM unnest($1::uuid[]) AS selected(channel_id)
 			JOIN LATERAL (
-				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at
+				SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role
 				FROM channel_member cm
 				WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
-				ORDER BY cm.created_at ASC
+				ORDER BY
+				  CASE cm.role
+				    WHEN 'owner' THEN 0
+				    WHEN 'manager' THEN 1
+				    ELSE 2
+				  END,
+				  CASE WHEN cm.role = 'manager' AND cm.member_type = 'agent' THEN 0
+				       WHEN cm.role = 'manager' AND cm.member_type = 'user' THEN 1
+				       ELSE 2
+				  END,
+				  cm.created_at ASC
 				LIMIT $3
 			) limited ON true
 			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
 			LEFT JOIN agent a ON limited.member_type = 'agent' AND a.id = limited.member_id
-			ORDER BY selected.channel_id, limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
+			ORDER BY selected.channel_id,
+			  CASE limited.role
+			    WHEN 'owner' THEN 0
+			    WHEN 'manager' THEN 1
+			    ELSE 2
+			  END,
+			  limited.created_at ASC`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
 		if err == nil {
 			defer memberRows.Close()
 			grouped := map[string][]ChannelMemberBrief{}
 			for memberRows.Next() {
 				var chID, memberID pgtype.UUID
-				var memberType, memberName, memberDisplayName string
+				var memberType, memberName, memberDisplayName, role string
 				var avatarURL pgtype.Text
-				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName, &memberDisplayName, &avatarURL); err != nil {
+				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName, &memberDisplayName, &avatarURL, &role); err != nil {
 					continue
 				}
+				if role == "" {
+					role = "member"
+				}
 				key := uuidToString(chID)
-				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName, DisplayName: firstNonEmpty(memberDisplayName, memberName), AvatarURL: textToPtr(avatarURL)})
+				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName, DisplayName: firstNonEmpty(memberDisplayName, memberName), AvatarURL: textToPtr(avatarURL), Role: role})
 			}
 			for i := range out {
 				if m := grouped[out[i].ID]; m != nil {
@@ -802,9 +822,8 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	desc := trimTextPtr(req.Description)
 	larkChatID := trimTextPtr(req.LarkChatID)
 
-	// channel row + owner membership MUST be atomic. Swallowing the owner
-	// INSERT (former `_, _ = h.DB.Exec`) left zero-owner groups that nobody
-	// can administer (Barry #1284 SOURCE BLOCK).
+	// Ordinary groups always go through createOrdinaryGroupWithOwnerTx so
+	// channel + human owner cannot diverge (Parker: single create funnel).
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create channel")
@@ -812,12 +831,11 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	row := tx.QueryRow(r.Context(), `
-		INSERT INTO channel (workspace_id, name, description, lark_chat_id, project_id, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, system_key, archived_at, archived_by`,
-		parseUUID(workspaceID), name, desc, larkChatID, projectID, parseUUID(userID))
-	ch, err := scanChannel(row)
+	channelID, err := createOrdinaryGroupWithOwnerTx(
+		r.Context(), tx,
+		parseUUID(workspaceID), parseUUID(userID),
+		name, desc, larkChatID, projectID,
+	)
 	if err != nil {
 		if isChannelNameTakenError(err) {
 			writeCodedError(w, http.StatusConflict, channelNameTakenCode, "channel name already exists")
@@ -826,16 +844,12 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create channel")
 		return
 	}
-	tag, err := tx.Exec(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1, $2, 'user', $3, 'owner')`,
-		parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
+	// Re-read full row for response (helper only returns id).
+	ch, err := scanChannel(tx.QueryRow(r.Context(), `
+		SELECT id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, system_key, archived_at, archived_by
+		FROM channel WHERE id = $1::uuid`, channelID))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create channel owner membership")
-		return
-	}
-	if tag.RowsAffected() != 1 {
-		writeError(w, http.StatusInternalServerError, "failed to create channel owner membership")
+		writeError(w, http.StatusInternalServerError, "failed to create channel")
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {

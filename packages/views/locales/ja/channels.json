@@ -373,6 +373,7 @@
     "send_failed_title": "送信に失敗しました",
     "send_failed_reason": "送信に失敗しました · {{reason}}",
     "send_failed_kept_previous": "送信に失敗しました。入力欄に新しい内容があるため、前のメッセージは保持されています。",
+    "send_failed_too_long": "メッセージが長すぎます — 未送信。短くして再送してください。",
     "retry": "再試行",
     "restore_previous": "前のメッセージを復元",
     "voice_start": "音声メッセージを録音",

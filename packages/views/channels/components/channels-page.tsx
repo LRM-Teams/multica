@@ -1993,7 +1993,7 @@ export function ChannelsPage({
       // composer (unless it already holds new text → keep + offer Restore) and
       // show the inline error bar; bump the editor remount-nonce so it re-reads
       // the restored draft.
-      onVisibleError: () => {
+      onVisibleError: (kind) => {
         const currentText = editorRef.current?.getMarkdown()?.trim() ?? "";
         const conflicted = currentText.length > 0 && currentText !== content;
         channelFailedContentRef.current = content;
@@ -2001,7 +2001,7 @@ export function ChannelsPage({
           setConversationDraft(draftKey, content);
           setChannelRestoreNonce((n) => n + 1);
         }
-        setChannelSendError({ conflicted });
+        setChannelSendError({ conflicted, tooLong: kind === "too_long" });
       },
     });
     if (dispatched) {

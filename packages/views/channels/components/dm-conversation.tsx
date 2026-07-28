@@ -931,11 +931,16 @@ function DmChannelConversation({
         restore.clear();
         onDraftClear?.();
       },
-      onVisibleError: () => {
+      onVisibleError: (kind) => {
         // #772: no permanent failed bubble. Restore the failed text into the
         // composer (unless it already holds DIFFERENT new text — then keep it +
-        // offer Restore-previous) and show the inline error bar.
-        restore.onFailed(content, editorRef.current?.getMarkdown()?.trim() ?? "");
+        // offer Restore-previous) and show the inline error bar. #1276 413: a
+        // too-large payload guides shorten-and-retry (no plain Retry).
+        restore.onFailed(
+          content,
+          editorRef.current?.getMarkdown()?.trim() ?? "",
+          kind === "too_long",
+        );
       },
     });
     if (dispatched) {
@@ -1010,13 +1015,14 @@ function DmChannelConversation({
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => threadRestore.clear(),
-      onVisibleError: () => {
+      onVisibleError: (kind) => {
         // #772 (thread): restore the failed text into the thread composer (via
         // the editor's `defaultValue` + remount) unless it already holds new
-        // text; show the inline error bar.
+        // text; show the inline error bar. #1276 413: guide shorten-and-retry.
         threadRestore.onFailed(
           content,
           threadEditorRef.current?.getMarkdown()?.trim() ?? "",
+          kind === "too_long",
         );
       },
     });

@@ -36,6 +36,12 @@ describe("classifySendFailure", () => {
     expect(classifySendFailure(new TypeError("Failed to fetch"))).toBe("retry");
     expect(classifySendFailure(undefined)).toBe("retry");
   });
+
+  it("maps a 413 too-large payload to the too_long branch (shorten, not raw retry)", () => {
+    expect(
+      classifySendFailure(new ApiError("too large", 413, "Payload Too Large")),
+    ).toBe("too_long");
+  });
 });
 
 describe("useComposerSend", () => {

@@ -373,6 +373,7 @@
     "send_failed_title": "Send failed",
     "send_failed_reason": "Send failed · {{reason}}",
     "send_failed_kept_previous": "Send failed. Composer has new text — previous kept.",
+    "send_failed_too_long": "Message too long — not sent. Shorten it and try again.",
     "retry": "Retry",
     "restore_previous": "Restore previous",
     "voice_start": "Record voice message",

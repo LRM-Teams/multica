@@ -10,6 +10,12 @@ export interface ComposerSendErrorState {
    * offers "Restore previous" instead of a plain Retry (Iris edge case #1).
    */
   conflicted: boolean;
+  /**
+   * #1276 413 fast-follow: the payload was too large. The message guides the
+   * user to shorten (a plain retry of the same text just 413s again), and the
+   * bar offers no Retry — the preserved text is editable in the composer.
+   */
+  tooLong?: boolean;
 }
 
 /**
@@ -36,24 +42,30 @@ export function ComposerSendErrorBar({
 
   const message = error.conflicted
     ? t(($) => $.composer.send_failed_kept_previous)
-    : error.reason
-      ? t(($) => $.composer.send_failed_reason, { reason: error.reason })
-      : t(($) => $.composer.send_failed_title);
+    : error.tooLong
+      ? t(($) => $.composer.send_failed_too_long)
+      : error.reason
+        ? t(($) => $.composer.send_failed_reason, { reason: error.reason })
+        : t(($) => $.composer.send_failed_title);
 
   return (
     <output
       className="mx-1 mb-1 flex items-center gap-2 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
     >
       <span className="min-w-0 flex-1 truncate">{message}</span>
-      <button
-        type="button"
-        onClick={error.conflicted ? onRestore : onRetry}
-        className="shrink-0 font-medium underline underline-offset-2 hover:no-underline"
-      >
-        {error.conflicted
-          ? t(($) => $.composer.restore_previous)
-          : t(($) => $.composer.retry)}
-      </button>
+      {/* #1276 413: no Retry — the same oversized text just fails again; the user
+          shortens the preserved text and sends normally. */}
+      {!error.tooLong && (
+        <button
+          type="button"
+          onClick={error.conflicted ? onRestore : onRetry}
+          className="shrink-0 font-medium underline underline-offset-2 hover:no-underline"
+        >
+          {error.conflicted
+            ? t(($) => $.composer.restore_previous)
+            : t(($) => $.composer.retry)}
+        </button>
+      )}
     </output>
   );
 }

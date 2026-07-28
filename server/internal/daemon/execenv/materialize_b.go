@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -125,18 +126,32 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 	}
 
 	skillsParent := skillsDirPath(absWork, provider)
+	if len(plan.Skills) > 0 {
+		if err := mkdirAllWithoutSymlink(absWork, skillsParent, 0o755); err != nil {
+			return "", receipt, fmt.Errorf("create skills parent: %w", err)
+		}
+	}
 	for _, sk := range plan.Skills {
-		// Package staging: write all files under .tmp then rename into place.
 		finalDir := filepath.Join(skillsParent, sk.ActualSlug)
-		stageDir := finalDir + ".multica-staging"
-		_ = os.RemoveAll(stageDir)
-		if err := mkdirAllWithoutSymlink(absWork, stageDir, 0o755); err != nil {
+		if err := validatePathUnderWorkDirNoSymlink(absWork, filepath.Dir(finalDir)); err != nil {
 			return "", receipt, err
+		}
+		// Unique staging dir under skills parent — never a fixed name user might own.
+		stageDir, err := os.MkdirTemp(skillsParent, ".multica-skill-stage-*")
+		if err != nil {
+			return "", receipt, fmt.Errorf("create skill staging dir: %w", err)
+		}
+		// Only remove this exact path we created; surface cleanup errors.
+		cleanupStage := func() error {
+			if err := os.RemoveAll(stageDir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return nil
 		}
 		// Marker first inside staging.
 		markerBody := []byte(sk.LogicalName + "\n")
 		if err := os.WriteFile(filepath.Join(stageDir, managedSkillMarker), markerBody, 0o644); err != nil {
-			_ = os.RemoveAll(stageDir)
+			_ = cleanupStage()
 			return "", receipt, err
 		}
 		rec := MaterializedSkillReceipt{
@@ -148,43 +163,40 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 			},
 		}
 		for _, f := range sk.Files {
-			full := filepath.Join(stageDir, filepath.FromSlash(f.RelPath))
+			// Paths already validated at resolve; re-check confinement under stage.
+			full, err := confinedJoin(stageDir, f.RelPath)
+			if err != nil {
+				_ = cleanupStage()
+				return "", receipt, fmt.Errorf("skill file path: %w", err)
+			}
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-				_ = os.RemoveAll(stageDir)
+				_ = cleanupStage()
 				return "", receipt, err
 			}
 			if err := os.WriteFile(full, f.Body, 0o644); err != nil {
-				_ = os.RemoveAll(stageDir)
+				_ = cleanupStage()
 				return "", receipt, err
 			}
 			rec.Files = append(rec.Files, MaterializedFile{RelPath: f.RelPath, SHA256: sha256Hex(f.Body)})
 		}
 		// Reclaim final if managed leftover, then atomic rename staging → final.
-		if err := validatePathUnderWorkDirNoSymlink(absWork, filepath.Dir(finalDir)); err != nil {
-			_ = os.RemoveAll(stageDir)
-			return "", receipt, err
-		}
 		if isManagedSkillDir(finalDir) {
 			if err := os.RemoveAll(finalDir); err != nil {
-				_ = os.RemoveAll(stageDir)
+				_ = cleanupStage()
 				return "", receipt, err
 			}
 		}
 		if _, err := os.Lstat(finalDir); err == nil {
-			// Unmarked collision should have been resolved to sibling; fail closed.
-			_ = os.RemoveAll(stageDir)
+			_ = cleanupStage()
 			return "", receipt, fmt.Errorf("skill final dir still exists after resolve: %s", finalDir)
 		}
 		if err := os.Rename(stageDir, finalDir); err != nil {
-			_ = os.RemoveAll(stageDir)
+			_ = cleanupStage()
 			return "", receipt, fmt.Errorf("activate skill package %s: %w", sk.ActualSlug, err)
 		}
-		// Record package root in manifest for cleanup.
-		if manifest != nil {
-			manifest.Dirs = append(manifest.Dirs, finalDir)
-			for _, f := range rec.Files {
-				manifest.Files = append(manifest.Files, filepath.Join(finalDir, filepath.FromSlash(f.RelPath)))
-			}
+		manifest.Dirs = append(manifest.Dirs, finalDir)
+		for _, f := range rec.Files {
+			manifest.Files = append(manifest.Files, filepath.Join(finalDir, filepath.FromSlash(f.RelPath)))
 		}
 		receipt.Skills = append(receipt.Skills, rec)
 	}
@@ -223,27 +235,44 @@ func resolveMaterializationPlan(absWork, provider string, staticCtx TaskContextF
 	}
 
 	slugByName := map[string]string{}
+	reservedSlugs := map[string]string{} // slug → first logical name that claimed it
+	seenLogical := map[string]struct{}{}
 	if len(staticCtx.AgentSkills) > 0 && provider != "codex" {
 		skillsDir := skillsDirPath(absWork, provider)
-		// Parent may not exist yet — planning only Lstats candidates.
 		for _, sk := range staticCtx.AgentSkills {
-			baseSlug := sanitizeSkillName(sk.Name)
-			slug, decision, err := planCollisionFreeSkillSlug(skillsDir, baseSlug)
-			if err != nil {
-				return plan, fmt.Errorf("plan skill slug %q: %w", sk.Name, err)
+			logical := strings.TrimSpace(sk.Name)
+			if logical == "" {
+				return plan, errors.New("assigned skill name is empty")
 			}
-			slugByName[sk.Name] = slug
+			if _, dup := seenLogical[logical]; dup {
+				return plan, fmt.Errorf("duplicate assigned skill logical name %q", logical)
+			}
+			seenLogical[logical] = struct{}{}
+			baseSlug := sanitizeSkillName(logical)
+			slug, decision, err := planCollisionFreeSkillSlug(skillsDir, baseSlug, reservedSlugs)
+			if err != nil {
+				return plan, fmt.Errorf("plan skill slug %q: %w", logical, err)
+			}
+			reservedSlugs[slug] = logical
+			slugByName[logical] = slug
 			body := ensureSkillFrontmatter(sk.Content, slug, sk.Description)
 			files := []ResolvedSkillFile{{RelPath: "SKILL.md", Body: []byte(body)}}
+			seenRel := map[string]struct{}{"skill.md": {}, managedSkillMarker: {}}
 			for _, f := range sk.Files {
-				rel := strings.TrimPrefix(filepath.ToSlash(f.Path), "/")
-				if rel == "" || rel == "SKILL.md" {
-					continue
+				rel, err := validateSkillPackageRelPath(f.Path)
+				if err != nil {
+					return plan, fmt.Errorf("skill %q file %q: %w", logical, f.Path, err)
 				}
+				// Case-insensitive duplicate detection for APFS/Windows.
+				key := strings.ToLower(rel)
+				if _, dup := seenRel[key]; dup {
+					return plan, fmt.Errorf("skill %q duplicate package path %q", logical, rel)
+				}
+				seenRel[key] = struct{}{}
 				files = append(files, ResolvedSkillFile{RelPath: rel, Body: []byte(f.Content)})
 			}
 			plan.Skills = append(plan.Skills, ResolvedSkillPackage{
-				LogicalName: sk.Name,
+				LogicalName: logical,
 				ActualSlug:  slug,
 				Decision:    decision,
 				Files:       files,
@@ -287,9 +316,9 @@ func resolveMaterializationPlan(absWork, provider string, staticCtx TaskContextF
 }
 
 // planCollisionFreeSkillSlug chooses a slug without mutating the filesystem.
-// Managed leftover dirs are treated as reclaimable (decision "created").
-// Unmarked existing dirs force sibling allocation.
-func planCollisionFreeSkillSlug(skillsParent, baseSlug string) (slug, decision string, err error) {
+// reservedInPlan tracks slugs already claimed by earlier skills in this plan.
+// Disk: managed leftovers are reclaimable; unmarked dirs force sibling.
+func planCollisionFreeSkillSlug(skillsParent, baseSlug string, reservedInPlan map[string]string) (slug, decision string, err error) {
 	const maxAttempts = 64
 	for i := 0; i < maxAttempts; i++ {
 		var candidate string
@@ -300,6 +329,21 @@ func planCollisionFreeSkillSlug(skillsParent, baseSlug string) (slug, decision s
 			candidate = baseSlug + "-multica"
 		default:
 			candidate = fmt.Sprintf("%s-multica-%d", baseSlug, i)
+		}
+		if owner, taken := reservedInPlan[candidate]; taken {
+			_ = owner
+			continue
+		}
+		// Case-insensitive reserve check (APFS/Windows).
+		conflict := false
+		for r := range reservedInPlan {
+			if strings.EqualFold(r, candidate) {
+				conflict = true
+				break
+			}
+		}
+		if conflict {
+			continue
 		}
 		path := filepath.Join(skillsParent, candidate)
 		st, statErr := os.Lstat(path)
@@ -316,7 +360,6 @@ func planCollisionFreeSkillSlug(skillsParent, baseSlug string) (slug, decision s
 			continue
 		}
 		if isManagedSkillDir(path) {
-			// Apply will RemoveAll then rename staging here.
 			if i == 0 {
 				return candidate, "created", nil
 			}
@@ -325,6 +368,61 @@ func planCollisionFreeSkillSlug(skillsParent, baseSlug string) (slug, decision s
 		// Unmarked user-owned — try next slug.
 	}
 	return "", "", fmt.Errorf("exhausted %d skill slug attempts for %q", maxAttempts, baseSlug)
+}
+
+// validateSkillPackageRelPath rejects empty, absolute, .., reserved names, and
+// unclean paths. Returns cleaned slash-separated relative path.
+func validateSkillPackageRelPath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("empty relative path")
+	}
+	// Force slash form then clean.
+	p := filepath.ToSlash(raw)
+	if strings.HasPrefix(p, "/") || filepath.IsAbs(raw) {
+		return "", errors.New("absolute path not allowed")
+	}
+	clean := path.Clean(p)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", errors.New("path escapes skill package")
+	}
+	for _, seg := range strings.Split(clean, "/") {
+		if seg == ".." || seg == "" {
+			return "", errors.New("path escapes skill package")
+		}
+	}
+	base := strings.ToLower(filepath.Base(clean))
+	if base == "skill.md" || base == strings.ToLower(managedSkillMarker) {
+		return "", fmt.Errorf("reserved package path %q", clean)
+	}
+	return clean, nil
+}
+
+// confinedJoin joins root/rel and ensures the result stays under root.
+// rel must already be validateSkillPackageRelPath-clean (or SKILL.md).
+func confinedJoin(root, rel string) (string, error) {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	if rel == "" {
+		return "", errors.New("empty rel")
+	}
+	if rel != "SKILL.md" && rel != managedSkillMarker {
+		if _, err := validateSkillPackageRelPath(rel); err != nil {
+			return "", err
+		}
+	}
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absFull, err := filepath.Abs(full)
+	if err != nil {
+		return "", err
+	}
+	if absFull != absRoot && !pathWithin(absRoot, absFull) {
+		return "", fmt.Errorf("join escapes package root: %s", rel)
+	}
+	return full, nil
 }
 
 const materializationReceiptFile = "materialization_receipt.json"

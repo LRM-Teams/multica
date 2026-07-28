@@ -4,11 +4,56 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// agentHumanRouteHits counts AgentPrincipal requests that hit a human data-plane
+// route (must stay at 0 after #801 alias deletion). Label "site" is a stable
+// code landmark, not a raw URL (avoid high-cardinality).
+var agentHumanRouteHits = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "multica",
+	Subsystem: "agent_surface",
+	Name:      "human_route_hits_total",
+	Help:      "AgentPrincipal requests that hit human (non-/api/agent) data-plane routes. Must be 0 after #801 cutover.",
+}, []string{"site"})
+
+var agentHumanRouteMetricsRegistered atomic.Bool
+
+func ensureAgentHumanRouteMetrics() {
+	if agentHumanRouteMetricsRegistered.Swap(true) {
+		return
+	}
+	// Best-effort: tests may re-register; ignore AlreadyRegistered.
+	_ = prometheus.Register(agentHumanRouteHits)
+}
+
+// rejectAgentOnHumanRoute fails closed when an AgentPrincipal hits a human
+// data-plane URL (not under /api/agent/). Shared helpers invoked from dedicated
+// agent routes keep working so behavior can stay principal-native without
+// duplicating every handler. Records metric for alias-zero observation.
+// Returns true if the request was rejected (caller must return).
+func rejectAgentOnHumanRoute(w http.ResponseWriter, r *http.Request, site string) bool {
+	if _, ok := middleware.AgentPrincipalFromContext(r.Context()); !ok {
+		return false
+	}
+	// Dedicated agent surface may call shared loaders/handlers.
+	if strings.HasPrefix(r.URL.Path, "/api/agent/") {
+		return false
+	}
+	ensureAgentHumanRouteMetrics()
+	if site == "" {
+		site = "unknown"
+	}
+	agentHumanRouteHits.WithLabelValues(site).Inc()
+	writeError(w, http.StatusForbidden, "agent must use dedicated /api/agent/* route")
+	return true
+}
 
 // errAgentChannelTxUnavailable is returned when remove/revoke needs a transaction
 // starter that is not configured on the handler.
@@ -139,6 +184,24 @@ func (h *Handler) agentAttachmentVisible(ctx context.Context, workspaceID, agent
 			  AND a.workspace_id = $1
 			  AND (a.issue_id IS NOT NULL OR a.comment_id IS NOT NULL)
 		)`, workspaceID, attachmentID).Scan(&ok)
+	if err == nil && ok {
+		return true
+	}
+	// Upload provenance: attachment.channel_id set at upload time, agent is a
+	// current direct member of that channel (Barry #801 counterfactual ②).
+	err = h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM attachment a
+			JOIN channel_member cm
+			  ON cm.channel_id = a.channel_id
+			 AND cm.workspace_id = a.workspace_id
+			 AND cm.member_type = 'agent'
+			 AND cm.member_id = $2
+			WHERE a.id = $3
+			  AND a.workspace_id = $1
+			  AND a.channel_id IS NOT NULL
+		)`, workspaceID, agentID, attachmentID).Scan(&ok)
 	return err == nil && ok
 }
 

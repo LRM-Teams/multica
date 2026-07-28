@@ -4,9 +4,12 @@ import (
 	"net/http"
 )
 
-// Agent issue data-plane (#801). Require AgentPrincipal, then reuse human
-// handlers (workspace-scoped issue model). Transitional dual-path still stamps
-// X-User-ID=owner for creator fields.
+// Agent issue data-plane (#801).
+//
+// Dedicated /api/agent/issues/* routes require AgentPrincipal. Shared issue
+// loaders called from these paths use principal.WorkspaceID (never owner
+// channel/workspace membership for surface ACL). Human URLs remain fail-closed
+// via rejectAgentOnHumanRoute.
 
 func (h *Handler) GetAgentIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAgentPrincipal(w, r); !ok {
@@ -19,6 +22,7 @@ func (h *Handler) CreateAgentIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAgentPrincipal(w, r); !ok {
 		return
 	}
+	// CreateIssue uses resolveActor → agent creator under mat_* auth.
 	h.CreateIssue(w, r)
 }
 

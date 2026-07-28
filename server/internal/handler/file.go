@@ -15,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -593,14 +592,9 @@ func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Reques
 		return db.Attachment{}, false
 	}
 
-	// #801: agent principal — visible-reference OR gate; orphan deny.
-	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
-		agentID, aok := p.AgentUUID()
-		ws, wok := p.WorkspaceUUID()
-		if !aok || !wok || !h.agentAttachmentVisible(r.Context(), ws, agentID, att.ID) {
-			writeError(w, http.StatusNotFound, "attachment not found")
-			return db.Attachment{}, false
-		}
+	// #801: agents must use /api/agent/attachments/* — human route is fail-closed.
+	if rejectAgentOnHumanRoute(w, r, "loadAttachmentForRequest") {
+		return db.Attachment{}, false
 	}
 
 	return att, true
@@ -639,15 +633,9 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 		return db.Attachment{}, false
 	}
 
-	// #801: agent principal — re-check visible references every download.
-	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
-		agentID, aok := p.AgentUUID()
-		ws, wok := p.WorkspaceUUID()
-		if !aok || !wok || !h.agentAttachmentVisible(r.Context(), ws, agentID, att.ID) {
-			writeError(w, http.StatusNotFound, "attachment not found")
-			return db.Attachment{}, false
-		}
-		return att, true
+	// #801: agents must use /api/agent/attachments/* — human route is fail-closed.
+	if rejectAgentOnHumanRoute(w, r, "loadAttachmentForDownload") {
+		return db.Attachment{}, false
 	}
 
 	userID, ok := requireUserID(w, r)
@@ -692,6 +680,12 @@ func (h *Handler) DownloadAttachment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.streamOrRedirectAttachmentDownload(w, r, att)
+}
+
+// streamOrRedirectAttachmentDownload is the transport half of attachment
+// download after ACL has already passed (human or agent principal-native).
+func (h *Handler) streamOrRedirectAttachmentDownload(w http.ResponseWriter, r *http.Request, att db.Attachment) {
 	if h.Storage == nil {
 		writeError(w, http.StatusServiceUnavailable, "storage not configured")
 		return
@@ -836,6 +830,11 @@ func (h *Handler) GetAttachmentContent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.writeAttachmentTextPreview(w, r, att)
+}
+
+// writeAttachmentTextPreview streams text preview after ACL has already passed.
+func (h *Handler) writeAttachmentTextPreview(w http.ResponseWriter, r *http.Request, att db.Attachment) {
 	attachmentID := uuidToString(att.ID)
 
 	if !isTextPreviewable(att.ContentType, att.Filename) {

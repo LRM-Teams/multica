@@ -730,6 +730,13 @@ func (h *Handler) isWorkspaceEntity(ctx context.Context, userType, userID, works
 }
 
 func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issueID string) (db.Issue, bool) {
+	// #801: human URL fail-closed for agents; /api/agent/* uses principal workspace.
+	if rejectAgentOnHumanRoute(w, r, "loadIssueForUser") {
+		return db.Issue{}, false
+	}
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		return h.loadIssueForAgent(w, r, p, issueID)
+	}
 	if _, ok := requireUserID(w, r); !ok {
 		return db.Issue{}, false
 	}
@@ -739,7 +746,20 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return db.Issue{}, false
 	}
+	return h.loadIssueInWorkspace(w, r, issueID, workspaceID)
+}
 
+// loadIssueForAgent loads an issue in the AgentPrincipal's bound workspace.
+// Never uses owner user membership (Parker/Barry counterfactual ②).
+func (h *Handler) loadIssueForAgent(w http.ResponseWriter, r *http.Request, p middleware.AgentPrincipal, issueID string) (db.Issue, bool) {
+	if p.WorkspaceID == "" {
+		writeError(w, http.StatusForbidden, "access denied")
+		return db.Issue{}, false
+	}
+	return h.loadIssueInWorkspace(w, r, issueID, p.WorkspaceID)
+}
+
+func (h *Handler) loadIssueInWorkspace(w http.ResponseWriter, r *http.Request, issueID, workspaceID string) (db.Issue, bool) {
 	// Try identifier format first (e.g., "JIA-42"). resolveIssueByIdentifier
 	// silently returns false for non-identifier strings, falling through to
 	// the UUID path below.

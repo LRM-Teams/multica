@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -214,11 +215,19 @@ func isValidGitRepoURL(s string) bool {
 // loadProjectForResource resolves the project, enforces workspace ownership,
 // and returns its DB row. Used by all project_resource handlers.
 func (h *Handler) loadProjectForResource(w http.ResponseWriter, r *http.Request, projectIDParam string) (db.Project, bool) {
+	// #801: human URL fail-closed for agents; /api/agent/* uses principal workspace.
+	if rejectAgentOnHumanRoute(w, r, "loadProjectForResource") {
+		return db.Project{}, false
+	}
 	projectUUID, ok := parseUUIDOrBadRequest(w, projectIDParam, "project id")
 	if !ok {
 		return db.Project{}, false
 	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace id")
+	workspaceID := h.resolveWorkspaceID(r)
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		workspaceID = p.WorkspaceID
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
 		return db.Project{}, false
 	}

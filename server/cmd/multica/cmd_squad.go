@@ -381,11 +381,9 @@ func runSquadMemberSetRole(cmd *cobra.Command, args []string) error {
 	}
 
 	var result map[string]any
-	rolePath := "/api/squads/" + args[0] + "/members/role"
-	if isAgentAPIToken(cmd) {
-		rolePath = "/api/agent/squads/" + args[0] + "/members/role"
-	}
-	if err := client.PatchJSON(ctx, rolePath, body, &result); err != nil {
+	// Squad product retired (Frank 2026-07-28). No /api/agent/squads* cutover;
+	// human route remains until Nash's full squad removal PR.
+	if err := client.PatchJSON(ctx, "/api/squads/"+args[0]+"/members/role", body, &result); err != nil {
 		return fmt.Errorf("set member role: %w", err)
 	}
 

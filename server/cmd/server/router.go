@@ -1234,7 +1234,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/projects/{id}/resources", h.ListAgentProjectResources)
 				r.Get("/workspace", h.GetAgentWorkspace)
 				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)
-				r.Patch("/squads/{id}/members/role", h.AgentSquadMemberSetRole)
+				// Squad retired (Frank 2026-07-28): no /api/agent/squads*.
 			})
 			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)

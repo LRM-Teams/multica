@@ -22,7 +22,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/messageparts"
-	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/promptcontext"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -401,9 +400,8 @@ func (h *Handler) StartChannelBridge() {
 }
 
 func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
-	// Agent principal: explicit legacy alias → dedicated agent list (no owner viewer).
-	if _, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
-		h.ListAgentChannels(w, r)
+	// #801: no human-route alias. Agents must use GET /api/agent/channels.
+	if rejectAgentOnHumanRoute(w, r, "ListChannels") {
 		return
 	}
 	userID, ok := requireUserID(w, r)
@@ -1258,9 +1256,8 @@ func (h *Handler) channelInviteRequesterRole(ctx context.Context, userID, worksp
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
-	// Agent principal: explicit legacy alias → agent surface gate (no owner viewer).
-	if _, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
-		h.ListAgentChannelMembers(w, r)
+	// #801: no human-route alias. Agents must use GET /api/agent/channels/{id}/members.
+	if rejectAgentOnHumanRoute(w, r, "ListChannelMembers") {
 		return
 	}
 	userID, ok := requireUserID(w, r)

@@ -515,7 +515,6 @@ func TestMigration234KillsWendyAmbientRadarAuthorization(t *testing.T) {
 	}
 }
 
-
 func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -565,3 +564,49 @@ func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 	}
 }
 
+func TestMigration244SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "244_agent_credential_issuance_source.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 244 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"ADD COLUMN issuance_source TEXT NOT NULL DEFAULT 'manual'",
+		"CHECK (issuance_source IN ('manual', 'daemon'))",
+		"audit.action = 'agent_credential_daemon_ensured'",
+		"audit.details->>'source' = 'daemon_runtime_ensure'",
+		"audit.details->>'reused' = 'false'",
+		"audit.details->>'agent_credential_id' = credential.id::text",
+		"PARTITION BY credential.agent_id, credential.workspace_id, credential.user_id",
+		"(credential.last_used_at IS NOT NULL) DESC",
+		"'daemon_issuance_backfill_deduplicate'",
+		"CREATE UNIQUE INDEX idx_agent_credential_daemon_subject_unrevoked",
+		"WHERE issuance_source = 'daemon'",
+		"AND revoked_at IS NULL",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 244 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "244_agent_credential_issuance_source.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 244 down: %v", err)
+	}
+	downContents := string(down)
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS idx_agent_credential_daemon_subject_unrevoked",
+		"DROP CONSTRAINT IF EXISTS agent_credential_issuance_source_check",
+		"DROP COLUMN IF EXISTS issuance_source",
+	} {
+		if !strings.Contains(downContents, required) {
+			t.Errorf("migration 244 down missing %q", required)
+		}
+	}
+}

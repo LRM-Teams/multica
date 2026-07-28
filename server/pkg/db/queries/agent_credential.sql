@@ -3,6 +3,32 @@ INSERT INTO agent_credential (token_hash, token_prefix, agent_id, workspace_id, 
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
+-- name: CreateDaemonAgentCredential :one
+INSERT INTO agent_credential (
+  token_hash,
+  token_prefix,
+  agent_id,
+  workspace_id,
+  user_id,
+  expires_at,
+  issuance_source
+)
+VALUES ($1, $2, $3, $4, $5, $6, 'daemon')
+RETURNING *;
+
+-- name: LockAgentForDaemonCredentialEnsure :one
+SELECT agent.id
+FROM agent
+JOIN agent_runtime AS runtime
+  ON runtime.id = agent.runtime_id
+ AND runtime.workspace_id = agent.workspace_id
+WHERE agent.id = sqlc.arg(agent_id)
+  AND agent.workspace_id = sqlc.arg(workspace_id)
+  AND runtime.id = sqlc.arg(runtime_id)
+  AND runtime.owner_id = sqlc.arg(owner_id)
+  AND agent.archived_at IS NULL
+FOR UPDATE OF agent, runtime;
+
 -- name: GetAgentCredentialByHash :one
 SELECT ac.*
 FROM agent_credential AS ac
@@ -37,13 +63,23 @@ SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
 RETURNING *;
 
--- name: RevokeAgentCredentialForDaemonRotation :execrows
+-- name: RevokeDaemonAgentCredentialsForSubject :execrows
 UPDATE agent_credential
 SET revoked_at = now(), updated_at = now()
-WHERE id = $1
-  AND agent_id = $2
-  AND workspace_id = $3
-  AND user_id = $4
+WHERE agent_id = $1
+  AND workspace_id = $2
+  AND user_id = $3
+  AND issuance_source = 'daemon'
+  AND revoked_at IS NULL;
+
+-- name: RevokeOtherDaemonAgentCredentialsForSubject :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE agent_id = $1
+  AND workspace_id = $2
+  AND user_id = $3
+  AND id <> $4
+  AND issuance_source = 'daemon'
   AND revoked_at IS NULL;
 
 -- name: DisableAgentCredentialsByAgent :exec

@@ -397,14 +397,15 @@ func TestEnsureDaemonAgentCredential_RevokesSupersededLiveCachedCredentialOnly(t
 	if err != nil {
 		t.Fatalf("generate manual sibling credential token: %v", err)
 	}
-	if _, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
+	manualCredential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
 		TokenHash:   auth.HashToken(manualToken),
 		TokenPrefix: tokenPrefix(manualToken),
 		AgentID:     parseUUID(agentID),
 		WorkspaceID: parseUUID(testWorkspaceID),
 		UserID:      parseUUID(testUserID),
 		ExpiresAt:   pgtype.Timestamptz{},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create manual sibling credential: %v", err)
 	}
 
@@ -487,6 +488,135 @@ func TestEnsureDaemonAgentCredential_RevokesSupersededLiveCachedCredentialOnly(t
 			auditSupersededRevoked,
 			issued.ID,
 		)
+	}
+
+	status, retried := ensure(map[string]any{"credential_id": issued.ID})
+	if status != http.StatusCreated || retried.Token == "" || retried.ID == issued.ID || retried.ID == rotated.ID || retried.RotationReason != "revoked" {
+		t.Fatalf("replayed superseded ensure = %d %#v, want one replacement for revoked old credential", status, retried)
+	}
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(rotated.Token)); !isNotFound(err) {
+		t.Fatalf("first replacement remains live after replaying superseded credential: %v", err)
+	}
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(retried.Token)); err != nil {
+		t.Fatalf("retry replacement credential is not live: %v", err)
+	}
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(manualToken)); err != nil {
+		t.Fatalf("manual sibling credential was revoked by replay cleanup: %v", err)
+	}
+
+	status, fromManual := ensure(map[string]any{"credential_id": uuidToString(manualCredential.ID)})
+	if status != http.StatusCreated || fromManual.Token == "" || fromManual.ID == uuidToString(manualCredential.ID) || fromManual.RotationReason != "not_daemon_issued" {
+		t.Fatalf("manual cached ensure = %d %#v, want separate daemon credential", status, fromManual)
+	}
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(manualToken)); err != nil {
+		t.Fatalf("submitted manual credential was revoked: %v", err)
+	}
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(retried.Token)); !isNotFound(err) {
+		t.Fatalf("prior daemon credential remains live after manual-id ensure: %v", err)
+	}
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(fromManual.Token)); err != nil {
+		t.Fatalf("daemon credential issued from manual-id ensure is not live: %v", err)
+	}
+}
+
+func TestEnsureDaemonAgentCredential_ConcurrentMissingCacheLeavesOneDaemonCredential(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	daemonID := "agent-credential-concurrent-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonID(t, daemonID)
+	agentID := createHandlerTestAgent(t, "agent-credential-daemon-concurrent", nil)
+
+	type ensureResult struct {
+		status int
+		body   CreateAgentCredentialResponse
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan ensureResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			req := newDaemonTokenRequest(
+				http.MethodPost,
+				"/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential",
+				nil,
+				testWorkspaceID,
+				daemonID,
+			)
+			req = withRouteParams(req, "runtimeId", runtimeID, "agentId", agentID)
+			w := httptest.NewRecorder()
+			testHandler.EnsureDaemonAgentCredential(w, req)
+			var resp CreateAgentCredentialResponse
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			results <- ensureResult{status: w.Code, body: resp, err: err}
+		}()
+	}
+	close(start)
+
+	responses := make([]CreateAgentCredentialResponse, 0, 2)
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("decode concurrent ensure response: %v", result.err)
+		}
+		if result.status != http.StatusCreated || result.body.Token == "" || result.body.ID == "" {
+			t.Fatalf("concurrent ensure = %d %#v, want newly issued credential", result.status, result.body)
+		}
+		responses = append(responses, result.body)
+	}
+	if responses[0].ID == responses[1].ID {
+		t.Fatalf("concurrent ensures returned the same raw credential: %q", responses[0].ID)
+	}
+
+	var unrevokedDaemonCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_credential
+		WHERE agent_id = $1
+		  AND workspace_id = $2
+		  AND user_id = $3
+		  AND issuance_source = 'daemon'
+		  AND revoked_at IS NULL
+	`, agentID, testWorkspaceID, testUserID).Scan(&unrevokedDaemonCount); err != nil {
+		t.Fatalf("count unrevoked daemon credentials: %v", err)
+	}
+	if unrevokedDaemonCount != 1 {
+		t.Fatalf("unrevoked daemon credentials = %d, want 1", unrevokedDaemonCount)
+	}
+	duplicateToken, err := auth.GenerateAgentCredentialToken()
+	if err != nil {
+		t.Fatalf("generate duplicate daemon credential token: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_credential (
+			token_hash,
+			token_prefix,
+			agent_id,
+			workspace_id,
+			user_id,
+			expires_at,
+			issuance_source
+		)
+		VALUES ($1, $2, $3, $4, $5, now() + interval '24 hours', 'daemon')
+	`, auth.HashToken(duplicateToken), tokenPrefix(duplicateToken), agentID, testWorkspaceID, testUserID); !isUniqueViolation(err) {
+		t.Fatalf("second unrevoked daemon credential error = %v, want unique violation", err)
+	}
+
+	authenticCount := 0
+	for _, response := range responses {
+		if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(response.Token)); err == nil {
+			authenticCount++
+		} else if !isNotFound(err) {
+			t.Fatalf("authenticate concurrent credential %q: %v", response.ID, err)
+		}
+	}
+	if authenticCount != 1 {
+		t.Fatalf("authentic concurrent credentials = %d, want 1", authenticCount)
 	}
 }
 

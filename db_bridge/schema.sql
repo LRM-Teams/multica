@@ -58,6 +58,7 @@ declare
         'rpc_rl_set_reward',
         'rpc_rl_end_session',
         'rpc_rl_close_segment',
+        'rpc_export_trajectories',
         'rpc_chat_completions',
         'rpc_agent_start',
         'rpc_env_dispatch',

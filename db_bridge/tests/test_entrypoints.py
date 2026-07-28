@@ -56,6 +56,7 @@ def test_multica_side_selects_multica_api_channels():
         "rl_end_session",
         "chat_completions",
         "rl_close_segment",
+        "export_trajectories",
     }
 
 

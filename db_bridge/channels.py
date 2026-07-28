@@ -131,6 +131,20 @@ CHANNELS: Final[tuple[Channel, ...]] = (
         default_timeout_s=30.0,
         default_concurrency=4,
     ),
+    Channel(
+        name="export_trajectories",
+        group="gateway",
+        method="POST",
+        path="/export_trajectories",
+        kind="json",
+        # Paired with rl_close_segment: multica exports the just-closed segment
+        # to read its tensor refs, and a segment it cannot export is a segment
+        # it cannot record. The export returns remotized refs rather than tensor
+        # bytes so the payload stays small, but it waits on the data proxy
+        # serialising a whole trajectory -- hence the wider timeout.
+        default_timeout_s=120.0,
+        default_concurrency=4,
+    ),
     # -- leagent_api group (AReaL -> le-agent API) -------------------------
     Channel(
         name="agent_start",

@@ -431,3 +431,160 @@ DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, o
 		t.Fatalf("remove sole owner workspace membership want fail, got: %v", err)
 	}
 }
+
+// TestEligibleOwnerAuditRepairs239WindowMismatch: migration 240/241 full-table
+// repair must fix channel/owner workspace mismatch left from the 239 window.
+func TestEligibleOwnerAuditRepairs239WindowMismatch(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+
+	// Isolated workspace B; owner is only a member of A (fixture).
+	var wsB string
+	suffix := uuid.NewString()[:8]
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, 'audit repair', 'AR') RETURNING id`,
+		"audit-b-"+suffix, "audit-b-"+suffix).Scan(&wsB); err != nil {
+		t.Fatalf("wsB: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsB) })
+
+	// Create ordinary group in A with auto-seed owner (eligible).
+	var chID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO channel (workspace_id, name, created_by, kind)
+VALUES ($1, $2, $3, 'group') RETURNING id`,
+		testWorkspaceID, "audit-mismatch-"+suffix, testUserID).Scan(&chID); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, chID) })
+
+	// Bypass triggers to recreate 239-window damage: channel moved to B, owner row still A.
+	if _, err := testPool.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Fatalf("replica role: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET workspace_id = $1 WHERE id = $2`, wsB, chID); err != nil {
+		_, _ = testPool.Exec(ctx, `SET session_replication_role = DEFAULT`)
+		t.Fatalf("force channel ws: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `SET session_replication_role = DEFAULT`); err != nil {
+		t.Fatalf("restore role: %v", err)
+	}
+
+	var eligibleBefore int
+	_ = testPool.QueryRow(ctx, `
+SELECT count(*) FROM channel c
+JOIN channel_member cm ON cm.channel_id = c.id AND cm.workspace_id = c.workspace_id
+  AND cm.role = 'owner' AND cm.member_type = 'user'
+JOIN member m ON m.workspace_id = c.workspace_id AND m.user_id = cm.member_id
+WHERE c.id = $1`, chID).Scan(&eligibleBefore)
+	if eligibleBefore != 0 {
+		t.Fatalf("setup: expected 0 eligible owners before repair, got %d", eligibleBefore)
+	}
+
+	// Owner is not a member of B → repair cannot align workspace; must insert/promote fails
+	// unless we also seed owner into B. Seed owner into B so align-workspace repair works.
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
+ON CONFLICT DO NOTHING`, wsB, testUserID); err != nil {
+		t.Fatalf("seed owner into B: %v", err)
+	}
+
+	// Run the same repair steps as migration 240/241 (workspace align path).
+	if _, err := testPool.Exec(ctx, `
+UPDATE channel_member cm
+SET workspace_id = c.workspace_id
+FROM channel c
+WHERE cm.channel_id = c.id
+  AND c.id = $1
+  AND c.kind = 'group' AND c.system_key IS NULL
+  AND cm.role = 'owner' AND cm.member_type = 'user'
+  AND cm.workspace_id IS DISTINCT FROM c.workspace_id
+  AND EXISTS (
+    SELECT 1 FROM member m
+    WHERE m.workspace_id = c.workspace_id AND m.user_id = cm.member_id
+  )`, chID); err != nil {
+		t.Fatalf("repair align: %v", err)
+	}
+
+	var eligibleAfter int
+	if err := testPool.QueryRow(ctx, `
+SELECT count(*) FROM channel c
+JOIN channel_member cm ON cm.channel_id = c.id AND cm.workspace_id = c.workspace_id
+  AND cm.role = 'owner' AND cm.member_type = 'user'
+JOIN member m ON m.workspace_id = c.workspace_id AND m.user_id = cm.member_id
+WHERE c.id = $1`, chID).Scan(&eligibleAfter); err != nil {
+		t.Fatal(err)
+	}
+	if eligibleAfter != 1 {
+		t.Fatalf("after repair eligible owners=%d want 1", eligibleAfter)
+	}
+}
+
+// TestEligibleOwnerAuditFailsWhenUnrepairable documents fail-closed when no
+// workspace member can become owner (migration 240 would RAISE).
+func TestEligibleOwnerAuditFailsWhenUnrepairable(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	ctx := context.Background()
+	var wsB string
+	suffix := uuid.NewString()[:8]
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, 'audit fail', 'AF') RETURNING id`,
+		"audit-fail-"+suffix, "audit-fail-"+suffix).Scan(&wsB); err != nil {
+		t.Fatalf("wsB: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsB) })
+
+	var chID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO channel (workspace_id, name, created_by, kind)
+VALUES ($1, $2, $3, 'group') RETURNING id`,
+		testWorkspaceID, "audit-unfix-"+suffix, testUserID).Scan(&chID); err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, chID) })
+
+	if _, err := testPool.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	// Move channel to B; owner remains A and is NOT member of B; no created_by membership on B.
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET workspace_id = $1, created_by = $2 WHERE id = $3`,
+		wsB, testUserID, chID); err != nil {
+		_, _ = testPool.Exec(ctx, `SET session_replication_role = DEFAULT`)
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `SET session_replication_role = DEFAULT`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate migration final check: eligible count must be 0 and unrepairable.
+	var eligible int
+	_ = testPool.QueryRow(ctx, `
+SELECT count(*) FROM channel c
+JOIN channel_member cm ON cm.channel_id = c.id AND cm.workspace_id = c.workspace_id
+  AND cm.role = 'owner' AND cm.member_type = 'user'
+JOIN member m ON m.workspace_id = c.workspace_id AND m.user_id = cm.member_id
+WHERE c.id = $1`, chID).Scan(&eligible)
+	if eligible != 0 {
+		t.Fatalf("expected unrepairable 0 eligible, got %d", eligible)
+	}
+	// Align path no-ops without B membership
+	tag, err := testPool.Exec(ctx, `
+UPDATE channel_member cm
+SET workspace_id = c.workspace_id
+FROM channel c
+WHERE cm.channel_id = c.id AND c.id = $1
+  AND cm.role = 'owner' AND cm.member_type = 'user'
+  AND EXISTS (SELECT 1 FROM member m WHERE m.workspace_id = c.workspace_id AND m.user_id = cm.member_id)`, chID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.RowsAffected() != 0 {
+		t.Fatalf("align should not fix without membership, rows=%d", tag.RowsAffected())
+	}
+}

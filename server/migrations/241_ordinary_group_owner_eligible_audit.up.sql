@@ -1,3 +1,6 @@
+-- Idempotent re-apply of eligible-owner helper + full-table audit for envs
+-- that already applied an earlier 240 without the repair DO block.
+
 -- Barry #1286 workspace_id escape + upgrade audit for 239 window damage.
 -- 1) Install eligible-owner helper (same workspace + still member)
 -- 2) Re-check on member DELETE

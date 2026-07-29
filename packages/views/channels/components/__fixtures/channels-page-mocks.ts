@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 /**
  * Shared `vi.mock` factories for the `channels-page-*` test files (#1364 step 2).
@@ -51,7 +51,11 @@ export const hooksMock = async (
   useWorkspaceId: () => "ws-1",
 });
 
-export const fileUploadMock = () => ({
+// TS2742: an inferred `vi.fn()` type cannot be named without pointing at
+// @vitest/spy's path inside .pnpm, which is not portable. Annotate explicitly.
+export const fileUploadMock = (): {
+  useFileUpload: () => { uploadWithToast: Mock };
+} => ({
   useFileUpload: () => ({ uploadWithToast: vi.fn() }),
 });
 
@@ -67,7 +71,7 @@ export const pathsMock = async (
 
 export const realtimeMock = async (
   importOriginal: ImportOriginal<typeof import("@multica/core/realtime")>,
-) => ({
+): Promise<typeof import("@multica/core/realtime") & { useWSEvent: Mock }> => ({
   ...(await importOriginal()),
   useWSEvent: vi.fn(),
 });

@@ -54,11 +54,16 @@ func (h *Handler) ListMemberPresence(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, MemberPresenceResponse{Members: out})
 }
 
+// fallbackMemoryMemberPresence is shared when Redis is unavailable. Returning a
+// fresh MemoryMemberPresenceStore from memberPresenceStore() would drop every
+// Connect before ListMemberPresence could observe it.
+var fallbackMemoryMemberPresence = NewMemoryMemberPresenceStore()
+
 func (h *Handler) memberPresenceStore() MemberPresenceStore {
 	if h != nil && h.MemberPresenceStore != nil {
 		return h.MemberPresenceStore
 	}
-	return NewMemoryMemberPresenceStore()
+	return fallbackMemoryMemberPresence
 }
 
 // WireMemberPresenceHooks attaches Hub connect/disconnect/pong callbacks to the
@@ -76,10 +81,8 @@ func (h *Handler) WireMemberPresenceHooks() {
 		},
 	)
 	h.Hub.SetMemberPresenceTouchCallback(func(workspaceID, userID string) {
-		store := h.memberPresenceStore()
-		if err := store.Touch(context.Background(), workspaceID, userID); err != nil {
-			slog.Debug("member presence touch failed", "error", err, "workspace_id", workspaceID, "user_id", userID)
-		}
+		// Restore + publish on TTL lapse while WS is still open (LRM-717).
+		h.noteMemberActivity(workspaceID, userID, false)
 	})
 }
 
@@ -111,6 +114,32 @@ func (h *Handler) handleMemberPresenceTransition(workspaceID, userID string, onl
 	h.publish(protocol.EventMemberPresence, workspaceID, "member", userID, map[string]any{
 		"user_id":      userID,
 		"status":       status,
+		"observed_at":  time.Now().UTC().Format(time.RFC3339),
+		"workspace_id": workspaceID,
+	})
+}
+
+// noteMemberActivity refreshes (or restores) human online presence for a live
+// action. When forcePublish is true (message send), always emit member:presence
+// online so message-stream clients heal a stale Offline dot within seconds
+// (LRM-717). When false (WS pong), publish only on offline→online restore.
+func (h *Handler) noteMemberActivity(workspaceID, userID string, forcePublish bool) {
+	if h == nil || workspaceID == "" || userID == "" {
+		return
+	}
+	store := h.memberPresenceStore()
+	became, err := store.MarkActive(context.Background(), workspaceID, userID)
+	if err != nil {
+		slog.Debug("member presence mark-active failed",
+			"error", err, "workspace_id", workspaceID, "user_id", userID)
+		return
+	}
+	if !became && !forcePublish {
+		return
+	}
+	h.publish(protocol.EventMemberPresence, workspaceID, "member", userID, map[string]any{
+		"user_id":      userID,
+		"status":       "online",
 		"observed_at":  time.Now().UTC().Format(time.RFC3339),
 		"workspace_id": workspaceID,
 	})

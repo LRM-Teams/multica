@@ -3895,6 +3895,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
+	h.noteMemberActivity(workspaceID, userID, true)
 	// Ack first — see SendChannelMessage: wake/Feishu must not block send RTT.
 	writeJSON(w, http.StatusCreated, msg)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
@@ -4612,6 +4613,9 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
+	// LRM-717: message send is HTTP; WS presence alone can lag/expire. Force an
+	// online lease + member:presence so message-stream avatars heal Offline.
+	h.noteMemberActivity(workspaceID, userID, true)
 	// Ack first: agent wake fanout (and Feishu sync) are O(agents)/network and
 	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)

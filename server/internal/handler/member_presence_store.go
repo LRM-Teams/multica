@@ -24,7 +24,9 @@ const (
 
 // MemberPresenceStore tracks human-member online sessions for a workspace.
 // Unlike agent runtime liveness (daemon heartbeat), this is driven by the
-// browser/app realtime WebSocket connection count (LRM-462).
+// browser/app realtime WebSocket connection count (LRM-462), plus short
+// activity leases from live HTTP actions such as sending a channel message
+// (LRM-717 — just-spoke must not paint Offline).
 type MemberPresenceStore interface {
 	Available() bool
 	// Connect increments the session count. becameOnline is true when the
@@ -33,8 +35,13 @@ type MemberPresenceStore interface {
 	// Disconnect decrements the session count. becameOffline is true when
 	// the count reaches zero (or the key is removed).
 	Disconnect(ctx context.Context, workspaceID, userID string) (becameOffline bool, err error)
-	// Touch refreshes TTL while a session stays open (WS pong).
+	// Touch refreshes TTL while a session stays open (WS pong). If the Redis
+	// key expired while the WS is still open, Touch restores an online lease.
 	Touch(ctx context.Context, workspaceID, userID string) error
+	// MarkActive refreshes or creates a short online lease for a member who
+	// just performed a live action (e.g. sent a channel message). becameOnline
+	// is true when the member was not online before this call.
+	MarkActive(ctx context.Context, workspaceID, userID string) (becameOnline bool, err error)
 	// OnlineUserIDs returns currently-online member user IDs for a workspace.
 	OnlineUserIDs(ctx context.Context, workspaceID string) ([]string, error)
 	// IsOnline reports whether a single user is online in the workspace.
@@ -51,12 +58,16 @@ func memberPresenceIndexKey(workspaceID string) string {
 
 // MemoryMemberPresenceStore is the default for tests / no-Redis deployments.
 type MemoryMemberPresenceStore struct {
-	mu    sync.Mutex
-	conns map[string]int // workspace:user -> count
+	mu            sync.Mutex
+	conns         map[string]int       // workspace:user -> count
+	activityUntil map[string]time.Time // MarkActive leases (TTL without Redis)
 }
 
 func NewMemoryMemberPresenceStore() *MemoryMemberPresenceStore {
-	return &MemoryMemberPresenceStore{conns: make(map[string]int)}
+	return &MemoryMemberPresenceStore{
+		conns:         make(map[string]int),
+		activityUntil: make(map[string]time.Time),
+	}
 }
 
 func (s *MemoryMemberPresenceStore) Available() bool { return s != nil }
@@ -87,14 +98,47 @@ func (s *MemoryMemberPresenceStore) Disconnect(_ context.Context, workspaceID, u
 	prev := s.conns[key]
 	if prev <= 1 {
 		delete(s.conns, key)
-		return prev > 0, nil
+		if prev <= 0 {
+			return false, nil
+		}
+		// Session count hit zero; a MarkActive lease may still keep them online
+		// (LRM-717 just-spoke grace window).
+		now := time.Now()
+		s.pruneActivityLocked(now)
+		if s.activityUntil[key].After(now) {
+			return false, nil
+		}
+		return true, nil
 	}
 	s.conns[key] = prev - 1
 	return false, nil
 }
 
-func (s *MemoryMemberPresenceStore) Touch(_ context.Context, workspaceID, userID string) error {
-	return nil
+func (s *MemoryMemberPresenceStore) Touch(ctx context.Context, workspaceID, userID string) error {
+	_, err := s.MarkActive(ctx, workspaceID, userID)
+	return err
+}
+
+func (s *MemoryMemberPresenceStore) MarkActive(_ context.Context, workspaceID, userID string) (bool, error) {
+	if s == nil || workspaceID == "" || userID == "" {
+		return false, errors.New("member presence: invalid args")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := memoryPresenceSlot(workspaceID, userID)
+	now := time.Now()
+	s.pruneActivityLocked(now)
+	wasOnline := s.conns[key] > 0 || s.activityUntil[key].After(now)
+	s.activityUntil[key] = now.Add(memberPresenceTTL)
+	return !wasOnline, nil
+}
+
+func (s *MemoryMemberPresenceStore) pruneActivityLocked(now time.Time) {
+	for key, until := range s.activityUntil {
+		if !until.After(now) {
+			delete(s.activityUntil, key)
+		}
+	}
 }
 
 func (s *MemoryMemberPresenceStore) OnlineUserIDs(_ context.Context, workspaceID string) ([]string, error) {
@@ -103,11 +147,25 @@ func (s *MemoryMemberPresenceStore) OnlineUserIDs(_ context.Context, workspaceID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	s.pruneActivityLocked(now)
 	prefix := workspaceID + "\x00"
+	seen := make(map[string]struct{})
 	out := make([]string, 0)
 	for key, n := range s.conns {
 		if n > 0 && strings.HasPrefix(key, prefix) {
-			out = append(out, strings.TrimPrefix(key, prefix))
+			id := strings.TrimPrefix(key, prefix)
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	for key, until := range s.activityUntil {
+		if until.After(now) && strings.HasPrefix(key, prefix) {
+			id := strings.TrimPrefix(key, prefix)
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			out = append(out, id)
 		}
 	}
 	return out, nil
@@ -119,7 +177,10 @@ func (s *MemoryMemberPresenceStore) IsOnline(_ context.Context, workspaceID, use
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.conns[memoryPresenceSlot(workspaceID, userID)] > 0, nil
+	now := time.Now()
+	s.pruneActivityLocked(now)
+	key := memoryPresenceSlot(workspaceID, userID)
+	return s.conns[key] > 0 || s.activityUntil[key].After(now), nil
 }
 
 // RedisMemberPresenceStore uses a per-user connection counter + workspace index set.
@@ -173,18 +234,44 @@ func (s *RedisMemberPresenceStore) Disconnect(ctx context.Context, workspaceID, 
 }
 
 func (s *RedisMemberPresenceStore) Touch(ctx context.Context, workspaceID, userID string) error {
+	_, err := s.MarkActive(ctx, workspaceID, userID)
+	return err
+}
+
+// MarkActive refreshes an existing presence key or creates a short activity
+// lease when the member is not currently tracked. Used for WS pong recovery
+// after TTL lapse and for HTTP actions like sending a channel message (LRM-717).
+func (s *RedisMemberPresenceStore) MarkActive(ctx context.Context, workspaceID, userID string) (bool, error) {
 	if !s.Available() || workspaceID == "" || userID == "" {
-		return nil
+		return false, nil
 	}
 	key := memberPresenceKey(workspaceID, userID)
+	idx := memberPresenceIndexKey(workspaceID)
+
 	ok, err := s.rdb.Expire(ctx, key, memberPresenceTTL).Result()
 	if err != nil {
-		return fmt.Errorf("member presence touch: %w", err)
+		return false, fmt.Errorf("member presence mark-active expire: %w", err)
 	}
 	if ok {
-		_ = s.rdb.Expire(ctx, memberPresenceIndexKey(workspaceID), memberPresenceTTL*2).Err()
+		_ = s.rdb.Expire(ctx, idx, memberPresenceTTL*2).Err()
+		return false, nil
 	}
-	return nil
+
+	// Key missing — create a one-session activity lease. SetNX avoids racing
+	// Connect/Incr from a concurrent WS register.
+	created, err := s.rdb.SetNX(ctx, key, 1, memberPresenceTTL).Result()
+	if err != nil {
+		return false, fmt.Errorf("member presence mark-active setnx: %w", err)
+	}
+	if created {
+		_ = s.rdb.SAdd(ctx, idx, userID).Err()
+		_ = s.rdb.Expire(ctx, idx, memberPresenceTTL*2).Err()
+		return true, nil
+	}
+	// Lost the race to Connect/MarkActive — refresh whatever won.
+	_ = s.rdb.Expire(ctx, key, memberPresenceTTL).Err()
+	_ = s.rdb.Expire(ctx, idx, memberPresenceTTL*2).Err()
+	return false, nil
 }
 
 func (s *RedisMemberPresenceStore) OnlineUserIDs(ctx context.Context, workspaceID string) ([]string, error) {

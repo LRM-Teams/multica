@@ -53,6 +53,8 @@ type concurrentIndexSpec struct {
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
+	// This registry is manual: whenever a migration drops a table, remove its
+	// index spec here too or the hook will fail against the post-migration schema.
 	indexes := []concurrentIndexSpec{
 		{"idx_agent_inbox_event_runtime", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_runtime ON agent_inbox_event (runtime_id) WHERE runtime_id IS NOT NULL`},
 		{"idx_memory_curation_watermark_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_agent ON memory_curation_watermark (agent_id)`},

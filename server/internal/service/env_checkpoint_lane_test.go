@@ -402,6 +402,33 @@ func TestInterruptedLaneContinuesFromFirstIncompleteStep(t *testing.T) {
 	}
 }
 
+// TestRuntimeStepActsOnTheLanesRecordedIdentity pins what the runtime step is
+// told. Branch dispatch pre-seeds the lane with the env, project and channel its
+// reset phase created (design D6), so the step has to act on those; a step that
+// only learns the sandbox would mint a second conversation and leave the copied
+// one it exists to continue unused.
+func TestRuntimeStepActsOnTheLanesRecordedIdentity(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	deps.lanes.seed(EnvCheckpointLane{
+		ID: "l-0", CheckpointID: "cp-1", WorkspaceID: "ws",
+		LaneKey: laneKeyForOrdinal("dispatch-abc", 0), Status: LaneStatusProvisioning,
+		InstanceID: "inst-seeded", ProjectID: "proj-seeded", EnvID: "env-seeded",
+		ChannelID: "chan-seeded",
+	})
+
+	if _, err := fanOut(svc, 1, "dispatch-abc"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(deps.mat.runtimeCalls) != 1 {
+		t.Fatalf("runtime calls = %d, want 1", len(deps.mat.runtimeCalls))
+	}
+	got := deps.mat.runtimeCalls[0]
+	if got.InstanceID != "inst-seeded" || got.ProjectID != "proj-seeded" ||
+		got.EnvID != "env-seeded" || got.ChannelID != "chan-seeded" {
+		t.Fatalf("runtime step did not receive the lane's recorded identity: %+v", got)
+	}
+}
+
 // A lane that already provisioned its conversation must not copy a second one on
 // recovery, which is why the conversation ids are persisted rather than derived.
 func TestInterruptedLaneAfterProvisioningDoesNotReprovision(t *testing.T) {

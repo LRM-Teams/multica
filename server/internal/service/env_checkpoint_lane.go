@@ -22,6 +22,14 @@ const (
 // rediscovering the same missing snapshot.
 var ErrSavepointGone = errors.New("savepoint_gone")
 
+// ErrLaneConversationUnavailable reports a lane that has no conversation to
+// continue. A lane's channel is either pre-seeded by the caller (branch dispatch,
+// design D6) or minted from the source conversation a checkpoint records (design
+// D8). With neither, the only way to proceed would be to reuse the source's
+// channel, which would collapse independent continuations into one thread; that
+// is refused rather than done quietly.
+var ErrLaneConversationUnavailable = errors.New("lane_conversation_unavailable")
+
 // EnvCheckpointLane is one materialized continuation of a snapshot-mode
 // checkpoint. The per-step ids double as the recovery log: an empty one is a
 // step that has not completed, so a lane interrupted partway is resumed from its
@@ -113,12 +121,21 @@ type LaneProjectInput struct {
 	SourceProjectID string
 }
 
+// LaneRuntimeInput carries the lane's identity as recorded so far. Project, env
+// and channel are already known by the time the runtime step runs: fan-out fills
+// them in from the preceding step, and branch dispatch pre-seeds them from the
+// rows its reset phase created (design D6). The runtime step must act on those
+// rather than create its own, or a branch lane would end up with a second
+// conversation while the copied one it is meant to continue sits unused.
 type LaneRuntimeInput struct {
 	WorkspaceID string
 	ActorUserID string
 	LaneKey     string
 	AgentID     string
 	InstanceID  string
+	ProjectID   string
+	EnvID       string
+	ChannelID   string
 }
 
 // SavepointReader reads a checkpoint's savepoints and can mark one failed.
@@ -231,6 +248,9 @@ func (s *EnvCheckpointService) materializeLane(
 			LaneKey:     laneKey,
 			AgentID:     trigger.AgentID,
 			InstanceID:  lane.InstanceID,
+			ProjectID:   lane.ProjectID,
+			EnvID:       lane.EnvID,
+			ChannelID:   lane.ChannelID,
 		})
 		if err != nil {
 			return s.failLane(ctx, lane, savepoint, in.WorkspaceID, err)

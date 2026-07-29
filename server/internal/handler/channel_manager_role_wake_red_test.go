@@ -489,4 +489,23 @@ func TestRoleWakeClaimAggregatesUnarchivedManagerChannelsFromRosterSource(t *tes
 			t.Fatalf("archived manager channel leaked into claim: %+v", channel)
 		}
 	}
+
+	// The manager brief is rebuilt from this claim read model on every run.
+	// Demotion must therefore remove the channel immediately, without a
+	// separate cleanup path or stale role text surviving in the next brief.
+	patchChannelMemberRole(t, fixture.channel.ID, "agent", fixture.agentA, "member")
+	afterDemotion := testHandler.agentManagerChannels(
+		context.Background(),
+		parseUUID(testWorkspaceID),
+		parseUUID(derivedAgentID),
+	)
+	if len(afterDemotion) != 1 ||
+		afterDemotion[0].ID != second.ID ||
+		afterDemotion[0].Name != second.Name {
+		t.Fatalf(
+			"manager channels after demotion=%+v want only remaining active manager channel %+v",
+			afterDemotion,
+			second,
+		)
+	}
 }

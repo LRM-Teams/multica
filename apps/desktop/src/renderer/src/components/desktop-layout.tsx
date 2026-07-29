@@ -11,7 +11,7 @@ import {
 } from "@multica/ui/components/ui/sidebar";
 import { ModalRegistry } from "@multica/views/modals/registry";
 import { AppSidebar } from "@multica/views/layout";
-import { SearchCommand, GlobalSearchDialog } from "@multica/views/search";
+import { GlobalSearchDialog } from "@multica/views/search";
 import { ChatFab, ChatWindow } from "@multica/views/chat";
 import { WorkspaceSlugProvider, paths, useCurrentWorkspace } from "@multica/core/paths";
 import { useNavigation } from "@multica/views/navigation";
@@ -208,7 +208,6 @@ export function DesktopShell() {
           </SidebarProvider>
         </div>
         {slug && <ModalRegistry />}
-        {slug && <SearchCommand />}
         {slug && <GlobalSearchDialog />}
         <WindowOverlay />
       </WorkspaceSlugProvider>

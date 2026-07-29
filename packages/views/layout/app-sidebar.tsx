@@ -599,9 +599,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         {/* Navigation */}
         <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
           {/* Global search entry (LRM-454 Lock A) — opens the GlobalSearchDialog.
-              ⌘K is intentionally NOT shown here yet: it still opens the existing
-              SearchCommand palette. Reclaiming ⌘K is the gated migration step
-              (see LRM-606) — add the hint when ⌘K actually opens this surface. */}
+              ⌘K also opens it (LRM-606 reclaim); SearchCommand is retired. */}
           <div className="px-2 pt-2">
             <SidebarMenuButton
               onClick={() => useGlobalSearchStore.getState().setOpen(true)}
@@ -610,6 +608,9 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
             >
               <SearchIcon className="size-4" />
               <span>{t(($) => $.nav.search) ?? "Search"}</span>
+              <kbd className="ml-auto hidden rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
+                {t(($) => $.nav.search_shortcut) ?? "⌘K"}
+              </kbd>
             </SidebarMenuButton>
           </div>
           <SidebarGroup>

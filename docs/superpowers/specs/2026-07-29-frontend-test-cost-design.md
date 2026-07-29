@@ -125,6 +125,28 @@ The one measurement here that *is* clean is the flip-verify in §3 (412 → 0): 
 >
 > Full revision follows once the shared-fixture measurement is in — taken on CI,
 > not locally (local variance ~25%, dedicated runner ~0.4%).
+>
+> ### ⚠️ §1's goal and option D are not the same thing
+>
+> This document sets out to **reduce CI time**, and D was accepted as a means to
+> that end. Building it showed the two come apart:
+>
+> - **D buys a single source of truth.** A new test file should not hand-copy a
+>   160-line mock block, and changing the auth mock should be one edit, not seven.
+> - **D is NOT shown to buy time, and there is reason to doubt it does.** Every
+>   file still calls `vi.mock` fifteen times, still resolves the same modules, and
+>   now imports one more. **Sharing removes duplicated source, not duplicated
+>   module resolution** — and `import`/`environment` is the latter.
+>
+> A conversion of one file changed it from 304 to **302** lines: those "identical"
+> factories are 3–7 lines each while the shared call site costs 4, so it is close
+> to one-for-one. **"182 duplicated lines" was true; "extracting saves 182 lines"
+> was not.**
+>
+> **Do not present D as a performance measure.** Whether the time goal is
+> reachable at all is decided by one CI measurement over the seven converted
+> `channels-page-*` files; if `import`/`environment` do not move, that path stops
+> there rather than expanding to 297 files.
 
 
 | # | option | attacks | cost | verdict |

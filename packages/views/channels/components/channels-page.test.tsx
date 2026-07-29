@@ -4,16 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { useLastSelectedChannelStore } from "@multica/core/channels";
 import { ApiError } from "@multica/core/api";
+import { toast } from "sonner";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelsPage } from "./channels-page";
 
-// LRM-694 — merged from channels-page-voice-failure.test.tsx +
-// channels-page-system-channel.test.tsx (identical mock scaffolds; one jsdom
-// env + one module graph instead of two). Per-suite fixture state lives in the
-// hoisted `messagesFixture` / `navState` and is reset in each describe's
-// beforeEach so every test sees exactly the environment its source file gave
-// it — merging must not change what any test observes.
+// LRM-694 — merged from five channels-page-* files (batch 1: voice-failure +
+// system-channel; batch 2: create-group-project + role-failure-retry +
+// reminder-thread-anchor). One jsdom env + one module graph instead of five.
+// Per-suite fixture state lives in the hoisted `channelsFixture` /
+// `membersByChannel` / `messagesFixture` / `threadsFixture` /
+// `projectsFixture` / `navState` and is reset in each describe's beforeEach so
+// every test sees exactly the environment its source file gave it — merging
+// must not change what any test observes. Where two source files needed
+// different stub SHAPES for the same module (project picker, details panel,
+// presence cluster), the mock spreads importOriginal and switches on a
+// render-time flag the owning suite raises in its beforeEach.
 //
 // #642 — the workspace's immutable system #general channel. These tests
 // cover what's reliably assertable through RTL: default-select priority
@@ -58,7 +64,23 @@ vi.mock("./composer", () => ({
 }));
 
 const apiMock = vi.hoisted(() => {
-  const known: Record<string, unknown> = {};
+  // #576 create-flow: the created channel the createChannel spy resolves with.
+  // Pre-created (not lazy) so the merged suites can hold a direct `apiMock.X`
+  // reference the way their source files did.
+  const createChannel = vi.fn().mockResolvedValue({
+    id: "chan-new",
+    workspace_id: "ws-1",
+    name: "New Group",
+    kind: "group" as const,
+    description: null,
+    lark_chat_id: null,
+    created_by: "user-1",
+    created_at: "2026-07-21T09:00:00Z",
+    updated_at: "2026-07-21T09:00:00Z",
+  });
+  // #832 role-failure: no default impl — each test installs its own rejection.
+  const updateChannelMemberRole = vi.fn();
+  const known: Record<string, unknown> = { createChannel, updateChannelMemberRole };
   const proxy = new Proxy(known, {
     get(target, prop) {
       if (typeof prop !== "string") return undefined;
@@ -66,7 +88,7 @@ const apiMock = vi.hoisted(() => {
       return target[prop];
     },
   });
-  return { proxy };
+  return { proxy, createChannel, updateChannelMemberRole };
 });
 // Keep the real module's other exports (notably `ApiError`, used by the leave
 // handler's 409 check) while swapping the `api` singleton for the spy proxy.
@@ -79,6 +101,7 @@ const toastMock = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
+  warning: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), toastMock) }));
 
@@ -202,6 +225,19 @@ const messagesFixture = vi.hoisted(() => ({
   >,
 }));
 
+// #656 reminder-anchor suite: thread replies keyed by root message id. Default
+// `{}` reproduces the static `{ messages: [] }` the voice/system suites had.
+const threadsFixture = vi.hoisted(() => ({
+  current: {} as Record<string, unknown[]>,
+}));
+
+// #576 create-popover suite: projects the picker lists. The voice/system
+// suites never mocked `projects/queries` — the real queryFn ran against the
+// proxied api (undefined → empty picker), which a default `[]` reproduces.
+const projectsFixture = vi.hoisted(() => ({
+  current: [] as unknown[],
+}));
+
 vi.mock("@multica/core/channels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/channels")>();
   const options = (queryKey: string[], data: unknown) => ({ queryKey, queryFn: async () => data });
@@ -213,7 +249,10 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
       options(["channel-members", channelId], membersByChannel[channelId] ?? []),
     channelProjectOptions: () => options(["channel-project"], ""),
     activeChannelTasksOptions: () => options(["channel-tasks"], []),
-    channelMessageThreadOptions: () => options(["channel-thread"], { messages: [] }),
+    channelMessageThreadOptions: (_channelId: string, messageId: string) =>
+      options(["channel-thread", messageId], {
+        messages: threadsFixture.current[messageId] ?? [],
+      }),
     channelMessagesPageOptions: () => ({
       queryKey: ["channel-messages"],
       queryFn: async () => messagesFixture.current,
@@ -222,6 +261,13 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
     }),
   };
 });
+
+vi.mock("@multica/core/projects/queries", () => ({
+  projectListOptions: () => ({
+    queryKey: ["projects"],
+    queryFn: async () => projectsFixture.current,
+  }),
+}));
 
 // NOTE: the store is used BOTH as a hook and imperatively —
 // `viewerAuthorFields()` in core/channels/mutations.ts calls
@@ -291,9 +337,24 @@ const replaceSpy = vi.hoisted(() => vi.fn());
 // header as a second `active-title`, and `getByTestId` throws "found multiple
 // elements" in tests that never mentioned threads.
 const navState = vi.hoisted(() => ({ search: new URLSearchParams() }));
+// #656 reminder-anchor suite wrote its deep links through
+// `currentSearchParams.value`; alias it onto the same holder so both spellings
+// address one source of truth.
+const currentSearchParams = {
+  get value() {
+    return navState.search;
+  },
+  set value(v: URLSearchParams) {
+    navState.search = v;
+  },
+};
 vi.mock("../../navigation/context", () => ({
   useNavigation: () => ({
-    searchParams: navState.search,
+    // A fresh copy per call, like a real `useSearchParams()` on web — a
+    // same-pathname AppLink push changes searchParams WITHOUT remounting, and a
+    // one-shot mount-time read would silently miss it (#656).
+    searchParams: new URLSearchParams(navState.search),
+    push: vi.fn(),
     replace: replaceSpy,
     getShareableUrl: (url: string) => url,
   }),
@@ -302,12 +363,68 @@ vi.mock("../../navigation/context", () => ({
 vi.mock("../../editor/content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
+// The #576 SETTINGS tests need the dumb labeled button (enabled/disabled is
+// what's asserted); the #576 CREATE-popover suite needs a functional stub that
+// drives `onChange` and echoes `value`. Render-time flag, set by the create
+// suite's beforeEach — vi.mock factories can't vary per suite, the rendered
+// output can.
+const pickerStub = vi.hoisted(() => ({ functional: false }));
 vi.mock("../../common/project-picker-button", () => ({
-  ProjectPickerButton: () => <button type="button">project</button>,
+  ProjectPickerButton: (props: {
+    disabled?: boolean;
+    value?: string | null;
+    onChange?: (id: string | null) => void;
+  }) =>
+    pickerStub.functional ? (
+      <button
+        type="button"
+        aria-label="Project: pick"
+        onClick={() => props.onChange?.(props.value === "proj-1" ? null : "proj-1")}
+      >
+        picker:{props.value ?? "none"}
+      </button>
+    ) : (
+      <button type="button" disabled={props.disabled}>
+        project
+      </button>
+    ),
 }));
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div data-testid="dm-conversation" /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
 vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
+// #832 role-failure suite: chrome-only details panel (renders the page-built
+// membersBody directly) + presence cluster reduced to an "open-members"
+// button. Every other suite needs the REAL details panel and the REAL presence
+// trigger (the #642 tests click "View members"), so both stubs are gated on
+// render-time flags that only the role-failure suite raises.
+const chromeStub = vi.hoisted(() => ({ detailsPanel: false, presenceCue: false }));
+vi.mock("./channel-details-panel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel-details-panel")>();
+  return {
+    ...actual,
+    ChannelDetailsPanel: (props: React.ComponentProps<typeof actual.ChannelDetailsPanel>) =>
+      chromeStub.detailsPanel ? (
+        <div data-testid="details-panel">{props.membersBody}</div>
+      ) : (
+        <actual.ChannelDetailsPanel {...props} />
+      ),
+  };
+});
+vi.mock("./channel-agents-live-cue", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel-agents-live-cue")>();
+  type ClusterProps = React.ComponentProps<typeof actual.ChannelPresenceCluster>;
+  return {
+    ...actual,
+    ChannelPresenceCluster: (props: ClusterProps & { onOpenMembers?: () => void }) =>
+      chromeStub.presenceCue ? (
+        <button type="button" onClick={props.onOpenMembers}>
+          open-members
+        </button>
+      ) : (
+        <actual.ChannelPresenceCluster {...props} />
+      ),
+  };
+});
 // #838 thread A→B — `header` MUST be rendered. ThreadPanel passes the pinned
 // ThreadRootPreview through it (thread-panel.tsx:262), so a mock that drops
 // `header` also drops the only per-thread evidence in the DOM. The previous
@@ -317,8 +434,30 @@ vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
 // (Suites that never open a thread get header === undefined → the same plain
 // stub div the system-channel file used.)
 vi.mock("./channel-message-list", () => ({
-  ChannelMessageList: ({ header }: { header?: React.ReactNode }) => (
-    <div data-testid="message-list">{header}</div>
+  // Superset of the two source stubs: the voice suites need `header` rendered
+  // (ThreadRootPreview drives the thread voice flow); the #656 reminder suite
+  // needs message ids + the highlight target surfaced so it can tell the main
+  // timeline apart from ThreadPanel's reply list. Suites that never open a
+  // thread and seed no messages get the same plain stub div as before.
+  ChannelMessageList: ({
+    header,
+    messages,
+    highlightMessageId,
+  }: {
+    header?: React.ReactNode;
+    messages?: { id: string }[];
+    highlightMessageId?: string | null;
+  }) => (
+    <div
+      data-testid="message-list"
+      data-highlight={highlightMessageId ?? ""}
+      data-count={(messages ?? []).length}
+    >
+      {header}
+      {(messages ?? []).filter(Boolean).map((m) => (
+        <div key={m.id} data-testid={`msg-${m.id}`} />
+      ))}
+    </div>
   ),
 }));
 
@@ -363,7 +502,10 @@ function renderPage(channelId?: string) {
   // #838 — re-render against the SAME client so a test can change the `?thread=`
   // deep link (which is read from navigation, not props) without remounting and
   // losing the very state under test.
-  return { ...view, refresh: () => view.rerender(ui()) };
+  // #656: expose the client too — the reminder-anchor suite rerenders with an
+  // explicit provider and its whole point is proving the thread switch reuses
+  // THIS client (no full reload).
+  return { ...view, qc, refresh: () => view.rerender(ui()) };
 }
 
 
@@ -1380,5 +1522,491 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     // gate rather than an unmounted panel.
     await screen.findByText("Bob");
     expect(screen.queryByLabelText("Member actions")).toBeNull();
+  });
+});
+
+// #576 — create-group dialog project field. The channels-page scope shipped
+// the group-settings Project section (#800, ChannelProjectSettingsPanel) for
+// binding an EXISTING channel to a project; this covers the remaining piece —
+// picking a project AT CREATION time in the same inline create-channel
+// popover (channels-page.tsx's sidebar "+" Popover), reusing the identical
+// ProjectPickerButton + PropRow pattern instead of a bespoke picker. Leaving
+// the field untouched must behave exactly like the pre-existing create flow
+// (no `project_id` on the wire).
+
+function openCreatePopover() {
+  // The sidebar "+" trigger and the popover's submit button share the same
+  // accessible name ("Create channel") once the popover is open, so grab the
+  // trigger while it's still the only match.
+  fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
+}
+
+describe("ChannelsPage create-group popover — optional project field (#576)", () => {
+  beforeEach(() => {
+    // Fresh-file environment for this suite: its source file started with an
+    // empty jsdom + default fixtures, so reset everything earlier suites may
+    // have touched (see the merged-file header note).
+    window.sessionStorage.clear();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    mobileViewport.value = false;
+    navState.search = new URLSearchParams();
+    channelsFixture.current = [
+    {
+      id: "chan-1",
+      workspace_id: "ws-1",
+      name: "general",
+      kind: "group" as const,
+      description: null,
+      lark_chat_id: null,
+      created_by: "user-1",
+      created_at: "2026-06-17T09:00:00Z",
+      updated_at: "2026-06-17T09:00:00Z",
+    },
+  ];
+    messagesFixture.current = { messages: [], next_cursor: null };
+    threadsFixture.current = {};
+    projectsFixture.current = [
+      { id: "proj-1", title: "Apollo" },
+      { id: "proj-2", title: "Zeus" },
+    ];
+    pickerStub.functional = true;
+    apiMock.createChannel.mockClear();
+  });
+
+  afterEach(() => {
+    pickerStub.functional = false;
+  });
+
+  it("renders an optional project field in the create-group popover, defaulted to unset", async () => {
+    renderPage();
+    openCreatePopover();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Channel name")).toBeInTheDocument();
+    });
+    // Reuses the same "Project" / "No project" copy as the group-settings panel.
+    expect(screen.getByText("Project")).toBeInTheDocument();
+    expect(screen.getByText("No project")).toBeInTheDocument();
+    expect(screen.getByText("picker:none")).toBeInTheDocument();
+  });
+
+  it("includes the selected project id in the create submission", async () => {
+    renderPage();
+    openCreatePopover();
+
+    const nameInput = await screen.findByPlaceholderText("Channel name");
+    fireEvent.change(nameInput, { target: { value: "New Group" } });
+
+    fireEvent.click(screen.getByLabelText("Project: pick"));
+    await waitFor(() => expect(screen.getByText("Apollo")).toBeInTheDocument());
+
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    expect(apiMock.createChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "New Group", project_id: "proj-1" }),
+    );
+  });
+
+  it("omits project_id when no project is picked — existing create flow unaffected", async () => {
+    renderPage();
+    openCreatePopover();
+
+    const nameInput = await screen.findByPlaceholderText("Channel name");
+    fireEvent.change(nameInput, { target: { value: "Plain Group" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    const payload = apiMock.createChannel.mock.calls[0]?.[0] as { project_id?: string | null };
+    expect(payload).toMatchObject({ name: "Plain Group", lark_chat_id: undefined });
+    // Not just falsy — genuinely absent from the wire payload (JSON.stringify
+    // drops an `undefined` value), matching the pre-#576 create request shape.
+    expect(payload.project_id).toBeUndefined();
+  });
+
+  it("create-group UI has no auto-Beckham / group_manager affordance (LRM-399)", async () => {
+    renderPage();
+    openCreatePopover();
+    const popover = await screen.findByPlaceholderText("Channel name");
+    const root = popover.closest("[data-slot='popover-content'], [role='dialog'], div") ?? document.body;
+    const text = (root.textContent ?? "").toLowerCase();
+    expect(text).not.toMatch(/beckham|贝克汉姆|group[_\s-]?manager|自动.*群管|auto.?provision/);
+    // Create payload stays name/project only — no manager flag.
+    fireEvent.change(popover, { target: { value: "No Manager Group" } });
+    fireEvent.keyDown(popover, { key: "Enter" });
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    expect(Object.keys(apiMock.createChannel.mock.calls[0]?.[0] ?? {})).toEqual(
+      expect.arrayContaining(["name"]),
+    );
+    expect(apiMock.createChannel.mock.calls[0]?.[0]).not.toHaveProperty(
+      "group_manager_agent_id",
+    );
+    expect(apiMock.createChannel.mock.calls[0]?.[0]).not.toHaveProperty(
+      "provision_group_manager",
+    );
+  });
+
+  it("pins the freshly-created group to the creator's own sidebar (Beckham v2 §4)", async () => {
+    const pinChannel = apiMock.proxy.pinChannel as ReturnType<typeof vi.fn>;
+    pinChannel.mockClear();
+    renderPage();
+    openCreatePopover();
+    const nameInput = await screen.findByPlaceholderText("Channel name");
+    fireEvent.change(nameInput, { target: { value: "New Group" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    // The created group (kind:"group", id "chan-new") is pinned for the creator
+    // only — a per-user pin reusing the existing channel pin, best-effort.
+    await waitFor(() => expect(pinChannel).toHaveBeenCalledWith("chan-new"));
+  });
+
+  it("surfaces a non-blocking toast when the creator pin fails — creation still succeeds (Beckham v2 §4, Iris)", async () => {
+    const pinChannel = apiMock.proxy.pinChannel as ReturnType<typeof vi.fn>;
+    pinChannel.mockClear();
+    pinChannel.mockRejectedValueOnce(new Error("pin failed"));
+    const infoToast = toast.info as ReturnType<typeof vi.fn>;
+    infoToast.mockClear();
+    renderPage();
+    openCreatePopover();
+    const nameInput = await screen.findByPlaceholderText("Channel name");
+    fireEvent.change(nameInput, { target: { value: "New Group" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+    // Creation proceeds and the pin is still attempted…
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(pinChannel).toHaveBeenCalledWith("chan-new"));
+    // …but the pin rejection is NOT swallowed — an info toast tells the user
+    // the group exists yet wasn't pinned and can be pinned manually.
+    await waitFor(() =>
+      expect(infoToast).toHaveBeenCalledWith(
+        "Group created, but it couldn't be pinned. You can pin it manually later.",
+      ),
+    );
+  });
+});
+
+/**
+ * #832 — the page decides which role failures may be retried.
+ *
+ * The gap this closes: `owner_changed` and `gone` were covered at BOTH ends and
+ * nowhere in the middle.
+ *   - core `role-change-failure.test.ts` proves error → kind;
+ *   - `channel-members-list-role-pending.test.tsx` proves that a descriptor
+ *     WITHOUT `onRetry` renders no Retry button — but the test hands it that
+ *     descriptor directly.
+ * Nothing drove the page from a real failure to the descriptor, and the page is
+ * where the decision lives (`channels-page.tsx`, `retryable = kind ===
+ * "transient"`). Relaxing that line to `!== "forbidden"`, or to `true`, left
+ * the entire core + views suite green.
+ *
+ * Same shape as the transfer seam in #1367: two self-consistent halves, and the
+ * joint between them untested.
+ *
+ * These render the real page, so the real `classifyRoleChangeFailure` →
+ * `roleFailures` → `roleFailureFor` chain runs; only the surrounding chrome is
+ * stubbed. Copy comes from the real `en/channels.json`, not a mock dictionary —
+ * a hand-written dictionary drifts and renders "" instead of failing.
+ *
+ * HOW TO FLIP-VERIFY: widen `retryable` in channels-page.tsx (e.g. `kind !==
+ * "forbidden"`) → the owner_changed and gone cases go red while the transient
+ * case stays green. That asymmetry is the point: a guard that reddens for every
+ * mutation is not discriminating between these kinds.
+ */
+
+/** Open the roster and fire "promote" on Bob's row. */
+async function promoteBob() {
+  renderPage();
+  fireEvent.click(await screen.findByText("open-members"));
+  // Exactly one row offers a menu: the viewer's own row never does, so this is
+  // Bob's. Asserted rather than indexed blindly — if that ever changes, this
+  // fails here instead of silently driving the wrong row.
+  const triggers = await screen.findAllByLabelText("Member actions");
+  expect(triggers).toHaveLength(1);
+  fireEvent.click(triggers[0]!);
+  fireEvent.click(await screen.findByTestId("group-member-menu-promote"));
+}
+
+// The viewer is the group owner, so the management menu is offered; `bob` is an
+// ordinary member, so `promote` is available on his row.
+const ROLE_FAILURE_MEMBERS = [
+  {
+    channel_id: "chan-1",
+    member_id: "user-1",
+    member_type: "user" as const,
+    display_name: "Alice",
+    role: "owner" as const,
+    joined_at: "2026-06-17T09:00:00Z",
+  },
+  {
+    channel_id: "chan-1",
+    member_id: "user-2",
+    member_type: "user" as const,
+    display_name: "Bob",
+    role: "member" as const,
+    joined_at: "2026-06-17T09:00:00Z",
+  },
+];
+
+describe("ChannelsPage — which role failures offer Retry (#832)", () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    mobileViewport.value = false;
+    navState.search = new URLSearchParams();
+    channelsFixture.current = [
+    {
+      id: "chan-1",
+      workspace_id: "ws-1",
+      name: "general",
+      kind: "group" as const,
+      description: null,
+      lark_chat_id: null,
+      created_by: "user-1",
+      created_at: "2026-06-17T09:00:00Z",
+      updated_at: "2026-06-17T09:00:00Z",
+    },
+  ];
+    membersByChannel["chan-1"] = ROLE_FAILURE_MEMBERS;
+    messagesFixture.current = { messages: [], next_cursor: null };
+    threadsFixture.current = {};
+    projectsFixture.current = [];
+    // Chrome-only stubs — this suite drives the REAL members roster through a
+    // panel that renders membersBody directly; other suites need the real
+    // details panel + presence trigger, so lower the flags again after.
+    chromeStub.detailsPanel = true;
+    chromeStub.presenceCue = true;
+    apiMock.updateChannelMemberRole.mockReset();
+  });
+
+  afterEach(() => {
+    chromeStub.detailsPanel = false;
+    chromeStub.presenceCue = false;
+    delete membersByChannel["chan-1"];
+  });
+
+  it("owner_changed: shows its own message and NO retry — the roster moved, repeating cannot help", async () => {
+    apiMock.updateChannelMemberRole.mockRejectedValue(
+      new ApiError("someone else took ownership", 403, "Forbidden", { code: "owner_changed" }),
+    );
+
+    await promoteBob();
+
+    expect(
+      await screen.findByText("Ownership has changed; the member list has been refreshed."),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-members-row-role-retry")).toBeNull();
+  });
+
+  it("gone: shows its own message and NO retry — the target is no longer there", async () => {
+    apiMock.updateChannelMemberRole.mockRejectedValue(
+      new ApiError("not found", 404, "Not Found"),
+    );
+
+    await promoteBob();
+
+    expect(
+      await screen.findByText("The member or channel state has changed. Refresh and try again."),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-members-row-role-retry")).toBeNull();
+  });
+
+  it("transient: DOES offer retry — without this the other two prove nothing", async () => {
+    // The positive control. If the page stopped offering Retry entirely, the two
+    // assertions above would still pass while the feature was silently dead.
+    apiMock.updateChannelMemberRole.mockRejectedValue(
+      new ApiError("upstream boom", 503, "Service Unavailable"),
+    );
+
+    await promoteBob();
+
+    expect(
+      await screen.findByText("Couldn't update the member's role. Please try again."),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("channel-members-row-role-retry")).toBeInTheDocument();
+  });
+
+  it("retry re-issues the SAME action, not a default one", async () => {
+    apiMock.updateChannelMemberRole.mockRejectedValue(
+      new ApiError("upstream boom", 503, "Service Unavailable"),
+    );
+
+    await promoteBob();
+    await screen.findByTestId("channel-members-row-role-retry");
+    apiMock.updateChannelMemberRole.mockClear();
+    fireEvent.click(screen.getByTestId("channel-members-row-role-retry"));
+
+    await waitFor(() => expect(apiMock.updateChannelMemberRole).toHaveBeenCalled());
+    // promote → "manager"; a retry that sent "member" would be a demotion the
+    // user never asked for.
+    expect(apiMock.updateChannelMemberRole).toHaveBeenCalledWith(
+      "chan-1",
+      "user",
+      "user-2",
+      "manager",
+    );
+  });
+});
+
+// #656 Reminder anchor `?thread=<root>&message=<reply>` deep-link: it must
+// really open ThreadPanel and highlight the reply inside it — a plain
+// `?message=` main-timeline highlight (what channels-page-routing.test.tsx
+// already covers) is NOT the same thing and doesn't satisfy this.
+
+const THREAD_ROOT_ID = "root-msg-1";
+const THREAD_REPLY_ID = "reply-msg-1";
+const SECOND_THREAD_ROOT_ID = "root-msg-2";
+const SECOND_THREAD_REPLY_ID = "reply-msg-2";
+
+const REMINDER_THREADS: Record<string, unknown[]> = {
+  [THREAD_ROOT_ID]: [
+    {
+      id: THREAD_ROOT_ID,
+      channel_id: "chan-1",
+      workspace_id: "ws-1",
+      seq: 1,
+      type: "user",
+      author_id: "user-2",
+      author_name: "Bob",
+      content: "root",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      created_at: "2026-07-20T00:00:00Z",
+    },
+    {
+      id: THREAD_REPLY_ID,
+      channel_id: "chan-1",
+      workspace_id: "ws-1",
+      seq: 2,
+      type: "user",
+      author_id: "user-2",
+      author_name: "Bob",
+      content: "the anchored reply",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      thread_root_message_id: THREAD_ROOT_ID,
+      created_at: "2026-07-21T01:00:00Z",
+    },
+  ],
+  [SECOND_THREAD_ROOT_ID]: [
+    {
+      id: SECOND_THREAD_ROOT_ID,
+      channel_id: "chan-1",
+      workspace_id: "ws-1",
+      seq: 3,
+      type: "user",
+      author_id: "user-2",
+      author_name: "Bob",
+      content: "second root",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      created_at: "2026-07-20T00:00:00Z",
+    },
+    {
+      id: SECOND_THREAD_REPLY_ID,
+      channel_id: "chan-1",
+      workspace_id: "ws-1",
+      seq: 4,
+      type: "user",
+      author_id: "user-2",
+      author_name: "Bob",
+      content: "the second anchored reply",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      thread_root_message_id: SECOND_THREAD_ROOT_ID,
+      created_at: "2026-07-22T01:00:00Z",
+    },
+  ],
+};
+
+describe("ChannelsPage — Reminder anchor ?thread=&message= deep-link (#656)", () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    mobileViewport.value = false;
+    channelsFixture.current = [
+    {
+      id: "chan-1",
+      workspace_id: "ws-1",
+      name: "general",
+      kind: "group" as const,
+      description: null,
+      lark_chat_id: null,
+      created_by: "user-1",
+      created_at: "2026-06-17T09:00:00Z",
+      updated_at: "2026-06-17T09:00:00Z",
+    },
+  ];
+    messagesFixture.current = { messages: [], limit: 50, has_more: false, next_cursor: null };
+    threadsFixture.current = REMINDER_THREADS;
+    projectsFixture.current = [];
+    currentSearchParams.value = new URLSearchParams({ thread: THREAD_ROOT_ID, message: THREAD_REPLY_ID });
+  });
+
+  it("opens ThreadPanel (not just a main-timeline highlight) and routes the highlight to the reply inside it", async () => {
+    renderPage("chan-1");
+
+    // Both the main conversation header and ThreadPanel's own header render
+    // through the same mocked ConversationHeader, so this now matches two —
+    // the group's own title is enough to confirm the right channel resolved.
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("active-title").some((el) => el.textContent?.includes("general")),
+      ).toBe(true);
+    });
+
+    // Two ChannelMessageList instances now exist: the main timeline and the
+    // ThreadPanel's reply list. The reply-list one is the one carrying the
+    // highlight target and the anchored reply.
+    const lists = await screen.findAllByTestId("message-list");
+    expect(lists.length).toBeGreaterThanOrEqual(2);
+    const threadList = lists.find((el) => el.querySelector(`[data-testid="msg-${THREAD_REPLY_ID}"]`));
+    expect(threadList).toBeTruthy();
+    expect(threadList).toHaveAttribute("data-highlight", THREAD_REPLY_ID);
+
+    // The main timeline must NOT have absorbed the highlight — it belongs to
+    // a message that was never in the main list's page.
+    const mainList = lists.find((el) => el !== threadList);
+    expect(mainList).toHaveAttribute("data-highlight", "");
+  });
+
+  it("opens a SECOND, different thread when a same-pathname AppLink navigation changes ?thread=&message= without remounting (no full reload)", async () => {
+    const { rerender, qc } = renderPage("chan-1");
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("active-title").some((el) => el.textContent?.includes("general")),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId(`msg-${THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+
+    // Simulate an AppLink push: only searchParams changes (new URLSearchParams
+    // instance, same pathname) — the SAME QueryClient/component tree stays
+    // mounted, proving this isn't a full reload. A one-shot mount-time read
+    // would silently miss this.
+    currentSearchParams.value = new URLSearchParams({
+      thread: SECOND_THREAD_ROOT_ID,
+      message: SECOND_THREAD_REPLY_ID,
+    });
+    rerender(
+      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+        <QueryClientProvider client={qc}>
+          <ChannelsPage channelId="chan-1" />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`msg-${SECOND_THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+    const lists = await screen.findAllByTestId("message-list");
+    const secondThreadList = lists.find((el) =>
+      el.querySelector(`[data-testid="msg-${SECOND_THREAD_REPLY_ID}"]`),
+    );
+    expect(secondThreadList).toHaveAttribute("data-highlight", SECOND_THREAD_REPLY_ID);
   });
 });

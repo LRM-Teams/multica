@@ -253,8 +253,9 @@ jobs:
           POSTGRES_DB: multica
           POSTGRES_USER: multica
           POSTGRES_PASSWORD: multica
+        # High host ports avoid colliding with Compose Postgres on self-hosted runners.
         ports:
-          - 5432:5432
+          - 55432:5432
         options: >-
           --health-cmd "pg_isready -U multica -d multica"
           --health-interval 5s
@@ -263,19 +264,19 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 6379:6379
+          - 56379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://multica:multica@localhost:5432/multica?sslmode=disable
+      DATABASE_URL: postgres://multica:multica@localhost:55432/multica?sslmode=disable
       # Wires up the RedisLocalSkill*_test.go suite. Distinct from REDIS_URL
       # (which would flip the server binary itself onto the Redis-backed
       # realtime relay + request stores); the tests talk to this Redis
       # directly so they run alongside the Postgres-backed suite.
-      REDIS_TEST_URL: redis://localhost:6379/1
+      REDIS_TEST_URL: redis://localhost:56379/1
     steps:
       - name: Checkout
         uses: actions/checkout@v6

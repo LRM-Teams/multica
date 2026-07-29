@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ComponentType, ReactNode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -21,6 +22,36 @@ vi.mock("@multica/core/api", () => ({
     listChannelAttachments: (...args: unknown[]) => listChannelAttachments(...args),
   },
 }));
+
+// LRM-714: the panel is virtualized; jsdom has no layout, so render every
+// row through the same List/Item components the panel hands to Virtuoso.
+vi.mock("react-virtuoso", () => {
+  const MockVirtuoso = ({
+    components = {},
+    data = [],
+    itemContent,
+  }: {
+    components?: {
+      List?: ComponentType<{ children?: ReactNode }>;
+      Item?: ComponentType<{ children?: ReactNode }>;
+    };
+    data?: { id: string }[];
+    itemContent: (index: number, item: { id: string }) => ReactNode;
+  }) => {
+    const List = components.List ?? "div";
+    const Item = components.Item ?? "div";
+    return (
+      <div data-testid="virtuoso-scroller">
+        <List>
+          {data.map((item, i) => (
+            <Item key={item.id}>{itemContent(i, item)}</Item>
+          ))}
+        </List>
+      </div>
+    );
+  };
+  return { Virtuoso: MockVirtuoso };
+});
 
 vi.mock("@multica/core/channels", async () => {
   const { queryOptions } = await import("@tanstack/react-query");
@@ -202,6 +233,41 @@ describe("ChannelFilesPanel channel attachments (LRM-607 / LRM-675)", () => {
     const row = screen.getByTestId("channel-file-row");
     fireEvent.click(row.firstElementChild as HTMLElement);
     await waitFor(() => expect(download).toHaveBeenCalledWith("att-zip"));
+  });
+
+  it("renders through the virtualized scroller, newest first (LRM-714)", async () => {
+    const make = (id: string, created_at: string) => ({
+      id,
+      workspace_id: "ws",
+      issue_id: null,
+      comment_id: null,
+      chat_session_id: null,
+      chat_message_id: `m-${id}`,
+      uploader_type: "member",
+      uploader_id: "user-1",
+      filename: `${id}.txt`,
+      url: "/u",
+      download_url: `/api/attachments/${id}/download`,
+      markdown_url: `/api/attachments/${id}/download`,
+      content_type: "text/plain",
+      size_bytes: 100,
+      created_at,
+    });
+    listChannelAttachments.mockResolvedValue([
+      make("older", "2026-07-20T02:00:00Z"),
+      make("newest", "2026-07-28T02:00:00Z"),
+      make("middle", "2026-07-24T02:00:00Z"),
+    ]);
+
+    renderPanel();
+
+    expect(await screen.findByTestId("virtuoso-scroller")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("channel-file-row");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining("newest.txt"),
+      expect.stringContaining("middle.txt"),
+      expect.stringContaining("older.txt"),
+    ]);
   });
 
   it("shows empty state when the channel has no uploads", async () => {

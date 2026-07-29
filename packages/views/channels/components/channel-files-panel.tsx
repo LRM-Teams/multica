@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo, type Ref } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Virtuoso } from "react-virtuoso";
 import { channelAttachmentsOptions } from "@multica/core/channels";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -25,6 +26,13 @@ import { useMessageTime } from "../../i18n/use-message-time";
  * preview); clicking anywhere on the row opens the shared preview modal
  * (lightbox for images, rendered md / monospaced txt). Non-previewable
  * binaries open nothing and keep Download as the only action.
+ *
+ * LRM-714: rows are windowed with react-virtuoso. The endpoint returns the
+ * full attachment set in one payload (hundreds of rows in busy channels) and
+ * each image row's thumbnail is the original download URL — mounting every
+ * row at once froze the whole page (multi-second long tasks, hundreds of MB
+ * of decoded images). Only viewport rows mount now, which also bounds how
+ * many full-size thumbnails the browser fetches/decodes.
  */
 export function ChannelFilesPanel({
   channelId,
@@ -94,16 +102,19 @@ export function ChannelFilesPanel({
 
   return (
     <>
-      <ul
-        className={cn(
-          "list-none space-y-0 overflow-auto p-0",
-          wide ? "flex-1" : "max-h-80",
-        )}
-        data-testid="channel-files-list"
-      >
-        {sorted.map((att) => (
+      <Virtuoso
+        className={wide ? "min-h-0 flex-1" : undefined}
+        style={
+          wide
+            ? undefined
+            : { height: Math.min(sorted.length * FILE_ROW_HEIGHT, COMPACT_MAX_HEIGHT) }
+        }
+        data={sorted}
+        initialItemCount={Math.min(sorted.length, 20)}
+        increaseViewportBy={{ top: 200, bottom: 400 }}
+        components={{ List: FilesVirtuosoList, Item: FilesVirtuosoItem }}
+        itemContent={(_index, att) => (
           <ChannelAttachmentRow
-            key={att.id}
             attachment={att}
             onOpen={() => {
               const opened = preview.tryOpen({ kind: "full", attachment: att });
@@ -111,14 +122,51 @@ export function ChannelFilesPanel({
             }}
             onDownload={() => void download(att.id)}
           />
-        ))}
-      </ul>
+        )}
+      />
       {preview.modal}
     </>
   );
 }
 
-function ChannelAttachmentRow({
+/** py-2 (16) + 40px thumb/badge row content + 1px bottom border. */
+const FILE_ROW_HEIGHT = 57;
+/** Compact host keeps the old max-h-80 cap. */
+const COMPACT_MAX_HEIGHT = 320;
+
+// Virtuoso types its List/Item refs as HTMLDivElement (its default elements);
+// the node it hands over is just whatever we mount, so native <ul>/<li> work
+// and keep list semantics for AT (react-doctor prefer-tag-over-role).
+function FilesVirtuosoList({
+  ref,
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }) {
+  return (
+    <ul
+      ref={ref as Ref<HTMLUListElement>}
+      {...(props as React.HTMLAttributes<HTMLUListElement>)}
+      className={cn("list-none space-y-0 p-0", className)}
+      data-testid="channel-files-list"
+    />
+  );
+}
+
+function FilesVirtuosoItem({
+  ref,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }) {
+  return (
+    <li
+      ref={ref as Ref<HTMLLIElement>}
+      {...(props as React.LiHTMLAttributes<HTMLLIElement>)}
+      className="group border-b border-border/70 transition-colors hover:bg-muted/60"
+      data-testid="channel-file-row"
+    />
+  );
+}
+
+const ChannelAttachmentRow = memo(function ChannelAttachmentRow({
   attachment,
   onOpen,
   onDownload,
@@ -146,73 +194,68 @@ function ChannelAttachmentRow({
       : "";
 
   return (
-    <li
-      className="group border-b border-border/70 transition-colors last:border-b-0 hover:bg-muted/60"
-      data-testid="channel-file-row"
+    /* react-doctor-disable-next-line react-doctor/click-events-have-key-events, react-doctor/no-static-element-interactions -- row body click mirrors the row's explicit Open/Download buttons (keyboard/AT path); click-anywhere is the LRM-675 design affordance */
+    <div
+      className="flex cursor-pointer items-center gap-2.5 px-3 py-2"
+      onClick={onOpen}
     >
-      {/* react-doctor-disable-next-line react-doctor/click-events-have-key-events, react-doctor/no-static-element-interactions -- row body click mirrors the row's explicit Open/Download buttons (keyboard/AT path); click-anywhere is the LRM-675 design affordance */}
-      <div
-        className="flex cursor-pointer items-center gap-2.5 px-3 py-2"
-        onClick={onOpen}
-      >
-        {kind === "image" && thumbUrl ? (
-          <span
-            className="size-10 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
-            aria-hidden
-          >
-            {/* thumbnail only; object-cover crop per LRM-675 design */}
-            {/* react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
-            <img
-              src={thumbUrl}
-              alt=""
-              loading="lazy"
-              className="size-full object-cover"
-              data-testid="channel-file-thumb"
-            />
-          </span>
-        ) : (
-          <div
-            className="grid size-10 shrink-0 place-items-center rounded-md border border-border bg-brand/10 text-[10px] font-bold text-brand"
-            aria-hidden
-          >
-            {ext.slice(0, 4)}
-          </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-semibold text-foreground">
-            {attachment.filename}
-          </div>
-          <div className="truncate text-[11px] text-muted-foreground">{meta}</div>
+      {kind === "image" && thumbUrl ? (
+        <span
+          className="size-10 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
+          aria-hidden
+        >
+          {/* thumbnail only; object-cover crop per LRM-675 design */}
+          {/* react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
+          <img
+            src={thumbUrl}
+            alt=""
+            loading="lazy"
+            className="size-full object-cover"
+            data-testid="channel-file-thumb"
+          />
+        </span>
+      ) : (
+        <div
+          className="grid size-10 shrink-0 place-items-center rounded-md border border-border bg-brand/10 text-[10px] font-bold text-brand"
+          aria-hidden
+        >
+          {ext.slice(0, 4)}
         </div>
-        <div className="flex shrink-0 gap-1.5 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
-          {previewable ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={cn("h-7 px-2 text-[11px] text-brand")}
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpen();
-              }}
-            >
-              {t(($) => $.files.open)}
-            </Button>
-          ) : null}
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-semibold text-foreground">
+          {attachment.filename}
+        </div>
+        <div className="truncate text-[11px] text-muted-foreground">{meta}</div>
+      </div>
+      <div className="flex shrink-0 gap-1.5 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
+        {previewable ? (
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-[11px]"
+            className={cn("h-7 px-2 text-[11px] text-brand")}
             onClick={(e) => {
               e.stopPropagation();
-              onDownload();
+              onOpen();
             }}
           >
-            {t(($) => $.files.download)}
+            {t(($) => $.files.open)}
           </Button>
-        </div>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-[11px]"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDownload();
+          }}
+        >
+          {t(($) => $.files.download)}
+        </Button>
       </div>
-    </li>
+    </div>
   );
-}
+});

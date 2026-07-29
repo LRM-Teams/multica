@@ -38,7 +38,6 @@ import {
   channelMembersOptions,
   channelInviteCandidatesOptions,
   channelProjectOptions,
-  channelAttachmentsOptions,
   useSetChannelProject,
   useAddChannelMembers,
   useCreateChannel,
@@ -1027,11 +1026,6 @@ export function ChannelsPage({
     }),
   );
   const activeChannelId = active?.id ?? "";
-  // LRM-675 AC#1: the Files tab carries the attachment count. Shares the
-  // react-query cache with ChannelFilesPanel, so no extra request when the tab
-  // content mounts.
-  const { data: activeChannelAttachments } = useQuery(channelAttachmentsOptions(activeChannelId));
-  const channelFilesCount = activeChannelAttachments?.length ?? 0;
   // Land on the conversation whenever the active channel changes; the Tasks tab
   // is a per-channel view, not a sticky global mode. Reset during render (the
   // React "adjust state on prop change" pattern used elsewhere in this file for
@@ -3692,11 +3686,6 @@ export function ChannelsPage({
                     </TabsTrigger>
                     <TabsTrigger value="files" className="flex-none px-3 py-2">
                       {t(($) => $.view_tabs.files)}
-                      {channelFilesCount > 0 && (
-                        <span className="ml-1.5 text-xs font-normal tabular-nums text-muted-foreground">
-                          {channelFilesCount}
-                        </span>
-                      )}
                     </TabsTrigger>
                   </TabsList>
                 </div>

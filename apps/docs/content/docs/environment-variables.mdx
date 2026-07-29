@@ -182,6 +182,20 @@ The daemon runs on the user's local machine, and its config is read from local e
 | `MULTICA_<PROVIDER>_PATH` | matches the CLI name | Path to each AI coding tool's executable (for example `MULTICA_CLAUDE_PATH`) |
 | `MULTICA_<PROVIDER>_MODEL` | empty | Default model for each AI coding tool |
 
+### Daemon outbound proxy
+
+The daemon, its GitHub update downloads, and inherited child-process egress honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` variables (lowercase spellings are also accepted). Task-wakeup WebSockets use the same rules: `ws://` follows `HTTP_PROXY`, while `wss://` follows `HTTPS_PROXY`.
+
+For a persistent per-machine/profile setting, use:
+
+```bash
+multica config set proxy.http http://proxy.example:8080
+multica config set proxy.https http://proxy.example:8080
+multica config set proxy.no_proxy .corp.example,metadata.internal
+```
+
+Environment variables take priority over config-file proxy URLs. `NO_PROXY`, `no_proxy`, and `proxy.no_proxy` are merged; `127.0.0.1,localhost` is always retained and both env spellings are exported so local daemon/runtime control traffic never goes through the proxy. Proxy URLs may contain credentials: the config file is mode `0600`, and `multica config show` reports only `(set)` rather than printing HTTP(S) proxy values.
+
 For a full explanation of how each parameter affects daemon behavior, see [Daemon and runtimes](/daemon-runtimes).
 
 ## Frontend access control

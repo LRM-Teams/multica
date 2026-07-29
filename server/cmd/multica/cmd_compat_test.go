@@ -106,6 +106,12 @@ func TestRunConfigSetPersistsValues(t *testing.T) {
 	if err := runConfigSet(cmd, []string{"workspace_id", "ws-123"}); err != nil {
 		t.Fatalf("runConfigSet(workspace_id) error = %v", err)
 	}
+	if err := runConfigSet(cmd, []string{"proxy.http", "http://user:secret@proxy.internal:8080"}); err != nil {
+		t.Fatalf("runConfigSet(proxy.http) error = %v", err)
+	}
+	if err := runConfigSet(cmd, []string{"proxy.no_proxy", ".corp.example"}); err != nil {
+		t.Fatalf("runConfigSet(proxy.no_proxy) error = %v", err)
+	}
 
 	cfg, err := cli.LoadCLIConfig()
 	if err != nil {
@@ -116,5 +122,20 @@ func TestRunConfigSetPersistsValues(t *testing.T) {
 	}
 	if cfg.WorkspaceID != "ws-123" {
 		t.Fatalf("WorkspaceID = %q, want %q", cfg.WorkspaceID, "ws-123")
+	}
+	if cfg.Proxy == nil {
+		t.Fatal("Proxy config is nil")
+	}
+	if cfg.Proxy.HTTP != "http://user:secret@proxy.internal:8080" {
+		t.Fatalf("Proxy.HTTP = %q", cfg.Proxy.HTTP)
+	}
+	if cfg.Proxy.NoProxy != ".corp.example" {
+		t.Fatalf("Proxy.NoProxy = %q", cfg.Proxy.NoProxy)
+	}
+	if got := secretPresence(cfg.Proxy.HTTP); got != "(set)" {
+		t.Fatalf("secretPresence(proxy.http) = %q, want (set)", got)
+	}
+	if got := secretPresence(""); got != "(not set)" {
+		t.Fatalf("secretPresence(empty) = %q, want (not set)", got)
 	}
 }

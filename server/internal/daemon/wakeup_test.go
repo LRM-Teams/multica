@@ -2,6 +2,11 @@ package daemon
 
 import (
 	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +51,61 @@ func TestTaskWakeupURL(t *testing.T) {
 				t.Fatalf("taskWakeupURL() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTaskWakeupDialer_ProxyAndNoProxyRouteContract(t *testing.T) {
+	const helperEnv = "MULTICA_TEST_WAKEUP_PROXY_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		dialer := taskWakeupDialer()
+		if dialer.Proxy == nil {
+			t.Fatal("task wakeup dialer has nil Proxy; HTTP_PROXY would direct-connect")
+		}
+
+		proxied, err := dialer.Proxy(&http.Request{URL: &url.URL{
+			Scheme: "http",
+			Host:   "proxied.example",
+		}})
+		if err != nil {
+			t.Fatalf("proxy decision for proxied target: %v", err)
+		}
+		if proxied == nil || proxied.String() != "http://127.0.0.1:3128" {
+			t.Fatalf("proxied target decision = %v, want http://127.0.0.1:3128", proxied)
+		}
+
+		bypassed, err := dialer.Proxy(&http.Request{URL: &url.URL{
+			Scheme: "http",
+			Host:   "bypass.example",
+		}})
+		if err != nil {
+			t.Fatalf("proxy decision for NO_PROXY target: %v", err)
+		}
+		if bypassed != nil {
+			t.Fatalf("NO_PROXY target used proxy %v, want direct connection", bypassed)
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTaskWakeupDialer_ProxyAndNoProxyRouteContract$")
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		name := entry
+		if idx := strings.IndexByte(entry, '='); idx >= 0 {
+			name = entry[:idx]
+		}
+		switch strings.ToUpper(name) {
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY":
+			continue
+		}
+		env = append(env, entry)
+	}
+	cmd.Env = append(env,
+		helperEnv+"=1",
+		"HTTP_PROXY=http://127.0.0.1:3128",
+		"NO_PROXY=bypass.example",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("proxy contract subprocess failed: %v\n%s", err, output)
 	}
 }
 

@@ -761,6 +761,106 @@ func TestOpenclawOverrideFrom_NavigationCases(t *testing.T) {
 	}
 }
 
+func clearProxyEnvForTest(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"NO_PROXY", "no_proxy",
+	} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+	}
+}
+
+func TestApplyProxyConfig_ConfigFallbackAndRaftLoopback(t *testing.T) {
+	clearProxyEnvForTest(t)
+
+	applyProxyConfig(&cli.ProxyConfig{
+		HTTP:    "http://config-http.internal:8080",
+		HTTPS:   "http://config-https.internal:8443",
+		NoProxy: ".corp.example,localhost",
+	})
+
+	for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
+		if got := os.Getenv(name); got != "http://config-http.internal:8080" {
+			t.Fatalf("%s = %q", name, got)
+		}
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy"} {
+		if got := os.Getenv(name); got != "http://config-https.internal:8443" {
+			t.Fatalf("%s = %q", name, got)
+		}
+	}
+	const wantNoProxy = "127.0.0.1,localhost,.corp.example"
+	for _, name := range []string{"NO_PROXY", "no_proxy"} {
+		if got := os.Getenv(name); got != wantNoProxy {
+			t.Fatalf("%s = %q, want %q", name, got, wantNoProxy)
+		}
+	}
+}
+
+func TestApplyProxyConfig_EnvironmentWinsAndNoProxyUnionsBothCases(t *testing.T) {
+	clearProxyEnvForTest(t)
+	t.Setenv("HTTP_PROXY", "http://upper-http.internal:8080")
+	t.Setenv("http_proxy", "http://lower-http.internal:8080")
+	t.Setenv("https_proxy", "http://lower-https.internal:8443")
+	t.Setenv("NO_PROXY", "metadata.internal,LOCALHOST")
+	t.Setenv("no_proxy", ".svc.cluster.local,metadata.internal")
+
+	applyProxyConfig(&cli.ProxyConfig{
+		HTTP:    "http://ignored-config-http.internal:8080",
+		HTTPS:   "http://ignored-config-https.internal:8443",
+		NoProxy: ".corp.example,localhost",
+	})
+
+	for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
+		if got := os.Getenv(name); got != "http://upper-http.internal:8080" {
+			t.Fatalf("%s = %q, want uppercase env value", name, got)
+		}
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy"} {
+		if got := os.Getenv(name); got != "http://lower-https.internal:8443" {
+			t.Fatalf("%s = %q, want lowercase env fallback", name, got)
+		}
+	}
+	const wantNoProxy = "127.0.0.1,localhost,metadata.internal,.svc.cluster.local,.corp.example"
+	for _, name := range []string{"NO_PROXY", "no_proxy"} {
+		if got := os.Getenv(name); got != wantNoProxy {
+			t.Fatalf("%s = %q, want %q", name, got, wantNoProxy)
+		}
+	}
+}
+
+func TestLoadConfig_AppliesProfileProxyConfig(t *testing.T) {
+	stageFakeAgent(t)
+	clearProxyEnvForTest(t)
+	const profile = "proxy-test"
+	writeCLIConfigForProfile(t, profile, cli.CLIConfig{
+		Proxy: &cli.ProxyConfig{
+			HTTP:    "http://profile-proxy.internal:8080",
+			NoProxy: ".profile.internal",
+		},
+	})
+
+	if _, err := LoadConfig(Overrides{Profile: profile}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
+		if got := os.Getenv(name); got != "http://profile-proxy.internal:8080" {
+			t.Fatalf("%s = %q", name, got)
+		}
+	}
+	const wantNoProxy = "127.0.0.1,localhost,.profile.internal"
+	for _, name := range []string{"NO_PROXY", "no_proxy"} {
+		if got := os.Getenv(name); got != wantNoProxy {
+			t.Fatalf("%s = %q, want %q", name, got, wantNoProxy)
+		}
+	}
+}
+
 // TestLoadConfig_AppliesBackendOverridesFromConfigFile is the integration
 // test that ties commit 1's schema to commit 2's wire-up: write a config
 // file with backends.openclaw.{binary_path,state_dir}, call LoadConfig

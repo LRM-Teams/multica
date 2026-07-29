@@ -166,6 +166,34 @@ func TestCLIConfig_OpenClawOverride_PartialFieldsOmitted(t *testing.T) {
 	}
 }
 
+func TestCLIConfig_ProxyConfig_RoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	original := CLIConfig{
+		ServerURL: "https://api.multica.ai",
+		Proxy: &ProxyConfig{
+			HTTP:    "http://proxy.internal:8080",
+			HTTPS:   "http://secure-proxy.internal:8443",
+			NoProxy: ".corp.example,metadata.internal",
+		},
+	}
+	if err := SaveCLIConfig(original); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Proxy == nil {
+		t.Fatal("Proxy should be non-nil after round-trip")
+	}
+	if *loaded.Proxy != *original.Proxy {
+		t.Fatalf("Proxy round-trip = %+v, want %+v", loaded.Proxy, original.Proxy)
+	}
+}
+
 // TestCLIConfig_UnknownFieldsArePreserved verifies forward-compat: a future
 // daemon that adds, say, a `backends.codex` key should not have its data
 // destroyed when an older daemon (without knowledge of that key) reads and

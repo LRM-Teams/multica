@@ -63,6 +63,8 @@ func TestEvolutionCandidateJSONLQuarantinesMalformedLines(t *testing.T) {
 }
 
 func TestSecureSkillDraftBundleDirRejectsEscapes(t *testing.T) {
+	// macOS default TMPDIR may spell /private/var through its /var symlink;
+	// until this assertion canonicalizes paths, run it with TMPDIR=/private/tmp/multica-go-test.
 	agentRoot := filepath.Join(t.TempDir(), "agent")
 	validDir := filepath.Join(agentRoot, "skills", "drafts", "candidate-1")
 	if err := os.MkdirAll(validDir, 0o755); err != nil {

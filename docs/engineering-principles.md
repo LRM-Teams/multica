@@ -248,6 +248,11 @@
 - **物**：`server/internal/daemon/supervisor` 的 `Run/RequestRestart/Snapshot`、Unix `flock + process-group SIGTERM/SIGKILL`、Windows `LockFileEx + CREATE_NEW_PROCESS_GROUP/CTRL_BREAK` adapter；真实 subprocess 回归覆盖 clean-no-restart、real start failure、crash-backoff-cap + stable-run reset、cancel-no-resurrection、explicit generation restart、stopping/backoff duplicate-request coalescing、failed-lock/terminal request rejection、second-instance fail-closed，以及 Unix descendant process-group graceful/forced termination。
 - **已见红**：Phase B 测试在实现前因 supervisor state/API 全部不存在而 compile-fail；实现后 focused/race suite、Go vet、Windows amd64 cross-compile 与 diff-check 必须通过。
 
+### 4.14 Daemon 出站代理必须复用标准语义并保住本机控制面 — `可执行`（③单一 env 入口 + ⑤双向路由回归；owner: @Ronan）
+- daemon HTTP、GitHub 下载、WebSocket 与继承环境的子进程必须共享标准 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 语义；不能给某个 caller 自造一套 proxy matcher。环境变量优先于 per-profile `proxy.http|https`，大小写两套变量归一到同一值；`NO_PROXY`/`no_proxy`/profile 配置取并集，并强制保留 Raft runtime 的 `127.0.0.1,localhost` 本机边界。
+- 代理 URL 可能携带凭据：持久配置仍走原子 `0600` config；CLI show/set receipt 只能显示 presence，禁止回显原值。没有真实 caller 的“image pull”等能力不得虚报覆盖；新增 subprocess caller 只有继承 canonical daemon env 才自动纳入。
+- **物**：`applyProxyConfig` 的 env-over-config、大小写归一、NO_PROXY 去重+loopback 回归；`taskWakeupDialer` 必须使用 `http.ProxyFromEnvironment`。双向 mutation gate 固定为：配置 `HTTP_PROXY` 时 proxy decision 必须非空（删 Proxy hook 即红）；目标命中 `NO_PROXY` 时 decision 必须为空（强制走 proxy 即红）。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

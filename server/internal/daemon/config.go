@@ -65,6 +65,7 @@ const (
 	DefaultMemoryCurationL3ReviewTimeout = 10 * time.Minute
 	DefaultGrokPersistentIdleTTL         = 15 * time.Minute
 	DefaultPiPersistentIdleTTL           = 15 * time.Minute
+	raftLoopbackNoProxy                  = "127.0.0.1,localhost"
 	// DefaultInboundWatchdog: see inbound_watchdog.go (Raft-aligned 70s).
 )
 
@@ -184,10 +185,14 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// purely from env-var configuration. We log a warning and proceed with
 	// no overrides.
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
-		slog.Warn("could not load CLI config for backend overrides; proceeding without",
+		slog.Warn("could not load CLI config for daemon overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
-	} else if oc := openclawOverrideFrom(cliCfg); oc != nil {
-		applyOpenclawOverride(oc)
+		applyProxyConfig(nil)
+	} else {
+		applyProxyConfig(cliCfg.Proxy)
+		if oc := openclawOverrideFrom(cliCfg); oc != nil {
+			applyOpenclawOverride(oc)
+		}
 	}
 
 	// Probe available agent CLIs. exec.LookPath is the primary path, but on
@@ -967,4 +972,76 @@ func applyOpenclawOverride(oc *cli.OpenClawOverride) {
 			_ = os.Setenv("OPENCLAW_STATE_DIR", oc.StateDir)
 		}
 	}
+}
+
+// applyProxyConfig canonicalizes the standard proxy environment once, before
+// the daemon creates HTTP/WebSocket clients or launches child processes.
+//
+// Existing environment values win over config-file values. Uppercase wins
+// when both cases are present, matching net/http's standard precedence. The
+// selected value is exported in both cases because downstream tools differ in
+// which spelling they honor. NO_PROXY is a union rather than a precedence
+// choice: Raft preserves both inherited variants and always adds
+// 127.0.0.1,localhost so local runtime control traffic never leaves the host.
+func applyProxyConfig(proxy *cli.ProxyConfig) {
+	httpProxy := firstNonEmptyEnv("HTTP_PROXY", "http_proxy")
+	if httpProxy == "" && proxy != nil {
+		httpProxy = strings.TrimSpace(proxy.HTTP)
+	}
+	setProxyEnvPair("HTTP_PROXY", "http_proxy", httpProxy)
+
+	httpsProxy := firstNonEmptyEnv("HTTPS_PROXY", "https_proxy")
+	if httpsProxy == "" && proxy != nil {
+		httpsProxy = strings.TrimSpace(proxy.HTTPS)
+	}
+	setProxyEnvPair("HTTPS_PROXY", "https_proxy", httpsProxy)
+
+	noProxyValues := []string{
+		raftLoopbackNoProxy,
+		os.Getenv("NO_PROXY"),
+		os.Getenv("no_proxy"),
+	}
+	if proxy != nil {
+		noProxyValues = append(noProxyValues, proxy.NoProxy)
+	}
+	noProxy := mergeNoProxy(noProxyValues...)
+	_ = os.Setenv("NO_PROXY", noProxy)
+	_ = os.Setenv("no_proxy", noProxy)
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func setProxyEnvPair(upper, lower, value string) {
+	if value == "" {
+		return
+	}
+	_ = os.Setenv(upper, value)
+	_ = os.Setenv(lower, value)
+}
+
+func mergeNoProxy(values ...string) string {
+	seen := make(map[string]struct{})
+	var merged []string
+	for _, value := range values {
+		for _, entry := range strings.Split(value, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			key := strings.ToLower(entry)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, entry)
+		}
+	}
+	return strings.Join(merged, ",")
 }

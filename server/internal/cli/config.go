@@ -18,12 +18,27 @@ type CLIConfig struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	Token       string `json:"token,omitempty"`
 
+	// Proxy contains machine-local daemon egress overrides. Environment
+	// variables remain authoritative; these values are translated into the
+	// standard HTTP_PROXY / HTTPS_PROXY / NO_PROXY family during daemon
+	// startup when no corresponding proxy env is present.
+	Proxy *ProxyConfig `json:"proxy,omitempty"`
+
 	// Backends contains per-backend overrides for users who want to point
 	// the daemon at non-default tool installations (e.g. an OpenClaw bundled
 	// inside another desktop app, or multiple isolated profiles on the same
 	// machine). Empty / absent means "discover from PATH and use vendor
 	// defaults" — the historical behavior. See issue #3875.
 	Backends *BackendOverrides `json:"backends,omitempty"`
+}
+
+// ProxyConfig configures standard outbound HTTP(S) proxy behavior for the
+// daemon and the child processes it launches. HTTP and HTTPS values may carry
+// credentials, so callers must never print them verbatim.
+type ProxyConfig struct {
+	HTTP    string `json:"http,omitempty"`
+	HTTPS   string `json:"https,omitempty"`
+	NoProxy string `json:"no_proxy,omitempty"`
 }
 
 // BackendOverrides holds per-backend configuration overrides. Each field is

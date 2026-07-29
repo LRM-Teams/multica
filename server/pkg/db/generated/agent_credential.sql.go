@@ -14,7 +14,7 @@ import (
 const createAgentCredential = `-- name: CreateAgentCredential :one
 INSERT INTO agent_credential (token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at
+RETURNING id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at, issuance_source
 `
 
 type CreateAgentCredentialParams struct {
@@ -49,6 +49,58 @@ func (q *Queries) CreateAgentCredential(ctx context.Context, arg CreateAgentCred
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IssuanceSource,
+	)
+	return i, err
+}
+
+const createDaemonAgentCredential = `-- name: CreateDaemonAgentCredential :one
+INSERT INTO agent_credential (
+  token_hash,
+  token_prefix,
+  agent_id,
+  workspace_id,
+  user_id,
+  expires_at,
+  issuance_source
+)
+VALUES ($1, $2, $3, $4, $5, $6, 'daemon')
+RETURNING id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at, issuance_source
+`
+
+type CreateDaemonAgentCredentialParams struct {
+	TokenHash   string             `json:"token_hash"`
+	TokenPrefix string             `json:"token_prefix"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateDaemonAgentCredential(ctx context.Context, arg CreateDaemonAgentCredentialParams) (AgentCredential, error) {
+	row := q.db.QueryRow(ctx, createDaemonAgentCredential,
+		arg.TokenHash,
+		arg.TokenPrefix,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.ExpiresAt,
+	)
+	var i AgentCredential
+	err := row.Scan(
+		&i.ID,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.AgentID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.DisabledAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IssuanceSource,
 	)
 	return i, err
 }
@@ -87,7 +139,7 @@ func (q *Queries) DisableAgentCredentialsByAgent(ctx context.Context, agentID pg
 }
 
 const getAgentCredentialByHash = `-- name: GetAgentCredentialByHash :one
-SELECT ac.id, ac.token_hash, ac.token_prefix, ac.agent_id, ac.workspace_id, ac.user_id, ac.expires_at, ac.revoked_at, ac.disabled_at, ac.last_used_at, ac.created_at, ac.updated_at
+SELECT ac.id, ac.token_hash, ac.token_prefix, ac.agent_id, ac.workspace_id, ac.user_id, ac.expires_at, ac.revoked_at, ac.disabled_at, ac.last_used_at, ac.created_at, ac.updated_at, ac.issuance_source
 FROM agent_credential AS ac
 JOIN agent AS a
   ON a.id = ac.agent_id
@@ -118,12 +170,13 @@ func (q *Queries) GetAgentCredentialByHash(ctx context.Context, tokenHash string
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IssuanceSource,
 	)
 	return i, err
 }
 
 const getAgentCredentialForDaemonEnsure = `-- name: GetAgentCredentialForDaemonEnsure :one
-SELECT id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at
+SELECT id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at, issuance_source
 FROM agent_credential
 WHERE id = $1
   AND agent_id = $2
@@ -159,15 +212,49 @@ func (q *Queries) GetAgentCredentialForDaemonEnsure(ctx context.Context, arg Get
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IssuanceSource,
 	)
 	return i, err
+}
+
+const lockAgentForDaemonCredentialEnsure = `-- name: LockAgentForDaemonCredentialEnsure :one
+SELECT agent.id
+FROM agent
+JOIN agent_runtime AS runtime
+  ON runtime.id = agent.runtime_id
+ AND runtime.workspace_id = agent.workspace_id
+WHERE agent.id = $1
+  AND agent.workspace_id = $2
+  AND runtime.id = $3
+  AND runtime.owner_id = $4
+  AND agent.archived_at IS NULL
+FOR UPDATE OF agent, runtime
+`
+
+type LockAgentForDaemonCredentialEnsureParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RuntimeID   pgtype.UUID `json:"runtime_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) LockAgentForDaemonCredentialEnsure(ctx context.Context, arg LockAgentForDaemonCredentialEnsureParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockAgentForDaemonCredentialEnsure,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.RuntimeID,
+		arg.OwnerID,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const revokeAgentCredential = `-- name: RevokeAgentCredential :one
 UPDATE agent_credential
 SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
-RETURNING id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at
+RETURNING id, token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at, revoked_at, disabled_at, last_used_at, created_at, updated_at, issuance_source
 `
 
 func (q *Queries) RevokeAgentCredential(ctx context.Context, id pgtype.UUID) (AgentCredential, error) {
@@ -186,6 +273,7 @@ func (q *Queries) RevokeAgentCredential(ctx context.Context, id pgtype.UUID) (Ag
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IssuanceSource,
 	)
 	return i, err
 }
@@ -199,6 +287,61 @@ WHERE agent_id = $1 AND revoked_at IS NULL
 func (q *Queries) RevokeAgentCredentialsByAgent(ctx context.Context, agentID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, revokeAgentCredentialsByAgent, agentID)
 	return err
+}
+
+const revokeDaemonAgentCredentialsForSubject = `-- name: RevokeDaemonAgentCredentialsForSubject :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE agent_id = $1
+  AND workspace_id = $2
+  AND user_id = $3
+  AND issuance_source = 'daemon'
+  AND revoked_at IS NULL
+`
+
+type RevokeDaemonAgentCredentialsForSubjectParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) RevokeDaemonAgentCredentialsForSubject(ctx context.Context, arg RevokeDaemonAgentCredentialsForSubjectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeDaemonAgentCredentialsForSubject, arg.AgentID, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeOtherDaemonAgentCredentialsForSubject = `-- name: RevokeOtherDaemonAgentCredentialsForSubject :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE agent_id = $1
+  AND workspace_id = $2
+  AND user_id = $3
+  AND id <> $4
+  AND issuance_source = 'daemon'
+  AND revoked_at IS NULL
+`
+
+type RevokeOtherDaemonAgentCredentialsForSubjectParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RevokeOtherDaemonAgentCredentialsForSubject(ctx context.Context, arg RevokeOtherDaemonAgentCredentialsForSubjectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeOtherDaemonAgentCredentialsForSubject,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchAgentCredentialLastUsed = `-- name: TouchAgentCredentialLastUsed :exec

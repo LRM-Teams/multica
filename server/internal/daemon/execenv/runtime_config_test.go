@@ -1066,9 +1066,9 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.10)",
+		"### Memory Operating Guide (v0.11)",
 		"Use high-strength auto-write for human preferences and durable work arrangements",
-		"treat human speech as high-signal by default",
+		"treat **human speech and peer-agent durable statements** as high-signal by default",
 		"A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering",
 		"You judge the right destination",
 		"current user's isolated `USER.md`",
@@ -1086,13 +1086,16 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"notes/relationship-map.md",
 		"not only at welcome/introduction",
 		"Pure social greetings",
-		"Human feedback first",
+		"Feedback from humans and peer agents",
+		"Do not treat agent-to-agent talk as disposable chatter",
+		"Peer-agent messages can be remembered",
 		"Claiming \"记住了\"",
 		"After solving a problem, remember it yourself",
-		"do not wait for the human to say \"记住\"",
+		"do not wait for anyone to say \"记住\"",
 		"Closing with only \"fixed\" and no durable write is wrong",
 		"memory-signal.jsonl",
 		"Daily journal (hot path) vs self-review/curator (cold path)",
+		"peer-agent durable lessons",
 		"reusable problem-resolution lessons still write immediately",
 		"memory/daily/YYYY-MM-DD.md",
 		"Do **not** run a full self-review or curator-style promotion inside every chat/task turn",
@@ -1101,6 +1104,7 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"must not block chat latency",
 		"Source is not scope",
 		"who said a memory is provenance",
+		"do not discard a rule merely because a peer agent stated it",
 		"agents addressed by the current message",
 		"Do not add a workspace/shared candidate merely to fan the preference out",
 		"memory/STATE.md",
@@ -1170,7 +1174,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.10)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.11)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

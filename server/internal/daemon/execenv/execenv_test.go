@@ -3725,6 +3725,9 @@ func TestBuildMetaSkillContentEmitsTaskInitiatorAgent(t *testing.T) {
 	if !strings.Contains(content, "initiated by **GPT-Boy**, another agent in this workspace") {
 		t.Errorf("expected agent-initiator phrasing\n---\n%s", content)
 	}
+	if !strings.Contains(content, "Peer-agent turns can still carry durable memory") {
+		t.Errorf("expected peer-agent durable-memory reminder\n---\n%s", content)
+	}
 	if strings.Contains(content, "a member of this workspace") {
 		t.Errorf("agent initiator must not be described as a member\n---\n%s", content)
 	}

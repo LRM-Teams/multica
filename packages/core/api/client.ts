@@ -2901,11 +2901,30 @@ export class ApiClient {
    *     `updateChannelMemberRole` in channels/mutations.ts for why the UI does
    *     NOT name that reason.
    */
+  /**
+   * Ownership transfer has its OWN route (#814). The member-role PATCH above
+   * explicitly rejects `role: "owner"` with 400 "use POST
+   * .../transfer-ownership" (channel.go:1761) — so transfer is a different
+   * request, not a different value.
+   */
+  async transferChannelOwnership(
+    channelId: string,
+    memberType: "user" | "agent",
+    memberId: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/channels/${channelId}/members/${memberType}/${memberId}/transfer-ownership`,
+      { method: "POST" },
+    );
+  }
+
   async updateChannelMemberRole(
     channelId: string,
     memberType: "user" | "agent",
     memberId: string,
-    role: ChannelMemberRole,
+    // NOT ChannelMemberRole: the server rejects "owner" here and routes it to
+    // transferChannelOwnership above.
+    role: "manager" | "member",
   ): Promise<{ role: ChannelMemberRole }> {
     return this.fetch(`/api/channels/${channelId}/members/${memberType}/${memberId}`, {
       method: "PATCH",

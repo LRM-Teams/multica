@@ -39,9 +39,10 @@ function bodyCode(error: ApiError): string | undefined {
  * NOT "the viewer is the sole owner". Read it as an unresolvable state, not as
  * a fact about ownership.
  *
- * The route happens to emit only one 409 today ("sole owner must transfer
- * first"), but that response carries no stable code, nothing stops the backend
- * adding a second meaning, and a frontend test cannot detect it if they do —
+ * There is already more than one 409 on this route: "sole owner must transfer
+ * first" AND "channel is archived" (channel.go:1650). Neither carries a stable
+ * code, nothing stops a third being added, and a frontend test cannot detect it
+ * if one is —
  * there is no shared contract artifact between us and the server. So the UI
  * shows a NEUTRAL message and does not name a cause: naming it would be a guess
  * that reads as a fact, which is the exact defect this change removes. When the

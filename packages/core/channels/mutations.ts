@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ChannelMemberRole } from "../types";
 import { classifyRoleChangeFailure } from "./role-change-failure";
 import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
@@ -481,7 +480,9 @@ export function useUpdateChannelMemberRole() {
       channelId: string;
       memberType: "user" | "agent";
       memberId: string;
-      role: ChannelMemberRole;
+      // "owner" is deliberately absent: transfer is a different endpoint, not a
+      // different role value (the PATCH route 400s on "owner").
+      role: "manager" | "member";
     }) => api.updateChannelMemberRole(channelId, memberType, memberId, role),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
@@ -492,6 +493,37 @@ export function useUpdateChannelMemberRole() {
     onError: (error, vars) => {
       // Refresh the roster on the two kinds that mean "your view is stale".
       // Not a retry — the user is told what happened and decides.
+      const kind = classifyRoleChangeFailure(error);
+      if (kind === "owner_changed" || kind === "gone") {
+        qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      }
+    },
+  });
+}
+
+/**
+ * Ownership transfer (#814). A separate mutation because it is a separate
+ * endpoint — the member-role PATCH rejects `role: "owner"` outright. Shares the
+ * same failure classification and roster invalidation as a role change.
+ */
+export function useTransferChannelOwnership() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      memberType,
+      memberId,
+    }: {
+      channelId: string;
+      memberType: "user" | "agent";
+      memberId: string;
+    }) => api.transferChannelOwnership(channelId, memberType, memberId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    },
+    onError: (error, vars) => {
       const kind = classifyRoleChangeFailure(error);
       if (kind === "owner_changed" || kind === "gone") {
         qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });

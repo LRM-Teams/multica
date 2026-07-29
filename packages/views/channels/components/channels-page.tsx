@@ -51,6 +51,7 @@ import {
   useMuteChannel,
   useRemoveChannelMember,
   useUpdateChannelMemberRole,
+  useTransferChannelOwnership,
   classifyRoleChangeFailure,
   type RoleChangeFailure,
   useSendChannelMessage,
@@ -2549,13 +2550,13 @@ export function ChannelsPage({
     ReadonlyMap<string, "promote" | "demote" | "transfer">
   >(() => new Map());
   const updateMemberRole = useUpdateChannelMemberRole();
+  const transferOwnership = useTransferChannelOwnership();
 
   const runRoleChange = useCallback(
     (m: ChannelMember, action: "promote" | "demote" | "transfer") => {
       const channelId = active?.id;
       if (!channelId) return;
       const key = memberFailureKey(channelId, m);
-      const role = action === "transfer" ? "owner" : action === "promote" ? "manager" : "member";
       lastRoleActionRef.current?.set(key, action);
       setRolePending((prev) => new Map(prev).set(key, action));
       setRoleFailures((prev) => {
@@ -2564,9 +2565,12 @@ export function ChannelsPage({
         next.delete(key);
         return next;
       });
-      updateMemberRole.mutate(
-        { channelId, memberType: m.member_type, memberId: m.member_id, role },
-        {
+      // Transfer is a DIFFERENT ENDPOINT, not a different role value: the
+      // member-role PATCH rejects `owner` outright (channel.go:1761), so sending
+      // it there 400s every time. Caught by Felix in review — and invisible to
+      // the suite, because the api mock accepts any arguments. The request
+      // itself is now asserted (path + verb), not just "the mutation ran".
+      const settle = {
           onSuccess: () => {
             setRolePending((prev) => {
               const next = new Map(prev);
@@ -2581,7 +2585,7 @@ export function ChannelsPage({
                   : t(($) => $.members.menu.role_done_demote),
             );
           },
-          onError: (error) => {
+          onError: (error: unknown) => {
             setRolePending((prev) => {
               const next = new Map(prev);
               next.delete(key);
@@ -2593,10 +2597,25 @@ export function ChannelsPage({
               new Map(prev).set(key, classifyRoleChangeFailure(error)),
             );
           },
+      };
+      if (action === "transfer") {
+        transferOwnership.mutate(
+          { channelId, memberType: m.member_type, memberId: m.member_id },
+          settle,
+        );
+        return;
+      }
+      updateMemberRole.mutate(
+        {
+          channelId,
+          memberType: m.member_type,
+          memberId: m.member_id,
+          role: action === "promote" ? "manager" : "member",
         },
+        settle,
       );
     },
-    [active?.id, updateMemberRole, t],
+    [active?.id, updateMemberRole, transferOwnership, t],
   );
 
   // #832 — one sentence per failure kind. Copy is frontend-supplied in four

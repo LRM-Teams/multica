@@ -176,25 +176,6 @@ function MemberRow({
       menuActions.canTransferOwnership ||
       menuActions.canRemove);
 
-  // #832 临时诚实守卫：整块删除（勿翻开关/勿部分启用）。删除条件 = **#814 的角色写
-  // 接口 merged + served**，且本菜单三行已接真实授权 mutation（届时由实现真 UI 的
-  // 那张任务一并删除）。
-  //
-  // 条件写任务号、不写 PR 号：PR 会滚（#1321 → #1326 → #1332 …），指向一个已经合并
-  // 的前身会让人以为条件已满足、提前把守卫拆掉。任务号不会滚。
-  //
-  // Why it exists: the role mutations (promote / demote / transfer) have no
-  // write endpoint yet, so these rows used to be clickable and answer with an
-  // info toast. Frank set a group manager, saw the toast, and believed it had
-  // worked — the click itself promises the action is available, and a toast
-  // that disappears is no substitute for saying so up front.
-  //
-  // There is deliberately NO feature flag here. `disabled` is unconditional.
-  // A flag would create a legal-looking half-open state — rows clickable with
-  // no handler behind them, i.e. the original bug minus even the toast. This
-  // block has exactly one valid exit: delete it and replace it with rows wired
-  // to the real authorized mutation. One exit ⇒ no switch. (Parker)
-
   return (
     <div
       className="rounded-lg"

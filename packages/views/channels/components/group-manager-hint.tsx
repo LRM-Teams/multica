@@ -48,8 +48,9 @@ export function GroupManagerHint({
   // "member", which is exactly the distinction that matters here — a real
   // manager whose role the server omitted would otherwise be counted as an
   // ordinary member and the hint would announce "no manager yet" to a group
-  // that has one. Partial role data is the live state while #814 is in flight,
-  // so this is the case, not a theoretical one. (Iris/Wren review catch.)
+  // that has one. A roster that omits `role` for some members is a shape the
+  // server can still return, so this guard is load-bearing, not theoretical.
+  // (Iris/Wren review catch.)
   if (members.some((m) => m.role === undefined)) return null;
 
   const viewer = members.find(

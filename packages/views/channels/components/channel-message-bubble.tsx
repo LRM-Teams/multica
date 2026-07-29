@@ -577,7 +577,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // unified composer (#258 backlog). onEdit/MessageInlineEditor kept dormant for
   // that rebuild. Delete stays.
   const canEdit = false;
-  const canDelete = isOwn && !!onDelete && !isLocalSend;
+  // LRM-695 — message delete affordance removed from the UI (Frank: 只去删除、
+  // 其余都留). Kept dormant like `canEdit`: the server-driven tombstone still
+  // renders for messages deleted via API/other clients, and the soft-delete
+  // wiring stays in place for potential restore — there is just no button.
+  const canDelete = false;
   const isEdited = !!message.edited_at;
   const canCollapseContent = collapseLongContent && contentOverflows;
   const isContentCollapsed = canCollapseContent && !contentExpanded;

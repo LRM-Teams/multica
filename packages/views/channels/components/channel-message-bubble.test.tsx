@@ -1952,7 +1952,7 @@ describe("ChannelMessageBubble", () => {
   // (canEdit=false) until the inline editor is rebuilt on the unified composer
   // (#258). Delete stays. This asserts Delete renders on the viewer's own
   // message while Edit never does.
-  it("shows delete but never edit on the viewer's own message", () => {
+  it("shows neither delete nor edit on the viewer's own message (LRM-695)", () => {
     const { rerender } = render(
       <ChannelMessageBubble
         message={ownMessage()}
@@ -1962,8 +1962,9 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
-    // Edit is unshipped — the entry point must not render even on own messages.
+    // LRM-695: message delete is removed from the UI (Frank: 只去删除). Edit is
+    // unshipped. Neither entry point renders, even on the viewer's own message.
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 
     // A peer / agent message from another author exposes no edit or delete.
@@ -2095,25 +2096,22 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: "👍1" })).not.toBeInTheDocument();
   });
 
-  it("deletes through onDelete without a send/dispatch path", async () => {
+  it("does not surface a delete affordance (LRM-695 removed it)", () => {
+    // LRM-695: message delete is removed from the UI. The soft-delete wiring
+    // (onDelete) stays dormant like onEdit, but there is no button to reach it.
     const onDelete = vi.fn();
-    const onReact = vi.fn();
-    const message = ownMessage();
     render(
       <ChannelMessageBubble
-        message={message}
+        message={ownMessage()}
         currentUserId="user-1"
         onEdit={vi.fn()}
         onDelete={onDelete}
-        onReact={onReact}
+        onReact={vi.fn()}
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-
-    expect(onDelete).toHaveBeenCalledTimes(1);
-    expect(onDelete).toHaveBeenCalledWith(message);
-    expect(onReact).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
   it("renders an optimistic pending bubble silently (no Sending…)", () => {

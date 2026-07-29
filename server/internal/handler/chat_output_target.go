@@ -403,7 +403,6 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	// on O(agents) fanout.
 	if ch.Kind == "group" {
 		h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
-			h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
 			if threadRootMessageID.Valid {
 				h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
 			} else {

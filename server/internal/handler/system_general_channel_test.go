@@ -55,7 +55,6 @@ func newSystemGeneralHandlerFixture(t *testing.T) systemGeneralHandlerFixture {
 		  AND archived_at IS NULL
 		  AND project_id IS NULL
 		  AND lark_chat_id IS NULL
-		  AND group_manager_agent_id IS NULL
 	`, workspace.ID).Scan(&channelID); err != nil {
 		t.Fatalf("load pristine general channel: %v", err)
 	}
@@ -190,11 +189,6 @@ func TestSystemGeneralHandlersReturnStableProtectedConflict(t *testing.T) {
 			name:    "set project",
 			handler: testHandler.SetChannelProject,
 			req:     fixture.request(http.MethodPut, "/api/channels/"+fixture.channelID+"/project", map[string]any{"project_id": nil}, "channelId", fixture.channelID),
-		},
-		{
-			name:    "invite group manager",
-			handler: testHandler.InviteGroupManager,
-			req:     fixture.request(http.MethodPost, "/api/channels/"+fixture.channelID+"/group-manager", nil, "channelId", fixture.channelID),
 		},
 	}
 

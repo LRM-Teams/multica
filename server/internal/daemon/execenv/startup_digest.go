@@ -43,6 +43,10 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 		AgentSkills:         skills,
 		// Workspace-level standing context (not issue/chat turn)
 		WorkspaceContext: ctx.WorkspaceContext,
+		// Channel manager memberships are standing role facts. They must rotate
+		// a resident agent×runtime process so its create-only brief cannot retain
+		// manager duties after promotion, demotion, or a channel rename.
+		ManagerChannels: append([]ManagerChannelContextForEnv(nil), ctx.ManagerChannels...),
 		// Runtime-owner profile is process-stable for this agent binding.
 		RequestingUserName:               ctx.RequestingUserName,
 		RequestingUserProfileDescription: ctx.RequestingUserProfileDescription,

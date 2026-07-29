@@ -40,12 +40,12 @@ type ResearchFleetResponse struct {
 }
 
 type ResearchFleetMemberResp struct {
-	ID        string  `json:"id"`
-	AgentID   string  `json:"agent_id"`
-	Role      string  `json:"role"`
-	Status    string  `json:"status"`
-	IsLead    bool    `json:"is_lead"`
-	Name      string  `json:"name,omitempty"`
+	ID          string `json:"id"`
+	AgentID     string `json:"agent_id"`
+	Role        string `json:"role"`
+	Status      string `json:"status"`
+	IsLead      bool   `json:"is_lead"`
+	Name        string `json:"name,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 }
 
@@ -106,7 +106,7 @@ func (h *Handler) ensureResearchFleet(ctx context.Context, workspaceID, userID p
 }
 
 func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.ResearchFleet, workspaceID, userID pgtype.UUID) (db.ResearchFleet, []db.ResearchFleetMember, error) {
-	runtime, ok := h.pickGroupManagerRuntime(ctx, workspaceID, userID)
+	runtime, ok := h.pickVisibleAgentRuntime(ctx, workspaceID, userID)
 	if !ok {
 		return db.ResearchFleet{}, nil, errors.New("no agent runtime available to seed research fleet")
 	}

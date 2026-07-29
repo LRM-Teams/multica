@@ -53,6 +53,8 @@ type concurrentIndexSpec struct {
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
+	// This registry is manual: whenever a migration drops a table, remove its
+	// index spec here too or the hook will fail against the post-migration schema.
 	indexes := []concurrentIndexSpec{
 		{"idx_agent_inbox_event_runtime", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_runtime ON agent_inbox_event (runtime_id) WHERE runtime_id IS NOT NULL`},
 		{"idx_memory_curation_watermark_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_agent ON memory_curation_watermark (agent_id)`},
@@ -79,10 +81,8 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_team_knowledge_item_curator_agent", `CREATE INDEX CONCURRENTLY idx_team_knowledge_item_curator_agent ON team_knowledge_item (created_by_curator_agent_id)`},
 		{"idx_memory_curator_profile_curator_agent", `CREATE INDEX CONCURRENTLY idx_memory_curator_profile_curator_agent ON memory_curator_profile (curator_agent_id)`},
 		{"idx_memory_curation_run_curator_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_run_curator_agent ON memory_curation_run (curator_agent_id)`},
-		{"idx_channel_group_manager_agent", `CREATE INDEX CONCURRENTLY idx_channel_group_manager_agent ON channel (group_manager_agent_id)`},
 		{"idx_squad_leader", `CREATE INDEX CONCURRENTLY idx_squad_leader ON squad (leader_id)`},
 		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
-		{"idx_wendy_channel_ambient_agent", `CREATE INDEX CONCURRENTLY idx_wendy_channel_ambient_agent ON wendy_channel_ambient (wendy_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
 		{"idx_workspace_radar_state_supervisor_agent", `CREATE INDEX CONCURRENTLY idx_workspace_radar_state_supervisor_agent ON workspace_radar_state (workspace_id, supervisor_agent_id) WHERE supervisor_agent_id IS NOT NULL`},
 	}

@@ -87,8 +87,8 @@ func (h *Handler) seedResearchSessionKickoff(
 			Status:       "active",
 			ActorAgentID: m.AgentID,
 			Payload: marshalJSONRaw(map[string]any{
-				"role":   m.Role,
-				"phase":  "kickoff",
+				"role":    m.Role,
+				"phase":   "kickoff",
 				"is_lead": m.IsLead,
 			}),
 		}, goal.ID, "leads_to")

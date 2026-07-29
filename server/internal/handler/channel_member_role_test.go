@@ -240,6 +240,9 @@ func TestUpdateChannelMemberRoleOwnerOnly(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &ch); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, ch.ID)
+	})
 
 	// Second human member (workspace member role, not channel owner).
 	var peerID string

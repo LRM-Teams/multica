@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock, Cog, Link2, Repeat } from "lucide-react";
+import { Clock, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
@@ -30,13 +30,9 @@ interface RemindersTabProps {
  * inline form anywhere in this file. A human who wants a change asks the
  * Agent; only the owning Agent may act, via its own CLI.
  *
- * One flat list of visible reminder definitions. Active rows are ordered by
- * next fire; the server-owned dormant patrol stays visible with no invented
- * countdown. There is no Upcoming/History partition: once an ordinary
- * one-shot fires it disappears and the agent's resulting action is the
- * user-visible record. Adaptive group patrols stay in place and add one "last
- * patrol" line because they replan the same definition instead of creating a
- * stream of visible history rows.
+ * One flat list of active reminder definitions ordered by next fire. There is
+ * no Upcoming/History partition: once a one-shot fires it disappears and the
+ * agent's resulting action is the user-visible record.
  *
  * LRM-505 field/IA alignment (not neo-brutal skin): title; clock + relative
  * + absolute time; recurring cadence chip (one-shot: no chip); readable
@@ -236,33 +232,9 @@ function TimeRow({ iso, label }: { iso: string; label?: string }) {
   );
 }
 
-function ManagedPatrolTimeRow({
-  iso,
-  kind,
-}: {
-  iso: string;
-  kind: "next" | "last";
-}) {
-  const { t } = useT("agents");
-  const relative = formatRelativeInstant(iso);
-  const label =
-    kind === "next"
-      ? t(($) => $.reminders.managed_patrol_next, { time: relative })
-      : t(($) => $.reminders.managed_patrol_last, { time: relative });
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
-      <Clock className="size-3.5 shrink-0" aria-hidden />
-      <span className="font-medium text-foreground">{label}</span>
-      <span aria-hidden>·</span>
-      <span>{formatAbsoluteInstant(iso)}</span>
-    </div>
-  );
-}
-
-type DisplayStatus = "scheduled" | "firing" | "overdue" | "dormant";
+type DisplayStatus = "scheduled" | "firing" | "overdue";
 
 function resolveUpcomingStatus(row: ReminderDefinitionRow, nowMs = Date.now()): DisplayStatus {
-  if (row.status === "fired") return "dormant";
   if (row.status === "firing") return "firing";
   const fireAt = new Date(row.nextFireAt).getTime();
   if (!Number.isNaN(fireAt) && fireAt < nowMs) return "overdue";
@@ -276,26 +248,9 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
       ? t(($) => $.reminders.status_scheduled)
       : status === "firing"
         ? t(($) => $.reminders.status_firing)
-        : status === "overdue"
-          ? t(($) => $.reminders.status_overdue)
-          : t(($) => $.reminders.status_dormant);
+        : t(($) => $.reminders.status_overdue);
   return (
     <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-      {label}
-    </span>
-  );
-}
-
-function ManagedSourceBadge() {
-  const { t } = useT("agents");
-  const label = t(($) => $.reminders.source_group_manager_auto);
-  return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-      title={t(($) => $.reminders.source_group_manager_auto_tooltip)}
-      aria-label={t(($) => $.reminders.source_group_manager_auto_aria)}
-    >
-      <Cog className="size-3" aria-hidden />
       {label}
     </span>
   );
@@ -304,8 +259,6 @@ function ManagedSourceBadge() {
 function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
   const { t } = useT("agents");
   const displayStatus = resolveUpcomingStatus(row);
-  const managedPatrol =
-    row.origin.kind === "group_manager_auto" && row.origin.managedKind === "patrol";
   return (
     <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start justify-between gap-2">
@@ -313,32 +266,10 @@ function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
           <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
             {row.title}
           </p>
-          {row.origin.kind === "group_manager_auto" ? <ManagedSourceBadge /> : null}
         </div>
         <StatusBadge status={displayStatus} />
       </div>
-      {row.status !== "fired" ? (
-        managedPatrol ? (
-          <ManagedPatrolTimeRow iso={row.nextFireAt} kind="next" />
-        ) : (
-          <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
-        )
-      ) : managedPatrol ? (
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <Clock className="size-3.5 shrink-0" aria-hidden />
-          <span>{t(($) => $.reminders.managed_patrol_dormant)}</span>
-        </div>
-      ) : null}
-      {managedPatrol ? (
-        row.lastFireAt ? (
-          <ManagedPatrolTimeRow iso={row.lastFireAt} kind="last" />
-        ) : (
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Clock className="size-3.5 shrink-0" aria-hidden />
-            <span>{t(($) => $.reminders.not_patrolled_yet)}</span>
-          </div>
-        )
-      ) : null}
+      <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
       <div className="flex flex-wrap items-center gap-1.5">
         <RecurrenceChip cadence={row.cadence} />
         <AnchorLink anchor={row.anchor} />

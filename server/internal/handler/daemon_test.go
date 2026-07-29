@@ -147,6 +147,21 @@ func claimTaskThroughInboxForTest(w *httptest.ResponseRecorder, req *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"task": task})
 }
 
+func createHandlerTestAgentWithIsolatedRuntime(t *testing.T) (agentID, runtimeID string) {
+	t.Helper()
+	runtimeID = createRuntimeLocalSkillTestRuntime(t, testUserID)
+	agentID = createHandlerTestAgent(t, "claim-isolated-"+uuid.NewString(), nil)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		SET runtime_id = $2
+		WHERE id = $1`,
+		agentID, runtimeID,
+	); err != nil {
+		t.Fatalf("move claim fixture agent to isolated runtime: %v", err)
+	}
+	return agentID, runtimeID
+}
+
 func startTaskThroughInboxForTest(w *httptest.ResponseRecorder, req *http.Request) {
 	forwardTaskRequestThroughInboxForTest(w, req, func(forwarded *http.Request) {
 		testHandler.StartAgentInboxExecution(w, forwarded)
@@ -2791,14 +2806,9 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 		t.Fatalf("create project_resource: %v", err)
 	}
 
-	// Agent + runtime + queued task in this project.
-	var agentID, runtimeID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID); err != nil {
-		t.Fatalf("get agent: %v", err)
-	}
+	// Isolate the runtime so unrelated pending events from earlier handler
+	// tests cannot consume this claim.
+	agentID, runtimeID := createHandlerTestAgentWithIsolatedRuntime(t)
 
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
@@ -2873,13 +2883,7 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 		{"url": "https://github.com/example/workspace-fallback", "description": "ws"},
 	})
 
-	var agentID, runtimeID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID); err != nil {
-		t.Fatalf("get agent: %v", err)
-	}
+	agentID, runtimeID := createHandlerTestAgentWithIsolatedRuntime(t)
 
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
@@ -2939,12 +2943,7 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 
 	ctx := context.Background()
 
-	var agentID, runtimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
-	`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
-		t.Fatalf("setup: get agent: %v", err)
-	}
+	agentID, runtimeID := createHandlerTestAgentWithIsolatedRuntime(t)
 
 	var autopilotID string
 	if err := testPool.QueryRow(ctx, `
@@ -3030,14 +3029,9 @@ func TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects(t *testing.T
 
 	ctx := context.Background()
 
-	// Local agent/runtime (belongs to testWorkspace).
-	var localAgentID, localRuntimeID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&localAgentID, &localRuntimeID); err != nil {
-		t.Fatalf("setup: get local agent: %v", err)
-	}
+	// Local agent/runtime (belongs to testWorkspace) is isolated so the
+	// mismatched task is the only claimable event for this runtime.
+	localAgentID, localRuntimeID := createHandlerTestAgentWithIsolatedRuntime(t)
 
 	// Foreign workspace with its own issue — what the misrouted task will
 	// resolve to.

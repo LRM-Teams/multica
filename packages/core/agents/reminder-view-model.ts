@@ -32,12 +32,9 @@ export type ReminderAnchor =
   | { available: true; kind: "channel" | "thread"; label: string; href: string }
   | { available: false };
 
-export type ReminderOrigin =
-  | { kind: "agent" }
-  | { kind: "group_manager_auto"; managedKind: "patrol" };
+export type ReminderOrigin = { kind: "agent" };
 
-/** Ordinary Upcoming rows must be mid-lifecycle. The adapter separately admits
- * the one server-owned dormant patrol shape. */
+/** Upcoming rows must be mid-lifecycle. */
 const KNOWN_UPCOMING_DEFINITION_STATUSES = new Set(["scheduled", "firing"]);
 
 /** The reminder DEFINITION's own lifecycle state — independent of any one occurrence row. `"firing"` is a real transient state (mid-fire-transaction) the FE must accept as-is, never coerced to `"fired"`. */
@@ -58,13 +55,7 @@ export interface UpcomingReminderRow extends ReminderRow {
   status: Extract<ReminderDefinitionStatus, "scheduled" | "firing">;
 }
 
-export interface DormantPatrolReminderRow extends ReminderRow {
-  lastFireAt?: string;
-  status: "fired";
-  origin: Extract<ReminderOrigin, { kind: "group_manager_auto" }>;
-}
-
-export type ReminderDefinitionRow = UpcomingReminderRow | DormantPatrolReminderRow;
+export type ReminderDefinitionRow = UpcomingReminderRow;
 
 export interface FiredReminderRow extends ReminderRow {
   firedAt: string;
@@ -190,9 +181,6 @@ function isKnownDefinitionStatus(status: string): status is ReminderDefinitionSt
 
 function adaptOrigin(originKind: string, managedKind: string | undefined): ReminderOrigin | null {
   if (originKind === "agent" && !managedKind) return { kind: "agent" };
-  if (originKind === "group_manager_auto" && managedKind === "patrol") {
-    return { kind: "group_manager_auto", managedKind };
-  }
   return null;
 }
 
@@ -219,34 +207,12 @@ function adaptCadence(scheduleKind: string, cadence: string | undefined, schedul
   };
 }
 
-/**
- * Adapts one visible definition row. Besides ordinary scheduled/firing rows,
- * the server-owned dormant patrol is the only fired definition admitted:
- * group_manager_auto/patrol, no next fire, and an optional preserved last
- * fire. Everything else returns `null` rather than rendering a broken or
- * contract-violating row.
- */
+/** Adapts one visible scheduled/firing definition row. */
 export function adaptUpcomingRow(raw: RawReminderDefinition): ReminderDefinitionRow | null {
   const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
   if (!cadence) return null;
   const origin = adaptOrigin(raw.origin_kind, raw.managed_kind);
   if (!origin) return null;
-  if (
-    raw.status === "fired" &&
-    !raw.next_fire_at &&
-    origin.kind === "group_manager_auto" &&
-    origin.managedKind === "patrol"
-  ) {
-    return {
-      id: raw.id,
-      title: raw.title,
-      cadence,
-      anchor: adaptAnchor(raw.anchor),
-      origin,
-      lastFireAt: raw.last_fire_at,
-      status: "fired",
-    };
-  }
   if (!raw.next_fire_at) return null;
   if (!KNOWN_UPCOMING_DEFINITION_STATUSES.has(raw.status)) return null;
   return {

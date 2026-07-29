@@ -50,6 +50,25 @@ func TestBuildPromptAssignmentSnapshotAvoidsRedundantReads(t *testing.T) {
 	}
 }
 
+func TestBuildPromptChannelRoleChangedUsesBoundedSignal(t *testing.T) {
+	out := BuildPrompt(Task{
+		ChannelID: "channel-1",
+		InboxEvent: &AgentInboxLease{
+			Reason: protocol.ChannelRoleChangedReason,
+		},
+	}, "codex", "")
+
+	if want := "Your channel manager role changed for channel channel-1."; !strings.Contains(out, want) {
+		t.Fatalf("prompt = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "Your assigned issue ID") {
+		t.Fatalf("role-change wake fell through to issue prompt: %q", out)
+	}
+	if strings.Contains(out, "Per channel, close open loops") {
+		t.Fatalf("role-change wake duplicated runtime responsibilities: %q", out)
+	}
+}
+
 func TestBuildPromptTerminalAssignmentNeverSuggestsIssueCommands(t *testing.T) {
 	for _, status := range []string{"done", "cancelled"} {
 		t.Run(status, func(t *testing.T) {

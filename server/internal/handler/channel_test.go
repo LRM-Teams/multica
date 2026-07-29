@@ -796,21 +796,18 @@ func TestChannelGroupCommandWakesAllAgentsRestoresAndongDefault(t *testing.T) {
 	channelID := seedChannelForTest(t, "group-command-wake-all-"+suffix, testUserID)
 	managerID := createHandlerTestAgent(t, "group-mgr-"+suffix, nil)
 	peerID := createHandlerTestAgent(t, "group-peer-"+suffix, nil)
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent SET managed_role = 'group_manager', display_name = $2 WHERE id = $1`,
-		managerID, "贝克汉姆"+suffix); err != nil {
-		t.Fatalf("mark group manager: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`, channelID, managerID); err != nil {
-		t.Fatalf("bind group manager: %v", err)
-	}
-	for _, agentID := range []string{managerID, peerID} {
+	for _, member := range []struct {
+		agentID string
+		role    string
+	}{
+		{agentID: managerID, role: "manager"},
+		{agentID: peerID, role: "member"},
+	} {
 		if _, err := testPool.Exec(ctx, `
-			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-			t.Fatalf("seed agent member %s: %v", agentID, err)
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+			VALUES ($1, $2, 'agent', $3, $4)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, member.agentID, member.role); err != nil {
+			t.Fatalf("seed agent member %s: %v", member.agentID, err)
 		}
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))

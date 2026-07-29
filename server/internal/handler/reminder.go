@@ -19,11 +19,9 @@ import (
 )
 
 const (
-	reminderMinDelay      = time.Minute
-	reminderMaxDelay      = 90 * 24 * time.Hour
-	reminderActiveCap     = 25
-	managedPatrolMinDelay = 15 * time.Minute
-	managedPatrolMaxDelay = time.Hour
+	reminderMinDelay  = time.Minute
+	reminderMaxDelay  = 90 * 24 * time.Hour
+	reminderActiveCap = 25
 )
 
 var errReminderDaemonOutdated = fmt.Errorf("daemon_outdated")
@@ -82,36 +80,11 @@ func (h *Handler) authorizeNaturalLanguageReminderMutation(
 		writeError(w, http.StatusForbidden, "reminder mutation requires an attributable workspace member")
 		return false
 	}
-	if reminder.OriginKind == "group_manager_auto" {
-		if canUserManageGroupChannelWithQuery(r.Context(), tx, reminder.WorkspaceID, reminder.AnchorChannelID, initiatorUserID) {
-			return true
-		}
-		writeError(w, http.StatusForbidden, "only the channel creator or workspace owner/admin may manage group patrol reminders")
-		return false
-	}
 	if reminder.InitiatorUserID.Valid && reminder.InitiatorUserID == initiatorUserID {
 		return true
 	}
 	writeError(w, http.StatusForbidden, "only the reminder initiator may manage this reminder")
 	return false
-}
-
-func managedPatrolStepForDelaySeconds(delaySeconds *int64) (int16, error) {
-	if delaySeconds == nil {
-		return 0, fmt.Errorf("managed group patrol must use delay_seconds 900, 1800, 2700, or 3600")
-	}
-	switch *delaySeconds {
-	case 900:
-		return 0, nil
-	case 1800:
-		return 1, nil
-	case 2700:
-		return 2, nil
-	case 3600:
-		return 3, nil
-	default:
-		return 0, fmt.Errorf("managed group patrol must use delay_seconds 900, 1800, 2700, or 3600")
-	}
 }
 
 type agentReminder struct {
@@ -581,85 +554,32 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	if !h.authorizeNaturalLanguageReminderMutation(w, r, tx, source, previous) {
 		return
 	}
-	managedPatrol := previous.OriginKind == "group_manager_auto" && previous.ManagedKind.String == "patrol"
-	managedStep := previous.ManagedBackoffStep
-	var managedContext managedPatrolOpenLoopContext
-	if managedPatrol {
-		managedStep, err = managedPatrolStepForDelaySeconds(req.DelaySeconds)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		managedContext, err = loadManagedPatrolOpenLoopContext(r.Context(), tx, previous.WorkspaceID, previous.AnchorChannelID, previous.AgentID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to validate managed group patrol")
-			return
-		}
-	}
-	if previous.Status != "scheduled" && previous.Status != "fired" && !(managedPatrol && previous.Status == "cancelled") {
+	if previous.Status != "scheduled" && previous.Status != "fired" {
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
 		return
 	}
-	var updated agentReminder
-	eventType := "snoozed"
-	reasonCode := any(nil)
-	if managedPatrol && previous.Status == "cancelled" {
-		updated, err = scanAgentReminder(tx.QueryRow(r.Context(), `
-			INSERT INTO agent_reminder (
-			  workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
-			  anchor_message_id, anchor_thread_root_message_id, fire_at, fired_at,
-			  snooze_count, origin_kind, managed_kind, origin_key, managed_backoff_step
-			)
-			SELECT workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
-			       anchor_message_id, anchor_thread_root_message_id, $2, fired_at,
-			       snooze_count + 1, origin_kind, managed_kind, origin_key, $3
-			FROM agent_reminder
-			WHERE id = $1 AND status = 'cancelled'
-			RETURNING `+reminderSelectColumns(), previous.ID, fireAt, managedStep))
-		eventType = "scheduled"
-		reasonCode = "re_enabled_by_natural_language"
-	} else {
-		updated, err = scanAgentReminder(tx.QueryRow(r.Context(), `
+	updated, err := scanAgentReminder(tx.QueryRow(r.Context(), `
 			UPDATE agent_reminder
-			SET fire_at = $4, status = 'scheduled',
-			    fired_at = CASE WHEN $5 THEN fired_at ELSE NULL END,
+			SET fire_at = $4, status = 'scheduled', fired_at = NULL,
 			    fired_task_id = NULL, current_occurrence_id = NULL,
-			    terminal_reason = NULL,
-			    snooze_count = snooze_count + 1,
-			    managed_backoff_step = $6,
+			    terminal_reason = NULL, snooze_count = snooze_count + 1,
 			    version = version + 1, updated_at = now()
 			WHERE id = $1 AND workspace_id = $2 AND agent_id = $3
 			  AND status IN ('scheduled', 'fired')
-			RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID, fireAt, managedPatrol, managedStep))
-		if managedPatrol {
-			reasonCode = "patrol_replanned_by_group_manager"
-		}
-	}
+			RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID, fireAt))
 	if err != nil {
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
 		return
-	}
-	var lifecycleDetails any = []byte(`{}`)
-	if managedPatrol {
-		lifecycleDetails = map[string]any{
-			"policy":             "group_manager_open_loop_v1",
-			"controlled_dial":    true,
-			"backoff_step":       managedStep,
-			"delay_seconds":      *req.DelaySeconds,
-			"issue_candidates":   len(managedContext.Issues),
-			"message_candidates": len(managedContext.Messages),
-		}
 	}
 	if _, err := tx.Exec(r.Context(), `
 		INSERT INTO agent_reminder_lifecycle_event (
 			reminder_id, workspace_id, agent_id, event_type, actor_type, actor_id,
 			previous_fire_at, next_fire_at, title_snapshot, cadence_snapshot,
 			timezone_snapshot, resulting_state, reason_code, details
-		) VALUES ($1, $2, $3, $4, 'agent', $3, $5, $6, $7, $8, $9, 'scheduled', $10, $11)`,
-		updated.ID, updated.WorkspaceID, updated.AgentID, eventType,
+			) VALUES ($1, $2, $3, 'snoozed', 'agent', $3, $4, $5, $6, $7, $8, 'scheduled', NULL, '{}'::jsonb)`,
+		updated.ID, updated.WorkspaceID, updated.AgentID,
 		previous.FireAt, updated.FireAt, updated.Title, nullableText(updated.Cadence),
-		reminderTimezoneValue(updated.Cadence, updated.ScheduleTimezone), reasonCode,
-		lifecycleDetails); err != nil {
+		reminderTimezoneValue(updated.Cadence, updated.ScheduleTimezone)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to snooze reminder")
 		return
 	}
@@ -775,26 +695,6 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	if !h.authorizeNaturalLanguageReminderMutation(w, r, tx, source, previous) {
 		return
 	}
-	managedPatrol := previous.OriginKind == "group_manager_auto" && previous.ManagedKind.String == "patrol"
-	managedStep := previous.ManagedBackoffStep
-	var managedContext managedPatrolOpenLoopContext
-	if previous.OriginKind == "group_manager_auto" {
-		if !managedPatrol || explicitFireAt == nil || req.DelaySeconds == nil {
-			writeError(w, http.StatusBadRequest, "managed reminders only allow replanning the next group patrol")
-			return
-		}
-		managedStep, err = managedPatrolStepForDelaySeconds(req.DelaySeconds)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		managedContext, err = loadManagedPatrolOpenLoopContext(r.Context(), tx, previous.WorkspaceID, previous.AnchorChannelID, previous.AgentID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to validate managed group patrol")
-			return
-		}
-	}
-
 	nextTitle := previous.Title
 	if title != "" {
 		nextTitle = title
@@ -853,28 +753,15 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	row := tx.QueryRow(r.Context(), `
 		UPDATE agent_reminder
 		SET title = $4, fire_at = $5, cadence = $6, schedule_timezone = $7,
-		    cadence_next_at = $8, managed_backoff_step = $9,
-		    version = version + 1, updated_at = now()
+			    cadence_next_at = $8,
+			    version = version + 1, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status = 'scheduled'
 		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID,
-		nextTitle, nextFireAt, nextCadence, nextTimezone, nextCadenceAt, managedStep)
+		nextTitle, nextFireAt, nextCadence, nextTimezone, nextCadenceAt)
 	updated, err := scanAgentReminder(row)
 	if err != nil {
 		writeError(w, http.StatusConflict, "reminder cannot be updated in its current state")
 		return
-	}
-	var lifecycleReason any
-	var lifecycleDetails any = []byte(`{}`)
-	if managedPatrol {
-		lifecycleReason = "patrol_replanned_by_group_manager"
-		lifecycleDetails = map[string]any{
-			"policy":             "group_manager_open_loop_v1",
-			"controlled_dial":    true,
-			"backoff_step":       managedStep,
-			"delay_seconds":      *req.DelaySeconds,
-			"issue_candidates":   len(managedContext.Issues),
-			"message_candidates": len(managedContext.Messages),
-		}
 	}
 	if _, err := tx.Exec(r.Context(), `
 		INSERT INTO agent_reminder_lifecycle_event (
@@ -884,7 +771,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		) VALUES ($1, $2, $3, 'updated', 'agent', $3, $4, $5, $6, $7, $8, 'scheduled', $9, $10)`,
 		updated.ID, updated.WorkspaceID, updated.AgentID, previous.FireAt, updated.FireAt,
 		updated.Title, nullableText(updated.Cadence), reminderTimezoneValue(updated.Cadence, updated.ScheduleTimezone),
-		lifecycleReason, lifecycleDetails); err != nil {
+		nil, []byte(`{}`)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update reminder")
 		return
 	}
@@ -936,9 +823,6 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	terminalReason := "cancelled_by_author"
-	if previous.OriginKind == "group_manager_auto" {
-		terminalReason = "cancelled_by_channel_manager"
-	}
 	row := tx.QueryRow(r.Context(), `
 		UPDATE agent_reminder
 		SET status = 'cancelled', terminal_reason = $4, current_occurrence_id = NULL,
@@ -1857,9 +1741,6 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		}
 		return err
 	}
-	if reminder.OriginKind == "group_manager_auto" && reminder.ManagedKind.String != "patrol" {
-		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "managed_kind_invalid")
-	}
 	txQueries := h.Queries.WithTx(tx)
 	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
 	anchor, err := loadReminderAnchorSnapshot(ctx, tx, reminder)
@@ -1892,22 +1773,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	if err != nil {
 		return err
 	}
-	var patrolContext managedPatrolOpenLoopContext
-	managedPatrol := reminder.OriginKind == "group_manager_auto" && reminder.ManagedKind.String == "patrol"
-	if managedPatrol {
-		patrolContext, err = loadManagedPatrolOpenLoopContext(ctx, tx, reminder.WorkspaceID, reminder.AnchorChannelID, reminder.AgentID)
-		if err != nil {
-			return err
-		}
-		if !patrolContext.HasCandidates() {
-			return h.dormantManagedPatrolOccurrence(ctx, tx, reminder, occurrenceID)
-		}
-	}
-
 	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
-	if managedPatrol {
-		prompt = buildManagedPatrolPrompt(ch, reminder, occurrenceID, patrolContext)
-	}
 	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
 	if err != nil {
 		return err
@@ -1931,36 +1797,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	var nextFireAt any
 	var lifecycleReason any
 	lifecycleDetails := any([]byte(`{}`))
-	if managedPatrol {
-		nextStep := reminder.ManagedBackoffStep + 1
-		if nextStep > 3 {
-			nextStep = 3
-		}
-		delay := managedPatrolDelayForStep(nextStep)
-		next := time.Now().UTC().Add(delay)
-		resultingState = "scheduled"
-		nextFireAt = next
-		lifecycleReason = "patrol_controlled_dial_fallback_rearmed"
-		lifecycleDetails = map[string]any{
-			"policy":             "group_manager_open_loop_v1",
-			"controlled_dial":    true,
-			"issue_candidates":   len(patrolContext.Issues),
-			"message_candidates": len(patrolContext.Messages),
-			"fallback_step":      nextStep,
-			"fallback_seconds":   int64(delay / time.Second),
-		}
-		if err := tx.QueryRow(ctx, `
-			UPDATE agent_reminder
-			SET status = 'scheduled', fire_at = $2, cadence = NULL,
-			    schedule_timezone = NULL, cadence_next_at = NULL,
-			    current_occurrence_id = NULL, fired_task_id = $3, fired_at = now(),
-			    managed_backoff_step = $5,
-			    version = version + 1, updated_at = now()
-			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $4
-			RETURNING version`, reminder.ID, next, task.ID, occurrenceID, nextStep).Scan(&reminder.Version); err != nil {
-			return err
-		}
-	} else if reminder.Cadence.Valid {
+	if reminder.Cadence.Valid {
 		cadence, parseErr := parseReminderCadence(reminder.Cadence.String, reminderCadenceTimezone(reminder))
 		if parseErr != nil {
 			return parseErr
@@ -2025,19 +1862,6 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		map[string]any{"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID)},
 	)
 	return nil
-}
-
-func managedPatrolDelayForStep(step int16) time.Duration {
-	switch step {
-	case 0:
-		return managedPatrolMinDelay
-	case 1:
-		return 30 * time.Minute
-	case 2:
-		return 45 * time.Minute
-	default:
-		return managedPatrolMaxDelay
-	}
 }
 
 func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, reminder agentReminder) (reminderAnchorSnapshot, error) {
@@ -2135,52 +1959,6 @@ func (h *Handler) terminalizeReminderOccurrence(ctx context.Context, tx pgx.Tx, 
 	}
 	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
 	reminder.Status = "cancelled"
-	h.projectReminderCancel(ctx, reminder)
-	return nil
-}
-
-func (h *Handler) dormantManagedPatrolOccurrence(
-	ctx context.Context,
-	tx pgx.Tx,
-	reminder agentReminder,
-	occurrenceID pgtype.UUID,
-) error {
-	const reason = "patrol_no_open_loop_context_dormant"
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_reminder_occurrence
-		SET status = 'cancelled', terminal_reason = $2, anchor_available = true,
-		    updated_at = now()
-		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID, reason); err != nil {
-		return err
-	}
-	if err := tx.QueryRow(ctx, `
-		UPDATE agent_reminder
-		SET status = 'fired', terminal_reason = NULL, current_occurrence_id = NULL,
-		    fired_task_id = NULL, fired_at = now(), managed_backoff_step = 0,
-		    version = version + 1, updated_at = now()
-		WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $2
-		RETURNING version`, reminder.ID, occurrenceID).Scan(&reminder.Version); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO agent_reminder_lifecycle_event (
-			reminder_id, workspace_id, agent_id, occurrence_id, event_type,
-			actor_type, previous_fire_at, title_snapshot, cadence_snapshot,
-			timezone_snapshot, resulting_state, reason_code, details
-		) VALUES (
-			$1, $2, $3, $4, 'cancelled', 'system', $5, $6, $7, $8,
-			'fired', $9, '{"policy":"group_manager_open_loop_v1","candidate_count":0}'::jsonb
-		)`,
-		reminder.ID, reminder.WorkspaceID, reminder.AgentID, occurrenceID,
-		reminder.FireAt, reminder.Title, nullableText(reminder.Cadence),
-		reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone), reason); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
-	reminder.Status = "fired"
 	h.projectReminderCancel(ctx, reminder)
 	return nil
 }

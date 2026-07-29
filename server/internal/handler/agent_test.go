@@ -632,61 +632,6 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	}
 }
 
-func TestGetMemberProfile_GroupManagerReturnsDisplayName(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "beckham-profile-"+uuid.NewString()[:8], []byte(`{}`))
-	displayName := "贝克汉姆"
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent
-		SET managed_role = 'group_manager', display_name = $2, visibility = 'private'
-		WHERE id = $1
-	`, agentID, displayName); err != nil {
-		t.Fatalf("mark group manager: %v", err)
-	}
-
-	// ListAgents must hide the manager (LRM-233).
-	listRec := httptest.NewRecorder()
-	listReq := newRequest(http.MethodGet, "/api/agents", nil)
-	listReq = withChannelTestWorkspaceCtx(t, listReq, testUserID)
-	testHandler.ListAgents(listRec, listReq)
-	if listRec.Code != http.StatusOK {
-		t.Fatalf("ListAgents: status=%d body=%s", listRec.Code, listRec.Body.String())
-	}
-	var listed []AgentResponse
-	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
-		t.Fatalf("decode ListAgents: %v", err)
-	}
-	for _, a := range listed {
-		if a.ID == agentID {
-			t.Fatalf("group manager %s leaked into ListAgents", agentID)
-		}
-	}
-
-	// Member profile must still resolve the display name from DB (LRM-281).
-	w := httptest.NewRecorder()
-	req := withRouteParams(
-		newRequest(http.MethodGet, "/api/member-profiles/agent/"+agentID, nil),
-		"memberType", "agent",
-		"memberId", agentID,
-	)
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	testHandler.GetMemberProfile(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("GetMemberProfile: status=%d body=%s", w.Code, w.Body.String())
-	}
-	var profile MemberProfileResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &profile); err != nil {
-		t.Fatalf("decode profile: %v", err)
-	}
-	if profile.DisplayName != displayName {
-		t.Fatalf("profile display_name = %q, want %q (body=%s)", profile.DisplayName, displayName, w.Body.String())
-	}
-}
-
 func TestGetMemberProfile_PrivateAgentReturnsIdentityOnlyForPlainMember(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

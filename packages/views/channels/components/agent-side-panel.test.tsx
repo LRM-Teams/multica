@@ -258,7 +258,6 @@ const members: MemberWithUser[] = [ownerMember];
 
 function makeAgent(
   ownerId = "user-owner",
-  managedRole?: "group_manager",
   visibility: Agent["visibility"] = "workspace",
 ): Agent {
   return {
@@ -278,7 +277,6 @@ function makeAgent(
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
-    managed_role: managedRole,
     owner_id: ownerId,
     skills: [],
     created_at: "2026-01-01T00:00:00Z",
@@ -290,12 +288,11 @@ function makeAgent(
 
 function renderPanel(
   currentUserId = "user-owner",
-  managedRole?: "group_manager",
   variant?: "page",
 ) {
   return render(
     <AgentSidePanel
-      agent={makeAgent("user-owner", managedRole)}
+      agent={makeAgent("user-owner")}
       currentUserId={currentUserId}
       members={members}
       onClose={() => {}}
@@ -436,7 +433,7 @@ describe("AgentSidePanel", () => {
 
     render(
       <AgentSidePanel
-        agent={makeAgent("user-owner", undefined, "private")}
+        agent={makeAgent("user-owner", "private")}
         currentUserId="user-other"
         members={[...members, workspaceMember]}
         onClose={() => {}}
@@ -486,7 +483,7 @@ describe("AgentSidePanel", () => {
 
     render(
       <AgentSidePanel
-        agent={makeAgent("user-owner", undefined, "private")}
+        agent={makeAgent("user-owner", "private")}
         currentUserId="user-other"
         members={[...members, workspaceMember]}
         onClose={() => {}}
@@ -571,7 +568,7 @@ describe("AgentSidePanel", () => {
 
   it("keeps visited page tabs mounted in equal-width 44px mobile targets", () => {
     activityPermission.allowed = true;
-    const { container } = renderPanel("user-owner", undefined, "page");
+    const { container } = renderPanel("user-owner", "page");
 
     expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
@@ -594,7 +591,7 @@ describe("AgentSidePanel", () => {
 
   it("restores a visited page tab's scroll position after switching tabs", () => {
     activityPermission.allowed = true;
-    const { container } = renderPanel("user-owner", undefined, "page");
+    const { container } = renderPanel("user-owner", "page");
     const tabBody = container.querySelector(".overflow-y-auto") as HTMLDivElement;
 
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
@@ -650,26 +647,14 @@ describe("AgentSidePanel", () => {
   });
 
   it("renders exactly the 4 runtime pickers, no Concurrency (#565 fix-forward)", () => {
-    renderPanel("user-owner", "group_manager");
+    renderPanel("user-owner");
     for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
       expect(screen.getByTestId(id)).toBeInTheDocument();
     }
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
-  // #871: the `group_manager` marker no longer grants any member edit rights.
-  // Runtime config now follows `canEdit` alone, which already admits the agent
-  // owner and workspace owners/admins.
-  it("keeps runtime pickers READ-ONLY for a member on a group_manager agent when canEdit denies", () => {
-    permission.allowed = false;
-    renderPanel("user-other", "group_manager");
-
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
-      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
-    }
-  });
-
-  it("renders EDITABLE runtime pickers when canEdit allows, marker or not", () => {
+  it("renders EDITABLE runtime pickers when canEdit allows", () => {
     // Visibility stays editable too (LRM-387: Frank — must support modify).
     permission.allowed = true;
     renderPanel("user-other");

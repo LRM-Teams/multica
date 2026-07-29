@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -132,6 +134,46 @@ func (h *Handler) applyAgentHomeChannel(ctx context.Context, agentID pgtype.UUID
 		WHERE id = $1
 	`, agentID, binding.Visibility)
 	return err
+}
+
+// ensureChannelAgentMember adds a channel-scoped agent to its home channel.
+// This is ordinary membership provisioning, not a role assignment.
+func (h *Handler) ensureChannelAgentMember(
+	ctx context.Context,
+	workspaceID, channelID, agentID pgtype.UUID,
+) {
+	actor := channelMemberSystemActor()
+	if err := validateChannelMemberActorWithExec(ctx, h.DB, uuidToString(workspaceID), actor); err != nil {
+		slog.Warn("ensure channel agent member: validate actor failed", "channel_id", uuidToString(channelID), "error", err)
+		return
+	}
+	var generationID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id,
+		  added_by_type, added_by_id, join_source
+		)
+		VALUES ($1, $2, 'agent', $3, $4, $5, 'system')
+		ON CONFLICT DO NOTHING
+		RETURNING generation_id
+	`, channelID, workspaceID, agentID, actor.Type, actor.ID).Scan(&generationID)
+	if err != nil {
+		if !errorsIsNoRows(err) {
+			slog.Warn("ensure channel agent member failed", "channel_id", uuidToString(channelID), "agent_id", uuidToString(agentID), "error", err)
+		}
+		return
+	}
+	if err := h.publishChannelOnboardingSystemMessageForGeneration(ctx, generationID); err != nil {
+		slog.Warn("ensure channel agent member: onboarding publish failed",
+			"channel_id", uuidToString(channelID),
+			"agent_id", uuidToString(agentID),
+			"generation", uuidToString(generationID),
+			"error", err,
+		)
+	}
+	h.publish(protocol.EventChannelUpdated, uuidToString(workspaceID), "system", "", map[string]any{
+		"id": uuidToString(channelID),
+	})
 }
 
 // loadAgentHomeChannelID returns the agent's home_channel_id when set.

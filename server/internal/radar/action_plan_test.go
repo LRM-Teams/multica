@@ -1,7 +1,6 @@
 package radar
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -70,71 +69,5 @@ func TestParseActionPlanAcceptsRequestRework(t *testing.T) {
 	}
 	if len(plan.Actions) != 1 || plan.Actions[0].Type != ActionRequestRework {
 		t.Fatalf("unexpected actions: %+v", plan.Actions)
-	}
-}
-
-func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
-	prompt := BuildAmbientChannelPrompt("## Channel\n\n- channel_id=abc")
-	for _, want := range []string{
-		"manager of ONE group channel",
-		"no_action",
-		"mention_agent",
-		"create_issue",
-		"request_rework",
-		"project and channel scope are enforced by the server",
-		"do not send project_id",
-		"post_channel_message",
-		"untrusted evidence",
-		"Return at most 5 actions",
-		// Naming in prose does not wake an agent — must use mention_agent.
-		"mention_agent action targeting that agent",
-		"server adds the one target mention",
-		"must not repeat that target by @handle or display name",
-		// Spec-driven review (审): production standard, evidence-based, playable≠done.
-		"spec-driven review",
-		"not a playable demo",
-		"acceptance criteria",
-		"based on evidence",
-		// Visual/UI review must use reachable evidence and real asset files.
-		"multica attachment view",
-		"Only claim visual inspection",
-		"declared visual or image-generation capability",
-		"SVG, PNG, WebP, Lottie, video, or frame assets",
-		"CSS shapes, gradients, pseudo-elements, or emoji",
-		// 对话→issue→开发: requirements become issues; execution builds from issues.
-		"Requirements go through issues, not chat",
-		// On shortfall: diagnose spec-wrong vs impl-wrong; owner owns criteria.
-		"diagnose spec-wrong vs implementation-wrong",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("ambient prompt missing %q:\n%s", want, prompt)
-		}
-	}
-}
-
-func TestBuildIdleNudgeChannelPromptDrivesWork(t *testing.T) {
-	prompt := BuildIdleNudgeChannelPrompt("## Channel\n\n- channel_id=abc")
-	for _, want := range []string{
-		"NO agent in this group is working",
-		"mention_agent", // must use mention_agent to wake
-		"产品经理",          // fall back to the product manager
-		"break the final goal into concrete issues",
-		// silence only when the whole goal is genuinely complete
-		"no_action ONLY if the entire goal is genuinely complete",
-		"nudged_without_progress",
-		"ask the specific blocker",
-		"reassign the work",
-		"escalate to a human",
-		"full identifier from its current Open Issues row",
-		"dynamically supplied for this review",
-		"bare `#number`",
-		"Keep mention_agent payload content to the instruction only",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("idle-nudge prompt missing %q:\n%s", want, prompt)
-		}
-	}
-	if strings.Contains(prompt, "Reference the issue by #number") {
-		t.Fatalf("idle-nudge prompt still teaches bare issue numbers:\n%s", prompt)
 	}
 }

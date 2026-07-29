@@ -69,9 +69,9 @@ type AgentResponse struct {
 	// discovered/invited/@-mentioned in.
 	HomeChannelID *string `json:"home_channel_id"`
 	Status        string  `json:"status"`
-	// ManagedRole marks agents the platform manages specially. Empty for
-	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
-	// the channel-panel config tab (and its any-member editability) off this.
+	// ManagedRole is reserved for independent platform-managed agent classes
+	// such as research_fleet. Channel manager identity comes exclusively from
+	// channel_member.role.
 	ManagedRole        string `json:"managed_role,omitempty"`
 	WorkspaceRole      string `json:"workspace_role"`
 	MaxConcurrentTasks int32  `json:"max_concurrent_tasks"`
@@ -237,44 +237,6 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	}
 	if err := rows.Err(); err != nil {
 		slog.Warn("failed to iterate agent runtime names", "error", err)
-	}
-	h.attachAgentManagedRoles(ctx, resps)
-}
-
-// attachAgentManagedRoles stamps ManagedRole="group_manager" onto the
-// Beckham agents in each response set. Grouped by workspace so a list only
-// costs one lookup per workspace (there is at most a handful of group
-// managers per workspace). Ordinary agents keep an empty ManagedRole.
-func (h *Handler) attachAgentManagedRoles(ctx context.Context, resps []AgentResponse) {
-	if len(resps) == 0 {
-		return
-	}
-	byWorkspace := map[string][]int{}
-	for i := range resps {
-		ws := strings.TrimSpace(resps[i].WorkspaceID)
-		if ws == "" {
-			continue
-		}
-		byWorkspace[ws] = append(byWorkspace[ws], i)
-	}
-	for ws, idxs := range byWorkspace {
-		wsUUID := parseUUID(ws)
-		if !wsUUID.Valid {
-			continue
-		}
-		managers, err := h.groupManagerAgentIDs(ctx, wsUUID)
-		if err != nil {
-			slog.Warn("failed to load group-manager agent ids", "workspace_id", ws, "error", err)
-			continue
-		}
-		if len(managers) == 0 {
-			continue
-		}
-		for _, idx := range idxs {
-			if managers[resps[idx].ID] {
-				resps[idx].ManagedRole = managedRoleGroupManager
-			}
-		}
 	}
 }
 
@@ -468,18 +430,24 @@ type ChatAttachmentMeta struct {
 
 // TaskAgentData holds agent info included in claim responses so the daemon
 // can set up the execution environment (branch naming, skill files, instructions).
+type ManagerChannelData struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type TaskAgentData struct {
-	ID            string                    `json:"id"`
-	Name          string                    `json:"name"`
-	ManagedRole   string                    `json:"managed_role,omitempty"`
-	Instructions  string                    `json:"instructions"`
-	Skills        []service.AgentSkillData  `json:"skills,omitempty"`
-	Memories      []service.AgentMemoryData `json:"memories,omitempty"`
-	CustomEnv     map[string]string         `json:"custom_env,omitempty"`
-	CustomArgs    []string                  `json:"custom_args,omitempty"`
-	McpConfig     json.RawMessage           `json:"mcp_config,omitempty"`
-	Model         string                    `json:"model,omitempty"`
-	ThinkingLevel string                    `json:"thinking_level,omitempty"`
+	ID              string                    `json:"id"`
+	Name            string                    `json:"name"`
+	ManagedRole     string                    `json:"managed_role,omitempty"`
+	ManagerChannels []ManagerChannelData      `json:"manager_channels,omitempty"`
+	Instructions    string                    `json:"instructions"`
+	Skills          []service.AgentSkillData  `json:"skills,omitempty"`
+	Memories        []service.AgentMemoryData `json:"memories,omitempty"`
+	CustomEnv       map[string]string         `json:"custom_env,omitempty"`
+	CustomArgs      []string                  `json:"custom_args,omitempty"`
+	McpConfig       json.RawMessage           `json:"mcp_config,omitempty"`
+	Model           string                    `json:"model,omitempty"`
+	ThinkingLevel   string                    `json:"thinking_level,omitempty"`
 }
 
 // ArealProxyData is the wire shape of the RL proxy provider config stored at
@@ -775,14 +743,8 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	// to preserve A2A collaboration; members must be in allowed_principals
 	// (agent owner or workspace owner/admin) to see private agents.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	// Group managers (贝克汉姆) and Research Fleet agents are infrastructure:
-	// hide them from the workspace agent directory / issue assignee picker.
-	// Channel membership and GetAgent remain available via their own paths.
-	groupManagers, gmErr := h.groupManagerAgentIDs(r.Context(), parseUUID(workspaceID))
-	if gmErr != nil {
-		slog.Warn("failed to load group-manager ids for ListAgents", "workspace_id", workspaceID, "error", gmErr)
-		groupManagers = map[string]bool{}
-	}
+	// Research Fleet agents are infrastructure and stay out of the workspace
+	// agent directory / issue assignee picker.
 	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
 	if listChannelID != "" {
 		if _, ok := parseUUIDOrBadRequest(w, listChannelID, "channel_id"); !ok {
@@ -796,9 +758,6 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	homeByAgent := h.loadAgentHomeChannelIDs(r.Context(), agentIDs)
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
-		if groupManagers[uuidToString(a.ID)] {
-			continue
-		}
 		if a.ManagedRole.Valid && a.ManagedRole.String == managedRoleResearchFleet {
 			continue
 		}
@@ -1357,12 +1316,7 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	return true
 }
 
-// canUpdateAgent permits the normal owner/admin update path, plus the narrow
-// shared-runtime contract for group-manager agents. The latter deliberately
-// uses the same agent resource but is limited to the five properties shown in
-// Profile's runtime configuration section; it must not accidentally grant a
-// workspace member access to identity, instructions, secrets, skills, or an
-// agent's lifecycle controls.
+// canUpdateAgent permits the normal owner/admin update path.
 func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent db.Agent, rawFields map[string]json.RawMessage) bool {
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
@@ -1371,47 +1325,11 @@ func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent d
 	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
 	isAgentOwner := uuidToString(agent.OwnerID) == requestUserID(r)
-	if isAdmin || isAgentOwner {
-		return true
-	}
-	if !h.isGroupManagerAgent(r.Context(), agent.ID) {
+	if !isAdmin && !isAgentOwner {
 		writeError(w, http.StatusForbidden, "only the agent owner can manage this agent")
 		return false
 	}
-
-	allowed := map[string]struct{}{
-		"runtime_id": {},
-		"model":      {},
-		// This is transient validation proof for the selected runtime/model
-		// tuple, not an independently editable agent property.
-		"model_catalog_request_id": {},
-		"thinking_level":           {},
-		"max_concurrent_tasks":     {},
-	}
-	for field := range rawFields {
-		if _, ok := allowed[field]; !ok {
-			writeError(w, http.StatusForbidden, "workspace members can only update group manager runtime properties")
-			return false
-		}
-	}
 	return true
-}
-
-// isGroupManagerAgent reports whether the agent is a per-group Beckham. Reads
-// the managed_role column directly (it is not on the sqlc Agent model).
-func (h *Handler) isGroupManagerAgent(ctx context.Context, agentID pgtype.UUID) bool {
-	return h.agentManagedRole(ctx, agentID) == managedRoleGroupManager
-}
-
-func (h *Handler) agentManagedRole(ctx context.Context, agentID pgtype.UUID) string {
-	var managedRole pgtype.Text
-	if err := h.DB.QueryRow(ctx, `SELECT managed_role FROM agent WHERE id = $1`, agentID).Scan(&managedRole); err != nil {
-		return ""
-	}
-	if !managedRole.Valid {
-		return ""
-	}
-	return managedRole.String
 }
 
 func agentUpdateAffectsEvolutionMatching(req UpdateAgentRequest) bool {

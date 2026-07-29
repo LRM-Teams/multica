@@ -3516,9 +3516,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var skills []SkillData
 	var instructions string
 	var managedRole string
+	var managerChannels []execenv.ManagerChannelContextForEnv
 	if task.Agent != nil {
 		agentName = task.Agent.Name
 		managedRole = task.Agent.ManagedRole
+		managerChannels = task.Agent.ManagerChannels
 		skills = append([]SkillData(nil), task.Agent.Skills...)
 		instructions = task.Agent.Instructions
 	}
@@ -3563,6 +3565,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentID:                          agentID,
 		AgentName:                        agentName,
 		ManagedRole:                      managedRole,
+		ManagerChannels:                  managerChannels,
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentMemoryDir:                   agentMemoryDir,

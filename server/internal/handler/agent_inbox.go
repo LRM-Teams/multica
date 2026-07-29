@@ -1667,16 +1667,17 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			thinkingLevel = config.ThinkingLevel
 		}
 		resp.Agent = &TaskAgentData{
-			ID:            uuidToString(agent.ID),
-			Name:          agentDisplayName(agent),
-			ManagedRole:   h.agentManagedRole(ctx, agent.ID),
-			Instructions:  agent.Instructions,
-			Skills:        skills,
-			CustomEnv:     customEnv,
-			CustomArgs:    customArgs,
-			McpConfig:     mcpConfig,
-			Model:         model,
-			ThinkingLevel: thinkingLevel,
+			ID:              uuidToString(agent.ID),
+			Name:            agentDisplayName(agent),
+			ManagedRole:     agent.ManagedRole.String,
+			ManagerChannels: h.agentManagerChannels(ctx, event.WorkspaceID, agent.ID),
+			Instructions:    agent.Instructions,
+			Skills:          skills,
+			CustomEnv:       customEnv,
+			CustomArgs:      customArgs,
+			McpConfig:       mcpConfig,
+			Model:           model,
+			ThinkingLevel:   thinkingLevel,
 		}
 	}
 	usesAgentCredentialTransport := runtime.OwnerID.Valid && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -1745,6 +1746,63 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	// That false execution hint is reserved for D6-2 after archive/read-switch.
 	h.attachCanonicalRuntimeState(ctx, event.AgentID, resp.RuntimeID, &resp)
 	return &resp
+}
+
+func (h *Handler) agentManagerChannels(
+	ctx context.Context,
+	workspaceID, executionAgentID pgtype.UUID,
+) []ManagerChannelData {
+	rows, err := h.DB.Query(ctx, `
+		WITH roster_agent AS (
+		  SELECT COALESCE(source_agent_id, id) AS id
+		  FROM agent
+		  WHERE id = $1 AND workspace_id = $2
+		)
+		SELECT channel.id::text, channel.name
+		FROM roster_agent
+		JOIN channel_member member
+		  ON member.workspace_id = $2
+		 AND member.member_type = 'agent'
+		 AND member.member_id = roster_agent.id
+		 AND member.role = 'manager'
+		JOIN channel
+		  ON channel.workspace_id = member.workspace_id
+		 AND channel.id = member.channel_id
+		WHERE channel.archived_at IS NULL
+		ORDER BY channel.name, channel.id`,
+		executionAgentID,
+		workspaceID,
+	)
+	if err != nil {
+		slog.Warn("agent inbox claim: failed to load manager channels",
+			"agent_id", uuidToString(executionAgentID),
+			"workspace_id", uuidToString(workspaceID),
+			"error", err,
+		)
+		return nil
+	}
+	defer rows.Close()
+
+	var channels []ManagerChannelData
+	for rows.Next() {
+		var channel ManagerChannelData
+		if err := rows.Scan(&channel.ID, &channel.Name); err != nil {
+			slog.Warn("agent inbox claim: failed to scan manager channel",
+				"agent_id", uuidToString(executionAgentID),
+				"error", err,
+			)
+			return nil
+		}
+		channels = append(channels, channel)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("agent inbox claim: failed to iterate manager channels",
+			"agent_id", uuidToString(executionAgentID),
+			"error", err,
+		)
+		return nil
+	}
+	return channels
 }
 
 // attachCanonicalRuntimeState ensures the agent×runtime row exists and copies
@@ -2376,7 +2434,11 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 		if channelID, err := util.ParseUUID(radar.ChannelID); err == nil {
 			if channel, found := h.getChannel(ctx, resp.WorkspaceID, channelID); found {
 				resp.ChannelID = channel.ID
-				loadProject(ambientChannelProjectID(channel))
+				if channel.ProjectID != nil {
+					if projectID, err := util.ParseUUID(*channel.ProjectID); err == nil {
+						loadProject(projectID)
+					}
+				}
 			}
 		}
 		if resp.ProjectID == "" {

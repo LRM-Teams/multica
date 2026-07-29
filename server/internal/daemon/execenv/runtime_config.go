@@ -782,6 +782,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		}
 	}
 
+	renderGroupManagerBrief(&b, ctx)
 	b.WriteString(executionDisciplineBrief)
 	b.WriteString("\n\n")
 
@@ -1131,10 +1132,6 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Delivery\n\n")
 	standaloneChat := ctx.ChatSessionID != "" && strings.TrimSpace(ctx.ChannelID) == ""
-	if ctx.ManagedRole == "group_manager" {
-		b.WriteString("### Managed Group Manager Role\n\n")
-		b.WriteString("The server structurally assigned this agent the `group_manager` role for the current group. Treat issue-progress patrol wakes as judgment work for this exact channel and re-check active issue/task state before acting. Group chat quietness or chatter is not progress. Speak only when issue coordination is genuinely useful. Prefer private coordination for one recipient and minimize group noise; use the related group or thread only when shared visibility or multiple participants are necessary. Issue creation, assignment, and status system events plus their directed wakes already own work delivery: never duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands. On a managed patrol wake, choose the next check for that exact reminder with `multica reminder snooze --id <reminder-id> --delay-seconds <900|1800|2700|3600>`; never create, cancel, or mutate another patrol reminder. The server validates the controlled choice, keeps a bounded fallback, resets real issue progress to 15 minutes, makes no-active groups dormant, and caps blocked work at 15 minutes. Pending, executing, in-review, and blocked issues require different coordination: verify ownership/start, concrete progress, reviewer/merge gates, or blocker removal respectively, and do not repeatedly disturb a blocked executor. Never infer this role from the agent's display name.\n\n")
-	}
 	// Directed reply requirement — only rendered for directed runs (DM,
 	// @mention, direct question, priority >= 2). Ambient runs never see
 	// this block, so they won't be pressured to reply to every message.
@@ -1217,6 +1214,39 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	}
 	b.WriteString(compactCloseoutStatusInstruction)
 	b.WriteString("\n")
+}
+
+func renderGroupManagerBrief(b *strings.Builder, ctx TaskContextForEnv) {
+	if len(ctx.ManagerChannels) == 0 {
+		return
+	}
+	refs := make([]string, 0, len(ctx.ManagerChannels))
+	for _, channel := range ctx.ManagerChannels {
+		name := sanitizeNameForBriefMarkdown(channel.Name)
+		if name == "" {
+			name = "channel"
+		}
+		refs = append(refs, "#"+name)
+	}
+
+	fmt.Fprintf(b, "**Group manager: %s.**\n\n", strings.Join(refs, ", "))
+	b.WriteString("Per channel, close open loops:\n")
+	b.WriteString("unanswered questions · unclaimed `todo` · `in_progress`/`in_review` gone stale ·\n")
+	b.WriteString("someone blocked on one person.\n\n")
+	b.WriteString("Act, don't narrate: @mention whoever unblocks it, or claim/reassign.\n")
+	b.WriteString("Nudge in-channel, not DM — other managers see an in-channel nudge and won't\n")
+	b.WriteString("double up. No periodic \"all clear\" posts.\n\n")
+	b.WriteString("Nothing patrols for you. `multica reminder schedule` anchored per channel —\n")
+	b.WriteString("one each, not one combined. Woken by one → patrol that channel only.\n\n")
+	b.WriteString("Scope: role is per channel; ")
+	if len(refs) > 1 {
+		fmt.Fprintf(b, "manager of %s grants nothing in %s. ", refs[0], refs[1])
+	} else {
+		fmt.Fprintf(b, "manager of %s grants nothing in another group. ", refs[0])
+	}
+	b.WriteString("No extra read\n")
+	b.WriteString("access — private still follows membership. Demoted/removed → actions start\n")
+	b.WriteString("failing; cancel that channel's reminder.\n\n")
 }
 
 func chatRuntimeSkills(ctx TaskContextForEnv) []SkillContextForEnv {

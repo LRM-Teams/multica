@@ -214,7 +214,6 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 	}
 
 	postCommitContext := context.WithoutCancel(ctx)
-	scopedHandler.publishRearmedManagedPatrol(postCommitContext, inserted.RearmedManagedPatrol)
 	message = bridge.handler.attachSingleChannelMessageDetails(
 		postCommitContext,
 		scope.WorkspaceID,

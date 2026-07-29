@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -190,17 +191,18 @@ type ArealProxy struct {
 
 // AgentData holds agent details returned by the claim endpoint.
 type AgentData struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	ManagedRole   string            `json:"managed_role,omitempty"`
-	Instructions  string            `json:"instructions"`
-	Skills        []SkillData       `json:"skills"`
-	Memories      []MemoryData      `json:"memories,omitempty"`
-	CustomEnv     map[string]string `json:"custom_env,omitempty"`
-	CustomArgs    []string          `json:"custom_args,omitempty"`
-	McpConfig     json.RawMessage   `json:"mcp_config,omitempty"`
-	Model         string            `json:"model,omitempty"`
-	ThinkingLevel string            `json:"thinking_level,omitempty"`
+	ID              string                                `json:"id"`
+	Name            string                                `json:"name"`
+	ManagedRole     string                                `json:"managed_role,omitempty"`
+	ManagerChannels []execenv.ManagerChannelContextForEnv `json:"manager_channels,omitempty"`
+	Instructions    string                                `json:"instructions"`
+	Skills          []SkillData                           `json:"skills"`
+	Memories        []MemoryData                          `json:"memories,omitempty"`
+	CustomEnv       map[string]string                     `json:"custom_env,omitempty"`
+	CustomArgs      []string                              `json:"custom_args,omitempty"`
+	McpConfig       json.RawMessage                       `json:"mcp_config,omitempty"`
+	Model           string                                `json:"model,omitempty"`
+	ThinkingLevel   string                                `json:"thinking_level,omitempty"`
 }
 
 type MemoryData struct {

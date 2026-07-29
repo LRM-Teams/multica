@@ -33,6 +33,11 @@ type ProjectResourceForEnv struct {
 	Label        string          // optional user-supplied label
 }
 
+type ManagerChannelContextForEnv struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // PrepareParams holds all inputs needed to set up an execution environment.
 type PrepareParams struct {
 	WorkspacesRoot string // base path for all envs (e.g., ~/multica_workspaces)
@@ -76,6 +81,7 @@ type TaskContextForEnv struct {
 	AgentID             string // unique ID of the dispatched agent
 	AgentName           string
 	ManagedRole         string // structural platform-managed role; never inferred from display name
+	ManagerChannels     []ManagerChannelContextForEnv
 	AgentInstructions   string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentRoot           string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
 	AgentMemoryDir      string // Multica-scoped memory root (PI_MEMORY_DIR), when available

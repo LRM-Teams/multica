@@ -552,7 +552,6 @@ func (h *Handler) publishAgentDMPauseNotification(
 	if !result.Created {
 		return
 	}
-	h.publishRearmedManagedPatrol(ctx, result.RearmedManagedPatrol)
 	if dmChannel, found := h.getChannel(ctx, uuidToString(result.WorkspaceID), result.ChannelID); found {
 		h.publishAgentDMToOwners(
 			ctx, dmChannel, result.LowID, result.HighID, protocol.EventChannelMessage, result.Message,

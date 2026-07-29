@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -98,13 +97,6 @@ func (h *Handler) ExecuteAgentRadarPlan(ctx context.Context, run db.AgentRadarRu
 	if len(plan.Actions) == 0 {
 		plan.Actions = []radar.RadarAction{{Type: radar.ActionNoAction, Reason: "agent returned no actions", Confidence: "medium", RiskLevel: "low", TargetKind: "none"}}
 	}
-	if strings.HasPrefix(run.CooldownKey, "wendy_ambient:") {
-		if err := validateAmbientCoordinationPlan(plan); err != nil {
-			message := "invalid ambient coordination plan: " + err.Error()
-			h.failPersistedAgentRadarRun(ctx, run, message)
-			return errors.New(message)
-		}
-	}
 	if run.TriggerKind == "scheduled" {
 		if err := h.validateScheduledRadarSupervisor(ctx, run, agent); err != nil {
 			_, _ = h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
@@ -148,38 +140,7 @@ func (h *Handler) ExecuteAgentRadarPlan(ctx context.Context, run db.AgentRadarRu
 	} else {
 		_, err = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, run.ID)
 	}
-	// Settle the ambient watch (#2): clear dirty precisely on success, re-arm on
-	// failure. Never lose a review because the run failed after enqueue.
-	if h.WorkGraph != nil && strings.HasPrefix(run.CooldownKey, "wendy_ambient:") {
-		reviewSucceeded := status == "succeeded" || status == "no_action"
-		if rerr := h.WorkGraph.ReconcileChannelAmbientRun(ctx, run.ID, reviewSucceeded); rerr != nil {
-			slog.Warn("reconcile wendy ambient run failed", "run_id", uuidToString(run.ID), "status", status, "error", rerr)
-		}
-	}
 	return err
-}
-
-func validateAmbientCoordinationPlan(plan radar.ActionPlan) error {
-	if len(plan.Actions) > 5 {
-		return errors.New("more than 5 actions")
-	}
-	allowed := map[string]struct{}{
-		radar.ActionNoAction:           {},
-		radar.ActionMentionAgent:       {},
-		radar.ActionCommentIssue:       {},
-		radar.ActionCreateIssue:        {},
-		radar.ActionRequestRework:      {},
-		radar.ActionPostChannelMessage: {},
-	}
-	for _, action := range plan.Actions {
-		if _, ok := allowed[action.Type]; !ok {
-			return fmt.Errorf("action %s is outside the ambient allowlist", action.Type)
-		}
-		if action.Type == radar.ActionNoAction && len(plan.Actions) != 1 {
-			return errors.New("no_action must be the only ambient action")
-		}
-	}
-	return nil
 }
 
 func (h *Handler) validateScheduledRadarSupervisor(ctx context.Context, run db.AgentRadarRun, agent db.Agent) error {
@@ -869,7 +830,6 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	}
 	execution.AfterCommit = func() {
 		// Realtime and activity publication must observe committed rows only.
-		h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 		h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), directive.Target.ChannelID)
 		messages := []ChannelMessageResponse{msg}
 		h.attachChannelMessageAuthorAvatars(ctx, uuidToString(run.WorkspaceID), messages)
@@ -878,11 +838,6 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 		h.recordChannelAgentPromptWake(ctx, directive.Channel, directive.TargetAgent, msg, "mention", txResult)
 		if msg.ThreadRootMessageID != nil {
 			h.followChannelThreadAgent(ctx, directive.Target.ChannelID, parseUUID(*msg.ThreadRootMessageID), directive.TargetAgent.ID)
-		}
-		// Escalation ladder: if this directive came from the channel's group
-		// manager (Beckham), raise the nudged agent's escalation level.
-		if mgrID, ok := h.resolveGroupManagerForChannel(ctx, run.WorkspaceID, directive.Target.ChannelID); ok && uuidToString(mgrID) == uuidToString(supervisor.ID) {
-			h.incrementNudgeLadder(ctx, run.WorkspaceID, directive.Target.ChannelID, directive.TargetAgent.ID)
 		}
 	}
 	return execution, nil
@@ -1507,9 +1462,6 @@ func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadar
 		}
 	} else if strings.TrimSpace(payload.AssigneeType) != "" {
 		return nil, errors.New("assignee_id is required when assignee_type is set")
-	}
-	if strings.HasPrefix(run.CooldownKey, "wendy_ambient:") && assigneeType.Valid && assigneeType.String != "agent" {
-		return nil, errors.New("ambient issue creation may only assign a qualified channel agent")
 	}
 	projectID, err := h.resolveRadarIssueCreateProject(ctx, run, payload.ProjectID)
 	if err != nil {

@@ -38,24 +38,24 @@ func createWorkgraphChannel(t *testing.T, ctx context.Context, workspaceID, chan
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent (
 		  id, workspace_id, name, display_name, runtime_mode, runtime_config,
-		  runtime_id, managed_role
-		) VALUES ($1, $2, $3, 'Beckham', 'local', '{}'::jsonb, $4, 'group_manager')
+		  runtime_id
+		) VALUES ($1, $2, $3, 'Manager', 'local', '{}'::jsonb, $4)
 	`, managerID, workspaceID, "wg-manager-"+uuid.NewString(), runtimeID); err != nil {
-		t.Fatalf("create group manager: %v", err)
+		t.Fatalf("create manager agent: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel (
-		  id, workspace_id, name, kind, created_by, group_manager_agent_id
-		) VALUES ($1, $2, $3, 'group', $4, $5)
-	`, channelID, workspaceID, "wg-channel-"+uuid.NewString(), userID, managerID); err != nil {
+		  id, workspace_id, name, kind, created_by
+		) VALUES ($1, $2, $3, 'group', $4)
+	`, channelID, workspaceID, "wg-channel-"+uuid.NewString(), userID); err != nil {
 		t.Fatalf("create channel: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (
 		  channel_id, workspace_id, member_type, member_id,
-		  added_by_type, added_by_id
-		) VALUES ($1, $2, 'agent', $3, 'user', $4)
+		  role, added_by_type, added_by_id
+		) VALUES ($1, $2, 'agent', $3, 'manager', 'user', $4)
 	`, channelID, workspaceID, managerID, userID); err != nil {
-		t.Fatalf("add group manager to channel: %v", err)
+		t.Fatalf("add manager to channel: %v", err)
 	}
 }

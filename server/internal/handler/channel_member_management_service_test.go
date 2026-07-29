@@ -214,13 +214,19 @@ func TestChannelMemberOwnershipTransferFirstSerializesAgainstSelfLeave(t *testin
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE channel_member
-		SET role = CASE WHEN member_id = $3 THEN 'owner' ELSE 'member' END
+		SET role = 'manager'
 		WHERE channel_id = $1 AND workspace_id = $2
-		  AND member_type = 'user' AND member_id = ANY($4::uuid[])`,
-		channelID,
-		testWorkspaceID,
-		nextOwnerID,
-		[]string{testUserID, nextOwnerID},
+		  AND member_type = 'user' AND role = 'owner'`,
+		channelID, testWorkspaceID,
+	); err != nil {
+		t.Fatalf("demote current owner in held transaction: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE channel_member
+		SET role = 'owner'
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'user' AND member_id = $3`,
+		channelID, testWorkspaceID, nextOwnerID,
 	); err != nil {
 		t.Fatalf("transfer ownership in held transaction: %v", err)
 	}
@@ -267,72 +273,6 @@ func TestChannelMemberOwnershipTransferFirstSerializesAgainstSelfLeave(t *testin
 	if ownerID != nextOwnerID {
 		t.Fatalf("surviving owner=%s want %s", ownerID, nextOwnerID)
 	}
-}
-
-func TestChannelMemberBindingFirstSerializesAgainstRemoveEffect(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	seed := seedBoundarySequentialRevoke(t)
-	channelID := seed.channelID
-	agentID := seed.agentID
-	before := loadAgentChannelRevokeTuple(t, channelID, agentID, seed.eventID)
-	auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
-	systemBefore := countChannelSystemMessagesForTest(t, channelID)
-
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin binding mutation: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	var lockedChannelID pgtype.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM channel WHERE id = $1 FOR UPDATE`, channelID).Scan(&lockedChannelID); err != nil {
-		t.Fatalf("lock channel for binding: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE channel
-		SET group_manager_agent_id = $2
-		WHERE id = $1`,
-		channelID, agentID); err != nil {
-		t.Fatalf("bind target in held transaction: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			UPDATE channel SET group_manager_agent_id = NULL WHERE id = $1`,
-			channelID)
-	})
-
-	atomic.StoreInt32(&testMemberManagementLockAttemptEntered, 0)
-	t.Cleanup(func() { atomic.StoreInt32(&testMemberManagementLockAttemptEntered, 0) })
-	result := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := newRequestAs(testUserID, http.MethodDelete,
-			"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none",
-			nil)
-		req = withChannelTestWorkspaceCtx(t, req, testUserID)
-		req = withRouteParams(req,
-			"channelId", channelID,
-			"memberType", "agent",
-			"memberId", agentID,
-		)
-		rec := httptest.NewRecorder()
-		testHandler.RemoveChannelMember(rec, req)
-		result <- rec
-	}()
-	waitForMemberManagementLockAttempt(t)
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit binding mutation: %v", err)
-	}
-
-	rec := <-result
-	assertRemoveEffectChangedResponse(t, rec)
-	assertGroupManagerBinding(t, channelID, agentID)
-	if after := loadAgentChannelRevokeTuple(t, channelID, agentID, seed.eventID); after != before {
-		t.Fatalf("binding race changed revoke tuple: before=%+v after=%+v", before, after)
-	}
-	assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
 }
 
 func waitForMemberManagementLockAttempt(t *testing.T) {

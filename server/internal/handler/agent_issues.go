@@ -276,10 +276,6 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
-	groupManagers, gmErr := h.groupManagerAgentIDs(r.Context(), ws)
-	if gmErr != nil {
-		groupManagers = map[string]bool{}
-	}
 	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
 	if listChannelID != "" {
 		if _, ok := parseUUIDOrBadRequest(w, listChannelID, "channel_id"); !ok {
@@ -293,9 +289,6 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 	homeByAgent := h.loadAgentHomeChannelIDs(r.Context(), agentIDs)
 	visible := make([]AgentDirectoryItem, 0, len(agents))
 	for _, a := range agents {
-		if groupManagers[uuidToString(a.ID)] {
-			continue
-		}
 		homeID := homeByAgent[uuidToString(a.ID)]
 		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
 			continue

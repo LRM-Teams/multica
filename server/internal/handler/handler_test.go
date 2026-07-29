@@ -137,6 +137,18 @@ func runHandlerTests(m *testing.M) int {
 // the fixture agent and use the pre-cutover lifecycle words for readability.
 func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx, `
+		ALTER TABLE agent_inbox_event
+		  DROP CONSTRAINT IF EXISTS agent_inbox_event_reason_check;
+		ALTER TABLE agent_inbox_event
+		  ADD CONSTRAINT agent_inbox_event_reason_check
+		  CHECK (reason IN (
+		    'mention', 'dm', 'ambient', 'thread_reply', 'channel_message',
+		    'collaboration_turn', 'collaboration_manager_fallback',
+		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
+		    'agent_radar', 'training', 'environment_dispatch',
+		    'memory_curation', 'reminder', 'channel_role_changed'
+		  ));
+
 		CREATE OR REPLACE FUNCTION test_agent_inbox_fixture_defaults()
 		RETURNS trigger
 		LANGUAGE plpgsql
@@ -158,7 +170,7 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'collaboration_turn', 'collaboration_manager_fallback',
 		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
 		    'agent_radar', 'training', 'environment_dispatch',
-		    'memory_curation', 'reminder'
+		    'memory_curation', 'reminder', 'channel_role_changed'
 		  ) THEN
 		    NEW.reason := CASE
 		      WHEN NEW.chat_session_id IS NOT NULL THEN 'dm'

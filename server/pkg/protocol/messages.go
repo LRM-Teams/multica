@@ -54,6 +54,7 @@ type MessagePart struct {
 	ContentEndUTF16   *int            `json:"content_end_utf16,omitempty"`
 	Event             string          `json:"event,omitempty"`
 	EventParams       json.RawMessage `json:"event_params,omitempty"`
+	Params            json.RawMessage `json:"params,omitempty"`
 	PackID            string          `json:"pack_id,omitempty"`
 	StickerID         string          `json:"sticker_id,omitempty"`
 	Alt               string          `json:"alt,omitempty"`
@@ -263,6 +264,7 @@ const (
 
 const (
 	ChannelOnboardingReason          = "channel_onboarding"
+	ChannelRoleChangedReason         = "channel_role_changed"
 	ChannelOnboardingSkipReceipt     = "channel_onboarding_skipped"
 	ChannelOnboardingDecisionSkipped = "skipped"
 )

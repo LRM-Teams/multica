@@ -20,31 +20,6 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestValidateAmbientCoordinationPlanRejectsUnsafeShapes(t *testing.T) {
-	allowed := radar.RadarAction{Type: radar.ActionPostChannelMessage}
-	tests := []struct {
-		name string
-		plan radar.ActionPlan
-	}{
-		{name: "more than five actions", plan: radar.ActionPlan{Actions: []radar.RadarAction{allowed, allowed, allowed, allowed, allowed, allowed}}},
-		{name: "no action mixed with effect", plan: radar.ActionPlan{Actions: []radar.RadarAction{{Type: radar.ActionNoAction}, allowed}}},
-		{name: "action outside ambient allowlist", plan: radar.ActionPlan{Actions: []radar.RadarAction{{Type: radar.ActionUpdateAgentPlan}}}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := validateAmbientCoordinationPlan(tt.plan); err == nil {
-				t.Fatalf("unsafe plan accepted: %+v", tt.plan)
-			}
-		})
-	}
-	if err := validateAmbientCoordinationPlan(radar.ActionPlan{Actions: []radar.RadarAction{
-		{Type: radar.ActionCreateIssue},
-		{Type: radar.ActionRequestRework},
-	}}); err != nil {
-		t.Fatalf("valid coordination plan rejected: %v", err)
-	}
-}
-
 func TestExecuteRadarCommentIssueCreatesVisibleCommentBeforeExactTargetTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

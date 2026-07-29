@@ -74,14 +74,17 @@ export function AgentSidePanel({
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
   const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
-  const isWorkspaceMember =
-    !!currentUserId && members.some((member) => member.user_id === currentUserId);
-  const isGroupManager = agent.managed_role === "group_manager";
-  const canViewActivity =
-    isOwner ||
-    (!!currentUserId && devProfileAccess) ||
-    (isWorkspaceMember && agent.visibility === "workspace") ||
-    (isWorkspaceMember && isGroupManager);
+  // LRM-542: the header avatar is now editable. Compute the edit permission
+  // once here so the header avatar and the Profile tab share one decision.
+  //
+  // Workspace authority comes from the viewer's own membership, not from any
+  // marker on the agent. `devProfileAccess` stays separate: it is a local dev
+  // toggle, not a permission the backend would honour.
+  const { canEdit, canViewActivity: activityDecision } = useAgentPermissions(
+    agent,
+    agent.workspace_id,
+  );
+  const canViewActivity = activityDecision.allowed || (!!currentUserId && devProfileAccess);
   const availableTabs: OwnerTab[] = ["profile"];
   if (canViewActivity) availableTabs.push("activity");
   if (canViewActivity) availableTabs.push("reminders");
@@ -95,9 +98,6 @@ export function AgentSidePanel({
   const tabScrollTopRef = useRef<Partial<Record<OwnerTab, number>>>({});
   const displayName = resolveActorDisplayName(agent, agent.id);
   const handleLabel = formatActorHandleLabel(resolveActorHandle(agent));
-  // LRM-542: the header avatar is now editable. Compute the edit permission
-  // once here so the header avatar and the Profile tab share one decision.
-  const { canEdit } = useAgentPermissions(agent, agent.workspace_id);
   // LRM-542: header avatar is editable, so the outer panel needs the same
   // update handle the Profile tab already uses.
   const handleUpdate = useUpdateAgent(agent.workspace_id);
@@ -273,8 +273,12 @@ function AgentProfileTabContent({
   const { canEdit } = useAgentPermissions(agent, wsId);
   const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
-  const isGroupManager = agent.managed_role === "group_manager";
-  const canEditRuntime = isGroupManager ? true : canEdit.allowed;
+  // Runtime config used to be editable by any workspace member when the agent
+  // carried the `group_manager` marker ("shared team infrastructure"). That
+  // marker is retired with the group-manager cutover (#871), and `canEdit`
+  // already admits workspace owners/admins, so the special case dissolves
+  // rather than needing a replacement.
+  const canEditRuntime = canEdit.allowed;
   const canEditIdentity = canEdit.allowed;
 
   const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;

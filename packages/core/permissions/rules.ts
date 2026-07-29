@@ -42,6 +42,36 @@ export function canEditAgent(agent: Agent, ctx: PermissionContext): Decision {
 }
 
 /**
+ * Read an agent's Activity / Reminders. Mirrors the backend's
+ * `canAccessPrivateAgent` (`server/internal/handler/agent_access.go:26-51`):
+ * non-private agents are readable by any workspace member, private ones by
+ * their owner plus workspace admins/owners.
+ *
+ * Until 2026-07-29 the view layer gated this on `agent.managed_role ===
+ * "group_manager"` instead, which was both the wrong subject (the agent's
+ * marker, not the viewer's authority) and stricter than the backend — admins
+ * could fetch the data over the API but never saw the tab. That marker is
+ * being retired with the group-manager cutover (#871).
+ *
+ * Not mirrored: the backend's `privateAgentOwnerOnly` branch, which keys on
+ * the agent's *display name* (`windy.go:511`) and has no client-side
+ * equivalent. Such an agent shows the tab to an admin and the request 403s.
+ * Narrow enough to accept for now — see the note on #871.
+ */
+export function canViewAgentActivity(agent: Agent, ctx: PermissionContext): Decision {
+  if (ctx.userId === null) {
+    return deny("not_authenticated", "Sign in to view this agent's activity.");
+  }
+  if (agent.owner_id !== null && agent.owner_id === ctx.userId) return ALLOW;
+  if (isAdminLike(ctx.role)) return ALLOW;
+  if (ctx.role !== null && agent.visibility === "workspace") return ALLOW;
+  return deny(
+    "not_resource_owner",
+    "Only the agent owner and workspace admins can view this agent's activity.",
+  );
+}
+
+/**
  * Assign an agent to an issue. Workspace-visibility agents are assignable by
  * any workspace member; private agents are restricted to their owner plus
  * workspace admins/owners. Mirrors `issue.go:1471-1490`.

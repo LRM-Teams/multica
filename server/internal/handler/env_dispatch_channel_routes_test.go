@@ -115,6 +115,79 @@ func TestChannelCleanupDeletesChannelProjectEnvAndBindings(t *testing.T) {
 	}
 }
 
+// TestChannelCleanupReclaimsReadyBindingOwnedResources pins the owned-resource
+// cascade for a fully provisioned rollout. Regression coverage for the reclaim
+// loop being unreachable: markDeleting moves the ready binding to "deleting"
+// before the loop reads it, so gating on "ready" alone skipped every resource
+// and the bindings were then deleted, leaving the sandbox, the runtime, and the
+// derived agent as orphans nothing could reach. The pre-existing cleanup test
+// above uses a "pending" binding, which never enters this loop at all.
+func TestChannelCleanupReclaimsReadyBindingOwnedResources(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	envID, _, channelID, _ := setupEnvDispatchChannelRolloutFixture(t)
+	derivedAgentID, runtimeID := setupBoundRuntimeAgent(t, "pi")
+
+	var nodeID, instanceID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_node (node_key, name, owner_user_id, capabilities, max_concurrency, metadata)
+		VALUES ($1, 'channel cleanup node', $2, '{}'::jsonb, 1, '{}'::jsonb)
+		RETURNING id`, "channel-cleanup-"+uuid.NewString(), testUserID).Scan(&nodeID))
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_instance (workspace_id, creator_user_id, node_id, status, template, limits, metadata)
+		VALUES ($1, $2, $3, 'running', 'default', '{}'::jsonb, '{}'::jsonb)
+		RETURNING id`, testWorkspaceID, testUserID, nodeID).Scan(&instanceID))
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM sandbox_instance WHERE id = $1`, instanceID)
+		testPool.Exec(context.Background(), `DELETE FROM sandbox_node WHERE id = $1`, nodeID)
+	})
+
+	// Promote the fixture's pending binding to a fully provisioned rollout:
+	// the CHECK constraint requires all three handles once status is 'ready'.
+	_, err := testPool.Exec(ctx, `
+		UPDATE environment_agent_sandbox
+		   SET status = 'ready', sandbox_instance_id = $2, runtime_id = $3,
+		       daemon_id = $4, derived_agent_id = $5
+		 WHERE env_id = $1`, envID, instanceID, runtimeID, uuid.NewString(), derivedAgentID)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	testHandler.DeleteEnvDispatchChannel(w, authedChannelRequest(http.MethodDelete, "/api/v1/env-dispatch/channels/"+channelID, "channelID", channelID))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+
+	// The sandbox was reclaimed: a delete job is queued for its node, or the
+	// row was force-deleted because the node was unreachable.
+	var deleteJobs int
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT count(*) FROM sandbox_job WHERE instance_id = $1 AND type = 'delete'`,
+		instanceID).Scan(&deleteJobs))
+	var instanceExists bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM sandbox_instance WHERE id = $1)`,
+		instanceID).Scan(&instanceExists))
+	if deleteJobs == 0 && instanceExists {
+		t.Error("sandbox was neither queued for deletion nor force-deleted")
+	}
+
+	// The runtime and its derived agent are gone, so the in-sandbox daemon has
+	// no identity left to re-register against.
+	var runtimeExists, derivedExists bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agent_runtime WHERE id = $1)`, runtimeID).Scan(&runtimeExists))
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agent WHERE id = $1)`, derivedAgentID).Scan(&derivedExists))
+	if runtimeExists {
+		t.Error("runtime should be deleted with the rollout")
+	}
+	if derivedExists {
+		t.Error("derived agent should be deleted with the rollout")
+	}
+}
+
 func TestChannelCleanupIsIdempotent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

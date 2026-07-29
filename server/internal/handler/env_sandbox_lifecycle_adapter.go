@@ -266,7 +266,11 @@ func (a *ephemeralSandboxCleanerAdapter) DeleteSandboxInstance(ctx context.Conte
 		// Not-found or transient error: best-effort, treat as already gone.
 		return nil
 	}
-	return a.lifecycle.DeleteSandboxInstance(ctx, ref, "")
+	// The sandbox's creator is the actor: terminal-task cleanup has no request
+	// context, yet a "delete" job's initiator_user_id is NOT NULL and Delete
+	// only force-deletes when the node is unavailable. An empty actor therefore
+	// failed to enqueue and left a reachable node's Cube sandbox running.
+	return a.lifecycle.DeleteSandboxInstance(ctx, ref, ref.CreatorUserID)
 }
 
 // sandboxInstanceRowToRef converts a joined sandbox_instance row to the

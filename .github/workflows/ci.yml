@@ -138,9 +138,29 @@ jobs:
           MEMTOTAL_KB="$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
           echo "::notice::MemTotal_kB=${MEMTOTAL_KB} attempt=${{ github.run_attempt }}"
           START=$(date +%s)
-          setsid pnpm exec turbo test --filter='@multica/web...' --concurrency=1 \
+          # ⚠️ DIAGNOSTIC ROUND ONLY (task #855, authorised by @Ronan) —
+          # NOT the production shape and NOT part of the 3-run acceptance.
+          #
+          # Outer Turbo parallelism is RESTORED (no `--concurrency=1`) and the
+          # throttle is moved INSIDE each Vitest via `--maxWorkers=1`. Turbo
+          # forwards args after `--` to the underlying task; verified locally
+          # that vitest 4.1.0 accepts `maxWorkers` (CLI only — there is no
+          # env-var equivalent in the installed dist).
+          #
+          # This round answers one yes/no: does inner throttling have any room
+          # on a 2-core runner? Every branch is a usable result —
+          #   wall better + no timeout  → inner throttling works
+          #   wall worse  + no timeout  → contention real, wrong lever (views
+          #                               is dominant and gets starved of
+          #                               workers), close this direction
+          #   timeouts persist          → inner throttling does not even fix
+          #                               starvation; kill the approach
+          #
+          # Cache/instrumentation baseline is deliberately unchanged so the
+          # wall is comparable with attempt 1's 804s.
+          setsid pnpm exec turbo test --filter='@multica/web...' \
             --cache=local:rw --cache-dir=".turbo/855-${{ github.run_attempt }}" \
-            --summarize &
+            --summarize -- --maxWorkers=1 &
           TURBO_PID=$!
           # Do NOT assume PGID == $!: depending on whether `setsid` execs or
           # forks, $! can be setsid itself rather than the group leader. Read

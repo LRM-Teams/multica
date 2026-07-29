@@ -125,6 +125,9 @@ prepare_job="$(awk '/^  prepare:/{capture=1; next} /^  build:/{capture=0} captur
 build_job="$(awk '/^  build:/{capture=1; next} /^  deploy:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
 require_config "$prepare_job" 'runs-on: [self-hosted, ci]'
 require_config "$build_job" 'runs-on: [self-hosted, ci]'
+require_config "$build_job" 'buildkitd-config-inline: |'
+require_config "$build_job" '[registry."docker.io"]'
+require_config "$build_job" 'mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]'
 if grep -Fq 'uses: actions/checkout' <<<"$deploy_job"; then
   echo "Aliyun self-hosted deploy job must consume the immutable deploy artifact, not git checkout."
   exit 1

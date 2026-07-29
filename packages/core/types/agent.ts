@@ -411,7 +411,7 @@ export interface Agent {
    * edit (group managers are shared team infrastructure, not owned by one
    * person). Older backends omit the field — treat undefined as "ordinary".
    */
-  managed_role?: "group_manager";
+  managed_role?: "group_manager" | "research_fleet";
   max_concurrent_tasks: number;
   model: string;
   /**

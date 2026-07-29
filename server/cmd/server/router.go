@@ -951,6 +951,28 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Research Fleet
+			r.Route("/api/research", func(r chi.Router) {
+				r.Get("/fleet", h.GetResearchFleet)
+				r.Post("/fleet/ensure", h.EnsureResearchFleet)
+				r.Post("/fleet/members", h.HireResearchFleetMember)
+				r.Post("/fleet/members/{memberId}/optimize", h.OptimizeResearchFleetMember)
+				r.Post("/fleet/members/{memberId}/archive", h.ArchiveResearchFleetMemberHandler)
+				r.Get("/sessions", h.ListResearchSessions)
+				r.Post("/sessions", h.CreateResearchSession)
+				r.Route("/sessions/{id}", func(r chi.Router) {
+					r.Get("/", h.GetResearchSessionSnapshot)
+					r.Post("/messages", h.PostResearchMessage)
+					r.Post("/graph/nodes", h.AppendResearchGraphNode)
+					r.Post("/sources", h.UpsertResearchSourceHandler)
+					r.Post("/report", h.PatchResearchReport)
+					r.Post("/presence", h.PostResearchPresence)
+					r.Post("/stage-eval", h.RequestResearchStageEval)
+					r.Post("/confirm", h.ConfirmResearchSession)
+					r.Post("/handoff", h.ResearchSessionHandoff)
+				})
+			})
+
 			// Autopilots
 			r.Route("/api/autopilots", func(r chi.Router) {
 				r.Get("/", h.ListAutopilots)

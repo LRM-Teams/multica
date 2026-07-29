@@ -39,6 +39,7 @@ import {
   Zap,
   MessageCircle,
   SearchIcon,
+  Telescope,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -115,6 +116,7 @@ type NavKey =
   | "inbox"
   | "issues"
   | "projects"
+  | "research"
   | "channels"
   | "autopilots"
   | "agents"
@@ -132,6 +134,7 @@ type NavLabelKey =
   | "inbox"
   | "issues"
   | "projects"
+  | "research"
   | "channels"
   | "autopilots"
   | "agents"
@@ -154,6 +157,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
   { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
+  { key: "research", labelKey: "research", icon: Telescope },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "usage", labelKey: "usage", icon: BarChart3 },

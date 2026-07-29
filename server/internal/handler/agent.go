@@ -128,6 +128,10 @@ func agentToResponse(a db.Agent) AgentResponse {
 		mcpConfig = json.RawMessage(a.McpConfig)
 	}
 
+	managedRole := ""
+	if a.ManagedRole.Valid {
+		managedRole = a.ManagedRole.String
+	}
 	return AgentResponse{
 		ID:                 uuidToString(a.ID),
 		WorkspaceID:        uuidToString(a.WorkspaceID),
@@ -151,6 +155,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Model:              a.Model.String,
 		ThinkingLevel:      a.ThinkingLevel.String,
 		OwnerID:            uuidToPtr(a.OwnerID),
+		ManagedRole:        managedRole,
 		Skills:             []AgentSkillSummary{},
 		CreatedAt:          timestampToString(a.CreatedAt),
 		UpdatedAt:          timestampToString(a.UpdatedAt),
@@ -768,10 +773,9 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	// to preserve A2A collaboration; members must be in allowed_principals
 	// (agent owner or workspace owner/admin) to see private agents.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	// Group managers (贝克汉姆) are channel-bound infrastructure: hide them from
-	// the workspace agent directory / invite picker even for owner/admin, who
-	// would otherwise still see private agents (LRM-233). Channel membership and
-	// GetAgent remain available via their own paths.
+	// Group managers (贝克汉姆) and Research Fleet agents are infrastructure:
+	// hide them from the workspace agent directory / issue assignee picker.
+	// Channel membership and GetAgent remain available via their own paths.
 	groupManagers, gmErr := h.groupManagerAgentIDs(r.Context(), parseUUID(workspaceID))
 	if gmErr != nil {
 		slog.Warn("failed to load group-manager ids for ListAgents", "workspace_id", workspaceID, "error", gmErr)
@@ -791,6 +795,9 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
 		if groupManagers[uuidToString(a.ID)] {
+			continue
+		}
+		if a.ManagedRole.Valid && a.ManagedRole.String == managedRoleResearchFleet {
 			continue
 		}
 		homeID := homeByAgent[uuidToString(a.ID)]

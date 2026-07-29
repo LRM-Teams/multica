@@ -106,6 +106,7 @@ vi.mock("@multica/core/paths", () => ({
     myIssues: () => "/acme/my-issues",
     issues: () => "/acme/issues",
     projects: () => "/acme/projects",
+    research: () => "/acme/research",
     channels: () => "/acme/channels",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
@@ -118,6 +119,7 @@ vi.mock("@multica/core/paths", () => ({
     settings: () => "/acme/settings",
     issueDetail: (id: string) => `/acme/issues/${id}`,
     projectDetail: (id: string) => `/acme/projects/${id}`,
+    researchDetail: (id: string) => `/acme/research/${id}`,
   }),
 }));
 vi.mock("@multica/core/api", async (importOriginal) => {

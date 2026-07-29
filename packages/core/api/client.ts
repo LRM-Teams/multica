@@ -3794,4 +3794,87 @@ export class ApiClient {
       body: JSON.stringify({ token }),
     });
   }
+
+  // Research Fleet
+  async ensureResearchFleet(): Promise<import("../types/research").ResearchFleet> {
+    const { ResearchFleetSchema, EMPTY_RESEARCH_FLEET } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/fleet/ensure", { method: "POST" });
+    return parseWithFallback(raw, ResearchFleetSchema, EMPTY_RESEARCH_FLEET, {
+      endpoint: "POST /api/research/fleet/ensure",
+    });
+  }
+
+  async listResearchSessions(): Promise<import("../types/research").ListResearchSessionsResponse> {
+    const {
+      ListResearchSessionsResponseSchema,
+      EMPTY_RESEARCH_SESSIONS,
+    } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/sessions");
+    return parseWithFallback(raw, ListResearchSessionsResponseSchema, EMPTY_RESEARCH_SESSIONS, {
+      endpoint: "GET /api/research/sessions",
+    });
+  }
+
+  async createResearchSession(
+    data: import("../types/research").CreateResearchSessionRequest,
+  ): Promise<{ session: import("../types/research").ResearchSession; fleet: import("../types/research").ResearchFleet }> {
+    const {
+      ResearchFleetSchema,
+      EMPTY_RESEARCH_FLEET,
+      ResearchSessionSnapshotSchema,
+      EMPTY_RESEARCH_SNAPSHOT,
+    } = await import("../research/schemas");
+    const { z } = await import("zod");
+    const raw = await this.fetch("/api/research/sessions", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    const CreateSchema = z
+      .object({
+        session: ResearchSessionSnapshotSchema.shape.session,
+        fleet: ResearchFleetSchema,
+      })
+      .passthrough();
+    const parsed = parseWithFallback(
+      raw,
+      CreateSchema,
+      { session: EMPTY_RESEARCH_SNAPSHOT.session, fleet: EMPTY_RESEARCH_FLEET },
+      { endpoint: "POST /api/research/sessions" },
+    );
+    return { session: parsed.session, fleet: parsed.fleet };
+  }
+
+  async getResearchSessionSnapshot(
+    id: string,
+  ): Promise<import("../types/research").ResearchSessionSnapshot> {
+    const { ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}`);
+    return parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
+      endpoint: "GET /api/research/sessions/:id",
+    });
+  }
+
+  async postResearchMessage(
+    id: string,
+    data: { body: string; target_agent_id?: string },
+  ): Promise<import("../types/research").ResearchMessage> {
+    return this.fetch(`/api/research/sessions/${id}/messages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async confirmResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
+    return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
+  }
+
+  async researchSessionHandoff(
+    id: string,
+    data: import("../types/research").ResearchHandoffRequest,
+  ): Promise<import("../types/research").ResearchSession> {
+    return this.fetch(`/api/research/sessions/${id}/handoff`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
 }

@@ -328,6 +328,76 @@ type DiagnosisOnDemandConfig struct {
 	ExtensionRoot string
 }
 
+// DiagnosisSegmentTarget is the immutable message-range snapshot used by one
+// on-demand run. AssistantSeqs is the authoritative set the tool server must
+// score; it is deliberately not reconstructed from a count or numeric range.
+type DiagnosisSegmentTarget struct {
+	SegmentID     string
+	AgentRunID    string
+	StartSeq      int32
+	EndSeq        int32
+	AssistantSeqs []int32
+}
+
+// freezeDiagnosisSegmentTargets snapshots the actual messages behind each
+// segment before Pi starts. A resumed run must see the same target set; a
+// changed message range is rejected rather than silently scoring another turn.
+func (r *DiagnosisAgentRunner) freezeDiagnosisSegmentTargets(
+	ctx context.Context,
+	state *DiagnosisStateStore,
+	run DiagnosisRunCheckpoint,
+	segmentIDs []string,
+) ([]DiagnosisSegmentTarget, error) {
+	if r.dagStore == nil || r.messageStore == nil {
+		return nil, fmt.Errorf("diagnosis on-demand: stores not configured")
+	}
+	targets := make([]DiagnosisSegmentTarget, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segment, err := r.dagStore.GetInteractionDAGSegmentByID(ctx, segmentID)
+		if err != nil {
+			return nil, fmt.Errorf("diagnosis on-demand: get segment %s: %w", segmentID, err)
+		}
+		if segment.ProjectID != run.ProjectID {
+			return nil, fmt.Errorf("diagnosis on-demand: segment %s is outside project", segmentID)
+		}
+		messages, err := r.messageStore.MessagesForTaskInRange(
+			ctx, segment.AgentRunID, segment.StartSeq, segment.EndSeq,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("diagnosis on-demand: messages for segment %s: %w", segmentID, err)
+		}
+		assistantSeqs := make([]int32, 0, len(messages))
+		for _, message := range messages {
+			if message.Type == "assistant" {
+				assistantSeqs = append(assistantSeqs, message.Seq)
+			}
+		}
+
+		checkpoint, err := state.GetSegment(ctx, run.RunID, segmentID)
+		if err != nil {
+			return nil, fmt.Errorf("diagnosis on-demand: load segment checkpoint %s: %w", segmentID, err)
+		}
+		if checkpoint.Status == SegmentDiagnosisPending {
+			if _, err := state.StartSegmentWithTargets(
+				ctx, run.RunID, segmentID, len(messages), assistantSeqs,
+			); err != nil {
+				return nil, fmt.Errorf("diagnosis on-demand: freeze targets for segment %s: %w", segmentID, err)
+			}
+		} else if checkpoint.ExpectedMessageCount != len(messages) || !sameInt32s(checkpoint.ExpectedRewardSeqs, assistantSeqs) {
+			return nil, fmt.Errorf("diagnosis on-demand: target set changed for segment %s", segmentID)
+		}
+
+		targets = append(targets, DiagnosisSegmentTarget{
+			SegmentID:     segmentID,
+			AgentRunID:    segment.AgentRunID,
+			StartSeq:      segment.StartSeq,
+			EndSeq:        segment.EndSeq,
+			AssistantSeqs: assistantSeqs,
+		})
+	}
+	return targets, nil
+}
+
 // DiagnoseOnDemand runs the persistent per-segment diagnosis flow. It creates or
 // resumes a diagnosis run, starts the loopback tool server, launches a single
 // persistent Pi RPC session with the trusted extension, and processes one
@@ -355,11 +425,22 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 		}
 		segments, _ = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
 	}
+	targets, err := r.freezeDiagnosisSegmentTargets(ctx, cfg.StateStore, runCkpt, orderedSegmentIDs)
+	if err != nil {
+		return DiagnosisReport{}, err
+	}
+	segments, err = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
+	if err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: list frozen segments: %w", err)
+	}
 
 	// Start the loopback tool server.
 	server, err := NewDiagnosisToolServer(runCkpt, cfg.StateStore, cfg.MessagePager, cfg.DAGWriter)
 	if err != nil {
 		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: tool server: %w", err)
+	}
+	if err := server.SetSegmentTargets(targets); err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: configure segment targets: %w", err)
 	}
 	baseURL, err := server.ListenAndServe()
 	if err != nil {

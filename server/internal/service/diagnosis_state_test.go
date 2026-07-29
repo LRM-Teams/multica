@@ -162,6 +162,7 @@ func (f *fakeDiagnosisStateQueries) StartInteractionDAGDiagnosisSegment(_ contex
 	row.Status = string(SegmentDiagnosisInProgress)
 	row.ExpectedMessageCount = arg.ExpectedMessageCount
 	row.ExpectedRewardCount = arg.ExpectedRewardCount
+	row.ExpectedRewardSeqs = arg.ExpectedRewardSeqs
 	f.segments[key] = row
 	return 1, nil
 }

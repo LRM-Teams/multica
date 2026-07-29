@@ -210,6 +210,42 @@ func TestDiagnose_PromptContainsDAGMessagesAndContext(t *testing.T) {
 	stores.AssertExpectations(t)
 }
 
+func TestDiagnosisAgentRunner_FreezeSegmentTargets_UsesActualAssistantSequences(t *testing.T) {
+	projectID := util.MustParseUUID(diagProjectID)
+	workspaceID := util.MustParseUUID(diagWorkspaceID)
+	stores := newDiagnosisStores(t, projectID, workspaceID)
+	store, _ := newTestDiagnosisStore(t)
+	ckpt, err := store.CreateRun(context.Background(), DiagnosisRunCheckpoint{
+		RunID:             "run-freeze",
+		ProjectID:         projectID.String(),
+		TaskID:            diagAgentRunID,
+		TopologyHash:      "topo-freeze",
+		OrderedSegmentIDs: []string{diagSegmentID},
+	})
+	require.NoError(t, err)
+	runner, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{
+		Backend:      &fakeBackend{},
+		DAGStore:     stores,
+		MessageStore: stores,
+	})
+	require.NoError(t, err)
+
+	targets, err := runner.freezeDiagnosisSegmentTargets(
+		context.Background(), store, ckpt, []string{diagSegmentID},
+	)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, diagAgentRunID, targets[0].AgentRunID)
+	assert.Equal(t, int32(1), targets[0].StartSeq)
+	assert.Equal(t, int32(2), targets[0].EndSeq)
+	assert.Equal(t, []int32{1, 2}, targets[0].AssistantSeqs)
+
+	segment, err := store.GetSegment(context.Background(), ckpt.RunID, diagSegmentID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, segment.ExpectedMessageCount)
+	assert.Equal(t, []int32{1, 2}, segment.ExpectedRewardSeqs)
+}
+
 // TestDiagnose_PropagatesNonCompleted verifies a non-completed backend result
 // surfaces as an error even when the stores fetch succeeds.
 func TestDiagnose_PropagatesNonCompleted(t *testing.T) {

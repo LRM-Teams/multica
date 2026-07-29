@@ -44,6 +44,7 @@ type InteractionDAGDiagnosisSegment struct {
 	ExpectedMessageCount int32              `json:"expected_message_count"`
 	FetchedMessageCount  int32              `json:"fetched_message_count"`
 	ExpectedRewardCount  int32              `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte             `json:"expected_reward_seqs"`
 	RewardCount          int32              `json:"reward_count"`
 	NextCursor           string             `json:"next_cursor"`
 	Status               string             `json:"status"`
@@ -190,7 +191,7 @@ func (q *Queries) CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg 
 }
 
 const getInteractionDAGDiagnosisSegment = `-- name: GetInteractionDAGDiagnosisSegment :one
-SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1 AND segment_id = $2
 `
 
@@ -209,6 +210,7 @@ func (q *Queries) GetInteractionDAGDiagnosisSegment(ctx context.Context, arg Get
 		&i.ExpectedMessageCount,
 		&i.FetchedMessageCount,
 		&i.ExpectedRewardCount,
+		&i.ExpectedRewardSeqs,
 		&i.RewardCount,
 		&i.NextCursor,
 		&i.Status,
@@ -220,7 +222,7 @@ func (q *Queries) GetInteractionDAGDiagnosisSegment(ctx context.Context, arg Get
 }
 
 const listInteractionDAGDiagnosisSegments = `-- name: ListInteractionDAGDiagnosisSegments :many
-SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1
 ORDER BY ordinal
 `
@@ -241,6 +243,7 @@ func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID
 			&i.ExpectedMessageCount,
 			&i.FetchedMessageCount,
 			&i.ExpectedRewardCount,
+			&i.ExpectedRewardSeqs,
 			&i.RewardCount,
 			&i.NextCursor,
 			&i.Status,
@@ -260,7 +263,8 @@ func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID
 
 const startInteractionDAGDiagnosisSegment = `-- name: StartInteractionDAGDiagnosisSegment :execrows
 UPDATE interaction_dag_diagnosis_segment
-SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4, updated_at = now()
+SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4,
+    expected_reward_seqs = $5, updated_at = now()
 WHERE run_id = $1 AND segment_id = $2 AND status = 'pending'
 `
 
@@ -269,6 +273,7 @@ type StartInteractionDAGDiagnosisSegmentParams struct {
 	SegmentID            string `json:"segment_id"`
 	ExpectedMessageCount int32  `json:"expected_message_count"`
 	ExpectedRewardCount  int32  `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte `json:"expected_reward_seqs"`
 }
 
 func (q *Queries) StartInteractionDAGDiagnosisSegment(ctx context.Context, arg StartInteractionDAGDiagnosisSegmentParams) (int64, error) {
@@ -277,6 +282,7 @@ func (q *Queries) StartInteractionDAGDiagnosisSegment(ctx context.Context, arg S
 		arg.SegmentID,
 		arg.ExpectedMessageCount,
 		arg.ExpectedRewardCount,
+		arg.ExpectedRewardSeqs,
 	)
 	if err != nil {
 		return 0, err

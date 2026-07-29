@@ -156,6 +156,13 @@ func TestDiagnosisToolServer_GetSegmentMessages_ValidPage(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		pager.addMessage(t, int32(i), "assistant", fmt.Sprintf("msg-%d", i))
 	}
+	require.NoError(t, server.SetSegmentTargets([]DiagnosisSegmentTarget{{
+		SegmentID: "seg-1", AgentRunID: "task-test", StartSeq: 1, EndSeq: 5,
+		AssistantSeqs: []int32{1, 2, 3, 4, 5},
+	}, {
+		SegmentID: "seg-2", AgentRunID: "task-test", StartSeq: 1, EndSeq: 1,
+		AssistantSeqs: []int32{1},
+	}}))
 
 	// Start the segment before fetching.
 	_, err := server.stateStore.StartSegment(context.Background(), "run-test", "seg-1", 5, 5)
@@ -169,6 +176,39 @@ func TestDiagnosisToolServer_GetSegmentMessages_ValidPage(t *testing.T) {
 	assert.Equal(t, 5, page.ExpectedCount)
 	assert.True(t, page.Complete)
 	assert.Len(t, page.Messages, 5)
+}
+
+func TestDiagnosisToolServer_GetSegmentMessages_UsesFrozenSegmentRange(t *testing.T) {
+	server, _, _ := newTestDiagnosisToolServer(t)
+	pager := server.pager.(*fakeDiagnosisMessagePager)
+	for i := 1; i <= 7; i++ {
+		pager.addMessage(t, int32(i), "assistant", fmt.Sprintf("msg-%d", i))
+	}
+	require.NoError(t, server.SetSegmentTargets([]DiagnosisSegmentTarget{{
+		SegmentID:     "seg-1",
+		AgentRunID:    "agent-run-1",
+		StartSeq:      2,
+		EndSeq:        7,
+		AssistantSeqs: []int32{2, 7},
+	}, {
+		SegmentID: "seg-2", AgentRunID: "agent-run-2", StartSeq: 1, EndSeq: 1,
+		AssistantSeqs: []int32{1},
+	}}))
+	_, err := server.stateStore.StartSegmentWithTargets(
+		context.Background(), "run-test", "seg-1", 6, []int32{2, 7},
+	)
+	require.NoError(t, err)
+
+	resp := doRequest(t, server, "POST", "/v1/get-segment-messages", getSegmentMessagesRequest{SegmentID: "seg-1"}, http.StatusOK)
+	var page SegmentMessagePage
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
+	require.Len(t, page.Messages, 6)
+	assert.Equal(t, int32(2), page.Messages[0].Seq)
+	assert.Equal(t, int32(7), page.Messages[len(page.Messages)-1].Seq)
+
+	checkpoint, err := server.stateStore.GetSegment(context.Background(), "run-test", "seg-1")
+	require.NoError(t, err)
+	assert.Equal(t, 6, checkpoint.FetchedMessageCount)
 }
 
 func TestDiagnosisToolServer_GetSegmentMessages_RejectsUnknownSegment(t *testing.T) {
@@ -207,6 +247,32 @@ func TestDiagnosisToolServer_RecordStepRewards_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, exists)
 	assert.Equal(t, 8, score)
+}
+
+func TestDiagnosisToolServer_RecordStepRewards_RejectsNonTargetSequence(t *testing.T) {
+	server, _, dagWriter := newTestDiagnosisToolServer(t)
+
+	_, err := server.stateStore.StartSegmentWithTargets(
+		context.Background(), "run-test", "seg-1", 3, []int32{2, 7},
+	)
+	require.NoError(t, err)
+
+	resp := doRequest(t, server, "POST", "/v1/record-step-rewards", recordStepRewardsRequest{
+		SegmentID: "seg-1",
+		Rewards: []stepRewardEntry{
+			{Seq: 1, Score: 4, Rationale: "not an assistant output"},
+			{Seq: 2, Score: 5, Rationale: "first assistant output"},
+			{Seq: 7, Score: 6, Rationale: "second assistant output"},
+		},
+	}, http.StatusOK)
+	var result recordStepRewardsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, []int{2, 7}, result.PersistedSeqs)
+	assert.Equal(t, []rejectedReward{{Seq: 1, Reason: "seq is not an assistant target"}}, result.Rejected)
+
+	_, _, exists, err := dagWriter.GetDiagnosisStepReward(context.Background(), "project-test", "seg-1", 1)
+	require.NoError(t, err)
+	assert.False(t, exists)
 }
 
 func TestDiagnosisToolServer_RecordStepRewards_ConflictingRewrite(t *testing.T) {

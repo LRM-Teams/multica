@@ -143,13 +143,13 @@ INSERT INTO interaction_dag_diagnosis_segment (run_id, segment_id, ordinal, stat
 VALUES ($1, $2, $3, 'pending');
 
 -- name: GetInteractionDAGDiagnosisSegment :one
-SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at
 FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1 AND segment_id = $2;
 
 -- name: ListInteractionDAGDiagnosisSegments :many
 -- All segment checkpoints for a run in snapshot (ordinal) order.
-SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at
 FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1
 ORDER BY ordinal;
@@ -159,7 +159,8 @@ ORDER BY ordinal;
 -- A replay while already in_progress/completed matches no row (idempotency is
 -- resolved by the service comparing the stored expectations).
 UPDATE interaction_dag_diagnosis_segment
-SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4, updated_at = now()
+SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4,
+    expected_reward_seqs = $5, updated_at = now()
 WHERE run_id = $1 AND segment_id = $2 AND status = 'pending';
 
 -- name: AdvanceInteractionDAGDiagnosisSegmentFetch :execrows

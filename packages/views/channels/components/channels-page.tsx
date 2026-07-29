@@ -566,7 +566,10 @@ export function ChannelsPage({
   const [transferTarget, setTransferTarget] = useState<ChannelMember | null>(null);
   // Retry must replay the action that failed, not re-derive one from current
   // state — the row's role may have changed underneath us.
-  const lastRoleActionRef = useRef<Map<string, "promote" | "demote" | "transfer">>(new Map());
+  // Lazily initialised: `useRef(new Map())` would allocate a fresh Map on every
+  // render and immediately discard it (react-doctor).
+  const lastRoleActionRef = useRef<Map<string, "promote" | "demote" | "transfer"> | null>(null);
+  lastRoleActionRef.current ??= new Map();
   // #838 — a recording whose upload succeeded but whose send failed. Kept per
   // surface (channel / thread) because each has its own composer; the toast is
   // the announcement, this is the durable record. Cleared ONLY by a committed
@@ -2553,7 +2556,7 @@ export function ChannelsPage({
       if (!channelId) return;
       const key = memberFailureKey(channelId, m);
       const role = action === "transfer" ? "owner" : action === "promote" ? "manager" : "member";
-      lastRoleActionRef.current.set(key, action);
+      lastRoleActionRef.current?.set(key, action);
       setRolePending((prev) => new Map(prev).set(key, action));
       setRoleFailures((prev) => {
         if (!prev.has(key)) return prev;
@@ -2632,7 +2635,7 @@ export function ChannelsPage({
               retryLabel: t(($) => $.members.menu.role_failed_retry),
               onRetry: () => {
                 dismiss();
-                const last = lastRoleActionRef.current.get(key);
+                const last = lastRoleActionRef.current?.get(key);
                 if (last) runRoleChange(m, last);
               },
             }

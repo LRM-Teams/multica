@@ -27,6 +27,10 @@ const (
 // canonicalAgentRuntimeIdentity contains only process-stable configuration.
 // The logical slot is always agent×runtime. The fingerprint decides whether
 // that slot's provider backend must restart; it never creates another slot.
+//
+// Product (Frank/Parker 2026-07-28): one long-lived resident session per
+// agent×runtime across channel/DM/thread. ChatSessionID / Directed / Initiator
+// are per-turn prompt facts — never fingerprint / force-fresh inputs.
 type canonicalAgentRuntimeIdentity struct {
 	AgentID      string
 	RuntimeID    string
@@ -39,6 +43,13 @@ type canonicalAgentRuntimeIdentity struct {
 	MCP          string
 	CustomArgs   []string
 	Environment  map[string]string
+
+	// Slow-changing process boundary (fingerprint). Prefer restart when unsure;
+	// never put ChatSessionID, Directed, Initiator, Issue, or other per-turn fields.
+	WorkspaceID         string
+	AgentInstructions   string
+	WorkspaceContext    string
+	StartupStaticDigest string // hash of create-time AGENTS managed brief bytes
 }
 
 type canonicalAgentRuntimeIdentityParams canonicalAgentRuntimeIdentity
@@ -70,20 +81,23 @@ func newCanonicalAgentRuntimeIdentity(params canonicalAgentRuntimeIdentityParams
 	if len(currentTurn) != 0 {
 		return canonicalAgentRuntimeIdentity{}, errors.New("canonical runtime identity contains current-turn environment")
 	}
-	identity := canonicalAgentRuntimeIdentity{
-		AgentID:      strings.TrimSpace(params.AgentID),
-		RuntimeID:    strings.TrimSpace(params.RuntimeID),
-		Provider:     strings.TrimSpace(params.Provider),
-		Executable:   strings.TrimSpace(params.Executable),
-		Model:        strings.TrimSpace(params.Model),
-		Thinking:     strings.TrimSpace(params.Thinking),
-		WorkDir:      strings.TrimSpace(params.WorkDir),
-		SystemPrompt: params.SystemPrompt,
-		MCP:          params.MCP,
-		CustomArgs:   append([]string(nil), params.CustomArgs...),
-		Environment:  cloneStringMap(stable),
-	}
-	return identity, nil
+	return canonicalAgentRuntimeIdentity{
+		AgentID:             strings.TrimSpace(params.AgentID),
+		RuntimeID:           strings.TrimSpace(params.RuntimeID),
+		Provider:            strings.TrimSpace(params.Provider),
+		Executable:          strings.TrimSpace(params.Executable),
+		Model:               strings.TrimSpace(params.Model),
+		Thinking:            strings.TrimSpace(params.Thinking),
+		WorkDir:             strings.TrimSpace(params.WorkDir),
+		SystemPrompt:        params.SystemPrompt,
+		MCP:                 params.MCP,
+		CustomArgs:          append([]string(nil), params.CustomArgs...),
+		Environment:         cloneStringMap(stable),
+		WorkspaceID:         strings.TrimSpace(params.WorkspaceID),
+		AgentInstructions:   params.AgentInstructions,
+		WorkspaceContext:    params.WorkspaceContext,
+		StartupStaticDigest: strings.TrimSpace(params.StartupStaticDigest),
+	}, nil
 }
 
 func (i canonicalAgentRuntimeIdentity) slotKey() string {
@@ -92,15 +106,19 @@ func (i canonicalAgentRuntimeIdentity) slotKey() string {
 
 func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 	type canonical struct {
-		Provider     string      `json:"provider"`
-		Executable   string      `json:"executable"`
-		Model        string      `json:"model"`
-		Thinking     string      `json:"thinking"`
-		WorkDir      string      `json:"work_dir"`
-		SystemPrompt string      `json:"system_prompt"`
-		MCP          string      `json:"mcp"`
-		CustomArgs   []string    `json:"custom_args"`
-		Environment  [][2]string `json:"environment"`
+		Provider            string      `json:"provider"`
+		Executable          string      `json:"executable"`
+		Model               string      `json:"model"`
+		Thinking            string      `json:"thinking"`
+		WorkDir             string      `json:"work_dir"`
+		SystemPrompt        string      `json:"system_prompt"`
+		MCP                 string      `json:"mcp"`
+		CustomArgs          []string    `json:"custom_args"`
+		Environment         [][2]string `json:"environment"`
+		WorkspaceID         string      `json:"workspace_id"`
+		AgentInstructions   string      `json:"agent_instructions"`
+		WorkspaceContext    string      `json:"workspace_context"`
+		StartupStaticDigest string      `json:"startup_static_digest"`
 	}
 	keys := make([]string, 0, len(i.Environment))
 	for key := range i.Environment {
@@ -112,15 +130,19 @@ func (i canonicalAgentRuntimeIdentity) fingerprint() string {
 		environment = append(environment, [2]string{key, i.Environment[key]})
 	}
 	payload, _ := json.Marshal(canonical{
-		Provider:     i.Provider,
-		Executable:   i.Executable,
-		Model:        i.Model,
-		Thinking:     i.Thinking,
-		WorkDir:      i.WorkDir,
-		SystemPrompt: i.SystemPrompt,
-		MCP:          i.MCP,
-		CustomArgs:   append([]string(nil), i.CustomArgs...),
-		Environment:  environment,
+		Provider:            i.Provider,
+		Executable:          i.Executable,
+		Model:               i.Model,
+		Thinking:            i.Thinking,
+		WorkDir:             i.WorkDir,
+		SystemPrompt:        i.SystemPrompt,
+		MCP:                 i.MCP,
+		CustomArgs:          append([]string(nil), i.CustomArgs...),
+		Environment:         environment,
+		WorkspaceID:         i.WorkspaceID,
+		AgentInstructions:   i.AgentInstructions,
+		WorkspaceContext:    i.WorkspaceContext,
+		StartupStaticDigest: i.StartupStaticDigest,
 	})
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -159,7 +181,11 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	CanonicalSessionID string
 	BackendConfig      agent.Config
 	Factory            canonicalRuntimeBackendFactory
-	Now                time.Time
+	// BeforeCreate runs only when a new backend will be factory-created
+	// (not on resident reuse). Create-only AGENTS write — zero filesystem I/O
+	// on the reuse path. Must not leave a half-created slot if it fails.
+	BeforeCreate func() error
+	Now          time.Time
 }
 
 type canonicalAgentRuntimePool struct {
@@ -216,6 +242,7 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, errors.New("canonical runtime provider, executable, and work_dir are required")
 	}
 	fingerprint := request.Identity.fingerprint()
+	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
 	now := request.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -235,31 +262,49 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
 
+	// Fingerprint drift (slow config / AGENTS digest) → dispose process and recreate.
+	// Cross-surface chat change alone does NOT dispose or force-fresh Prior.
 	configDrift := slot.fingerprint != "" &&
 		(slot.fingerprint != fingerprint || slot.mode != request.Mode)
 	if configDrift {
 		slot.closeBackend()
 	}
+	prevFingerprint := slot.fingerprint
+	prevMode := slot.mode
 	slot.fingerprint = fingerprint
 	slot.mode = request.Mode
 	slot.running = true
 
 	var backend agent.Backend
 	var closeBackend func()
-	if request.Mode == canonicalRuntimeResident && !configDrift && slot.backend != nil {
+	reused := request.Mode == canonicalRuntimeResident && !configDrift && slot.backend != nil
+	if reused {
 		backend = slot.backend
 		closeBackend = slot.close
 	} else {
+		// Create-only: AGENTS (and any future startup disk) only on process create.
+		if request.BeforeCreate != nil {
+			if err := request.BeforeCreate(); err != nil {
+				slot.running = false
+				slot.fingerprint = prevFingerprint
+				slot.mode = prevMode
+				return nil, fmt.Errorf("canonical runtime before-create: %w", err)
+			}
+		}
 		config := request.BackendConfig
 		config.ExecutablePath = request.Identity.Executable
 		config.Env = cloneStringMap(request.Identity.Environment)
 		created, closeFn, err := request.Factory(config)
 		if err != nil {
 			slot.running = false
+			slot.fingerprint = prevFingerprint
+			slot.mode = prevMode
 			return nil, fmt.Errorf("create canonical runtime backend: %w", err)
 		}
 		if created == nil {
 			slot.running = false
+			slot.fingerprint = prevFingerprint
+			slot.mode = prevMode
 			if closeFn != nil {
 				closeFn()
 			}
@@ -275,7 +320,7 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 
 	wrapped := &canonicalSessionBackend{
 		backend:            backend,
-		canonicalSessionID: strings.TrimSpace(request.CanonicalSessionID),
+		canonicalSessionID: resumeSessionID,
 	}
 	return &canonicalAgentRuntimeLease{
 		slot:      slot,
@@ -285,14 +330,37 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	}, nil
 }
 
+// canonicalSessionBackend is the only Execute wrapper on the canonical path.
+// Field audit (Parker): the sole unconditional override is ResumeSessionID ←
+// canonicalSessionID. Prompt, Cwd, Model, SystemPrompt, MCP, ExtraArgs, and
+// all other ExecOptions pass through unchanged. Upstream runTask stale-session
+// fallback clears ResumeSessionID on opts AND must call ClearCanonicalResume
+// or the wrapper would re-apply the stale Prior on retry.
 type canonicalSessionBackend struct {
 	backend            agent.Backend
 	canonicalSessionID string
 }
 
+// ClearCanonicalResume drops the wrapper-owned resume id so a same-turn fresh
+// retry (runTask after failed+empty SessionID) is not re-forced onto Prior.
+func (b *canonicalSessionBackend) ClearCanonicalResume() {
+	if b == nil {
+		return
+	}
+	b.canonicalSessionID = ""
+}
+
 func (b *canonicalSessionBackend) Execute(ctx context.Context, prompt string, options agent.ExecOptions) (*agent.Session, error) {
+	// Only ResumeSessionID is forced from lease state; see type comment audit.
 	options.ResumeSessionID = b.canonicalSessionID
 	return b.backend.Execute(ctx, prompt, options)
+}
+
+// clearCanonicalResumeIfPresent is the runTask hook for stale-session fallback.
+func clearCanonicalResumeIfPresent(backend agent.Backend) {
+	if clearer, ok := backend.(interface{ ClearCanonicalResume() }); ok {
+		clearer.ClearCanonicalResume()
+	}
 }
 
 type canonicalAgentRuntimeLease struct {

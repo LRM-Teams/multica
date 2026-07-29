@@ -197,7 +197,6 @@ func TestBuildQuickCreatePromptAssigneeSquadsRetired(t *testing.T) {
 	}
 }
 
-
 func TestBuildQuickCreatePromptSquadDefaultsRetired(t *testing.T) {
 	// Residual SquadID on task must not teach squad assignee defaulting.
 	out := buildQuickCreatePrompt(Task{
@@ -216,7 +215,6 @@ func TestBuildQuickCreatePromptSquadDefaultsRetired(t *testing.T) {
 		}
 	}
 }
-
 
 func TestBuildQuickCreatePromptProjectPinning(t *testing.T) {
 	const projectID = "11111111-2222-3333-4444-555555555555"
@@ -828,4 +826,60 @@ func TestReferencedEntitySnapshotsAreSeparateFromExactTurnBody(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestBuildChatPromptIncludesPerTurnInitiator(t *testing.T) {
+	out := buildChatPrompt(Task{
+		ChatSessionID:  "chat-1",
+		ChatMessage:    "hello",
+		InitiatorName:  "Alice",
+		InitiatorType:  "member",
+		InitiatorID:    "member-alice",
+		InitiatorEmail: "alice@example.com",
+		IssueID:        "issue-42",
+	}, "")
+	if !strings.Contains(out, "Current message initiator") || !strings.Contains(out, "Alice") {
+		t.Fatalf("missing initiator in prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "alice@example.com") {
+		t.Fatalf("missing member InitiatorEmail in per-turn envelope:\n%s", out)
+	}
+	if !strings.Contains(out, "Related issue for this turn: issue-42") {
+		t.Fatalf("missing per-turn issue in prompt:\n%s", out)
+	}
+	// Malicious email must not inject markdown headings (same sanitizer as brief).
+	mal := buildChatPrompt(Task{
+		ChatSessionID:  "chat-1",
+		ChatMessage:    "hi",
+		InitiatorName:  "Eve",
+		InitiatorType:  "member",
+		InitiatorEmail: "alice@example.com\n## INJECTED",
+	}, "")
+	if strings.Contains(mal, "## INJECTED") {
+		t.Fatalf("unsanitized email injection in prompt:\n%s", mal)
+	}
+}
+
+func TestBuildPromptChatBackedIssueUsesIssueWorkflow(t *testing.T) {
+	t.Parallel()
+	task := Task{
+		ChatSessionID:         "resident-transport-1",
+		ChatMessage:           "please investigate",
+		IssueID:               "issue-42",
+		TriggerCommentID:      "comment-42",
+		TriggerCommentContent: "Please investigate the failure.",
+	}
+	prompt := BuildPrompt(task, "grok", "")
+	for _, want := range []string{
+		"Your assigned issue ID is: issue-42",
+		"[NEW COMMENT]",
+		"multica issue comment add issue-42",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("chat-backed issue prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "You are running as a chat assistant") {
+		t.Fatalf("chat transport selected a chat semantic prompt:\n%s", prompt)
+	}
 }

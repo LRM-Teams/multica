@@ -114,6 +114,12 @@ func sanitizeEmailForBrief(email string) string {
 	return email
 }
 
+// SanitizeEmailForBrief is the shared sanitizer for AGENTS brief and per-turn
+// chat envelope (option A: same path, no second implementation).
+func SanitizeEmailForBrief(email string) string {
+	return sanitizeEmailForBrief(email)
+}
+
 func sanitizeInlineCodeForBrief(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.ReplaceAll(value, "`", "")
@@ -180,6 +186,238 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 		return content, nil
 	}
 	return content, writeRuntimeConfigFile(path, content)
+}
+
+// CanonicalTurnLedgerRoot returns the daemon-owned ledger directory for one
+// agent workspace. It lives under AgentWorkspaceLayout.RootDir (sibling of
+// WorkDir), never inside the provider CWD — agents must not be able to edit
+// absolute-path cleanup ledgers.
+func CanonicalTurnLedgerRoot(agentRootDir string) string {
+	return filepath.Join(strings.TrimSpace(agentRootDir), "daemon", "canonical_turn_ledger")
+}
+
+// MaterializeCanonicalTurnContext is the create-time entry (option A / Barry B).
+// See MaterializeCanonicalTurnContextB for the full contract.
+func MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider string, ctx TaskContextForEnv) (string, error) {
+	brief, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider, ctx)
+	return brief, err
+}
+
+// validatePathUnderWorkDirNoSymlink requires target under workDir with no
+// symlink components. Missing leaf is OK if ancestors are clean.
+func validatePathUnderWorkDirNoSymlink(workDir, target string) error {
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return err
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if absTarget != absWork && !pathWithin(absWork, absTarget) {
+		return fmt.Errorf("path escapes workdir: %s", target)
+	}
+	return validateNoSymlinkDescendants(absWork, absTarget)
+}
+
+// removeManagedSkillDirs removes only Multica-owned skill packages under the
+// provider-native skills parent (directories bearing managedSkillMarker).
+// Unmarked user/agent skill siblings are left intact (Tier A).
+func removeManagedSkillDirs(workDir, provider string) error {
+	skills := skillsDirPath(workDir, provider)
+	if skills == "" {
+		return nil
+	}
+	if err := validatePathUnderWorkDirNoSymlink(workDir, skills); err != nil {
+		if errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err) {
+			return nil
+		}
+		if strings.Contains(err.Error(), "symlink") || strings.Contains(err.Error(), "escapes") {
+			return fmt.Errorf("refusing managed skill cleanup: %w", err)
+		}
+	}
+	entries, err := os.ReadDir(skills)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(skills, entry.Name())
+		if !isManagedSkillDir(dir) {
+			continue
+		}
+		if err := validatePathUnderWorkDirNoSymlink(workDir, dir); err != nil {
+			return fmt.Errorf("refusing managed skill dir cleanup: %w", err)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove managed skill dir %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// Ownership markers for fixed Multica sidecars under the provider CWD.
+// When present, reclaimMarkedMulticaSidecars may delete the paired content even
+// if the ledger was lost (write-before-ledger crash window).
+const (
+	managedIssueContextMarker = ".multica-managed-issue_context"
+	managedResourcesMarker    = ".multica-managed-resources"
+)
+
+// reclaimMarkedMulticaSidecars removes Multica-owned fixed sidecars when their
+// ownership marker is present. Fail-closed on symlink paths (accident model).
+func reclaimMarkedMulticaSidecars(workDir string) error {
+	pairs := [][2]string{
+		{filepath.Join(workDir, ".agent_context", managedIssueContextMarker), filepath.Join(workDir, ".agent_context", "issue_context.md")},
+		{filepath.Join(workDir, ".multica", "project", managedResourcesMarker), filepath.Join(workDir, ".multica", "project", "resources.json")},
+	}
+	for _, pair := range pairs {
+		marker, content := pair[0], pair[1]
+		if _, err := os.Lstat(marker); err != nil {
+			continue
+		}
+		if err := validatePathUnderWorkDirNoSymlink(workDir, marker); err != nil {
+			return fmt.Errorf("refusing reclaim via unsafe marker: %w", err)
+		}
+		if err := validatePathUnderWorkDirNoSymlink(workDir, content); err != nil {
+			if err2 := validatePathUnderWorkDirNoSymlink(workDir, filepath.Dir(content)); err2 != nil {
+				return fmt.Errorf("refusing reclaim via unsafe content parent: %w", err2)
+			}
+			if strings.Contains(err.Error(), "symlink") {
+				return fmt.Errorf("refusing reclaim via symlink content: %w", err)
+			}
+		}
+		if err := os.Remove(content); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove marked sidecar %s: %w", content, err)
+		}
+		if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove ownership marker %s: %w", marker, err)
+		}
+	}
+	return nil
+}
+
+// writeSidecarManifestAtomic writes the ledger via temp+rename so readers never
+// observe a partial JSON document.
+func writeSidecarManifestAtomic(envRoot string, m *sidecarManifest) error {
+	if envRoot == "" {
+		return nil
+	}
+	if m == nil {
+		m = &sidecarManifest{}
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal sidecar manifest: %w", err)
+	}
+	final := filepath.Join(envRoot, sidecarManifestFile)
+	tmp, err := os.CreateTemp(envRoot, "."+sidecarManifestFile+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp ledger: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write temp ledger: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("close temp ledger: %w", err)
+	}
+	if err := os.Rename(tmpName, final); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("rename ledger into place: %w", err)
+	}
+	return nil
+}
+
+// CleanupSidecarsConfined is CleanupSidecars with a hard confine: every file/dir
+// path is absolutized and must lie under confineRoot (fail closed). Escape
+// paths are never deleted; they are reported as an error.
+func CleanupSidecarsConfined(envRoot, confineRoot string) error {
+	if envRoot == "" {
+		return nil
+	}
+	confineRoot = strings.TrimSpace(confineRoot)
+	if confineRoot == "" {
+		return errors.New("cleanup confine root is required")
+	}
+	absConfine, err := filepath.Abs(confineRoot)
+	if err != nil {
+		return fmt.Errorf("abs confine root: %w", err)
+	}
+
+	manifestPath := filepath.Join(envRoot, sidecarManifestFile)
+	data, err := os.ReadFile(manifestPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read sidecar manifest %s: %w", manifestPath, err)
+	}
+	var m sidecarManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("parse sidecar manifest %s: %w", manifestPath, err)
+	}
+
+	var firstErr error
+	captureErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	confineOK := func(path string) (string, bool) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return "", false
+		}
+		if abs == absConfine || pathWithin(absConfine, abs) {
+			return abs, true
+		}
+		return abs, false
+	}
+
+	for _, f := range m.Files {
+		abs, ok := confineOK(f)
+		if !ok {
+			captureErr(fmt.Errorf("sidecar ledger path escapes confine root (refusing delete): %s", f))
+			continue
+		}
+		if err := os.Remove(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			captureErr(fmt.Errorf("remove %s: %w", abs, err))
+		}
+	}
+	for i := len(m.Dirs) - 1; i >= 0; i-- {
+		d := m.Dirs[i]
+		abs, ok := confineOK(d)
+		if !ok {
+			captureErr(fmt.Errorf("sidecar ledger dir escapes confine root (refusing delete): %s", d))
+			continue
+		}
+		err := os.Remove(abs)
+		if err == nil || errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		hasEntries, okEntries := dirHasEntries(abs)
+		switch {
+		case !okEntries:
+			captureErr(fmt.Errorf("rmdir %s: %w", abs, err))
+		case hasEntries:
+			// user content under Multica-created dir — leave
+		default:
+			captureErr(fmt.Errorf("rmdir %s: %w", abs, err))
+		}
+	}
+	if err := os.Remove(manifestPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		captureErr(fmt.Errorf("remove manifest %s: %w", manifestPath, err))
+	}
+	return firstErr
 }
 
 // runtimeConfigPath returns the absolute path to the runtime config file that
@@ -549,7 +787,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	renderPinnedRules(&b, ctx)
 
-	if ctx.ChatSessionID != "" {
+	if ctx.ChatSessionID != "" && ctx.IssueID == "" {
 		renderChatRuntimeBrief(&b, provider, ctx)
 		return b.String()
 	}
@@ -627,7 +865,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
 	// run-only autopilot don't carry an issue id and would just generate a
 	// failed `metadata list` call on every entry.
-	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == ""
+	hasIssueContext := ctx.IssueID != ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
 		b.WriteString("High-signal issue KV scratchpad; most runs write nothing.\n")
@@ -637,7 +875,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Reuse snake_case keys: `pr_url` · `pr_number` · `pipeline_status` · `deploy_url` · `external_issue_url` · `waiting_on` · `blocked_reason` · `decision`.\n\n")
 	}
 
-	isAssignmentTriggered := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && ctx.TriggerCommentID == ""
+	isAssignmentTriggered := hasIssueContext && ctx.TriggerCommentID == ""
 	if isAssignmentTriggered {
 		b.WriteString("## Instruction Precedence\n\n")
 		b.WriteString("Agent Identity instructions have priority over the assignment workflow below. ")
@@ -746,14 +984,14 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// parent-notification guidance was dropped in MUL-2538: the platform
 	// now posts a system comment on the parent itself when a child enters
 	// `done`, and the agent has nothing to do or avoid on that path.
-	// Section is skipped for chat, quick-create, and run-only autopilot
-	// runs (no parent/child semantics there).
-	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && !terminalAssignment {
+	// Section is skipped when no issue exists; chat transport does not suppress
+	// parent/child semantics for a real issue.
+	if hasIssueContext && !terminalAssignment {
 		b.WriteString("## Sub-issue Creation\n\n")
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
 
-	renderSkillIndex(&b, provider, ctx.AgentSkills)
+	renderSkillIndexWithSlugs(&b, provider, ctx.AgentSkills, ctx.SkillDirSlugByName, ctx.AgentSkillDir)
 
 	renderRuntimeSectionHeading(&b, "Attachments")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
@@ -961,7 +1199,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	renderRepositoryContext(b, ctx)
 	renderProjectContext(b, ctx)
-	renderSkillIndex(b, provider, chatRuntimeSkills(ctx))
+	renderSkillIndexWithSlugs(b, provider, chatRuntimeSkills(ctx), ctx.SkillDirSlugByName, ctx.AgentSkillDir)
 
 	renderRuntimeSectionHeading(b, "Attachments")
 	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment view <id> --output <path>` (or inspect `multica attachment view --help`). Do not open Multica resource URLs directly.\n\n")
@@ -1012,10 +1250,10 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("## Project Context\n\n")
 	if ctx.ProjectTitle != "" {
 		switch {
-		case ctx.ChatSessionID != "":
-			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.IssueID != "":
 			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
+		case ctx.ChatSessionID != "":
+			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.AgentRadarPrompt != "":
 			fmt.Fprintf(b, "This proactive review is scoped to **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.QuickCreatePrompt != "":
@@ -1058,65 +1296,81 @@ func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasProje
 }
 
 func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {
+	renderSkillIndexWithSlugs(b, provider, skills, nil, "")
+}
+
+// renderSkillIndexWithSlugs uses actualDirSlugByName when set so brief index,
+// disk writer, and receipt share one resolved plan (Barry: no second sanitize).
+//
+// When agentSkillDir is set (Multica agent-owned skill root), locations point at
+// the durable absolute mirror `{agentSkillDir}/enabled/<slug>/SKILL.md` — the
+// path mirrorBoundSkillsToAgentEnabled actually writes. Slim D6 does not create
+// provider-CWD packages (.grok/skills, .pi/skills, …); never advertise those
+// fake relative paths when a durable root exists (Barry #1274 CODE blocker 2).
+func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []SkillContextForEnv, actualDirSlugByName map[string]string, agentSkillDir string) {
 	if len(skills) == 0 {
 		return
 	}
-	{
-		b.WriteString("## Skills\n\n")
-		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
-		b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
+	agentSkillDir = strings.TrimSpace(agentSkillDir)
+	b.WriteString("## Skills\n\n")
+	b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
+	b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
+	if agentSkillDir != "" {
+		b.WriteString("Installed skills (durable agent-local mirror; open the absolute path listed):\n\n")
+	} else {
 		switch provider {
 		case "claude", "codebuddy":
-			// Claude/CodeBuddy can also discover skills from .claude/skills/.
 			b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
 		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
-			// These providers also write provider-native skill dirs (see
-			// resolveSkillsDir / hydrateCodexSkills). Still require the agent
-			// to open SKILL.md when the index matches — native discovery is
-			// unreliable across CLI versions and session reuse.
 			b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
 		case "gemini", "hermes":
-			// Gemini reads GEMINI.md directly. Hermes has no native skill
-			// discovery path wired up in resolveSkillsDir; both fall back to
-			// referencing the files explicitly under .agent_context/skills/.
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		default:
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		}
-		for _, skill := range skills {
-			// Emit only the index fields here; the full SKILL.md lives on disk.
-			location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			switch provider {
-			case "claude", "codebuddy":
-				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "codex":
-				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "copilot":
-				location = fmt.Sprintf(".github/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "opencode":
-				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "openclaw":
-				location = fmt.Sprintf("skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "pi":
-				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "cursor":
-				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "kimi":
-				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "kiro":
-				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "antigravity":
-				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "grok":
-				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			}
-			if desc := strings.TrimSpace(skill.Description); desc != "" {
-				fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
-			} else {
-				fmt.Fprintf(b, "- **%s** (location: `%s`)\n", skill.Name, location)
+	}
+	for _, skill := range skills {
+		slug := sanitizeSkillName(skill.Name)
+		if actualDirSlugByName != nil {
+			if s, ok := actualDirSlugByName[skill.Name]; ok && s != "" {
+				slug = s
 			}
 		}
-		b.WriteString("\n")
+		var location string
+		if agentSkillDir != "" {
+			location = filepath.Join(agentSkillDir, "enabled", slug, "SKILL.md")
+		} else {
+			location = fmt.Sprintf(".agent_context/skills/%s/SKILL.md", slug)
+			switch provider {
+			case "claude", "codebuddy":
+				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
+			case "codex":
+				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
+			case "copilot":
+				location = fmt.Sprintf(".github/skills/%s/SKILL.md", slug)
+			case "opencode":
+				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
+			case "openclaw":
+				location = fmt.Sprintf("skills/%s/SKILL.md", slug)
+			case "pi":
+				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", slug)
+			case "cursor":
+				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", slug)
+			case "kimi":
+				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", slug)
+			case "kiro":
+				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", slug)
+			case "antigravity":
+				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
+			case "grok":
+				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", slug)
+			}
+		}
+		if desc := strings.TrimSpace(skill.Description); desc != "" {
+			fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
+		} else {
+			fmt.Fprintf(b, "- **%s** (location: `%s`)\n", skill.Name, location)
+		}
 	}
-
+	b.WriteString("\n")
 }

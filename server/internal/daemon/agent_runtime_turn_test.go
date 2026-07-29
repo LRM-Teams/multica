@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/turntransport"
 )
 
 func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) {
@@ -147,6 +148,35 @@ func TestAgentRuntimeTurnCoordinatorRejectsConcurrentSameSlot(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeTurnCoordinatorStripsLegacyCredentialTransportBeforeSplit(t *testing.T) {
+	// Barry #1274 CODE BLOCK: legacy agentEnv may still carry MULTICA_TOKEN_FILE
+	// for the CLI wrapper. Begin must strip before D3 SplitEnvironment so
+	// production does not fail-closed; provider stable env never sees secrets;
+	// Bind still writes request.Token for the wrapper.
+	root := t.TempDir()
+	request := testAgentRuntimeTurnRequest(t, root)
+	request.Environment["MULTICA_TOKEN"] = "mat_must_not_enter_provider"
+	request.Environment["MULTICA_TOKEN_FILE"] = "/tmp/must-not-enter-provider"
+	request.Environment[turntransport.EnvelopePathEnv] = "/tmp/envelope-must-not-enter"
+
+	coordinator := newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger())
+	turn, err := coordinator.Begin(request)
+	if err != nil {
+		t.Fatalf("Begin with legacy credential keys: %v", err)
+	}
+	defer turn.Close()
+
+	for _, key := range []string{"MULTICA_TOKEN", "MULTICA_TOKEN_FILE", turntransport.EnvelopePathEnv} {
+		if _, ok := turn.StableEnvironment[key]; ok {
+			t.Fatalf("stable provider env leaked %s", key)
+		}
+	}
+	raw, readErr := os.ReadFile(turn.binding.TokenFile)
+	if readErr != nil || string(raw) != request.Token {
+		t.Fatalf("Bind token file = %q err=%v, want request.Token", raw, readErr)
+	}
+}
+
 func TestAgentRuntimeTurnCoordinatorRejectsInvalidRequestWithoutOccupyingSlot(t *testing.T) {
 	root := t.TempDir()
 	coordinator := newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger())
@@ -253,13 +283,13 @@ func TestAgentRuntimeTurnCoordinatorConcurrentBeginHasSingleWinner(t *testing.T)
 	}
 }
 
-func TestD4AgentRuntimeTurnSeamRemainsDormantUntilD6(t *testing.T) {
-	raw, err := os.ReadFile("daemon.go")
+func TestD4AgentRuntimeTurnSeamIsActivatedForD6(t *testing.T) {
+	entryRaw, err := os.ReadFile("canonical_chat_entry.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), ".agentRuntimeTurns.Begin(") {
-		t.Fatal("daemon.go activates D4 agent runtime turn seam before D6")
+	if !strings.Contains(string(entryRaw), ".agentRuntimeTurns.Begin(") {
+		t.Fatal("D6-1b must call agentRuntimeTurns.Begin from the production chat entry")
 	}
 }
 

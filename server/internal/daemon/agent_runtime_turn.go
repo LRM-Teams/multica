@@ -89,7 +89,11 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 		return nil, err
 	}
 
-	stableEnvironment, currentTurnEnvironment, err := splitAgentProcessEnvironment(request.Environment)
+	// Token is request.Token → Bind; strip legacy raw credential keys from the
+	// process-identity map so D3 SplitEnvironment does not fail-close production
+	// agentEnv that still carries MULTICA_TOKEN_FILE for the CLI wrapper path.
+	env := stripProviderCredentialTransport(request.Environment)
+	stableEnvironment, currentTurnEnvironment, err := splitAgentProcessEnvironment(env)
 	if err != nil {
 		return nil, fmt.Errorf("split agent runtime environment: %w", err)
 	}

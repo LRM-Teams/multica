@@ -212,16 +212,20 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
-	// persistentRuntimes owns Grok ACP chat sessions. Issue work stays one-shot.
-	// Full execution identity keeps unrelated chat agents and prompts isolated.
+	// persistentRuntimes owns Grok ACP chat for generation=0 legacy path.
+	// D6-1b routes generation>0 chat through canonicalRuntimes (agent×runtime).
 	persistentRuntimes *persistentRuntimePool
-	// piPersistentRuntimes owns native Pi RPC chat sessions. Issue work stays
-	// on the existing one-shot Pi path.
+	// piPersistentRuntimes owns Pi RPC chat for generation=0 legacy path.
 	piPersistentRuntimes *piPersistentPool
-	// agentRuntimeTurns is the dormant D4a handoff from canonical runtime
-	// state/workspace/current-turn transport into the provider-neutral D4
-	// pool. D6 activates Begin after server and daemon serialization are live.
+	// agentRuntimeTurns is the D4a handoff. D6-1b activates Begin for
+	// generation>0 Grok/Pi chat wakes.
 	agentRuntimeTurns *agentRuntimeTurnCoordinator
+	// canonicalRuntimes is the D4 provider pool; D6-1b acquires resident
+	// Grok/Pi backends so one agent×runtime shares one provider session slot.
+	canonicalRuntimes *canonicalAgentRuntimePool
+	// canonicalChatFactoryOverride is test-only; production uses
+	// defaultCanonicalRuntimeFactory for grok/pi resident adapters.
+	canonicalChatFactoryOverride canonicalRuntimeBackendFactory
 }
 
 // New creates a new Daemon instance.
@@ -253,6 +257,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeCurationRuns:        make(map[string]string),
 		persistentRuntimes:        newPersistentRuntimePool(),
 		piPersistentRuntimes:      newPiPersistentPool(),
+		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 	}
 	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
 	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
@@ -3753,9 +3758,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 	}
 
+	// Full Grok/Pi resident turns materialize their create-only static brief in
+	// the stable turn.WorkDir inside tryCanonicalChatBackend. Do not also write
+	// a task-scoped runtime brief here: that legacy path is neither executed nor
+	// read by the resident process and can retain stale issue/surface context.
+	canonicalResidentTask := usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task)
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief := restrictedExecutionSystemPrompt(profile)
-	if !restrictedExecution {
+	if !restrictedExecution && !canonicalResidentTask {
 		runtimeBrief, err = execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
 		if err != nil {
 			d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
@@ -4064,44 +4074,27 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	var backend agent.Backend
 	var releasePersistentRuntime func(bool)
-	if usesPersistentGrokChatRuntime(provider, task) {
-		identity := persistentRuntimeIdentity{
-			AgentID:       resolvedTaskAgentID(task),
-			RuntimeID:     task.RuntimeID,
-			ChatSessionID: task.ChatSessionID,
-			Executable:    entry.Path,
-			Model:         execOpts.Model,
-			Thinking:      execOpts.ThinkingLevel,
-			WorkDir:       execOpts.Cwd,
-			SystemPrompt:  execOpts.SystemPrompt,
-			MCP:           string(execOpts.McpConfig),
-			CustomArgs:    append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
-			Environment:   agentEnv,
+	// D6-1b: full Grok/Pi chat uses only the canonical agent×runtime pool.
+	// No generation==0 dual path to ChatSession-keyed pools (Frank: no permanent
+	// compat). D6-1a is served; missing generation fails closed inside the entry.
+	selfBinForCanonical := ""
+	if resolveExecutable != nil {
+		if bin, binErr := resolveExecutable(); binErr == nil {
+			selfBinForCanonical = bin
 		}
-		var persistentErr error
-		backend, releasePersistentRuntime, persistentErr = d.acquireGrokChatACPBackend(identity, backendCfg)
-		if persistentErr != nil {
-			return TaskResult{}, fmt.Errorf("acquire persistent runtime backend: %w", persistentErr)
+	}
+	if canonicalResidentTask {
+		cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
+			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, &execOpts, taskCtx, taskLog,
+		)
+		if cErr != nil {
+			return TaskResult{}, cErr
 		}
-	} else if usesPersistentPiChatRuntime(provider, task) {
-		identity := piPersistentIdentity{
-			AgentID:       resolvedTaskAgentID(task),
-			RuntimeID:     task.RuntimeID,
-			ChatSessionID: task.ChatSessionID,
-			Executable:    entry.Path,
-			Model:         execOpts.Model,
-			Thinking:      execOpts.ThinkingLevel,
-			WorkDir:       execOpts.Cwd,
-			SystemPrompt:  execOpts.SystemPrompt,
-			MCP:           string(execOpts.McpConfig),
-			CustomArgs:    append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
-			Environment:   agentEnv,
+		if !cUsed {
+			return TaskResult{}, fmt.Errorf("canonical chat entry required for %s full chat (no legacy ChatSession pool)", provider)
 		}
-		var persistentErr error
-		backend, releasePersistentRuntime, persistentErr = d.acquirePiChatRPCBackend(identity, backendCfg)
-		if persistentErr != nil {
-			return TaskResult{}, fmt.Errorf("acquire persistent Pi runtime backend: %w", persistentErr)
-		}
+		backend = cBackend
+		releasePersistentRuntime = cRelease
 	} else {
 		var createErr error
 		backend, createErr = agent.New(provider, backendCfg)
@@ -4137,6 +4130,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
+		// Canonical wrapper re-applies ResumeSessionID on every Execute; opts
+		// alone are not enough — clear the lease-owned id before the retry.
+		clearCanonicalResumeIfPresent(backend)
 		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start", "error", retryErr)

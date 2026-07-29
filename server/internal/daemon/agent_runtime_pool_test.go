@@ -64,6 +64,11 @@ func (p *canonicalRuntimeFactoryProbe) counts() (created, closed int) {
 
 func canonicalRuntimeIdentityForTest(t *testing.T, model string, environment map[string]string) canonicalAgentRuntimeIdentity {
 	t.Helper()
+	return canonicalRuntimeIdentityForTestWithContext(t, model, "chat-session-a", environment)
+}
+
+func canonicalRuntimeIdentityForTestWithContext(t *testing.T, model, contextKey string, environment map[string]string) canonicalAgentRuntimeIdentity {
+	t.Helper()
 	stable, currentTurn, err := splitAgentProcessEnvironment(environment)
 	if err != nil {
 		t.Fatalf("splitAgentProcessEnvironment: %v", err)
@@ -80,6 +85,7 @@ func canonicalRuntimeIdentityForTest(t *testing.T, model string, environment map
 		MCP:          `{"servers":[]}`,
 		CustomArgs:   []string{"--flag"},
 		Environment:  stable,
+		WorkspaceID:  "workspace-a",
 	})
 	if err != nil {
 		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
@@ -139,6 +145,144 @@ func TestCanonicalAgentRuntimeIdentityFailsClosedOnCredentialOrUnknownMulticaEnv
 		if err == nil {
 			t.Fatalf("%s was accepted into canonical process identity", key)
 		}
+	}
+}
+
+// Frank/Parker: agent×runtime long-lived across chats — no force-fresh on chat change.
+func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	}
+	firstIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-A", env)
+	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           firstIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if _, err := first.backend.Execute(context.Background(), "a", agent.ExecOptions{}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	if got := first.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-A" {
+		t.Fatalf("turn A resume = %q, want provider-session-A", got)
+	}
+	first.release(true)
+
+	// Different chat surface, same agent×runtime fingerprint → reuse backend + keep Prior.
+	envB := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-b",
+	}
+	secondIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", envB)
+	if firstIdentity.fingerprint() != secondIdentity.fingerprint() {
+		t.Fatal("chat surface alone must not change process fingerprint")
+	}
+	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           secondIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-A",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	defer second.release(true)
+	if _, err := second.backend.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if got := second.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-A" {
+		t.Fatalf("turn B resume = %q, want provider-session-A (no force-fresh)", got)
+	}
+	created, closed := probe.counts()
+	if created != 1 || closed != 0 {
+		t.Fatalf("factory created=%d closed=%d, want 1/0 (reuse across chat)", created, closed)
+	}
+	if first.backend.(*canonicalSessionBackend).backend != second.backend.(*canonicalSessionBackend).backend {
+		t.Fatal("cross-chat must reuse resident backend")
+	}
+}
+
+func TestCanonicalSessionBackendStaleResumeFallbackClearsWrapper(t *testing.T) {
+	// runTask sets opts.ResumeSessionID="" on stale resume; wrapper must also
+	// drop its forced id or retry keeps the bad Prior (Barry activation BLOCK).
+	inner := &canonicalRuntimeTestBackend{}
+	wrapped := &canonicalSessionBackend{backend: inner, canonicalSessionID: "stale-prior"}
+	if _, err := wrapped.Execute(context.Background(), "first", agent.ExecOptions{ResumeSessionID: "ignored"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := inner.lastResumeSessionID(); got != "stale-prior" {
+		t.Fatalf("first resume = %q, want stale-prior", got)
+	}
+	// Simulate runTask fallback: clear opts is insufficient without ClearCanonicalResume.
+	opts := agent.ExecOptions{ResumeSessionID: ""}
+	clearCanonicalResumeIfPresent(wrapped)
+	if _, err := wrapped.Execute(context.Background(), "retry", opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := inner.lastResumeSessionID(); got != "" {
+		t.Fatalf("retry resume = %q, want empty after ClearCanonicalResume", got)
+	}
+}
+
+func TestCanonicalAgentRuntimePoolRestartsProcessKeepsPriorOnHardFieldDrift(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	}
+	firstIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-same", env)
+	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           firstIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-chat",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	first.release(true)
+
+	// Slow field change (AgentInstructions) → fingerprint drift → new process, keep Prior.
+	secondIdentity := firstIdentity
+	secondIdentity.AgentInstructions = "updated-instructions"
+	if firstIdentity.fingerprint() == secondIdentity.fingerprint() {
+		t.Fatal("AgentInstructions change must alter fingerprint")
+	}
+	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:           secondIdentity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: "provider-session-chat",
+		Factory:            probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	defer second.release(true)
+	if _, err := second.backend.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if got := second.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-chat" {
+		t.Fatalf("same-chat hard-field restart resume = %q, want provider-session-chat", got)
+	}
+	created, closed := probe.counts()
+	if created != 2 || closed != 1 {
+		t.Fatalf("factory created=%d closed=%d, want 2/1", created, closed)
 	}
 }
 
@@ -791,12 +935,14 @@ func TestCanonicalAgentRuntimeSlotIdleTimestampAdvances(t *testing.T) {
 	}
 }
 
-func TestCanonicalAgentRuntimePoolRemainsDormantUntilD6(t *testing.T) {
+func TestCanonicalAgentRuntimePoolIsActivatedForD6(t *testing.T) {
+	// Behavioral proof of reuse is TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs.
+	// This only pins the runTask call site so the entry is not left unhooked.
 	raw, err := os.ReadFile("daemon.go")
 	if err != nil {
 		t.Fatalf("read daemon.go: %v", err)
 	}
-	if strings.Contains(string(raw), ".acquireCanonicalAgentRuntime(") {
-		t.Fatal("D4 provider pool is live before D5/D6 wake serialization and caller cutover")
+	if !strings.Contains(string(raw), "tryCanonicalChatBackend(") {
+		t.Fatal("D6-1b must invoke tryCanonicalChatBackend from runTask")
 	}
 }

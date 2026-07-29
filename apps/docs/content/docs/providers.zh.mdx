@@ -17,14 +17,14 @@ Multica 内置支持 **12 款 AI 编程工具**。它们都实现了同一套接
 | **Claude Code** | Anthropic | ✅ | ✅ | `.claude/skills/` | 静态 + flag |
 | **Codex** | OpenAI | ⚠️ 代码存在但不可达 | ✅ | `$CODEX_HOME/skills/` | 静态 |
 | **Copilot** | GitHub | ✅ | ❌ | `.github/skills/` | 静态（账号权益决定）|
-| **Cursor** | Anysphere | ⚠️ 代码存在但不可用 | ❌ | `.cursor/skills/` | 动态发现 |
+| **Cursor** | Anysphere | ⚠️ 代码存在但不可用 | ✅ | `.cursor/skills/` | 动态发现 |
 | **Gemini** | Google | ❌ | ❌ | `.agent_context/skills/` | 静态 |
 | **Hermes** | Nous Research | ✅ | ✅ | `.agent_context/skills/` （fallback）| 动态发现 |
 | **Kimi** | Moonshot | ✅ | ✅ | `.kimi/skills/` | 动态发现 |
 | **Kiro CLI** | Amazon | ✅ | ✅ | `.kiro/skills/` | 动态发现 |
 | **OpenCode** | SST | ✅ | ✅ | `.opencode/skills/` | 动态发现 + variant |
 | **OpenClaw** | 开源项目 | ✅ | ✅ | `.agent_context/skills/` （fallback）| 绑定在智能体上，不能在任务里切换 |
-| **Pi** | Inflection AI | ✅（session 为文件路径）| ❌ | `.pi/skills/` | 动态发现 |
+| **Pi** | Inflection AI | ✅（session 为文件路径）| ✅ | `.pi/skills/` | 动态发现 |
 
 ## 每款工具的定位
 
@@ -46,7 +46,7 @@ GitHub 出品。模型路由走你的 GitHub 账号权益——工具自己不�
 
 ### Cursor
 
-Anysphere 出品，Cursor 编辑器的 CLI 对应物。**会话恢复代码存在但实际不工作**——Cursor CLI 的事件流里不回传 session ID，所以你传的 resume 值永远无效。如果要 resume，选别的。
+Anysphere 出品，Cursor 编辑器的 CLI 对应物。**会话恢复代码存在但实际不工作**——Cursor CLI 的事件流里不回传 session ID，所以你传的 resume 值永远无效。如果要 resume，选别的。**MCP 真用**：Multica 把智能体的 `mcp_config` 写入 `{workdir}/.cursor/mcp.json`，并以 `--approve-mcps` 启动，避免无头守护进程卡在 MCP 审批提示上。
 
 ### Gemini
 
@@ -74,7 +74,7 @@ SST 出品，开源。动态发现可用模型和模型 variant（扫 CLI 的配
 
 ### Pi
 
-Inflection AI 出品，极简主义。**会话恢复机制特殊**——session ID 是磁盘上的文件路径（`~/.pi/...`），而不是字符串 ID。其他工具里，resume id 是 CLI 返回的字符串；Pi 里，resume id 就是会话文件本身。
+Inflection AI 出品，极简主义。**会话恢复机制特殊**——session ID 是磁盘上的文件路径（`~/.pi/...`），而不是字符串 ID。其他工具里，resume id 是 CLI 返回的字符串；Pi 里，resume id 就是会话文件本身。**MCP 真用**：通过 Pi 的 `--mcp-config` flag（与 Multica 存的 Claude 风格 JSON 相同）。
 
 ## 会话恢复：谁真的支持
 
@@ -90,9 +90,9 @@ Inflection AI 出品，极简主义。**会话恢复机制特殊**——session 
 
 ## MCP 配置：按工具不同
 
-**12 款工具里有 7 款实际消费 `mcp_config`：Claude Code、Codex、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw**。其他 5 款会接收这个字段但**忽略**——不报错、不警告，只是配置不生效。
+**12 款工具里有 9 款实际消费 `mcp_config`：Claude Code、Codex、Cursor、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi**。其他 3 款会接收这个字段但**忽略**——不报错、不警告，只是配置不生效。
 
-各工具的接入方式不同：Claude Code 通过 `--mcp-config` 加 `--strict-mcp-config` 接收；Codex 会把 daemon 管理的 `mcp_servers` block 写入单次任务的 `$CODEX_HOME/config.toml`；Hermes、Kimi、Kiro CLI 通过 ACP `mcpServers` 接收；OpenCode 通过 `OPENCODE_CONFIG_CONTENT` 环境变量内联接收；OpenClaw 通过 Multica 的单次任务配置 wrapper 接收 `mcp.servers`。OpenCode 这条路径**不会**改写项目里的 `opencode.json`。
+各工具的接入方式不同：Claude Code 和 Pi 通过 `--mcp-config` 接收（Claude 还会加 `--strict-mcp-config`）；Cursor 写入 `{workdir}/.cursor/mcp.json` 并传 `--approve-mcps`；Codex 会把 daemon 管理的 `mcp_servers` block 写入单次任务的 `$CODEX_HOME/config.toml`；Hermes、Kimi、Kiro CLI 通过 ACP `mcpServers` 接收；OpenCode 通过 `OPENCODE_CONFIG_CONTENT` 环境变量内联接收；OpenClaw 通过 Multica 的单次任务配置 wrapper 接收 `mcp.servers`。OpenCode 这条路径**不会**改写项目里的 `opencode.json`。
 
 <Callout type="warning">
 如果你在智能体配置里设置了 `mcp_config`，但选了矩阵 MCP 列没有标 ✅ 的工具，你的 MCP server 对这个智能体**没有效果**。MCP 集成是按工具实现的。

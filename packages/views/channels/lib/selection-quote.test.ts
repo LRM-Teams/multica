@@ -144,6 +144,52 @@ function stubSelection(body: HTMLElement, start: number, end: number, r: DOMRect
   return range;
 }
 
+/** Two stamped bubbles sharing one container, for cross-message tests. */
+function setupTwoMessageDOM() {
+  document.body.innerHTML = "";
+  const container = document.createElement("div");
+  const mk = (author: string, id: string, text: string) => {
+    const bubble = document.createElement("div");
+    bubble.setAttribute("data-message-author", author);
+    bubble.setAttribute("data-message-id", id);
+    const body = document.createElement("div");
+    body.setAttribute("data-testid", "message-body");
+    body.textContent = text;
+    bubble.appendChild(body);
+    container.appendChild(bubble);
+    return body;
+  };
+  const bodyA = mk("Alice", "m-1", "first message");
+  const bodyB = mk("Bob", "m-2", "second message");
+  document.body.appendChild(container);
+  return { container, bodyA, bodyB };
+}
+
+/** A selection whose start/end live in DIFFERENT message bodies. */
+function stubCrossMessageSelection(
+  bodyA: HTMLElement,
+  startA: number,
+  bodyB: HTMLElement,
+  endB: number,
+  r: DOMRect,
+) {
+  const range = document.createRange();
+  range.setStart(bodyA.firstChild as Text, startA);
+  range.setEnd(bodyB.firstChild as Text, endB);
+  Object.defineProperty(range, "getBoundingClientRect", {
+    value: () => r,
+    configurable: true,
+  });
+  vi.stubGlobal("getSelection", () => ({
+    isCollapsed: false,
+    rangeCount: 1,
+    toString: () => "cross",
+    getRangeAt: () => range,
+    removeAllRanges: () => {},
+  }));
+  return range;
+}
+
 describe("resolveMessageSelection", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -200,5 +246,11 @@ describe("resolveMessageSelection", () => {
     expect(result?.author).toBeNull();
     expect(result?.messageId).toBeNull();
     expect(result?.text).toBe("hello");
+  });
+
+  it("returns null for a cross-message selection (endpoints in different bodies) — AC#7", () => {
+    const { container, bodyA, bodyB } = setupTwoMessageDOM();
+    stubCrossMessageSelection(bodyA, 0, bodyB, 6, rect(10, 100, 220, 16));
+    expect(resolveMessageSelection(window.getSelection(), container)).toBeNull();
   });
 });

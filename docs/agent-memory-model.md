@@ -65,12 +65,13 @@ Multica 的记忆分成两层：
 7. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
 8. 猜测、一次性执行噪音、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
 9. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` **追加几行**流水；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
+10. **处理完可复用的问题后，agent 自己记住**：根因/修法/命令若下次还会用到，收工同轮写入项目 `MEMORY.md`/`DECISIONS.md` 或 agent `memory/MEMORY.md`/`notes/*`，不要等用户再说「记住」；一次性噪音只留 Daily。是否可复用由 agent 判断。
 
 ### 3.2 热路径 vs 冷路径（避免短任务卡顿）
 
 | 路径 | 谁做 | 何时 | 写什么 | 不要做什么 |
 |---|---|---|---|---|
-| **热路径** | 当前任务里的 agent | 干活过程中 / 实质收工 | 偏好→`USER.md`；对接→`RELATIONSHIP.md`；实质流水→append Daily | 每轮聊天都做全文自审再决定写不写 |
+| **热路径** | 当前任务里的 agent | 干活过程中 / 实质收工 | 偏好→`USER.md`；对接→`RELATIONSHIP.md`；可复用排障→项目/`MEMORY.md`/`notes`；实质流水→append Daily | 每轮聊天都做全文自审再决定写不写 |
 | **冷路径** | L1 Daily / L2 自审 / Team Curator | 后台、按 active agent 定时/轮次 | 补齐 Daily、提升稳定事实、去重合并共享候选 | 挡在用户回消息的延迟路径上 |
 
 一句话：**自己轻量记；自审+Curator 负责整理。**
@@ -220,6 +221,7 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 某个成员的偏好              -> users/<member-id>/USER.md（热路径立刻写）
 对接/交接/归属              -> RELATIONSHIP.md / notes（热路径立刻写）
 实质收工流水账              -> memory/daily/今天.md（热路径 append；短社交跳过）
+可复用问题修法              -> 项目 MEMORY/DECISIONS 或 agent MEMORY/notes（收工自记，不等「记住」）
 只属于当前项目或当前群       -> project/channel scoped 文件
 群内所有当前接收者都要记住   -> 每个 agent 各写自己的文件
 明确覆盖群外/未来 agent       -> workspace/team 候选，经过审核后入库

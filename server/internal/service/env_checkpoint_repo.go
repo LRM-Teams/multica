@@ -21,6 +21,7 @@ type envCheckpointQueries interface {
 	GetEnvCheckpointForWorkspace(ctx context.Context, arg db.GetEnvCheckpointForWorkspaceParams) (db.EnvCheckpoint, error)
 	ListEnvCheckpointsForProject(ctx context.Context, arg db.ListEnvCheckpointsForProjectParams) ([]db.EnvCheckpoint, error)
 	UpdateEnvCheckpointSaveStatus(ctx context.Context, arg db.UpdateEnvCheckpointSaveStatusParams) (db.EnvCheckpoint, error)
+	DeleteEnvCheckpoint(ctx context.Context, arg db.DeleteEnvCheckpointParams) error
 }
 
 // The production queries must keep satisfying the narrow surface: the fake in the
@@ -117,6 +118,20 @@ func (r *envCheckpointRepo) GetCheckpoint(ctx context.Context, checkpointID, wor
 		return EnvCheckpoint{}, fmt.Errorf("get env checkpoint: %w", err)
 	}
 	return envCheckpointFromRow(row)
+}
+
+func (r *envCheckpointRepo) DeleteCheckpoint(ctx context.Context, checkpointID, workspaceID string) error {
+	cpUUID, wsUUID, err := parseCheckpointAndWorkspace(checkpointID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := r.q.DeleteEnvCheckpoint(ctx, db.DeleteEnvCheckpointParams{
+		ID:          cpUUID,
+		WorkspaceID: wsUUID,
+	}); err != nil {
+		return fmt.Errorf("delete env checkpoint: %w", err)
+	}
+	return nil
 }
 
 func (r *envCheckpointRepo) ListCheckpoints(ctx context.Context, workspaceID, projectID string) ([]EnvCheckpoint, error) {

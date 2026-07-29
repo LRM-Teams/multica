@@ -98,6 +98,17 @@ func (r *fakeCheckpointRepo) GetCheckpoint(_ context.Context, checkpointID, work
 	return cp, nil
 }
 
+func (r *fakeCheckpointRepo) DeleteCheckpoint(_ context.Context, checkpointID, workspaceID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp, ok := r.checkpoints[checkpointID]
+	if !ok || cp.WorkspaceID != workspaceID {
+		return fmt.Errorf("not found: checkpoint %q", checkpointID)
+	}
+	delete(r.checkpoints, checkpointID)
+	return nil
+}
+
 func (r *fakeCheckpointRepo) ListCheckpoints(_ context.Context, workspaceID, projectID string) ([]EnvCheckpoint, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

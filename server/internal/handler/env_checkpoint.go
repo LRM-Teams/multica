@@ -255,6 +255,7 @@ type EnvCheckpointServiceAPI interface {
 	Get(ctx context.Context, checkpointID, workspaceID string) (service.EnvCheckpoint, error)
 	List(ctx context.Context, workspaceID, projectID string) ([]service.EnvCheckpoint, error)
 	ResumeFromCheckpoint(ctx context.Context, in service.ResumeFromCheckpointInput) (service.ResumeFromCheckpointResult, error)
+	Delete(ctx context.Context, workspaceID, checkpointID, actorUserID string) error
 }
 
 // ResumeEnvCheckpointRequest is the optional request body for resume. Both
@@ -381,4 +382,49 @@ func (h *Handler) ResumeEnvCheckpoint(w http.ResponseWriter, r *http.Request) {
 		Lanes:         lanes,
 		Status:        string(res.Status),
 	})
+}
+
+// DeleteEnvCheckpoint handles DELETE /api/v1/env-checkpoints/{checkpointID}. It
+// releases the savepoints the checkpoint owns and removes the row; lanes and
+// savepoint ownership cascade with it.
+func (h *Handler) DeleteEnvCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if !envCheckpointsEnabled() {
+		writeError(w, http.StatusNotFound, "env checkpoints are not enabled")
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace ID required")
+		return
+	}
+	if h.EnvCheckpointService == nil {
+		writeError(w, http.StatusServiceUnavailable, "checkpoint service not configured")
+		return
+	}
+	checkpointID := chi.URLParam(r, "checkpointID")
+	if _, ok := parseUUIDOrBadRequest(w, checkpointID, "checkpointID"); !ok {
+		return
+	}
+
+	if err := h.EnvCheckpointService.Delete(r.Context(), workspaceID, checkpointID, userID); err != nil {
+		switch {
+		// A lane still materializing is a conflict, not a failure: retrying once
+		// it settles succeeds, so the caller should be told to wait rather than
+		// that something broke.
+		case errors.Is(err, service.ErrCheckpointHasProvisioningLanes):
+			writeError(w, http.StatusConflict, err.Error())
+		case strings.Contains(err.Error(), "not found"):
+			writeError(w, http.StatusNotFound, "checkpoint not found")
+		case strings.Contains(err.Error(), "validation_failed"):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "delete failed")
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

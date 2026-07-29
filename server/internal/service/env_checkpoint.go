@@ -175,6 +175,15 @@ type EnvCheckpointRepository interface {
 	UpdateCheckpointSaveStatus(ctx context.Context, checkpointID, workspaceID string, status EnvCheckpointStatus, saveErr string) (EnvCheckpoint, error)
 	GetCheckpoint(ctx context.Context, checkpointID, workspaceID string) (EnvCheckpoint, error)
 	ListCheckpoints(ctx context.Context, workspaceID, projectID string) ([]EnvCheckpoint, error)
+	DeleteCheckpoint(ctx context.Context, checkpointID, workspaceID string) error
+}
+
+// SavepointReleaser schedules a savepoint's Cube template for deletion through
+// the existing delete_template job. Releasing is separate from deleting the
+// checkpoint row because the row is what records that the template exists: drop
+// it first and the template is leaked with nothing left pointing at it.
+type SavepointReleaser interface {
+	ReleaseSavepoint(ctx context.Context, snapshotID, workspaceID, actorUserID string) error
 }
 
 // SandboxInstanceSaver saves (stops) a sandbox instance and blocks until the
@@ -286,6 +295,10 @@ var (
 	ErrCheckpointNotResumable = errors.New("checkpoint_not_resumable")
 	// ErrLaneCountInvalid marks a bad request rather than a bad checkpoint.
 	ErrLaneCountInvalid = errors.New("lane_count_invalid")
+	// ErrCheckpointHasProvisioningLanes refuses deletion while a lane is still
+	// materializing. Retrying once those lanes settle succeeds, so this is a
+	// conflict rather than a permanent rejection.
+	ErrCheckpointHasProvisioningLanes = errors.New("checkpoint_has_provisioning_lanes")
 )
 
 // EnvCheckpointService orchestrates checkpoint creation, save, and retrieval.
@@ -302,6 +315,18 @@ type EnvCheckpointService struct {
 	lanes           EnvCheckpointLaneRepository
 	materializer    LaneMaterializer
 	savepointReader SavepointReader
+
+	// savepointReleaser is only needed to delete a snapshot checkpoint, so it
+	// stays separate from WithLanes rather than forcing every caller that reads
+	// lanes to supply one.
+	savepointReleaser SavepointReleaser
+}
+
+// WithSavepointReleaser injects the seam that schedules a savepoint's Cube
+// template for deletion.
+func (s *EnvCheckpointService) WithSavepointReleaser(r SavepointReleaser) *EnvCheckpointService {
+	s.savepointReleaser = r
+	return s
 }
 
 func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader, inFlight InFlightTaskResolver, continuations ContinuationRegistry) *EnvCheckpointService {
@@ -440,6 +465,65 @@ func (s *EnvCheckpointService) List(ctx context.Context, workspaceID, projectID 
 // Fan-out (LaneCount > 1) is only available to snapshot mode; pause_in_place is
 // rejected with ErrLaneCountInvalid, since materializing it consumes the paused
 // instances and so can only happen once.
+// Delete releases the checkpoint's savepoints and removes the row; its lanes and
+// savepoint ownership rows cascade with it.
+//
+// Two orderings matter. Savepoints are released *before* the row goes, because
+// the row is the only record that those Cube templates exist -- delete it first
+// and a failed release leaks them with nothing left to retry from. And deletion
+// is refused while any lane is still provisioning: that lane row is the only
+// record of a sandbox being built, so cascading it away would orphan the
+// sandbox, which is what the lane status column exists to prevent (design D4).
+func (s *EnvCheckpointService) Delete(ctx context.Context, workspaceID, checkpointID, actorUserID string) error {
+	if workspaceID == "" || checkpointID == "" {
+		return fmt.Errorf("validation_failed: workspace_id and checkpoint_id are required")
+	}
+	cp, err := s.repo.GetCheckpoint(ctx, checkpointID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if s.lanes != nil {
+		provisioning, err := s.lanes.CountProvisioningLanes(ctx, cp.ID, workspaceID)
+		if err != nil {
+			return fmt.Errorf("count provisioning lanes: %w", err)
+		}
+		if provisioning > 0 {
+			return fmt.Errorf("%w: %d lane(s) still materializing", ErrCheckpointHasProvisioningLanes, provisioning)
+		}
+	}
+	if err := s.releaseSavepoints(ctx, cp, workspaceID, actorUserID); err != nil {
+		return err
+	}
+	return s.repo.DeleteCheckpoint(ctx, cp.ID, workspaceID)
+}
+
+// releaseSavepoints schedules every template this checkpoint owns for deletion.
+// A pause_in_place checkpoint owns none, so it needs no releaser; a snapshot
+// checkpoint that owns some and has no releaser is refused rather than deleted,
+// since deleting it would leak them.
+func (s *EnvCheckpointService) releaseSavepoints(ctx context.Context, cp EnvCheckpoint, workspaceID, actorUserID string) error {
+	if s.savepointReader == nil {
+		return nil
+	}
+	savepoints, err := s.savepointReader.ListSavepoints(ctx, cp.ID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("list savepoints: %w", err)
+	}
+	if len(savepoints) == 0 {
+		return nil
+	}
+	if s.savepointReleaser == nil {
+		return fmt.Errorf("unconfigured: checkpoint %s owns %d savepoint(s) but no releaser is installed",
+			cp.ID, len(savepoints))
+	}
+	for _, sp := range savepoints {
+		if err := s.savepointReleaser.ReleaseSavepoint(ctx, sp.SnapshotID, workspaceID, actorUserID); err != nil {
+			return fmt.Errorf("release savepoint %s: %w", sp.SnapshotID, err)
+		}
+	}
+	return nil
+}
+
 func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, in ResumeFromCheckpointInput) (ResumeFromCheckpointResult, error) {
 	if s.resumer == nil {
 		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: resume is not configured (no sandbox resumer)")

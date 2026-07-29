@@ -241,3 +241,22 @@ func (q *Queries) UpdateEnvCheckpointSaveStatus(ctx context.Context, arg UpdateE
 	)
 	return i, err
 }
+
+const deleteEnvCheckpoint = `-- name: DeleteEnvCheckpoint :exec
+DELETE FROM env_checkpoint
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteEnvCheckpointParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Cascades the savepoint ownership rows migration 246 added and the
+// env_checkpoint_lane rows migration 247 added. The Cube templates themselves are
+// scheduled for deletion through delete_template jobs before this runs, since
+// once this row is gone nothing records that they exist.
+func (q *Queries) DeleteEnvCheckpoint(ctx context.Context, arg DeleteEnvCheckpointParams) error {
+	_, err := q.db.Exec(ctx, deleteEnvCheckpoint, arg.ID, arg.WorkspaceID)
+	return err
+}

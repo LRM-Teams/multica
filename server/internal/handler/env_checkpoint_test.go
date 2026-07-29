@@ -32,6 +32,14 @@ type fakeEnvCheckpointService struct {
 	getCalls     []envCheckpointGetCall
 	listCalls    []envCheckpointListCall
 	resumeCalls  []service.ResumeFromCheckpointInput
+	deleteErr    error
+	deleteCalls  []envCheckpointDeleteCall
+}
+
+type envCheckpointDeleteCall struct {
+	workspaceID  string
+	checkpointID string
+	actorUserID  string
 }
 
 type envCheckpointGetCall struct {
@@ -62,6 +70,11 @@ func (f *fakeEnvCheckpointService) List(_ context.Context, workspaceID, projectI
 func (f *fakeEnvCheckpointService) ResumeFromCheckpoint(_ context.Context, in service.ResumeFromCheckpointInput) (service.ResumeFromCheckpointResult, error) {
 	f.resumeCalls = append(f.resumeCalls, in)
 	return f.resumeResult, f.resumeErr
+}
+
+func (f *fakeEnvCheckpointService) Delete(_ context.Context, workspaceID, checkpointID, actorUserID string) error {
+	f.deleteCalls = append(f.deleteCalls, envCheckpointDeleteCall{workspaceID, checkpointID, actorUserID})
+	return f.deleteErr
 }
 
 // --- helpers ---
@@ -425,4 +438,96 @@ func TestFanOutResumeSerializesLanes(t *testing.T) {
 	if body.Lanes[1].Status != "failed" || body.Lanes[1].Error != "snapshot gone" {
 		t.Fatalf("failed lane not reported: %+v", body.Lanes[1])
 	}
+}
+
+// --- delete handler tests ---
+
+func TestDeleteEnvCheckpointReturnsNoContentAndScopesToTheWorkspace(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{}
+	h := newCheckpointHandler(fake)
+
+	w := deleteCheckpoint(h)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.deleteCalls) != 1 {
+		t.Fatalf("delete calls = %+v, want 1", fake.deleteCalls)
+	}
+	// The workspace comes from the member context, never from the request, or a
+	// caller could delete another workspace's checkpoint by id.
+	got := fake.deleteCalls[0]
+	if got.workspaceID != "ws1" || got.checkpointID != validUUID || got.actorUserID != "u1" {
+		t.Fatalf("delete call = %+v", got)
+	}
+}
+
+// A lane still materializing is a conflict the caller can retry, not a failure.
+func TestDeleteEnvCheckpointWithProvisioningLanesIsAConflict(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		deleteErr: fmt.Errorf("%w: 2 lane(s) still materializing", service.ErrCheckpointHasProvisioningLanes),
+	}
+	h := newCheckpointHandler(fake)
+
+	w := deleteCheckpoint(h)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteEnvCheckpointNotFound(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{deleteErr: fmt.Errorf("not found: checkpoint")}
+	h := newCheckpointHandler(fake)
+
+	if w := deleteCheckpoint(h); w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+// The flag gates deletion like every other checkpoint endpoint, so enabling the
+// feature is what exposes it rather than the route existing.
+func TestDeleteEnvCheckpointHiddenWhenDisabled(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "false")
+	fake := &fakeEnvCheckpointService{}
+	h := newCheckpointHandler(fake)
+
+	w := deleteCheckpoint(h)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 while disabled", w.Code)
+	}
+	if len(fake.deleteCalls) != 0 {
+		t.Fatalf("disabled endpoint must not reach the service, got %+v", fake.deleteCalls)
+	}
+}
+
+func TestDeleteEnvCheckpointRejectsAMalformedID(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{}
+	h := newCheckpointHandler(fake)
+
+	r := authedCheckpointRequest("DELETE", "/api/v1/env-checkpoints/not-a-uuid", "")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("checkpointID", "not-a-uuid")
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.DeleteEnvCheckpoint(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	if len(fake.deleteCalls) != 0 {
+		t.Fatalf("a malformed id must not reach the service, got %+v", fake.deleteCalls)
+	}
+}
+
+func deleteCheckpoint(h *Handler) *httptest.ResponseRecorder {
+	r := authedCheckpointRequest("DELETE", "/api/v1/env-checkpoints/"+validUUID, "")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("checkpointID", validUUID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.DeleteEnvCheckpoint(w, r)
+	return w
 }

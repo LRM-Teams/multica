@@ -24,6 +24,12 @@ type fakeCheckpointQueries struct {
 	err      error
 	getParam db.GetEnvCheckpointForWorkspaceParams
 	lsParam  db.ListEnvCheckpointsForProjectParams
+	deleted  []db.DeleteEnvCheckpointParams
+}
+
+func (f *fakeCheckpointQueries) DeleteEnvCheckpoint(_ context.Context, arg db.DeleteEnvCheckpointParams) error {
+	f.deleted = append(f.deleted, arg)
+	return f.err
 }
 
 func (f *fakeCheckpointQueries) CreateEnvCheckpoint(_ context.Context, arg db.CreateEnvCheckpointParams) (db.EnvCheckpoint, error) {
@@ -247,5 +253,34 @@ func TestCheckpointRepoRoundTripsTheJSONColumns(t *testing.T) {
 	}
 	if cp.SaveError != "" {
 		t.Fatalf("save_error = %q, want empty for a NULL column", cp.SaveError)
+	}
+}
+
+// The delete must carry the workspace, not just the id. Without it a caller
+// holding a checkpoint id from another workspace could delete that workspace's
+// checkpoint and cascade away its savepoints and lanes.
+func TestRepoDeleteIsScopedToTheWorkspace(t *testing.T) {
+	q := &fakeCheckpointQueries{}
+	repo := NewEnvCheckpointRepository(q)
+
+	if err := repo.DeleteCheckpoint(context.Background(), testCheckpointUUID, testWorkspaceUUID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if len(q.deleted) != 1 {
+		t.Fatalf("deletes = %d, want 1", len(q.deleted))
+	}
+	if q.deleted[0].ID != mustUUID(t, testCheckpointUUID) ||
+		q.deleted[0].WorkspaceID != mustUUID(t, testWorkspaceUUID) {
+		t.Fatalf("delete params = %+v, want both ids", q.deleted[0])
+	}
+}
+
+func TestRepoDeleteRejectsMalformedIDs(t *testing.T) {
+	repo := NewEnvCheckpointRepository(&fakeCheckpointQueries{})
+	if err := repo.DeleteCheckpoint(context.Background(), "not-a-uuid", testWorkspaceUUID); err == nil {
+		t.Fatal("malformed checkpoint id must be rejected before the delete")
+	}
+	if err := repo.DeleteCheckpoint(context.Background(), testCheckpointUUID, "not-a-uuid"); err == nil {
+		t.Fatal("malformed workspace id must be rejected before the delete")
 	}
 }

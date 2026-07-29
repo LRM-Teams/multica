@@ -4,9 +4,16 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // newEnvCheckpointService builds the production checkpoint service from the
@@ -42,6 +49,76 @@ func newBranchSavepointProvider(h *Handler) service.BranchSavepointResolver {
 		lifecycle,
 		h.Queries,
 	)
+}
+
+// savepointReleaserAdapter releases a savepoint through the same delete_template
+// path a user-initiated snapshot deletion takes. A savepoint is an ordinary
+// sandbox_snapshot with an owning checkpoint, so there is one reclamation path,
+// not two.
+// The two dependencies are named narrowly so the release decisions -- already
+// gone, already queued, still being created, never reached Cube -- are testable
+// without a Handler or a database.
+type savepointReleaseQueries interface {
+	GetSandboxSnapshotForWorkspace(ctx context.Context, arg db.GetSandboxSnapshotForWorkspaceParams) (db.SandboxSnapshot, error)
+	DeleteSandboxSnapshot(ctx context.Context, arg db.DeleteSandboxSnapshotParams) error
+}
+
+type snapshotTemplateDeletionScheduler interface {
+	scheduleSnapshotTemplateDeletion(ctx context.Context, snap db.SandboxSnapshot, wsUUID pgtype.UUID, actorUserID string) (db.SandboxSnapshot, error)
+}
+
+type savepointReleaserAdapter struct {
+	q         savepointReleaseQueries
+	scheduler snapshotTemplateDeletionScheduler
+}
+
+// The production types must keep satisfying the narrow surfaces, or the fakes in
+// the tests drift from what really runs.
+var (
+	_ savepointReleaseQueries           = (*db.Queries)(nil)
+	_ snapshotTemplateDeletionScheduler = (*Handler)(nil)
+)
+
+func (a *savepointReleaserAdapter) ReleaseSavepoint(ctx context.Context, snapshotID, workspaceID, actorUserID string) error {
+	snapUUID, err := util.ParseUUID(snapshotID)
+	if err != nil {
+		return fmt.Errorf("parse snapshot_id: %w", err)
+	}
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("parse workspace_id: %w", err)
+	}
+	snap, err := a.q.GetSandboxSnapshotForWorkspace(ctx, db.GetSandboxSnapshotForWorkspaceParams{
+		ID:          snapUUID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		// Already gone. Release is called while deleting a checkpoint, which
+		// must be able to complete; failing here would pin the checkpoint row
+		// on a savepoint that no longer exists.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("load savepoint %s: %w", snapshotID, err)
+	}
+	switch snap.Status {
+	case "deleting":
+		// A delete_template job is already queued for it.
+		return nil
+	case "creating":
+		// The template is still being written. Deleting now would race the
+		// create, so the checkpoint delete is refused and can be retried.
+		return fmt.Errorf("savepoint %s is still being created", snapshotID)
+	}
+	if strings.TrimSpace(snap.CubeSnapshotID) == "" {
+		// Never reached Cube, so there is no template to release; drop the row.
+		return a.q.DeleteSandboxSnapshot(ctx, db.DeleteSandboxSnapshotParams{
+			ID:          snapUUID,
+			WorkspaceID: wsUUID,
+		})
+	}
+	_, err = a.scheduler.scheduleSnapshotTemplateDeletion(ctx, snap, wsUUID, actorUserID)
+	return err
 }
 
 func newEnvCheckpointService(h *Handler) EnvCheckpointServiceAPI {
@@ -83,7 +160,8 @@ func newEnvCheckpointService(h *Handler) EnvCheckpointServiceAPI {
 				dispatch:  dispatch,
 			}),
 			service.NewSavepointReader(h.Queries),
-		)
+		).
+		WithSavepointReleaser(&savepointReleaserAdapter{q: h.Queries, scheduler: h})
 }
 
 // laneMaterializerDepsAdapter wires lane materialization to the same primitives

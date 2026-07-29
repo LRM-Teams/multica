@@ -34,12 +34,12 @@ export function ResearchFleetStrip({ members }: { members: ResearchFleetMember[]
                 </span>
                 {m.is_lead ? (
                   <Badge variant="secondary" className="h-4 px-1 text-[9px]">
-                    lead
+                    {t(($) => $.panel.fleet_lead)}
                   </Badge>
                 ) : null}
                 {m.status === "pending_prompt_review" ? (
                   <Badge variant="outline" className="h-4 px-1 text-[9px]">
-                    pending
+                    {t(($) => $.panel.fleet_pending)}
                   </Badge>
                 ) : null}
               </div>

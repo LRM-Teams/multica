@@ -22,6 +22,8 @@
     "delivery": "来源与报告",
     "send": "发送",
     "fleet": "调研团",
+    "fleet_lead": "负责人",
+    "fleet_pending": "待审",
     "confirm": "确认调研完成",
     "handoff_project": "建立开发项目",
     "handoff_channel": "建立开发群",

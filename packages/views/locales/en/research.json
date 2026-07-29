@@ -22,6 +22,8 @@
     "delivery": "Sources & report",
     "send": "Send",
     "fleet": "Research fleet",
+    "fleet_lead": "Lead",
+    "fleet_pending": "Pending",
     "confirm": "Confirm research complete",
     "handoff_project": "Create development project",
     "handoff_channel": "Create development channel",

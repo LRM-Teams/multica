@@ -1,3 +1,4 @@
+/* eslint-disable import-x/no-extraneous-dependencies -- test fixture: vitest types for hoisted vi.mock factories */
 import { vi, type Mock } from "vitest";
 
 /**

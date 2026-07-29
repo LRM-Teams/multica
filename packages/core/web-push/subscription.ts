@@ -7,7 +7,10 @@ export type WebPushSupportState =
   | "ios_requires_pwa"
   | "permission_denied";
 
-const SERVICE_WORKER_PATH = "/web-push-sw.js";
+// One service worker per scope (LRM-679): the notification bridge registers
+// "/sw.js" on the default "/" scope, so push must use the same script —
+// a second file on the same scope evicts the push handler.
+const SERVICE_WORKER_PATH = "/sw.js";
 
 type PushSubscriptionJSONValue = {
   endpoint?: string;

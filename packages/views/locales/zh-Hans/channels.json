@@ -97,8 +97,7 @@
   "members": {
     "role_badge": {
       "owner": "群主",
-      "manager_agent": "群管",
-      "manager_human": "管理员"
+      "manager": "群管"
     },
     "menu": {
       "aria": "成员操作",

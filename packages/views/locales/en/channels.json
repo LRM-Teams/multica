@@ -97,8 +97,7 @@
   "members": {
     "role_badge": {
       "owner": "Owner",
-      "manager_agent": "Group manager",
-      "manager_human": "Admin"
+      "manager": "Group manager"
     },
     "menu": {
       "aria": "Member actions",

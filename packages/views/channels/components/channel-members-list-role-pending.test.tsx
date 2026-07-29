@@ -57,7 +57,7 @@ const dict = {
       role_actions_pending:
         "Group role management is coming soon; member roles are not changed yet.",
     },
-    role_badge: { owner: "Owner", manager_agent: "Group manager", manager_human: "Admin" },
+    role_badge: { owner: "Owner", manager: "Group manager" },
     remove_aria: "Remove",
   },
   message: { agent_badge: "Agent" },

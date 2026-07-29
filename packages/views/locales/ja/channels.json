@@ -97,8 +97,7 @@
   "members": {
     "role_badge": {
       "owner": "オーナー",
-      "manager_agent": "マネージャー",
-      "manager_human": "管理者"
+      "manager": "グループ管理者"
     },
     "menu": {
       "aria": "メンバー操作",

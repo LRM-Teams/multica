@@ -92,8 +92,9 @@ function MemberRow({
   const roleKey = roleForMember(m);
   const showMutedRole = !isAgent && (roleKey === "owner" || roleKey === "admin");
   // The group member panel passes `badgeForMember` → show the channel/group role
-  // (owner / 群管 / 管理员; ordinary members get no badge). Everywhere else, keep
-  // the existing workspace-role label.
+  // (owner / 群管; ordinary members get no badge). Everywhere else, keep the
+  // existing workspace-role label. #832: no separate human label — one role,
+  // one name, for humans and agents alike.
   const groupBadge = badgeForMember?.(m) ?? null;
   const mutedRoleLabel = badgeForMember
     ? groupBadge

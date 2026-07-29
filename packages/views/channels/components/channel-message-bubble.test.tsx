@@ -1958,7 +1958,6 @@ describe("ChannelMessageBubble", () => {
         message={ownMessage()}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -1973,7 +1972,6 @@ describe("ChannelMessageBubble", () => {
         message={makeMessage({ type: "user", author_id: "user-2", author_name: "bob" })}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
@@ -1994,7 +1992,6 @@ describe("ChannelMessageBubble", () => {
         message={message}
         currentUserId="user-1"
         onEdit={onEdit}
-        onDelete={vi.fn()}
         onReact={onReact}
         onOpenThread={onOpenThread}
       />,
@@ -2028,7 +2025,6 @@ describe("ChannelMessageBubble", () => {
         message={ownMessage()}
         currentUserId="user-1"
         onEdit={onEdit}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -2081,7 +2077,6 @@ describe("ChannelMessageBubble", () => {
         })}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
         onReact={vi.fn()}
         onOpenThread={vi.fn()}
       />,
@@ -2097,21 +2092,19 @@ describe("ChannelMessageBubble", () => {
   });
 
   it("does not surface a delete affordance (LRM-695 removed it)", () => {
-    // LRM-695: message delete is removed from the UI. The soft-delete wiring
-    // (onDelete) stays dormant like onEdit, but there is no button to reach it.
-    const onDelete = vi.fn();
+    // LRM-695: message delete is fully removed from the UI (Frank/Wendy seq 4555 —
+    // entry code + calls deleted, not dormant). No button renders; the tombstone
+    // still renders for server-deleted messages (covered in the list test).
     render(
       <ChannelMessageBubble
         message={ownMessage()}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={onDelete}
         onReact={vi.fn()}
       />,
     );
 
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-    expect(onDelete).not.toHaveBeenCalled();
   });
 
   it("renders an optimistic pending bubble silently (no Sending…)", () => {
@@ -2130,7 +2123,6 @@ describe("ChannelMessageBubble", () => {
         onReact={vi.fn()}
         onQuote={vi.fn()}
         onOpenThread={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -2159,7 +2151,6 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
         onRetrySend={onRetrySend}
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -2312,7 +2303,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         message={pending()}
         currentUserId="user-1"
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     act(() => vi.advanceTimersByTime(999));
@@ -2326,7 +2316,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         message={pending()}
         currentUserId="user-1"
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     act(() => vi.advanceTimersByTime(1000));
@@ -2346,7 +2335,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         currentUserId="user-1"
         onRetrySend={vi.fn()}
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     act(() => vi.advanceTimersByTime(1000));
@@ -2357,7 +2345,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         currentUserId="user-1"
         onRetrySend={vi.fn()}
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     expect(screen.queryByTestId("message-sending")).not.toBeInTheDocument();

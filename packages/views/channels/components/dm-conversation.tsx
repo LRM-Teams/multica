@@ -18,7 +18,6 @@ import {
   useAddChannelReaction,
   useRemoveChannelReaction,
   useEditChannelMessage,
-  useDeleteChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
 } from "@multica/core/channels";
@@ -505,24 +504,16 @@ function DmChannelConversation({
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
   const editChannelMessage = useEditChannelMessage();
-  const deleteChannelMessage = useDeleteChannelMessage();
   const setThreadFollowed = useSetChannelThreadFollowed();
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
-  // DMs are never archived/closed, so (like onReact) edit/delete are always wired;
-  // the bubble still gates the affordance on the message being the viewer's own.
+  // DMs are never archived/closed, so (like onReact) edit is always wired.
   const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
     editChannelMessage.mutate(
       { channelId: message.channel_id, messageId: message.id, content },
       { onError: () => showErrorToast(t(($) => $.message.edit_failed_toast)) },
     );
   }, [editChannelMessage, t]);
-  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
-    deleteChannelMessage.mutate(
-      { channelId: message.channel_id, messageId: message.id },
-      { onError: () => showErrorToast(t(($) => $.message.delete_failed_toast)) },
-    );
-  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -1206,7 +1197,6 @@ function DmChannelConversation({
           onReact={supervisedReadOnly ? undefined : handleReactToMessage}
           onQuoteMessage={supervisedReadOnly ? undefined : setThreadQuoteTarget}
           onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
-          onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
           onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
         />
         <Composer
@@ -1464,7 +1454,6 @@ function DmChannelConversation({
         onReact={supervisedReadOnly ? undefined : handleReactToMessage}
         onQuoteMessage={supervisedReadOnly ? undefined : setQuoteTarget}
         onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
-        onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
         onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
       />
       <Composer

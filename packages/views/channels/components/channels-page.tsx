@@ -54,7 +54,6 @@ import {
   useSendChannelMessage,
   useSendChannelThreadMessage,
   useEditChannelMessage,
-  useDeleteChannelMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
@@ -1128,7 +1127,6 @@ export function ChannelsPage({
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
   const editChannelMessage = useEditChannelMessage();
-  const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
@@ -1155,12 +1153,6 @@ export function ChannelsPage({
       { onError: () => showErrorToast(t(($) => $.message.edit_failed_toast)) },
     );
   }, [editChannelMessage, t]);
-  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
-    deleteChannelMessage.mutate(
-      { channelId: message.channel_id, messageId: message.id },
-      { onError: () => showErrorToast(t(($) => $.message.delete_failed_toast)) },
-    );
-  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -3693,7 +3685,6 @@ export function ChannelsPage({
                 onReact={handleReactToMessage}
                 onQuoteMessage={isActiveArchived ? undefined : setQuoteTarget}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
-                onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
                 onRetrySend={isActiveArchived ? undefined : handleRetrySend}
                 onOpenAgent={handleOpenAgentPanel}
               />

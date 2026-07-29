@@ -646,7 +646,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={vi.fn()}
-        onDeleteMessage={vi.fn()}
       />,
     );
 
@@ -669,7 +668,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={vi.fn()}
-        onDeleteMessage={vi.fn()}
       />,
     );
 
@@ -692,7 +690,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={onEditMessage}
-        onDeleteMessage={vi.fn()}
         onReact={onReact}
         onOpenThread={onOpenThread}
       />,
@@ -760,7 +757,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={vi.fn()}
-        onDeleteMessage={vi.fn()}
       />,
     );
 

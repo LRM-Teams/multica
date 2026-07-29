@@ -1,13 +1,15 @@
 /**
  * @vitest-environment jsdom
  *
- * B3 (#241) — Edit / Delete + H5 FE guard. Editing or deleting a message must
- * go through the dedicated edit/delete endpoints and MUST NOT call the
- * message-send / agent-dispatch endpoints (`sendChannelMessage` /
- * `sendChannelThreadMessage`) — the only wake-producing calls on this surface.
- * The BE enforces no-new-wake (#235); this locks the FE contract so a
- * regression can never re-disturb already-read agents by routing an edit or a
- * delete through a send/dispatch.
+ * B3 (#241) — Edit + H5 FE guard. Editing a message must go through the
+ * dedicated edit endpoint and MUST NOT call the message-send / agent-dispatch
+ * endpoints (`sendChannelMessage` / `sendChannelThreadMessage`) — the only
+ * wake-producing calls on this surface. The BE enforces no-new-wake (#235);
+ * this locks the FE contract so a regression can never re-disturb already-read
+ * agents by routing an edit through a send/dispatch.
+ *
+ * LRM-695: message delete is fully removed from the FE, so the delete half of
+ * this guard is retired here too.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -17,7 +19,7 @@ import type { ReactNode } from "react";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import type { ChannelMessage } from "../types";
-import { useDeleteChannelMessage, useEditChannelMessage } from "./mutations";
+import { useEditChannelMessage } from "./mutations";
 
 vi.mock("../hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -51,14 +53,13 @@ function channelMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage
 function makeApi() {
   return {
     editChannelMessage: vi.fn().mockResolvedValue(channelMessage()),
-    deleteChannelMessage: vi.fn().mockResolvedValue(undefined),
-    // The wake-producing calls — must never fire on an edit or delete.
+    // The wake-producing calls — must never fire on an edit.
     sendChannelMessage: vi.fn(),
     sendChannelThreadMessage: vi.fn(),
   };
 }
 
-describe("channel message edit/delete never wakes an agent (H5)", () => {
+describe("channel message edit never wakes an agent (H5)", () => {
   let qc: QueryClient;
   let api: ReturnType<typeof makeApi>;
 
@@ -94,22 +95,6 @@ describe("channel message edit/delete never wakes an agent (H5)", () => {
       "edited body",
       undefined,
     );
-    expect(api.sendChannelMessage).not.toHaveBeenCalled();
-    expect(api.sendChannelThreadMessage).not.toHaveBeenCalled();
-  });
-
-  it("deletes a message through the delete endpoint, not a send/dispatch", async () => {
-    const { result } = renderHook(() => useDeleteChannelMessage(), {
-      wrapper: createWrapper(qc),
-    });
-
-    act(() => {
-      result.current.mutate({ channelId: "channel-1", messageId: "msg-1" });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    expect(api.deleteChannelMessage).toHaveBeenCalledWith("channel-1", "msg-1");
     expect(api.sendChannelMessage).not.toHaveBeenCalled();
     expect(api.sendChannelThreadMessage).not.toHaveBeenCalled();
   });

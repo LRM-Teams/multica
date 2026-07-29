@@ -19,6 +19,31 @@ import (
 // still gated by ENV_CHECKPOINTS_ENABLED. What the flag now gates is a service
 // that is actually reachable -- before this, the endpoints were dead even with
 // the flag on, because nothing ever set the field.
+// newBranchSavepointProvider builds the seam branch dispatch captures its source
+// through, and that the mention path looks templates up from. It returns nil for
+// a handler with no queries, exactly like the checkpoint service: branch dispatch
+// then refuses rather than falling back to a clone that no longer exists.
+func newBranchSavepointProvider(h *Handler) service.BranchSavepointResolver {
+	if h == nil || h.Queries == nil {
+		return nil
+	}
+	checkpoints := newEnvCheckpointService(h)
+	if checkpoints == nil {
+		return nil
+	}
+	lifecycle := newEnvSandboxLifecycleService(h)
+	if lifecycle == nil {
+		return nil
+	}
+	return service.NewBranchSavepointProvider(
+		checkpoints,
+		service.NewSavepointReader(h.Queries),
+		service.NewEnvCheckpointLaneRepository(h.Queries),
+		lifecycle,
+		h.Queries,
+	)
+}
+
 func newEnvCheckpointService(h *Handler) EnvCheckpointServiceAPI {
 	if h == nil || h.Queries == nil {
 		return nil

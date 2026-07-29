@@ -83,6 +83,14 @@ type BranchSavepointProvider interface {
 	SettleBranchLane(ctx context.Context, in BranchLaneSettleInput) error
 }
 
+// BranchSavepointResolver adds the lookup used away from the dispatch, where a
+// copied binding names a source sandbox but there is no dispatch to inherit a
+// template from.
+type BranchSavepointResolver interface {
+	BranchSavepointProvider
+	LookupSavepointTemplate(ctx context.Context, workspaceID, sourceInstanceID string) (string, error)
+}
+
 // branchMessageSourceInstance reports the sandbox instance a branch+message
 // dispatch continues from, or "" when there is nothing to capture (a trigger with
 // no sandbox instance provisions from scratch, unchanged by this path).

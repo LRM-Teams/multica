@@ -83,20 +83,6 @@ type CreateSandboxInstanceInput struct {
 	DaemonEnabled bool
 }
 
-// CloneSandboxInstanceInput identifies the destination execution identity and
-// the already-resolved create policy to use after Cube snapshots the source.
-// RuntimeID is pre-created by the caller so the cloned sandbox can register a
-// distinct daemon/runtime pair from its source.
-type CloneSandboxInstanceInput struct {
-	WorkspaceID   string
-	EnvID         string
-	AgentID       string
-	RuntimeID     string
-	DaemonID      string
-	Name          string
-	CreatePayload json.RawMessage
-}
-
 type EnvSandboxLifecycleService struct {
 	deps    EnvSandboxLifecycleDeps
 	timeout time.Duration
@@ -210,60 +196,6 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 			"error", err)
 	}
 	return ref, nil
-}
-
-// CloneSandboxInstance creates a destination instance and queues a clone job
-// that snapshots the source filesystem before starting the destination. The
-// source is only read; completion updates the destination instance.
-func (s *EnvSandboxLifecycleService) CloneSandboxInstance(ctx context.Context, source SandboxInstanceRef, in CloneSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
-	if in.WorkspaceID == "" || in.RuntimeID == "" || in.DaemonID == "" {
-		return SandboxInstanceRef{}, fmt.Errorf("validation_failed: workspace_id, runtime_id, and daemon_id are required for sandbox clone")
-	}
-	fresh, err := s.deps.GetSandboxInstanceRef(ctx, source.WorkspaceID, source.InstanceID)
-	if err != nil {
-		return SandboxInstanceRef{}, err
-	}
-	if fresh.WorkspaceID != in.WorkspaceID {
-		return SandboxInstanceRef{}, fmt.Errorf("validation_failed: source and destination workspace differ")
-	}
-	if fresh.LocalRef == "" {
-		return SandboxInstanceRef{}, fmt.Errorf("validation_failed: source sandbox has no external id")
-	}
-	var create CreateSandboxInstanceInput
-	if err := json.Unmarshal(in.CreatePayload, &create); err != nil {
-		return SandboxInstanceRef{}, fmt.Errorf("decode clone create payload: %w", err)
-	}
-	create.WorkspaceID = in.WorkspaceID
-	destination, err := s.deps.InsertSandboxInstance(ctx, create, actorUserID)
-	if err != nil {
-		return SandboxInstanceRef{}, fmt.Errorf("insert cloned sandbox instance: %w", err)
-	}
-	compensate := func(cause error) (SandboxInstanceRef, error) {
-		cleanupCtx := context.WithoutCancel(ctx)
-		if runtimeErr := s.deps.ForceDeleteSandboxRuntime(cleanupCtx, in.WorkspaceID, in.RuntimeID); runtimeErr != nil {
-			cause = errors.Join(cause, fmt.Errorf("compensate clone runtime: %w", runtimeErr))
-		}
-		if instanceErr := s.deps.ForceDeleteSandboxInstance(cleanupCtx, in.WorkspaceID, destination.InstanceID); instanceErr != nil {
-			cause = errors.Join(cause, fmt.Errorf("compensate cloned sandbox instance: %w", instanceErr))
-		}
-		return SandboxInstanceRef{}, cause
-	}
-	payload, err := json.Marshal(map[string]any{
-		"source_sandbox_instance_id": fresh.InstanceID,
-		"source_external_id":         fresh.LocalRef,
-		"create_payload":             json.RawMessage(in.CreatePayload),
-	})
-	if err != nil {
-		return compensate(fmt.Errorf("build sandbox clone payload: %w", err))
-	}
-	job, err := s.deps.EnqueueSandboxJob(ctx, in.WorkspaceID, actorUserID, destination.NodeID, destination.InstanceID, "clone", payload)
-	if err != nil {
-		return compensate(fmt.Errorf("enqueue sandbox clone job: %w", err))
-	}
-	if err := s.deps.NotifySandboxJobAvailable(ctx, destination.NodeID, job.JobID); err != nil {
-		slog.Warn("sandbox clone: failed to notify job available", "instance_id", destination.InstanceID, "job_id", job.JobID, "error", err)
-	}
-	return destination, nil
 }
 
 func (s *EnvSandboxLifecycleService) Resume(ctx context.Context, ref SandboxInstanceRef, actorUserID string) (SandboxLifecycleJobResult, error) {

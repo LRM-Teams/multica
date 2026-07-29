@@ -1694,7 +1694,7 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 	}
 	var inst db.SandboxInstance
 	switch job.Type {
-	case "create", "clone":
+	case "create":
 		inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
 	case "stop":
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)

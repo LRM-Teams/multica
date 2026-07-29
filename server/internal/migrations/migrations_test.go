@@ -904,3 +904,96 @@ func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 		t.Errorf("%d checkpoint scans read resume_trigger but only %d follow it with save_mode", scans, saveModeScans)
 	}
 }
+
+// TestMigration246RetiresTheCloneJobType pins both halves of retiring a job type:
+// the CHECK stops accepting it, and the down migration puts it back so an older
+// server image can still insert one.
+func TestMigration246RetiresTheCloneJobType(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(dir, "246_sandbox_job_retire_clone.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 246 up: %v", err)
+	}
+	// Only the statement counts. The comment above it names the value it is
+	// dropping, which is worth keeping and is not part of the constraint.
+	upSQL := stripSQLComments(string(up))
+	if strings.Contains(upSQL, "'clone'") {
+		t.Error("migration 246 must drop 'clone' from sandbox_job_type_check")
+	}
+	// Dropping the value must not drop the ones 181/182/187 added alongside it;
+	// that mistake is exactly what migration 187 existed to repair.
+	for _, kept := range []string{"'create_template'", "'delete_template'", "'exec'", "'message'"} {
+		if !strings.Contains(upSQL, kept) {
+			t.Errorf("migration 246 dropped %s along with clone", kept)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(dir, "246_sandbox_job_retire_clone.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 246 down: %v", err)
+	}
+	if !strings.Contains(stripSQLComments(string(down)), "'clone'") {
+		t.Error("migration 246 down must restore 'clone'")
+	}
+}
+
+func stripSQLComments(sql string) string {
+	var kept []string
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// TestNoPathEnqueuesOrHandlesACloneJob is the other half of retiring the type:
+// the schema stops accepting 'clone', so code still producing one would fail at
+// insert with a CHECK violation rather than at compile time.
+//
+// It matches the two shapes that actually carry a job type -- the enqueue call
+// and sandboxd's dispatch switch -- rather than the bare word, which also appears
+// in git clone and agent cloning.
+func TestNoPathEnqueuesOrHandlesACloneJob(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	var offenders []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || path == thisFile {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(body), "\n") {
+			if !strings.Contains(line, `"clone"`) {
+				continue
+			}
+			if strings.Contains(line, "EnqueueSandboxJob") || strings.Contains(line, "case ") ||
+				strings.Contains(line, "JobType") || strings.Contains(line, "Type:") {
+				offenders = append(offenders, path+": "+strings.TrimSpace(line))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk server tree: %v", err)
+	}
+	if len(offenders) != 0 {
+		t.Errorf("these sites still treat 'clone' as a sandbox job type, which migration 246 makes unacceptable: %v", offenders)
+	}
+}

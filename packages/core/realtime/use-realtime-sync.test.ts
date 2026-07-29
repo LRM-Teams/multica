@@ -704,7 +704,8 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         channelId: "channel-1",
-        url: "/workspace-a/channels/channel-1",
+        itemId: "message-1",
+        url: "/workspace-a/channels/channel-1?message=message-1",
       }),
     });
   });
@@ -733,7 +734,7 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         channelId: "channel-1",
-        url: "/workspace-a/channels/channel-1",
+        url: "/workspace-a/channels/channel-1?message=message-1",
       }),
     });
   });
@@ -754,7 +755,33 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         dmId: "channel-1",
-        url: "/workspace-a/channels/channel-1",
+        url: "/workspace-a/channels/channel-1?message=message-1",
+      }),
+    });
+  });
+
+  it("deep-links thread-reply banners into the thread panel (LRM-736)", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({ id: "reply-1", thread_root_message_id: "root-1" }),
+      "member-1",
+    );
+
+    expect(webBanners[0]?.options).toMatchObject({
+      tag: "channel-1",
+      data: expect.objectContaining({
+        channelId: "channel-1",
+        itemId: "reply-1",
+        threadId: "root-1",
+        url: "/workspace-a/channels/channel-1?thread=root-1&message=reply-1",
       }),
     });
   });

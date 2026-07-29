@@ -20,14 +20,15 @@ import (
 )
 
 type webPushInboxPayload struct {
-	WorkspaceID string `json:"-"`
-	Slug        string `json:"slug"`
-	ItemID      string `json:"item_id"`
-	ChannelID   string `json:"channel_id,omitempty"`
-	IssueKey    string `json:"issue_key,omitempty"`
-	Title       string `json:"title"`
-	Body        string `json:"body"`
-	URL         string `json:"url"`
+	WorkspaceID  string `json:"-"`
+	Slug         string `json:"slug"`
+	ItemID       string `json:"item_id"`
+	ChannelID    string `json:"channel_id,omitempty"`
+	IssueKey     string `json:"issue_key,omitempty"`
+	ThreadRootID string `json:"thread_id,omitempty"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	URL          string `json:"url"`
 }
 
 type webPushChannelInfo struct {
@@ -165,7 +166,7 @@ func buildWebPushChannelPayload(ctx context.Context, queries *db.Queries, msg ha
 	} else if strings.TrimSpace(info.Name) != "" {
 		title = "#" + info.Name
 	}
-	return webPushInboxPayload{
+	payload := webPushInboxPayload{
 		WorkspaceID: msg.WorkspaceID,
 		Slug:        slug,
 		ItemID:      msg.ID,
@@ -174,6 +175,12 @@ func buildWebPushChannelPayload(ctx context.Context, queries *db.Queries, msg ha
 		Body:        notificationBody(msg.AuthorName, msg.Content),
 		URL:         webPushAbsoluteURL(cfg, path),
 	}
+	// Thread replies carry their root so a notification click can deep-link
+	// into the thread panel (?thread=<root>&message=<reply>) — LRM-736.
+	if msg.ThreadRootMessageID != nil {
+		payload.ThreadRootID = *msg.ThreadRootMessageID
+	}
+	return payload
 }
 
 func deliverWebPushToSubscriptions(ctx context.Context, queries *db.Queries, sender *webpush.Sender, userID pgtype.UUID, subs []db.WebPushSubscription, payload any) {

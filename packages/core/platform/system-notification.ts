@@ -1,5 +1,7 @@
 "use client";
 
+import { paths } from "../paths/paths";
+
 // Native system notification bridge for the WEB app.
 //
 // The desktop app renders OS banners through its Electron main process
@@ -31,8 +33,39 @@ export interface SystemNotificationPayload {
   channelId?: string;
   /** Direct-message channel row id for DM notifications. */
   dmId?: string;
+  /** Thread root message id when the notified message is a thread reply. */
+  threadId?: string;
   title: string;
   body: string;
+}
+
+/**
+ * Single source of truth for where a notification click lands (LRM-736).
+ * Conversation banners deep-link into the channel/DM with `?message=<itemId>`
+ * (plus `?thread=<threadId>` for replies) so the channels page pages back to,
+ * scrolls to, and highlights the exact triggering message — the same deep-link
+ * Reminder anchors already use. Inbox banners keep the `?issue=` selector.
+ * Returns null when the source workspace slug is unknown: the click is then a
+ * no-op rather than routing to the wrong workspace (#3766).
+ */
+export function buildNotificationRoute(
+  payload: Pick<
+    SystemNotificationPayload,
+    "slug" | "issueKey" | "channelId" | "dmId" | "itemId" | "threadId"
+  >,
+): string | null {
+  if (!payload.slug) return null;
+  const wsPaths = paths.workspace(payload.slug);
+  const conversationId = payload.dmId || payload.channelId;
+  if (conversationId) {
+    const params = new URLSearchParams();
+    if (payload.threadId) params.set("thread", payload.threadId);
+    if (payload.itemId) params.set("message", payload.itemId);
+    const selector = params.toString();
+    return `${wsPaths.channelDetail(conversationId)}${selector ? `?${selector}` : ""}`;
+  }
+  const selector = payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : "";
+  return `${wsPaths.inbox()}${selector}`;
 }
 
 type ClickHandler = (payload: SystemNotificationPayload) => void;
@@ -102,7 +135,11 @@ export async function requestWebNotificationPermission(): Promise<WebNotificatio
 export function showWebNotification(payload: SystemNotificationPayload): void {
   const ctor = getNotificationCtor();
   if (!ctor || ctor.permission !== "granted") return;
-  const tag = payload.itemId ?? payload.dmId ?? payload.channelId ?? payload.title;
+  // Conversation banners keep the conversation-level tag so a new message
+  // replaces the prior banner from the same channel/DM (Slack-like dedup);
+  // itemId is only the fallback for inbox banners (LRM-736 added itemId to
+  // conversation payloads for click deep-linking — it must not fragment tags).
+  const tag = payload.dmId ?? payload.channelId ?? payload.itemId ?? payload.title;
   const options: NotificationOptions = {
     body: payload.body,
     tag,

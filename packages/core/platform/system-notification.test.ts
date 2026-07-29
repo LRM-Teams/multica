@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildNotificationRoute,
   getWebNotificationPermission,
   isWebNotificationSupported,
   registerSystemNotificationClickHandler,
@@ -91,6 +92,53 @@ describe("requestWebNotificationPermission", () => {
 
     await expect(requestWebNotificationPermission()).resolves.toBe("denied");
     expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildNotificationRoute (LRM-736)", () => {
+  it("returns null without a slug instead of routing to the wrong workspace", () => {
+    expect(buildNotificationRoute(payload({ slug: "" }))).toBeNull();
+  });
+
+  it("deep-links channel banners to the triggering message", () => {
+    expect(
+      buildNotificationRoute(
+        payload({ channelId: "chan-1", itemId: "msg-9", issueKey: undefined }),
+      ),
+    ).toBe("/workspace-a/channels/chan-1?message=msg-9");
+  });
+
+  it("deep-links DM banners via dmId (preferred over channelId)", () => {
+    expect(
+      buildNotificationRoute(
+        payload({ dmId: "dm-1", channelId: "chan-1", itemId: "msg-9", issueKey: undefined }),
+      ),
+    ).toBe("/workspace-a/channels/dm-1?message=msg-9");
+  });
+
+  it("routes thread replies into the thread panel anchored on the reply", () => {
+    expect(
+      buildNotificationRoute(
+        payload({
+          channelId: "chan-1",
+          itemId: "reply-2",
+          threadId: "root-1",
+          issueKey: undefined,
+        }),
+      ),
+    ).toBe("/workspace-a/channels/chan-1?thread=root-1&message=reply-2");
+  });
+
+  it("keeps the bare conversation route when no message id is known", () => {
+    expect(
+      buildNotificationRoute(payload({ channelId: "chan-1", itemId: undefined, issueKey: undefined })),
+    ).toBe("/workspace-a/channels/chan-1");
+  });
+
+  it("keeps inbox banners on the ?issue= selector", () => {
+    expect(buildNotificationRoute(payload({ channelId: undefined, itemId: "item-1" }))).toBe(
+      "/workspace-a/inbox?issue=issue-1",
+    );
   });
 });
 

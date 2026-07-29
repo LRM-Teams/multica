@@ -32,6 +32,7 @@ interface DesktopAPI {
     issueKey?: string;
     channelId?: string;
     dmId?: string;
+    threadId?: string;
     title: string;
     body: string;
   }) => void;
@@ -45,6 +46,7 @@ interface DesktopAPI {
       issueKey?: string;
       channelId?: string;
       dmId?: string;
+      threadId?: string;
     }) => void,
   ) => () => void;
   /** Listen for native macOS back/forward swipe gestures. Returns an unsubscribe function. */

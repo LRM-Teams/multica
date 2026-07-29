@@ -7,6 +7,7 @@ export { createWorkspaceAwareStorage, setCurrentWorkspace, getCurrentSlug, getCu
 export { clearWorkspaceStorage } from "./storage-cleanup";
 export { isMac, modKey, enterKey, formatShortcut } from "./keyboard";
 export {
+  buildNotificationRoute,
   registerSystemNotificationClickHandler,
   isWebNotificationSupported,
   getWebNotificationPermission,

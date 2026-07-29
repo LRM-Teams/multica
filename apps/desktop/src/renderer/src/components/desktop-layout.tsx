@@ -13,9 +13,9 @@ import { ModalRegistry } from "@multica/views/modals/registry";
 import { AppSidebar } from "@multica/views/layout";
 import { GlobalSearchDialog } from "@multica/views/search";
 import { ChatFab, ChatWindow } from "@multica/views/chat";
-import { WorkspaceSlugProvider, paths, useCurrentWorkspace } from "@multica/core/paths";
+import { WorkspaceSlugProvider, useCurrentWorkspace } from "@multica/core/paths";
 import { useNavigation } from "@multica/views/navigation";
-import { getCurrentSlug, subscribeToCurrentSlug } from "@multica/core/platform";
+import { buildNotificationRoute, getCurrentSlug, subscribeToCurrentSlug } from "@multica/core/platform";
 import { useDesktopUnreadBadge } from "@multica/views/platform";
 import { DesktopNavigationProvider } from "@/platform/navigation";
 import { TabBar } from "./tab-bar";
@@ -149,20 +149,12 @@ function DesktopInboxBridge() {
 
   useEffect(() => {
     // LRM-414 — channel/DM banners carry channelId/dmId; inbox banners still
-    // use issueKey. Prefer conversation routes when present (match web bridge).
-    return window.desktopAPI.onInboxOpen(({ slug, issueKey, channelId, dmId }) => {
-      if (!slug) return;
-      const wsPaths = paths.workspace(slug);
-      if (dmId) {
-        pushRef.current(wsPaths.channelDetail(dmId));
-        return;
-      }
-      if (channelId) {
-        pushRef.current(wsPaths.channelDetail(channelId));
-        return;
-      }
-      const selector = issueKey ? `?issue=${encodeURIComponent(issueKey)}` : "";
-      pushRef.current(`${wsPaths.inbox()}${selector}`);
+    // use issueKey. LRM-736 — conversation banners deep-link to the exact
+    // triggering message (?message=, plus ?thread= for replies) via the shared
+    // core route builder (same behavior as the web bridge).
+    return window.desktopAPI.onInboxOpen((payload) => {
+      const target = buildNotificationRoute(payload);
+      if (target) pushRef.current(target);
     });
   }, []);
 

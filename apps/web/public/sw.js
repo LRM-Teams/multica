@@ -27,21 +27,37 @@ self.addEventListener("push", (event) => {
       issueKey: data.issue_key || "",
       itemId: data.item_id || "",
       channelId: data.channel_id || "",
+      threadId: data.thread_id || "",
     },
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
+// LRM-736: the no-open-window fallback must land on the triggering MESSAGE,
+// not the bare channel — mirror the in-app deep link (?thread=/‌?message=).
+function buildClickUrl(payload) {
+  const url = payload.url || "/";
+  // Client-emitted payloads already carry the anchor in `url`; only push-
+  // payload URLs (bare channel route) need it appended here.
+  if (!payload.itemId || !url.includes("/channels/") || url.includes("message=")) return url;
+  const params = payload.threadId
+    ? `thread=${encodeURIComponent(payload.threadId)}&message=${encodeURIComponent(payload.itemId)}`
+    : `message=${encodeURIComponent(payload.itemId)}`;
+  return `${url}${url.includes("?") ? "&" : "?"}${params}`;
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const payload = event.notification.data || {};
-  const targetUrl = payload.url || "/";
   event.waitUntil((async () => {
     const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    for (const client of allClients) {
-      client.postMessage({ type: "multica:notification-click", payload });
-      if ("focus" in client) return client.focus();
+    // Route the click into exactly ONE window: the one we focus. Messaging
+    // every client made all open tabs navigate away from their own context.
+    const target = allClients.find((client) => "focus" in client);
+    if (target) {
+      target.postMessage({ type: "multica:notification-click", payload });
+      return target.focus();
     }
-    if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    if (self.clients.openWindow) return self.clients.openWindow(buildClickUrl(payload));
   })());
 });

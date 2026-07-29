@@ -53,6 +53,14 @@ type memberManagementCapabilitiesFixture struct {
 
 func newMemberManagementCapabilitiesFixture(t *testing.T) memberManagementCapabilitiesFixture {
 	t.Helper()
+	return newMemberManagementCapabilitiesFixtureForOwner(t, testUserID)
+}
+
+func newMemberManagementCapabilitiesFixtureForOwner(
+	t *testing.T,
+	ownerID string,
+) memberManagementCapabilitiesFixture {
+	t.Helper()
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -65,7 +73,7 @@ func newMemberManagementCapabilitiesFixture(t *testing.T) memberManagementCapabi
 	channelID := seedChannelForTest(
 		t,
 		channelName,
-		testUserID,
+		ownerID,
 		memberID,
 		managerID,
 	)
@@ -101,7 +109,7 @@ func newMemberManagementCapabilitiesFixture(t *testing.T) memberManagementCapabi
 
 	return memberManagementCapabilitiesFixture{
 		channelID:      channelID,
-		ownerID:        testUserID,
+		ownerID:        ownerID,
 		memberID:       memberID,
 		managerID:      managerID,
 		agentMemberID:  agentMemberID,
@@ -217,19 +225,30 @@ func assertMemberManagementCapabilityWhitelist(
 	fixture memberManagementCapabilitiesFixture,
 ) memberManagementCapabilitiesResponse {
 	t.Helper()
+	return assertMemberManagementCapabilityWhitelistAtArchivedState(t, rec, fixture, false)
+}
+
+func assertMemberManagementCapabilityWhitelistAtArchivedState(
+	t *testing.T,
+	rec *httptest.ResponseRecorder,
+	fixture memberManagementCapabilitiesFixture,
+	wantArchived bool,
+) memberManagementCapabilitiesResponse {
+	t.Helper()
 	response := decodeMemberManagementCapabilities(t, rec)
 	if response.ChannelID != fixture.channelID ||
 		response.Name != fixture.channelName ||
 		response.Kind != "group" ||
-		response.Archived {
+		response.Archived != wantArchived {
 		t.Fatalf(
-			"channel identity=%q/%q/%q archived=%v want %q/%q/group/false",
+			"channel identity=%q/%q/%q archived=%v want %q/%q/group/%v",
 			response.ChannelID,
 			response.Name,
 			response.Kind,
 			response.Archived,
 			fixture.channelID,
 			fixture.channelName,
+			wantArchived,
 		)
 	}
 
@@ -397,13 +416,15 @@ func TestMemberManagementCapabilitiesHumanAgentRoleParity(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			human := decodeMemberManagementCapabilities(
+			human := assertMemberManagementCapabilityWhitelist(
 				t,
 				requestHumanMemberManagementCapabilities(t, fixture.channelID, tc.humanID),
+				fixture,
 			)
-			agent := decodeMemberManagementCapabilities(
+			agent := assertMemberManagementCapabilityWhitelist(
 				t,
 				requestAgentMemberManagementCapabilities(t, fixture.channelID, tc.agentID),
+				fixture,
 			)
 			if human.CanAddMembers != tc.canAdd ||
 				human.CanRemoveMembers != tc.canRemove ||
@@ -531,8 +552,11 @@ func TestMemberManagementCapabilitiesProjectOwnerOnlyTargetActions(t *testing.T)
 	}
 }
 
-func TestMemberManagementCapabilitiesArchivedGroupReturnsNoActions(t *testing.T) {
-	fixture := newMemberManagementCapabilitiesFixture(t)
+func archiveMemberManagementCapabilitiesFixture(
+	t *testing.T,
+	fixture memberManagementCapabilitiesFixture,
+) {
+	t.Helper()
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE channel
 		SET archived_at = now()
@@ -542,10 +566,19 @@ func TestMemberManagementCapabilitiesArchivedGroupReturnsNoActions(t *testing.T)
 	); err != nil {
 		t.Fatalf("archive channel: %v", err)
 	}
+}
 
-	response := decodeMemberManagementCapabilities(
+func assertArchivedMemberManagementCapabilities(
+	t *testing.T,
+	rec *httptest.ResponseRecorder,
+	fixture memberManagementCapabilitiesFixture,
+) {
+	t.Helper()
+	response := assertMemberManagementCapabilityWhitelistAtArchivedState(
 		t,
-		requestHumanMemberManagementCapabilities(t, fixture.channelID, fixture.ownerID),
+		rec,
+		fixture,
+		true,
 	)
 	if response.CanAddMembers || response.CanRemoveMembers || response.CanLeave {
 		t.Fatalf("archived actor capabilities=%+v want all false", response)
@@ -557,6 +590,92 @@ func TestMemberManagementCapabilitiesArchivedGroupReturnsNoActions(t *testing.T)
 			target.CanTransferOwnership {
 			t.Fatalf("archived target actions=%+v want all false", target)
 		}
+	}
+}
+
+func TestMemberManagementCapabilitiesArchivedGroupReturnsNoActionsForEveryAuthority(t *testing.T) {
+	fixture := newMemberManagementCapabilitiesFixture(t)
+	humanAdminID := createChannelWorkspaceAdmin(t)
+	agentAdminID := createHandlerTestAgent(t, "cap-archived-admin-"+uuid.NewString(), nil)
+	setAgentWorkspaceRoleForCapabilityTest(t, agentAdminID, "admin")
+
+	otherOwnerID := createChannelPlainMember(t)
+	workspaceOwnerFallbackFixture := newMemberManagementCapabilitiesFixtureForOwner(t, otherOwnerID)
+
+	archiveMemberManagementCapabilitiesFixture(t, fixture)
+	archiveMemberManagementCapabilitiesFixture(t, workspaceOwnerFallbackFixture)
+
+	tests := []struct {
+		name    string
+		fixture memberManagementCapabilitiesFixture
+		call    func(*testing.T) *httptest.ResponseRecorder
+	}{
+		{
+			name:    "ordinary human member",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestHumanMemberManagementCapabilities(t, fixture.channelID, fixture.memberID)
+			},
+		},
+		{
+			name:    "ordinary agent member",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestAgentMemberManagementCapabilities(t, fixture.channelID, fixture.agentMemberID)
+			},
+		},
+		{
+			name:    "human manager",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestHumanMemberManagementCapabilities(t, fixture.channelID, fixture.managerID)
+			},
+		},
+		{
+			name:    "agent manager",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestAgentMemberManagementCapabilities(t, fixture.channelID, fixture.agentManagerID)
+			},
+		},
+		{
+			name:    "human channel owner",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestHumanMemberManagementCapabilities(t, fixture.channelID, fixture.ownerID)
+			},
+		},
+		{
+			name:    "nonmember human workspace admin",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestHumanMemberManagementCapabilities(t, fixture.channelID, humanAdminID)
+			},
+		},
+		{
+			name:    "nonmember agent workspace admin",
+			fixture: fixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestAgentMemberManagementCapabilities(t, fixture.channelID, agentAdminID)
+			},
+		},
+		{
+			name:    "nonmember human workspace owner",
+			fixture: workspaceOwnerFallbackFixture,
+			call: func(t *testing.T) *httptest.ResponseRecorder {
+				return requestHumanMemberManagementCapabilities(
+					t,
+					workspaceOwnerFallbackFixture.channelID,
+					testUserID,
+				)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertArchivedMemberManagementCapabilities(t, tc.call(t), tc.fixture)
+		})
 	}
 }
 
@@ -698,22 +817,18 @@ func TestMemberManagementCapabilitiesFailClosedAcrossWorkspaces(t *testing.T) {
 	}
 }
 
-func TestMemberManagementCapabilitiesKeepAdminProjectionSeparateFromPrivateContent(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	fixture := newMemberManagementCapabilitiesFixture(t)
-	humanAdminID := createChannelWorkspaceAdmin(t)
-	taskID, _ := createChannelCompletionTask(t, "group")
-	agentAdminID := agentIDForTask(t, taskID)
-	setAgentWorkspaceRoleForCapabilityTest(t, agentAdminID, "admin")
-
+func seedPrivateCapabilityBoundaryRoot(
+	t *testing.T,
+	fixture memberManagementCapabilitiesFixture,
+	authorID string,
+) ChannelMessageResponse {
+	t.Helper()
 	root, err := testHandler.insertChannelMessage(
 		context.Background(),
 		parseUUID(fixture.channelID),
 		parseUUID(testWorkspaceID),
 		"user",
-		parseUUID(testUserID),
+		parseUUID(authorID),
 		"Tester",
 		"private capability boundary",
 		"multica",
@@ -726,22 +841,17 @@ func TestMemberManagementCapabilitiesKeepAdminProjectionSeparateFromPrivateConte
 	if err != nil {
 		t.Fatalf("seed private channel root: %v", err)
 	}
+	return root
+}
 
-	t.Run("human admin gets exact projection", func(t *testing.T) {
-		assertMemberManagementCapabilityWhitelist(
-			t,
-			requestHumanMemberManagementCapabilities(t, fixture.channelID, humanAdminID),
-			fixture,
-		)
-	})
-	t.Run("agent admin gets exact projection", func(t *testing.T) {
-		assertMemberManagementCapabilityWhitelist(
-			t,
-			requestAgentMemberManagementCapabilities(t, fixture.channelID, agentAdminID),
-			fixture,
-		)
-	})
-
+func assertNonmemberHumanPrivateContentDenied(
+	t *testing.T,
+	label string,
+	userID string,
+	fixture memberManagementCapabilitiesFixture,
+	root ChannelMessageResponse,
+) {
+	t.Helper()
 	for _, tc := range []struct {
 		name    string
 		path    string
@@ -767,17 +877,101 @@ func TestMemberManagementCapabilitiesKeepAdminProjectionSeparateFromPrivateConte
 			handler: testHandler.ListChannelAttachments,
 		},
 	} {
-		t.Run("human admin content denied/"+tc.name, func(t *testing.T) {
-			req := newRequestAs(humanAdminID, http.MethodGet, tc.path, nil)
-			req = withChannelTestWorkspaceCtx(t, req, humanAdminID)
+		t.Run(label+"/"+tc.name, func(t *testing.T) {
+			req := newRequestAs(userID, http.MethodGet, tc.path, nil)
+			req = withChannelTestWorkspaceCtx(t, req, userID)
 			req = withURLParams(req, tc.params...)
 			rec := httptest.NewRecorder()
 			tc.handler(rec, req)
 			if rec.Code != http.StatusForbidden {
-				t.Fatalf("nonmember human admin %s status=%d want 403 body=%s", tc.name, rec.Code, rec.Body.String())
+				t.Fatalf(
+					"nonmember %s %s status=%d want 403 body=%s",
+					label,
+					tc.name,
+					rec.Code,
+					rec.Body.String(),
+				)
 			}
 		})
 	}
+}
+
+func TestMemberManagementCapabilitiesAllowNonmemberWorkspaceOwnerWithoutContentAccess(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	var workspaceRole string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT role
+		FROM member
+		WHERE workspace_id = $1 AND user_id = $2`,
+		testWorkspaceID,
+		testUserID,
+	).Scan(&workspaceRole); err != nil {
+		t.Fatalf("load fixture workspace owner role: %v", err)
+	}
+	if workspaceRole != "owner" {
+		t.Fatalf("fixture user workspace role=%q want owner", workspaceRole)
+	}
+
+	channelOwnerID := createChannelPlainMember(t)
+	fixture := newMemberManagementCapabilitiesFixtureForOwner(t, channelOwnerID)
+	assertChannelUserMembershipCount(t, fixture.channelID, testUserID, 0)
+	root := seedPrivateCapabilityBoundaryRoot(t, fixture, channelOwnerID)
+
+	t.Run("exact management projection", func(t *testing.T) {
+		response := assertMemberManagementCapabilityWhitelist(
+			t,
+			requestHumanMemberManagementCapabilities(t, fixture.channelID, testUserID),
+			fixture,
+		)
+		if !response.CanAddMembers || !response.CanRemoveMembers || response.CanLeave {
+			t.Fatalf("nonmember workspace owner caps=%+v want add/remove true and leave false", response)
+		}
+	})
+	assertNonmemberHumanPrivateContentDenied(
+		t,
+		"workspace owner content denied",
+		testUserID,
+		fixture,
+		root,
+	)
+}
+
+func TestMemberManagementCapabilitiesKeepAdminProjectionSeparateFromPrivateContent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := newMemberManagementCapabilitiesFixture(t)
+	humanAdminID := createChannelWorkspaceAdmin(t)
+	taskID, _ := createChannelCompletionTask(t, "group")
+	agentAdminID := agentIDForTask(t, taskID)
+	setAgentWorkspaceRoleForCapabilityTest(t, agentAdminID, "admin")
+
+	root := seedPrivateCapabilityBoundaryRoot(t, fixture, testUserID)
+
+	t.Run("human admin gets exact projection", func(t *testing.T) {
+		assertMemberManagementCapabilityWhitelist(
+			t,
+			requestHumanMemberManagementCapabilities(t, fixture.channelID, humanAdminID),
+			fixture,
+		)
+	})
+	t.Run("agent admin gets exact projection", func(t *testing.T) {
+		assertMemberManagementCapabilityWhitelist(
+			t,
+			requestAgentMemberManagementCapabilities(t, fixture.channelID, agentAdminID),
+			fixture,
+		)
+	})
+
+	assertNonmemberHumanPrivateContentDenied(
+		t,
+		"human admin content denied",
+		humanAdminID,
+		fixture,
+		root,
+	)
 
 	for _, target := range []string{
 		"#" + fixture.channelName,

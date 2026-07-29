@@ -66,13 +66,175 @@ jobs:
       - name: React Doctor
         run: pnpm react:doctor
 
-      - name: Build, type check, lint, and test
+      - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.
         # Mobile remains path-filtered in mobile-verify.yml; desktop packaging
         # is out of the main release gate (#1320). Dependents of @multica/web
         # (core/ui/views) are included via the `...` selector.
-        run: pnpm exec turbo build typecheck lint test --filter='@multica/web...'
+        # ⚠️ MEASUREMENT INSTRUMENTATION (task #855) — the `--cache-dir` /
+        # `--cache` flags below are TEMPORARY and MUST be removed before merge.
+        # They exist only so the verification rounds are genuinely cache-cold:
+        # the cache action restores `.turbo/cache`, so an attempt-specific
+        # directory is cold on every fresh runner/attempt, while both steps in
+        # ONE attempt share it (so the `^typecheck` this step just ran is a HIT
+        # in the Test step, and each package's `test` must be a MISS).
+        # Pushing empty commits would NOT prove cache-miss: the cache key's
+        # `restore-keys` cascade means a new SHA can still restore an older
+        # Turbo cache. (@Ronan)
+        run: >
+          pnpm exec turbo build typecheck lint --filter='@multica/web...'
+          --cache=local:rw --cache-dir=".turbo/855-${{ github.run_attempt }}"
+
+      - name: Test
+        # task #853/#855 — `test` is a SEPARATE turbo invocation, pinned to one
+        # outer task at a time. Previously all four tasks shared one command, so
+        # turbo ran several packages' `test` concurrently and EACH spawned its
+        # own pool of Vitest file workers: outer task concurrency × inner worker
+        # count. On a runner that oversubscribes the CPU badly enough to starve
+        # whichever test is unlucky enough to be mid-`waitFor` — the failure
+        # lands on a different file each time the load changes, which is why it
+        # kept reddening PRs whose diffs never touched views (#1243, #1232).
+        #
+        # `--concurrency=1` bounds only the OUTER task graph. Each package still
+        # uses its own file workers, so views' 297 files stay parallel; we are
+        # removing the multiplication, not serialising the suite.
+        #
+        # The cost is small and was measured before choosing this. Note the
+        # package set is exactly what `@multica/web...` expands to — core, ui,
+        # views, web; desktop is NOT in this job (`Web-only`, above), so it is
+        # not part of the trade: views ~65s is ~92% of this job's test wall time
+        # (core 3.51s + web 1.77s ≈ 5.3s; ui has no test script), so giving up
+        # cross-package overlap costs ~5s at most.
+        #
+        # Deliberately NOT done here: raising any timeout. Starvation slowdown is
+        # a censored lower bound of ≥21–24×, so no timeout value is known to be
+        # sufficient — raising it would hide the symptom while leaving the
+        # contention, and turn a stable red into an intermittent one.
+        #
+        # ⚠️ MEASUREMENT INSTRUMENTATION BELOW — TEMPORARY, REMOVE BEFORE MERGE.
+        # The cache flags, `--summarize`, the setsid process group and the RSS
+        # sampler exist only to produce task #855's three cache-cold rounds.
+        # The production diff is the command split above plus these comments.
+        #
+        # RSS is sampled as the AGGREGATE over the whole process group, not a
+        # single process max: the mechanism under investigation is several
+        # processes contending at once, which a single-process peak cannot see.
+        # The per-sample process COUNT is printed as the sampler's own
+        # calibration — if it stays at 1, the sampler is not seeing Vitest's
+        # worker children and the RSS figure is INVALID, not "low". A sampler
+        # that misses children reports small numbers, which look identical to
+        # genuine headroom. (@Wren)
+        #
+        # SCOPE OF WHAT A LOW READING PROVES: only that THIS configuration is
+        # bounded. It says nothing about the old outer×inner regime, because
+        # `--concurrency=1` has already removed that multiplication — so it
+        # cannot retire the parked memory-pressure hypothesis, which needs a
+        # comparison under the OLD regime with the same sampler. A HIGH reading
+        # would be informative (successor still has a problem); a low one is
+        # not. One-directional. (@Ronan)
+        run: |
+          set -uo pipefail
+          MEMTOTAL_KB="$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
+          echo "::notice::MemTotal_kB=${MEMTOTAL_KB} attempt=${{ github.run_attempt }}"
+          START=$(date +%s)
+          # ⚠️ DIAGNOSTIC ROUND ONLY (task #855, authorised by @Ronan) —
+          # NOT the production shape and NOT part of the 3-run acceptance.
+          #
+          # Outer Turbo parallelism is RESTORED (no `--concurrency=1`) and the
+          # throttle is moved INSIDE each Vitest via `--maxWorkers=1`. Turbo
+          # forwards args after `--` to the underlying task; verified locally
+          # that vitest 4.1.0 accepts `maxWorkers` (CLI only — there is no
+          # env-var equivalent in the installed dist).
+          #
+          # This round answers one yes/no: does inner throttling have any room
+          # on a 2-core runner? Every branch is a usable result —
+          #   wall better + no timeout  → inner throttling works
+          #   wall worse  + no timeout  → contention real, wrong lever (views
+          #                               is dominant and gets starved of
+          #                               workers), close this direction
+          #   timeouts persist          → inner throttling does not even fix
+          #                               starvation; kill the approach
+          #
+          # Cache/instrumentation baseline is deliberately unchanged so the
+          # wall is comparable with attempt 1's 804s.
+          setsid pnpm exec turbo test --filter='@multica/web...' \
+            --cache=local:rw --cache-dir=".turbo/855-${{ github.run_attempt }}" \
+            --summarize -- --maxWorkers=1 &
+          TURBO_PID=$!
+          # Do NOT assume PGID == $!: depending on whether `setsid` execs or
+          # forks, $! can be setsid itself rather than the group leader. Read
+          # the real PGID back instead of guessing — a wrong group silently
+          # yields an empty sum, i.e. a small number that looks like headroom.
+          PGID="$(ps -o pgid= -p "${TURBO_PID}" 2>/dev/null | tr -d ' ')"
+          PGID="${PGID:-${TURBO_PID}}"
+          echo "::notice::sampling pgid=${PGID} (job pid=${TURBO_PID})"
+          PEAK_KB=0
+          PEAK_PROCS=0
+          while kill -0 "${TURBO_PID}" 2>/dev/null; do
+            read -r SUM NPROC <<<"$(ps -eo pgid=,rss= | awk -v g="${PGID}" \
+              '$1==g {s+=$2; n++} END {print s+0, n+0}')"
+            [ "${SUM}" -gt "${PEAK_KB}" ] && PEAK_KB="${SUM}"
+            [ "${NPROC}" -gt "${PEAK_PROCS}" ] && PEAK_PROCS="${NPROC}"
+            echo "rss_sample_kB=${SUM} procs=${NPROC}"
+            sleep 1
+          done
+          wait "${TURBO_PID}"; STATUS=$?
+          WALL=$(( $(date +%s) - START ))
+          echo "::notice::wall_s=${WALL} peak_aggregate_rss_kB=${PEAK_KB} peak_procs=${PEAK_PROCS} pct_of_memtotal=$(( PEAK_KB * 100 / MEMTOTAL_KB ))"
+          if [ "${PEAK_PROCS}" -le 1 ]; then
+            echo "::warning::RSS INVALID — sampler never saw more than one process; it did not observe Vitest workers. Do not read the RSS figure."
+          fi
+          echo "--- process-group command sample (calibration evidence) ---"
+          ps -eo pgid=,pid=,comm= | awk -v g="${PGID}" '$1==g' | head -20 || true
+          # ⚠️ Round 1 read peak_procs=3 / 178MB / 2% of MemTotal.
+          #
+          # An earlier version of this comment said worker threads "cannot be
+          # enumerated" by process-group aggregation. That was WRONG (@Ronan):
+          # RSS is process-level and already includes every thread / V8 isolate
+          # resident in the process, and child processes inheriting the PGID are
+          # aggregated too. The actual limitations are that 1s sampling can miss
+          # transient peaks, and that summing RSS across processes double-counts
+          # shared pages — so this is not precise unique memory. `peak_procs>1`
+          # shows several processes were caught; it is not a thread-coverage
+          # condition. Conservative reading only: "peak observed under this
+          # sampling method is far below MemTotal; precise unique / cgroup peak
+          # not measured."
+          echo "--- turbo run summaries (cache status per task) ---"
+          for f in .turbo/runs/*.json; do
+            [ -e "$f" ] || continue
+            echo "== $f"
+            # `require` needs an explicit path, not a bare relative string —
+            # otherwise Node resolves it as a MODULE NAME and throws. Read the
+            # file instead of requiring it (round 1 was voided by this bug: the
+            # run itself was fine, but the cache-status evidence never printed).
+            # Per-task DURATION is printed alongside cache status because the
+            # step wall is only comparable between rounds when the cache
+            # pattern matches. `-- --maxWorkers=1` is folded into every task's
+            # hash (turbo), so the test step's typecheck misses when the arg is
+            # present and hits when it is not — round 1's 812s therefore
+            # included cold typecheck while the 804s baseline did not. Summing
+            # the `#test` tasks' own durations sidesteps that entirely: it
+            # measures the same work regardless of what typecheck did. The step
+            # wall is still reported, since serialising multiple test tasks is
+            # a real cost the per-task figures alone would hide.
+            #
+            # NB: the arg CANNOT simply be added to the build/typecheck/lint
+            # step to force hash parity — verified locally that `tsc` rejects
+            # it outright (`error TS5023: Unknown compiler option`).
+            node -e '
+              const fs = require("node:fs");
+              const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              let testMs = 0;
+              for (const t of (j.tasks || [])) {
+                const ms = (t.execution?.endTime ?? 0) - (t.execution?.startTime ?? 0);
+                if (t.taskId.endsWith("#test")) testMs += ms;
+                console.log(`  ${t.taskId}  cache.status=${t.cache?.status}  duration_ms=${ms}`);
+              }
+              console.log(`  SUM_OF_TEST_TASK_DURATIONS_ms=${testMs}`);
+            ' "$f" || cat "$f"
+          done
+          exit "${STATUS}"
 
   backend:
     runs-on: ubuntu-latest

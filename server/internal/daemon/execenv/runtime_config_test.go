@@ -1066,10 +1066,10 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.8)",
+		"### Memory Operating Guide (v0.9)",
 		"Use high-strength auto-write for human preferences and durable work arrangements",
 		"treat human speech as high-signal by default",
-		"A verbal acknowledgment such as \"got it\" does not count as remembering",
+		"A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering",
 		"current user's isolated `USER.md`",
 		"likely to matter in a future run",
 		"Write target map",
@@ -1087,6 +1087,8 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"Pure social greetings",
 		"Human feedback first",
 		"corrections, rework requests, confirmations, and explicit dissatisfaction",
+		"Process lessons and \"记住到 memory\"",
+		"mr_workflow",
 		"Optional memory signal (not a second write path)",
 		"memory-signal.jsonl",
 		"Daily journal (hot path) vs self-review/curator (cold path)",
@@ -1166,7 +1168,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.8)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.9)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

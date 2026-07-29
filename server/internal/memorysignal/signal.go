@@ -64,8 +64,8 @@ type MissedWrite struct {
 }
 
 var (
-	explicitRememberRE = regexp.MustCompile(`(?i)(记住这个|记一下|写下来|记下来|remember\s+this|write\s+this\s+down|don't\s+forget|do\s+not\s+forget)`)
-	durableFeedbackRE  = regexp.MustCompile(`(?i)(以后都|以后要|别再|不要再|下次先|下次要|我不喜欢|不要把|这个项目必须|都必须|必须先|先反馈|持续.*(进度|汇报)|发现问题.*指出|remember\s+that|from\s+now\s+on|always\s+|never\s+again|don't\s+ever|do\s+not\s+ever|prefer\s+that|next\s+time)`)
+	explicitRememberRE = regexp.MustCompile(`(?i)(记住这个|记住到|记到\s*memory|写进\s*memory|写到\s*memory|固化|记一下|写下来|记下来|remember\s+this|write\s+this\s+down|write\s+it\s+(to|into)\s+memory|don't\s+forget|do\s+not\s+forget)`)
+	durableFeedbackRE  = regexp.MustCompile(`(?i)(以后都|以后要|以后得|别再|不要再|下次先|下次要|我不喜欢|不要把|这个项目必须|都必须|必须先|先反馈|持续.*(进度|汇报)|发现问题.*指出|又犯(过|了|错)|别再犯|上次也是|没记住|提\s*MR|开\s*MR|建\s*MR|merge\s*request|先\s*rebase|rebase.*dev|pipeline.*绿|记住了|remember\s+that|from\s+now\s+on|always\s+|never\s+again|don't\s+ever|do\s+not\s+ever|prefer\s+that|next\s+time)`)
 )
 
 // ParseSignalJSON accepts a single JSON object or {"memory":{...}} wrapper.
@@ -304,6 +304,8 @@ func InferTopic(trigger, summary string) string {
 		return "privacy_redaction"
 	case strings.Contains(text, "中文") || strings.Contains(text, "english") || strings.Contains(text, "语言") || strings.Contains(text, "language"):
 		return "language_preference"
+	case strings.Contains(text, "mr") || strings.Contains(text, "merge request") || strings.Contains(text, "rebase") || strings.Contains(text, "pipeline") || strings.Contains(text, "提mr") || strings.Contains(text, "开mr") || strings.Contains(text, "建mr"):
+		return "mr_workflow"
 	default:
 		if LooksLikeExplicitRemember(trigger) {
 			return "explicit_remember"

@@ -8,9 +8,15 @@ func TestLooksLikeDurableFeedback(t *testing.T) {
 		want bool
 	}{
 		{"记住这个：发材料前去掉第三方个人信息", true},
+		{"记住到memory 里", true},
+		{"记住到 memory", true},
+		{"写进 memory", true},
 		{"以后长任务先反馈一下进度", true},
 		{"别再只说好", true},
 		{"下次先确认再动手", true},
+		{"pipeline也有错，以后都得记住", true},
+		{"那你为什么又犯错了", true},
+		{"先 rebase/merge dev，再建 MR", true},
 		{"hello", false},
 		{"帮我看一下这个 bug", false},
 		{"from now on always report progress first", true},
@@ -20,6 +26,19 @@ func TestLooksLikeDurableFeedback(t *testing.T) {
 		if got := LooksLikeDurableFeedback(tc.text); got != tc.want {
 			t.Fatalf("%q: got %v want %v", tc.text, got, tc.want)
 		}
+	}
+}
+
+func TestInferTopicMRWorkflow(t *testing.T) {
+	if got := InferTopic("提 MR 前先 rebase/merge dev，pipeline 绿再合并", ""); got != "mr_workflow" {
+		t.Fatalf("got %q", got)
+	}
+	miss, ok := DetectMissedWrite("记住到memory 里\n以后先 rebase/merge dev，再建 MR", nil, nil, "member-1")
+	if !ok {
+		t.Fatal("expected missed write for 记住到memory")
+	}
+	if miss.Topic != "mr_workflow" {
+		t.Fatalf("topic=%q miss=%+v", miss.Topic, miss)
 	}
 }
 

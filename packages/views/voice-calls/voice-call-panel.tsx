@@ -172,7 +172,14 @@ export function VoiceCallPanel({
               role="alert"
               className="mt-4 w-full rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-left text-xs leading-5 text-destructive"
             >
-              {failureMessage}
+              <p>{failureMessage}</p>
+              {error?.providerCode && (
+                <p className="mt-1 font-mono text-[11px] text-destructive/80">
+                  {t(($) => $.voice_call.rtc_diagnostic_code, {
+                    code: error.providerCode,
+                  })}
+                </p>
+              )}
             </div>
           )}
 

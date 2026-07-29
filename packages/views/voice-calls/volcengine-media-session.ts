@@ -27,6 +27,7 @@ export class VoiceCallMediaError extends Error {
   constructor(
     public readonly code: VoiceCallMediaErrorCode,
     message: string,
+    public readonly providerCode?: string,
     options?: ErrorOptions,
   ) {
     super(message, options);
@@ -140,7 +141,12 @@ function mediaError(
 ): VoiceCallMediaError {
   return cause instanceof VoiceCallMediaError
     ? cause
-    : new VoiceCallMediaError(code, message, { cause });
+    : new VoiceCallMediaError(code, message, undefined, { cause });
+}
+
+function normalizeProviderCode(providerCode: string): string | undefined {
+  const value = providerCode.trim();
+  return /^-?\d{1,10}$/.test(value) ? value : undefined;
 }
 
 export class VolcengineVoiceMediaSession {
@@ -243,6 +249,7 @@ export class VolcengineVoiceMediaSession {
             const error = new VoiceCallMediaError(
               "provider_error",
               `Voice call media provider failed (${providerCode})`,
+              normalizeProviderCode(providerCode),
             );
             this.fatalError = error;
             this.disconnectRequested = true;

@@ -239,11 +239,12 @@ describe("VolcengineVoiceMediaSession", () => {
     );
     await session.connect(media);
 
-    harness.getCallbacks()?.onFatalError("TOKEN_EXPIRED");
+    harness.getCallbacks()?.onFatalError("-1000");
 
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining<Partial<VoiceCallMediaError>>({
         code: "provider_error",
+        providerCode: "-1000",
       }),
     );
     await vi.waitFor(() => {

@@ -43,6 +43,7 @@ export interface VoiceCallControllerError {
   source: VoiceCallControllerErrorSource;
   code: string;
   message: string;
+  providerCode?: string;
 }
 
 export interface VoiceCallMediaSession {
@@ -93,6 +94,9 @@ function controllerError(
     source,
     code: error instanceof VoiceCallMediaError ? error.code : code,
     message: errorMessage(error, fallback),
+    providerCode: error instanceof VoiceCallMediaError
+      ? error.providerCode
+      : undefined,
   };
 }
 

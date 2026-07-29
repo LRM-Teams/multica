@@ -1217,7 +1217,6 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 			FROM agent a
 			WHERE a.workspace_id = $1
 			  AND a.archived_at IS NULL
-			  AND COALESCE(a.managed_role, '') <> 'group_manager'
 			  AND (a.visibility <> 'channel' OR a.home_channel_id = $2)
 			  AND NOT EXISTS (
 				SELECT 1 FROM channel_member cm
@@ -4682,7 +4681,6 @@ func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelRe
 	if h.WorkGraph == nil || ch.Kind != "group" {
 		return
 	}
-	h.touchWendyChannelAmbient(ctx, ch, msg)
 	mentions := util.ParseMentionsFromContentAndParts(msg.Content, msg.Parts)
 	agentIDs := make([]pgtype.UUID, 0, len(mentions))
 	for _, mention := range mentions {
@@ -4707,24 +4705,6 @@ func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelRe
 			}
 		}
 	}
-}
-
-// ingestWendyAgentGroupMessage re-arms ambient debounce when another agent posts
-// in a group. Agent completions otherwise leave the chain stuck until the next
-// human message. The group manager's (Beckham's) own posts are skipped to avoid
-// review loops.
-func (h *Handler) ingestWendyAgentGroupMessage(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse, agentID pgtype.UUID) {
-	if h.WorkGraph == nil || ch.Kind != "group" || !agentID.Valid {
-		return
-	}
-	managerID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID))
-	if !ok {
-		return
-	}
-	if uuidToString(agentID) == uuidToString(managerID) {
-		return
-	}
-	h.touchWendyChannelAmbient(ctx, ch, msg)
 }
 
 func channelMessageSignalsRework(content string) bool {
@@ -4822,7 +4802,6 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to commit lark message import")
 		return
 	}
-	h.publishRearmedManagedPatrol(r.Context(), inserted.RearmedManagedPatrol)
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(msg.ChannelID))
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, parseUUID(ch.ID), msg)
@@ -4858,14 +4837,6 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 		}
 		if ok, msg := canInviteAgentToChannel(agent, homeChannelID, uuidToString(channelID)); !ok {
 			writeError(w, http.StatusBadRequest, msg)
-			return false
-		}
-		// Group managers (贝克汉姆) are one-per-group and auto-managed; they must
-		// not be manually invited into a channel (that is how foreign groups'
-		// managers used to leak in as duplicates).
-		var managedRole pgtype.Text
-		if err := h.DB.QueryRow(r.Context(), `SELECT managed_role FROM agent WHERE id = $1`, memberID).Scan(&managedRole); err == nil && managedRole.Valid && managedRole.String == managedRoleGroupManager {
-			writeError(w, http.StatusBadRequest, "群管理（贝克汉姆）由系统按群自动管理，不能手动加入频道")
 			return false
 		}
 		return true
@@ -5694,24 +5665,11 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 		}
 	}
 
-	// Stamp the channel's group manager (Beckham) so the client-side mention
-	// quick-reply popup can offer a one-click "hand it to Beckham" action
-	// without a separate lookup. Empty when the group has no manager.
-	gmID, gmName := "", ""
-	if mgr, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID)); ok {
-		gmID = uuidToString(mgr)
-		var n string
-		if err := h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(display_name, ''), name) FROM agent WHERE id = $1`, mgr).Scan(&n); err == nil {
-			gmName = n
-		}
-	}
 	details, _ := json.Marshal(map[string]string{
-		"channel_id":             ch.ID,
-		"channel_name":           ch.Name,
-		"message_id":             msg.ID,
-		"actor_name":             msg.AuthorName,
-		"group_manager_agent_id": gmID,
-		"group_manager_name":     gmName,
+		"channel_id":   ch.ID,
+		"channel_name": ch.Name,
+		"message_id":   msg.ID,
+		"actor_name":   msg.AuthorName,
 	})
 	body := strings.TrimSpace(msg.Content)
 	if runes := []rune(body); len(runes) > 280 {
@@ -6359,12 +6317,11 @@ func (h *Handler) buildChannelMentionPromptForActor(ctx context.Context, ch Chan
 		b.WriteString("\n")
 	}
 	appendChannelFacilitatorPromptSection(&b, facilitatorState)
-	// A @mention from the channel's group manager (贝克汉姆/Beckham) is an
-	// authoritative coordination directive, not a weak agent-to-agent ping: the
-	// worker must respond and act. Overrides the weak-notification default above.
+	// A @mention from any current agent manager is an authoritative coordination
+	// directive, not a weak agent-to-agent ping.
 	if trigger.Type == "agent" && trigger.AuthorID != nil {
-		if mgrID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID)); ok && uuidToString(mgrID) == *trigger.AuthorID {
-			b.WriteString("- This @mention is from 贝克汉姆, the group manager coordinating this channel. Treat it as a DIRECTED request (not a weak agent-to-agent notification): do the work now and produce a concrete deliverable — make the change / run it / advance the referenced issue and update its status — then report the result. A bare acknowledgment (\"收到\"/\"我这就做\") without actually progressing the work does not satisfy this; if you are blocked, say the specific blocker and who can unblock you.\n")
+		if h.isChannelAgentManager(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), parseUUID(*trigger.AuthorID)) {
+			b.WriteString("- This @mention is from a group manager coordinating this channel. Treat it as a DIRECTED request (not a weak agent-to-agent notification): do the work now and produce a concrete deliverable — make the change / run it / advance the referenced issue and update its status — then report the result. A bare acknowledgment (\"收到\"/\"我这就做\") without actually progressing the work does not satisfy this; if you are blocked, say the specific blocker and who can unblock you.\n")
 		}
 	}
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
@@ -7079,7 +7036,6 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err := tx.Commit(ctx); err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 	return channelMessageCreateResult{Message: msg, Created: true}, nil
 }
 
@@ -7233,7 +7189,6 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 	if err := tx.Commit(ctx); err != nil {
 		return ChannelMessageResponse{}, err
 	}
-	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 	return inserted.Message, nil
 }
 
@@ -7242,8 +7197,7 @@ type channelMessageInsertResult struct {
 	RearmedManagedPatrol *agentReminder
 }
 
-// insertChannelMessageWithPartsExec mutates only transactional state. A caller
-// that receives RearmedManagedPatrol must publish it strictly after commit.
+// insertChannelMessageWithPartsExec mutates only transactional state.
 func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (channelMessageInsertResult, error) {
 	row := exec.QueryRow(ctx, `
 			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth)
@@ -7260,11 +7214,7 @@ func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, cha
 	if err := incrementChannelMentionUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, content, parts); err != nil {
 		return channelMessageInsertResult{}, err
 	}
-	rearmed, err := rearmDormantManagedPatrolForChannelMessage(ctx, exec, workspaceID, channelID, msg)
-	if err != nil {
-		return channelMessageInsertResult{}, err
-	}
-	return channelMessageInsertResult{Message: msg, RearmedManagedPatrol: rearmed}, nil
+	return channelMessageInsertResult{Message: msg}, nil
 }
 
 func incrementChannelMainUnreadCounters(ctx context.Context, exec dbExecutor, channelID pgtype.UUID, authorType string, authorID pgtype.UUID, seq int64, threadRootMessageID pgtype.UUID) error {

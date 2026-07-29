@@ -958,7 +958,6 @@ func (h *Handler) isSquadLeaderReady(ctx context.Context, issue db.Issue) bool {
 	return false
 }
 
-
 func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string) {
 	// Squad product retired: never enqueue leader tasks.
 	_ = ctx

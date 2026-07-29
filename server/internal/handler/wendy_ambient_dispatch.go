@@ -81,9 +81,6 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 	if err != nil || supervisor.ArchivedAt.Valid || !supervisor.RuntimeID.Valid {
 		return false, h.WorkGraph.CancelChannelAmbientClaim(ctx, watch.ChannelID, claimToken, "Wendy unavailable")
 	}
-	// Opportunistically bring an existing Beckham's persona/avatar up to date.
-	supervisor = h.refreshGroupManagerIfStale(ctx, supervisor)
-
 	markdown, err := h.buildWendyAmbientChannelMarkdown(ctx, watch, channel)
 	if err != nil {
 		return false, err
@@ -99,7 +96,7 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 		TriggerKind:    "event",
 		TriggerRef:     triggerRef,
 		CooldownKey:    "wendy_ambient:" + uuidToString(watch.ChannelID),
-		ContextSummary: "Beckham ambient review for channel " + channel.Name,
+		ContextSummary: "Legacy ambient review for channel " + channel.Name,
 		ScheduledFor:   time.Now().UTC(),
 		Prompt:         prompt,
 	})
@@ -724,33 +721,3 @@ func trimAmbientEvidenceJSON(raw []byte) string {
 	}
 	return string(envelope)
 }
-
-func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
-	if h.WorkGraph == nil || ch.Kind != "group" {
-		return
-	}
-	managerID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID))
-	if !ok {
-		return
-	}
-	messageAt := time.Now()
-	if msg.CreatedAt != "" {
-		if parsed, parseErr := time.Parse(time.RFC3339, msg.CreatedAt); parseErr == nil {
-			messageAt = parsed
-		} else if parsed, parseErr := time.Parse(time.RFC3339Nano, msg.CreatedAt); parseErr == nil {
-			messageAt = parsed
-		}
-	}
-	var messageID pgtype.UUID
-	if msg.ID != "" {
-		if parsed, parseErr := util.ParseUUID(msg.ID); parseErr == nil {
-			messageID = parsed
-		}
-	}
-	if err := h.WorkGraph.TouchChannelAmbient(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), managerID, messageID, messageAt); err != nil {
-		slog.Warn("touch group manager channel ambient failed", "channel_id", ch.ID, "message_id", msg.ID, "error", err)
-	}
-}
-
-// resolveWendyAmbientAgentForChannel was removed: ambient watching now belongs to
-// the per-group manager (Beckham) resolved via resolveGroupManagerForChannel.

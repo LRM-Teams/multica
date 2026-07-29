@@ -11,30 +11,30 @@ import (
 )
 
 type ResearchSessionResponse struct {
-	ID            string  `json:"id"`
-	WorkspaceID   string  `json:"workspace_id"`
-	FleetID       string  `json:"fleet_id"`
-	CreatedBy     string  `json:"created_by"`
-	Title         string  `json:"title"`
-	Goal          string  `json:"goal"`
-	Status        string  `json:"status"`
-	CurrentStage  string  `json:"current_stage"`
-	ProjectID     *string `json:"project_id"`
-	ChannelID     *string `json:"channel_id"`
+	ID             string  `json:"id"`
+	WorkspaceID    string  `json:"workspace_id"`
+	FleetID        string  `json:"fleet_id"`
+	CreatedBy      string  `json:"created_by"`
+	Title          string  `json:"title"`
+	Goal           string  `json:"goal"`
+	Status         string  `json:"status"`
+	CurrentStage   string  `json:"current_stage"`
+	ProjectID      *string `json:"project_id"`
+	ChannelID      *string `json:"channel_id"`
 	HandoffSummary *string `json:"handoff_summary"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     string  `json:"updated_at"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 type ResearchSessionSnapshot struct {
-	Session  ResearchSessionResponse   `json:"session"`
-	Fleet    ResearchFleetResponse     `json:"fleet"`
-	Nodes    []ResearchGraphNodeResp   `json:"nodes"`
-	Edges    []ResearchGraphEdgeResp   `json:"edges"`
-	Sources  []ResearchSourceResp      `json:"sources"`
-	Report   *ResearchReportResp       `json:"report"`
-	Evals    []ResearchStageEvalResp   `json:"evals"`
-	Messages []ResearchMessageResp     `json:"messages"`
+	Session  ResearchSessionResponse `json:"session"`
+	Fleet    ResearchFleetResponse   `json:"fleet"`
+	Nodes    []ResearchGraphNodeResp `json:"nodes"`
+	Edges    []ResearchGraphEdgeResp `json:"edges"`
+	Sources  []ResearchSourceResp    `json:"sources"`
+	Report   *ResearchReportResp     `json:"report"`
+	Evals    []ResearchStageEvalResp `json:"evals"`
+	Messages []ResearchMessageResp   `json:"messages"`
 }
 
 type ResearchGraphNodeResp struct {
@@ -60,29 +60,29 @@ type ResearchGraphEdgeResp struct {
 }
 
 type ResearchSourceResp struct {
-	ID                 string          `json:"id"`
-	SessionID          string          `json:"session_id"`
-	URL                string          `json:"url"`
-	Title              string          `json:"title"`
-	SourceClass        string          `json:"source_class"`
-	CredibilityWeight  float64         `json:"credibility_weight"`
-	Stance             string          `json:"stance"`
-	Relevance          float64         `json:"relevance"`
-	Summary            string          `json:"summary"`
-	Excerpt            string          `json:"excerpt"`
-	Payload            json.RawMessage `json:"payload"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	URL               string          `json:"url"`
+	Title             string          `json:"title"`
+	SourceClass       string          `json:"source_class"`
+	CredibilityWeight float64         `json:"credibility_weight"`
+	Stance            string          `json:"stance"`
+	Relevance         float64         `json:"relevance"`
+	Summary           string          `json:"summary"`
+	Excerpt           string          `json:"excerpt"`
+	Payload           json.RawMessage `json:"payload"`
+	CreatedAt         string          `json:"created_at"`
+	UpdatedAt         string          `json:"updated_at"`
 }
 
 type ResearchReportResp struct {
-	ID          string          `json:"id"`
-	SessionID   string          `json:"session_id"`
-	Revision    int32           `json:"revision"`
-	ContentMD   string          `json:"content_md"`
-	Structured  json.RawMessage `json:"structured"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
+	ID         string          `json:"id"`
+	SessionID  string          `json:"session_id"`
+	Revision   int32           `json:"revision"`
+	ContentMD  string          `json:"content_md"`
+	Structured json.RawMessage `json:"structured"`
+	CreatedAt  string          `json:"created_at"`
+	UpdatedAt  string          `json:"updated_at"`
 }
 
 type ResearchStageEvalResp struct {

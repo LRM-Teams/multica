@@ -191,11 +191,6 @@ func TestSystemGeneralHandlersReturnStableProtectedConflict(t *testing.T) {
 			handler: testHandler.SetChannelProject,
 			req:     fixture.request(http.MethodPut, "/api/channels/"+fixture.channelID+"/project", map[string]any{"project_id": nil}, "channelId", fixture.channelID),
 		},
-		{
-			name:    "invite group manager",
-			handler: testHandler.InviteGroupManager,
-			req:     fixture.request(http.MethodPost, "/api/channels/"+fixture.channelID+"/group-manager", nil, "channelId", fixture.channelID),
-		},
 	}
 
 	for _, operation := range operations {

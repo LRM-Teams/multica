@@ -2776,40 +2776,40 @@ func TestAgentReminderModernTransportFireFallsBackToOwnerWithoutTimezoneDrift(t 
 				WHERE id = $1`, scheduled.ID, due); err != nil {
 				t.Fatalf("make modern reminder due: %v", err)
 			}
-	tx, err := testPool.Begin(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(context.Background(), `
+			tx, err := testPool.Begin(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(context.Background(), `
 INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
 VALUES ($1, $2, 'user', $3, 'member')
 ON CONFLICT (channel_id, member_type, member_id) DO NOTHING`,
-		fixture.channelID, testWorkspaceID, testUserID); err != nil {
-		_ = tx.Rollback(context.Background())
-		t.Fatalf("seed replacement channel member: %v", err)
-	}
-	if _, err := tx.Exec(context.Background(), `
+				fixture.channelID, testWorkspaceID, testUserID); err != nil {
+				_ = tx.Rollback(context.Background())
+				t.Fatalf("seed replacement channel member: %v", err)
+			}
+			if _, err := tx.Exec(context.Background(), `
 UPDATE channel_member SET role = 'member'
 WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2`,
-		fixture.channelID, fixture.initiatorUserID); err != nil {
-		_ = tx.Rollback(context.Background())
-		t.Fatalf("demote initiator channel owner: %v", err)
-	}
-	if _, err := tx.Exec(context.Background(), `
+				fixture.channelID, fixture.initiatorUserID); err != nil {
+				_ = tx.Rollback(context.Background())
+				t.Fatalf("demote initiator channel owner: %v", err)
+			}
+			if _, err := tx.Exec(context.Background(), `
 UPDATE channel_member SET role = 'owner'
 WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2`,
-		fixture.channelID, testUserID); err != nil {
-		_ = tx.Rollback(context.Background())
-		t.Fatalf("promote replacement channel owner: %v", err)
-	}
-	if err := tx.Commit(context.Background()); err != nil {
-		t.Fatalf("transfer channel ownership: %v", err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
+				fixture.channelID, testUserID); err != nil {
+				_ = tx.Rollback(context.Background())
+				t.Fatalf("promote replacement channel owner: %v", err)
+			}
+			if err := tx.Commit(context.Background()); err != nil {
+				t.Fatalf("transfer channel ownership: %v", err)
+			}
+			if _, err := testPool.Exec(context.Background(), `
 DELETE FROM member
 WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, fixture.initiatorUserID); err != nil {
-		t.Fatalf("remove reminder initiator membership: %v", err)
-	}
+				t.Fatalf("remove reminder initiator membership: %v", err)
+			}
 
 			if err := fireReminderAttempt(testHandler, scheduled.ID); err != nil {
 				t.Fatalf("fire modern reminder after initiator removal: %v", err)

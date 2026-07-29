@@ -97,3 +97,33 @@ func (h *Handler) publishChannelManagerRoleWake(
 		h.TaskService.NotifyTaskEnqueued(ctx, db.AgentInboxEvent(event))
 	}
 }
+
+func (h *Handler) isChannelAgentManager(
+	ctx context.Context,
+	workspaceID, channelID, agentID pgtype.UUID,
+) bool {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM channel_member membership
+		  JOIN channel channel_row
+		    ON channel_row.id = membership.channel_id
+		   AND channel_row.workspace_id = membership.workspace_id
+		  JOIN agent manager
+		    ON manager.id = membership.member_id
+		   AND manager.workspace_id = membership.workspace_id
+		  WHERE membership.workspace_id = $1
+		    AND membership.channel_id = $2
+		    AND membership.member_type = 'agent'
+		    AND membership.member_id = $3
+		    AND membership.role = 'manager'
+		    AND channel_row.archived_at IS NULL
+		    AND manager.archived_at IS NULL
+		)`,
+		workspaceID,
+		channelID,
+		agentID,
+	).Scan(&exists)
+	return err == nil && exists
+}

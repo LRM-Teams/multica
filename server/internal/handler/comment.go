@@ -1266,7 +1266,6 @@ func (h *Handler) computeAssignedSquadLeaderCommentTrigger(ctx context.Context, 
 	return commentAgentTrigger{}, false
 }
 
-
 func (h *Handler) commentMentionsOthersButNotAssignee(content string, issue db.Issue) bool {
 	mentions := util.ParseMentions(content)
 	// Filter out issue mentions — they are cross-references, not @people.

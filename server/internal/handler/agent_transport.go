@@ -1323,10 +1323,8 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 		if target.channel.Kind == "group" {
 			ch := target.channel
 			msg := result.Message
-			agentID := source.origin.agentID
 			threadRoot := target.threadRootMessageID
 			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
-				h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
 				if threadRoot.Valid {
 					h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
 				} else {
@@ -1615,7 +1613,6 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err := tx.Commit(ctx); err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 	return agentTransportMessageResult{
 		Message:                  msg,
 		Created:                  true,

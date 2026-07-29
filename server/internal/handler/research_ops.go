@@ -218,10 +218,10 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 			Status:       "active",
 			ActorAgentID: member.AgentID,
 			Payload: marshalJSONRaw(map[string]any{
-				"source_id":           uuidToString(source.ID),
-				"source_class":        source.SourceClass,
-				"credibility_weight":  source.CredibilityWeight,
-				"url":                 source.Url,
+				"source_id":          uuidToString(source.ID),
+				"source_class":       source.SourceClass,
+				"credibility_weight": source.CredibilityWeight,
+				"url":                source.Url,
 			}),
 		}, pgtype.UUID{}, "supports")
 	}
@@ -231,18 +231,18 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 		Body:    fmt.Sprintf("来源入库 · %s（权重 %.2f）", firstNonEmpty(source.Title, source.Url, source.SourceClass, "—"), weight),
 		ActorID: member.AgentID,
 		Meta: map[string]any{
-			"source_id":           uuidToString(source.ID),
-			"credibility_weight":  weight,
-			"source_class":        source.SourceClass,
+			"source_id":          uuidToString(source.ID),
+			"credibility_weight": weight,
+			"source_class":       source.SourceClass,
 		},
 	})
 	writeJSON(w, http.StatusOK, resp)
 }
 
 type patchReportRequest struct {
-	ContentMD  string          `json:"content_md"`
-	Structured json.RawMessage `json:"structured"`
-	NewRevision bool           `json:"new_revision"`
+	ContentMD   string          `json:"content_md"`
+	Structured  json.RawMessage `json:"structured"`
+	NewRevision bool            `json:"new_revision"`
 }
 
 func (h *Handler) PatchResearchReport(w http.ResponseWriter, r *http.Request) {
@@ -712,7 +712,7 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "name and role are required")
 		return
 	}
-	runtime, okRuntime := h.pickGroupManagerRuntime(r.Context(), wsUUID, parseUUID(userID))
+	runtime, okRuntime := h.pickVisibleAgentRuntime(r.Context(), wsUUID, parseUUID(userID))
 	if !okRuntime {
 		writeError(w, http.StatusBadRequest, "no runtime available for hire")
 		return
@@ -788,12 +788,12 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		})
 	}
 	writeJSON(w, http.StatusCreated, ResearchFleetMemberResp{
-		ID:      uuidToString(member.ID),
-		AgentID: uuidToString(member.AgentID),
-		Role:    member.Role,
-		Status:  member.Status,
-		IsLead:  member.IsLead,
-		Name:    agent.Name,
+		ID:          uuidToString(member.ID),
+		AgentID:     uuidToString(member.AgentID),
+		Role:        member.Role,
+		Status:      member.Status,
+		IsLead:      member.IsLead,
+		Name:        agent.Name,
 		DisplayName: agent.DisplayName,
 	})
 }

@@ -869,7 +869,6 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	}
 	execution.AfterCommit = func() {
 		// Realtime and activity publication must observe committed rows only.
-		h.publishRearmedManagedPatrol(ctx, inserted.RearmedManagedPatrol)
 		h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), directive.Target.ChannelID)
 		messages := []ChannelMessageResponse{msg}
 		h.attachChannelMessageAuthorAvatars(ctx, uuidToString(run.WorkspaceID), messages)
@@ -878,11 +877,6 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 		h.recordChannelAgentPromptWake(ctx, directive.Channel, directive.TargetAgent, msg, "mention", txResult)
 		if msg.ThreadRootMessageID != nil {
 			h.followChannelThreadAgent(ctx, directive.Target.ChannelID, parseUUID(*msg.ThreadRootMessageID), directive.TargetAgent.ID)
-		}
-		// Escalation ladder: if this directive came from the channel's group
-		// manager (Beckham), raise the nudged agent's escalation level.
-		if mgrID, ok := h.resolveGroupManagerForChannel(ctx, run.WorkspaceID, directive.Target.ChannelID); ok && uuidToString(mgrID) == uuidToString(supervisor.ID) {
-			h.incrementNudgeLadder(ctx, run.WorkspaceID, directive.Target.ChannelID, directive.TargetAgent.ID)
 		}
 	}
 	return execution, nil

@@ -105,14 +105,7 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 			FROM agent_reminder
 			WHERE workspace_id = $1
 			  AND agent_id = $2
-			  AND (
-			    status IN ('scheduled', 'firing')
-			    OR (
-			      status = 'fired'
-			      AND origin_kind = 'group_manager_auto'
-			      AND managed_kind = 'patrol'
-			    )
-			  )
+				  AND status IN ('scheduled', 'firing')
 			ORDER BY fire_at ASC, id ASC`, request.agent.WorkspaceID, request.agent.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load reminders")
@@ -161,10 +154,6 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 			JOIN agent_reminder reminder ON reminder.id = occurrence.reminder_id
 			WHERE occurrence.workspace_id = $1 AND occurrence.agent_id = $2
 			  AND occurrence.status = 'fired'
-			  AND NOT (
-			    reminder.origin_kind = 'group_manager_auto'
-			    AND reminder.managed_kind = 'patrol'
-			  )
 			  AND ($3::timestamptz IS NULL OR (occurrence.fired_at, occurrence.id) < ($3, $4))
 			ORDER BY occurrence.fired_at DESC, occurrence.id DESC
 			LIMIT $5`, request.agent.WorkspaceID, request.agent.ID, cursorAt, nullableUUID(cursorID), limit+1)

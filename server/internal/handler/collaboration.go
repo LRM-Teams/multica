@@ -499,28 +499,9 @@ func (h *Handler) failCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event 
 }
 
 func (h *Handler) createCollaborationManagerFallbackTx(ctx context.Context, tx pgx.Tx, workspaceID, channelID, sourceMessageID, sessionID pgtype.UUID, reason string) ([]channelAgentWake, error) {
-	managerID, ok := h.resolveGroupManagerForChannel(ctx, workspaceID, channelID)
-	if !ok {
-		return nil, nil
-	}
-	ch, ok := h.getChannel(ctx, uuidToString(workspaceID), channelID)
-	if !ok {
-		return nil, errors.New("collaboration channel not found")
-	}
-	trigger, err := h.collaborationTriggerMessageTx(ctx, tx, collaborationSessionCreateParams{WorkspaceID: workspaceID, ChannelID: channelID, SourceMessageID: sourceMessageID})
-	if err != nil {
-		return nil, err
-	}
-	manager, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: workspaceID})
-	if err != nil {
-		return nil, err
-	}
-	prompt := fmt.Sprintf("Collaboration session %s was suspended: %s. Review the session state, decide whether to skip, replace a participant, resume, or cancel, and post a concise coordination update if useful.", uuidToString(sessionID), reason)
-	result, err := h.enqueueChannelAgentPromptRangeWithTx(ctx, h.Queries.WithTx(tx), tx, ch, manager, trigger, pgtype.UUID{}, prompt, collaborationManagerFallbackReason, 10, trigger.Seq, trigger.Seq)
-	if err != nil {
-		return nil, err
-	}
-	return []channelAgentWake{{channel: ch, agent: manager, trigger: trigger, reason: collaborationManagerFallbackReason, result: result}}, nil
+	// The retired singleton manager cannot be used as a fallback target. Current
+	// managers discover the suspended open loop through their own patrol brief.
+	return nil, nil
 }
 
 func (h *Handler) SweepCollaborationTurnTimeouts(ctx context.Context, limit int) int {

@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/migrations"
@@ -244,6 +247,24 @@ type runOptions struct {
 	Hooks map[string]preMigrationHook
 }
 
+func newMigrationPool(ctx context.Context, dbURL string, noticeOutput io.Writer) (*pgxpool.Pool, error) {
+	config, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		return nil, err
+	}
+
+	noticeLogger := log.New(noticeOutput, "", 0)
+	config.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
+		severity := notice.SeverityUnlocalized
+		if severity == "" {
+			severity = notice.Severity
+		}
+		noticeLogger.Printf("  %s  %s", strings.ToLower(severity), notice.Message)
+	}
+
+	return pgxpool.NewWithConfig(ctx, config)
+}
+
 func main() {
 	logger.Init()
 
@@ -264,7 +285,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := newMigrationPool(ctx, dbURL, os.Stdout)
 	if err != nil {
 		slog.Error("unable to connect to database", "error", err)
 		os.Exit(1)

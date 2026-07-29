@@ -61,6 +61,12 @@ func newRoleWakeFixture(t *testing.T) roleWakeFixture {
 	); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
+	// Delete the roster before createHandlerTestAgent's cleanup runs. Otherwise
+	// the membership FKs keep the agents and their role-change inbox events
+	// alive, contaminating later tests that drain the shared runtime.
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channel.ID)
+	})
 	return roleWakeFixture{channel: channel, agentA: agentA, agentB: agentB}
 }
 
@@ -379,6 +385,9 @@ func createRoleWakeExtraChannel(
 			t.Fatalf("archive extra channel: %v", err)
 		}
 	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channel.ID)
+	})
 	return channel
 }
 

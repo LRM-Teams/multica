@@ -107,8 +107,7 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 	}
 
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentID := createHandlerTestAgent(t, "Onboarding Send "+uuid.NewString()[:8], nil)
+	agentID, runtimeID := createHandlerTestAgentWithIsolatedRuntime(t)
 	channelID := seedChannelForTest(t, "onboarding-send-"+uuid.NewString(), testUserID)
 	channelName := channelNameForTransportTest(t, channelID)
 

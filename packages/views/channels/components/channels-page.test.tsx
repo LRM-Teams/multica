@@ -1639,9 +1639,6 @@ describe("ChannelsPage create-group popover — optional project field (#576)", 
       expect.arrayContaining(["name"]),
     );
     expect(apiMock.createChannel.mock.calls[0]?.[0]).not.toHaveProperty(
-      "group_manager_agent_id",
-    );
-    expect(apiMock.createChannel.mock.calls[0]?.[0]).not.toHaveProperty(
       "provision_group_manager",
     );
   });

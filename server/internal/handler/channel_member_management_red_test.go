@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,8 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
-
-const removeEffectChangedCode = "remove_effect_changed"
 
 // These tests are the executable adapter/service RED slice for task #844.
 // They pin transport separation, authorization/no-op ordering, strict remove
@@ -300,90 +296,6 @@ func TestRemoveChannelMemberRequiresExpectedEffect(t *testing.T) {
 	}
 }
 
-func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
-	t.Skip("retired singleton manager confirmation contract")
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	t.Run("expected_none_but_target_is_bound", func(t *testing.T) {
-		seed := seedBoundarySequentialRevoke(t)
-		channelID := seed.channelID
-		agentID := seed.agentID
-		if _, err := testPool.Exec(context.Background(), `
-			UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`,
-			agentID); err != nil {
-			t.Fatalf("mark mismatch target as group manager: %v", err)
-		}
-		if _, err := testPool.Exec(context.Background(), `
-			UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`,
-			channelID, agentID); err != nil {
-			t.Fatalf("bind mismatch target as group manager: %v", err)
-		}
-		t.Cleanup(func() {
-			_, _ = testPool.Exec(context.Background(), `
-				UPDATE channel SET group_manager_agent_id = NULL WHERE id = $1`,
-				channelID)
-		})
-
-		revokeBefore := loadAgentChannelRevokeTuple(t, channelID, agentID, seed.eventID)
-		wantPreRevoke := agentChannelRevokeTuple{
-			MembershipCount: 1,
-			EventStatus:     "pending",
-			ActiveDelivery:  1,
-			RunningExec:     1,
-		}
-		if revokeBefore != wantPreRevoke {
-			t.Fatalf("invalid mismatch pre-revoke tuple: got=%+v want=%+v", revokeBefore, wantPreRevoke)
-		}
-		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
-		systemBefore := countChannelSystemMessagesForTest(t, channelID)
-
-		req := newRequestAs(testUserID, http.MethodDelete,
-			"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none",
-			nil)
-		req = withChannelTestWorkspaceCtx(t, req, testUserID)
-		req = withRouteParams(req,
-			"channelId", channelID,
-			"memberType", "agent",
-			"memberId", agentID,
-		)
-		rec := httptest.NewRecorder()
-		testHandler.RemoveChannelMember(rec, req)
-
-		assertRemoveEffectChangedResponse(t, rec)
-		assertChannelAgentMembershipCount(t, context.Background(), channelID, agentID, 1)
-		assertGroupManagerBinding(t, channelID, agentID)
-		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
-		if revokeAfter := loadAgentChannelRevokeTuple(t, channelID, agentID, seed.eventID); revokeAfter != revokeBefore {
-			t.Fatalf("effect mismatch changed pre-revoke tuple: before=%+v after=%+v", revokeBefore, revokeAfter)
-		}
-	})
-
-	t.Run("expected_binding_clear_but_target_is_unbound", func(t *testing.T) {
-		targetID := createChannelPlainMember(t)
-		channelID := seedChannelForTest(t, "remove-effect-unbound-mismatch-"+uuid.NewString(), testUserID, targetID)
-		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
-		systemBefore := countChannelSystemMessagesForTest(t, channelID)
-
-		req := newRequestAs(testUserID, http.MethodDelete,
-			"/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=clears_automation_binding",
-			nil)
-		req = withChannelTestWorkspaceCtx(t, req, testUserID)
-		req = withRouteParams(req,
-			"channelId", channelID,
-			"memberType", "user",
-			"memberId", targetID,
-		)
-		rec := httptest.NewRecorder()
-		testHandler.RemoveChannelMember(rec, req)
-
-		assertRemoveEffectChangedResponse(t, rec)
-		assertChannelUserMembershipCount(t, channelID, targetID, 1)
-		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
-	})
-}
-
 func TestHumanMemberSelfLeaveUsesMemberLeftSemantics(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -541,63 +453,6 @@ func TestDuplicateAddAuthorizesBeforeIdempotentNoop(t *testing.T) {
 	}
 }
 
-func TestRemoveBoundAgentClearsAutomationBinding(t *testing.T) {
-	t.Skip("retired singleton manager binding")
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	channelID := seedChannelForTest(t, "remove-bound-agent-"+uuid.NewString(), testUserID)
-	agentID := seedBoundGroupManagerAgent(t, channelID)
-	auditBefore := countChannelMemberActivityForTest(t, channelID, "member_removed")
-
-	req := newRequestAs(testUserID, http.MethodDelete,
-		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=clears_automation_binding",
-		nil)
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withRouteParams(req,
-		"channelId", channelID,
-		"memberType", "agent",
-		"memberId", agentID,
-	)
-	rec := httptest.NewRecorder()
-	testHandler.RemoveChannelMember(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("remove bound agent want 200 got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "clears_automation_binding") {
-		t.Fatalf("remove bound agent response=%q want truthful effect", rec.Body.String())
-	}
-	assertChannelAgentMembershipCount(t, context.Background(), channelID, agentID, 0)
-	assertGroupManagerBinding(t, channelID, "")
-	if got := countChannelMemberActivityForTest(t, channelID, "member_removed"); got != auditBefore+1 {
-		t.Fatalf("bound-agent member_removed audit count=%d want=%d", got, auditBefore+1)
-	}
-	var previousBoundAgentID string
-	var bindingCleared bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT details->>'previous_group_manager_agent_id',
-		       COALESCE((details->>'group_manager_binding_cleared')::boolean, false)
-		FROM activity_log
-		WHERE workspace_id = $1
-		  AND action = 'member_removed'
-		  AND details->>'channel_id' = $2
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1`,
-		testWorkspaceID, channelID,
-	).Scan(&previousBoundAgentID, &bindingCleared); err != nil {
-		t.Fatalf("load bound-agent removal audit details: %v", err)
-	}
-	if previousBoundAgentID != agentID || !bindingCleared {
-		t.Fatalf(
-			"bound-agent audit previous=%q cleared=%t want=%q/true",
-			previousBoundAgentID,
-			bindingCleared,
-			agentID,
-		)
-	}
-}
-
 func TestNonMemberWorkspaceAdminStillCannotReadPrivateChannelContent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -730,91 +585,6 @@ func TestArchivedChannelDeniesHumanMemberMutationsForEveryAuthority(t *testing.T
 			assertChannelUserMembershipCount(t, channelID, addTargetID, 0)
 			assertChannelUserMembershipCount(t, channelID, removeTargetID, 1)
 		})
-	}
-}
-
-func seedBoundGroupManagerAgent(t *testing.T, channelID string) string {
-	t.Helper()
-	agentID := createHandlerTestAgent(t, "BoundManager"+uuid.NewString()[:8], nil)
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`,
-		agentID); err != nil {
-		t.Fatalf("mark group manager agent: %v", err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1, $2, 'agent', $3, 'manager')`,
-		channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed bound agent member: %v", err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`,
-		channelID, agentID); err != nil {
-		t.Fatalf("bind group manager agent: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			UPDATE channel SET group_manager_agent_id = NULL WHERE id = $1`,
-			channelID)
-	})
-	return agentID
-}
-
-func assertRemoveEffectChangedResponse(t *testing.T, rec *httptest.ResponseRecorder) {
-	t.Helper()
-	if err := validateRemoveEffectChangedResponse(rec); err != nil {
-		t.Error(err)
-	}
-}
-
-func validateRemoveEffectChangedResponse(rec *httptest.ResponseRecorder) error {
-	if rec.Code != http.StatusConflict {
-		return fmt.Errorf("effect mismatch want 409 got %d: %s", rec.Code, rec.Body.String())
-	}
-	var body struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		return fmt.Errorf("effect mismatch body is not JSON: %w body=%q", err, rec.Body.String())
-	}
-	if body.Code != removeEffectChangedCode {
-		return fmt.Errorf(
-			"effect mismatch code=%q want %s body=%q",
-			body.Code,
-			removeEffectChangedCode,
-			rec.Body.String(),
-		)
-	}
-	return nil
-}
-
-func TestRemoveEffectChangedResponseRequiresTypedCode(t *testing.T) {
-	t.Skip("retired singleton manager confirmation contract")
-	rec := httptest.NewRecorder()
-	writeError(rec, http.StatusConflict, removeEffectChangedCode)
-
-	if err := validateRemoveEffectChangedResponse(rec); err == nil {
-		t.Fatalf("error-only body unexpectedly satisfied typed code contract: %s", rec.Body.String())
-	}
-}
-
-func assertGroupManagerBinding(t *testing.T, channelID, wantAgentID string) {
-	t.Helper()
-	var got pgtype.UUID
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT group_manager_agent_id FROM channel WHERE id = $1`,
-		channelID,
-	).Scan(&got); err != nil {
-		t.Fatalf("load group manager binding: %v", err)
-	}
-	if wantAgentID == "" {
-		if got.Valid {
-			t.Fatalf("group manager binding got=%s want NULL", uuidToString(got))
-		}
-		return
-	}
-	if !got.Valid || uuidToString(got) != wantAgentID {
-		t.Fatalf("group manager binding got=%s valid=%t want=%s", uuidToString(got), got.Valid, wantAgentID)
 	}
 }
 

@@ -78,12 +78,8 @@ func seedDueManagedPatrolWithActiveIssue(t *testing.T, fixture channelAgentRunti
 		t.Fatal("managed reminder fixture requires a manager")
 	}
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`,
-		fixture.agentIDs[0]); err != nil {
-		t.Fatalf("mark managed group manager: %v", err)
-	}
-	if _, err := testPool.Exec(context.Background(),
-		`UPDATE channel SET group_manager_agent_id = $1 WHERE id = $2`,
+		`UPDATE channel_member SET role = 'manager'
+		 WHERE member_type = 'agent' AND member_id = $1 AND channel_id = $2`,
 		fixture.agentIDs[0], fixture.channel.ID); err != nil {
 		t.Fatalf("bind group manager channel: %v", err)
 	}
@@ -2080,16 +2076,9 @@ func TestListAgentRemindersReturnsManagedPatrolInActiveListWithoutHistory(t *tes
 	t.Skip("retired with channel_member manager-role cutover")
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent
-		SET managed_role = 'group_manager'
-		WHERE id = $1
-	`, fixture.agentIDs[0]); err != nil {
-		t.Fatalf("mark managed group manager: %v", err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE channel
-		SET group_manager_agent_id = $1
-		WHERE id = $2
+		UPDATE channel_member
+		SET role = 'manager'
+		WHERE member_type = 'agent' AND member_id = $1 AND channel_id = $2
 	`, fixture.agentIDs[0], fixture.channel.ID); err != nil {
 		t.Fatalf("bind managed group manager: %v", err)
 	}
@@ -2366,10 +2355,10 @@ func serveReminderModernTransport(t *testing.T, router http.Handler, fixture rem
 func seedManagedPatrolForModernTransport(t *testing.T, fixture reminderModernTransportFixture) string {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`, fixture.agentID); err != nil {
-		t.Fatalf("mark modern fixture group manager: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `UPDATE channel SET group_manager_agent_id = $1 WHERE id = $2`, fixture.agentID, fixture.channelID); err != nil {
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_member SET role = 'manager'
+		WHERE member_type = 'agent' AND member_id = $1 AND channel_id = $2`,
+		fixture.agentID, fixture.channelID); err != nil {
 		t.Fatalf("bind modern fixture group manager: %v", err)
 	}
 	issueID := createCommentTriggerPreviewIssue(t, "managed reminder control "+uuid.NewString(), "", "")

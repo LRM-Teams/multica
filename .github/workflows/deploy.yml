@@ -72,6 +72,7 @@ jobs:
           install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
           install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
+          install -m 0755 scripts/run-aliyun-backend-migration.sh "${bundle}/scripts/run-aliyun-backend-migration.sh"
           install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
 
       - name: Validate deploy bundle
@@ -303,7 +304,7 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-      - name: Pull & restart backend + frontend + Caddy
+      - name: Validate host config + database + Caddy
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
@@ -374,18 +375,61 @@ jobs:
           fi
           unset db_user db_name db_password voice_api_key
           echo "Host-local database identity and protected speech/RTC configuration preflight passed."
-          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           # Validate the immutable artifact source before touching the runtime
           # file. A bad config must not be left behind for the next host restart.
           docker run --rm \
             -v "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      # Run the new image's migration binary before changing any runtime
+      # container or the live Caddyfile. A failure is therefore reported as a
+      # migration failure and leaves the currently served stack untouched.
+      - name: Run database migration
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/run-aliyun-backend-migration.sh" \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle"
+
+      - name: Pull & restart backend + frontend + Caddy
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          # Aliyun/dev is the shared integration environment; keep this off by
+          # default in docker-compose.selfhost.yml and opt in only for this lane.
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          if [ ! -r "${DEPLOY_DIR}/.env" ]; then
+            echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
+            exit 1
+          fi
+          compose() {
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
+          }
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           # The runtime path is stable; the Actions artifact is ephemeral.
           # Install through a sibling file and rename it atomically.
           install -m 0644 "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
           mv -f "${DEPLOY_DIR}/Caddyfile.next" "${DEPLOY_DIR}/Caddyfile"
-          # The backend container runs `migrate up` on start (entrypoint.sh).
+          # The backend entrypoint keeps its migration for Compose/Helm callers.
+          # Here it is a safe version-ledger no-op because the independent
+          # migration step above already advanced the database.
           compose pull frontend backend
           # Start frontend before backend so Caddy can resolve the frontend DNS name
           # before the backend health check begins — avoids the container-restart

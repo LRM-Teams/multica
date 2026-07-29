@@ -17,6 +17,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useT } from "../../i18n/use-t";
 import { ResearchCanvas } from "./research-canvas";
+import { ResearchChatCard } from "./research-chat-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchSessionChrome } from "./research-session-chrome";
 
@@ -142,7 +143,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           <ResearchCanvas
             nodes={data.nodes}
             edges={data.edges}
+            sources={sources}
             members={fleet.members}
+            presence={presence}
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
           />
@@ -196,20 +199,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   ))}
               </div>
             ) : null}
-            <div className="flex-1 space-y-2 overflow-y-auto p-3">
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className={
-                    m.sender_type === "user"
-                      ? "ml-4 rounded-xl border border-primary/20 bg-primary/10 px-3 py-2 text-sm shadow-sm"
-                      : "mr-4 rounded-xl border bg-card px-3 py-2 text-sm shadow-sm"
-                  }
-                >
-                  <div className="mb-1 text-[10px] uppercase text-muted-foreground">{m.sender_type}</div>
-                  {m.body}
-                </div>
-              ))}
+            <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
+              {messages.length === 0 ? (
+                <p className="px-1 text-xs text-muted-foreground">{t(($) => $.chat.empty)}</p>
+              ) : (
+                messages.map((m) => (
+                  <ResearchChatCard key={m.id} message={m} members={fleet.members} />
+                ))
+              )}
             </div>
             <div className="space-y-2 border-t p-3">
               <Textarea

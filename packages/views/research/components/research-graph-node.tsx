@@ -11,7 +11,13 @@ import { isCompactActivityLabel } from "../../channels/components/is-compact-act
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 
-export type ResearchFlowNode = Node<ResearchFlowNodeData, "research">;
+export type ResearchFlowNode = Node<
+  ResearchFlowNodeData & {
+    presenceLabel?: string;
+    sourceBadgeCount?: number;
+  },
+  "research"
+>;
 
 function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNode>) {
   const { t } = useT("research");
@@ -20,8 +26,13 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const visual = visualForNodeType(n.node_type);
   const actorId = n.actor_agent_id ?? undefined;
   const projection = useAgentActivityProjection(wsId, actorId);
-  const actorBusy = !!(projection && isCompactActivityLabel(projection.label));
+  const presenceBusy = !!(data.presenceLabel && data.presenceLabel.trim());
+  const actorBusy =
+    presenceBusy || !!(projection && isCompactActivityLabel(projection.label));
   const pulse = nodeIsVisuallyBusy(n.status, n.node_type, actorBusy);
+  const activityCaption =
+    (data.presenceLabel && data.presenceLabel.trim()) ||
+    (actorBusy && projection ? projection.label : "");
   const typeLabel = (() => {
     switch (n.node_type) {
       case "goal":
@@ -86,8 +97,20 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
           {n.summary ? (
             <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{n.summary}</p>
           ) : null}
-          {actorBusy && projection ? (
-            <p className="mt-1 truncate text-[10px] font-medium text-primary">{projection.label}</p>
+          {activityCaption ? (
+            <p className="mt-1 truncate text-[10px] font-medium text-primary">{activityCaption}</p>
+          ) : null}
+          {n.node_type === "finding" ? (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
+                {t(($) => $.node.finding)}
+              </span>
+              {typeof (n.payload as { source_class?: string } | null)?.source_class === "string" ? (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                  {(n.payload as { source_class: string }).source_class}
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

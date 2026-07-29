@@ -32,6 +32,18 @@ export function ResearchListPage() {
   const create = useMutation({
     mutationFn: () => api.createResearchSession({ goal: goal.trim() }),
     onSuccess: (res) => {
+      // Seed snapshot from kickoff payload so the session page paints a busy graph
+      // without waiting on the first GET / WS round-trip.
+      qc.setQueryData(researchKeys.snapshot(wsId, res.session.id), {
+        session: res.session,
+        fleet: res.fleet,
+        nodes: res.nodes ?? [],
+        edges: res.edges ?? [],
+        sources: [],
+        report: null,
+        evals: [],
+        messages: res.messages ?? [],
+      });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
       nav.push(paths.researchDetail(res.session.id));
     },

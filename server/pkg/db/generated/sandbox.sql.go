@@ -1123,3 +1123,46 @@ func scanSandboxJob(row interface{ Scan(...interface{}) error }) (SandboxJob, er
 	err := row.Scan(&i.ID, &i.WorkspaceID, &i.InitiatorUserID, &i.NodeID, &i.InstanceID, &i.Type, &i.Status, &i.Payload, &i.Result, &i.Error, &i.LeaseUntil, &i.StartedAt, &i.CompletedAt, &i.JobTokenHash, &i.JobTokenExpiresAt, &i.CreatedAt, &i.UpdatedAt)
 	return i, err
 }
+
+const getReadySavepointForInstance = `-- name: GetReadySavepointForInstance :one
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
+FROM sandbox_snapshot
+WHERE workspace_id = $1
+  AND instance_id = $2
+  AND status = 'ready'
+  AND checkpoint_id IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetReadySavepointForInstanceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	InstanceID  pgtype.UUID `json:"instance_id"`
+}
+
+// The savepoint a branch continuation boots a peer's sandbox from. Restricted to
+// checkpoint-owned rows: an unowned snapshot has no checkpoint keeping it alive,
+// so a sandbox created from it could lose its template underneath it. Newest
+// first, because re-branching the same source captures a fresher savepoint and a
+// later mention should continue from the state the branch was actually taken at.
+func (q *Queries) GetReadySavepointForInstance(ctx context.Context, arg GetReadySavepointForInstanceParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, getReadySavepointForInstance, arg.WorkspaceID, arg.InstanceID)
+	var i SandboxSnapshot
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.NodeID,
+		&i.InstanceID,
+		&i.CreatorUserID,
+		&i.CubeSnapshotID,
+		&i.Name,
+		&i.Description,
+		&i.Status,
+		&i.Error,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CheckpointID,
+	)
+	return i, err
+}

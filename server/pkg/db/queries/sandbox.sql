@@ -361,3 +361,18 @@ SELECT *
 FROM sandbox_snapshot
 WHERE checkpoint_id = @checkpoint_id AND workspace_id = @workspace_id
 ORDER BY created_at ASC;
+
+-- name: GetReadySavepointForInstance :one
+-- The savepoint a branch continuation boots a peer's sandbox from. Restricted to
+-- checkpoint-owned rows: an unowned snapshot has no checkpoint keeping it alive,
+-- so a sandbox created from it could lose its template underneath it. Newest
+-- first, because re-branching the same source captures a fresher savepoint and a
+-- later mention should continue from the state the branch was actually taken at.
+SELECT *
+FROM sandbox_snapshot
+WHERE workspace_id = @workspace_id
+  AND instance_id = @instance_id
+  AND status = 'ready'
+  AND checkpoint_id IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1;

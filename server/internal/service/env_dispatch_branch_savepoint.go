@@ -21,11 +21,20 @@ type BranchSavepoint struct {
 // BranchSavepointInput identifies the source a branch dispatch continues from.
 // Capture is keyed on the source env so re-expanding the same state reuses one
 // snapshot instead of taking another (design D2).
+//
+// SourceChannelID matters because the trigger is not the only agent that inherits
+// source state. Copying the branch channel copies every roster member's binding
+// along with the source sandbox it was bound to, so a peer mentioned later in the
+// branch inherits state too. That provisioning runs on the mention path under a
+// five second deadline, far less than a snapshot of a real repository takes, so
+// every ready source sandbox in the channel is captured here -- while the dispatch
+// can still afford to wait -- and the mention path only looks one up.
 type BranchSavepointInput struct {
 	WorkspaceID      string
 	ActorUserID      string
 	SourceEnvID      string
 	SourceProjectID  string
+	SourceChannelID  string
 	SourceInstanceID string
 }
 
@@ -65,7 +74,9 @@ type BranchLaneSettleInput struct {
 }
 
 // BranchSavepointProvider captures the branch source once per dispatch and tracks
-// the lanes booted from that capture.
+// the lanes booted from that capture. EnsureBranchSavepoint captures every ready
+// sandbox in the source channel and returns the trigger's savepoint; the rest are
+// found by the mention path through the same checkpoint.
 type BranchSavepointProvider interface {
 	EnsureBranchSavepoint(ctx context.Context, in BranchSavepointInput) (BranchSavepoint, error)
 	ClaimBranchLane(ctx context.Context, in BranchLaneInput) (BranchLane, error)
@@ -110,6 +121,7 @@ func (s *EnvDispatchService) captureBranchSource(ctx context.Context, in EnvDisp
 		ActorUserID:      in.UserID,
 		SourceEnvID:      in.EnvID,
 		SourceProjectID:  in.SourceProjectID,
+		SourceChannelID:  in.BranchMessageSource.SourceChannelID,
 		SourceInstanceID: sourceInstance,
 	})
 	if err != nil {

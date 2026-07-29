@@ -819,9 +819,41 @@ func TestSavepointOwnershipQueriesStayWorkspaceScopedAndNonStealing(t *testing.T
 		"AND (checkpoint_id IS NULL OR checkpoint_id = @checkpoint_id)",
 		"-- name: ListSandboxSnapshotsForCheckpoint :many",
 		"WHERE checkpoint_id = @checkpoint_id AND workspace_id = @workspace_id",
+		"-- name: GetReadySavepointForInstance :one",
+		// A sandbox created from an unowned snapshot can lose its template
+		// underneath it: nothing keeps that snapshot alive.
+		"AND checkpoint_id IS NOT NULL",
 	} {
 		if !strings.Contains(string(sandbox), required) {
 			t.Errorf("sandbox queries missing %q", required)
+		}
+	}
+}
+
+// TestBranchSourceInstanceQueryStaysWorkspaceScoped guards the one query in this
+// change that reads a table with no workspace column of its own.
+// environment_agent_sandbox is scoped through its channel, so dropping the join
+// would let a caller enumerate another workspace's sandboxes by channel id -- and
+// then capture savepoints of them.
+func TestBranchSourceInstanceQueryStaysWorkspaceScoped(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	environment, err := os.ReadFile(filepath.Join(
+		filepath.Dir(thisFile), "..", "..", "pkg", "db", "queries", "environment.sql"))
+	if err != nil {
+		t.Fatalf("read environment queries: %v", err)
+	}
+	for _, required := range []string{
+		"-- name: ListReadyEnvDispatchChannelInstances :many",
+		"JOIN channel ON channel.id = binding.channel_id",
+		"AND channel.workspace_id = @workspace_id",
+		// Only a ready binding has a sandbox worth capturing.
+		"AND binding.status = 'ready'",
+	} {
+		if !strings.Contains(string(environment), required) {
+			t.Errorf("environment queries missing %q", required)
 		}
 	}
 }
@@ -844,8 +876,8 @@ func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 	}
 	contents := string(sandbox)
 	const snapshotColumns = "id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id"
-	if got := strings.Count(contents, snapshotColumns); got != 9 {
-		t.Errorf("snapshot column list appears %d times, want 9 (7 pre-existing queries plus attach and list-for-checkpoint)", got)
+	if got := strings.Count(contents, snapshotColumns); got != 10 {
+		t.Errorf("snapshot column list appears %d times, want 10 (7 pre-existing queries plus attach, list-for-checkpoint and the per-instance savepoint lookup)", got)
 	}
 	// The scan helper must end with checkpoint_id, in the same order.
 	if !strings.Contains(contents, "&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,") {

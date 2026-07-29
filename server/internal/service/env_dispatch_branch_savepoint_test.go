@@ -129,6 +129,12 @@ func TestBranchDispatchCapturesTheSourceOnceForTheWholeGroup(t *testing.T) {
 		provider.ensureCalls[0].SourceInstanceID != "source-sandbox-leader" {
 		t.Fatalf("capture input = %+v", provider.ensureCalls[0])
 	}
+	// The source channel travels so the provider can also capture the peers whose
+	// bindings the channel copy carried over. Their provisioning runs later on the
+	// mention path, which has no time to snapshot anything.
+	if provider.ensureCalls[0].SourceChannelID != "source-channel" {
+		t.Fatalf("capture must name the source channel, got %q", provider.ensureCalls[0].SourceChannelID)
+	}
 	// Every rollout boots from that one savepoint.
 	for i, call := range f.provisionCalls {
 		if call.SavepointTemplate != "cube-branch-1" {

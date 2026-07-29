@@ -1,31 +1,33 @@
 BEGIN;
 
 -- channel_member(agent, manager) is the only live group-manager identity.
--- Legacy singleton bindings are migrated only when the bound agent is already
--- a real member of the same channel; the old provisioning path always created
--- that membership. Fail closed instead of manufacturing a membership (and an
--- onboarding wake) during deploy.
+-- Migrate a legacy singleton binding only when the bound agent is still a real
+-- member of the same channel. Orphan bindings are discarded with the retired
+-- column instead of manufacturing membership or an onboarding wake.
 DO $$
+DECLARE
+  orphan_binding RECORD;
 BEGIN
-  IF EXISTS (
-    SELECT 1
+  FOR orphan_binding IN
+    SELECT
+      channel_row.id AS channel_id,
+      channel_row.group_manager_agent_id AS agent_id
     FROM channel channel_row
-    JOIN agent manager
-      ON manager.id = channel_row.group_manager_agent_id
-     AND manager.workspace_id = channel_row.workspace_id
     WHERE channel_row.group_manager_agent_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1
         FROM channel_member membership
-        WHERE membership.workspace_id = channel_row.workspace_id
+          WHERE membership.workspace_id = channel_row.workspace_id
           AND membership.channel_id = channel_row.id
           AND membership.member_type = 'agent'
-          AND membership.member_id = manager.id
+          AND membership.member_id = channel_row.group_manager_agent_id
       )
-  ) THEN
-    RAISE EXCEPTION 'legacy group manager binding has no same-channel membership'
-      USING ERRCODE = 'check_violation';
-  END IF;
+  LOOP
+    RAISE NOTICE
+      'discarding orphan legacy group manager binding channel_id=% agent_id=%',
+      orphan_binding.channel_id,
+      orphan_binding.agent_id;
+  END LOOP;
 END;
 $$;
 

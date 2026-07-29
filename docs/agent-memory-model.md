@@ -57,23 +57,41 @@ Multica 的记忆分成两层：
 ### 3.1 常用写入判断
 
 1. 明确的个人偏好、工作习惯或协作默认，立即写当前成员的 `USER.md`。真人干活时的指令默认高信号；只有明显是测试/打招呼/玩笑才跳过。
-2. 与某个成员的稳定协作关系，以及干活过程中出现的对接/交接/归属安排（谁跟谁对接、谁负责啥），写该成员的 `RELATIONSHIP.md`；与队友 agent 的关系写 `notes/agents.md` / `notes/relationship-map.md`。不要只在欢迎入群时才写。纯社交打招呼、没有可复用事实时不写。
-3. 只要求当前 agent 永久记住、且跨项目适用的安全规则，写当前 agent 的 `memory/MEMORY.md`。
-4. 项目知识、状态和决定，写当前项目目录。
-5. 群目的、语言、路由和协作默认值，写当前群的 `CONTEXT.md`。
-6. 当前事件、配额、阻塞和会过期的状态，写对应 `STATE.md`，并记录日期、状态和可用的 TTL / 到期时间。
-7. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
-8. 猜测、一次性执行噪音、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
-9. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` **追加几行**流水；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
+2. **队友 agent 说的话也能记**：站位规则、对接/交接、可复用修法/清单、纠正、或明确「记住」——同轮写入正式文件，不要因为说话人是 agent 就当闲聊丢掉。协作默认写 `notes/agents.md` / `notes/relationship-map.md`；项目运维写项目目录；跨项目 agent 规则写 `memory/MEMORY.md`。纯打招呼 / 谢谢 / LGTM / 空 ack 不写。不要复制对方的私有用户文件或秘密。
+3. 与某个成员的稳定协作关系，以及干活过程中出现的对接/交接/归属安排（谁跟谁对接、谁负责啥），写该成员的 `RELATIONSHIP.md`；与队友 agent 的关系写 `notes/agents.md` / `notes/relationship-map.md`。不要只在欢迎入群时才写。纯社交打招呼、没有可复用事实时不写。
+4. 只要求当前 agent 永久记住、且跨项目适用的安全规则，写当前 agent 的 `memory/MEMORY.md`。
+5. 项目知识、状态和决定，写当前项目目录。
+6. 群目的、语言、路由和协作默认值，写当前群的 `CONTEXT.md`。
+7. 当前事件、配额、阻塞和会过期的状态，写对应 `STATE.md`，并记录日期、状态和可用的 TTL / 到期时间。
+8. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
+9. 猜测、一次性执行噪音、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
+10. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` **追加几行**流水；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
+11. **处理完可复用的问题后，agent 自己记住**：根因/修法/命令若下次还会用到，收工同轮写入项目 `MEMORY.md`/`DECISIONS.md` 或 agent `memory/MEMORY.md`/`notes/*`，不要等任何人再说「记住」；一次性噪音只留 Daily。是否可复用由 agent 判断。
 
 ### 3.2 热路径 vs 冷路径（避免短任务卡顿）
 
 | 路径 | 谁做 | 何时 | 写什么 | 不要做什么 |
 |---|---|---|---|---|
-| **热路径** | 当前任务里的 agent | 干活过程中 / 实质收工 | 偏好→`USER.md`；对接→`RELATIONSHIP.md`；实质流水→append Daily | 每轮聊天都做全文自审再决定写不写 |
+| **热路径** | 当前任务里的 agent | 干活过程中 / 实质收工 | 偏好→`USER.md`；对接→`RELATIONSHIP.md`/`notes`；队友 agent 耐久教训同写；可复用排障→项目/`MEMORY.md`/`notes`；实质流水→append Daily | 每轮聊天都做全文自审再决定写不写 |
 | **冷路径** | L1 Daily / L2 自审 / Team Curator | 后台、按 active agent 定时/轮次 | 补齐 Daily、提升稳定事实、去重合并共享候选 | 挡在用户回消息的延迟路径上 |
 
 一句话：**自己轻量记；自审+Curator 负责整理。**
+
+### 3.3 同轮 memory signal + 漏写兜底（不另跑模型）
+
+主写入路径仍然是 agent 直接改本地 Markdown。平台**不**在每条消息后再同步调用小模型。
+
+可选增强：
+
+1. Agent 写完 `USER.md` / `RELATIONSHIP.md` 等后，可向 `sync_queue/memory-signal.jsonl` 追加一行短信号，例如：
+   `{"action":"write","kind":"feedback","scope":"user","topic":"progress_feedback","summary":"长任务开始前确认并持续反馈进度"}`
+2. 任务结束后 daemon 上报文件差分；若触发消息命中明确偏好句式（记住/以后都/别再/下次先…），或 signal 要求 write，但本轮没有任何 durable 文件写入（Daily 不算），平台异步写入一条 `agent_memory_curation_candidate`（`metadata.source=missed_write_guard|memory_signal`，`shareable=false`）。
+3. 当天 self-review 消费这些 pending 候选：补写正式文件，或放入 `REVIEW.md`。
+4. Team curator 跳过 `shareable=false` / `scope=user` 的私有候选。
+
+明确「记住这个」时，agent 仍须先完成 durable 写入再声称已记住；漏写由上述兜底进入自审，而不是再跑一遍同步 LLM。
+
+候选去重优先使用稳定 `topic` / `dedupe_key`（`scope[+subject]+kind+topic`），词法相似只作补充。
 
 ## 4. 单 agent 记忆与群体记忆
 
@@ -204,6 +222,7 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 某个成员的偏好              -> users/<member-id>/USER.md（热路径立刻写）
 对接/交接/归属              -> RELATIONSHIP.md / notes（热路径立刻写）
 实质收工流水账              -> memory/daily/今天.md（热路径 append；短社交跳过）
+可复用问题修法              -> 项目 MEMORY/DECISIONS 或 agent MEMORY/notes（收工自记，不等「记住」）
 只属于当前项目或当前群       -> project/channel scoped 文件
 群内所有当前接收者都要记住   -> 每个 agent 各写自己的文件
 明确覆盖群外/未来 agent       -> workspace/team 候选，经过审核后入库

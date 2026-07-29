@@ -755,6 +755,9 @@ func hasSemanticDuplicate(entries []reviewEntry, candidate reviewEntry) bool {
 		if entry.Type != candidate.Type || entry.ProposedDestination != candidate.ProposedDestination || entry.Scope != candidate.Scope || entry.Sensitivity != candidate.Sensitivity {
 			continue
 		}
+		if sameTopicDuplicate(entry.Topic, candidate.Topic, entry.Type, candidate.Type, entry.Scope, candidate.Scope) {
+			return true
+		}
 		if semanticDuplicate(entry.Body, candidate.Body) {
 			return true
 		}

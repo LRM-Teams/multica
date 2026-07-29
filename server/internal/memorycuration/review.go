@@ -13,6 +13,7 @@ type reviewEntry struct {
 	Confidence          string
 	Sensitivity         string
 	Scope               string
+	Topic               string
 	SourceDate          string
 	ReviewExpiresAt     string
 	Evidence            []string

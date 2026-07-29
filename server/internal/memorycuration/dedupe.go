@@ -22,6 +22,46 @@ func semanticDuplicate(a, b string) bool {
 	return lexicalSimilarity(a, b) >= lexicalDuplicateThreshold
 }
 
+// sameTopicDuplicate is true when both sides share a non-empty normalized topic
+// key and belong to the same type/scope bucket. Prefer this over pure lexical
+// matching when self-review / missed-write candidates carry topic metadata.
+func sameTopicDuplicate(topicA, topicB, typeA, typeB, scopeA, scopeB string) bool {
+	topicA = NormalizeTopicKey(topicA)
+	topicB = NormalizeTopicKey(topicB)
+	if topicA == "" || topicB == "" || topicA != topicB {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(typeA), strings.TrimSpace(typeB)) &&
+		strings.EqualFold(strings.TrimSpace(scopeA), strings.TrimSpace(scopeB))
+}
+
+// NormalizeTopicKey keeps topic identity stable across slight wording changes.
+func NormalizeTopicKey(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range raw {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			b.WriteRune(r)
+			lastUnderscore = false
+		case r == '_' || r == '-' || unicode.IsSpace(r):
+			if b.Len() > 0 && !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
+}
+
 func lexicalSimilarity(a, b string) float64 {
 	wa := weightedTokens(a)
 	wb := weightedTokens(b)

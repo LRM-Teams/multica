@@ -1,0 +1,48 @@
+# Answers ONE question: will GitHub dispatch a job to a self-hosted runner
+# while the account's hosted-runner billing is failing?
+#
+# Nothing else is in here on purpose:
+#   - single job, so there is nothing to be blocked behind;
+#   - ZERO `needs:` — this is the whole point. The existing deploy job has sat
+#     `skipped` all day because it needs a hosted job, so it never tested
+#     dispatch at all. A probe with a dependency returns neither green nor red
+#     and proves nothing;
+#   - zero secrets and zero deploy actions, so it is safe to run anywhere;
+#   - `workflow_dispatch` only — it must never gate a PR.
+#
+# HOW TO READ THE RESULT
+#   runs, prints the runner name        -> self-hosted dispatch works; the
+#                                          `[self-hosted, ci]` path in ci.yml is
+#                                          viable and only needs a labelled runner
+#   stays queued / skipped / 0 steps    -> dispatch itself is blocked; a runner
+#                                          does not help and the billing route is
+#                                          the only one left
+#
+# The label below must match a REGISTERED runner. As of 2026-07-29 the repo has
+# only `aliyun` and `s89`; no runner carries `ci`, which is why ci.yml currently
+# waits for a machine that does not exist.
+name: runner-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Second label to target (must be on a registered runner)"
+        required: true
+        default: "ci"
+
+jobs:
+  probe:
+    runs-on: [self-hosted, "${{ inputs.runner_label }}" ]
+    timeout-minutes: 5
+    steps:
+      - name: Report the runner that accepted this job
+        run: |
+          echo "dispatched to: ${RUNNER_NAME:-<unset>}"
+          echo "os/arch: ${RUNNER_OS:-?}/${RUNNER_ARCH:-?}"
+          echo "workspace: ${GITHUB_WORKSPACE:-?}"
+      - name: Confirm a toolchain exists (non-fatal, informational only)
+        continue-on-error: true
+        run: |
+          node --version || echo "node: absent"
+          docker --version || echo "docker: absent"

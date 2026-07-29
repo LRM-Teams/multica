@@ -158,6 +158,15 @@ type EnvCheckpoint struct {
 	SaveError     string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	// SourceChannelID is the conversation this checkpoint was taken from, which
+	// standalone fan-out copies per lane. It has no column yet: the migration
+	// that records it ships with the fan-out capability itself (design D8), so
+	// every checkpoint written today reports none and fan-out is refused. The
+	// rule is expressed against this field rather than as a temporary
+	// unconditional refusal so the capability arrives by populating it, with no
+	// guard to remember to remove.
+	SourceChannelID string
 }
 
 // EnvCheckpointRepository is the persistence seam for env checkpoints.
@@ -479,6 +488,17 @@ func (s *EnvCheckpointService) resumeSnapshotLanes(ctx context.Context, cp EnvCh
 	// this is permanent rather than transient.
 	if len(savepoints) == 0 {
 		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: %w: checkpoint owns no savepoint", ErrCheckpointNotResumable)
+	}
+	// Design D8: every lane continues its own copy of the source conversation. A
+	// checkpoint that did not record which conversation that was could only be
+	// served from the source's own channel, putting every lane in one thread --
+	// the opposite of independent continuations. A single lane is exempt because
+	// its caller supplies the conversation (branch dispatch pre-seeds the lane
+	// row, design D6).
+	if in.LaneCount > 1 && cp.SourceChannelID == "" {
+		return ResumeFromCheckpointResult{}, fmt.Errorf(
+			"validation_failed: %w: checkpoint recorded no source conversation to fan out from",
+			ErrCheckpointNotResumable)
 	}
 	result := ResumeFromCheckpointResult{
 		CheckpointID:  cp.ID,

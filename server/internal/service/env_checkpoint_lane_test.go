@@ -244,8 +244,9 @@ func newFanoutFixture(t *testing.T) (*EnvCheckpointService, *fanoutDeps) {
 	d.repo.checkpoints["cp-1"] = EnvCheckpoint{
 		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
 		SaveMode: SaveModeSnapshot, SaveStatus: EnvCheckpointSaveComplete,
-		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "src-1", WorkspaceID: "ws"}},
-		ResumeTrigger: json.RawMessage(`{"agent_id":"a-1","project_id":"proj","kind":"chat"}`),
+		SandboxRefs:     []SandboxInstanceRef{{InstanceID: "src-1", WorkspaceID: "ws"}},
+		ResumeTrigger:   json.RawMessage(`{"agent_id":"a-1","project_id":"proj","kind":"chat"}`),
+		SourceChannelID: "chan-src",
 	}
 	svc := NewEnvCheckpointService(d.repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{},
 		&fakeProjectSnapshotReader{}, &fakeInFlightResolver{},
@@ -399,6 +400,33 @@ func TestInterruptedLaneContinuesFromFirstIncompleteStep(t *testing.T) {
 	}
 	if res.Lanes[0].Status != LaneStatusReady {
 		t.Fatalf("recovered lane status = %q, want ready", res.Lanes[0].Status)
+	}
+}
+
+// TestFanOutRefusedForACheckpointWithNoSourceConversation holds design D8's
+// release boundary. Lanes must each continue their own copy of the source
+// conversation; a checkpoint that never recorded which conversation that was
+// could only be served from the source's own channel, which would put every lane
+// in one thread. Refusing is typed as not-resumable because the request is fine
+// and the checkpoint is what cannot serve it.
+func TestFanOutRefusedForACheckpointWithNoSourceConversation(t *testing.T) {
+	svc, deps := newFanoutFixture(t)
+	cp := deps.repo.checkpoints["cp-1"]
+	cp.SourceChannelID = ""
+	deps.repo.checkpoints["cp-1"] = cp
+
+	_, err := fanOut(svc, 2, "dispatch-abc")
+	if !errors.Is(err, ErrCheckpointNotResumable) {
+		t.Fatalf("err = %v, want ErrCheckpointNotResumable", err)
+	}
+	if len(deps.lanes.lanes) != 0 {
+		t.Fatalf("no lane may be claimed for a refused fan-out, got %+v", deps.lanes.lanes)
+	}
+
+	// One lane is not fan-out: the caller supplies that lane's conversation, so
+	// it stays available and this refusal must not reach it.
+	if _, err := fanOut(svc, 1, "dispatch-abc"); err != nil {
+		t.Fatalf("single-lane resume must stay available: %v", err)
 	}
 }
 
@@ -644,6 +672,12 @@ func TestSnapshotCheckpointRoundTripRunningToLanes(t *testing.T) {
 
 	// Resume sees the savepoints capture actually produced, not literals.
 	savepoints.savepoints = creator.produced
+	// Stand in for the source conversation design D8's migration records at
+	// capture time. Without it fan-out is refused, which is the shipping state
+	// until that migration lands; this test is about the state machine behind it.
+	stored := repo.checkpoints[cp.ID]
+	stored.SourceChannelID = "chan-src"
+	repo.checkpoints[cp.ID] = stored
 
 	res, err := svc.ResumeFromCheckpoint(context.Background(), ResumeFromCheckpointInput{
 		WorkspaceID: "ws", CheckpointID: cp.ID, ActorUserID: "u",

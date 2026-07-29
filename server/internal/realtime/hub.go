@@ -975,6 +975,15 @@ func (c *Client) handleFrame(raw []byte) {
 			c.handleUnsubscribe(p.Scope, p.ID)
 		}
 	case "ping":
+		// Application-level keepalive: also refresh member presence TTL so
+		// clients that only send JSON pings (or proxies that eat WS ping/pong)
+		// do not expire into Offline while the socket stays open (LRM-717).
+		c.hub.mu.RLock()
+		touch := c.hub.onMemberPresence
+		c.hub.mu.RUnlock()
+		if touch != nil && c.userID != "" && c.workspaceID != "" {
+			touch(c.workspaceID, c.userID)
+		}
 		c.sendJSON(map[string]string{"type": "pong"})
 	default:
 		// Unknown frame — ignore silently for forward compat.

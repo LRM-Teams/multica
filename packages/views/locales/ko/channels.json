@@ -101,10 +101,8 @@
     },
     "menu": {
       "aria": "멤버 작업",
-      "promote_agent": "그룹 매니저로 지정",
-      "promote_human": "관리자로 지정",
-      "demote_agent": "그룹 매니저 해제",
-      "demote_human": "관리자 해제",
+      "promote": "그룹 관리자로 지정",
+      "demote": "멤버로 변경",
       "transfer": "소유권 이전",
       "remove": "그룹에서 삭제",
       "role_actions_pending": "그룹 관리 권한은 곧 제공됩니다. 현재 멤버 역할은 변경되지 않습니다.",

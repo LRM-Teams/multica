@@ -101,10 +101,8 @@
     },
     "menu": {
       "aria": "成员操作",
-      "promote_agent": "设为群管",
-      "promote_human": "设为管理员",
-      "demote_agent": "取消群管",
-      "demote_human": "取消管理员",
+      "promote": "设为群管",
+      "demote": "降为成员",
       "transfer": "转让群主",
       "remove": "移出群聊",
       "role_actions_pending": "群管理权限即将推出；当前不会更改成员角色。",

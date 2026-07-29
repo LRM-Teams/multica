@@ -101,10 +101,8 @@
     },
     "menu": {
       "aria": "メンバー操作",
-      "promote_agent": "グループ管理者に設定",
-      "promote_human": "管理者に設定",
-      "demote_agent": "グループ管理者を解除",
-      "demote_human": "管理者を解除",
+      "promote": "グループ管理者にする",
+      "demote": "メンバーに変更",
       "transfer": "オーナーを譲渡",
       "remove": "グループから削除",
       "role_actions_pending": "グループ管理権限は近日提供予定です。現在メンバーのロールは変更されません。",

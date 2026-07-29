@@ -90,9 +90,13 @@ function MemberRow({
     onDismiss: () => void;
   };
   /**
-   * Which role action is in flight for THIS member. The menu deliberately stays
-   * open while it runs — closing it would hide the outcome the user is waiting
-   * for — and all role items disable so the same change can't be issued twice.
+   * Which role action is in flight for THIS member.
+   *
+   * Radix closes the menu on select, so the in-progress state is rendered as an
+   * inline row status rather than inside the menu — a menu-only indicator would
+   * be invisible for the entire time it matters. The row's role items also stay
+   * disabled while it runs, so reopening the menu cannot issue the same change
+   * twice.
    */
   rolePendingAction?: "promote" | "demote" | "transfer" | null;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
@@ -273,13 +277,7 @@ function MemberRow({
                 data-testid="group-member-menu-promote"
                 onClick={() => onGroupMemberAction(m, "promote")}
               >
-                {rolePendingAction === "promote" ? rolePendingLabel : (
-                  <>
-                    {isAgent
-                  ? t(($) => $.members.menu.promote_agent)
-                  : t(($) => $.members.menu.promote_human)}
-                  </>
-                )}
+                {t(($) => $.members.menu.promote)}
               </DropdownMenuItem>
             )}
             {menuActions.canDemoteToMember && (
@@ -288,13 +286,7 @@ function MemberRow({
                 data-testid="group-member-menu-demote"
                 onClick={() => onGroupMemberAction(m, "demote")}
               >
-                {rolePendingAction === "demote" ? rolePendingLabel : (
-                  <>
-                    {isAgent
-                  ? t(($) => $.members.menu.demote_agent)
-                  : t(($) => $.members.menu.demote_human)}
-                  </>
-                )}
+                {t(($) => $.members.menu.demote)}
               </DropdownMenuItem>
             )}
             {menuActions.canTransferOwnership && (
@@ -303,11 +295,7 @@ function MemberRow({
                 data-testid="group-member-menu-transfer"
                 onClick={() => onGroupMemberAction(m, "transfer")}
               >
-                {rolePendingAction === "transfer" ? rolePendingLabel : (
-                  <>
-                    {t(($) => $.members.menu.transfer)}
-                  </>
-                )}
+                {t(($) => $.members.menu.transfer)}
               </DropdownMenuItem>
             )}
             {menuActions.canRemove && (
@@ -376,6 +364,18 @@ function MemberRow({
           >
             <X className="size-3.5" />
           </button>
+        </output>
+      ) : null}
+      {/* #832 — in-progress status. Lives in the ROW, not the menu: Radix closes
+          the menu on select, so a menu-only indicator would vanish exactly when
+          the user needs it. `<output>` carries role=status implicitly, so the
+          change is announced rather than only drawn. */}
+      {rolePendingLabel ? (
+        <output
+          className="mx-2.5 mb-2 block px-2 py-1.5 text-xs text-muted-foreground"
+          data-testid="channel-members-row-role-pending"
+        >
+          {rolePendingLabel}
         </output>
       ) : null}
       {/* #832 — role-change failure, same in-row treatment as the removal notice

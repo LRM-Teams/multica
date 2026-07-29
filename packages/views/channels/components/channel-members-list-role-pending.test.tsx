@@ -153,18 +153,23 @@ describe("ChannelMembersList — role rows are real actions (#832)", () => {
     expect(screen.queryByTestId("group-member-menu-role-pending")).toBeNull();
   });
 
-  it("while one role action is in flight, every role row is disabled and the running one says which", async () => {
+  it("in-flight status renders in the ROW and is announced — the menu closes on select, so a menu-only indicator would be invisible", async () => {
+    renderList(ALL_ACTIONS, { rolePendingActionFor: () => "promote" });
+    // Visible without opening the menu, which is the whole point.
+    const status = screen.getByTestId("channel-members-row-role-pending");
+    expect(status).toHaveTextContent("Making group manager…");
+    // `<output>` maps to role=status implicitly — assert what AT resolves.
+    expect(screen.getByRole("status")).toBe(status);
+    // Named, not a bare spinner: with three actions the user must know which.
+    expect(status).not.toHaveTextContent("Demoting");
+  });
+
+  it("while an action is in flight the row's role items stay disabled — reopening the menu can't issue it twice", async () => {
     const user = userEvent.setup();
     const onGroupMemberAction = renderList(ALL_ACTIONS, {
       rolePendingActionFor: () => "promote",
     });
     await openMenu(user);
-
-    // The row that is running names the action, not a bare spinner.
-    expect(screen.getByTestId("group-member-menu-promote")).toHaveTextContent(
-      "Making group manager…",
-    );
-    // …and the others are held so the same member can't be double-changed.
     for (const id of ["group-member-menu-promote", "group-member-menu-demote", "group-member-menu-transfer"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("aria-disabled", "true");
       screen.getByTestId(id).click();

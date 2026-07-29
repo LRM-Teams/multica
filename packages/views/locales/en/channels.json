@@ -101,10 +101,8 @@
     },
     "menu": {
       "aria": "Member actions",
-      "promote_agent": "Set as group manager",
-      "promote_human": "Set as admin",
-      "demote_agent": "Remove group manager role",
-      "demote_human": "Remove admin role",
+      "promote": "Make group manager",
+      "demote": "Demote to member",
       "transfer": "Transfer ownership",
       "remove": "Remove from group",
       "role_actions_pending": "Group role management is coming soon; member roles are not changed yet.",

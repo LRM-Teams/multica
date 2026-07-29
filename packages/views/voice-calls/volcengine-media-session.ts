@@ -141,12 +141,30 @@ function mediaError(
 ): VoiceCallMediaError {
   return cause instanceof VoiceCallMediaError
     ? cause
-    : new VoiceCallMediaError(code, message, undefined, { cause });
+    : new VoiceCallMediaError(
+      code,
+      message,
+      providerCodeFromCause(cause),
+      { cause },
+    );
 }
 
-function normalizeProviderCode(providerCode: string): string | undefined {
-  const value = providerCode.trim();
-  return /^-?\d{1,10}$/.test(value) ? value : undefined;
+function normalizeProviderCode(providerCode: unknown): string | undefined {
+  if (typeof providerCode !== "string" && typeof providerCode !== "number") {
+    return undefined;
+  }
+  const value = String(providerCode).trim();
+  return /^-?\d{1,10}$/.test(value) ||
+      /^[A-Z][A-Z0-9_]{0,63}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function providerCodeFromCause(cause: unknown): string | undefined {
+  if (typeof cause !== "object" || cause === null || !("code" in cause)) {
+    return undefined;
+  }
+  return normalizeProviderCode(cause.code);
 }
 
 export class VolcengineVoiceMediaSession {

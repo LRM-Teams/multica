@@ -230,27 +230,70 @@ describe("VolcengineVoiceMediaSession", () => {
     expect(session.getState()).toBe("closed");
   });
 
-  it("does not expose provider errors as an untyped failure", async () => {
-    const harness = createHarness();
-    const onError = vi.fn();
+  it.each(["INVALID_TOKEN", "-1000"])(
+    "preserves bounded provider code %s from fatal callbacks",
+    async (providerCode) => {
+      const harness = createHarness();
+      const onError = vi.fn();
+      const session = new VolcengineVoiceMediaSession(
+        { onError },
+        async () => harness.driver,
+      );
+      await session.connect(media);
+
+      harness.getCallbacks()?.onFatalError(providerCode);
+
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining<Partial<VoiceCallMediaError>>({
+          code: "provider_error",
+          providerCode,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(harness.engine.destroy).toHaveBeenCalledOnce();
+      });
+      expect(session.getState()).toBe("failed");
+    },
+  );
+
+  it("preserves bounded provider enum codes from rejected SDK calls", async () => {
+    const harness = createHarness({
+      join: vi.fn(async () => {
+        harness.calls.push("join");
+        throw Object.assign(new Error("provider detail"), {
+          code: "JOIN_ROOM_FAILED",
+        });
+      }),
+    });
     const session = new VolcengineVoiceMediaSession(
-      { onError },
+      {},
       async () => harness.driver,
     );
-    await session.connect(media);
 
-    harness.getCallbacks()?.onFatalError("-1000");
-
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining<Partial<VoiceCallMediaError>>({
-        code: "provider_error",
-        providerCode: "-1000",
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(harness.engine.destroy).toHaveBeenCalledOnce();
+    await expect(session.connect(media)).rejects.toMatchObject({
+      code: "join_failed",
+      providerCode: "JOIN_ROOM_FAILED",
     });
-    expect(session.getState()).toBe("failed");
+  });
+
+  it("does not expose arbitrary rejection values as provider codes", async () => {
+    const harness = createHarness({
+      join: vi.fn(async () => {
+        harness.calls.push("join");
+        throw Object.assign(new Error("provider detail"), {
+          code: "raw provider message with spaces",
+        });
+      }),
+    });
+    const session = new VolcengineVoiceMediaSession(
+      {},
+      async () => harness.driver,
+    );
+
+    await expect(session.connect(media)).rejects.toMatchObject({
+      code: "join_failed",
+      providerCode: undefined,
+    });
   });
 
   it("serializes provider cleanup with a simultaneous user disconnect", async () => {

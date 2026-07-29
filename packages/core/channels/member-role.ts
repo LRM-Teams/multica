@@ -47,12 +47,17 @@ export function channelMemberBadge(
 }
 
 /**
- * Whether a viewer may open the management menu (change role / transfer
- * ownership / remove) on other members. Owner-only in V1 — the mutations
- * themselves are gated behind #801; this drives the FE menu show/hide.
+ * Whether a viewer may open the management menu on other members at all.
+ * Owner and manager both qualify (#845); *which* items they get is decided by
+ * `groupMemberActions` — a manager only ever acts on ordinary members, while
+ * role changes and ownership transfer stay owner-only.
+ *
+ * This drives menu show/hide only. The server re-decides every mutation
+ * (`DecideMemberManagement`, #844), so a menu shown in error yields a failed
+ * action, never an escalation.
  */
 export function canManageGroupMembers(viewerRole: ChannelMemberRole): boolean {
-  return viewerRole === "owner";
+  return viewerRole === "owner" || viewerRole === "manager";
 }
 
 /**

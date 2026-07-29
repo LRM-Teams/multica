@@ -21,6 +21,7 @@ import (
 const (
 	removeEffectNone                    = "none"
 	removeEffectClearsAutomationBinding = "clears_automation_binding"
+	removeEffectChangedCode             = "remove_effect_changed"
 )
 
 // Test-only observation point used to prove a member-management request has
@@ -33,6 +34,7 @@ func noteMemberManagementLockAttempt() {
 
 type memberManagementHTTPError struct {
 	Status  int
+	Code    string
 	Message string
 }
 
@@ -44,6 +46,10 @@ func memberManagementError(status int, message string) error {
 	return &memberManagementHTTPError{Status: status, Message: message}
 }
 
+func codedMemberManagementError(status int, code, message string) error {
+	return &memberManagementHTTPError{Status: status, Code: code, Message: message}
+}
+
 func writeMemberManagementError(w http.ResponseWriter, err error, fallback string) {
 	if errors.Is(err, errChannelSystemProtected) {
 		writeSystemChannelProtected(w)
@@ -51,6 +57,10 @@ func writeMemberManagementError(w http.ResponseWriter, err error, fallback strin
 	}
 	var httpErr *memberManagementHTTPError
 	if errors.As(err, &httpErr) {
+		if httpErr.Code != "" {
+			writeCodedError(w, httpErr.Status, httpErr.Code, httpErr.Message)
+			return
+		}
 		writeError(w, httpErr.Status, httpErr.Message)
 		return
 	}
@@ -500,9 +510,10 @@ func (h *Handler) removeChannelMemberService(
 		actualEffect = removeEffectClearsAutomationBinding
 	}
 	if expectedEffect != actualEffect {
-		return memberManagementMutationResult{}, memberManagementError(
+		return memberManagementMutationResult{}, codedMemberManagementError(
 			http.StatusConflict,
-			"remove_effect_changed",
+			removeEffectChangedCode,
+			"member removal effect changed; refresh and confirm again",
 		)
 	}
 
@@ -536,9 +547,10 @@ func (h *Handler) removeChannelMemberService(
 			return memberManagementMutationResult{}, err
 		}
 		if tag.RowsAffected() != 1 {
-			return memberManagementMutationResult{}, memberManagementError(
+			return memberManagementMutationResult{}, codedMemberManagementError(
 				http.StatusConflict,
-				"remove_effect_changed",
+				removeEffectChangedCode,
+				"member removal effect changed; refresh and confirm again",
 			)
 		}
 	}

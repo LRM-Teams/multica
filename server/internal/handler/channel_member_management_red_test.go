@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -755,11 +757,38 @@ func seedBoundGroupManagerAgent(t *testing.T, channelID string) string {
 
 func assertRemoveEffectChangedResponse(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
-	if rec.Code != http.StatusConflict {
-		t.Errorf("effect mismatch want 409 got %d: %s", rec.Code, rec.Body.String())
+	if err := validateRemoveEffectChangedResponse(rec); err != nil {
+		t.Error(err)
 	}
-	if !strings.Contains(rec.Body.String(), "remove_effect_changed") {
-		t.Errorf("effect mismatch body=%q want remove_effect_changed", rec.Body.String())
+}
+
+func validateRemoveEffectChangedResponse(rec *httptest.ResponseRecorder) error {
+	if rec.Code != http.StatusConflict {
+		return fmt.Errorf("effect mismatch want 409 got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		return fmt.Errorf("effect mismatch body is not JSON: %w body=%q", err, rec.Body.String())
+	}
+	if body.Code != removeEffectChangedCode {
+		return fmt.Errorf(
+			"effect mismatch code=%q want %s body=%q",
+			body.Code,
+			removeEffectChangedCode,
+			rec.Body.String(),
+		)
+	}
+	return nil
+}
+
+func TestRemoveEffectChangedResponseRequiresTypedCode(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeError(rec, http.StatusConflict, removeEffectChangedCode)
+
+	if err := validateRemoveEffectChangedResponse(rec); err == nil {
+		t.Fatalf("error-only body unexpectedly satisfied typed code contract: %s", rec.Body.String())
 	}
 }
 

@@ -33,6 +33,13 @@
       "pending": "待审"
     }
   },
+  "chat": {
+    "you": "你",
+    "process": "过程",
+    "system": "系统",
+    "process_tag": "过程事件",
+    "empty": "画布推进时，舰队对话与过程事件会出现在这里。"
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",

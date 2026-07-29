@@ -130,6 +130,8 @@ export interface ResearchStageEval {
   created_at: string;
 }
 
+export type ResearchMessageCardKind = "chat" | "process" | string;
+
 export interface ResearchMessage {
   id: string;
   session_id: string;
@@ -137,7 +139,18 @@ export interface ResearchMessage {
   sender_id: string | null;
   target_agent_id: string | null;
   body: string;
+  card_kind?: ResearchMessageCardKind;
+  meta?: Record<string, unknown> | unknown;
   created_at: string;
+}
+
+/** Create-session response includes a kickoff snapshot so the canvas paints immediately. */
+export interface CreateResearchSessionResponse {
+  session: ResearchSession;
+  fleet: ResearchFleet;
+  nodes?: ResearchGraphNode[];
+  edges?: ResearchGraphEdge[];
+  messages?: ResearchMessage[];
 }
 
 export interface ResearchSessionSnapshot {

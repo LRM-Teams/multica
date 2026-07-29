@@ -234,8 +234,10 @@ export type {
   ResearchReport,
   ResearchStageEval,
   ResearchMessage,
+  ResearchMessageCardKind,
   ResearchSessionSnapshot,
   CreateResearchSessionRequest,
+  CreateResearchSessionResponse,
   ResearchHandoffRequest,
   ListResearchSessionsResponse,
 } from "./research";

@@ -99,3 +99,13 @@ export function visualForEdgeType(edgeType: ResearchGraphEdgeType | string): Edg
 export function shouldPulseNode(status: string, nodeType: string): boolean {
   return status === "active" && nodeType !== "goal" && nodeType !== "stage_gate";
 }
+
+/** Pulse when the node is in-flight or its actor has live compact activity. */
+export function nodeIsVisuallyBusy(
+  status: string,
+  nodeType: string,
+  actorHasActivity: boolean,
+): boolean {
+  if (actorHasActivity && status === "active") return true;
+  return shouldPulseNode(status, nodeType);
+}

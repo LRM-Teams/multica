@@ -301,8 +301,35 @@ func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
 	}
 
 	t.Run("expected_none_but_target_is_bound", func(t *testing.T) {
-		channelID := seedChannelForTest(t, "remove-effect-bound-mismatch-"+uuid.NewString(), testUserID)
-		agentID := seedBoundGroupManagerAgent(t, channelID)
+		seed := seedBoundarySequentialRevoke(t)
+		channelID := seed.channelID
+		agentID := seed.agentID
+		if _, err := testPool.Exec(context.Background(), `
+			UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`,
+			agentID); err != nil {
+			t.Fatalf("mark mismatch target as group manager: %v", err)
+		}
+		if _, err := testPool.Exec(context.Background(), `
+			UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`,
+			channelID, agentID); err != nil {
+			t.Fatalf("bind mismatch target as group manager: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `
+				UPDATE channel SET group_manager_agent_id = NULL WHERE id = $1`,
+				channelID)
+		})
+
+		revokeBefore := loadAgentChannelRevokeTuple(t, channelID, agentID, seed.eventID)
+		wantPreRevoke := agentChannelRevokeTuple{
+			MembershipCount: 1,
+			EventStatus:     "pending",
+			ActiveDelivery:  1,
+			RunningExec:     1,
+		}
+		if revokeBefore != wantPreRevoke {
+			t.Fatalf("invalid mismatch pre-revoke tuple: got=%+v want=%+v", revokeBefore, wantPreRevoke)
+		}
 		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
 		systemBefore := countChannelSystemMessagesForTest(t, channelID)
 
@@ -322,6 +349,9 @@ func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
 		assertChannelAgentMembershipCount(t, context.Background(), channelID, agentID, 1)
 		assertGroupManagerBinding(t, channelID, agentID)
 		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
+		if revokeAfter := loadAgentChannelRevokeTuple(t, channelID, agentID, seed.eventID); revokeAfter != revokeBefore {
+			t.Fatalf("effect mismatch changed pre-revoke tuple: before=%+v after=%+v", revokeBefore, revokeAfter)
+		}
 	})
 
 	t.Run("expected_binding_clear_but_target_is_unbound", func(t *testing.T) {

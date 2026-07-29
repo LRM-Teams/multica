@@ -47,9 +47,11 @@ describe("channelMemberBadge (elevated-only)", () => {
 });
 
 describe("canManageGroupMembers", () => {
-  it("is owner-only in V1", () => {
+  // #845 widened this from owner-only: a manager may open the menu too, but
+  // only ever gets "remove an ordinary member" inside it (groupMemberActions).
+  it("admits owner and manager; ordinary members get no menu", () => {
     expect(canManageGroupMembers("owner")).toBe(true);
-    expect(canManageGroupMembers("manager")).toBe(false);
+    expect(canManageGroupMembers("manager")).toBe(true);
     expect(canManageGroupMembers("member")).toBe(false);
   });
 });

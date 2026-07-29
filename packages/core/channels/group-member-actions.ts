@@ -11,8 +11,13 @@ import {
  * is unit-testable. The mutations themselves are gated behind #801; this only
  * drives which menu items render.
  *
- * V1 rule: only the group **owner** manages members. Every non-owner viewer —
- * and a viewer whose role is missing — gets zero actions (fail-closed).
+ * Rule (#845): the **owner** may do everything below. A **manager** may only
+ * remove ordinary members — no promote, no demote, no ownership transfer, and
+ * nothing at all against another manager or the owner. Every other viewer, and
+ * a viewer whose role is missing, gets zero actions (fail-closed).
+ *
+ * Menu visibility only. The server re-decides each mutation (#844), so this
+ * never grants anything — at worst it offers an action that then fails.
  */
 /** The mutating actions a group owner can invoke from a member's menu. */
 export type GroupMemberActionKind = "promote" | "demote" | "transfer" | "remove";
@@ -40,13 +45,22 @@ export function groupMemberActions(
   target: Pick<ChannelMember, "role" | "member_type" | "member_id">,
   viewerId: string,
 ): GroupMemberActions {
-  // Only the owner manages members (V1). Fail closed on any other / missing role.
-  if (!canManageGroupMembers(channelMemberRole(viewer))) return NO_ACTIONS;
+  const viewerRole = channelMemberRole(viewer);
+  // Owner or manager only. Fail closed on any other / missing role.
+  if (!canManageGroupMembers(viewerRole)) return NO_ACTIONS;
   // No actions on your own row — the owner leaves by transferring ownership,
   // never by self-removal, and cannot promote/demote themselves.
   if (target.member_id === viewerId) return NO_ACTIONS;
 
   const role = channelMemberRole(target);
+
+  // A manager acts on ordinary members only: it can neither touch a peer
+  // manager or the owner, nor change anyone's role. Ownership transfer stays
+  // owner-only regardless of the target.
+  if (viewerRole === "manager") {
+    return { ...NO_ACTIONS, canRemove: role === "member" };
+  }
+
   return {
     canPromoteToManager: role === "member",
     canDemoteToMember: role === "manager",

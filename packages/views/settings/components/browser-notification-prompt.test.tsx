@@ -25,6 +25,30 @@ vi.mock("@multica/core/platform", () => ({
   snoozeBrowserNotificationPrompt: () => platform.snooze(),
 }));
 
+const webpush = vi.hoisted(() => ({
+  supportState: "supported" as string,
+  requestAndBind: vi.fn(async () => ({
+    endpoint: "https://push/ep",
+    keys: { p256dh: "p", auth: "a" },
+    expiration_time: null,
+    device_id: "https://push/ep",
+    user_agent: "",
+  })),
+  bindCurrent: vi.fn(async () => ({
+    endpoint: "https://push/ep",
+    keys: { p256dh: "p", auth: "a" },
+    expiration_time: null,
+    device_id: "https://push/ep",
+    user_agent: "",
+  })),
+}));
+
+vi.mock("@multica/core/web-push", () => ({
+  getWebPushSupportState: () => webpush.supportState,
+  requestAndBindWebPushSubscription: () => webpush.requestAndBind(),
+  bindCurrentWebPushSubscription: () => webpush.bindCurrent(),
+}));
+
 vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (selector: (bundle: Record<string, unknown>) => unknown) => {
@@ -57,6 +81,9 @@ describe("BrowserNotificationPrompt (LRM-525)", () => {
     platform.request.mockClear();
     platform.dismiss.mockClear();
     platform.snooze.mockClear();
+    webpush.supportState = "supported";
+    webpush.requestAndBind.mockClear();
+    webpush.bindCurrent.mockClear();
   });
 
   afterEach(() => {
@@ -94,7 +121,9 @@ describe("BrowserNotificationPrompt (LRM-525)", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("browser-notification-prompt-enable"));
     });
-    expect(platform.request).toHaveBeenCalled();
+    // Enable must subscribe + bind (not just request permission), or
+    // background push never delivers. See LRM-679.
+    expect(webpush.requestAndBind).toHaveBeenCalled();
     expect(platform.dismiss).toHaveBeenCalled();
     unmount();
 
@@ -127,5 +156,37 @@ describe("BrowserNotificationPrompt (LRM-525)", () => {
     expect(
       screen.queryByTestId("browser-notification-prompt"),
     ).not.toBeInTheDocument();
+  });
+
+  it("ensures a push subscription is bound on mount when permission already granted (LRM-679 recovery)", async () => {
+    // Frank already granted permission (e.g. via the old prompt that only
+    // requested permission) but has no server-side subscription → background
+    // push dark. On dashboard mount we must best-effort (re)bind.
+    platform.permission = "granted";
+    render(<BrowserNotificationPrompt />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(webpush.bindCurrent).toHaveBeenCalled();
+  });
+
+  it("does not ensure-bind on mount when permission is not yet granted", async () => {
+    platform.permission = "default";
+    render(<BrowserNotificationPrompt />);
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+      await Promise.resolve();
+    });
+    expect(webpush.bindCurrent).not.toHaveBeenCalled();
+  });
+
+  it("does not ensure-bind on desktop shell", async () => {
+    platform.isDesktopShell = true;
+    platform.permission = "granted";
+    render(<BrowserNotificationPrompt />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(webpush.bindCurrent).not.toHaveBeenCalled();
   });
 });

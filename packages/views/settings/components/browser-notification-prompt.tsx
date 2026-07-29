@@ -5,10 +5,14 @@ import {
   dismissBrowserNotificationPrompt,
   getBrowserNotificationCapability,
   getWebNotificationPermission,
-  requestWebNotificationPermission,
   shouldShowBrowserNotificationPrompt,
   snoozeBrowserNotificationPrompt,
 } from "@multica/core/platform";
+import {
+  bindCurrentWebPushSubscription,
+  getWebPushSupportState,
+  requestAndBindWebPushSubscription,
+} from "@multica/core/web-push";
 import { Button } from "@multica/ui/components/ui/button";
 import { Bell, X } from "lucide-react";
 import { isDesktopShell } from "../../platform";
@@ -37,10 +41,37 @@ export function BrowserNotificationPrompt() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  // Recovery (LRM-679): if permission is already granted — e.g. granted via an
+  // earlier enable that never completed subscribe/bind (the old prompt only
+  // requested permission), or after a VAPID key rotation — this prompt won't
+  // render, but we still must ensure a valid push subscription is bound or
+  // background push stays dark ("foreground works, background doesn't").
+  // Idempotent: existing & matching key → reuse; stale key → resubscribe.
+  useEffect(() => {
+    if (isDesktopShell()) return;
+    if (getWebNotificationPermission() !== "granted") return;
+    if (getWebPushSupportState() !== "supported") return;
+    let cancelled = false;
+    bindCurrentWebPushSubscription().catch((err) => {
+      if (!cancelled) console.error("[web-push] ensure-subscription failed", err);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (isDesktopShell() || !open) return null;
 
   const handleEnable = async () => {
-    await requestWebNotificationPermission();
+    try {
+      // Subscribe + bind, not just request permission. Requesting permission
+      // alone (the old behavior) left no PushSubscription and no server-side
+      // endpoint, so background/system push never delivered — only the
+      // in-page foreground notification worked.
+      await requestAndBindWebPushSubscription();
+    } catch (err) {
+      console.error("[web-push] enable via prompt failed", err);
+    }
     dismissBrowserNotificationPrompt();
     setOpen(false);
   };

@@ -82,7 +82,9 @@ require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
 require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
 require_config "$deploy_workflow" 'scripts/assert-served-app-image-provenance.sh'
 require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
+require_config "$deploy_workflow" 'scripts/run-aliyun-backend-migration.sh'
 require_config "$deploy_workflow" 'scripts/validate-rtc-environment.sh'
+require_config "$deploy_workflow" '- name: Run database migration'
 require_config "$deploy_workflow" 'Host-local database identity and protected speech/RTC configuration preflight passed.'
 require_config "$deploy_workflow" '--project-name multica'
 require_config "$deploy_workflow" 'db_user="$(compose_env_value POSTGRES_USER multica)"'
@@ -103,7 +105,7 @@ require_config "$deploy_workflow" '-U "$target_user"'
 require_config "$deploy_workflow" '-d "$target_db"'
 require_config "$deploy_workflow" 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD'
 require_config "$deploy_workflow" 'compose_environment="$(compose config --environment)"'
-if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 2 ]]; then
+if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 3 ]]; then
   echo "Every Aliyun deploy/verify Compose wrapper must clear ambient POSTGRES_* values."
   exit 1
 fi
@@ -155,9 +157,22 @@ require_config "$deploy_job" 'post-health'
 require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}"'
 require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"'
 
+migration_step_line="$(grep -nF -- '- name: Run database migration' .github/workflows/deploy.yml | cut -d: -f1)"
+runtime_step_line="$(grep -nF -- '- name: Pull & restart backend + frontend + Caddy' .github/workflows/deploy.yml | cut -d: -f1)"
+caddy_install_line="$(grep -nF -- 'install -m 0644 "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile"' .github/workflows/deploy.yml | cut -d: -f1)"
+first_runtime_up_line="$(grep -nF -- 'compose up -d frontend' .github/workflows/deploy.yml | cut -d: -f1)"
+if [[ -z "$migration_step_line" || -z "$runtime_step_line" || -z "$caddy_install_line" || -z "$first_runtime_up_line" ]] ||
+  ((migration_step_line >= runtime_step_line)) ||
+  ((migration_step_line >= caddy_install_line)) ||
+  ((migration_step_line >= first_runtime_up_line)); then
+  echo "Aliyun database migration must be its own step before Caddy installation and every runtime compose up."
+  exit 1
+fi
+
 bash scripts/runner-workspace-ownership.test.sh
 bash scripts/served-app-image-provenance.test.sh
 bash scripts/compose-environment-value.test.sh
+SELFHOST_CONFIG_STATIC_ONLY=true bash scripts/run-aliyun-backend-migration.test.sh
 bash scripts/validate-rtc-environment.test.sh
 
 if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then

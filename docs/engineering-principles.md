@@ -150,9 +150,14 @@
 - **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；Aliyun self-hosted runner 只下载同一 `github.sha` 的 immutable artifact、拉固定 SHA 镜像并在本机执行 Compose/Caddy/readyz。self-hosted deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免把 Actions checkout 变成人工/agent 共用源码树。
 - **runner ownership**：Aliyun runner/deploy user 是 `dev`，`/home/dev/actions-runner/_work/**` 必须全为 `dev`。artifact 前、artifact 后、deploy 后、终局四个 phase 都扫描整棵 work root；任何异主路径立即报 phase + owner/mode + exact path，禁止 broad chown。人工/agent 永远不得在 `_work/**` 建 branch/worktree。
 - **runtime owner 与 secrets**：`/data/multica` 由 deploy owner `dev` 管理，Caddyfile 从 runner-owned artifact 先校验，再通过 sibling + atomic rename 安装；不 sudo、不回写 runner work root。runtime secrets 只在 host-owned `/data/multica/.env`，受保护 GitHub Environment `aliyun-dev` 只做部署边界；Compose dotenv 永远只作为数据解析，禁止 `source`/`eval`，不能覆盖 workflow 控制变量。每次 restart 前必须用同一份 host 目标 user/database/password 三元组做真实 PostgreSQL TCP `SELECT 1`，不把“文件有值”或旧容器 identity 当 credential 有效。
+- **迁移先于 runtime roll**：Aliyun 必须用目标 backend image 的 one-off container 独立执行 `migrate up`；失败直接以 database migration 失败终止，并发生在 Caddyfile 安装和任何 runtime `compose up` 之前，因此既有服务保持不动。backend entrypoint 的第二次迁移是当前 Compose/Helm 活合同，版本已最新时只做 ledger 空跑，不能当兼容 shim 删除。
 - **终局证据**：连续两次 cumulative Deploy（clean + reuse）成功；每次 postflight non-`dev`=0；served backend/frontend SHA 对应 cumulative `dev`；host-local `/readyz` 与外部 `leagent.me` HTTPS 都通过。CI/merge 或公网 `:8090/health` 单独都不能宣称部署完成。
 - **事故依据**：2026-07-23 腾讯 s89 checkout 的 6 个 root-owned refs/logs 来自宿主机 root Git 复用 Actions worktree；同日 Aliyun 首次 cutover run `29979928059` 又因 `actions/checkout` 的 GnuTLS/partial-clone promisor fetch 失败。两起事故共同证明：长期修复不是清一次目录或多重试，而是让 self-hosted deploy 根本不拥有 Git worktree。
 - **branch source-of-truth 元教训**：workflow 可以只存在于特定 branch。产品代码看 `dev`；“什么部署 main”看 `main`；线上跑什么看部署 SHA/容器。不要把“永远读某一 branch”写成无上下文常量。
+
+### 4.0.1 Schema rollback contract — `仅文档`（人工设计/评审门；无可靠自动 SQL compatibility 判定）
+- 每个可能随镜像回滚的 schema 迁移必须保持旧一版应用仍可运行：优先 expand → 双读/双写或 backfill → contract，删除/重命名/收紧约束不得与首次使用新 schema 的应用版本同轮落地。
+- 部署回滚只切换 image tag，不自动回滚 schema；因此 migration reviewer 必须逐项确认目标旧 image 对迁移后 schema 的读写兼容性。自动测试可以覆盖具体旧/新二进制组合，但不能把通用 SQL 文本扫描冒充兼容性证明。
 
 ### 4.1 子进程环境合同 — `可执行`（task #512，进行中）
 - 全局宿主私有变量禁继承（Raft SEA 标记等）+ per-provider 声明允许/禁止清单 + 显式 `custom_env` 最后叠加最优先 + 全 provider 矩阵回归。首刀已落：中央 provider-aware sanitizer（#627，Pi 声明 `PI_PACKAGE_DIR` 宿主私有）。

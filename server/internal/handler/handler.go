@@ -312,6 +312,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
+	h.EnvCheckpointService = newEnvCheckpointService(h)
 	return h
 }
 

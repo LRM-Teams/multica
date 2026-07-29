@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package handler
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/multica-ai/multica/server/internal/service"
+)
+
+// newEnvCheckpointService builds the production checkpoint service from the
+// handler's queries, sandbox lifecycle, and hubs. It returns nil when the
+// handler has no queries (test fixtures build *Handler directly), which keeps
+// the injected fake as the test path and leaves the endpoints answering
+// "unconfigured" rather than panicking.
+//
+// Construction alone does not expose anything: every checkpoint endpoint is
+// still gated by ENV_CHECKPOINTS_ENABLED. What the flag now gates is a service
+// that is actually reachable -- before this, the endpoints were dead even with
+// the flag on, because nothing ever set the field.
+func newEnvCheckpointService(h *Handler) EnvCheckpointServiceAPI {
+	if h == nil || h.Queries == nil {
+		return nil
+	}
+	lifecycle := newEnvSandboxLifecycleService(h)
+	if lifecycle == nil {
+		return nil
+	}
+	jobs := &envSandboxLifecycleDepsAdapter{h: h}
+	dispatch := &envDispatchDepsAdapter{h: h}
+
+	// A nil *daemonws.Hub stored in the interface would be non-nil as an
+	// interface value, so the wake fast-path would call through a nil receiver.
+	// Pass nothing instead: the daemon's poll loop still re-claims the task,
+	// just less promptly.
+	var waker service.TaskWakeupNotifier
+	if h.DaemonHub != nil {
+		waker = h.DaemonHub
+	}
+
+	return service.NewEnvCheckpointService(
+		service.NewEnvCheckpointRepository(h.Queries),
+		service.NewSandboxInstanceSaver(lifecycle),
+		service.NewSandboxInstanceResumer(lifecycle),
+		service.NewProjectSnapshotReader(h.Queries),
+		service.NewInFlightTaskResolver(h.Queries),
+		service.ContinuationRegistry{
+			SameRuntime: service.NewSameRuntimeContinuation(h.Queries, waker),
+			Forked:      service.NewForkedRuntimeContinuation(dispatch),
+		},
+	).
+		WithSavepointCreator(service.NewSavepointCreator(h.Queries, jobs)).
+		WithLanes(
+			service.NewEnvCheckpointLaneRepository(h.Queries),
+			service.NewLaneMaterializer(&laneMaterializerDepsAdapter{
+				lifecycle: lifecycle,
+				dispatch:  dispatch,
+			}),
+			service.NewSavepointReader(h.Queries),
+		)
+}
+
+// laneMaterializerDepsAdapter wires lane materialization to the same primitives
+// env-dispatch uses, so a lane's sandbox, env, and project copy are produced the
+// same way a rollout's are.
+type laneMaterializerDepsAdapter struct {
+	lifecycle *service.EnvSandboxLifecycleService
+	dispatch  *envDispatchDepsAdapter
+}
+
+func (a *laneMaterializerDepsAdapter) CreateSandboxInstance(ctx context.Context, in service.CreateSandboxInstanceInput, actorUserID string) (service.SandboxInstanceRef, error) {
+	return a.lifecycle.CreateSandboxInstance(ctx, in, actorUserID)
+}
+
+func (a *laneMaterializerDepsAdapter) CreateEnv(ctx context.Context, workspaceID string, sandboxIDs []string, parentEnvID string, mode service.EnvMode, domain service.EnvDomain) (string, error) {
+	return a.dispatch.CreateEnv(ctx, workspaceID, sandboxIDs, parentEnvID, mode, domain)
+}
+
+func (a *laneMaterializerDepsAdapter) CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (string, map[string]string, map[string]string, error) {
+	return a.dispatch.CopyProjectSubtree(ctx, sourceProjectID, workspaceID, envID)
+}
+
+// ProvisionLaneAgentRuntime is refused until a checkpoint records its source
+// conversation (design D8). A lane needs its own channel and a per-lane
+// env-dispatch binding to derive the executing agent against, and neither can be
+// reconstructed from a checkpoint as recorded today: CopyProjectSubtree copies
+// issues and chat sessions but not channels. Reusing the source's channel would
+// post every lane into one thread, which is the opposite of independent
+// continuations, so this fails loudly instead.
+//
+// The API cannot reach here: standalone fan-out is refused up front for a
+// checkpoint with no recorded source conversation, and the branch path
+// provisions through provisionEnvDispatchAgentBranch rather than a lane.
+func (a *laneMaterializerDepsAdapter) ProvisionLaneAgentRuntime(_ context.Context, in service.LaneAgentProvisionInput) (service.LaneBinding, error) {
+	return service.LaneBinding{}, fmt.Errorf(
+		"%w: lane %q cannot mint a runtime until checkpoints record their source conversation",
+		service.ErrLaneConversationUnavailable, in.LaneKey)
+}

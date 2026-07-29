@@ -13,11 +13,15 @@ const openDMMocks = vi.hoisted(() => ({
   isPending: false,
 }));
 
-// Per-test permission decision for the merged runtime-config section. Group
-// managers override this to always-editable inside the component, so leaving
-// it denied by default lets us assert the read-only path for ordinary agents.
-const { permission, usageRows, mockRuntimes } = vi.hoisted(() => ({
+// Per-test permission decisions. Both come from `useAgentPermissions`, which is
+// stubbed here: these tests assert that the panel *wires* a decision to the
+// right surface. Whether the decision itself is correct — owner, workspace
+// admin, visibility — is covered by `canViewAgentActivity` /  `canEditAgent`
+// in packages/core/permissions/rules.test.ts, against the same context the
+// backend gates on. Defaulting both to denied keeps the read-only paths honest.
+const { permission, activityPermission, usageRows, mockRuntimes } = vi.hoisted(() => ({
   permission: { allowed: false },
+  activityPermission: { allowed: false },
   usageRows: [] as Array<{
     agent_id: string;
     model: string;
@@ -139,7 +143,7 @@ vi.mock("../../common/use-open-dm", () => ({
   useOpenDM: () => openDMMocks,
 }));
 vi.mock("@multica/core/permissions", () => ({
-  useAgentPermissions: () => ({ canEdit: permission }),
+  useAgentPermissions: () => ({ canEdit: permission, canViewActivity: activityPermission }),
 }));
 vi.mock("../../runtimes/components/shared", () => ({
   useRuntimeHealthStateLabel: () => (state: string) => state,
@@ -305,6 +309,7 @@ describe("AgentSidePanel", () => {
     vi.clearAllMocks();
     configStore.setState({ agentProfileDevAccessEnabled: false });
     permission.allowed = false;
+    activityPermission.allowed = false;
     usageRows.length = 0;
     mockRuntimes.current = [];
   });
@@ -392,7 +397,8 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("No reported usage yet")).toBeInTheDocument();
   });
 
-  it("temporarily exposes Activity, but not Files, to a workspace-member viewer", () => {
+  it("exposes Activity, but not Files, when the activity decision allows", () => {
+    activityPermission.allowed = true;
     const workspaceMember: MemberWithUser = {
       ...ownerMember,
       id: "m-viewer",
@@ -416,7 +422,9 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
   });
 
-  it("does not advertise Activity to a non-owner of a private agent", () => {
+  it("does not advertise Activity when the activity decision denies", () => {
+    // activityPermission stays denied — this is the private-agent, non-owner,
+    // non-admin case that canViewAgentActivity rejects.
     const workspaceMember: MemberWithUser = {
       ...ownerMember,
       id: "m-viewer",
@@ -442,7 +450,8 @@ describe("AgentSidePanel", () => {
   // #656 — Reminders reuses the exact same visibility gate as Activity per
   // the V2 spec, and must always render as a direct tab (this panel has no
   // "More" overflow menu to hide it behind).
-  it("shows Reminders as a direct tab to a workspace-member viewer, same gate as Activity", () => {
+  it("shows Reminders as a direct tab whenever Activity is allowed, same gate", () => {
+    activityPermission.allowed = true;
     const workspaceMember: MemberWithUser = {
       ...ownerMember,
       id: "m-viewer",
@@ -488,6 +497,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("shows Profile, Activity, Reminders, Files, and Usage as direct tabs for the owner — none hidden behind a 'More' menu", () => {
+    activityPermission.allowed = true;
     renderPanel("user-owner");
 
     expect(screen.getByRole("button", { name: "Profile" })).toBeInTheDocument();
@@ -560,6 +570,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("keeps visited page tabs mounted in equal-width 44px mobile targets", () => {
+    activityPermission.allowed = true;
     const { container } = renderPanel("user-owner", undefined, "page");
 
     expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
@@ -582,6 +593,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("restores a visited page tab's scroll position after switching tabs", () => {
+    activityPermission.allowed = true;
     const { container } = renderPanel("user-owner", undefined, "page");
     const tabBody = container.querySelector(".overflow-y-auto") as HTMLDivElement;
 
@@ -596,6 +608,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("keeps desktop panel tabs content-width and left aligned", () => {
+    activityPermission.allowed = true;
     const { container } = renderPanel();
 
     expect(container.querySelector("aside")).toHaveClass("w-full", "min-w-0");
@@ -606,7 +619,12 @@ describe("AgentSidePanel", () => {
   });
 
   it("never renders a separate Config tab; Runtime Config is its own Profile section (LRM-470)", () => {
-    renderPanel("user-owner", "group_manager");
+    activityPermission.allowed = true;
+    // The editable state used to come from the `group_manager` marker; since
+    // #871 it comes from canEdit, which is what this test needs for the
+    // "applies next run" hint.
+    permission.allowed = true;
+    renderPanel("user-owner");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
     expect(screen.getByText("Info")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Runtime Config" })).toBeInTheDocument();
@@ -639,10 +657,22 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
-  it("renders EDITABLE runtime pickers in Profile for a group manager (any member)", () => {
-    // permission stays denied — the group_manager override is what grants edit.
-    // Visibility stays editable too (LRM-387: Frank — must support modify).
+  // #871: the `group_manager` marker no longer grants any member edit rights.
+  // Runtime config now follows `canEdit` alone, which already admits the agent
+  // owner and workspace owners/admins.
+  it("keeps runtime pickers READ-ONLY for a member on a group_manager agent when canEdit denies", () => {
+    permission.allowed = false;
     renderPanel("user-other", "group_manager");
+
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
+    }
+  });
+
+  it("renders EDITABLE runtime pickers when canEdit allows, marker or not", () => {
+    // Visibility stays editable too (LRM-387: Frank — must support modify).
+    permission.allowed = true;
+    renderPanel("user-other");
 
     for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");

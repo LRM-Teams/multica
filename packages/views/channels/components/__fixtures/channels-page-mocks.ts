@@ -30,7 +30,12 @@ import { vi, type Mock } from "vitest";
  * Every factory takes `importOriginal` and spreads it, so named exports the test
  * still needs (e.g. a real `ApiError` to construct) survive the mock.
  */
-type ImportOriginal<T> = () => Promise<T>;
+// Matches vitest's own `importOriginal`, which is a GENERIC function
+// (`<T = unknown>() => Promise<T>`). Typing it as a plain `() => Promise<T>`
+// never matches, which pushed every call site into `importOriginal as never` —
+// the bluntest cast available, and one that would equally hide a real
+// incompatibility later. The signature was the defect, not the call sites.
+type ImportOriginal = <T = unknown>() => Promise<T>;
 
 export const authMock = () => ({
   useAuthStore: (selector: (s: { user: { id: string; name: string } }) => unknown) =>
@@ -38,16 +43,16 @@ export const authMock = () => ({
 });
 
 export const dmMock = async (
-  importOriginal: ImportOriginal<typeof import("@multica/core/dm")>,
+  importOriginal: ImportOriginal,
 ) => ({
-  ...(await importOriginal()),
+  ...(await importOriginal<typeof import("@multica/core/dm")>()),
   dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => [] }),
 });
 
 export const hooksMock = async (
-  importOriginal: ImportOriginal<typeof import("@multica/core/hooks")>,
+  importOriginal: ImportOriginal,
 ) => ({
-  ...(await importOriginal()),
+  ...(await importOriginal<typeof import("@multica/core/hooks")>()),
   useWorkspaceId: () => "ws-1",
 });
 
@@ -60,9 +65,9 @@ export const fileUploadMock = (): {
 });
 
 export const pathsMock = async (
-  importOriginal: ImportOriginal<typeof import("@multica/core/paths")>,
+  importOriginal: ImportOriginal,
 ) => ({
-  ...(await importOriginal()),
+  ...(await importOriginal<typeof import("@multica/core/paths")>()),
   useWorkspacePaths: () => ({
     channels: () => "/w/test/channels",
     channelDetail: (id: string) => `/w/test/channels/${id}`,
@@ -70,8 +75,8 @@ export const pathsMock = async (
 });
 
 export const realtimeMock = async (
-  importOriginal: ImportOriginal<typeof import("@multica/core/realtime")>,
+  importOriginal: ImportOriginal,
 ): Promise<typeof import("@multica/core/realtime") & { useWSEvent: Mock }> => ({
-  ...(await importOriginal()),
+  ...(await importOriginal<typeof import("@multica/core/realtime")>()),
   useWSEvent: vi.fn(),
 });

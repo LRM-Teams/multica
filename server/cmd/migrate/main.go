@@ -44,6 +44,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"191_agent_default_handle_repair":     runAgentDefaultHandleRepairHook,
 	"227_agent_delete_fk_indexes":         runAgentDeleteFKIndexesHook,
 	"229_agent_delete_cascade_fk_indexes": runAgentDeleteCascadeFKIndexesHook,
+	"245_research_fleet_agent_indexes":    runResearchFleetAgentIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -84,6 +85,28 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_wendy_channel_ambient_agent", `CREATE INDEX CONCURRENTLY idx_wendy_channel_ambient_agent ON wendy_channel_ambient (wendy_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
 		{"idx_workspace_radar_state_supervisor_agent", `CREATE INDEX CONCURRENTLY idx_workspace_radar_state_supervisor_agent ON workspace_radar_state (workspace_id, supervisor_agent_id) WHERE supervisor_agent_id IS NOT NULL`},
+	}
+
+	return ensureConcurrentIndexes(ctx, pool, indexes)
+}
+
+func runResearchFleetAgentIndexesHook(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+) error {
+	indexes := []concurrentIndexSpec{
+		{
+			"idx_research_fleet_lead_agent",
+			`CREATE INDEX CONCURRENTLY idx_research_fleet_lead_agent ON research_fleet (lead_agent_id) WHERE lead_agent_id IS NOT NULL`,
+		},
+		{
+			"idx_research_graph_node_actor_agent",
+			`CREATE INDEX CONCURRENTLY idx_research_graph_node_actor_agent ON research_graph_node (actor_agent_id) WHERE actor_agent_id IS NOT NULL`,
+		},
+		{
+			"idx_research_message_target_agent",
+			`CREATE INDEX CONCURRENTLY idx_research_message_target_agent ON research_message (target_agent_id) WHERE target_agent_id IS NOT NULL`,
+		},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

@@ -5,6 +5,8 @@
 | HTTP routes under `/api/research` | `server/cmd/server/router.go` Research Fleet block |
 | Fleet ensure + seed roles | `server/internal/handler/research_fleet.go`, `research_templates.go` |
 | Graph/source/report/message/stage/handoff | `server/internal/handler/research_ops.go`, `research_stage.go`, `research_handoff.go` |
+| Session kickoff graph + process cards | `server/internal/handler/research_kickoff.go`, `research_process.go` |
+| Message `card_kind` / `meta` | migration `246_research_message_cards` |
 | Session wake / fleet dispatch | `server/internal/handler/research_dispatch.go` (`EnqueueChatTask`) |
 | Domain playbooks | `references/playbooks/*.md` + `seedResearchFleetPlaybooks` |
 | Schema | `server/migrations/244_research_fleet.up.sql` |

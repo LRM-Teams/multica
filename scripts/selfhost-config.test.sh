@@ -121,6 +121,10 @@ if grep -Fq 'secrets.POSTGRES_PASSWORD' <<<"$deploy_workflow"; then
 fi
 
 deploy_job="$(awk '/^  deploy:/{capture=1} capture{print}' .github/workflows/deploy.yml)"
+prepare_job="$(awk '/^  prepare:/{capture=1; next} /^  build:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
+build_job="$(awk '/^  build:/{capture=1; next} /^  deploy:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
+require_config "$prepare_job" 'runs-on: [self-hosted, ci]'
+require_config "$build_job" 'runs-on: [self-hosted, ci]'
 if grep -Fq 'uses: actions/checkout' <<<"$deploy_job"; then
   echo "Aliyun self-hosted deploy job must consume the immutable deploy artifact, not git checkout."
   exit 1

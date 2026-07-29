@@ -1,7 +1,8 @@
 # Custom labels for self-hosted runners, so actionlint doesn't flag them as
-# unknown. `s89` is the current dev deploy host. `aliyun` remains registered
-# for workflows or revisions that explicitly target the Aliyun runner.
+# unknown. `ci` selects the generic build/test lane; `aliyun` remains
+# registered for the protected production deploy job.
 self-hosted-runner:
   labels:
     - aliyun
+    - ci
     - s89

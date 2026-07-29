@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   mobile:
-    # Keep mobile verify on the same Tencent CI runner as ci.yml (LRM-701).
+    # Same [self-hosted, ci] pool as ci.yml (LRM-701; Aliyun and/or Tencent).
     runs-on: [self-hosted, ci]
     steps:
       - name: Checkout

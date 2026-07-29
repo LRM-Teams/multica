@@ -10,8 +10,9 @@ concurrency:
 
 jobs:
   frontend:
-    # Tencent Cloud CI runner (LRM-701). Labels must match the registered
-    # self-hosted runner; do not fall back to ubuntu-latest (hosted minutes).
+    # Self-hosted CI (LRM-701). Any runner with labels self-hosted+ci —
+    # Aliyun (add `ci` alongside `aliyun`) and/or a dedicated Tencent box.
+    # Do not fall back to ubuntu-latest (hosted minutes).
     runs-on: [self-hosted, ci]
     steps:
       - name: Checkout
@@ -239,8 +240,8 @@ jobs:
           exit "${STATUS}"
 
   backend:
-    # Same CI runner as frontend (LRM-701). Requires Docker for the Postgres /
-    # Redis service containers below — see docs/ci-tencent-runner.md.
+    # Same [self-hosted, ci] pool as frontend (LRM-701). Requires Docker for
+    # Postgres/Redis service containers — see docs/ci-tencent-runner.md.
     runs-on: [self-hosted, ci]
     services:
       postgres:

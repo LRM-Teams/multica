@@ -123,8 +123,12 @@ fi
 deploy_job="$(awk '/^  deploy:/{capture=1} capture{print}' .github/workflows/deploy.yml)"
 prepare_job="$(awk '/^  prepare:/{capture=1; next} /^  build:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
 build_job="$(awk '/^  build:/{capture=1; next} /^  deploy:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
-require_config "$prepare_job" 'runs-on: [self-hosted, ci]'
-require_config "$build_job" 'runs-on: [self-hosted, ci]'
+# Deliberately NOT asserted: which runner prepare/build use. That is a CI
+# preference, not a deployment-safety property, and pinning it here meant every
+# legitimate `runs-on` change silently reddened this test for the whole team
+# (2026-07-29). What this file guards is below — the deploy job must stay on the
+# target host, credentials must stay in the host .env, and the deploy must
+# consume an immutable artifact rather than a git checkout.
 require_config "$build_job" 'buildkitd-config-inline: |'
 require_config "$build_job" '[registry."docker.io"]'
 require_config "$build_job" 'mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]'

@@ -94,7 +94,14 @@ export type WSEventType =
   | "pull_request:updated"
   | "pull_request:unlinked"
   | "sandbox:instance_created"
-  | "sandbox:instance_updated";
+  | "sandbox:instance_updated"
+  | "research_session:graph_updated"
+  | "research_session:presence"
+  | "research_session:sources_updated"
+  | "research_session:report_updated"
+  | "research_session:message"
+  | "research_session:stage_eval"
+  | "research_session:status_changed";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -621,6 +628,13 @@ export interface WSEventPayloadMap {
   "pull_request:linked": unknown;
   "pull_request:updated": unknown;
   "pull_request:unlinked": unknown;
+  "research_session:graph_updated": unknown;
+  "research_session:presence": unknown;
+  "research_session:sources_updated": unknown;
+  "research_session:report_updated": unknown;
+  "research_session:message": unknown;
+  "research_session:stage_eval": unknown;
+  "research_session:status_changed": unknown;
 }
 
 /**

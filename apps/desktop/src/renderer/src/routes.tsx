@@ -1,9 +1,6 @@
-import { useEffect } from "react";
 import {
   createMemoryRouter,
   Navigate,
-  Outlet,
-  useMatches,
 } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
@@ -14,12 +11,15 @@ import { AgentDetailPage } from "./pages/agent-detail-page";
 import { MemberDetailPage } from "./pages/member-detail-page";
 import { RuntimeDetailPage } from "./pages/runtime-detail-page";
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
+import { DesktopResearchSessionPage } from "./pages/research-session-page";
+import { DesktopSettingsRoute } from "./pages/desktop-settings-route";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
 import { DashboardPage } from "@multica/views/dashboard";
 import { OverviewPage } from "@multica/views/overview";
 import { PlanBillingPage } from "@multica/views/plan-billing";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
+import { ResearchListPage } from "@multica/views/research";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { SkillsPage } from "@multica/views/skills";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
@@ -28,70 +28,9 @@ import { SandboxesPage } from "@multica/views/sandboxes";
 import { SandboxDetailPage } from "./pages/sandbox-detail-page";
 import { SandboxNodeSetupPage } from "./pages/sandbox-node-setup-page";
 import { InboxPage } from "@multica/views/inbox";
-import { SettingsPage } from "@multica/views/settings";
-import { useT } from "@multica/views/i18n";
-import { Download, Server } from "lucide-react";
-import { DaemonSettingsTab } from "./components/daemon-settings-tab";
-import { UpdatesSettingsTab } from "./components/updates-settings-tab";
 import { WorkspaceRouteLayout } from "./components/workspace-route-layout";
 import { DesktopRouteErrorPage } from "./components/route-error-page";
-
-/**
- * Wraps `SettingsPage` so the desktop-only extra tabs can pull their labels
- * from i18n. The route element has to be a component (not a literal JSX
- * value) for `useT` to run.
- */
-function DesktopSettingsRoute() {
-  const { t } = useT("settings");
-  return (
-    <SettingsPage
-      extraAccountTabs={[
-        {
-          value: "daemon",
-          label: "Daemon",
-          icon: Server,
-          content: <DaemonSettingsTab />,
-        },
-        {
-          value: "updates",
-          label: t(($) => $.desktop.tabs.updates),
-          icon: Download,
-          content: <UpdatesSettingsTab />,
-        },
-      ]}
-    />
-  );
-}
-
-/**
- * Sets document.title from the deepest matched route's handle.title.
- * The tab system observes document.title via MutationObserver.
- * Pages with dynamic titles (e.g. issue detail) override by setting
- * document.title directly via useDocumentTitle().
- */
-function TitleSync() {
-  const matches = useMatches();
-  const title = [...matches]
-    .reverse()
-    .find((m) => (m.handle as { title?: string })?.title)
-    ?.handle as { title?: string } | undefined;
-
-  useEffect(() => {
-    if (title?.title) document.title = title.title;
-  }, [title?.title]);
-
-  return null;
-}
-
-/** Wrapper that renders route children + TitleSync */
-function PageShell() {
-  return (
-    <>
-      <TitleSync />
-      <Outlet />
-    </>
-  );
-}
+import { PageShell } from "./components/page-shell";
 
 /**
  * Route definitions shared by all tabs.
@@ -145,6 +84,16 @@ export const appRoutes: RouteObject[] = [
             path: "projects/:id",
             element: <ProjectDetailPage />,
             handle: { title: "Project" },
+          },
+          {
+            path: "research",
+            element: <ResearchListPage />,
+            handle: { title: "Research" },
+          },
+          {
+            path: "research/:id",
+            element: <DesktopResearchSessionPage />,
+            handle: { title: "Research" },
           },
           {
             path: "autopilots",

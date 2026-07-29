@@ -104,6 +104,8 @@
     "./feedback/mutations": "./feedback/mutations.ts",
     "./evolution": "./evolution/index.ts",
     "./evolution/queries": "./evolution/queries.ts",
+    "./research": "./research/index.ts",
+    "./research/queries": "./research/queries.ts",
     "./realtime": "./realtime/index.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",

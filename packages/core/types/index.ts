@@ -219,6 +219,26 @@ export type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
+export type {
+  ResearchSessionStatus,
+  ResearchStage,
+  ResearchGraphNodeType,
+  ResearchGraphEdgeType,
+  ResearchFleetMemberStatus,
+  ResearchFleetMember,
+  ResearchFleet,
+  ResearchSession,
+  ResearchGraphNode,
+  ResearchGraphEdge,
+  ResearchSource,
+  ResearchReport,
+  ResearchStageEval,
+  ResearchMessage,
+  ResearchSessionSnapshot,
+  CreateResearchSessionRequest,
+  ResearchHandoffRequest,
+  ListResearchSessionsResponse,
+} from "./research";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   GitHubInstallation,

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -66,6 +67,31 @@ func TestParseStepRewards_Valid(t *testing.T) {
 	if len(got) != 2 || got[0].SegmentID != "s1" || got[0].Seq != 1 || got[0].Score != 8 {
 		t.Fatalf("%+v", got)
 	}
+}
+
+func TestDiagnosisReport_UsesStableJSONKeys(t *testing.T) {
+	encoded, err := json.Marshal(DiagnosisReport{
+		RunID:             "run-1",
+		CompletedSegments: 2,
+		TotalSegments:     3,
+		Status:            DiagnosisRunCompleted,
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"run_id":"run-1","completed_segments":2,"total_segments":3,"status":"completed"}`, string(encoded))
+}
+
+func TestLoadExistingCompletedDiagnosis_ReturnsMatchingTopology(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+	_, err := store.StartSegment(context.Background(), "run-1", "seg-a", 0, 0)
+	require.NoError(t, err)
+	require.NoError(t, store.CompleteSegment(context.Background(), "run-1", "seg-a"))
+	require.NoError(t, store.CompleteRun(context.Background(), "run-1", "topo-hash-1"))
+
+	report, found, err := loadExistingCompletedDiagnosis(context.Background(), store, "project-1", "task-1", "topo-hash-1")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, DiagnosisReport{RunID: "run-1", CompletedSegments: 1, TotalSegments: 1, Status: DiagnosisRunCompleted}, report)
 }
 
 func TestParseStepRewards_ClampsAndSkips(t *testing.T) {

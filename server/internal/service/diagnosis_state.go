@@ -82,6 +82,7 @@ type diagnosisStateQueries interface {
 	CreateInteractionDAGDiagnosisRun(ctx context.Context, arg db.CreateInteractionDAGDiagnosisRunParams) error
 	GetInteractionDAGDiagnosisRun(ctx context.Context, runID string) (db.InteractionDAGDiagnosisRun, error)
 	GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error)
+	GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error)
 	FailInteractionDAGDiagnosisRun(ctx context.Context, arg db.FailInteractionDAGDiagnosisRunParams) (int64, error)
 	CompleteInteractionDAGDiagnosisRun(ctx context.Context, runID string) (int64, error)
 	CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg db.CreateInteractionDAGDiagnosisSegmentParams) error
@@ -409,6 +410,30 @@ func (s *DiagnosisStateStore) LoadResumableRun(ctx context.Context, projectID, t
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return DiagnosisRunCheckpoint{}, nil, fmt.Errorf("%w: project %s task %s", ErrDiagnosisRunNotFound, projectID, taskID)
+		}
+		return DiagnosisRunCheckpoint{}, nil, err
+	}
+	run, err := diagnosisRunFromRow(row)
+	if err != nil {
+		return DiagnosisRunCheckpoint{}, nil, err
+	}
+	segments, err := s.ListSegments(ctx, run.RunID)
+	if err != nil {
+		return DiagnosisRunCheckpoint{}, nil, err
+	}
+	return run, segments, nil
+}
+
+// LoadCompletedRun returns the newest completed run for a project/task. It is
+// used by an idempotent on-demand request after no active run exists.
+func (s *DiagnosisStateStore) LoadCompletedRun(ctx context.Context, projectID, taskID string) (DiagnosisRunCheckpoint, []SegmentDiagnosisCheckpoint, error) {
+	row, err := s.q.GetLatestCompletedInteractionDAGDiagnosisRun(ctx, db.GetLatestCompletedInteractionDAGDiagnosisRunParams{
+		ProjectID: projectID,
+		TaskID:    taskID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DiagnosisRunCheckpoint{}, nil, fmt.Errorf("%w: completed project %s task %s", ErrDiagnosisRunNotFound, projectID, taskID)
 		}
 		return DiagnosisRunCheckpoint{}, nil, err
 	}

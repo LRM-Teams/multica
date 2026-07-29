@@ -51,6 +51,7 @@ type InteractionDAGStore interface {
 	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error)
 	InsertInteractionDAGStepReward(ctx context.Context, arg db.InsertInteractionDAGStepRewardParams) error
 	ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGStepReward, error)
+	ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGDiagnosisTarget, error)
 }
 
 // MessageStore is the DB seam for accessing task messages.
@@ -448,16 +449,17 @@ type AssembledDag struct {
 // is reconstructed from the three interaction_dag_env_snapshot columns. issue_id
 // is a non-optional str on the areal side; a NULL DB issue_id is emitted as "".
 type AssembledSegment struct {
-	SegmentID        string               `json:"segment_id"`
-	AgentRunID       string               `json:"agent_run_id"`
-	IssueID          string               `json:"issue_id"`
-	TrajectoryID     *int64               `json:"trajectory_id"`
-	TensorRef        json.RawMessage      `json:"tensor_ref"`
-	ClosingEvent     *string              `json:"closing_event"`
-	TrajectorySource string               `json:"trajectory_source"`
-	Trainable        bool                 `json:"trainable"`
-	Trajectory       json.RawMessage      `json:"trajectory"`
-	EnvSnapshot      AssembledEnvSnapshot `json:"env_snapshot"`
+	SegmentID         string               `json:"segment_id"`
+	AgentRunID        string               `json:"agent_run_id"`
+	IssueID           string               `json:"issue_id"`
+	TrajectoryID      *int64               `json:"trajectory_id"`
+	TensorRef         json.RawMessage      `json:"tensor_ref"`
+	ClosingEvent      *string              `json:"closing_event"`
+	TrajectorySource  string               `json:"trajectory_source"`
+	Trainable         bool                 `json:"trainable"`
+	Trajectory        json.RawMessage      `json:"trajectory"`
+	EnvSnapshot       AssembledEnvSnapshot `json:"env_snapshot"`
+	AssistantTurnSeqs []int32              `json:"assistant_turn_seqs"`
 }
 
 // AssembledEnvSnapshot is the inverse of encodeEnvSnapshot: the three
@@ -526,6 +528,18 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 	if err != nil {
 		return AssembledDag{}, fmt.Errorf("interaction_dag: list step_rewards for %s: %w", projectID, err)
 	}
+	targetRows, err := s.store.ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx, projectID)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list diagnosis targets for %s: %w", projectID, err)
+	}
+	targetsBySegment := make(map[string][]int32, len(targetRows))
+	for _, target := range targetRows {
+		var seqs []int32
+		if err := json.Unmarshal(target.ExpectedRewardSeqs, &seqs); err != nil {
+			return AssembledDag{}, fmt.Errorf("interaction_dag: decode diagnosis targets for segment %s: %w", target.SegmentID, err)
+		}
+		targetsBySegment[target.SegmentID] = seqs
+	}
 
 	// Index env_snapshots by segment_id for an O(1) 1:1 join (the atomic CTE
 	// in CloseSegmentForEvent guarantees every segment has exactly one snapshot;
@@ -563,6 +577,12 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 			TrajectorySource: sg.TrajectorySource,
 			Trainable:        sg.Trainable,
 			Trajectory:       json.RawMessage(sg.Trajectory),
+			AssistantTurnSeqs: func() []int32 {
+				if seqs, exists := targetsBySegment[sg.SegmentID]; exists {
+					return seqs
+				}
+				return []int32{}
+			}(),
 		}
 		if sn, ok := snapBySeg[sg.SegmentID]; ok {
 			seg.EnvSnapshot = assembleEnvSnapshot(sn)

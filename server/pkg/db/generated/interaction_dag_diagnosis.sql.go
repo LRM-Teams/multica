@@ -53,6 +53,13 @@ type InteractionDAGDiagnosisSegment struct {
 	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
 }
 
+// InteractionDAGDiagnosisTarget is the immutable assistant-turn set frozen
+// for one segment in the latest completed diagnosis run.
+type InteractionDAGDiagnosisTarget struct {
+	SegmentID          string `json:"segment_id"`
+	ExpectedRewardSeqs []byte `json:"expected_reward_seqs"`
+}
+
 const createInteractionDAGDiagnosisRun = `-- name: CreateInteractionDAGDiagnosisRun :exec
 INSERT INTO interaction_dag_diagnosis_run (run_id, project_id, task_id, topology_hash, ordered_segment_ids, status)
 VALUES ($1, $2, $3, $4, $5, 'running')
@@ -134,6 +141,38 @@ func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, ar
 		&i.CompletedAt,
 	)
 	return i, err
+}
+
+const getLatestCompletedInteractionDAGDiagnosisRun = `-- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_run
+WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
+ORDER BY completed_at DESC, updated_at DESC
+LIMIT 1
+`
+
+type GetLatestCompletedInteractionDAGDiagnosisRunParams struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}
+
+func (q *Queries) GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg GetLatestCompletedInteractionDAGDiagnosisRunParams) (InteractionDAGDiagnosisRun, error) {
+	row := q.db.QueryRow(ctx, getLatestCompletedInteractionDAGDiagnosisRun, arg.ProjectID, arg.TaskID)
+	var item InteractionDAGDiagnosisRun
+	err := row.Scan(
+		&item.RunID,
+		&item.ProjectID,
+		&item.TaskID,
+		&item.TopologyHash,
+		&item.OrderedSegmentIds,
+		&item.Status,
+		&item.CurrentSegmentOrdinal,
+		&item.PiSessionID,
+		&item.LastError,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&item.CompletedAt,
+	)
+	return item, err
 }
 
 const failInteractionDAGDiagnosisRun = `-- name: FailInteractionDAGDiagnosisRun :execrows
@@ -254,6 +293,42 @@ func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLatestCompletedInteractionDAGDiagnosisTargetsForProject = `-- name: ListLatestCompletedInteractionDAGDiagnosisTargetsForProject :many
+WITH latest_run AS (
+  SELECT run_id
+  FROM interaction_dag_diagnosis_run
+  WHERE project_id = $1 AND status = 'completed'
+  ORDER BY completed_at DESC, updated_at DESC
+  LIMIT 1
+)
+SELECT segment_id, expected_reward_seqs
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = (SELECT run_id FROM latest_run)
+ORDER BY ordinal
+`
+
+// ListLatestCompletedInteractionDAGDiagnosisTargetsForProject returns the
+// frozen assistant target sequences from the newest completed diagnosis run.
+func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]InteractionDAGDiagnosisTarget, error) {
+	rows, err := q.db.Query(ctx, listLatestCompletedInteractionDAGDiagnosisTargetsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGDiagnosisTarget{}
+	for rows.Next() {
+		var item InteractionDAGDiagnosisTarget
+		if err := rows.Scan(&item.SegmentID, &item.ExpectedRewardSeqs); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

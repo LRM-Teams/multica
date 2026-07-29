@@ -120,6 +120,15 @@ WHERE project_id = $1 AND task_id = $2 AND status IN ('running', 'compacting')
 ORDER BY updated_at DESC
 LIMIT 1;
 
+-- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
+-- Used by idempotent on-demand requests: a completed diagnosis for the exact
+-- same terminal DAG is returned rather than launching another Pi session.
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_run
+WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
+ORDER BY completed_at DESC, updated_at DESC
+LIMIT 1;
+
 -- name: FailInteractionDAGDiagnosisRun :execrows
 -- CAS: only an active run can be failed; last_error is bounded by the caller.
 UPDATE interaction_dag_diagnosis_run
@@ -152,6 +161,22 @@ WHERE run_id = $1 AND segment_id = $2;
 SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at
 FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1
+ORDER BY ordinal;
+
+-- name: ListLatestCompletedInteractionDAGDiagnosisTargetsForProject :many
+-- Returns the frozen assistant-turn targets for the latest completed diagnosis
+-- run. The assembled DAG exposes these immutable targets so downstream clients
+-- can prove exact score coverage instead of inferring it from reward counts.
+WITH latest_run AS (
+  SELECT run_id
+  FROM interaction_dag_diagnosis_run
+  WHERE project_id = $1 AND status = 'completed'
+  ORDER BY completed_at DESC, updated_at DESC
+  LIMIT 1
+)
+SELECT segment_id, expected_reward_seqs
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = (SELECT run_id FROM latest_run)
 ORDER BY ordinal;
 
 -- name: StartInteractionDAGDiagnosisSegment :execrows

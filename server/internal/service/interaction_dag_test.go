@@ -61,12 +61,13 @@ var _ MessageStore = (*fakeMessageStore)(nil)
 
 // fakeInteractionDAGStore is an in-memory InteractionDAGStore for unit tests.
 type fakeInteractionDAGStore struct {
-	mu               sync.Mutex
-	sessionRuns      map[string]db.InteractionDAGSessionRun
-	segmentSnapshots []db.InsertInteractionDAGSegmentWithSnapshotParams
-	edges            []db.InsertInteractionDAGEdgeParams
-	taskMessages     map[string][]int32 // taskID -> list of seq numbers
-	stepRewards      []db.InteractionDAGStepReward
+	mu                  sync.Mutex
+	sessionRuns         map[string]db.InteractionDAGSessionRun
+	segmentSnapshots    []db.InsertInteractionDAGSegmentWithSnapshotParams
+	edges               []db.InsertInteractionDAGEdgeParams
+	taskMessages        map[string][]int32 // taskID -> list of seq numbers
+	stepRewards         []db.InteractionDAGStepReward
+	diagnosisTargetSeqs map[string][]int32
 	// order, when non-nil, records cross-helper call ordering by appending
 	// "RecordStepRewards" on each InsertInteractionDAGStepReward. nil-safe
 	// (the default) so existing tests are unaffected. Used by the Task 4
@@ -81,9 +82,10 @@ type fakeInteractionDAGStore struct {
 
 func newFakeInteractionDAGStore() *fakeInteractionDAGStore {
 	return &fakeInteractionDAGStore{
-		sessionRuns:  map[string]db.InteractionDAGSessionRun{},
-		taskMessages: map[string][]int32{},
-		stepRewards:  []db.InteractionDAGStepReward{},
+		sessionRuns:         map[string]db.InteractionDAGSessionRun{},
+		taskMessages:        map[string][]int32{},
+		stepRewards:         []db.InteractionDAGStepReward{},
+		diagnosisTargetSeqs: map[string][]int32{},
 	}
 }
 
@@ -346,6 +348,33 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ cont
 	return out, nil
 }
 
+func (f *fakeInteractionDAGStore) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(_ context.Context, projectID string) ([]db.InteractionDAGDiagnosisTarget, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	projectSegments := make(map[string]struct{})
+	for _, segment := range f.segmentSnapshots {
+		if segment.ProjectID == projectID {
+			projectSegments[segment.SegmentID] = struct{}{}
+		}
+	}
+	targets := make([]db.InteractionDAGDiagnosisTarget, 0, len(projectSegments))
+	for _, segment := range f.segmentSnapshots {
+		if _, exists := projectSegments[segment.SegmentID]; !exists {
+			continue
+		}
+		seqs, exists := f.diagnosisTargetSeqs[segment.SegmentID]
+		if !exists {
+			continue
+		}
+		encoded, err := json.Marshal(seqs)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, db.InteractionDAGDiagnosisTarget{SegmentID: segment.SegmentID, ExpectedRewardSeqs: encoded})
+	}
+	return targets, nil
+}
+
 var _ InteractionDAGStore = (*fakeInteractionDAGStore)(nil)
 
 func TestRecordStepRewards(t *testing.T) {
@@ -406,6 +435,32 @@ func TestAssembleAssembledDag_StepRewards(t *testing.T) {
 	dag2, err := svc2.AssembleAssembledDag(context.Background(), "proj-2")
 	require.NoError(t, err)
 	assert.Equal(t, []StepReward{}, dag2.StepRewards, "absent rewards -> empty slice, not nil")
+}
+
+func TestAssembleAssembledDag_IncludesFrozenAssistantTurnSequences(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID: "seg-1", ProjectID: "proj-1", AgentRunID: "run-1", StartSeq: 1, EndSeq: 7,
+	})
+	store.diagnosisTargetSeqs = map[string][]int32{"seg-1": {2, 7}}
+
+	dag, err := NewInteractionDAGService(store, nil, true).AssembleAssembledDag(context.Background(), "proj-1")
+	require.NoError(t, err)
+	require.Len(t, dag.Segments, 1)
+	assert.Equal(t, []int32{2, 7}, dag.Segments[0].AssistantTurnSeqs)
+}
+
+func TestAssembleAssembledDag_UsesEmptyAssistantTurnSequencesWithoutDiagnosis(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID: "seg-1", ProjectID: "proj-1", AgentRunID: "run-1", StartSeq: 1, EndSeq: 1,
+	})
+
+	dag, err := NewInteractionDAGService(store, nil, true).AssembleAssembledDag(context.Background(), "proj-1")
+	require.NoError(t, err)
+	encoded, err := json.Marshal(dag)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"segments":[{"segment_id":"seg-1","agent_run_id":"run-1","issue_id":"","trajectory_id":null,"tensor_ref":null,"closing_event":null,"trajectory_source":"","trainable":false,"trajectory":null,"env_snapshot":{"sandbox_ids":null,"issue_snapshot_id":null,"env_state":null},"assistant_turn_seqs":[]}],"edges":[],"session_to_agent_run":{},"step_rewards":[],"score_max":0}`, string(encoded))
 }
 
 // fakeArealSegmentClient is an in-memory ArealSegmentClient for unit tests.

@@ -14,9 +14,10 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
+import type { ResearchFleetMember, ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { layoutResearchGraph } from "../lib/layout-graph";
 import { visualForEdgeType } from "../lib/node-visuals";
+import { ResearchFleetStrip } from "./research-fleet-strip";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
 import { ResearchNodeDetail } from "./research-node-detail";
 
@@ -27,11 +28,13 @@ const nodeTypes: NodeTypes = {
 function ResearchCanvasInner({
   nodes,
   edges,
+  members,
   selectedId,
   onSelect,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
+  members?: ResearchFleetMember[];
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
 }) {
@@ -101,6 +104,7 @@ function ResearchCanvasInner({
           maskColor="hsl(var(--background)/0.7)"
         />
       </ReactFlow>
+      {members && members.length > 0 ? <ResearchFleetStrip members={members} /> : null}
       {selectedNode ? <ResearchNodeDetail node={selectedNode} /> : null}
     </div>
   );
@@ -109,6 +113,7 @@ function ResearchCanvasInner({
 export function ResearchCanvas(props: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
+  members?: ResearchFleetMember[];
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
 }) {

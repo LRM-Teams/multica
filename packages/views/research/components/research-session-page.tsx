@@ -137,6 +137,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           <ResearchCanvas
             nodes={data.nodes}
             edges={data.edges}
+            members={fleet.members}
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
           />

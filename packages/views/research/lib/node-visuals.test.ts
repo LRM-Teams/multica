@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { shouldPulseNode, visualForEdgeType, visualForNodeType } from "./node-visuals";
+import {
+  nodeIsVisuallyBusy,
+  shouldPulseNode,
+  visualForEdgeType,
+  visualForNodeType,
+} from "./node-visuals";
 
 describe("node-visuals", () => {
   it("maps dead_end to danger tone", () => {
@@ -14,5 +19,10 @@ describe("node-visuals", () => {
     expect(shouldPulseNode("active", "probe")).toBe(true);
     expect(shouldPulseNode("active", "goal")).toBe(false);
     expect(shouldPulseNode("done", "probe")).toBe(false);
+  });
+
+  it("pulses when actor has live activity even for quiet types", () => {
+    expect(nodeIsVisuallyBusy("active", "goal", true)).toBe(true);
+    expect(nodeIsVisuallyBusy("active", "goal", false)).toBe(false);
   });
 });

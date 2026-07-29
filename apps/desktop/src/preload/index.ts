@@ -117,6 +117,7 @@ const desktopAPI = {
     issueKey?: string;
     channelId?: string;
     dmId?: string;
+    threadId?: string;
     title: string;
     body: string;
   }) => ipcRenderer.send("notification:show", payload),
@@ -139,6 +140,7 @@ const desktopAPI = {
       issueKey?: string;
       channelId?: string;
       dmId?: string;
+      threadId?: string;
     }) => void,
   ) => {
     const handler = (
@@ -149,6 +151,7 @@ const desktopAPI = {
         issueKey?: string;
         channelId?: string;
         dmId?: string;
+        threadId?: string;
       },
     ) => callback(payload);
     ipcRenderer.on("inbox:open", handler);

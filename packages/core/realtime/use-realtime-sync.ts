@@ -9,7 +9,6 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
-import { paths } from "../paths/paths";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -43,6 +42,7 @@ import { workspaceKeys, workspaceListOptions } from "../workspace/queries";
 import { applyMemberPresenceEvent } from "../workspace/use-member-presence";
 import type { MemberPresencePayload } from "../types/events";
 import {
+  buildNotificationRoute,
   showWebNotification,
   type SystemNotificationPayload,
 } from "../platform/system-notification";
@@ -317,11 +317,7 @@ async function deliverSystemNotification(
 }
 
 function buildSystemNotificationUrl(payload: SystemNotificationPayload): string {
-  if (!payload.slug) return "/";
-  const wsPaths = paths.workspace(payload.slug);
-  if (payload.dmId) return wsPaths.channelDetail(payload.dmId);
-  if (payload.channelId) return wsPaths.channelDetail(payload.channelId);
-  return `${wsPaths.inbox()}${payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : ""}`;
+  return buildNotificationRoute(payload) ?? "/";
 }
 
 export async function handleInboxNew(
@@ -425,8 +421,10 @@ export async function handleChannelMessageNotification(
       : "New group message";
 
   await deliverSystemNotification(qc, sourceWsId, {
+    itemId: message.id,
     channelId: isDM ? undefined : message.channel_id,
     dmId: isDM ? message.channel_id : undefined,
+    threadId: message.thread_root_message_id ?? undefined,
     title,
     body: notificationBody(message.author_name || "Someone", message.content),
   });

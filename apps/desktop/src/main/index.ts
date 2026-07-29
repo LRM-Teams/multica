@@ -418,6 +418,7 @@ if (!gotTheLock) {
           issueKey,
           channelId,
           dmId,
+          threadId,
           title,
           body,
         }: {
@@ -427,6 +428,8 @@ if (!gotTheLock) {
           /** LRM-414 — channel/DM banners must round-trip these for click routing. */
           channelId?: string;
           dmId?: string;
+          /** LRM-736 — thread root for reply banners (click opens the thread). */
+          threadId?: string;
           title: string;
           body: string;
         },
@@ -439,14 +442,16 @@ if (!gotTheLock) {
           mainWindow.show();
           mainWindow.focus();
           // Ship the full context back — the renderer pins the route to the
-          // source workspace (slug). Channel/DM clicks open the conversation;
-          // inbox clicks still use issueKey as the ?issue=<…> selector.
+          // source workspace (slug). Channel/DM clicks open the conversation
+          // deep-linked to the triggering message; inbox clicks still use
+          // issueKey as the ?issue=<…> selector.
           mainWindow.webContents.send("inbox:open", {
             slug,
             itemId,
             issueKey,
             channelId,
             dmId,
+            threadId,
           });
         });
         notification.show();

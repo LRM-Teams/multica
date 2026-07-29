@@ -35,15 +35,18 @@ function bodyCode(error: ApiError): string | undefined {
  * and couple our copy to theirs (Felix, #844 boundary). All user-facing wording
  * is supplied by the frontend in four locales.
  *
- * ⚠️ `conflict` is keyed on status 409 alone, because that response carries no
- * stable code yet. Today this route emits exactly one 409 meaning ("you are the
- * sole owner; transfer first"), but nothing prevents the backend adding a
- * second one — and a frontend test cannot detect that, since there is no shared
- * contract artifact between us and the server. So the UI deliberately shows a
- * NEUTRAL message here and does not name the reason: naming it would be a
- * guess that reads as a fact. When the backend adds a stable code, this branch
- * should key on it and the specific "transfer ownership first" guidance can be
- * restored.
+ * ⚠️ `conflict` means "the server refused with 409 and we cannot tell why" —
+ * NOT "the viewer is the sole owner". Read it as an unresolvable state, not as
+ * a fact about ownership.
+ *
+ * The route happens to emit only one 409 today ("sole owner must transfer
+ * first"), but that response carries no stable code, nothing stops the backend
+ * adding a second meaning, and a frontend test cannot detect it if they do —
+ * there is no shared contract artifact between us and the server. So the UI
+ * shows a NEUTRAL message and does not name a cause: naming it would be a guess
+ * that reads as a fact, which is the exact defect this change removes. When the
+ * backend adds a stable code, this branch keys on it and the specific "transfer
+ * ownership first" guidance can be restored.
  */
 export function classifyRoleChangeFailure(error: unknown): RoleChangeFailure {
   if (!(error instanceof ApiError)) return "transient";

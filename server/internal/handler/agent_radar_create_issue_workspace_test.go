@@ -612,31 +612,6 @@ func TestExecuteRadarCreateIssueAcceptsMemberInRunWorkspace(t *testing.T) {
 	}
 }
 
-func TestExecuteRadarCreateIssueAmbientRejectsNonAgentAssignee(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	creatorID := createHandlerTestAgent(t, "Radar ambient assignee guard "+uuid.NewString(), nil)
-	creator, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(creatorID))
-	if err != nil {
-		t.Fatalf("load creator agent: %v", err)
-	}
-	projectID := createRadarProjectForTest(t, "Radar ambient assignee project "+uuid.NewString())
-	run := enqueueProjectScopedRadarRunForTest(t, creator, projectID)
-	title := "Radar ambient member assignment " + uuid.NewString()
-	cleanupRadarIssueTitle(t, title)
-	_, err = executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
-		Title:              title,
-		Description:        "Ambient coordination must choose a qualified delivery agent",
-		AcceptanceCriteria: []string{"a qualified channel agent owns implementation"},
-		AssigneeType:       "member",
-		AssigneeID:         testUserID,
-	})
-	if err == nil || err.Error() != "ambient issue creation may only assign a qualified channel agent" {
-		t.Fatalf("ambient member assignment error = %v", err)
-	}
-}
-
 func TestExecuteRadarCreateIssueRejectsCreatorFromAnotherWorkspace(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -106,6 +106,27 @@ The one measurement here that *is* clean is the flip-verify in §3 (412 → 0): 
 
 ## 4. Options, with honest costs
 
+> ### ⛔ SUPERSEDED — do not implement §4's option E or §5's step 2 as written
+>
+> **A pilot on 2026-07-29 measured this and disproved the argument for E.** The
+> claim below — that merging fixes mock competition "by construction, since
+> mocks within one file are already consistent" — **does not hold for the merge
+> operation itself.** The seven `channels-page-*` tests mock an identical set of
+> 18 modules, but their factory bodies differ by 68/106/127 lines out of blocks
+> that are only 111/127/186 lines long: they are bespoke per file. Concatenating
+> two of them puts two `vi.mock` calls for the same module in one file, the
+> second silently wins, and the first file's tests then run against a stand-in
+> they were never written for.
+>
+> **The duplication is in the factories, not the files** ⇒ shared mock fixtures
+> (option D) moves ahead of merging (option E), and attacks the same duplication
+> without giving up file-level isolation. **D's saving is not yet measured** and
+> is deliberately not asserted here.
+>
+> Full revision follows once the shared-fixture measurement is in — taken on CI,
+> not locally (local variance ~25%, dedicated runner ~0.4%).
+
+
 | # | option | attacks | cost | verdict |
 |---|---|---|---|---|
 | A | keep #1356 as-is | nothing | 1066s/PR forever | **status quo — acceptable, not free** |

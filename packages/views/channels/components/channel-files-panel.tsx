@@ -134,19 +134,19 @@ const FILE_ROW_HEIGHT = 57;
 /** Compact host keeps the old max-h-80 cap. */
 const COMPACT_MAX_HEIGHT = 320;
 
-// Virtuoso types its List/Item refs as HTMLDivElement (same convention as
-// channel-message-list's VirtuosoItemList); list semantics come from roles.
+// Virtuoso types its List/Item refs as HTMLDivElement (its default elements);
+// the node it hands over is just whatever we mount, so native <ul>/<li> work
+// and keep list semantics for AT (react-doctor prefer-tag-over-role).
 function FilesVirtuosoList({
   ref,
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }) {
   return (
-    <div
-      role="list"
-      ref={ref}
-      {...props}
-      className={cn("space-y-0 p-0", className)}
+    <ul
+      ref={ref as Ref<HTMLUListElement>}
+      {...(props as React.HTMLAttributes<HTMLUListElement>)}
+      className={cn("list-none space-y-0 p-0", className)}
       data-testid="channel-files-list"
     />
   );
@@ -157,10 +157,9 @@ function FilesVirtuosoItem({
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> }) {
   return (
-    <div
-      role="listitem"
-      ref={ref}
-      {...props}
+    <li
+      ref={ref as Ref<HTMLLIElement>}
+      {...(props as React.LiHTMLAttributes<HTMLLIElement>)}
       className="group border-b border-border/70 transition-colors hover:bg-muted/60"
       data-testid="channel-file-row"
     />

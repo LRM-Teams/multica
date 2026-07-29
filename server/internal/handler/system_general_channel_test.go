@@ -55,7 +55,6 @@ func newSystemGeneralHandlerFixture(t *testing.T) systemGeneralHandlerFixture {
 		  AND archived_at IS NULL
 		  AND project_id IS NULL
 		  AND lark_chat_id IS NULL
-		  AND group_manager_agent_id IS NULL
 	`, workspace.ID).Scan(&channelID); err != nil {
 		t.Fatalf("load pristine general channel: %v", err)
 	}

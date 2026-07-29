@@ -81,7 +81,6 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_memory_curation_run_curator_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_run_curator_agent ON memory_curation_run (curator_agent_id)`},
 		{"idx_squad_leader", `CREATE INDEX CONCURRENTLY idx_squad_leader ON squad (leader_id)`},
 		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
-		{"idx_wendy_channel_ambient_agent", `CREATE INDEX CONCURRENTLY idx_wendy_channel_ambient_agent ON wendy_channel_ambient (wendy_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
 		{"idx_workspace_radar_state_supervisor_agent", `CREATE INDEX CONCURRENTLY idx_workspace_radar_state_supervisor_agent ON workspace_radar_state (workspace_id, supervisor_agent_id) WHERE supervisor_agent_id IS NOT NULL`},
 	}

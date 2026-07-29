@@ -105,6 +105,12 @@ func TestPreviewAndDeleteLegacyRuntimeSystemMessagesIntegration(t *testing.T) {
 	`, slug).Scan(&workspaceID); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'owner')
+	`, workspaceID, userID); err != nil {
+		t.Fatalf("insert workspace owner: %v", err)
+	}
 
 	var channelID string
 	if err := pool.QueryRow(ctx, `

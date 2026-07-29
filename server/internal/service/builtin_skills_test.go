@@ -84,9 +84,9 @@ func TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery(t *testing.T) 
 	}
 
 	for _, want := range []string{
-		"Standalone chat session",
+		"No `ChannelID`",
 		`{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`,
-		"DM, channel, or thread",
+		"`ChannelID` present",
 		"explicit target",
 		"Do not search for a DM/channel target",
 		"agent task is not a channel task",

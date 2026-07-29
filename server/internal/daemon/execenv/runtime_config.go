@@ -546,31 +546,23 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString(executionDisciplineBrief)
 	b.WriteString("\n\n")
 
+	renderPinnedRules(&b, ctx)
+
 	if ctx.ChatSessionID != "" {
 		renderChatRuntimeBrief(&b, provider, ctx)
 		return b.String()
 	}
 
-	b.WriteString("## Pinned Rules\n\n")
-	b.WriteString("Pinned rules are high-frequency or safety-critical and must stay in mind for every issue run:\n\n")
-	b.WriteString("- Use the `multica` CLI for all Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
-	b.WriteString("- Use `--output json` for structured data. Human table output may use routable issue keys and short UUID prefixes; use `--full-id` on list commands when canonical UUIDs matter.\n")
-	b.WriteString("- For issue writes, operate only within your Agent Identity and the workflow below; do not self-approve `in_review -> done`.\n")
-	b.WriteString("- For agent-authored issue comments, never inline `--content`; use the platform-correct non-inline mode in ## Comment Formatting.\n")
-	b.WriteString("- @mentions can notify humans or enqueue agents after server resolution. Use them only for intentional notification, escalation, or delegation.\n")
-	b.WriteString("- Deliver to the issue's acceptance criteria / definition of done, NOT a shallow pass: build the full, production-quality result and **self-verify it with real evidence** — build/compile, run it, exercise the actual behavior, run or add tests, and for UI compare the running result (screenshot) to the target — BEFORE you report done or reply. Fix what fails first. Reporting an unverified partial and waiting to be bounced in review is not acceptable; if a requirement genuinely cannot be met, raise it as a blocker instead of quietly shipping less.\n")
-	b.WriteString("- The issue (its description + acceptance criteria + attachments) is your single source of truth — build against IT, not against loose channel chat or the coordination cross-talk in comments (that is background, not the spec). If you believe the issue or its acceptance criteria is wrong, missing, or ambiguous, **propose the correction to the issue owner** (post a comment stating what is wrong and why) — do NOT unilaterally rewrite or lower the acceptance criteria to make your own work pass. Changing the spec is the owner's (the group manager / PM's) call, not a way to dodge the bar.\n\n")
-
-	b.WriteString("## Available Commands\n\n")
-	b.WriteString("The default brief includes only always-needed command forms for the core agent loop and common issue create/update tasks. For less common operations, progressively load the exact syntax with `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
+	renderRuntimeSectionHeading(&b, "Available Commands")
+	b.WriteString("Common forms stay inline; use `multica <command> --help` or subcommand help only for missing low-frequency flags.\n\n")
 	b.WriteString("### Core\n")
 	b.WriteString("- `multica issue get <id> --output json` — Get full issue details.\n")
-	b.WriteString("- `multica issue comment list <issue-id> [--thread <comment-id> [--tail N] | --recent N] [--before <ts> --before-id <uuid>] [--since <RFC3339>] --output json` — List comments on an issue. Default returns the full flat timeline (server cap 2000). On busy issues prefer the thread-aware reads: `--thread <comment-id>` returns one conversation (root + every reply); `--thread <id> --tail N` caps replies to the N most recent (root is always included, even at `--tail 0`); `--recent N` returns the N most recently active threads. `--before` / `--before-id` walks older replies under `--thread --tail` (stderr label: `Next reply cursor`) or older threads under `--recent` (stderr label: `Next thread cursor`). `--since` is for incremental polling and may combine with `--thread` (with or without `--tail`) or `--recent`.\n")
-	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--channel <group-id-or-name>] [--due-date <RFC3339>] [--source-channel <uuid> --source-message <uuid>] [--attachment-id <uuid>]` — Create a new issue; pass attachment ids from `multica attachment upload` (repeatable). `--channel` and `--project` are independent explicit Properties: no omitted value is inferred from the other. A chosen group may expose `project_id` in `multica channel list --output json`; inspect it, then explicitly pass the project you intend to set. When the issue follows a visible channel discussion, pass its triggering message with both source flags; replies are normalized to their thread root for the return link.\n")
-	b.WriteString("- `multica issue channel <issue-id> <group-id-or-name>` / `multica issue channel <issue-id> --clear` — View the current association with `issue get --output json`, then explicitly set, change, or clear the task's associated group. Choose only a group you can access; this never guesses a group. The task's `project_id` remains independent and can be changed with `issue update --project`.\n")
-	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — Update issue fields; use `--parent \"\"` to clear parent.\n")
-	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out a repository into the working directory (creates a git worktree with a dedicated branch; use `--ref` for review/QA on a specific branch, tag, or commit)\n")
-	b.WriteString("- `multica issue status <id> <status>` — Shortcut for `issue update --status` when you only need to flip status (todo, in_progress, in_review, done, blocked, backlog, cancelled)\n")
+	b.WriteString("- `multica issue comment list <issue-id> [--thread <comment-id> [--tail N] | --recent N] [--before <ts> --before-id <uuid>] [--since <RFC3339>] --output json` — full timeline (cap 2000) or bounded threads; follow `Next reply cursor` / `Next thread cursor` for older pages.\n")
+	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--channel <group-id-or-name>] [--due-date <RFC3339>] [--source-channel <uuid> --source-message <uuid>] [--attachment-id <uuid>]` — `--project` and `--channel` are independent; use both source flags for discussion-derived work.\n")
+	b.WriteString("- `multica issue channel <issue-id> <group-id-or-name>` / `multica issue channel <issue-id> --clear` — explicit group association; never inferred; project stays independent.\n")
+	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — `--parent \"\"` clears parent.\n")
+	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — checkout worktree; pin exact revision for review/QA.\n")
+	b.WriteString("- `multica issue status <id> <status>` — `todo|in_progress|in_review|done|blocked|backlog|cancelled`.\n")
 	// Available Commands lists `multica issue comment add` with all three input
 	// modes, but the menu entry now actively steers agents away from inlining
 	// `--content` for agent-authored bodies. The prescriptive form-by-platform
@@ -587,8 +579,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	//     non-UTF-8 codepage (issues #2198 / #2236 / #2376) — which is why
 	//     Windows uses `--content-file`, not stdin.
 	// Because the corruption is shell-driven, the guardrail is provider-agnostic.
-	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment-id <uuid>]` — Post a comment. For agent-authored bodies, do NOT inline `--content` — the shell can rewrite backticks, `$()`, quotes, or newlines before the CLI sees them; use the platform-correct non-inline mode shown in ## Comment Formatting below. Run `multica issue comment add --help` for details.\n")
-	b.WriteString("- `multica issue metadata list|set|delete ...` — Read or pin a small issue-specific KV fact only when explicitly working on that issue. Run `multica issue metadata --help` or the subcommand help for exact flags; issue tasks include the semantic bar in their metadata section.\n\n")
+	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment-id <uuid>]` — agent bodies never inline `--content`; see ## Comment Formatting.\n")
+	b.WriteString("- `multica issue metadata list|set|delete ...` — high-signal issue KV only; load exact flags when needed.\n\n")
 
 	// Comment Formatting guardrail for ALL providers. The MUL-2904
 	// duplicate-comment loop happened because an agent inlined a backtick-wrapped
@@ -612,7 +604,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	// Inject available repositories section.
 	if len(ctx.Repos) > 0 {
-		b.WriteString("## Repositories\n\n")
+		renderRuntimeSectionHeading(&b, "Repositories")
 		b.WriteString("The following code repositories are available in this workspace.\n")
 		b.WriteString("Use `multica repo checkout <url>` to check out a repository into your working directory. Add `--ref <branch-or-sha>` when you need an exact branch, tag, or commit.\n\n")
 		for _, repo := range ctx.Repos {
@@ -637,12 +629,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
-		b.WriteString("Each issue carries a small KV `metadata` bag — a high-signal scratchpad where agents pin the handful of facts that future runs on this same issue will look up over and over (the PR URL, the deploy URL, what we're blocked on). It is NOT a place to record every fact you discover — that's what comments and the description are for. Most runs write **zero** new keys; that's the expected case, not a failure.\n\n")
-		b.WriteString("- **The bar for writing is high.** Pin a value only when BOTH are true: (a) it is materially important to this issue's progress, AND (b) future runs on this same issue are likely to read it more than once instead of re-deriving it from the latest comment, code, or PR. If you cannot name a concrete future read for the key, do not pin it. When in doubt, **do not write**.\n")
-		b.WriteString("- **Read on entry.** Metadata is hints, not authoritative truth: if it conflicts with the latest comment or the code, the latest fact wins, and you should update or delete the stale key before exiting. Empty `{}` and CLI failures are normal — do not stop or ask the user.\n")
-		b.WriteString("- **Write on exit.** Sparingly. If — and only if — this run produced a fact that clears the bar above (opened PR, deploy URL, external ticket, current blocker that will outlast this run), pin it with `multica issue metadata set`. If a key you saw on entry is now stale (e.g. `pipeline_status=waiting_review` but the PR has merged), overwrite it with the new value or `multica issue metadata delete` it. Don't let metadata rot — that recreates the comment-archaeology problem this feature is meant to solve. Stale-key cleanup is still expected even when you add nothing new.\n")
-		b.WriteString("- **What NOT to pin.** No secrets, tokens, or API keys. No logs, long quotes, or description / comment summaries — that's what description and comments are for. No runtime bookkeeping (`attempts`, run timestamps, agent ids) — metadata is the agent's editorial notebook, not a run log. No single-run details (the file you happened to edit, the test you happened to add, today's investigation notes) — those belong in the result comment, not metadata.\n")
-		b.WriteString("- **Recommended keys** (reuse these names so queries stay consistent across the workspace; coin a new key only when none fits): `pr_url`, `pr_number`, `pipeline_status`, `deploy_url`, `external_issue_url`, `waiting_on`, `blocked_reason`, `decision`. Use snake_case ASCII. The list is short on purpose — most issues only need 1-2 of these pinned, not the full set.\n\n")
+		b.WriteString("High-signal issue KV scratchpad; most runs write nothing.\n")
+		b.WriteString("- Read on entry as hints. Latest comment/code wins conflicts; update/delete stale keys. Empty `{}` and CLI failure are normal.\n")
+		b.WriteString("- Write on exit only when important **and** future runs will read it repeatedly: PR/deploy/external ticket/durable blocker/decision. Otherwise comment it.\n")
+		b.WriteString("- Never store secrets, logs, quotes, summaries, runtime bookkeeping, agent IDs, or single-run details.\n")
+		b.WriteString("- Reuse snake_case keys: `pr_url` · `pr_number` · `pipeline_status` · `deploy_url` · `external_issue_url` · `waiting_on` · `blocked_reason` · `decision`.\n\n")
 	}
 
 	isAssignmentTriggered := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && ctx.TriggerCommentID == ""
@@ -655,19 +646,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("### Workflow\n\n")
 
-	if ctx.ChatSessionID != "" {
-		// Chat task: interactive assistant mode
-		b.WriteString("**You are in chat mode.** A user is messaging you directly in a chat window.\n\n")
-		b.WriteString("- Respond conversationally and helpfully to the user's message\n")
-		b.WriteString("- Conversation context is scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
-		b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary. Do not load the entire parent channel/DM history by default.\n")
-		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
-		b.WriteString("- If asked about your assigned issues, use `multica issue list --mine --output json`; for general issue browsing, use `multica issue list --output json`, `multica issue get <id> --output json`, `multica issue search <query> --output json`, or `multica issue comment list <issue-id> --output json`\n")
-		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
-		b.WriteString("- Issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and rely on message/system-event visibility for auditability.\n")
-		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first. Use `--ref <branch-or-sha>` when you need an exact revision\n")
-		b.WriteString("- Keep responses concise and direct\n\n")
-	} else if ctx.QuickCreatePrompt != "" {
+	if ctx.QuickCreatePrompt != "" {
 		// Quick-create task: detailed field / output rules live in the
 		// per-turn prompt (BuildPrompt → buildQuickCreatePrompt) so they
 		// have a single source of truth. Quick-create is one-shot, so the
@@ -725,11 +704,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			fmt.Fprintf(&b, "3. Catch up on comments — read with `multica issue comment list %s --output json` (long issue? `--recent 20`).\n", ctx.IssueID)
 		}
 		fmt.Fprintf(&b, "4. Find the triggering comment (ID: `%s`) and understand what is being asked — do NOT confuse it with previous comments\n", ctx.TriggerCommentID)
-			b.WriteString("5. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 7 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
+		b.WriteString("5. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 7 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
 		b.WriteString("6. If a reply IS warranted: do any requested work first **and self-verify it against the issue's acceptance criteria with real evidence before you reply** (build/run/test it; for UI compare the running screenshot to the target — do not reply on an unverified partial), then **decide whether to include any `@mention` link.** The default is NO mention. Only mention when you are escalating to a human owner who is not yet involved, delegating a concrete new sub-task to another agent for the first time, or the user explicitly asked you to loop someone in. Never @mention the agent you are replying to as a thank-you or sign-off.\n")
 		b.WriteString("7. **If you reply, post it as a comment — this step is mandatory when you reply.** Text in your terminal or run logs is NOT delivered to the user. ")
 		b.WriteString(BuildCommentReplyInstructions(provider, ctx.IssueID, ctx.TriggerCommentID))
-		b.WriteString("8. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
+		b.WriteString("8. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set` / `multica issue metadata delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
 		b.WriteString("9. Do NOT change the issue status unless the comment explicitly asks for it\n\n")
 	} else {
 		// Assignment-triggered: defer to agent Skills for workflow specifics.
@@ -754,8 +733,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			}
 			fmt.Fprintf(&b, "4. Run `multica issue status %s in_progress` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
 			b.WriteString("5. Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries — build the full, production-quality result, not a quick shallow pass just to reply. Then **self-verify before you treat it as done**: re-read the acceptance criteria and check your work against EACH one with real evidence (build/compile, run it, exercise the actual behavior, run or add tests; for UI compare the running screenshot to the target), and fix whatever fails. Do NOT report a shallow/partial result and wait to be bounced in review; if a requirement genuinely cannot be met, raise it as a blocker (step 9) instead of quietly shipping less. Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action; if your role is delegation-only, perform the allowed delegation work and stop once that outcome is delivered.\n")
-				fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
-			b.WriteString("7. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
+			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+			b.WriteString("7. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set` / `multica issue metadata delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
 			fmt.Fprintf(&b, "8. When done, run `multica issue status %s in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
 			fmt.Fprintf(&b, "9. If blocked, run `multica issue status %s blocked` unless your Agent Identity forbids issue status changes. Post a comment explaining the blocker unless your Agent Identity forbids issue comments.\n\n", ctx.IssueID)
 		}
@@ -775,37 +754,21 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	renderSkillIndex(&b, provider, ctx.AgentSkills)
 
-	b.WriteString("## Mentions\n\n")
-	b.WriteString("Use plain `@handle` / `@display name` text only when you intentionally want the platform to create a structured mention action:\n\n")
-	b.WriteString("- `@human` notifies that human when it resolves to a unique channel/workspace member.\n")
-	b.WriteString("- `@agent` enqueues a new run for that agent when it resolves to a unique channel/workspace agent.\n")
-	b.WriteString("- Refer to issues by their visible key or URL; do not invent raw mention links.\n\n")
-	b.WriteString("### When NOT to use an @mention\n\n")
-	b.WriteString("- Referring to someone in prose (e.g. \"GPT-Boy is right\") — write the plain name, no `@`.\n")
-	b.WriteString("- **Replying to another agent that just spoke to you.** By default, do NOT @mention the other agent in your reply. The platform already shows your comment to everyone on the issue; re-mentioning the other agent will make them run again, and if they reply with a mention back, you will be triggered again. That is a loop and it costs the user money.\n")
-	b.WriteString("- Thanking, acknowledging, wrapping up, or signing off. These are exactly the moments where an accidental `@mention` causes the other agent to reply \"you're welcome\" and restart the loop. If the work is done, **end with no mention at all**.\n\n")
-	b.WriteString("### When a mention IS appropriate\n\n")
-	b.WriteString("- Escalating to a human owner who is not yet involved.\n")
-	b.WriteString("- Delegating a concrete sub-task to another agent for the first time, with a clear request.\n")
-	b.WriteString("- The user explicitly asked you to loop someone in.\n\n")
-	b.WriteString("If you are unsure whether a mention is warranted, **don't mention**. Silence ends conversations; `@` restarts them.\n\n")
-	b.WriteString("If you need the exact handle, inspect the relevant CLI help path and request JSON output when available.\n\n")
-
-	b.WriteString("## Attachments\n\n")
+	renderRuntimeSectionHeading(&b, "Attachments")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
 	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n")
 	b.WriteString("If the issue carries image attachments — especially UI references, mockups, or design targets — fetch and actually look at them before doing UI/visual work: build to match the reference and diff your result against it. If you CANNOT render or interpret images, do NOT silently ignore the reference and guess from a text summary — say so explicitly and ask for the visual intent to be captured as concrete text acceptance criteria on the issue, then build to those. Dropping a provided visual reference and shipping a blind approximation is a defect.\n\n")
 
 	renderLazyReferences(&b, false, false, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
 
-	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
+	renderRuntimeSectionHeading(&b, "Important: Always Use the `multica` CLI")
 	b.WriteString("All interactions with Multica platform resources — including issues, comments, attachments, images, files, and any other platform data — **must** go through the `multica` CLI. ")
 	b.WriteString("Do NOT use `curl`, `wget`, or any other HTTP client to access Multica URLs or APIs directly. ")
 	b.WriteString("Multica resource URLs require authenticated access that only the `multica` CLI can provide.\n\n")
 	b.WriteString("If you need to perform an operation that is not covered by any existing `multica` command, ")
 	b.WriteString("do NOT attempt to work around it. Instead, post a comment mentioning the workspace owner to request the missing functionality.\n\n")
 
-	b.WriteString("## Output\n\n")
+	renderRuntimeSectionHeading(&b, "Output")
 	switch {
 	case ctx.AutopilotRunID != "":
 		b.WriteString("This is a run-only autopilot task, so there may be no issue comment to post. Your final assistant output is captured automatically as the autopilot run result. Keep it concise and state the outcome.\n")
@@ -819,7 +782,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	case terminalAssignment:
 		b.WriteString("This assignment wake is stale because the issue is already terminal. Return one concise line with the current terminal status; do not call issue read or write commands.\n")
 	default:
-			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
+		b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
 		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
 		b.WriteString(compactCloseoutStatusInstruction)
 		b.WriteString("\n")
@@ -883,6 +846,26 @@ func truncateMemorySnapshotContent(value string, maxBytes int) string {
 	return strings.TrimSpace(value[:cut])
 }
 
+func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
+	renderRuntimeSectionHeading(b, "Pinned Rules")
+	b.WriteString("- All Multica platform I/O via `multica` CLI. No raw HTTP.\n")
+	b.WriteString("- `--output json` for structured reads · `--full-id` when canonical UUIDs matter.\n")
+	b.WriteString("- Issue writes require claim/Agent Identity authority. Never self-approve `in_review -> done`.\n")
+	if ctx.IssueID != "" {
+		b.WriteString("- Agent-authored issue comments: never inline `--content`; use ## Comment Formatting.\n")
+	} else {
+		b.WriteString("- Agent-authored issue comments: never inline `--content`; use a non-inline input mode.\n")
+	}
+	b.WriteString("- Ship to acceptance criteria, not a shallow pass. Before reporting done: build · run · exercise behavior · test · UI screenshot vs target. Fix failures first; surface real blockers.\n")
+	if ctx.IssueID != "" {
+		b.WriteString("- Issue description + acceptance criteria + attachments = spec. Chat/comments are context. Challenge a bad spec with its owner; never silently rewrite or lower it.\n")
+	}
+	if ctx.ChatSessionID != "" {
+		b.WriteString("- Thread attention is explicit. Unfollow only after work and every handoff/review/decision/reply/follow-up completes. CI/deploy/human wait/reminder/idle/task-done/mute are not completion. Personal @mentions still pierce; posting re-follows.\n")
+	}
+	b.WriteString("\n")
+}
+
 func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("### Memory Operating Guide (v0.7)\n\n")
 	b.WriteString("Use high-strength auto-write for human preferences and durable work arrangements, and medium-strength auto-write for other durable knowledge: record them without waiting for a separate request when they are specific, supported by the current interaction, likely to matter in a future run, and belong to this agent. During real work, treat human speech as high-signal by default — preferences, ownership, handoffs, and \"who works with whom\" are almost never idle chatter; only skip writing when the turn is clearly a test, greeting, thanks, or throwaway joke. A verbal acknowledgment such as \"got it\" does not count as remembering; the durable write must succeed. Do not record guesses, ephemeral execution noise (one-off file paths, transient logs), raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
@@ -904,7 +887,7 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 }
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	b.WriteString("## Chat Mode\n\n")
+	b.WriteString("## Delivery\n\n")
 	standaloneChat := ctx.ChatSessionID != "" && strings.TrimSpace(ctx.ChannelID) == ""
 	if ctx.ManagedRole == "group_manager" {
 		b.WriteString("### Managed Group Manager Role\n\n")
@@ -916,57 +899,41 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if ctx.Directed {
 		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
 		if standaloneChat {
-			b.WriteString("This run came from a user in a standalone Multica chat session. A visible final response is required. Reply through the final assistant output that this session delivers automatically; do not turn the reply into a separate DM or channel send.\n")
-			b.WriteString("\nFor a normal response, write the answer as ordinary final assistant text. For a sticker-only social response, return the structured sticker envelope documented below. Do not send a separate acknowledgment before tool use: the current chat already exposes live activity, and the final response closes the turn.\n")
-			b.WriteString("\nNot responding is **not** an option when the user is waiting on you.\n\n")
+			b.WriteString("This run has no `ChannelID`. A visible final response is required through final assistant output, which the current session delivers automatically. Do not turn it into a separate DM or channel send.\n")
+			b.WriteString("Normal answer → ordinary final text · sticker-only → exact envelope below. No pre-tool acknowledgment; live activity is visible. User waiting → response required.\n\n")
 		} else {
-			b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
-			b.WriteString("\n**Work-before-feedback rule:** If the request requires tool calls, investigation, coding, or other non-trivial work, send a short acknowledgment with `multica message send` before the first substantive tool or platform call. State what you understood and the immediate plan so the user knows work has started. Then do the work and send a separate result when it is ready. Do not send a separate acknowledgment for a simple question you can answer immediately.\n")
-			b.WriteString("\n**Operational-command acknowledgement:** When a user directs an attention-management operation (for example, follow/unfollow or mute/unmute), perform the operation first. If it succeeds, react `✅` to the instructing message with `multica message react --message-id <triggering-message-id> --emoji \"✅\"` and send no ordinary text confirmation. Use a text reply only when the operation fails or the user needs substantive information.\n")
-			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
-			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
-			b.WriteString("\nNot responding is **not** an option when a human or explicit task is waiting on you. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies only to ambient/unaddressed channel messages and weak agent-to-agent notifications. If you are unsure whether a human needs a response: reply. If only another agent mentioned you without a concrete ask: stay silent.\n\n")
+			b.WriteString("Visible reply required for human DM/@mention/direct question/task/continuation. Agent channel @mention without an immediate deliverable/review/decision/direct answer → silence.\n")
+			b.WriteString("- Non-trivial work: short `multica message send` acknowledgment before substantive tools; state understanding + next step. Then work + separate result. Skip ack for immediate answers.\n")
+			b.WriteString("- Attention operation (follow/unfollow/mute/unmute): act first. Success → `multica message react --message-id <triggering-message-id> --emoji \"✅\"`, no text. Failure/substance → text.\n")
+			b.WriteString("- Words → `multica message send` · pure greeting/thanks/sign-off → reaction or `multica message send --sticker`.\n")
+			b.WriteString("Silence applies only to ambient/unaddressed messages and weak agent notifications. Unsure about a human → reply.\n\n")
 		}
 	}
-	// Regular chat mode context (directed + ambient agents both see this;
-	// the Reply Requirement above tells them which parts apply).
+	// Every conversation run sees the delivery boundary; the directed-only
+	// requirement above decides whether visible output is mandatory.
 	if standaloneChat {
-		b.WriteString("You are in a standalone Multica chat session. Your final assistant output is delivered automatically to this current chat session. Do not run `multica message send` or `multica message react` to reply to this current chat session. Those commands require an explicit channel/DM target and are only for a separate destination the user explicitly requests. Do not search for a DM/channel target for the current reply. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+		b.WriteString("No `ChannelID` target: final assistant output is delivered to the current session. Do not run `multica message send` or `multica message react` for this reply, search for a target, or invent one. Those commands require an explicit channel/DM target and are only for a separate destination the user requests. Issue writes remain claim-first and only when requested.\n\n")
 	} else {
-		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Visible chat output is delivered only by the task-scoped Multica CLI transport: use multica message send or multica message react. Text outside those commands, including final assistant output, is not delivered to the conversation. If no visible reply is warranted, finish without sending a message (this applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions). Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+		b.WriteString("`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport (`multica message send` / `multica message react`). Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed channel messages, never human DMs, human @mentions, direct questions, or tasks. Issue writes remain claim-first and only when requested.\n\n")
 	}
 	b.WriteString("Context boundaries:\n")
 	if standaloneChat {
-		b.WriteString("- Treat the injected conversation context as scoped to this standalone chat session. Do not infer a backing DM or channel; there is none.\n")
+		b.WriteString("- Injected context belongs to this targetless session. Do not infer a backing DM or channel.\n")
 	} else {
 		b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	}
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
 	b.WriteString("- Load broader chat history, issue timelines, repositories, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
 
-	b.WriteString("## Pinned Rules\n\n")
-	b.WriteString("Pinned rules are high-frequency or safety-critical and must stay in mind for every chat run:\n\n")
+	renderRuntimeSectionHeading(b, "Available Commands")
 	if standaloneChat {
-		b.WriteString("- Reply to this current session only through final assistant output; never search for or invent a DM/channel target.\n")
-		b.WriteString("- Treat injected conversation context as scoped to this standalone session; fetch other platform data only when the request needs it.\n")
-	} else {
-		b.WriteString("- Use the task-scoped Multica chat output path for visible replies; command-external text, including final assistant output, is never delivered.\n")
-		b.WriteString("- Treat injected conversation context as scoped to the current DM/channel/thread; fetch broader history only when the request needs it.\n")
-	}
-	b.WriteString("- Use the `multica` CLI for Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
-	b.WriteString("- Issue writes from chat are incidental only when explicitly requested or required; follow claim-first and do not self-approve `in_review -> done`.\n")
-	b.WriteString("- Thread attention is explicit, never automatic: unfollow only when your work in that thread is clearly complete or no longer relevant and no handoff, review, decision, reply, or follow-up remains. Do not unfollow while waiting for CI, deployment, a human reply, or a reminder; idle state, task-done status, and parent-channel mute are not unfollow triggers. After an explicit unfollow, personal @mentions still arrive without re-following, and posting in the thread re-follows automatically.\n")
-	b.WriteString("- @mentions can notify humans or enqueue agents after server resolution. Use them only for intentional notification, escalation, or delegation.\n\n")
-
-	b.WriteString("## Available Commands\n\n")
-	if standaloneChat {
-		b.WriteString("The current reply does not need a Multica delivery command. The commands below are only for platform operations or a separate destination explicitly requested by the user. Do not inspect send/react help or enumerate targets for the current reply. Use `multica --help`, `multica <command> --help`, or subcommand help only for unfamiliar, low-frequency, or destructive operations whose flags are not listed here. Prefer `--output json` when reading data.\n\n")
+		b.WriteString("Current reply needs no delivery command. Commands below are for platform work or a separate destination the user explicitly requests. Do not inspect send/react help or enumerate targets for this reply. Use help only for unfamiliar, low-frequency, or destructive flags missing here.\n\n")
 	} else {
 		b.WriteString("Common chat command forms are listed here so you can use them directly. Do NOT run `multica message send --help`, `multica message react --help`, or `multica sticker list` for ordinary replies, reactions, or common stickers. Use `multica --help`, `multica <command> --help`, or subcommand help only for unfamiliar, low-frequency, or destructive operations whose flags are not listed here. Prefer `--output json` when reading data.\n\n")
 	}
 	b.WriteString("Common capability index — use these forms directly when they fit; inspect help only when a needed flag is missing:\n")
 	if standaloneChat {
-		b.WriteString("- Current-chat delivery boundary: ordinary final assistant text is delivered to this standalone session automatically.\n")
+		b.WriteString("- Current-session delivery: ordinary final assistant text is delivered automatically.\n")
 		b.WriteString("- Current-chat sticker fast path: for a sticker-only reply, return exactly one JSON object as final output with no commentary: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`. Replace `hi` with another stable sticker id when appropriate. Do not call a send command for this reply.\n")
 		b.WriteString("- Separate-destination chat output: only when the user explicitly asks you to contact a different channel, DM, or thread, use `multica message send --target <target>` with an explicit target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`).\n")
 	} else {
@@ -982,7 +949,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Chat reactions/history: use `multica message react --message-id <id> --emoji \"...\"`; use `multica message read [--target ...] [--limit N] --output json` or `multica message search \"query\" [--target ...] --output json` when more bounded chat context is needed.\n")
 	b.WriteString("- Reminders: schedule an anchored durable self-wake with `multica reminder schedule --title \"...\" (--delay-seconds N | --fire-at ISO | --repeat RULE) --message-id <id>`; always pass the explicit current message/thread anchor because Reminder does not infer one from task text. Repeat rules are `every:Nm|Nh|Nd`, `daily@HH:MM`, or `weekly:days@HH:MM`. Use all six operations `reminder schedule|list|snooze|update|cancel|log`; the server locks calendar timezone at schedule time. Use a reminder when this run cannot close the work now because it depends on a future time or external state, such as CI or deployment completion, a human reply, a daemon reconnect, a scheduled recheck, or a periodic report. Do not create one when the work can finish in the current run or the wait is likely to finish within about one minute; in that short case, briefly poll instead. The reminder must stay anchored to the current message or thread and owned by this agent. Prefer reminders over sleep or runtime cron.\n")
 	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
-	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")
+	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only for a durable high-signal issue fact; load exact flags when needed.\n")
 	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
 	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating.\n")
 	b.WriteString("- Workspace/channel: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
@@ -992,20 +959,17 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	renderProjectContext(b, ctx)
 	renderSkillIndex(b, provider, chatRuntimeSkills(ctx))
 
-	b.WriteString("## Mention Safety\n\n")
-	b.WriteString("@mentions are side-effecting actions, not just formatting: `@human` can notify a person and `@agent` can enqueue a new agent run after the server resolves it. Use plain names in prose. Only include `@` when you are intentionally notifying, escalating, or delegating.\n\n")
-
-	b.WriteString("## Attachments\n\n")
+	renderRuntimeSectionHeading(b, "Attachments")
 	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment view <id> --output <path>` (or inspect `multica attachment view --help`). Do not open Multica resource URLs directly.\n\n")
 
 	renderLazyReferences(b, true, true, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
 
-	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
+	renderRuntimeSectionHeading(b, "Important: Always Use the `multica` CLI")
 	b.WriteString("All interactions with Multica platform resources — issues, comments, attachments, images, files, and platform data — must go through the `multica` CLI. Do NOT use `curl`, `wget`, or other HTTP clients to access Multica URLs or APIs directly.\n\n")
 
-	b.WriteString("## Output\n\n")
+	renderRuntimeSectionHeading(b, "Output")
 	if standaloneChat {
-		b.WriteString("Reply to the current standalone chat with final assistant output. Use ordinary text for normal answers or the exact structured sticker envelope above for a sticker-only reply. Do not send the same reply through a DM/channel transport.\n")
+		b.WriteString("Reply with final assistant output. Use ordinary text, or the exact structured sticker envelope above for sticker-only output. Do not duplicate it through DM/channel transport.\n")
 	} else {
 		b.WriteString("For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
 	}
@@ -1021,7 +985,7 @@ func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {
 	if len(ctx.Repos) == 0 {
 		return
 	}
-	b.WriteString("## Repositories\n\n")
+	renderRuntimeSectionHeading(b, "Repositories")
 	b.WriteString("Pinned repo handles available in this workspace. Use `multica repo checkout <url>` when code access is relevant. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
 	for _, repo := range ctx.Repos {
 		if repo.Description != "" {
@@ -1031,6 +995,10 @@ func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {
 		}
 	}
 	b.WriteString("\n")
+}
+
+func renderRuntimeSectionHeading(b *strings.Builder, title string) {
+	fmt.Fprintf(b, "## %s\n\n", title)
 }
 
 func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {

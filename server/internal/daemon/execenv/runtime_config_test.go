@@ -360,9 +360,9 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 		"Run `multica issue status " + issueID + " in_progress` unless your Agent Identity forbids issue status changes; if it does, skip this step.",
 		"Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries",
 		"self-verify before you treat it as done",
-		"Deliver to the issue's acceptance criteria / definition of done, NOT a shallow pass",
-		"is your single source of truth",
-		"propose the correction to the issue owner",
+		"Ship to acceptance criteria, not a shallow pass.",
+		"Issue description + acceptance criteria + attachments = spec.",
+		"Challenge a bad spec with its owner",
 		"Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action",
 		"When done, run `multica issue status " + issueID + " in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.",
 		"If blocked, run `multica issue status " + issueID + " blocked` unless your Agent Identity forbids issue status changes.",
@@ -380,6 +380,96 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 		if strings.Contains(out, banned) {
 			t.Errorf("assignment-triggered brief still contains unconditional legacy workflow text %q\n---\n%s", banned, out)
 		}
+	}
+}
+
+func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		ctx  TaskContextForEnv
+	}{
+		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}},
+		{name: "channel", ctx: TaskContextForEnv{ChatSessionID: "chat-1", ChannelID: "channel-1"}},
+		{name: "standalone", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", tc.ctx)
+			lower := strings.ToLower(out)
+			if strings.Contains(lower, "chat"+" mode") {
+				t.Fatalf("brief still assigns a mode identity\n---\n%s", out)
+			}
+			for _, heading := range []string{
+				"## Pinned Rules",
+				"## Available Commands",
+				"## Attachments",
+				"## Important: Always Use the `multica` CLI",
+				"## Output",
+			} {
+				if got := strings.Count(out, heading); got != 1 {
+					t.Fatalf("%s heading count=%d want 1\n---\n%s", heading, got, out)
+				}
+			}
+			for _, banned := range []string{
+				"Pinned rules are high-frequency or safety-critical",
+				"Use them only for intentional notification, escalation, or delegation.",
+			} {
+				if strings.Contains(out, banned) {
+					t.Fatalf("brief retains deleted meta/no-op rule %q\n---\n%s", banned, out)
+				}
+			}
+			for _, want := range []string{
+				"All Multica platform I/O via `multica` CLI. No raw HTTP.",
+				"`--output json` for structured reads",
+				"`--full-id` when canonical UUIDs matter",
+				"Issue writes require claim/Agent Identity authority.",
+				"Never self-approve `in_review -> done`",
+				"Agent-authored issue comments: never inline `--content`",
+				"Ship to acceptance criteria, not a shallow pass.",
+				"build · run · exercise behavior · test · UI screenshot vs target",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("brief missing shared rule %q\n---\n%s", want, out)
+				}
+			}
+			switch tc.name {
+			case "issue":
+				for _, want := range []string{
+					"Issue description + acceptance criteria + attachments = spec.",
+					"Challenge a bad spec with its owner",
+				} {
+					if !strings.Contains(out, want) {
+						t.Fatalf("issue brief missing scoped rule %q\n---\n%s", want, out)
+					}
+				}
+			case "channel":
+				for _, want := range []string{
+					"Thread attention is explicit.",
+					"`ChannelID` target present",
+					"task-scoped Multica CLI transport",
+					"final assistant output, is not delivered",
+				} {
+					if !strings.Contains(out, want) {
+						t.Fatalf("channel brief missing scoped rule %q\n---\n%s", want, out)
+					}
+				}
+			case "standalone":
+				for _, want := range []string{
+					"Thread attention is explicit.",
+					"No `ChannelID` target",
+					"final assistant output is delivered to the current session",
+					"search for a target, or invent one",
+				} {
+					if !strings.Contains(out, want) {
+						t.Fatalf("targetless brief missing scoped rule %q\n---\n%s", want, out)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -403,7 +493,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"## Chat Mode",
+		"## Delivery",
 		"task-scoped Multica CLI transport",
 		"Context boundaries:",
 		"Common chat command forms are listed here so you can use them directly",
@@ -452,7 +542,6 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"## Project Context",
 		"## Skills",
 		"$CODEX_HOME/skills/issue-triage/SKILL.md",
-		"## Mention Safety",
 		"After the command succeeds",
 		compactCloseoutStatusInstruction,
 	} {
@@ -468,6 +557,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"## Issue Metadata",
 		"## Sub-issue Creation",
 		"## Mentions\n\n",
+		"## Mention Safety",
 		"### Workflow",
 		"You are responsible for managing the issue status throughout your work",
 		"Run `multica issue status ",
@@ -501,13 +591,10 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 			})
 
 			for _, want := range []string{
-				"Thread attention is explicit, never automatic",
-				"clearly complete or no longer relevant",
-				"no handoff, review, decision, reply, or follow-up remains",
-				"Do not unfollow while waiting for CI, deployment, a human reply, or a reminder",
-				"idle state, task-done status, and parent-channel mute are not unfollow triggers",
-				"After an explicit unfollow, personal @mentions still arrive without re-following",
-				"posting in the thread re-follows automatically",
+				"Thread attention is explicit.",
+				"Unfollow only after work and every handoff/review/decision/reply/follow-up completes.",
+				"CI/deploy/human wait/reminder/idle/task-done/mute are not completion.",
+				"Personal @mentions still pierce; posting re-follows.",
 				"only under the explicit thread-attention boundary pinned above",
 			} {
 				if !strings.Contains(out, want) {
@@ -610,18 +697,15 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 
 	for _, want := range []string{
 		"### Reply Requirement (READ FIRST",
-		"**Work-before-feedback rule:**",
-		"before the first substantive tool or platform call",
-		"what you understood and the immediate plan",
-		"Then do the work and send a separate result",
-		"Human DMs, human @mentions, direct questions, assigned tasks",
-		"Agent-to-agent channel @mentions are weak notifications",
-		"**Operational-command acknowledgement:**",
-		"follow/unfollow or mute/unmute",
-		"react `✅` to the instructing message",
+		"Visible reply required for human DM/@mention/direct question/task/continuation.",
+		"Agent channel @mention without an immediate deliverable/review/decision/direct answer → silence.",
+		"short `multica message send` acknowledgment before substantive tools",
+		"state understanding + next step",
+		"Then work + separate result.",
+		"Attention operation (follow/unfollow/mute/unmute): act first.",
 		"--message-id <triggering-message-id> --emoji \"✅\"",
-		"send no ordinary text confirmation",
-		"Not responding is **not** an option when a human or explicit task is waiting on you",
+		"no text",
+		"Unsure about a human → reply.",
 		"Reply Requirement",
 	} {
 		if !strings.Contains(out, want) {
@@ -661,9 +745,9 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 		}
 	}
 
-	// Should still contain the regular chat mode section and CLI instructions.
+	// Ambient conversation delivery still carries the CLI instructions.
 	for _, want := range []string{
-		"## Chat Mode",
+		"## Delivery",
 		"task-scoped Multica CLI transport",
 		"multica message send",
 	} {
@@ -687,7 +771,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"## Chat Mode",
+		"## Delivery",
 		"task-scoped Multica CLI transport",
 		"multica message send",
 		"multica message react",
@@ -729,7 +813,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 	}
 }
 
-func TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T) {
+func TestTargetlessRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID: "standalone-chat-1",
@@ -739,14 +823,14 @@ func TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T)
 
 	const stickerEnvelope = `{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`
 	for _, want := range []string{
-		"standalone Multica chat session",
-		"final assistant output is delivered automatically to this current chat session",
-		"Do not run `multica message send` or `multica message react` to reply to this current chat session",
-		"Do not search for a DM/channel target",
+		"no `ChannelID`",
+		"final assistant output, which the current session delivers automatically",
+		"Do not run `multica message send` or `multica message react` for this reply",
+		"search for a target, or invent one",
 		stickerEnvelope,
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("standalone chat brief missing %q\n---\n%s", want, out)
+			t.Errorf("targetless brief missing %q\n---\n%s", want, out)
 		}
 	}
 
@@ -755,7 +839,7 @@ func TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T)
 		"For visible chat replies, run `multica message send` or `multica message react`",
 	} {
 		if strings.Contains(out, banned) {
-			t.Errorf("standalone chat brief contains channel transport rule %q\n---\n%s", banned, out)
+			t.Errorf("targetless brief contains channel transport rule %q\n---\n%s", banned, out)
 		}
 	}
 }
@@ -765,13 +849,12 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
 	for _, want := range []string{
 		"## Pinned Rules",
-		"Pinned rules are high-frequency or safety-critical",
+		"All Multica platform I/O via `multica` CLI. No raw HTTP.",
 		"## Available Commands",
 		"multica issue comment add",
 		"## Comment Formatting",
 		"## Issue Metadata",
 		"## Sub-issue Creation",
-		"## Mentions",
 		"## Lazy References",
 		"CLI details: inspect `multica ... --help`",
 		"Final results MUST be delivered via `multica issue comment add`",
@@ -781,6 +864,9 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("issue brief missing %q", want)
 		}
+	}
+	if strings.Contains(out, "## Mentions") {
+		t.Errorf("issue brief still contains deleted mention-loop section")
 	}
 }
 
@@ -972,8 +1058,8 @@ func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
 
 	for _, want := range []string{
 		"## Pinned Rules",
-		"Pinned rules are high-frequency or safety-critical",
-		"Treat injected conversation context as scoped to the current DM/channel/thread",
+		"All Multica platform I/O via `multica` CLI. No raw HTTP.",
+		"Treat the injected conversation context as scoped to the current DM, channel, or thread surface",
 		"## Project Context",
 		"Pinned project resources (full structured payload is in `.multica/project/resources.json`)",
 		"default branch: `dev`",

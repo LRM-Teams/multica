@@ -264,6 +264,27 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 	runCtx, cancel := runContext(ctx, timeout)
 
+	var mcpConfigPath string
+	var mcpFileCleanup func()
+	if hasManagedMcpConfig(opts.McpConfig) {
+		path, err := writeMcpConfigToTemp(opts.McpConfig)
+		if err != nil {
+			cancel()
+			if ephemeralSession {
+				_ = os.Remove(sessionPath)
+			}
+			return nil, err
+		}
+		mcpConfigPath = path
+		opts.piMcpConfigPath = path
+		mcpFileCleanup = func() { os.Remove(mcpConfigPath) }
+	}
+	defer func() {
+		if mcpFileCleanup != nil {
+			mcpFileCleanup()
+		}
+	}()
+
 	args, stdinPrompt := buildPiArgsForExecution(prompt, sessionPath, opts, b.cfg.Logger)
 	argv0, cmdArgs := choosePiInvocation(execName, lookedUp, args, b.cfg.Logger)
 
@@ -309,6 +330,8 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		}
 		return nil, fmt.Errorf("start pi: %w", err)
 	}
+	// Transfer temp MCP file ownership to the run goroutine (cleaned on exit).
+	mcpFileCleanup = nil
 	stdinWriteResult := make(chan error, 1)
 	go func() {
 		var writeErr error
@@ -344,6 +367,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+		if mcpConfigPath != "" {
+			defer func() { _ = os.Remove(mcpConfigPath) }()
+		}
 		if outputLimitExtensionPath != "" {
 			defer func() {
 				if err := os.Remove(outputLimitExtensionPath); err != nil && !os.IsNotExist(err) {
@@ -677,11 +703,12 @@ func decodePiResult(raw json.RawMessage) string {
 // overridden by user-configured custom_args. Overriding these would
 // break the daemon↔Pi communication protocol.
 var piBlockedArgs = map[string]blockedArgMode{
-	"-p":         blockedStandalone, // non-interactive mode
-	"--print":    blockedStandalone, // alias for -p
-	"--mode":     blockedWithValue,  // "json" event stream protocol
-	"--session":  blockedWithValue,  // daemon manages the session path
-	"--thinking": blockedWithValue,  // daemon owns per-agent thinking level
+	"-p":            blockedStandalone, // non-interactive mode
+	"--print":       blockedStandalone, // alias for -p
+	"--mode":        blockedWithValue,  // "json" event stream protocol
+	"--session":     blockedWithValue,  // daemon manages the session path
+	"--thinking":    blockedWithValue,  // daemon owns per-agent thinking level
+	"--mcp-config":  blockedWithValue,  // daemon owns MCP from agent.mcp_config
 }
 
 // buildPiArgs assembles the argv for a one-shot Pi invocation.
@@ -748,6 +775,9 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
+	}
+	if path := strings.TrimSpace(opts.piMcpConfigPath); path != "" {
+		args = append(args, "--mcp-config", path)
 	}
 	args = append(args, filterPiCustomArgs(opts, logger)...)
 	if prompt != "" {

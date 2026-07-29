@@ -27,7 +27,11 @@
     "handoff_channel": "Create development channel",
     "handoff": "Handoff",
     "presence": "Working",
-    "weight": "Weight"
+    "weight": "Weight",
+    "fleet_badge": {
+      "lead": "리드",
+      "pending": "검토 대기"
+    }
   },
   "node": {
     "goal": "Goal",

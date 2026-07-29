@@ -27,7 +27,11 @@
     "handoff_channel": "建立开发群",
     "handoff": "交接并创建",
     "presence": "正在工作",
-    "weight": "权重"
+    "weight": "权重",
+    "fleet_badge": {
+      "lead": "主理",
+      "pending": "待审"
+    }
   },
   "node": {
     "goal": "目标",

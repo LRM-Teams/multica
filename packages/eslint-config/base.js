@@ -22,6 +22,17 @@ export default [
           "**/*.spec.{ts,tsx}",
           "**/test/**",
           "**/tests/**",
+          // Test-support code that is not itself a test file: shared mock
+          // factories, fixtures and manual mocks. These legitimately import
+          // vitest, and it is correctly a devDependency — the allowlist was
+          // simply missing the path, so the first shared fixture (#1390) broke
+          // `views` lint for everyone. Widening the path list keeps the rule's
+          // real job (no phantom PRODUCTION dependencies) intact; moving vitest
+          // into `dependencies` would have "fixed" lint by shipping a test
+          // runner to users.
+          "**/__fixtures/**",
+          "**/__fixtures__/**",
+          "**/__mocks__/**",
           "**/vitest.config.*",
           "**/vite.config.*",
           "**/electron.vite.config.*",

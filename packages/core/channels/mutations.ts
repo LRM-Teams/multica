@@ -202,17 +202,6 @@ export function useEditChannelMessage() {
   });
 }
 
-export function useDeleteChannelMessage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ channelId, messageId }: { channelId: string; messageId: string }) =>
-      api.deleteChannelMessage(channelId, messageId),
-    onSuccess: (_data, vars) => {
-      invalidateChannelMessages(qc, vars.channelId);
-    },
-  });
-}
-
 export function useAddChannelReaction() {
   const qc = useQueryClient();
   return useMutation({

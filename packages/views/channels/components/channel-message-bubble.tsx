@@ -247,7 +247,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   onReact,
   onQuote,
   onEdit,
-  onDelete,
   onOpenAgent,
   onRetrySend,
   searchHighlighted = false,
@@ -279,8 +278,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
    * a re-send — it must not go through a send/dispatch path (no new wake).
    */
   onEdit?: (message: ChannelMessage, content: string) => void;
-  /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
-  onDelete?: (message: ChannelMessage) => void;
   /** Opens the side agent file/public-info panel for agent-authored messages
    *  (LRM-292: agentId + optional row identity snapshot). */
   onOpenAgent?: OpenAgentPanelFn;
@@ -577,7 +574,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // unified composer (#258 backlog). onEdit/MessageInlineEditor kept dormant for
   // that rebuild. Delete stays.
   const canEdit = false;
-  const canDelete = isOwn && !!onDelete && !isLocalSend;
   const isEdited = !!message.edited_at;
   const canCollapseContent = collapseLongContent && contentOverflows;
   const isContentCollapsed = canCollapseContent && !contentExpanded;
@@ -590,7 +586,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     }
     setEditDraft(null);
   };
-  const handleDelete = () => onDelete?.(message);
   const handleOpenAgent = () => {
     if (isAgent && message.author_id) {
       onOpenAgent?.(message.author_id, {
@@ -745,6 +740,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       id={`message-${message.id}`}
       data-testid="message-bubble"
       data-message-group={compact ? "compact" : "lead"}
+      data-message-id={message.id}
+      data-message-author={displayName}
       data-own={isOwn}
       data-self-mentioned={selfMentioned ? "true" : undefined}
       data-local-send={localSendStatus ?? undefined}
@@ -897,17 +894,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 title={t(($) => $.message.edit_action)}
               >
                 <Pencil className="size-4" />
-              </button>
-            )}
-            {canDelete && (
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive"
-                aria-label={t(($) => $.message.delete_action)}
-                title={t(($) => $.message.delete_action)}
-              >
-                <Trash2 className="size-4" />
               </button>
             )}
           </div>
@@ -1085,16 +1071,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                   >
                     <Pencil className="size-4" />
                     <span>{t(($) => $.message.edit_action)}</span>
-                  </button>
-                )}
-                {canDelete && (
-                  <button
-                    type="button"
-                    onClick={() => runMobileAction(handleDelete)}
-                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm text-destructive transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10 focus-visible:outline-none"
-                  >
-                    <Trash2 className="size-4" />
-                    <span>{t(($) => $.message.delete_action)}</span>
                   </button>
                 )}
               </div>

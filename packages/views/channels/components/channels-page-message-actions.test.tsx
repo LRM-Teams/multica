@@ -242,16 +242,6 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
 
   // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden in
   // the bubble (canEdit=false) until rebuilt on the unified composer (#258). The
-  // onEditMessage wiring is kept dormant, so we assert only the live delete
-  // handler here; the dormant edit wiring is covered by the skipped PATCH test.
-  it("supplies a working onDeleteMessage handler to the message list", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    await waitFor(() => {
-      expect(typeof listProps.current?.onDeleteMessage).toBe("function");
-    });
-  });
-
   // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
   // (canEdit=false) so an edit can't be triggered from the UI. The dormant
   // onEditMessage → editChannelMessage (PATCH) wiring is kept for the
@@ -268,19 +258,6 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
     await waitFor(() =>
       expect(apiMock.editChannelMessage).toHaveBeenCalledWith("chan-1", "m-1", "Corrected", undefined),
     );
-    expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
-  });
-
-  it("routes a delete through deleteChannelMessage (soft-delete)", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    await waitFor(() => expect(listProps.current?.onDeleteMessage).toBeTypeOf("function"));
-
-    await act(async () => {
-      listProps.current?.onDeleteMessage?.(ownMessage());
-    });
-
-    await waitFor(() => expect(apiMock.deleteChannelMessage).toHaveBeenCalledWith("chan-1", "m-1"));
     expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
   });
 

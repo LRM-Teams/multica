@@ -3202,10 +3202,6 @@ export class ApiClient {
     });
   }
 
-  async deleteChannelMessage(channelId: string, messageId: string): Promise<void> {
-    await this.fetch(`/api/channels/${channelId}/messages/${messageId}`, { method: "DELETE" });
-  }
-
   async addChannelReaction(channelId: string, messageId: string, emoji: string): Promise<ChannelReaction> {
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reactions`, {
       method: "POST",

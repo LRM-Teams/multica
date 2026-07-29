@@ -2538,14 +2538,10 @@ export function ChannelsPage({
   // all. Route it to the SAME handler the standalone button used: identical
   // permission gate (`canRemove` from core), identical confirm step.
   //
-  // promote / demote / transfer have no endpoint yet and are rendered disabled
-  // (#832), so they cannot reach this handler; they get no branch here rather
-  // than a toast that reads like success. Wire them for real once **#814's
-  // role-write API is merged AND served**.
-  //
-  // The condition names the task, not a PR: PRs roll (#1321 → #1326 → #1332 …),
-  // and keying this off a since-merged predecessor would read as "already
-  // satisfied" and invite wiring these up before the API is actually live.
+  // #832 — promote / demote / transfer are now real mutations and DO reach this
+  // handler: transfer opens its confirmation first (it gives away the viewer's
+  // own owner rights), promote and demote go straight to `runRoleChange`. They
+  // are no longer disabled placeholders, so every item in this menu writes.
   // #832 — role-change failures and in-flight state, keyed per member exactly
   // like the removal ones: a second failure must never silently replace an
   // unresolved first one, and one member's state must never render on another.

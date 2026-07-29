@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -119,4 +119,15 @@ describe("GlobalSearchDialog", () => {
     });
   });
 
+  it("⌘K / Ctrl-K toggles the dialog open then closed (LRM-606 reclaim)", () => {
+    useGlobalSearchStore.setState({ open: false });
+    renderDialog();
+    expect(screen.queryByPlaceholderText(/Search channels/i)).not.toBeInTheDocument();
+    // ⌘K opens (metaKey); Ctrl-K (ctrlKey) works too.
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    expect(useGlobalSearchStore.getState().open).toBe(true);
+    // ⌘K again closes (toggle).
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    expect(useGlobalSearchStore.getState().open).toBe(false);
+  });
 });

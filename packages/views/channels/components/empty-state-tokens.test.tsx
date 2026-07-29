@@ -62,7 +62,7 @@ describe("LRM-357 empty-state semantic tokens", () => {
       resolve(here, "channels-page.tsx"),
       resolve(here, "dm-list.tsx"),
       resolve(here, "channel-members-list.tsx"),
-      resolve(here, "../../search/search-command.tsx"),
+      resolve(here, "../../search/global-search-dialog.tsx"),
     ];
     for (const file of files) {
       const src = readFileSync(file, "utf8");
@@ -80,8 +80,8 @@ describe("LRM-357 empty-state semantic tokens", () => {
     const members = readFileSync(resolve(here, "channel-members-list.tsx"), "utf8");
     expect(members).toContain("text-sm text-foreground");
 
-    const search = readFileSync(resolve(here, "../../search/search-command.tsx"), "utf8");
-    expect(search).toContain('data-slot="search-empty"');
+    const search = readFileSync(resolve(here, "../../search/global-search-dialog.tsx"), "utf8");
+    expect(search).toContain("globalSearch.states.empty");
     expect(search).toContain("text-muted-foreground");
   });
 });

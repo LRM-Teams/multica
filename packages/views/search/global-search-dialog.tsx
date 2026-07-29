@@ -103,15 +103,27 @@ export function GlobalSearchDialog() {
     [t],
   );
 
-  // Entry point note (LRM-454 Lock A / AC#1):
-  //   Header Search button (sidebar) opens this dialog via the store. The
-  //   global ⌘K / Ctrl-K reallocation is intentionally DEFERRED: the existing
-  //   SearchCommand palette (issue/project/nav/member/agent search) still owns
-  //   ⌘K, and reclaiming it is a destructive, cross-cutting change that must
-  //   land atomically with the BE contract (LRM-605) — wiring it now would
-  //   both double-trigger (two ⌘K listeners) and point ⌘K at an endpoint that
-  //   404s until BE ships. See the gated migration note on LRM-606.
-  //   When BE lands, move ⌘K here and retire SearchCommand in one reviewed step.
+  // Entry points (LRM-454 Lock A / AC#1):
+  //   - Header Search button (sidebar) opens this dialog via the store.
+  //   - Global ⌘K / Ctrl-K toggles it (LRM-606 reclaim): the legacy
+  //     SearchCommand palette (issue/project/nav/member/agent search) has been
+  //     deleted, so this is now the single ⌘K owner — no double-trigger risk.
+  //     BE contract LRM-605 (`GET /api/search`, SearchGlobal) is live, so the
+  //     endpoint no longer 404s.
+
+  // Global ⌘K / Ctrl-K toggles the dialog (mirrors the legacy SearchCommand
+  // shortcut, now retired). preventDefault stops the browser's native ⌘K
+  // (e.g. Chrome address-bar search).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        useGlobalSearchStore.getState().toggle();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Esc closes (capture phase, before base-ui Dialog).
   useEffect(() => {

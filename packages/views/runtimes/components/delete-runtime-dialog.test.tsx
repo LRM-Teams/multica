@@ -160,6 +160,7 @@ function makeAgent(id: string, overrides: Partial<Agent> = {}): Agent {
   return {
     id,
     workspace_id: "ws-1",
+    workspace_role: "member",
     runtime_id: "rt-1",
     description: "",
     instructions: "",

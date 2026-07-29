@@ -1,3 +1,4 @@
+DROP INDEX IF EXISTS idx_agent_memory_sync_entry_conflict_of;
 DROP INDEX IF EXISTS idx_agent_memory_sync_entry_workspace_agent;
 DROP INDEX IF EXISTS idx_agent_memory_sync_entry_agent_status;
 DROP INDEX IF EXISTS idx_agent_memory_sync_entry_active_identity;

@@ -7642,7 +7642,7 @@ func TestAddChannelMemberEmitsSystemEventOnce(t *testing.T) {
 	req = withURLParam(req, "channelId", channelID)
 	rec = httptest.NewRecorder()
 	testHandler.AddChannelMember(rec, req)
-	if rec.Code != http.StatusCreated {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("duplicate add member: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if got := countChannelSystemMessagesForTest(t, channelID); got != 1 {
@@ -7725,7 +7725,7 @@ func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testin
 	targetID := createChannelPlainMember(t)
 	channelID := seedChannelForTest(t, "member-remove-event-"+uuid.NewString(), testUserID, targetID)
 
-	req := newRequestAs(testUserID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+targetID, nil)
+	req := newRequestAs(testUserID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withRouteParams(req, "channelId", channelID, "memberType", "user", "memberId", targetID)
 	rec := httptest.NewRecorder()
@@ -7755,7 +7755,7 @@ func TestRemoveChannelMemberEmitsLeftSystemEventForSelfRemove(t *testing.T) {
 	memberID := createChannelPlainMember(t)
 	channelID := seedChannelForTest(t, "member-left-event-"+uuid.NewString(), testUserID, memberID)
 
-	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+memberID, nil)
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+memberID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, memberID)
 	req = withRouteParams(req, "channelId", channelID, "memberType", "user", "memberId", memberID)
 	rec := httptest.NewRecorder()
@@ -7880,7 +7880,7 @@ func TestRemoveChannelMemberRejectsDMChannel(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "DM Remove Guard", nil)
 	channelID := seedAgentDMChannel(t, agentID)
 
-	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID, nil)
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withRouteParams(req, "channelId", channelID, "memberType", "agent", "memberId", agentID)
 	rec := httptest.NewRecorder()
@@ -7911,7 +7911,7 @@ func TestRemoveChannelMemberRequiresManagerForOtherMembers(t *testing.T) {
 	targetID := createChannelPlainMember(t)
 	channelID := seedChannelForTest(t, "remove-member-permission-"+uuid.NewString(), testUserID, memberID, targetID)
 
-	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+targetID, nil)
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, memberID)
 	req = withRouteParams(req, "channelId", channelID, "memberType", "user", "memberId", targetID)
 	rec := httptest.NewRecorder()
@@ -7931,7 +7931,7 @@ func TestRemoveChannelMemberRequiresManagerForOtherMembers(t *testing.T) {
 		t.Fatalf("target member count=%d, want 1", count)
 	}
 
-	selfReq := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+memberID, nil)
+	selfReq := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+memberID+"?expected_remove_effect=none", nil)
 	selfReq = withChannelTestWorkspaceCtx(t, selfReq, memberID)
 	selfReq = withRouteParams(selfReq, "channelId", channelID, "memberType", "user", "memberId", memberID)
 	selfRec := httptest.NewRecorder()

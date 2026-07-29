@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/memorysignal"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -25,8 +27,9 @@ var allowedAgentMemoryScopeTypes = map[string]struct{}{
 }
 
 type agentMemoryWriteReportResponse struct {
-	Accepted int `json:"accepted"`
-	Skipped  int `json:"skipped"`
+	Accepted          int  `json:"accepted"`
+	Skipped           int  `json:"skipped"`
+	MissedWriteQueued bool `json:"missed_write_queued,omitempty"`
 }
 
 func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +74,7 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 	resp := agentMemoryWriteReportResponse{}
 	dedupSince := time.Now().UTC().Add(-agentMemoryWriteDedupWindow)
 	today := pgtype.Date{Time: time.Now().UTC(), Valid: true}
+	writeEntries := make([]memorysignal.WriteEntry, 0, len(req.Writes))
 
 	for _, write := range req.Writes {
 		rel := filepathToSlash(strings.TrimSpace(write.RelPath))
@@ -137,9 +141,98 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 			Count:     1,
 		})
 		resp.Accepted++
+		writeEntries = append(writeEntries, memorysignal.WriteEntry{
+			RelPath:   rel,
+			ScopeType: scopeType,
+			FileKey:   fileKey,
+		})
+	}
+
+	signals := make([]memorysignal.Signal, 0, len(req.Signals))
+	for _, s := range req.Signals {
+		signals = append(signals, memorysignal.Signal{
+			Action:     s.Action,
+			Kind:       s.Kind,
+			Scope:      s.Scope,
+			SubjectID:  s.SubjectID,
+			Topic:      s.Topic,
+			Summary:    s.Summary,
+			Importance: s.Importance,
+		})
+	}
+	if queued, err := h.enqueueMissedMemoryWrite(r.Context(), wsUUID, agentID, taskID, req.TriggerText, req.InitiatorID, signals, writeEntries); err != nil {
+		writeError(w, http.StatusInternalServerError, "queue missed memory write failed")
+		return
+	} else {
+		resp.MissedWriteQueued = queued
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) enqueueMissedMemoryWrite(
+	ctx context.Context,
+	workspaceID, agentID pgtype.UUID,
+	taskID pgtype.UUID,
+	triggerText, initiatorID string,
+	signals []memorysignal.Signal,
+	writes []memorysignal.WriteEntry,
+) (bool, error) {
+	miss, ok := memorysignal.DetectMissedWrite(triggerText, signals, writes, strings.TrimSpace(initiatorID))
+	if !ok {
+		return false, nil
+	}
+	if h.DB == nil {
+		return false, nil
+	}
+
+	meta, err := json.Marshal(map[string]any{
+		"source":          miss.Source,
+		"topic":           miss.Topic,
+		"topic_key":       miss.Topic,
+		"dedupe_key":      miss.DedupeKey,
+		"subject_id":      miss.SubjectID,
+		"trigger_excerpt": truncateRunes(strings.TrimSpace(triggerText), 280),
+		"needs_review":    true,
+		"shareable":       false,
+		"privacy":         "user_private",
+		"task_id":         uuidToString(taskID),
+		"awaiting_stage":  "agent_self_review",
+	})
+	if err != nil {
+		return false, err
+	}
+	evidence, err := json.Marshal([]string{})
+	if err != nil {
+		return false, err
+	}
+
+	// Deterministic dedupe: same agent + same dedupe_key while still pending.
+	var existing int
+	if err := h.DB.QueryRow(ctx, `
+		SELECT count(*)
+		  FROM agent_memory_curation_candidate
+		 WHERE workspace_id = $1
+		   AND source_agent_id = $2
+		   AND status = 'pending'
+		   AND metadata->>'dedupe_key' = $3
+	`, workspaceID, agentID, miss.DedupeKey).Scan(&existing); err != nil {
+		return false, err
+	}
+	if existing > 0 {
+		return false, nil
+	}
+
+	_, err = h.DB.Exec(ctx, `
+		INSERT INTO agent_memory_curation_candidate (
+		  workspace_id, source_agent_id, candidate_type, scope, title,
+		  content, evidence_refs, confidence, status, metadata
+		) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,'pending',$9::jsonb)
+	`, workspaceID, agentID, miss.CandidateType, miss.Scope, miss.Title, miss.Content, evidence, 0.7, meta)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func filepathToSlash(path string) string {

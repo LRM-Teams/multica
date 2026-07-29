@@ -22,6 +22,7 @@ import { McpConfigTab } from "./mcp-config-tab";
 const baseAgent: Agent = {
   id: "agent-1",
   workspace_id: "ws-1",
+  workspace_role: "member",
   runtime_id: "runtime-1",
   name: "Agent",
   display_name: "Agent",

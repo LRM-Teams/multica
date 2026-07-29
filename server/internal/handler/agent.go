@@ -73,6 +73,7 @@ type AgentResponse struct {
 	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
 	// the channel-panel config tab (and its any-member editability) off this.
 	ManagedRole        string `json:"managed_role,omitempty"`
+	WorkspaceRole      string `json:"workspace_role"`
 	MaxConcurrentTasks int32  `json:"max_concurrent_tasks"`
 	Model              string `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
@@ -151,6 +152,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		CustomEnvKeyCount:  envKeyCount,
 		Visibility:         a.Visibility,
 		Status:             a.Status,
+		WorkspaceRole:      a.WorkspaceRole,
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
 		Model:              a.Model.String,
 		ThinkingLevel:      a.ThinkingLevel.String,
@@ -1441,6 +1443,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := rawFields["avatar_url"]; ok {
 		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
+		return
+	}
+	if _, ok := rawFields["workspace_role"]; ok {
+		writeError(w, http.StatusBadRequest, "workspace_role is not accepted on this endpoint; use PATCH /api/workspaces/{workspaceId}/agents/{agentId}/role")
 		return
 	}
 	if !h.canUpdateAgent(w, r, existing, rawFields) {

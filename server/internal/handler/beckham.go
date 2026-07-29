@@ -335,13 +335,21 @@ func (h *Handler) currentGroupManagerAgent(ctx context.Context, workspaceID, cha
 // On a fresh insert it publishes the agent channel-onboarding system message so
 // the agent is woken into the group (same path as manual AddChannelMember).
 func (h *Handler) ensureChannelAgentMember(ctx context.Context, workspaceID, channelID, agentID pgtype.UUID) {
+	actor := channelMemberSystemActor()
+	if err := validateChannelMemberActorWithExec(ctx, h.DB, uuidToString(workspaceID), actor); err != nil {
+		slog.Warn("ensure channel agent member: validate actor failed", "channel_id", uuidToString(channelID), "error", err)
+		return
+	}
 	var generationID pgtype.UUID
 	err := h.DB.QueryRow(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, join_source)
-		VALUES ($1, $2, 'agent', $3, 'system')
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id,
+		  added_by_type, added_by_id, join_source
+		)
+		VALUES ($1, $2, 'agent', $3, $4, $5, 'system')
 		ON CONFLICT DO NOTHING
 		RETURNING generation_id
-	`, channelID, workspaceID, agentID).Scan(&generationID)
+	`, channelID, workspaceID, agentID, actor.Type, actor.ID).Scan(&generationID)
 	if err != nil {
 		if !errorsIsNoRows(err) {
 			slog.Warn("ensure channel agent member failed", "channel_id", uuidToString(channelID), "agent_id", uuidToString(agentID), "error", err)

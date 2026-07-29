@@ -732,12 +732,29 @@ type DaemonMemoryCurationEvidenceItem struct {
 }
 
 // AgentMemoryWriteReport is sent by the daemon after a task when whitelisted
-// agent-local memory files changed.
+// agent-local memory files changed, or when a missed-write guard check is needed
+// (explicit remember / durable feedback / co-emitted memory signal) even if no
+// file changed.
 type AgentMemoryWriteReport struct {
-	AgentID   string                  `json:"agent_id"`
-	RuntimeID string                  `json:"runtime_id"`
-	TaskID    string                  `json:"task_id,omitempty"`
-	Writes    []AgentMemoryWriteEntry `json:"writes"`
+	AgentID     string                  `json:"agent_id"`
+	RuntimeID   string                  `json:"runtime_id"`
+	TaskID      string                  `json:"task_id,omitempty"`
+	TriggerText string                  `json:"trigger_text,omitempty"`
+	InitiatorID string                  `json:"initiator_id,omitempty"`
+	Signals     []AgentMemorySignal     `json:"signals,omitempty"`
+	Writes      []AgentMemoryWriteEntry `json:"writes"`
+}
+
+// AgentMemorySignal is an optional co-emitted memory intent. It does not replace
+// file writes; the platform uses it for observability and missed-write detection.
+type AgentMemorySignal struct {
+	Action     string `json:"action"`
+	Kind       string `json:"kind,omitempty"`
+	Scope      string `json:"scope,omitempty"`
+	SubjectID  string `json:"subject_id,omitempty"`
+	Topic      string `json:"topic,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	Importance string `json:"importance,omitempty"`
 }
 
 type AgentMemoryWriteEntry struct {

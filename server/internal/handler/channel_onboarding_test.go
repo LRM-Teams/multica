@@ -33,7 +33,7 @@ func addChannelAgentForOnboardingTest(t *testing.T, channelID, agentID string) {
 
 func removeChannelAgentForOnboardingTest(t *testing.T, channelID, agentID string) {
 	t.Helper()
-	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID, nil)
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withRouteParams(req, "channelId", channelID, "memberType", "agent", "memberId", agentID)
 	rec := httptest.NewRecorder()
@@ -268,7 +268,13 @@ func TestChannelOnboardingBatchAgentAddUsesCanonicalGeneration(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		rec := httptest.NewRecorder()
 		testHandler.AddChannelMembers(rec, request())
-		if rec.Code != http.StatusCreated {
+		wantStatus := http.StatusCreated
+		if attempt > 0 {
+			// Re-adding the same member is an authorized idempotent no-op:
+			// the first request creates the membership, later requests do not.
+			wantStatus = http.StatusOK
+		}
+		if rec.Code != wantStatus {
 			t.Fatalf("batch add agent attempt %d: status=%d body=%s", attempt+1, rec.Code, rec.Body.String())
 		}
 	}
@@ -624,9 +630,10 @@ func TestChannelOnboardingRemovedGenerationCannotUseFastPublicationPath(t *testi
 	channelID := seedChannelForTest(t, "onboarding-removed-publish-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (
-		  channel_id, workspace_id, member_type, member_id, join_source, added_by
+		  channel_id, workspace_id, member_type, member_id, join_source,
+		  added_by_type, added_by_id
 		)
-		VALUES ($1, $2, 'agent', $3, 'manual', $4)
+		VALUES ($1, $2, 'agent', $3, 'manual', 'user', $4)
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
 		t.Fatalf("insert pending onboarding generation: %v", err)
 	}
@@ -686,9 +693,10 @@ func TestChannelOnboardingPublicationSerializesClaimBeforeConcurrentRemoval(t *t
 	channelID := seedChannelForTest(t, "onboarding-publish-remove-race-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (
-		  channel_id, workspace_id, member_type, member_id, join_source, added_by
+		  channel_id, workspace_id, member_type, member_id, join_source,
+		  added_by_type, added_by_id
 		)
-		VALUES ($1, $2, 'agent', $3, 'manual', $4)
+		VALUES ($1, $2, 'agent', $3, 'manual', 'user', $4)
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
 		t.Fatalf("insert pending onboarding generation: %v", err)
 	}

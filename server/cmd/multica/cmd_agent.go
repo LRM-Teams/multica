@@ -170,7 +170,8 @@ func init() {
 	agentGetCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// agent create
-	agentCreateCmd.Flags().String("name", "", "Agent name (required)")
+	agentCreateCmd.Flags().String("display-name", "", "Agent display name (required)")
+	agentCreateCmd.Flags().String("username", "", "Agent username")
 	agentCreateCmd.Flags().String("description", "", "Agent description")
 	agentCreateCmd.Flags().String("instructions", "", "Agent instructions")
 	agentCreateCmd.Flags().String("runtime-id", "", "Runtime ID (required)")
@@ -450,9 +451,9 @@ func runAgentCreate(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	name, _ := cmd.Flags().GetString("name")
-	if name == "" {
-		return fmt.Errorf("--name is required")
+	displayName, _ := cmd.Flags().GetString("display-name")
+	if displayName == "" {
+		return fmt.Errorf("--display-name is required")
 	}
 	runtimeID, _ := cmd.Flags().GetString("runtime-id")
 	if runtimeID == "" {
@@ -460,8 +461,11 @@ func runAgentCreate(cmd *cobra.Command, _ []string) error {
 	}
 
 	body := map[string]any{
-		"name":       name,
-		"runtime_id": runtimeID,
+		"display_name": displayName,
+		"runtime_id":   runtimeID,
+	}
+	if username, _ := cmd.Flags().GetString("username"); username != "" {
+		body["username"] = username
 	}
 	if v, _ := cmd.Flags().GetString("description"); v != "" {
 		body["description"] = v

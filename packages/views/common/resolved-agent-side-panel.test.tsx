@@ -105,6 +105,7 @@ function makeAgent(id = "agent-1"): Agent {
   return {
     id,
     workspace_id: "ws-1",
+    workspace_role: "member",
     runtime_id: "rt-1",
     name: "beckham",
     display_name: "贝克汉姆",

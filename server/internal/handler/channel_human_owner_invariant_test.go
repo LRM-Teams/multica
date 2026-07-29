@@ -342,7 +342,12 @@ VALUES ($1, $2, 'inv row move', 'IRM') RETURNING id`,
 UPDATE channel_member SET workspace_id = $1
 WHERE channel_id = $2 AND member_type = 'user' AND member_id = $3`,
 		otherWS, chID, testUserID)
-	if !ownerInvariantErr(err) {
+	// Migration 245 may reject this malformed intermediate row before the
+	// deferred owner invariant: moving workspace_id alone also makes the row's
+	// actor provenance cross-workspace. Either constraint must block the same
+	// forbidden unilateral change.
+	if !ownerInvariantErr(err) &&
+		(err == nil || !strings.Contains(err.Error(), "channel actor provenance must reference an existing same-workspace actor")) {
 		t.Fatalf("owner-row workspace unilateral change want fail, got: %v", err)
 	}
 }

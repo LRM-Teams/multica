@@ -31,3 +31,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_memory_sync_entry_agent_status
 
 CREATE INDEX IF NOT EXISTS idx_agent_memory_sync_entry_workspace_agent
   ON agent_memory_sync_entry (workspace_id, agent_id, updated_at DESC);
+
+-- Self-FK: when rows cascade-delete with the agent, PostgreSQL must SET NULL
+-- conflict_of on children; without this index agent hard-delete seqscans.
+CREATE INDEX IF NOT EXISTS idx_agent_memory_sync_entry_conflict_of
+  ON agent_memory_sync_entry (conflict_of)
+  WHERE conflict_of IS NOT NULL;

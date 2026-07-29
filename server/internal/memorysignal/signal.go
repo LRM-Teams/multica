@@ -64,8 +64,10 @@ type MissedWrite struct {
 }
 
 var (
-	explicitRememberRE = regexp.MustCompile(`(?i)(记住这个|记住到|记到\s*memory|写进\s*memory|写到\s*memory|固化|记一下|写下来|记下来|remember\s+this|write\s+this\s+down|write\s+it\s+(to|into)\s+memory|don't\s+forget|do\s+not\s+forget)`)
-	durableFeedbackRE  = regexp.MustCompile(`(?i)(以后都|以后要|以后得|别再|不要再|下次先|下次要|我不喜欢|不要把|这个项目必须|都必须|必须先|先反馈|持续.*(进度|汇报)|发现问题.*指出|又犯(过|了|错)|别再犯|上次也是|没记住|提\s*MR|开\s*MR|建\s*MR|merge\s*request|先\s*rebase|rebase.*dev|pipeline.*绿|记住了|remember\s+that|from\s+now\s+on|always\s+|never\s+again|don't\s+ever|do\s+not\s+ever|prefer\s+that|next\s+time)`)
+	// Light platform fallback only. Prefer agent judgment + memory signal in-prompt;
+	// do not encode every workflow phrase here.
+	explicitRememberRE = regexp.MustCompile(`(?i)(记住这个|记住到|记到\s*memory|写进\s*memory|写到\s*memory|记一下|写下来|记下来|remember\s+this|write\s+this\s+down|write\s+it\s+(to|into)\s+memory|don't\s+forget|do\s+not\s+forget)`)
+	durableFeedbackRE  = regexp.MustCompile(`(?i)(以后都|以后要|以后得|别再|不要再|下次先|下次要|我不喜欢|不要把|这个项目必须|都必须|必须先|from\s+now\s+on|always\s+|never\s+again|don't\s+ever|do\s+not\s+ever|prefer\s+that|next\s+time|remember\s+that)`)
 )
 
 // ParseSignalJSON accepts a single JSON object or {"memory":{...}} wrapper.
@@ -138,8 +140,8 @@ func LooksLikeDurableFeedback(text string) bool {
 	return durableFeedbackRE.MatchString(text)
 }
 
-// HasDurableWrite reports whether any reported write is preference/relationship/
-// agent-global/project/channel durable memory (Daily alone does not count).
+// HasDurableWrite reports whether any reported write is a durable memory file
+// (USER / RELATIONSHIP / MEMORY / notes / project / channel). Daily alone does not count.
 func HasDurableWrite(writes []WriteEntry) bool {
 	for _, w := range writes {
 		if IsDurableWrite(w) {
@@ -149,7 +151,8 @@ func HasDurableWrite(writes []WriteEntry) bool {
 	return false
 }
 
-// IsDurableWrite classifies one reported file change.
+// IsDurableWrite classifies one reported file change. Any of these paths count
+// as "remembered" for missed-write checks — not only USER.md.
 func IsDurableWrite(w WriteEntry) bool {
 	scope := strings.TrimSpace(w.ScopeType)
 	key := strings.ToUpper(strings.TrimSpace(w.FileKey))
@@ -159,12 +162,24 @@ func IsDurableWrite(w WriteEntry) bool {
 		return key == "USER" || key == "RELATIONSHIP" || strings.HasSuffix(rel, "/USER.md") || strings.HasSuffix(rel, "/RELATIONSHIP.md")
 	case "agent_global":
 		return key == "MEMORY" || strings.HasSuffix(rel, "memory/MEMORY.md")
+	case "agent_notes":
+		return key == "AGENTS" || key == "RELATIONSHIP_MAP" || key == "WORK_LOG" ||
+			strings.HasPrefix(rel, "notes/")
 	case "project":
 		return key == "MEMORY" || key == "DECISIONS" || key == "STATE"
 	case "channel":
 		return key == "CONTEXT"
 	default:
-		return false
+		// Path fallback when scope classification is missing.
+		switch {
+		case strings.HasSuffix(rel, "/USER.md"), strings.HasSuffix(rel, "/RELATIONSHIP.md"),
+			rel == "memory/MEMORY.md", strings.HasPrefix(rel, "notes/"),
+			strings.Contains(rel, "/MEMORY.md"), strings.Contains(rel, "/DECISIONS.md"),
+			strings.HasSuffix(rel, "/CONTEXT.md"):
+			return true
+		default:
+			return false
+		}
 	}
 }
 

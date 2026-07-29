@@ -11,14 +11,14 @@ func TestLooksLikeDurableFeedback(t *testing.T) {
 		{"记住到memory 里", true},
 		{"记住到 memory", true},
 		{"写进 memory", true},
-		{"以后长任务先反馈一下进度", true},
+		{"以后都要先反馈一下进度", true},
 		{"别再只说好", true},
 		{"下次先确认再动手", true},
-		{"pipeline也有错，以后都得记住", true},
-		{"那你为什么又犯错了", true},
-		{"先 rebase/merge dev，再建 MR", true},
+		{"pipeline也有错，以后都得记住", true}, // 以后都
 		{"hello", false},
 		{"帮我看一下这个 bug", false},
+		{"那你为什么又犯错了", false}, // agent judges in-prompt; not a rigid platform phrase
+		{"先 rebase/merge dev，再建 MR", false}, // soft lesson — agent judges; platform only catches explicit remember / clear standing cues
 		{"from now on always report progress first", true},
 		{"remember this for later", true},
 	}
@@ -39,6 +39,20 @@ func TestInferTopicMRWorkflow(t *testing.T) {
 	}
 	if miss.Topic != "mr_workflow" {
 		t.Fatalf("topic=%q miss=%+v", miss.Topic, miss)
+	}
+}
+
+func TestNotesAndMemoryCountAsDurableWrite(t *testing.T) {
+	notes := []WriteEntry{{RelPath: "notes/agents.md", ScopeType: "agent_notes", FileKey: "AGENTS"}}
+	if !HasDurableWrite(notes) {
+		t.Fatal("notes should count as remembered")
+	}
+	mem := []WriteEntry{{RelPath: "memory/MEMORY.md", ScopeType: "agent_global", FileKey: "MEMORY"}}
+	if !HasDurableWrite(mem) {
+		t.Fatal("MEMORY.md should count as remembered")
+	}
+	if _, ok := DetectMissedWrite("记住到 memory", nil, notes, "m1"); ok {
+		t.Fatal("notes write should clear missed-write")
 	}
 }
 

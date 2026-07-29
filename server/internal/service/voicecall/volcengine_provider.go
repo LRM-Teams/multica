@@ -99,10 +99,25 @@ func NewVolcengineProvider(
 	}, nil
 }
 
-func (provider *VolcengineProvider) Start(
+func (provider *VolcengineProvider) Prepare(
+	_ context.Context,
+	input ProviderPrepareInput,
+) (ProviderPrepareResult, error) {
+	signedToken, err := provider.tokenSigner.Sign(input.RoomID, input.TargetUserID)
+	if err != nil {
+		return ProviderPrepareResult{}, fmt.Errorf("sign room token: %w", err)
+	}
+	return ProviderPrepareResult{
+		AppID:     provider.appID,
+		Token:     signedToken.Value,
+		ExpiresAt: signedToken.ExpiresAt,
+	}, nil
+}
+
+func (provider *VolcengineProvider) Connect(
 	ctx context.Context,
-	input ProviderStartInput,
-) (ProviderStartResult, error) {
+	input ProviderConnectInput,
+) error {
 	configuration, err := volcenginertc.BuildStartConfiguration(
 		volcenginertc.StartConfigurationInput{
 			TargetUserID:      input.TargetUserID,
@@ -117,12 +132,7 @@ func (provider *VolcengineProvider) Start(
 		},
 	)
 	if err != nil {
-		return ProviderStartResult{}, fmt.Errorf("build Volcengine conversation configuration: %w", err)
-	}
-
-	signedToken, err := provider.tokenSigner.Sign(input.RoomID, input.TargetUserID)
-	if err != nil {
-		return ProviderStartResult{}, fmt.Errorf("sign room token: %w", err)
+		return fmt.Errorf("build Volcengine conversation configuration: %w", err)
 	}
 	_, err = provider.client.StartVoiceChat(ctx, volcenginertc.StartVoiceChatRequest{
 		AppID:       provider.appID,
@@ -134,7 +144,7 @@ func (provider *VolcengineProvider) Start(
 	if err != nil {
 		var providerError *volcenginertc.ProviderError
 		if errors.As(err, &providerError) {
-			return ProviderStartResult{}, err
+			return err
 		}
 
 		compensationContext, cancel := context.WithTimeout(
@@ -151,21 +161,17 @@ func (provider *VolcengineProvider) Start(
 			},
 		)
 		if stopErr != nil {
-			return ProviderStartResult{}, &ProviderStartUncertainError{
+			return &ProviderStartUncertainError{
 				Err: errors.Join(
 					err,
 					fmt.Errorf("compensate Volcengine voice task: %w", stopErr),
 				),
 			}
 		}
-		return ProviderStartResult{}, err
+		return err
 	}
 
-	return ProviderStartResult{
-		AppID:     provider.appID,
-		Token:     signedToken.Value,
-		ExpiresAt: signedToken.ExpiresAt,
-	}, nil
+	return nil
 }
 
 func (provider *VolcengineProvider) Stop(

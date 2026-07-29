@@ -661,6 +661,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Use(handler.RequireHumanActor)
 						r.Post("/", h.CreateVoiceCall)
 						r.Get("/{callId}", h.GetVoiceCall)
+						r.Post("/{callId}/connect", h.ConnectVoiceCall)
 						r.Post("/{callId}/stop", h.StopVoiceCall)
 					})
 					r.Post("/leave", h.LeaveWorkspace)

@@ -8,7 +8,7 @@ const call = {
   id: "call-1",
   channel_id: "channel-1",
   agent_id: "agent-1",
-  status: "connecting",
+  status: "starting",
   started_at: "2026-07-23T10:00:00Z",
   input_audio_ms: 0,
   output_audio_ms: 0,
@@ -45,7 +45,7 @@ describe("ApiClient voice calls", () => {
     ).resolves.toMatchObject({
       call: {
         id: "call-1",
-        status: "connecting",
+        status: "starting",
         connected_at: null,
         ended_at: null,
       },
@@ -115,6 +115,31 @@ describe("ApiClient voice calls", () => {
       "https://api.example.test/api/workspaces/workspace-1/voice-calls/call%2F1",
       expect.any(Object),
     );
+  });
+
+  it("starts the provider through the post-room-join endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ call }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.connectVoiceCall("workspace-1", "call/1"))
+      .resolves.toMatchObject({ call: { id: "call-1" } });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/workspaces/workspace-1/voice-calls/call%2F1/connect",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("fails closed when the provider-start response is malformed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      Response.json({ call: null }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.connectVoiceCall("workspace-1", "call-1"))
+      .resolves.toEqual(EMPTY_GET_VOICE_CALL_RESPONSE);
   });
 
   it("returns the safe unknown call when a get response is malformed", async () => {

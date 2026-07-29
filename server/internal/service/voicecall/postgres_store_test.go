@@ -87,10 +87,11 @@ func TestPostgresStoreMapsSessionAndScopesEveryMutation(t *testing.T) {
 		t.Fatalf("provider turn params = %+v", queries.providerTurn)
 	}
 
-	if _, err := store.MarkConnecting(
+	providerStart, err := store.BeginProviderStart(
 		context.Background(), testVoiceWorkspaceID, testVoiceCallID,
-	); err != nil {
-		t.Fatalf("mark connecting: %v", err)
+	)
+	if err != nil || !providerStart.ProviderStartRequired {
+		t.Fatalf("begin provider start: %+v error=%v", providerStart, err)
 	}
 	if uuidStringForTest(queries.connecting.WorkspaceID) != testVoiceWorkspaceID ||
 		uuidStringForTest(queries.connecting.ID) != testVoiceCallID {
@@ -443,9 +444,10 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 		callbackConnecting.ConnectedAt == nil {
 		t.Fatalf("early provider callback = %+v error=%v", callbackConnecting, err)
 	}
-	active, err := store.MarkConnecting(ctx, testVoiceWorkspaceID, session.ID)
+	activeStart, err := store.BeginProviderStart(ctx, testVoiceWorkspaceID, session.ID)
+	active := activeStart.Session
 	if err != nil || active.Status != StatusActive {
-		t.Fatalf("mark connecting: %v", err)
+		t.Fatalf("begin provider start: %v", err)
 	}
 	active, err = store.ApplyProviderActive(ctx, "volcengine", session.ProviderTaskID)
 	if err != nil || active.Status != StatusActive {
@@ -483,6 +485,32 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 		lateFailure.Status != StatusEnded ||
 		lateFailure.ErrorCode != "" {
 		t.Fatalf("late provider failure = %+v error=%v", lateFailure, err)
+	}
+
+	prepared, err := store.CreateStarting(ctx, NewSession{
+		WorkspaceID:    testVoiceWorkspaceID,
+		ChannelID:      testVoiceChannelID,
+		AgentID:        testVoiceAgentID,
+		UserID:         testVoiceUserID,
+		Provider:       "volcengine",
+		ProviderTaskID: "voice-task-integration-prepared",
+		RoomID:         "voice-call-integration-prepared",
+	})
+	if err != nil {
+		t.Fatalf("create prepared session: %v", err)
+	}
+	preparedEnding, err := store.BeginEnding(
+		ctx, testVoiceWorkspaceID, testVoiceUserID, prepared.ID, "browser_closed",
+	)
+	if err != nil ||
+		preparedEnding.ProviderStopRequired ||
+		preparedEnding.Session.Status != StatusEnding {
+		t.Fatalf("prepared ending = %+v error=%v", preparedEnding, err)
+	}
+	if _, err := store.MarkEnded(
+		ctx, testVoiceWorkspaceID, prepared.ID, "browser_closed",
+	); err != nil {
+		t.Fatalf("mark prepared session ended: %v", err)
 	}
 
 	failing, err := store.CreateStarting(ctx, NewSession{
@@ -537,7 +565,7 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create stop-race session: %v", err)
 	}
-	if _, err := store.MarkConnecting(
+	if _, err := store.BeginProviderStart(
 		ctx, testVoiceWorkspaceID, stopRace.ID,
 	); err != nil {
 		t.Fatalf("connect stop-race session: %v", err)
@@ -581,7 +609,7 @@ type fakeVoiceCallQueries struct {
 	ending            db.BeginVoiceCallEndingRow
 	create            db.CreateVoiceCallSessionParams
 	get               db.GetVoiceCallSessionForMemberParams
-	connecting        db.MarkVoiceCallConnectingParams
+	connecting        db.BeginVoiceCallProviderStartParams
 	failed            db.MarkVoiceCallFailedParams
 	beginEnding       db.BeginVoiceCallEndingParams
 	ended             db.MarkVoiceCallEndedParams
@@ -631,12 +659,12 @@ func (queries *fakeVoiceCallQueries) UpsertVoiceCallProviderTurn(
 	return queries.turn, nil
 }
 
-func (queries *fakeVoiceCallQueries) MarkVoiceCallConnecting(
+func (queries *fakeVoiceCallQueries) BeginVoiceCallProviderStart(
 	_ context.Context,
-	params db.MarkVoiceCallConnectingParams,
-) (db.VoiceCallSession, error) {
+	params db.BeginVoiceCallProviderStartParams,
+) (db.BeginVoiceCallProviderStartRow, error) {
 	queries.connecting = params
-	return queries.session, nil
+	return testDBBeginProviderStartRow(queries.session, true), nil
 }
 
 func (queries *fakeVoiceCallQueries) MarkVoiceCallFailed(
@@ -739,6 +767,33 @@ func testDBBeginEndingRow(providerStopRequired bool) db.BeginVoiceCallEndingRow 
 		CreatedAt:            session.CreatedAt,
 		UpdatedAt:            session.UpdatedAt,
 		ProviderStopRequired: providerStopRequired,
+	}
+}
+
+func testDBBeginProviderStartRow(
+	session db.VoiceCallSession,
+	providerStartRequired bool,
+) db.BeginVoiceCallProviderStartRow {
+	return db.BeginVoiceCallProviderStartRow{
+		ID:                    session.ID,
+		WorkspaceID:           session.WorkspaceID,
+		ChannelID:             session.ChannelID,
+		AgentID:               session.AgentID,
+		UserID:                session.UserID,
+		Provider:              session.Provider,
+		ProviderTaskID:        session.ProviderTaskID,
+		RoomID:                session.RoomID,
+		Status:                string(StatusConnecting),
+		StartedAt:             session.StartedAt,
+		ConnectedAt:           session.ConnectedAt,
+		EndedAt:               session.EndedAt,
+		EndReason:             session.EndReason,
+		ErrorCode:             session.ErrorCode,
+		InputAudioMs:          session.InputAudioMs,
+		OutputAudioMs:         session.OutputAudioMs,
+		CreatedAt:             session.CreatedAt,
+		UpdatedAt:             session.UpdatedAt,
+		ProviderStartRequired: providerStartRequired,
 	}
 }
 

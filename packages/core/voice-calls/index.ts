@@ -4,5 +4,6 @@ export {
 } from "./queries";
 export {
   useCreateVoiceCall,
+  useConnectVoiceCall,
   useStopVoiceCall,
 } from "./mutations";

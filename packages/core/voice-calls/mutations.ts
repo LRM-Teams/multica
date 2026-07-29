@@ -21,6 +21,20 @@ export function useCreateVoiceCall(workspaceId: string) {
   });
 }
 
+export function useConnectVoiceCall(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: [...voiceCallKeys.all(workspaceId), "connect"],
+    mutationFn: (callId: string) => api.connectVoiceCall(workspaceId, callId),
+    onSuccess: (connected, callId) => {
+      queryClient.setQueryData(
+        voiceCallKeys.detail(workspaceId, callId),
+        connected,
+      );
+    },
+  });
+}
+
 export function useStopVoiceCall(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({

@@ -148,7 +148,7 @@ updated AS (
   WHERE call.id = current_session.id
   RETURNING
     call.id, call.workspace_id, call.channel_id, call.agent_id, call.user_id, call.provider, call.provider_task_id, call.room_id, call.status, call.started_at, call.connected_at, call.ended_at, call.end_reason, call.error_code, call.input_audio_ms, call.output_audio_ms, call.created_at, call.updated_at,
-    current_session.status NOT IN ('ended', 'failed') AS provider_stop_required
+    current_session.status NOT IN ('starting', 'ended', 'failed') AS provider_stop_required
 )
 SELECT id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at, provider_stop_required
 FROM updated
@@ -211,6 +211,94 @@ func (q *Queries) BeginVoiceCallEnding(ctx context.Context, arg BeginVoiceCallEn
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProviderStopRequired,
+	)
+	return i, err
+}
+
+const beginVoiceCallProviderStart = `-- name: BeginVoiceCallProviderStart :one
+WITH current_session AS (
+  SELECT session.id, session.status
+  FROM voice_call_session AS session
+  WHERE session.id = $1
+    AND session.workspace_id = $2
+    AND session.status IN ('starting', 'connecting', 'active', 'reconnecting')
+  FOR UPDATE
+),
+updated AS (
+  UPDATE voice_call_session AS call
+  SET
+    status = CASE
+      WHEN current_session.status = 'starting' THEN 'connecting'
+      WHEN current_session.status = 'connecting' AND call.connected_at IS NOT NULL
+        THEN 'active'
+      ELSE call.status
+    END,
+    updated_at = CASE
+      WHEN current_session.status = 'starting'
+        OR (current_session.status = 'connecting' AND call.connected_at IS NOT NULL)
+        THEN now()
+      ELSE call.updated_at
+    END
+  FROM current_session
+  WHERE call.id = current_session.id
+  RETURNING
+    call.id, call.workspace_id, call.channel_id, call.agent_id, call.user_id, call.provider, call.provider_task_id, call.room_id, call.status, call.started_at, call.connected_at, call.ended_at, call.end_reason, call.error_code, call.input_audio_ms, call.output_audio_ms, call.created_at, call.updated_at,
+    current_session.status = 'starting' AS provider_start_required
+)
+SELECT id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at, provider_start_required
+FROM updated
+`
+
+type BeginVoiceCallProviderStartParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type BeginVoiceCallProviderStartRow struct {
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	ChannelID             pgtype.UUID        `json:"channel_id"`
+	AgentID               pgtype.UUID        `json:"agent_id"`
+	UserID                pgtype.UUID        `json:"user_id"`
+	Provider              string             `json:"provider"`
+	ProviderTaskID        pgtype.Text        `json:"provider_task_id"`
+	RoomID                pgtype.Text        `json:"room_id"`
+	Status                string             `json:"status"`
+	StartedAt             pgtype.Timestamptz `json:"started_at"`
+	ConnectedAt           pgtype.Timestamptz `json:"connected_at"`
+	EndedAt               pgtype.Timestamptz `json:"ended_at"`
+	EndReason             string             `json:"end_reason"`
+	ErrorCode             string             `json:"error_code"`
+	InputAudioMs          int64              `json:"input_audio_ms"`
+	OutputAudioMs         int64              `json:"output_audio_ms"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ProviderStartRequired bool               `json:"provider_start_required"`
+}
+
+func (q *Queries) BeginVoiceCallProviderStart(ctx context.Context, arg BeginVoiceCallProviderStartParams) (BeginVoiceCallProviderStartRow, error) {
+	row := q.db.QueryRow(ctx, beginVoiceCallProviderStart, arg.ID, arg.WorkspaceID)
+	var i BeginVoiceCallProviderStartRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.AgentID,
+		&i.UserID,
+		&i.Provider,
+		&i.ProviderTaskID,
+		&i.RoomID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConnectedAt,
+		&i.EndedAt,
+		&i.EndReason,
+		&i.ErrorCode,
+		&i.InputAudioMs,
+		&i.OutputAudioMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProviderStartRequired,
 	)
 	return i, err
 }
@@ -298,57 +386,6 @@ type GetVoiceCallSessionForMemberParams struct {
 
 func (q *Queries) GetVoiceCallSessionForMember(ctx context.Context, arg GetVoiceCallSessionForMemberParams) (VoiceCallSession, error) {
 	row := q.db.QueryRow(ctx, getVoiceCallSessionForMember, arg.ID, arg.WorkspaceID, arg.UserID)
-	var i VoiceCallSession
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.ChannelID,
-		&i.AgentID,
-		&i.UserID,
-		&i.Provider,
-		&i.ProviderTaskID,
-		&i.RoomID,
-		&i.Status,
-		&i.StartedAt,
-		&i.ConnectedAt,
-		&i.EndedAt,
-		&i.EndReason,
-		&i.ErrorCode,
-		&i.InputAudioMs,
-		&i.OutputAudioMs,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const markVoiceCallConnecting = `-- name: MarkVoiceCallConnecting :one
-UPDATE voice_call_session
-SET
-  status = CASE
-    WHEN status = 'starting' THEN 'connecting'
-    WHEN status = 'connecting' AND connected_at IS NOT NULL THEN 'active'
-    ELSE status
-  END,
-  updated_at = CASE
-    WHEN status = 'starting'
-      OR (status = 'connecting' AND connected_at IS NOT NULL)
-      THEN now()
-    ELSE updated_at
-  END
-WHERE id = $1
-  AND workspace_id = $2
-  AND status IN ('starting', 'connecting', 'active')
-RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
-`
-
-type MarkVoiceCallConnectingParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) MarkVoiceCallConnecting(ctx context.Context, arg MarkVoiceCallConnectingParams) (VoiceCallSession, error) {
-	row := q.db.QueryRow(ctx, markVoiceCallConnecting, arg.ID, arg.WorkspaceID)
 	var i VoiceCallSession
 	err := row.Scan(
 		&i.ID,

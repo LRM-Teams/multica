@@ -15,7 +15,7 @@ import { useChatStore, DRAFT_NEW_SESSION } from "@multica/core/chat";
 import { useSetChatSessionProject } from "@multica/core/chat/mutations";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { createLogger } from "@multica/core/logger";
-import { enterKey, formatShortcut, modKey } from "@multica/core/platform";
+import { enterKey } from "@multica/core/platform";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import { useT } from "../../i18n";
@@ -319,11 +319,11 @@ export function ChatInput({
             // Chat is short-form — the floating formatting toolbar is
             // more distraction than feature here.
             showBubbleMenu={false}
-            // Chat intentionally leaves submitOnEnter at its default false:
-            // Mod+Enter submits, while bare Enter falls through to Tiptap's
-            // default behavior for lists, quotes, and paragraph breaks.
-            // Without this, Enter-as-send would steal the only key that
-            // continues a bullet list, leaving users stuck after one item.
+            // Chat / FAB bubble: bare Enter sends (same as channel/DM
+            // composers). Shift+Enter still inserts a newline via Tiptap's
+            // default; code blocks keep Enter for a new line inside the fence.
+            // IME composition is guarded in submit-shortcut.
+            submitOnEnter
           />
         </div>
         {leftAdornment && (
@@ -359,7 +359,7 @@ export function ChatInput({
             disabled={isEmpty || isSubmitting || !!disabled || !!noAgent || pendingUploads > 0}
             running={isRunning}
             allowSubmitWhileRunning
-            tooltip={`${t(($) => $.input.send_tooltip)} · ${formatShortcut(modKey, enterKey)}`}
+            tooltip={`${t(($) => $.input.send_tooltip)} · ${enterKey}`}
           />
         </div>
         {uploadEnabled && isDragOver && <FileDropOverlay />}

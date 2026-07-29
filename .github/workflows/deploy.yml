@@ -54,7 +54,7 @@ jobs:
       ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'))
     # Hosted minutes blocked by org spending limit; prepare on self-hosted ci.
-    runs-on: [self-hosted, ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
@@ -109,7 +109,7 @@ jobs:
         github.ref == 'refs/heads/dev' &&
         github.event.inputs.image_tag == ''))
     # Hosted minutes blocked by org spending limit; build on self-hosted ci.
-    runs-on: [self-hosted, ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read

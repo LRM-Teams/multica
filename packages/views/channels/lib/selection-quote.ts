@@ -14,8 +14,8 @@
  *    caret lands at the end; nothing is sent.
  *  - Copy: copy the selection as plain text (keep newlines) + toast.
  *  - Desktop (fine pointer) only this cut; mobile keeps the OS selection menu.
- *  - Cross-message selection: concatenate in document order into ONE quote
- *    block; >10 lines are NOT truncated (the user edits down).
+ *  - Cross-message selection is REJECTED (AC#7 / Frank DM lock 2026-07-29):
+ *    both endpoints must live in the SAME message body, or no menu floats.
  */
 
 /** Selector for a message body surface the menu may float over. */
@@ -100,10 +100,15 @@ export function resolveMessageSelection(
   const endBody = endEl?.closest(MESSAGE_BODY_SELECTOR) ?? null;
   if (!startBody || !endBody) return null;
 
+  // AC#7 / Frank DM lock (2026-07-29): cross-message selection is prohibited —
+  // both endpoints must live inside the SAME message body. A selection that
+  // spans two bubbles is rejected so the menu never floats over a spliced quote
+  // (a quote must come from a single message).
+  if (startBody !== endBody) return null;
+
   // The bubble root carries the stamped author / message id (added in
-  // channel-message-bubble.tsx). For a cross-message selection we attribute the
-  // block to the bubble the selection STARTS in (the anchor), which matches the
-  // "concat into one quote block in order" spec.
+  // channel-message-bubble.tsx). Both endpoints proved to share one message
+  // body above, so the anchor bubble is unambiguous.
   const bubble = startEl?.closest(`[${MESSAGE_AUTHOR_ATTR}]`) ?? null;
   const rawAuthor = bubble?.getAttribute(MESSAGE_AUTHOR_ATTR) ?? null;
   const author = rawAuthor && rawAuthor.trim() ? rawAuthor : null;

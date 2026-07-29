@@ -115,6 +115,10 @@ func TestDecideMemberManagementMatrix(t *testing.T) {
 			code: MemberManagementCodeTargetNotOrdinary,
 		},
 		{
+			name: "human channel owner removes manager", principal: user(WorkspaceRoleMember, ChannelRoleOwner),
+			action: MemberManagementRemoveMember, target: manager, visible: true, writable: true, allowed: true,
+		},
+		{
 			name: "workspace owner override cannot remove channel owner", principal: user(WorkspaceRoleOwner, ChannelRoleNone),
 			action: MemberManagementRemoveMember, target: owner, visible: true, writable: true,
 			code: MemberManagementCodeTargetNotOrdinary,

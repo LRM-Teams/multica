@@ -1368,191 +1368,27 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "AddChannelMember") {
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
-	if !ok {
-		return
-	}
-	var req AddChannelMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	memberID, ok := parseUUIDOrBadRequest(w, req.MemberID, "member_id")
-	if !ok {
-		return
-	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
-		return
-	}
-	if !h.requireChannelAgentCallerMember(w, r, workspaceID, channelID, userID) {
-		return
-	}
-	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	if !h.validateChannelMemberTarget(w, r, workspaceID, channelID, req.MemberType, memberID) {
-		return
-	}
-	actor := channelMemberUserActor(parseUUID(userID))
-	if err := validateChannelMemberActorWithExec(r.Context(), h.DB, workspaceID, actor); err != nil {
-		slog.Warn("channel member add: validate actor failed", "workspace", workspaceID, "actor", userID, "error", err)
-		writeError(w, http.StatusForbidden, "channel member actor is not available")
-		return
-	}
-	var membershipGenerationID pgtype.UUID
-	err := h.DB.QueryRow(r.Context(), `
-		INSERT INTO channel_member (
-		  channel_id, workspace_id, member_type, member_id,
-		  added_by_type, added_by_id, join_source
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, 'manual')
-		ON CONFLICT DO NOTHING
-		RETURNING generation_id`,
-		channelID, parseUUID(workspaceID), req.MemberType, memberID,
-		actor.Type, actor.ID,
-	).Scan(&membershipGenerationID)
-	if err != nil {
-		if !errorsIsNoRows(err) {
-			writeError(w, http.StatusInternalServerError, "failed to add channel member")
-			return
-		}
-	}
-	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
-	if membershipGenerationID.Valid && req.MemberType == "user" {
-		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, actor.Type, actor.ID, req.MemberType, memberID)
-	} else if membershipGenerationID.Valid && req.MemberType == "agent" {
-		if err := h.publishChannelOnboardingSystemMessageForGeneration(r.Context(), membershipGenerationID); err != nil {
-			slog.Warn("channel member add: publish agent membership system event failed", "channel", uuidToString(channelID), "agent", uuidToString(memberID), "generation", uuidToString(membershipGenerationID), "error", err)
-		}
-	}
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+	h.addChannelMemberAdapter(w, r, humanMemberManagementActor(workspaceID, userID))
 }
 
 func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "RemoveChannelMember") {
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
-	if !ok {
-		return
-	}
-	memberType := chi.URLParam(r, "memberType")
-	memberID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "memberId"), "member id")
-	if !ok {
-		return
-	}
-	if memberType != "user" && memberType != "agent" {
-		writeError(w, http.StatusBadRequest, "member_type must be user or agent")
-		return
-	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
-		return
-	}
-	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	if !(memberType == "user" && uuidToString(memberID) == userID) {
-		if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
-			return
-		}
-	}
-
-	// Agent removal: membership delete + revoke pending/in-flight access must
-	// share one transaction (Barry #801). User removal uses a tx that also
-	// enforces ordinary-group ≥1 human owner (Barry #1286).
-	if memberType == "agent" {
-		removed, err := h.removeAgentChannelMemberAndRevokeTx(r.Context(), parseUUID(workspaceID), channelID, memberID)
-		if err != nil {
-			slog.Error("remove agent channel member failed", "error", err, "channel", uuidToString(channelID), "agent", uuidToString(memberID))
-			writeError(w, http.StatusInternalServerError, "failed to remove channel member")
-			return
-		}
-		h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
-		if removed {
-			h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberRemovedEvent, channelMemberActorUser, parseUUID(userID), memberType, memberID)
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return
-	}
-
-	// Ordinary groups must keep ≥1 human owner (Barry #1286). Refuse removing
-	// the sole owner (self-leave or kick) so zero-owner groups cannot form.
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	var kind string
-	var systemKey pgtype.Text
-	if err := tx.QueryRow(r.Context(), `
-		SELECT kind, system_key FROM channel WHERE id = $1 AND workspace_id = $2`,
-		channelID, parseUUID(workspaceID)).Scan(&kind, &systemKey); err != nil {
-		writeError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	ordinaryGroup := kind == "group" && !systemKey.Valid
-	if ordinaryGroup && memberType == "user" {
-		var role string
-		err := tx.QueryRow(r.Context(), `
-			SELECT role FROM channel_member
-			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
-			channelID, parseUUID(workspaceID), memberID).Scan(&role)
-		if err == nil && role == "owner" {
-			var otherOwners int
-			_ = tx.QueryRow(r.Context(), `
-				SELECT count(*) FROM channel_member
-				WHERE channel_id = $1 AND workspace_id = $2
-				  AND role = 'owner' AND member_type = 'user' AND member_id <> $3`,
-				channelID, parseUUID(workspaceID), memberID).Scan(&otherOwners)
-			if otherOwners == 0 {
-				writeError(w, http.StatusConflict, "transfer channel ownership before removing the only owner")
-				return
-			}
-		}
-	}
-
-	tag, err := tx.Exec(r.Context(), `
-		DELETE FROM channel_member
-		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
-		channelID, parseUUID(workspaceID), memberType, memberID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to remove channel member")
-		return
-	}
-	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
-	if tag.RowsAffected() > 0 {
-		event := channelMemberRemovedEvent
-		if memberType == "user" && uuidToString(memberID) == userID {
-			event = channelMemberLeftEvent
-		}
-		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, event, channelMemberActorUser, parseUUID(userID), memberType, memberID)
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	h.removeChannelMemberAdapter(w, r, humanMemberManagementActor(workspaceID, userID))
 }
 
 const channelOwnerChangedCode = "owner_changed"
@@ -7535,24 +7371,6 @@ func (h *Handler) requireChannelAgentMember(w http.ResponseWriter, ctx context.C
 	}
 	if !h.channelHasAgentMember(ctx, parseUUID(workspaceID), channelID, agentID) {
 		writeError(w, http.StatusForbidden, "not a channel member")
-		return false
-	}
-	return true
-}
-
-// requireChannelAgentCallerMember prevents an agent process from borrowing its
-// credential owner's channel membership after the agent itself was removed.
-// Machine credentials are server-stamped with the bound X-Agent-ID, so this
-// check cannot be bypassed by omitting or forging the agent identity. Human
-// requests keep their existing authorization path.
-func (h *Handler) requireChannelAgentCallerMember(w http.ResponseWriter, r *http.Request, workspaceID string, channelID pgtype.UUID, userID string) bool {
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if actorType != "agent" {
-		return true
-	}
-	agentID, err := util.ParseUUID(actorID)
-	if err != nil || !h.channelHasAgentMember(r.Context(), parseUUID(workspaceID), channelID, agentID) {
-		writeError(w, http.StatusForbidden, "agent caller is not a channel member")
 		return false
 	}
 	return true

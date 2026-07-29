@@ -119,6 +119,9 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 		if !validMemberManagementTarget(req.Target) || sameMemberManagementIdentity(req.Principal, *req.Target) {
 			return denyMemberManagement(MemberManagementCodeForbidden)
 		}
+		if req.Target.Role == ChannelRoleManager && isHumanChannelOwner(req.Principal) {
+			return allowMemberManagement()
+		}
 		if req.Target.Role != ChannelRoleMember {
 			return denyMemberManagement(MemberManagementCodeTargetNotOrdinary)
 		}

@@ -268,7 +268,13 @@ func TestChannelOnboardingBatchAgentAddUsesCanonicalGeneration(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		rec := httptest.NewRecorder()
 		testHandler.AddChannelMembers(rec, request())
-		if rec.Code != http.StatusCreated {
+		wantStatus := http.StatusCreated
+		if attempt > 0 {
+			// Re-adding the same member is an authorized idempotent no-op:
+			// the first request creates the membership, later requests do not.
+			wantStatus = http.StatusOK
+		}
+		if rec.Code != wantStatus {
 			t.Fatalf("batch add agent attempt %d: status=%d body=%s", attempt+1, rec.Code, rec.Body.String())
 		}
 	}

@@ -22,6 +22,10 @@ func channelMemberUserActor(id pgtype.UUID) channelMemberActor {
 	return channelMemberActor{Type: channelMemberActorUser, ID: id}
 }
 
+func channelMemberAgentActor(id pgtype.UUID) channelMemberActor {
+	return channelMemberActor{Type: channelMemberActorAgent, ID: id}
+}
+
 func channelMemberSystemActor() channelMemberActor {
 	return channelMemberActor{Type: channelMemberActorSystem}
 }

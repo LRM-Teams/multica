@@ -85,6 +85,9 @@ var AgentHumanRouteKnownSites = []string{
 	"RejectAgentOnHumanAPI",
 	"ListChannels",
 	"ListChannelMembers",
+	"AddChannelMember",
+	"AddChannelMembers",
+	"RemoveChannelMember",
 	"loadAttachmentForRequest",
 	"loadAttachmentForDownload",
 	"loadIssueForUser",
@@ -98,7 +101,7 @@ var AgentHumanRouteKnownSites = []string{
 // Do NOT use process-global one-shot registration (Barry #1297): that left
 // later app registries missing the series entirely.
 var (
-	agentHumanRouteMu   sync.Mutex
+	agentHumanRouteMu    sync.Mutex
 	agentHumanRouteByReg = map[prometheus.Registerer]*prometheus.CounterVec{}
 	agentHumanRouteVecs  []*prometheus.CounterVec
 )

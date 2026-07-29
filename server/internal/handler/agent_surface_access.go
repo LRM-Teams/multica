@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -28,10 +27,6 @@ func rejectAgentOnHumanRoute(w http.ResponseWriter, r *http.Request, site string
 	writeError(w, http.StatusForbidden, "agent must use dedicated /api/agent/* route")
 	return true
 }
-
-// errAgentChannelTxUnavailable is returned when remove/revoke needs a transaction
-// starter that is not configured on the handler.
-var errAgentChannelTxUnavailable = errors.New("transaction starter unavailable")
 
 // agentHasSurfaceAccess is the unified hard gate for agent data-plane access
 // to a channel. ONLY current direct channel_member(agent) membership.
@@ -203,56 +198,6 @@ func (h *Handler) agentAttachmentVisible(ctx context.Context, workspaceID, agent
 			  )
 		)`, workspaceID, agentID, attachmentID).Scan(&ok)
 	return err == nil && ok
-}
-
-// removeAgentChannelMemberAndRevokeTx deletes agent membership and terminalizes
-// pending/in-flight inbox work for (channel, agent) in one transaction.
-// Lock order: advisory(channel×agent) → DELETE membership → deliveries → events → executions.
-// Any error rolls back the whole unit — callers must not return 200 on failure.
-func (h *Handler) removeAgentChannelMemberAndRevokeTx(ctx context.Context, workspaceID, channelID, agentID pgtype.UUID) (removed bool, err error) {
-	if h.TxStarter == nil {
-		return false, errAgentChannelTxUnavailable
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `
-		SELECT pg_advisory_xact_lock(
-			hashtext('agent_channel_membership_revoke'),
-			hashtext($1 || ':' || $2)
-		)`, uuidToString(channelID), uuidToString(agentID)); err != nil {
-		return false, err
-	}
-
-	var deletedID pgtype.UUID
-	err = tx.QueryRow(ctx, `
-		DELETE FROM channel_member
-		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'agent' AND member_id = $3
-		RETURNING member_id`, channelID, workspaceID, agentID).Scan(&deletedID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			// No row: still revoke orphans under same lock, then commit.
-			if err := revokeAgentChannelAccessTx(ctx, tx, workspaceID, channelID, agentID); err != nil {
-				return false, err
-			}
-			if err := tx.Commit(ctx); err != nil {
-				return false, err
-			}
-			return false, nil
-		}
-		return false, err
-	}
-
-	if err := revokeAgentChannelAccessTx(ctx, tx, workspaceID, channelID, agentID); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func revokeAgentChannelAccessTx(ctx context.Context, tx pgx.Tx, workspaceID, channelID, agentID pgtype.UUID) error {

@@ -1506,6 +1506,8 @@ type ResearchMessage struct {
 	SenderID      pgtype.UUID        `json:"sender_id"`
 	TargetAgentID pgtype.UUID        `json:"target_agent_id"`
 	Body          string             `json:"body"`
+	CardKind      string             `json:"card_kind"`
+	Meta          []byte             `json:"meta"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 

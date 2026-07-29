@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -98,13 +97,15 @@ type ResearchStageEvalResp struct {
 }
 
 type ResearchMessageResp struct {
-	ID            string  `json:"id"`
-	SessionID     string  `json:"session_id"`
-	SenderType    string  `json:"sender_type"`
-	SenderID      *string `json:"sender_id"`
-	TargetAgentID *string `json:"target_agent_id"`
-	Body          string  `json:"body"`
-	CreatedAt     string  `json:"created_at"`
+	ID            string          `json:"id"`
+	SessionID     string          `json:"session_id"`
+	SenderType    string          `json:"sender_type"`
+	SenderID      *string         `json:"sender_id"`
+	TargetAgentID *string         `json:"target_agent_id"`
+	Body          string          `json:"body"`
+	CardKind      string          `json:"card_kind"`
+	Meta          json.RawMessage `json:"meta"`
+	CreatedAt     string          `json:"created_at"`
 }
 
 func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
@@ -193,33 +194,22 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to create research session")
 		return
 	}
-	leadID := fleet.LeadAgentID
-	_, _ = h.Queries.CreateResearchGraphNode(r.Context(), db.CreateResearchGraphNodeParams{
-		WorkspaceID:  wsUUID,
-		SessionID:    session.ID,
-		NodeType:     "goal",
-		Title:        title,
-		Summary:      req.Goal,
-		Status:       "active",
-		ActorAgentID: leadID,
-		Payload:      []byte(`{}`),
-	})
 	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
 		"session": researchSessionToResponse(session),
 	})
-	// Kick off 罗纳尔多 with the session goal so the exploration graph starts moving.
-	if leadID.Valid {
-		kickoff := "New research session created. Begin S1 planning for the goal. Coordinate the fleet; talk to the user as 罗纳尔多."
-		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, leadID, parseUUID(userID), kickoff, "user"); wakeErr != nil {
-			slog.Warn("research session kickoff wake failed",
-				"session_id", uuidToString(session.ID),
-				"error", wakeErr,
-			)
-		}
-	}
+	// Fan-out goal + subquestions + per-member activity, process cards, and wakes.
+	h.seedResearchSessionKickoff(r.Context(), workspaceID, wsUUID, session, fleet, members, userID)
+
+	// Return a fresh snapshot so the client can paint the kickoff graph without waiting on WS.
+	nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: session.ID, WorkspaceID: wsUUID})
+	edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: session.ID, WorkspaceID: wsUUID})
+	messages, _ := h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: session.ID, WorkspaceID: wsUUID})
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"session": researchSessionToResponse(session),
-		"fleet":   h.researchFleetToResponse(r.Context(), fleet, members),
+		"session":  researchSessionToResponse(session),
+		"fleet":    h.researchFleetToResponse(r.Context(), fleet, members),
+		"nodes":    mapNodes(nodes),
+		"edges":    mapEdges(edges),
+		"messages": mapMessages(messages),
 	})
 }
 
@@ -370,6 +360,14 @@ func mapEvals(rows []db.ResearchStageEval) []ResearchStageEvalResp {
 func mapMessages(rows []db.ResearchMessage) []ResearchMessageResp {
 	out := make([]ResearchMessageResp, 0, len(rows))
 	for _, m := range rows {
+		cardKind := m.CardKind
+		if cardKind == "" {
+			cardKind = "chat"
+		}
+		meta := json.RawMessage(m.Meta)
+		if len(meta) == 0 {
+			meta = json.RawMessage(`{}`)
+		}
 		out = append(out, ResearchMessageResp{
 			ID:            uuidToString(m.ID),
 			SessionID:     uuidToString(m.SessionID),
@@ -377,6 +375,8 @@ func mapMessages(rows []db.ResearchMessage) []ResearchMessageResp {
 			SenderID:      uuidToPtr(m.SenderID),
 			TargetAgentID: uuidToPtr(m.TargetAgentID),
 			Body:          m.Body,
+			CardKind:      cardKind,
+			Meta:          meta,
 			CreatedAt:     timestampToString(m.CreatedAt),
 		})
 	}

@@ -8,6 +8,7 @@ allowed-tools: Bash(multica *)
 # Multica Research Fleet
 
 Sealed research squad led by **罗纳尔多**. Users talk to 罗纳尔多 by default.
+The session UI is **canvas-first** (exploration graph is the truth surface); fleet chat is an optional hideable card feed. Tool ops should keep the canvas dense via `graph-append` / `source-upsert` / `presence` — the server also emits process cards for ops.
 Fleet members write graph/sources/report through server tools; lead owns roster and stage eval.
 
 ## Commands

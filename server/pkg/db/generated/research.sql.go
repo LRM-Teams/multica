@@ -230,9 +230,9 @@ func (q *Queries) CreateResearchGraphNode(ctx context.Context, arg CreateResearc
 
 const createResearchMessage = `-- name: CreateResearchMessage :one
 INSERT INTO research_message (
-  workspace_id, session_id, sender_type, sender_id, target_agent_id, body
-) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at
+  workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta, created_at
 `
 
 type CreateResearchMessageParams struct {
@@ -242,6 +242,8 @@ type CreateResearchMessageParams struct {
 	SenderID      pgtype.UUID `json:"sender_id"`
 	TargetAgentID pgtype.UUID `json:"target_agent_id"`
 	Body          string      `json:"body"`
+	CardKind      string      `json:"card_kind"`
+	Meta          []byte      `json:"meta"`
 }
 
 func (q *Queries) CreateResearchMessage(ctx context.Context, arg CreateResearchMessageParams) (ResearchMessage, error) {
@@ -252,6 +254,8 @@ func (q *Queries) CreateResearchMessage(ctx context.Context, arg CreateResearchM
 		arg.SenderID,
 		arg.TargetAgentID,
 		arg.Body,
+		arg.CardKind,
+		arg.Meta,
 	)
 	var i ResearchMessage
 	err := row.Scan(
@@ -262,6 +266,8 @@ func (q *Queries) CreateResearchMessage(ctx context.Context, arg CreateResearchM
 		&i.SenderID,
 		&i.TargetAgentID,
 		&i.Body,
+		&i.CardKind,
+		&i.Meta,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -718,7 +724,7 @@ func (q *Queries) ListResearchGraphNodes(ctx context.Context, arg ListResearchGr
 }
 
 const listResearchMessages = `-- name: ListResearchMessages :many
-SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at FROM research_message
+SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta, created_at FROM research_message
 WHERE session_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -745,6 +751,8 @@ func (q *Queries) ListResearchMessages(ctx context.Context, arg ListResearchMess
 			&i.SenderID,
 			&i.TargetAgentID,
 			&i.Body,
+			&i.CardKind,
+			&i.Meta,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

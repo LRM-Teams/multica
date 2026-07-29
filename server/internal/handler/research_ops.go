@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -93,6 +94,17 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 		"session_id": uuidToString(sessionID),
 		"node":       nodeResp,
 		"edge":       edge,
+	})
+	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), researchProcessEvent{
+		Op:      "graph_append",
+		Title:   node.Title,
+		Body:    fmt.Sprintf("图更新 · %s：%s", node.NodeType, node.Title),
+		ActorID: member.AgentID,
+		Meta: map[string]any{
+			"node_id":   uuidToString(node.ID),
+			"node_type": node.NodeType,
+			"status":    node.Status,
+		},
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{"node": nodeResp, "edge": edge})
 }
@@ -188,6 +200,42 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 		"session_id": uuidToString(sessionID),
 		"source":     resp,
 	})
+	// Project high-signal sources onto the exploration canvas as finding nodes.
+	if weight >= 0.7 {
+		title := source.Title
+		if title == "" {
+			title = source.Url
+		}
+		if title == "" {
+			title = source.SourceClass
+		}
+		_, _, _ = h.createResearchGraphNodePublished(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), db.CreateResearchGraphNodeParams{
+			WorkspaceID:  wsUUID,
+			SessionID:    sessionID,
+			NodeType:     "finding",
+			Title:        title,
+			Summary:      source.Summary,
+			Status:       "active",
+			ActorAgentID: member.AgentID,
+			Payload: marshalJSONRaw(map[string]any{
+				"source_id":           uuidToString(source.ID),
+				"source_class":        source.SourceClass,
+				"credibility_weight":  source.CredibilityWeight,
+				"url":                 source.Url,
+			}),
+		}, pgtype.UUID{}, "supports")
+	}
+	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), researchProcessEvent{
+		Op:      "source_upsert",
+		Title:   source.Title,
+		Body:    fmt.Sprintf("来源入库 · %s（权重 %.2f）", firstNonEmpty(source.Title, source.Url, source.SourceClass, "—"), weight),
+		ActorID: member.AgentID,
+		Meta: map[string]any{
+			"source_id":           uuidToString(source.ID),
+			"credibility_weight":  weight,
+			"source_class":        source.SourceClass,
+		},
+	})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -246,6 +294,23 @@ func (h *Handler) PatchResearchReport(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventResearchSessionReportUpdated, workspaceID, "agent", uuidToString(member.AgentID), map[string]any{
 		"session_id": uuidToString(sessionID),
 		"report":     resp,
+	})
+	_, _, _ = h.createResearchGraphNodePublished(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), db.CreateResearchGraphNodeParams{
+		WorkspaceID:  wsUUID,
+		SessionID:    sessionID,
+		NodeType:     "finding",
+		Title:        fmt.Sprintf("报告修订 r%d", revision),
+		Summary:      truncateRunes(req.ContentMD, 160),
+		Status:       "done",
+		ActorAgentID: member.AgentID,
+		Payload:      marshalJSONRaw(map[string]any{"report_revision": revision, "kind": "report_revision"}),
+	}, pgtype.UUID{}, "supports")
+	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), researchProcessEvent{
+		Op:      "report_patch",
+		Title:   fmt.Sprintf("报告 r%d", revision),
+		Body:    fmt.Sprintf("报告已更新 · 修订 r%d", revision),
+		ActorID: member.AgentID,
+		Meta:    map[string]any{"revision": revision},
 	})
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -313,6 +378,8 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		SenderID:      senderID,
 		TargetAgentID: target,
 		Body:          strings.TrimSpace(req.Body),
+		CardKind:      "chat",
+		Meta:          []byte(`{}`),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to post message")
@@ -369,11 +436,43 @@ func (h *Handler) PostResearchPresence(w http.ResponseWriter, r *http.Request) {
 	}
 	var req presenceRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	activity := strings.TrimSpace(req.Activity)
 	h.publish(protocol.EventResearchSessionPresence, workspaceID, "agent", uuidToString(member.AgentID), map[string]any{
 		"session_id": uuidToString(sessionID),
 		"agent_id":   uuidToString(member.AgentID),
-		"activity":   req.Activity,
+		"activity":   activity,
 	})
+	// Presence drives canvas pulse/captions via WS; do not spam chat cards.
+	// Only project a new activity chip when the caption actually changes.
+	if activity != "" {
+		existing, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{
+			SessionID:   sessionID,
+			WorkspaceID: wsUUID,
+		})
+		skip := false
+		for i := len(existing) - 1; i >= 0; i-- {
+			n := existing[i]
+			if n.NodeType != "agent_activity" || n.ActorAgentID != member.AgentID {
+				continue
+			}
+			if n.Title == activity {
+				skip = true
+			}
+			break
+		}
+		if !skip {
+			_, _, _ = h.createResearchGraphNodePublished(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), db.CreateResearchGraphNodeParams{
+				WorkspaceID:  wsUUID,
+				SessionID:    sessionID,
+				NodeType:     "agent_activity",
+				Title:        activity,
+				Summary:      activity,
+				Status:       "active",
+				ActorAgentID: member.AgentID,
+				Payload:      marshalJSONRaw(map[string]any{"phase": "presence"}),
+			}, pgtype.UUID{}, "leads_to")
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -422,7 +521,7 @@ func (h *Handler) RequestResearchStageEval(w http.ResponseWriter, r *http.Reques
 			"session": researchSessionToResponse(updated),
 		})
 	}
-	_, _ = h.Queries.CreateResearchGraphNode(r.Context(), db.CreateResearchGraphNodeParams{
+	gate, _, _ := h.createResearchGraphNodePublished(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), db.CreateResearchGraphNodeParams{
 		WorkspaceID:  wsUUID,
 		SessionID:    sessionID,
 		NodeType:     "stage_gate",
@@ -431,6 +530,18 @@ func (h *Handler) RequestResearchStageEval(w http.ResponseWriter, r *http.Reques
 		Status:       ternary(eval.Passed, "done", "active"),
 		ActorAgentID: member.AgentID,
 		Payload:      marshalJSONRaw(map[string]any{"passed": eval.Passed, "score": eval.Score}),
+	}, pgtype.UUID{}, "leads_to")
+	_ = gate
+	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, "agent", uuidToString(member.AgentID), researchProcessEvent{
+		Op:      "stage_eval",
+		Title:   session.CurrentStage,
+		Body:    eval.Remediation,
+		ActorID: member.AgentID,
+		Meta: map[string]any{
+			"stage":  session.CurrentStage,
+			"passed": eval.Passed,
+			"score":  eval.Score,
+		},
 	})
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -641,6 +752,40 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add fleet member")
 		return
+	}
+	// Project roster change onto every active session so canvases stay current.
+	sessions, _ := h.Queries.ListResearchSessions(r.Context(), wsUUID)
+	for _, s := range sessions {
+		if s.FleetID != lead.FleetID {
+			continue
+		}
+		if s.Status != "running" && s.Status != "awaiting_user_confirm" {
+			continue
+		}
+		_, _, _ = h.createResearchGraphNodePublished(r.Context(), workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), db.CreateResearchGraphNodeParams{
+			WorkspaceID:  wsUUID,
+			SessionID:    s.ID,
+			NodeType:     "roster_change",
+			Title:        fmt.Sprintf("新成员 · %s", agent.DisplayName),
+			Summary:      fmt.Sprintf("角色 %s 待提示词优化后激活", req.Role),
+			Status:       "active",
+			ActorAgentID: agent.ID,
+			Payload: marshalJSONRaw(map[string]any{
+				"member_id": uuidToString(member.ID),
+				"role":      req.Role,
+				"status":    member.Status,
+			}),
+		}, pgtype.UUID{}, "leads_to")
+		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), researchProcessEvent{
+			Op:      "roster_hire",
+			Title:   agent.DisplayName,
+			Body:    fmt.Sprintf("编制变更 · 雇佣 %s（%s），待提示词优化", firstNonEmpty(agent.DisplayName, agent.Name), req.Role),
+			ActorID: agent.ID,
+			Meta: map[string]any{
+				"member_id": uuidToString(member.ID),
+				"role":      req.Role,
+			},
+		})
 	}
 	writeJSON(w, http.StatusCreated, ResearchFleetMemberResp{
 		ID:      uuidToString(member.ID),

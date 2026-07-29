@@ -172,8 +172,8 @@ ORDER BY created_at ASC;
 
 -- name: CreateResearchMessage :one
 INSERT INTO research_message (
-  workspace_id, session_id, sender_type, sender_id, target_agent_id, body
-) VALUES ($1, $2, $3, $4, $5, $6)
+  workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: GetLatestResearchPlaybook :one

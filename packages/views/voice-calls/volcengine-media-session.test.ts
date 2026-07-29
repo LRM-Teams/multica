@@ -1,5 +1,5 @@
 import type { VoiceCallMedia } from "@multica/core/types";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   VolcengineVoiceMediaSession,
   VoiceCallMediaError,
@@ -64,6 +64,32 @@ function createHarness(overrides: Partial<VoiceCallRTCEngine> = {}) {
 }
 
 describe("VolcengineVoiceMediaSession", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects insecure origins before loading the RTC SDK", async () => {
+    vi.stubGlobal("isSecureContext", false);
+    const harness = createHarness();
+    const loadDriver = vi.fn(async () => harness.driver);
+    const onError = vi.fn();
+    const session = new VolcengineVoiceMediaSession(
+      { onError },
+      loadDriver,
+    );
+
+    await expect(session.connect(media)).rejects.toMatchObject({
+      code: "insecure_context",
+    });
+
+    expect(loadDriver).not.toHaveBeenCalled();
+    expect(harness.driver.createEngine).not.toHaveBeenCalled();
+    expect(harness.engine.startAudioCapture).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "insecure_context" }),
+    );
+  });
+
   it("joins, captures, and publishes audio in order", async () => {
     const harness = createHarness();
     const states: string[] = [];

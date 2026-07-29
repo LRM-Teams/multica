@@ -11,6 +11,7 @@ export type VoiceCallMediaState =
 
 export type VoiceCallMediaErrorCode =
   | "already_started"
+  | "insecure_context"
   | "unsupported"
   | "sdk_unavailable"
   | "cancelled"
@@ -212,6 +213,13 @@ export class VolcengineVoiceMediaSession {
     deviceId?: string,
   ): Promise<void> {
     try {
+      if (globalThis.isSecureContext === false) {
+        throw new VoiceCallMediaError(
+          "insecure_context",
+          "Voice calls require a secure HTTPS context",
+        );
+      }
+
       let driver: VoiceCallRTCDriver;
       try {
         driver = await this.loadDriver();

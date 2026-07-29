@@ -185,6 +185,13 @@ describe("ChatInput @ context wiring", () => {
   });
 });
 
+describe("ChatInput Enter-to-send", () => {
+  it("enables bare Enter submit for FAB / chat bubbles", () => {
+    renderInput();
+    expect(editorProps.last?.submitOnEnter).toBe(true);
+  });
+});
+
 describe("ChatInput attachment wiring", () => {
   it("routes dropped files through the editor's upload handler", async () => {
     const { onUploadFile } = renderInput();

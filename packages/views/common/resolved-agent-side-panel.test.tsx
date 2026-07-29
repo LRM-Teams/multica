@@ -126,7 +126,6 @@ function makeAgent(id = "agent-1"): Agent {
     updated_at: "2026-07-01T00:00:00Z",
     archived_at: null,
     archived_by: null,
-    managed_role: "group_manager",
   } as Agent;
 }
 

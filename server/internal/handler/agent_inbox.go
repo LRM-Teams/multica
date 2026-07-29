@@ -2434,7 +2434,11 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 		if channelID, err := util.ParseUUID(radar.ChannelID); err == nil {
 			if channel, found := h.getChannel(ctx, resp.WorkspaceID, channelID); found {
 				resp.ChannelID = channel.ID
-				loadProject(ambientChannelProjectID(channel))
+				if channel.ProjectID != nil {
+					if projectID, err := util.ParseUUID(*channel.ProjectID); err == nil {
+						loadProject(projectID)
+					}
+				}
 			}
 		}
 		if resp.ProjectID == "" {

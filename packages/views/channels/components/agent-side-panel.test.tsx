@@ -258,7 +258,6 @@ const members: MemberWithUser[] = [ownerMember];
 
 function makeAgent(
   ownerId = "user-owner",
-  managedRole?: "group_manager",
   visibility: Agent["visibility"] = "workspace",
 ): Agent {
   return {
@@ -278,7 +277,6 @@ function makeAgent(
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
-    managed_role: managedRole,
     owner_id: ownerId,
     skills: [],
     created_at: "2026-01-01T00:00:00Z",
@@ -290,12 +288,11 @@ function makeAgent(
 
 function renderPanel(
   currentUserId = "user-owner",
-  managedRole?: "group_manager",
   variant?: "page",
 ) {
   return render(
     <AgentSidePanel
-      agent={makeAgent("user-owner", managedRole)}
+      agent={makeAgent("user-owner")}
       currentUserId={currentUserId}
       members={members}
       onClose={() => {}}
@@ -436,7 +433,7 @@ describe("AgentSidePanel", () => {
 
     render(
       <AgentSidePanel
-        agent={makeAgent("user-owner", undefined, "private")}
+        agent={makeAgent("user-owner", "private")}
         currentUserId="user-other"
         members={[...members, workspaceMember]}
         onClose={() => {}}
@@ -486,7 +483,7 @@ describe("AgentSidePanel", () => {
 
     render(
       <AgentSidePanel
-        agent={makeAgent("user-owner", undefined, "private")}
+        agent={makeAgent("user-owner", "private")}
         currentUserId="user-other"
         members={[...members, workspaceMember]}
         onClose={() => {}}
@@ -650,7 +647,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("renders exactly the 4 runtime pickers, no Concurrency (#565 fix-forward)", () => {
-    renderPanel("user-owner", "group_manager");
+    renderPanel("user-owner");
     for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
       expect(screen.getByTestId(id)).toBeInTheDocument();
     }

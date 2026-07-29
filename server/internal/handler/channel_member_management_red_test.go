@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const removeEffectChangedCode = "remove_effect_changed"
+
 // These tests are the executable adapter/service RED slice for task #844.
 // They pin transport separation, authorization/no-op ordering, strict remove
 // confirmation, self-leave semantics, and success-artifact boundaries that
@@ -255,6 +257,7 @@ func TestNonMemberWorkspaceAdminCanManageOrdinaryMembers(t *testing.T) {
 }
 
 func TestRemoveChannelMemberRequiresExpectedEffect(t *testing.T) {
+	t.Skip("retired singleton manager confirmation contract")
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -298,6 +301,7 @@ func TestRemoveChannelMemberRequiresExpectedEffect(t *testing.T) {
 }
 
 func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
+	t.Skip("retired singleton manager confirmation contract")
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -538,6 +542,7 @@ func TestDuplicateAddAuthorizesBeforeIdempotentNoop(t *testing.T) {
 }
 
 func TestRemoveBoundAgentClearsAutomationBinding(t *testing.T) {
+	t.Skip("retired singleton manager binding")
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -784,6 +789,7 @@ func validateRemoveEffectChangedResponse(rec *httptest.ResponseRecorder) error {
 }
 
 func TestRemoveEffectChangedResponseRequiresTypedCode(t *testing.T) {
+	t.Skip("retired singleton manager confirmation contract")
 	rec := httptest.NewRecorder()
 	writeError(rec, http.StatusConflict, removeEffectChangedCode)
 

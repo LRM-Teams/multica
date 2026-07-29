@@ -96,21 +96,12 @@ beforeEach(() => {
 describe("RemindersTab", () => {
   it("renders one flat active-reminder list without Upcoming or History sections", async () => {
     mockGetAgentReminders.mockResolvedValue(
-      page([
-        definition({ id: "manual", title: "Manual reminder" }),
-        definition({
-          id: "patrol",
-          title: "群巡检",
-          origin_kind: "group_manager_auto",
-          managed_kind: "patrol",
-        }),
-      ]),
+      page([definition({ id: "manual", title: "Manual reminder" })]),
     );
 
     renderTab();
 
     expect(await screen.findByText("Manual reminder")).toBeInTheDocument();
-    expect(screen.getByText("群巡检")).toBeInTheDocument();
     expect(screen.queryByText("Upcoming")).toBeNull();
     expect(screen.queryByText("History")).toBeNull();
     expect(mockGetAgentReminders).toHaveBeenCalledWith(
@@ -118,84 +109,6 @@ describe("RemindersTab", () => {
       expect.objectContaining({ status: "scheduled" }),
     );
     expect(mockGetAgentReminders).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks managed rows without creating a separate section", async () => {
-    mockGetAgentReminders.mockResolvedValue(
-      page([
-        definition({
-          title: "群巡检",
-          origin_kind: "group_manager_auto",
-          managed_kind: "patrol",
-        }),
-      ]),
-    );
-
-    renderTab();
-
-    expect(await screen.findByText("Automatic · Group management")).toBeInTheDocument();
-    expect(screen.queryByText("Manual")).toBeNull();
-  });
-
-  it("shows adaptive patrol next and last fire on the same row", async () => {
-    mockGetAgentReminders.mockResolvedValue(
-      page([
-        definition({
-          id: "patrol",
-          title: "群巡检",
-          origin_kind: "group_manager_auto",
-          managed_kind: "patrol",
-          last_fire_at: "2026-07-23T08:00:00Z",
-        }),
-      ]),
-    );
-
-    renderTab();
-
-    expect(await screen.findByText("群巡检")).toBeInTheDocument();
-    expect(screen.getByText(/Group manager on duty · Next check around/)).toBeInTheDocument();
-    expect(screen.getByText(/Last checked/)).toBeInTheDocument();
-  });
-
-  it("shows an honest first-run patrol state when no fire has happened yet", async () => {
-    mockGetAgentReminders.mockResolvedValue(
-      page([
-        definition({
-          title: "群巡检",
-          origin_kind: "group_manager_auto",
-          managed_kind: "patrol",
-        }),
-      ]),
-    );
-
-    renderTab();
-
-    expect(await screen.findByText("Not patrolled yet")).toBeInTheDocument();
-  });
-
-  it("keeps a dormant patrol visible without a false next-fire countdown", async () => {
-    mockGetAgentReminders.mockResolvedValue(
-      page([
-        definition({
-          title: "群巡检",
-          status: "fired",
-          next_fire_at: undefined,
-          origin_kind: "group_manager_auto",
-          managed_kind: "patrol",
-          last_fire_at: "2026-07-23T08:00:00Z",
-        }),
-      ]),
-    );
-
-    renderTab();
-
-    expect(await screen.findByText("群巡检")).toBeInTheDocument();
-    expect(screen.getByText("Dormant")).toBeInTheDocument();
-    expect(
-      screen.getByText("Group manager on duty · Will remind when follow-up is needed"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Last checked/)).toBeInTheDocument();
-    expect(screen.queryByText(/Next check around/)).toBeNull();
   });
 
   it("shows one cadence and timezone chip for a recurring calendar reminder", async () => {
@@ -274,17 +187,11 @@ describe("RemindersTab", () => {
 
   it("exposes zero reminder mutation affordances", async () => {
     mockGetAgentReminders.mockResolvedValue(
-      page([
-        definition({
-          origin_kind: "group_manager_auto",
-          managed_kind: "patrol",
-          title: "群巡检",
-        }),
-      ]),
+      page([definition({ title: "Follow up" })]),
     );
 
     renderTab();
-    await screen.findByText("群巡检");
+    await screen.findByText("Follow up");
 
     for (const button of screen.queryAllByRole("button")) {
       expect(button.textContent).not.toMatch(/schedule|snooze|update|cancel|dismiss|enable/i);

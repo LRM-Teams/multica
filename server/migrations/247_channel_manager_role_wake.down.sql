@@ -2,6 +2,9 @@ BEGIN;
 
 -- This rollback restores schema acceptance only. It cannot reconstruct deleted
 -- server-owned patrol reminders or the retired per-channel Beckham bindings.
+ALTER TABLE channel ADD COLUMN group_manager_agent_id UUID;
+CREATE INDEX idx_channel_group_manager_agent ON channel (group_manager_agent_id);
+
 ALTER TABLE agent
   DROP CONSTRAINT IF EXISTS agent_managed_role_check;
 ALTER TABLE agent

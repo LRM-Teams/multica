@@ -18,12 +18,6 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const (
-	removeEffectNone                    = "none"
-	removeEffectClearsAutomationBinding = "clears_automation_binding"
-	removeEffectChangedCode             = "remove_effect_changed"
-)
-
 // Test-only observation point used to prove a member-management request has
 // entered the channel FOR UPDATE attempt while another transaction owns it.
 var testMemberManagementLockAttemptEntered int32
@@ -89,13 +83,11 @@ func (a memberManagementActor) activityType() string {
 }
 
 type lockedMemberManagementContext struct {
-	Principal           MemberManagementPrincipal
-	GroupManagerAgentID pgtype.UUID
+	Principal MemberManagementPrincipal
 }
 
 type memberManagementMutationResult struct {
 	Mutated              bool
-	RemoveEffect         string
 	SystemMessages       []ChannelMessageResponse
 	OnboardingGeneration []pgtype.UUID
 }
@@ -284,27 +276,18 @@ func (h *Handler) removeChannelMemberAdapter(
 		writeMemberManagementError(w, err, "failed to remove channel member")
 		return
 	}
-	expectedEffect := strings.TrimSpace(r.URL.Query().Get("expected_remove_effect"))
-	if expectedEffect != removeEffectNone && expectedEffect != removeEffectClearsAutomationBinding {
-		writeError(w, http.StatusBadRequest, "expected_remove_effect is required")
-		return
-	}
 	result, err := h.removeChannelMemberService(
 		r.Context(),
 		actor,
 		channelID,
 		target,
-		expectedEffect,
 	)
 	if err != nil {
 		writeMemberManagementError(w, err, "failed to remove channel member")
 		return
 	}
 	h.publishMemberManagementResult(r.Context(), actor, channelID, result)
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":        "ok",
-		"remove_effect": result.RemoveEffect,
-	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) addChannelMembersService(
@@ -387,9 +370,6 @@ func (h *Handler) addChannelMembersService(
 			target,
 			channelID,
 			"member_added",
-			removeEffectNone,
-			pgtype.UUID{},
-			false,
 			chimw.GetReqID(ctx),
 		); err != nil {
 			return memberManagementMutationResult{}, err
@@ -428,7 +408,6 @@ func (h *Handler) removeChannelMemberService(
 	actor memberManagementActor,
 	channelID pgtype.UUID,
 	target MemberManagementTarget,
-	expectedEffect string,
 ) (memberManagementMutationResult, error) {
 	if h.TxStarter == nil {
 		return memberManagementMutationResult{}, errors.New("transaction starter unavailable")
@@ -503,20 +482,6 @@ func (h *Handler) removeChannelMemberService(
 		return memberManagementMutationResult{}, err
 	}
 
-	actualEffect := removeEffectNone
-	if target.Kind == PrincipalKindAgent &&
-		locked.GroupManagerAgentID.Valid &&
-		locked.GroupManagerAgentID.Bytes == target.ID.Bytes {
-		actualEffect = removeEffectClearsAutomationBinding
-	}
-	if expectedEffect != actualEffect {
-		return memberManagementMutationResult{}, codedMemberManagementError(
-			http.StatusConflict,
-			removeEffectChangedCode,
-			"member removal effect changed; refresh and confirm again",
-		)
-	}
-
 	if target.Kind == PrincipalKindAgent {
 		if _, err := tx.Exec(ctx, `
 			SELECT pg_advisory_xact_lock(
@@ -527,31 +492,6 @@ func (h *Handler) removeChannelMemberService(
 			uuidToString(target.ID),
 		); err != nil {
 			return memberManagementMutationResult{}, err
-		}
-	}
-
-	bindingCleared := actualEffect == removeEffectClearsAutomationBinding
-	if bindingCleared {
-		tag, err := tx.Exec(ctx, `
-			UPDATE channel
-			SET group_manager_agent_id = NULL,
-			    updated_at = now()
-			WHERE id = $1
-			  AND workspace_id = $2
-			  AND group_manager_agent_id = $3`,
-			channelID,
-			actor.WorkspaceID,
-			target.ID,
-		)
-		if err != nil {
-			return memberManagementMutationResult{}, err
-		}
-		if tag.RowsAffected() != 1 {
-			return memberManagementMutationResult{}, codedMemberManagementError(
-				http.StatusConflict,
-				removeEffectChangedCode,
-				"member removal effect changed; refresh and confirm again",
-			)
 		}
 	}
 
@@ -588,10 +528,6 @@ func (h *Handler) removeChannelMemberService(
 		}
 	}
 
-	previousBoundAgentID := pgtype.UUID{}
-	if bindingCleared {
-		previousBoundAgentID = target.ID
-	}
 	if err := insertMemberManagementActivityTx(
 		ctx,
 		tx,
@@ -599,9 +535,6 @@ func (h *Handler) removeChannelMemberService(
 		target,
 		channelID,
 		auditAction,
-		actualEffect,
-		previousBoundAgentID,
-		bindingCleared,
 		chimw.GetReqID(ctx),
 	); err != nil {
 		return memberManagementMutationResult{}, err
@@ -628,7 +561,6 @@ func (h *Handler) removeChannelMemberService(
 	}
 	return memberManagementMutationResult{
 		Mutated:        true,
-		RemoveEffect:   actualEffect,
 		SystemMessages: []ChannelMessageResponse{systemMessage},
 	}, nil
 }
@@ -642,16 +574,15 @@ func (h *Handler) lockMemberManagementContext(
 	var kind string
 	var systemKey pgtype.Text
 	var archivedAt pgtype.Timestamptz
-	var groupManagerAgentID pgtype.UUID
 	noteMemberManagementLockAttempt()
 	err := tx.QueryRow(ctx, `
-		SELECT kind, system_key, archived_at, group_manager_agent_id
+		SELECT kind, system_key, archived_at
 		FROM channel
 		WHERE id = $1 AND workspace_id = $2
 		FOR UPDATE`,
 		channelID,
 		actor.WorkspaceID,
-	).Scan(&kind, &systemKey, &archivedAt, &groupManagerAgentID)
+	).Scan(&kind, &systemKey, &archivedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return lockedMemberManagementContext{}, memberManagementError(http.StatusNotFound, "channel not found")
@@ -728,10 +659,7 @@ func (h *Handler) lockMemberManagementContext(
 	if !validWorkspaceRole(principal.WorkspaceRole) || !validChannelRole(principal.ChannelRole) {
 		return lockedMemberManagementContext{}, memberManagementError(http.StatusForbidden, "access denied")
 	}
-	return lockedMemberManagementContext{
-		Principal:           principal,
-		GroupManagerAgentID: groupManagerAgentID,
-	}, nil
+	return lockedMemberManagementContext{Principal: principal}, nil
 }
 
 func (h *Handler) validateMemberManagementTargetTx(
@@ -839,9 +767,6 @@ func insertMemberManagementActivityTx(
 	target MemberManagementTarget,
 	channelID pgtype.UUID,
 	action string,
-	removeEffect string,
-	previousBoundAgentID pgtype.UUID,
-	bindingCleared bool,
 	requestID string,
 ) error {
 	authoritySource := "channel_membership"
@@ -857,12 +782,7 @@ func insertMemberManagementActivityTx(
 		"target_id":                     uuidToString(target.ID),
 		"target_role":                   string(target.Role),
 		"authority_source":              authoritySource,
-		"request_id":                    requestID,
-		"remove_effect":                 removeEffect,
-		"group_manager_binding_cleared": bindingCleared,
-	}
-	if previousBoundAgentID.Valid {
-		details["previous_group_manager_agent_id"] = uuidToString(previousBoundAgentID)
+		"request_id":           requestID,
 	}
 	encoded, err := json.Marshal(details)
 	if err != nil {

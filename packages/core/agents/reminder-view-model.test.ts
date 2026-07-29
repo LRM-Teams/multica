@@ -60,46 +60,6 @@ describe("adaptUpcomingRow", () => {
     });
   });
 
-  it("preserves managed origin and the adaptive patrol's last-fire state", () => {
-    const row = adaptUpcomingRow(
-      makeDefinition({
-        schedule_kind: "one_shot",
-        cadence: undefined,
-        schedule_timezone: undefined,
-        origin_kind: "group_manager_auto",
-        managed_kind: "patrol",
-        last_fire_at: "2026-07-24T08:00:00Z",
-      }),
-    );
-    expect(row?.origin).toEqual({ kind: "group_manager_auto", managedKind: "patrol" });
-    expect(row?.lastFireAt).toBe("2026-07-24T08:00:00Z");
-  });
-
-  it("keeps a dormant managed patrol visible without inventing a next fire", () => {
-    const row = adaptUpcomingRow(
-      makeDefinition({
-        status: "fired",
-        schedule_kind: "one_shot",
-        next_fire_at: undefined,
-        cadence: undefined,
-        schedule_timezone: undefined,
-        origin_kind: "group_manager_auto",
-        managed_kind: "patrol",
-        last_fire_at: "2026-07-24T08:00:00Z",
-      }),
-    );
-
-    expect(row).toEqual({
-      id: "r-1",
-      title: "Ping standup",
-      cadence: { kind: "one_shot" },
-      anchor: { available: false },
-      origin: { kind: "group_manager_auto", managedKind: "patrol" },
-      lastFireAt: "2026-07-24T08:00:00Z",
-      status: "fired",
-    });
-  });
-
   it("does not admit an ordinary fired definition into the visible definition list", () => {
     expect(
       adaptUpcomingRow(
@@ -114,11 +74,7 @@ describe("adaptUpcomingRow", () => {
 
   it("drops an unknown or malformed origin rather than hiding its source", () => {
     expect(adaptUpcomingRow(makeDefinition({ origin_kind: "future_origin" }))).toBeNull();
-    expect(
-      adaptUpcomingRow(
-        makeDefinition({ origin_kind: "group_manager_auto", managed_kind: undefined }),
-      ),
-    ).toBeNull();
+    expect(adaptUpcomingRow(makeDefinition({ origin_kind: "group_manager_auto" }))).toBeNull();
   });
 
   it("degrades bare #workspace:shortId anchor labels to unavailable", () => {

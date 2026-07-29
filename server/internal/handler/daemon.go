@@ -1630,13 +1630,6 @@ func (h *Handler) failPersistedAgentRadarRun(ctx context.Context, run db.AgentRa
 	}); updateErr == nil {
 		_, _ = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, run.ID)
 	}
-	// Parse/result failures never reach ExecuteAgentRadarPlan, so settle ambient
-	// here; otherwise the watch stays running until stale reclaim (~15m).
-	if h.WorkGraph != nil && strings.HasPrefix(run.CooldownKey, "wendy_ambient:") {
-		if rerr := h.WorkGraph.ReconcileChannelAmbientRun(ctx, run.ID, false); rerr != nil {
-			slog.Warn("reconcile wendy ambient run after radar parse failure", "run_id", uuidToString(run.ID), "error", rerr)
-		}
-	}
 }
 
 func parseUUIDMaybe(raw string) (pgtype.UUID, bool) {

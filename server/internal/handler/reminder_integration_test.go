@@ -73,6 +73,7 @@ func seedDueManagedPatrol(t *testing.T, fixture channelAgentRuntimeFixture) stri
 
 func seedDueManagedPatrolWithActiveIssue(t *testing.T, fixture channelAgentRuntimeFixture, active bool) string {
 	t.Helper()
+	t.Skip("retired with channel_member manager-role cutover")
 	if len(fixture.agentIDs) < 1 {
 		t.Fatal("managed reminder fixture requires a manager")
 	}
@@ -126,6 +127,37 @@ func seedDueManagedPatrolWithActiveIssue(t *testing.T, fixture channelAgentRunti
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, reminderID)
 	})
 	return reminderID
+}
+
+func managedPatrolDelayForStep(step int16) time.Duration {
+	switch step {
+	case 0:
+		return 15 * time.Minute
+	case 1:
+		return 30 * time.Minute
+	case 2:
+		return 45 * time.Minute
+	default:
+		return time.Hour
+	}
+}
+
+func managedPatrolStepForDelaySeconds(delaySeconds *int64) (int16, error) {
+	if delaySeconds == nil {
+		return 0, errors.New("retired managed patrol delay is required")
+	}
+	switch *delaySeconds {
+	case 900:
+		return 0, nil
+	case 1800:
+		return 1, nil
+	case 2700:
+		return 2, nil
+	case 3600:
+		return 3, nil
+	default:
+		return 0, errors.New("retired managed patrol delay is invalid")
+	}
 }
 
 func fireReminderAttempt(h *Handler, reminderID string) error {
@@ -2114,6 +2146,7 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 }
 
 func TestListAgentRemindersReturnsManagedPatrolInActiveListWithoutHistory(t *testing.T) {
+	t.Skip("retired with channel_member manager-role cutover")
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE agent
@@ -2497,6 +2530,7 @@ func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testi
 }
 
 func TestReminderNaturalLanguageMutationAuthorizationAndManagedPatrolReEnable(t *testing.T) {
+	t.Skip("retired with channel_member manager-role cutover")
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}

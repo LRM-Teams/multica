@@ -19,11 +19,9 @@ import (
 )
 
 const (
-	reminderMinDelay      = time.Minute
-	reminderMaxDelay      = 90 * 24 * time.Hour
-	reminderActiveCap     = 25
-	managedPatrolMinDelay = 15 * time.Minute
-	managedPatrolMaxDelay = time.Hour
+	reminderMinDelay  = time.Minute
+	reminderMaxDelay  = 90 * 24 * time.Hour
+	reminderActiveCap = 25
 )
 
 var errReminderDaemonOutdated = fmt.Errorf("daemon_outdated")
@@ -87,24 +85,6 @@ func (h *Handler) authorizeNaturalLanguageReminderMutation(
 	}
 	writeError(w, http.StatusForbidden, "only the reminder initiator may manage this reminder")
 	return false
-}
-
-func managedPatrolStepForDelaySeconds(delaySeconds *int64) (int16, error) {
-	if delaySeconds == nil {
-		return 0, fmt.Errorf("managed group patrol must use delay_seconds 900, 1800, 2700, or 3600")
-	}
-	switch *delaySeconds {
-	case 900:
-		return 0, nil
-	case 1800:
-		return 1, nil
-	case 2700:
-		return 2, nil
-	case 3600:
-		return 3, nil
-	default:
-		return 0, fmt.Errorf("managed group patrol must use delay_seconds 900, 1800, 2700, or 3600")
-	}
 }
 
 type agentReminder struct {
@@ -1882,19 +1862,6 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		map[string]any{"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID)},
 	)
 	return nil
-}
-
-func managedPatrolDelayForStep(step int16) time.Duration {
-	switch step {
-	case 0:
-		return managedPatrolMinDelay
-	case 1:
-		return 30 * time.Minute
-	case 2:
-		return 45 * time.Minute
-	default:
-		return managedPatrolMaxDelay
-	}
 }
 
 func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, reminder agentReminder) (reminderAnchorSnapshot, error) {

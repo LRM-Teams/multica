@@ -755,3 +755,55 @@ type AgentMemoryUpdatedPayload struct {
 	FileKey   string `json:"file_key"`
 	Count     int    `json:"count"`
 }
+
+// AgentMemoryCenterSyncReport uploads durable local memory atoms to the center store.
+type AgentMemoryCenterSyncReport struct {
+	AgentID   string                     `json:"agent_id"`
+	RuntimeID string                     `json:"runtime_id,omitempty"`
+	TaskID    string                     `json:"task_id,omitempty"`
+	Entries   []AgentMemoryCenterSyncAtom `json:"entries"`
+}
+
+// AgentMemoryCenterSyncAtom is one durable bullet/fact from a local memory file.
+type AgentMemoryCenterSyncAtom struct {
+	RelPath   string `json:"rel_path"`
+	Scope     string `json:"scope,omitempty"`
+	SubjectID string `json:"subject_id,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Topic     string `json:"topic,omitempty"`
+	Content   string `json:"content"`
+}
+
+// AgentMemoryCenterSyncResponse summarizes upsert decisions.
+type AgentMemoryCenterSyncResponse struct {
+	Accepted  int `json:"accepted"`
+	Updated   int `json:"updated"`
+	Conflicts int `json:"conflicts"`
+	Skipped   int `json:"skipped"`
+}
+
+// AgentMemoryHydrateRequest asks the center for durable memory to materialize locally.
+type AgentMemoryHydrateRequest struct {
+	AgentID   string `json:"agent_id"`
+	RuntimeID string `json:"runtime_id,omitempty"`
+}
+
+// AgentMemoryHydrateResponse carries active entries (for files) and conflicts (for REVIEW).
+type AgentMemoryHydrateResponse struct {
+	Active    []AgentMemoryHydrateEntry `json:"active"`
+	Conflicts []AgentMemoryHydrateEntry `json:"conflicts"`
+}
+
+// AgentMemoryHydrateEntry is one center memory row for local materialization.
+type AgentMemoryHydrateEntry struct {
+	ID          string `json:"id"`
+	IdentityKey string `json:"identity_key"`
+	Scope       string `json:"scope"`
+	SubjectID   string `json:"subject_id,omitempty"`
+	Kind        string `json:"kind"`
+	Topic       string `json:"topic,omitempty"`
+	RelPath     string `json:"rel_path"`
+	Content     string `json:"content"`
+	Status      string `json:"status"`
+	ConflictOf  string `json:"conflict_of,omitempty"`
+}

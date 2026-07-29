@@ -3526,6 +3526,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentRoot := multicaAgentRoot(d.cfg, task.WorkspaceID, agentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			taskLog.Warn("multica agent root creation failed", "error", err)
+		} else {
+			d.hydrateAgentMemoryCenter(ctx, task.WorkspaceID, agentID, task.RuntimeID, agentRoot)
 		}
 		agentRootPath = agentRoot
 		agentMemoryDir = filepath.Join(agentRootPath, "memory")

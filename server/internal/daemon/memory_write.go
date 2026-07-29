@@ -373,6 +373,7 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 		return
 	}
 	_ = saveMemoryWriteSnapshot(agentRoot, next)
+	d.syncAgentMemoryCenter(ctx, task, changes)
 }
 
 // AgentMemoryWriteEntry mirrors protocol.AgentMemoryWriteEntry for the client.

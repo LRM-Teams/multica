@@ -118,7 +118,7 @@
       "role_done_demote": "Demoted to member",
       "role_done_transfer": "Ownership transferred",
       "role_transfer_title": "Transfer ownership?",
-      "role_transfer_body": "After transferring ownership to {{name}}, you will no longer be the owner of this group. The new owner can continue to change member roles and group managers.",
+      "role_transfer_body": "After transferring ownership to {{name}}, you will no longer be the owner of this group. The new owner can continue to manage member roles and group managers.",
       "role_transfer_confirm": "Confirm transfer",
       "role_failed_owner_changed": "Ownership has changed; the member list has been refreshed.",
       "role_failed_generic": "Couldn't update the member's role. Refresh and try again.",

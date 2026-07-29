@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ComponentType, ReactNode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -24,19 +25,18 @@ vi.mock("@multica/core/api", () => ({
 
 // LRM-714: the panel is virtualized; jsdom has no layout, so render every
 // row through the same List/Item components the panel hands to Virtuoso.
-vi.mock("react-virtuoso", async () => {
-  const React = await import("react");
+vi.mock("react-virtuoso", () => {
   const MockVirtuoso = ({
     components = {},
     data = [],
     itemContent,
   }: {
     components?: {
-      List?: React.ComponentType<{ children?: React.ReactNode }>;
-      Item?: React.ComponentType<{ children?: React.ReactNode }>;
+      List?: ComponentType<{ children?: ReactNode }>;
+      Item?: ComponentType<{ children?: ReactNode }>;
     };
     data?: { id: string }[];
-    itemContent: (index: number, item: { id: string }) => React.ReactNode;
+    itemContent: (index: number, item: { id: string }) => ReactNode;
   }) => {
     const List = components.List ?? "div";
     const Item = components.Item ?? "div";

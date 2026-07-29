@@ -63,9 +63,53 @@ func TestRuntimeToolEventTrackerLifecycle(t *testing.T) {
 	if !ok || reason != "" || message.Type != MessageToolResult || message.Tool != "bash" || message.Output != "/tmp" {
 		t.Fatalf("completed = (%+v, %v, %q)", message, ok, reason)
 	}
+	if command, _ := message.Input["command"].(string); command != "pwd" {
+		t.Fatalf("completed Input = %#v, want command=pwd (LRM-689 backfill carrier)", message.Input)
+	}
 
 	if missing, expired := tracker.finish(); missing != 0 || expired != 0 {
 		t.Fatalf("finish = (%d, %d), want (0, 0)", missing, expired)
+	}
+}
+
+func TestRuntimeToolEventTrackerCompletedCarriesInputWhenStartedEmpty(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	tracker := newRuntimeToolEventTracker(time.Minute, 8)
+	started := RuntimeToolEvent{
+		Schema:        RuntimeToolEventSchemaV1,
+		EventID:       "event-empty-started",
+		Source:        "test",
+		ProtocolShape: "test.v1",
+		CallID:        "call-empty",
+		Phase:         RuntimeToolEventStarted,
+		Tool:          "shell",
+		OccurredAt:    now,
+	}
+	message, ok, reason := tracker.accept(started)
+	if !ok || reason != "" || message.Type != MessageToolUse || len(message.Input) != 0 {
+		t.Fatalf("started = (%+v, %v, %q)", message, ok, reason)
+	}
+
+	completed := RuntimeToolEvent{
+		Schema:        RuntimeToolEventSchemaV1,
+		EventID:       "event-empty-completed",
+		Source:        "test",
+		ProtocolShape: "test.v1",
+		CallID:        "call-empty",
+		Phase:         RuntimeToolEventCompleted,
+		Tool:          "shell",
+		Input:         map[string]any{"command": "ls -la"},
+		Output:        "ok",
+		OccurredAt:    now.Add(time.Second),
+	}
+	message, ok, reason = tracker.accept(completed)
+	if !ok || reason != "" || message.Type != MessageToolResult {
+		t.Fatalf("completed = (%+v, %v, %q)", message, ok, reason)
+	}
+	if command, _ := message.Input["command"].(string); command != "ls -la" {
+		t.Fatalf("completed Input = %#v, want command backfill carrier", message.Input)
 	}
 }
 

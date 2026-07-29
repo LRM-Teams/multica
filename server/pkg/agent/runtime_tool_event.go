@@ -111,10 +111,13 @@ func (t *runtimeToolEventTracker) accept(event RuntimeToolEvent) (Message, bool,
 		state.completed = true
 		state.updatedAt = now
 		t.states[event.CallID] = state
+		// Carry completed Input so the UI can backfill a started-empty
+		// tool_use row (Cursor often emits args only on completed).
 		return Message{
 			Type:   MessageToolResult,
 			Tool:   state.tool,
 			CallID: event.CallID,
+			Input:  event.Input,
 			Output: event.Output,
 		}, true, ""
 

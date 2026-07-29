@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
@@ -11,9 +11,10 @@ import enChannels from "../../locales/en/channels.json";
 import { DmConversation } from "./dm-conversation";
 
 // LRM-682 — the DM main area gains a 聊天 | 文件 tab bar (no Issues — a 1:1 has
-// no issue context). 文件 is the 2nd tab, carries the attachment count, and
-// renders the shared ChannelFilesPanel wide; it is the single Files entry (the
-// header files icon stays removed, LRM-675). Chat remains the default view.
+// no issue context). 文件 is the 2nd tab and renders the shared
+// ChannelFilesPanel wide; it is the single Files entry (the header files icon
+// stays removed, LRM-675). Chat remains the default view. LRM-698: no count
+// badge on the tab (Frank: the number is noise).
 
 const apiMock = vi.hoisted(() => {
   const proxy = new Proxy({} as Record<string, unknown>, {
@@ -205,7 +206,7 @@ function renderDm() {
 }
 
 describe("LRM-682 DM 聊天|文件 tab bar", () => {
-  it("renders exactly 聊天 | 文件 (Files 2nd, with the attachment count) — no Issues tab", async () => {
+  it("renders exactly 聊天 | 文件 (Files 2nd, no count badge per LRM-698) — no Issues tab", async () => {
     renderDm();
     const tablist = await screen.findByRole("tablist");
     const tabs = screen.getAllByRole("tab");
@@ -213,8 +214,10 @@ describe("LRM-682 DM 聊天|文件 tab bar", () => {
     expect(tabs[0]).toHaveTextContent(enChannels.view_tabs.dm_chat);
     expect(tabs[1]).toHaveTextContent(enChannels.view_tabs.files);
     expect(screen.queryByRole("tab", { name: /issues/i })).not.toBeInTheDocument();
-    // Count badge comes from the same attachments query the panel consumes.
-    await waitFor(() => expect(tabs[1]).toHaveTextContent("2"));
+    // LRM-698: the tab is the label only — no attachment count badge, even
+    // after the async surfaces settle.
+    expect(await screen.findByTestId("virtuoso-scroller")).toBeInTheDocument();
+    expect(tabs[1]).not.toHaveTextContent(/\d/);
     expect(tablist).toBeInTheDocument();
   });
 

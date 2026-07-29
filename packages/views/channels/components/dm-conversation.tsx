@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  channelAttachmentsOptions,
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
@@ -470,10 +469,6 @@ function DmChannelConversation({
   // issue context). DmConversation remounts per DM (key={source:id} at the
   // call site), so switching conversations lands back on chat for free.
   const [dmView, setDmView] = useState<"chat" | "files">("chat");
-  // Files tab count badge. Same queryOptions as ChannelFilesPanel, so the
-  // panel shares this cache entry when the tab opens (no double fetch).
-  const { data: dmAttachments } = useQuery(channelAttachmentsOptions(channelId));
-  const dmFilesCount = dmAttachments?.length ?? 0;
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
     setSelectedMemberPanelId(null);
@@ -1331,11 +1326,6 @@ function DmChannelConversation({
             </TabsTrigger>
             <TabsTrigger value="files" className="flex-none px-3 py-2">
               {t(($) => $.view_tabs.files)}
-              {dmFilesCount > 0 && (
-                <span className="ml-1.5 text-xs font-normal tabular-nums text-muted-foreground">
-                  {dmFilesCount}
-                </span>
-              )}
             </TabsTrigger>
           </TabsList>
         </div>

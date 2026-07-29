@@ -144,15 +144,15 @@ export function Composer({
     case "sending":
       voiceBlockText = t(($) => $.composer.voice_blocked_sending);
       break;
-    case "text_draft":
-      voiceBlockText = t(($) => $.composer.voice_blocked_text_draft);
-      break;
+    // LRM-702 — "clear text to record" hints removed from the composer (Frank:
+    // composer 内的文字删掉). The mic still disables while the composer holds
+    // text/attachments (voiceBlocked stays true); we just no longer render the
+    // sentence inline. Falls through to `default` (null) → no <output>.
     case "attachment_draft":
       voiceBlockText = t(($) => $.composer.voice_blocked_attachment_draft);
       break;
+    case "text_draft":
     case "text_and_attachment_draft":
-      voiceBlockText = t(($) => $.composer.voice_blocked_text_and_attachment_draft);
-      break;
     default:
       voiceBlockText = null;
   }

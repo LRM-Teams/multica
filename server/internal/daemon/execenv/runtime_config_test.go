@@ -1121,33 +1121,6 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"never to copy private memory across agents directly",
 		"never silently rewrite instructions",
 	} {
-		"memory/daily/YYYY-MM-DD.md",
-		"Do **not** run a full self-review or curator-style promotion inside every chat/task turn",
-		"Only promote the most durable, broadly reusable facts out of Daily into `MEMORY.md`",
-		"project-specific durable facts belong in project files, not agent-global memory",
-		"must not block chat latency",
-		"Source is not scope",
-		"who said a memory is provenance",
-		"agents addressed by the current message",
-		"Do not add a workspace/shared candidate merely to fan the preference out",
-		"memory/STATE.md",
-		"status, TTL/expiry, or reset date",
-		"memory/REVIEW.md",
-		"MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl",
-		"remember this",
-		"defaults to agent-global `memory/MEMORY.md`",
-		"Collective intent does not require the exact words \"all agents\"",
-		"都给我记住",
-		"separate inbox delivery for each eligible channel agent",
-		"including offline runtimes",
-		"do not create a workspace/shared candidate merely to redeliver",
-		"agents beyond the current message recipients",
-		"explicitly canonical workspace/team knowledge",
-		"current task remain authoritative",
-		"Do not record guesses",
-		"never to copy private memory across agents directly",
-		"never silently rewrite instructions",
-	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("memory operating guide missing %q\n%s", want, out)
 		}

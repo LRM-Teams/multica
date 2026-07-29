@@ -933,6 +933,10 @@ func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID strin
 // re-register as the source sandbox's runtime before the new env takes effect,
 // and leftover profile-scoped daemon.id files can trigger legacy runtime merge
 // that steals the source row.
+//
+// Fan-out makes this sharper: several lanes are started from the same savepoint,
+// so they all restore the same frozen daemon.id. Without the reset they would
+// register as one runtime and their sessions would collide.
 func buildStartRuntimeInCubeCode(runtimeEnv map[string]string) string {
 	return fmt.Sprintf(`import json, os, pathlib, subprocess, time
 runtime_env = json.loads(%q)

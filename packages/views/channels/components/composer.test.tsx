@@ -24,9 +24,7 @@ vi.mock("../../i18n/use-t", () => ({
         voice_blocked_uploading: string;
         voice_blocked_pending_voice: string;
         voice_blocked_sending: string;
-        voice_blocked_text_draft: string;
         voice_blocked_attachment_draft: string;
-        voice_blocked_text_and_attachment_draft: string;
       };
     }) => string) => selector({
       composer: {
@@ -40,9 +38,7 @@ vi.mock("../../i18n/use-t", () => ({
         voice_blocked_uploading: "COPY_UPLOADING",
         voice_blocked_pending_voice: "COPY_PENDING_VOICE",
         voice_blocked_sending: "COPY_SENDING",
-        voice_blocked_text_draft: "COPY_TEXT",
         voice_blocked_attachment_draft: "COPY_ATTACHMENT",
-        voice_blocked_text_and_attachment_draft: "COPY_TEXT_AND_ATTACHMENT",
       },
     }),
   }),

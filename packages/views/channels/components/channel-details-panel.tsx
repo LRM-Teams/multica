@@ -534,6 +534,7 @@ export function ChannelDetailsPanel({
               type="file"
               accept="image/*"
               className="hidden"
+              aria-label={t(($) => $.details.avatar_change_aria)}
               onChange={handleAvatarFile}
             />
           </div>

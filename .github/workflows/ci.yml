@@ -3,6 +3,15 @@ name: CI
 on:
   pull_request:
     branches: [dev]
+  # Warms the shared Turbo cache. A cache written by a pull request is scoped to
+  # refs/pull/<n>/merge and can only be restored by re-runs of that same pull
+  # request; the only scope every PR can read is the base branch. With
+  # pull_request as the sole trigger nothing ever wrote a current dev-scoped
+  # entry, so every PR restored a stale one (the live entry dated from
+  # 2026-07-28) and turbo reported 0 of 9 tasks cached. Tests are skipped on
+  # this trigger — see the Test step.
+  push:
+    branches: [dev]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -10,9 +19,11 @@ concurrency:
 
 jobs:
   frontend:
-    # Self-hosted CI (LRM-701). Hosted ubuntu-latest is currently blocked by
-    # org spending-limit / billing (#1409); keep PR CI on [self-hosted, ci]
-    # until that is raised. High Postgres/Redis host ports avoid Compose clash.
+    # GitHub-hosted. The self-hosted CI pool was retired on 2026-07-29; the only
+    # self-hosted selector left in the repo is deploy.yml's [self-hosted, aliyun],
+    # which is the production deploy runner. Standard runners are 2 vCPU / 8 GB
+    # on private repos — see the "Report runner size" step below for the
+    # measured values.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -80,7 +91,20 @@ jobs:
         # (core/ui/views) are included via the `...` selector.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
+      - name: Report runner size
+        # One line, so the runner's core count is a measurement in the log
+        # rather than an assumption about GitHub's published spec. Vitest sizes
+        # its worker pool from this number (see packages/views/vitest.config.ts).
+        run: |
+          echo "nproc=$(nproc) availableParallelism=$(node -p 'require("node:os").availableParallelism()')"
+          echo "mem=$(free -g | awk '/^Mem:/{print $2}')GiB"
+
       - name: Test
+        # Skipped on the dev push, which exists only to publish a base-branch
+        # Turbo cache for build/typecheck/lint. Re-running the suite after a
+        # merge produces no information the pull request did not already give,
+        # and it is the expensive half of the job.
+        if: github.event_name == 'pull_request'
         # `test` is a separate turbo invocation pinned to one outer task at a
         # time (#853/#855). Previously all four tasks shared one command, so
         # turbo ran several packages' `test` concurrently and each spawned its
@@ -94,8 +118,12 @@ jobs:
         # symptom and turn a stable red into an intermittent one.
         run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
   backend:
-    # Same [self-hosted, ci] pool as frontend (LRM-701). Requires Docker for
-    # Postgres/Redis service containers — see docs/ci-tencent-runner.md.
+    # Pull requests only. The dev push exists to warm the frontend Turbo cache;
+    # this job shares none of it, so running it after a merge would just repeat
+    # what the pull request already proved.
+    if: github.event_name == 'pull_request'
+    # GitHub-hosted, same as frontend. Requires Docker for Postgres/Redis
+    # service containers — see docs/ci-tencent-runner.md.
     runs-on: ubuntu-latest
     services:
       postgres:

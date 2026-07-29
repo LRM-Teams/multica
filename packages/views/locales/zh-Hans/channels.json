@@ -105,7 +105,6 @@
       "demote": "降为成员",
       "transfer": "转让群主",
       "remove": "移出群聊",
-      "role_actions_pending": "群管理权限即将推出；当前不会更改成员角色。",
       "role_busy_promote": "正在设为群管…",
       "role_busy_demote": "正在降为成员…",
       "role_busy_transfer": "正在转让群主…",

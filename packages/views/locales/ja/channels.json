@@ -105,7 +105,6 @@
       "demote": "メンバーに変更",
       "transfer": "オーナーを譲渡",
       "remove": "グループから削除",
-      "role_actions_pending": "グループ管理権限は近日提供予定です。現在メンバーのロールは変更されません。",
       "role_busy_promote": "グループ管理者に設定しています…",
       "role_busy_demote": "メンバーに変更しています…",
       "role_busy_transfer": "オーナーを譲渡しています…",

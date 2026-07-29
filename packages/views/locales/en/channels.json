@@ -105,7 +105,6 @@
       "demote": "Demote to member",
       "transfer": "Transfer ownership",
       "remove": "Remove from group",
-      "role_actions_pending": "Group role management is coming soon; member roles are not changed yet.",
       "role_busy_promote": "Making group manager…",
       "role_busy_demote": "Demoting to member…",
       "role_busy_transfer": "Transferring ownership…",

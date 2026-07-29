@@ -105,7 +105,6 @@
       "demote": "멤버로 변경",
       "transfer": "소유권 이전",
       "remove": "그룹에서 삭제",
-      "role_actions_pending": "그룹 관리 권한은 곧 제공됩니다. 현재 멤버 역할은 변경되지 않습니다.",
       "role_busy_promote": "그룹 관리자로 설정하는 중…",
       "role_busy_demote": "멤버로 변경하는 중…",
       "role_busy_transfer": "소유자를 이전하는 중…",

@@ -63,10 +63,20 @@ export function classifyRoleChangeFailure(error: unknown): RoleChangeFailure {
   // status cannot tell them apart — so the copy must not claim which. Saying
   // "that member has left" would be asserting more than the evidence supports.
   if (error.status === 404) return "gone";
-  // Shouldn't happen: the UI only ever sends owner/manager/member for a member
-  // it already gated. Kept distinct so it can be reported rather than blending
-  // into ordinary transient failure — a branch that cannot happen is exactly
-  // the one nobody notices when it starts happening.
+  // 400 = the route refused the SHAPE of our request. The server returns it for
+  // a malformed channel/member UUID, a member_type outside user|agent, an
+  // unparseable body, a `role` outside manager|member, `role: "owner"` on the
+  // PATCH (ownership moves only through the dedicated POST route), and — on
+  // transfer only — a non-human recipient.
+  //
+  // Each of those is closed before the request is made: ids come from the
+  // roster, `updateChannelMemberRole` types its role parameter as
+  // "manager" | "member" so the refused value cannot be constructed, transfer
+  // calls the POST route, and `canTransferOwnership` requires
+  // member_type === "user". So this kind should be unreachable — which is
+  // exactly why it stays distinct from `transient` rather than being retried:
+  // if it fires, one of those guarantees has broken, and it should surface by
+  // name instead of looking like a network blip.
   if (error.status === 400) return "contract";
   return "transient";
 }

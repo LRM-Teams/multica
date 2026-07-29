@@ -5,28 +5,37 @@ import type { ChannelMember } from "@multica/core/types";
 import type { GroupMemberActions } from "@multica/core/channels";
 
 /**
- * #832 — the role rows must be honestly unavailable, not fake-available.
+ * #832 — the role rows are real actions now.
  *
  * Frank set a group manager, got an info toast, and believed it had worked.
- * The role mutations don't exist yet (#1321), so promote / demote / transfer
- * render DISABLED with a persistent note. These assert the user-visible
- * contract Iris specified:
- *   - the rows cannot be activated (asserted at the callback boundary, not on
- *     styling) and carry aria-disabled;
- *   - the explanation is a real text node present BEFORE any interaction, and
- *     is referenced by each row's aria-describedby (not tooltip-only);
- *   - REMOVE is deliberately NOT in this group — it has a working endpoint, so
- *     telling the user it's "coming soon" would be the opposite lie. (Wiring it
- *     back to the real confirm flow is its own ticket, #833.)
+ * The interim fix made the three rows honestly unavailable while the mutations
+ * were unbuilt (#1321); those mutations now exist, so the rows dispatch. What
+ * this file guards is the user-visible contract Iris specified for the working
+ * version:
+ *   - each row dispatches its own action, asserted at the callback boundary
+ *     with the member and the kind — not on styling;
+ *   - the "coming soon" note is GONE (a disabled row explaining itself with an
+ *     expired reason is the defect this replaced);
+ *   - an in-flight action shows a NAMED status inside that member's row, not in
+ *     the menu — Radix closes the menu on select, so a menu-only indicator is
+ *     invisible for the entire time it matters;
+ *   - while it is in flight that row's role items stay aria-disabled, so
+ *     reopening the menu cannot issue the same change twice;
+ *   - a failure renders in that member's row, and offers Retry only when
+ *     retrying can help;
+ *   - REMOVE is deliberately outside this group — it always had a working
+ *     endpoint (#833 owns its confirm flow).
  *
- * HOW TO FLIP-VERIFY THESE (matters — there is no flag to toggle):
- * delete the `disabled` prop from the three rows in channel-members-list.tsx
- * → the three click cases go red; stop rendering the note → the note case goes
- * red. That is the regression they guard: rows becoming activatable again.
- * `disabled` is unconditional on purpose (a half-open flag would mean clickable
- * rows with no handler behind them), so there is nothing to toggle — a reviewer
- * flipping a boolean will see nothing move and may wrongly conclude these don't
- * discriminate.
+ * HOW TO FLIP-VERIFY: point a row's onClick at a different kind → that
+ * dispatch case goes red and the other two stay green (they discriminate the
+ * kind, not merely that something fired). Drop `aria-disabled`/the guard while
+ * rolePendingAction is set → the double-issue case goes red. Move the pending
+ * `<output>` back inside the menu → the in-flight case goes red, because it
+ * asserts before any menu interaction.
+ *
+ * The `dict` below does NOT derive from en.json: a key missing here renders as
+ * an empty string, so the failure reads "expected …, received (nothing)" and
+ * looks like a component bug. Keep it in step with the real dictionary.
  */
 
 vi.mock("../../i18n", () => ({
@@ -48,10 +57,12 @@ const dict = {
     title: "Members",
     menu: {
       aria: "Member actions",
-      promote_agent: "Set as group manager",
-      promote_human: "Set as admin",
-      demote_agent: "Remove group manager role",
-      demote_human: "Remove admin role",
+      // One label per action, not one per member type: Iris's ruling is that a
+      // group manager is a 群管 whether the member is a human or an agent, so
+      // the agent/human fork that used to live here is gone from the component,
+      // the four locales, and this mock alike.
+      promote: "Make group manager",
+      demote: "Demote to member",
       transfer: "Transfer ownership",
       remove: "Remove from group",
       // #832 — the in-progress labels. This dictionary does NOT derive from

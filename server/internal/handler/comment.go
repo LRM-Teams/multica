@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -927,6 +928,7 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	attachmentIDs = uniqueAttachmentUUIDs(attachmentIDs)
 	suppressAgentIDs, ok := parseUUIDSliceOrBadRequest(w, req.SuppressAgentIDs, "suppress_agent_ids")
 	if !ok {
 		return
@@ -997,7 +999,19 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	comment, err := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
+	// Create the comment and bind attachments in one transaction so a failed
+	// bind never leaves a 201-shaped empty comment, and never cascades-deletes
+	// partially linked uploads (attachment.comment_id ON DELETE CASCADE).
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		slog.Warn("begin create-comment tx failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
+		writeError(w, http.StatusInternalServerError, "failed to create comment")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	comment, err := qtx.CreateComment(r.Context(), db.CreateCommentParams{
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
 		AuthorType:  authorType,
@@ -1012,9 +1026,26 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Link uploaded attachments to this comment.
 	if len(attachmentIDs) > 0 {
-		h.linkAttachmentsByIDs(r.Context(), comment.ID, issue.ID, attachmentIDs)
+		if linkErr := linkAttachmentsByIDs(r.Context(), qtx, comment.ID, issue.ID, issue.WorkspaceID, attachmentIDs); linkErr != nil {
+			slog.Warn("link comment attachments failed", append(logger.RequestAttrs(r),
+				"error", linkErr,
+				"comment_id", uuidToString(comment.ID),
+				"issue_id", issueID,
+			)...)
+			if errors.Is(linkErr, ErrCommentAttachmentIncomplete) {
+				writeError(w, http.StatusBadRequest, "one or more attachments could not be linked")
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to link attachments")
+			}
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Warn("commit create-comment tx failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
+		writeError(w, http.StatusInternalServerError, "failed to create comment")
+		return
 	}
 
 	// Fetch linked attachments so the response includes them.
@@ -1482,6 +1513,7 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		attachmentIDs = uniqueAttachmentUUIDs(attachmentIDs)
 	}
 
 	// NOTE: See CreateComment — Markdown is sanitized at render/edit time, not here.
@@ -1508,6 +1540,7 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		if err := h.Queries.ReplaceCommentAttachments(r.Context(), db.ReplaceCommentAttachmentsParams{
 			CommentID:     comment.ID,
 			IssueID:       existing.IssueID,
+			WorkspaceID:   existing.WorkspaceID,
 			AttachmentIds: attachmentIDs,
 		}); err != nil {
 			slog.Error("failed to replace comment attachments", "error", err)

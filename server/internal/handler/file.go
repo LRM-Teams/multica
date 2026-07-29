@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1028,16 +1029,31 @@ func (h *Handler) linkAttachmentsByIssueIDs(ctx context.Context, issueID, worksp
 	}
 }
 
+// ErrCommentAttachmentIncomplete means one or more attachment_ids could not be
+// bound (unknown, foreign issue, or already linked to another comment).
+var ErrCommentAttachmentIncomplete = errors.New("one or more attachments could not be linked")
+
 // linkAttachmentsByIDs links the given attachment IDs to a comment.
-// Only updates attachments that belong to the same issue and have no comment_id yet.
-func (h *Handler) linkAttachmentsByIDs(ctx context.Context, commentID, issueID pgtype.UUID, ids []pgtype.UUID) {
-	if err := h.Queries.LinkAttachmentsToComment(ctx, db.LinkAttachmentsToCommentParams{
-		CommentID: commentID,
-		IssueID:   issueID,
-		Column3:   ids,
-	}); err != nil {
-		slog.Error("failed to link attachments to comment", "error", err)
+// Accepts issue-scoped unbound-to-comment rows and workspace-scoped unbound
+// uploads (issue_id IS NULL). Returns an error when the DB write fails or when
+// fewer rows were updated than requested (silent partial bind is a product bug).
+func linkAttachmentsByIDs(ctx context.Context, q *db.Queries, commentID, issueID, workspaceID pgtype.UUID, ids []pgtype.UUID) error {
+	if len(ids) == 0 {
+		return nil
 	}
+	n, err := q.LinkAttachmentsToComment(ctx, db.LinkAttachmentsToCommentParams{
+		CommentID:   commentID,
+		IssueID:     issueID,
+		WorkspaceID: workspaceID,
+		Column4:     ids,
+	})
+	if err != nil {
+		return err
+	}
+	if n != int64(len(ids)) {
+		return fmt.Errorf("%w: linked %d of %d", ErrCommentAttachmentIncomplete, n, len(ids))
+	}
+	return nil
 }
 
 // deleteS3Object removes a single file from S3 by its CDN URL.

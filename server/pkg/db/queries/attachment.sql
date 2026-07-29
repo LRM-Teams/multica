@@ -47,23 +47,39 @@ WHERE a.issue_id = $1
 SELECT url FROM attachment
 WHERE comment_id = $1;
 
--- name: LinkAttachmentsToComment :exec
+-- name: LinkAttachmentsToComment :execrows
+-- Bind attachments to a comment. Accepts:
+--   - already issue-scoped rows (issue_id = $2, comment_id IS NULL)
+--   - workspace-scoped unbound uploads (issue_id IS NULL) — same contract as
+--     LinkAttachmentsToIssue / `multica attachment upload` then `--attachment-id`
 UPDATE attachment
-SET comment_id = $1
-WHERE issue_id = $2
+SET comment_id = $1,
+    issue_id = $2
+WHERE workspace_id = $3
   AND comment_id IS NULL
-  AND id = ANY($3::uuid[]);
+  AND (issue_id IS NULL OR issue_id = $2)
+  AND id = ANY($4::uuid[]);
 
 -- name: ReplaceCommentAttachments :exec
+-- Replace the attachment set for a comment. Newly added ids may be unbound
+-- workspace uploads (issue_id IS NULL) or already scoped to this issue.
 UPDATE attachment
 SET comment_id = CASE
   WHEN id = ANY(sqlc.arg(attachment_ids)::uuid[]) THEN $1
   ELSE NULL
+END,
+    issue_id = CASE
+  WHEN id = ANY(sqlc.arg(attachment_ids)::uuid[]) THEN $2
+  ELSE issue_id
 END
-WHERE issue_id = $2
+WHERE workspace_id = $3
   AND (
     comment_id = $1
-    OR (comment_id IS NULL AND id = ANY(sqlc.arg(attachment_ids)::uuid[]))
+    OR (
+      comment_id IS NULL
+      AND id = ANY(sqlc.arg(attachment_ids)::uuid[])
+      AND (issue_id IS NULL OR issue_id = $2)
+    )
   );
 
 -- name: LinkAttachmentsToChatMessage :exec

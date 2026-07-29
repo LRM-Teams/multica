@@ -250,6 +250,71 @@ func TestAgentCreateDoesNotExposeFromTemplate(t *testing.T) {
 	}
 }
 
+func TestAgentCreateUsesDisplayNameUsernameContract(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-123")
+
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/agents" {
+			t.Fatalf("request = %s %s, want POST /api/agents", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "agent-1", "name": "Nash"})
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := freshAgentCreateCmd()
+	if err := cmd.Flags().Set("display-name", "Nash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("username", "nash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("runtime-id", "runtime-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runAgentCreate(cmd, nil); err != nil {
+		t.Fatalf("runAgentCreate: %v", err)
+	}
+
+	if got["display_name"] != "Nash" || got["username"] != "nash" || got["runtime_id"] != "runtime-1" {
+		t.Fatalf("request body = %#v, want display_name, username, and runtime_id", got)
+	}
+	if _, exists := got["name"]; exists {
+		t.Fatalf("legacy name leaked into request body: %#v", got)
+	}
+	if agentCreateCmd.Flag("name") != nil || agentCreateCmd.Flag("display-name") == nil || agentCreateCmd.Flag("username") == nil {
+		t.Fatal("agent create flags must expose --display-name and --username only")
+	}
+}
+
+func freshAgentCreateCmd() *cobra.Command {
+	c := &cobra.Command{Use: "create"}
+	c.Flags().String("display-name", "", "")
+	c.Flags().String("username", "", "")
+	c.Flags().String("description", "", "")
+	c.Flags().String("instructions", "", "")
+	c.Flags().String("runtime-id", "", "")
+	c.Flags().String("runtime-config", "", "")
+	c.Flags().String("custom-args", "", "")
+	c.Flags().String("custom-env", "", "")
+	c.Flags().Bool("custom-env-stdin", false, "")
+	c.Flags().String("custom-env-file", "", "")
+	c.Flags().String("mcp-config", "", "")
+	c.Flags().Bool("mcp-config-stdin", false, "")
+	c.Flags().String("mcp-config-file", "", "")
+	c.Flags().String("model", "", "")
+	c.Flags().String("visibility", "", "")
+	c.Flags().Int32("max-concurrent-tasks", 0, "")
+	c.Flags().String("output", "table", "")
+	return c
+}
+
 // TestParseCustomEnvErrorSanitization guards against future changes
 // re-introducing %w wrapping of json.Unmarshal errors. Those errors
 // can surface short fragments of the input, which — for a flag that

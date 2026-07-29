@@ -5713,6 +5713,7 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+	h.observeChannelAgentTriggerDepth(eventType, payload)
 	if eventType != protocol.EventChannelMessage || h.DB == nil {
 		return
 	}
@@ -5725,6 +5726,31 @@ func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, worksp
 			slog.Error("immediate channel voice synthesis failed", "message_id", msg.ID, "error", err)
 		}
 	})
+}
+
+// observeChannelAgentTriggerDepth records only committed agent chat messages
+// after their publication. It intentionally excludes content from logs and
+// keeps high-cardinality identifiers out of Prometheus labels.
+func (h *Handler) observeChannelAgentTriggerDepth(eventType string, payload any) {
+	if eventType != protocol.EventChannelMessage {
+		return
+	}
+	msg, ok := payload.(ChannelMessageResponse)
+	if !ok || msg.Type != "agent" {
+		return
+	}
+	if h != nil && h.Metrics != nil {
+		h.Metrics.ObserveChannelTriggerDepth(msg.TriggerDepth)
+	}
+	slog.Info("channel agent trigger depth observed",
+		"workspace_id", msg.WorkspaceID,
+		"channel_id", msg.ChannelID,
+		"message_id", msg.ID,
+		"thread_id", ptrString(msg.ThreadID),
+		"thread_root_message_id", ptrString(msg.ThreadRootMessageID),
+		"agent_id", ptrString(msg.AuthorID),
+		"trigger_depth", msg.TriggerDepth,
+	)
 }
 
 // runAfterChannelMessageAck runs send side effects that must not block the HTTP

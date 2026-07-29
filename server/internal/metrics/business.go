@@ -39,6 +39,7 @@ type BusinessMetrics struct {
 	channelOutputSuppressed                *prometheus.CounterVec
 	channelFullExecutionWakes              *prometheus.CounterVec
 	channelFullExecutionAmplificationRatio *prometheus.GaugeVec
+	channelTriggerDepth                    prometheus.Histogram
 	freshnessHoldResolution                *prometheus.HistogramVec
 
 	activeMu    sync.Mutex
@@ -176,6 +177,13 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "full_execution_amplification_ratio",
 			Help:      "Ratio of full-execution wakes to human no-mention channel messages.",
 		}, metricLabels("multica_channel_full_execution_amplification_ratio")),
+		channelTriggerDepth: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "multica",
+			Subsystem: "channel",
+			Name:      "trigger_depth",
+			Help:      "Trigger depth of committed agent channel messages.",
+			Buckets:   []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 32, 64},
+		}),
 		freshnessHoldResolution: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "multica_freshness_hold_resolution_seconds",
 			Help:    "Time from a freshness decision fact to its decisive same-target resolution.",
@@ -210,6 +218,7 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.channelOutputSuppressed,
 		m.channelFullExecutionWakes,
 		m.channelFullExecutionAmplificationRatio,
+		m.channelTriggerDepth,
 		m.freshnessHoldResolution,
 	}, m.events.collectors()...)
 }
@@ -250,6 +259,16 @@ func (m *BusinessMetrics) SetChannelFullExecutionAmplificationRatio(ratio float6
 		return
 	}
 	m.channelFullExecutionAmplificationRatio.WithLabelValues().Set(ratio)
+}
+
+// ObserveChannelTriggerDepth records the depth of a committed agent message.
+// This metric intentionally has no labels: channel and actor identifiers are
+// high cardinality and belong only in the accompanying structured log.
+func (m *BusinessMetrics) ObserveChannelTriggerDepth(depth int) {
+	if m == nil || depth < 0 {
+		return
+	}
+	m.channelTriggerDepth.Observe(float64(depth))
 }
 
 func (m *BusinessMetrics) ObserveFreshnessHoldResolution(outcome string, seconds float64) {

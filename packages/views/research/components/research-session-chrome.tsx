@@ -18,6 +18,7 @@ export function ResearchSessionChrome({
   onHandoff,
   confirmPending,
   handoffPending,
+  onOpenDelivery,
   selectedSummary,
 }: {
   session: ResearchSession;
@@ -31,6 +32,7 @@ export function ResearchSessionChrome({
   onHandoff: () => void;
   confirmPending?: boolean;
   handoffPending?: boolean;
+  onOpenDelivery?: () => void;
   selectedSummary?: string | null;
 }) {
   const { t } = useT("research");
@@ -51,6 +53,11 @@ export function ResearchSessionChrome({
           <p className="mt-0.5 truncate text-xs text-muted-foreground">{session.goal}</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {onOpenDelivery ? (
+            <Button size="sm" variant="outline" onClick={onOpenDelivery}>
+              {t(($) => $.panel.delivery)}
+            </Button>
+          ) : null}
           {canConfirm && session.status !== "completed" ? (
             <Button size="sm" onClick={onConfirm} disabled={confirmPending}>
               {t(($) => $.panel.confirm)}

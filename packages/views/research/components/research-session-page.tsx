@@ -8,6 +8,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import {
   researchKeys,
   researchSessionSnapshotOptions,
+  useResearchUiStore,
   type ResearchPresenceMap,
 } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
@@ -16,6 +17,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useT } from "../../i18n/use-t";
 import { ResearchCanvas } from "./research-canvas";
+import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchSessionChrome } from "./research-session-chrome";
 
 type UiState = {
@@ -23,7 +25,7 @@ type UiState = {
   body: string;
   createProject: boolean;
   createChannel: boolean;
-  chatOpen: boolean;
+  deliveryOpen: boolean;
 };
 
 type UiAction =
@@ -31,7 +33,7 @@ type UiAction =
   | { type: "setBody"; body: string }
   | { type: "setCreateProject"; value: boolean }
   | { type: "setCreateChannel"; value: boolean }
-  | { type: "setChatOpen"; value: boolean }
+  | { type: "setDeliveryOpen"; value: boolean }
   | { type: "clearBody" };
 
 const initialUi: UiState = {
@@ -39,7 +41,7 @@ const initialUi: UiState = {
   body: "",
   createProject: true,
   createChannel: true,
-  chatOpen: true,
+  deliveryOpen: false,
 };
 
 function uiReducer(state: UiState, action: UiAction): UiState {
@@ -52,8 +54,8 @@ function uiReducer(state: UiState, action: UiAction): UiState {
       return { ...state, createProject: action.value };
     case "setCreateChannel":
       return { ...state, createChannel: action.value };
-    case "setChatOpen":
-      return { ...state, chatOpen: action.value };
+    case "setDeliveryOpen":
+      return { ...state, deliveryOpen: action.value };
     case "clearBody":
       return { ...state, body: "" };
     default:
@@ -65,6 +67,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
+  const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
+  const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   const { data, isLoading } = useQuery(researchSessionSnapshotOptions(wsId, sessionId));
   const { data: presence = {} } = useQuery<ResearchPresenceMap>({
     queryKey: researchKeys.presence(wsId, sessionId),
@@ -109,7 +113,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     );
   }
 
-  const { session, fleet, messages } = data;
+  const { session, fleet, messages, report, sources } = data;
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
 
@@ -127,6 +131,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onHandoff={() => handoff.mutate()}
         confirmPending={confirm.isPending}
         handoffPending={handoff.isPending}
+        onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
         selectedSummary={
           ui.selected ? `${ui.selected.title} — ${ui.selected.summary}` : null
         }
@@ -141,12 +146,18 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
           />
-          {!ui.chatOpen ? (
+          <ResearchDeliveryDrawer
+            open={ui.deliveryOpen}
+            onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
+            report={report}
+            sources={sources}
+          />
+          {!chatOpen ? (
             <Button
               type="button"
               size="icon"
               className="absolute bottom-5 right-5 z-10 h-12 w-12 rounded-full shadow-lg"
-              onClick={() => dispatch({ type: "setChatOpen", value: true })}
+              onClick={() => setChatOpen(true)}
               aria-label={t(($) => $.panel.chat)}
             >
               <MessageSquare className="h-5 w-5" />
@@ -154,16 +165,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           ) : null}
         </section>
 
-        {ui.chatOpen ? (
+        {chatOpen ? (
           <aside className="flex w-[340px] shrink-0 flex-col border-l bg-background">
             <div className="flex items-center justify-between border-b px-3 py-2">
               <div className="text-xs font-medium text-muted-foreground">{t(($) => $.panel.chat)}</div>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => dispatch({ type: "setChatOpen", value: false })}
-              >
+              <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
                 {t(($) => $.panel.hide_chat)}
               </Button>
             </div>

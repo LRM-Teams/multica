@@ -77,6 +77,10 @@ catalog:
   # YAML parsing (skill frontmatter)
   yaml: "^2.6.0"
 
+  # Research session infinite canvas
+  "@xyflow/react": "^12.11.2"
+  "@dagrejs/dagre": "^3.0.0"
+
   # Testing
   vitest: "^4.1.0"
   jsdom: "^29.0.1"

@@ -19,12 +19,34 @@ export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
 const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
+type CollapsibleMessageBodyProps = {
+  children: ReactNode;
+  /** Remount / remeasure when the underlying message identity/body changes. */
+  contentKey: string;
+  enabled?: boolean;
+  expandLabel: string;
+  collapseLabel: string;
+  fadeVariant?: MessageCollapseFadeVariant;
+  className?: string;
+};
+
 /**
  * Long chat / channel bodies: clip to Slack height with an explicit
  * 「查看更多」/「收起」control. Full DOM stays mounted so expand is instant
  * and copy still sees the complete text.
+ *
+ * `contentKey` is applied as a React key so a new message remounts collapsed
+ * without syncing expand state through an effect.
  */
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- key wrapper remounts inner expand state
 export function CollapsibleMessageBody({
+  contentKey,
+  ...props
+}: CollapsibleMessageBodyProps) {
+  return <CollapsibleMessageBodyInner key={contentKey} contentKey={contentKey} {...props} />;
+}
+
+function CollapsibleMessageBodyInner({
   children,
   contentKey,
   enabled = true,
@@ -32,16 +54,7 @@ export function CollapsibleMessageBody({
   collapseLabel,
   fadeVariant = "default",
   className,
-}: {
-  children: ReactNode;
-  /** Remeasure when the underlying message identity/body changes. */
-  contentKey: string;
-  enabled?: boolean;
-  expandLabel: string;
-  collapseLabel: string;
-  fadeVariant?: MessageCollapseFadeVariant;
-  className?: string;
-}) {
+}: CollapsibleMessageBodyProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<() => void>(() => {});
   const [contentOverflows, setContentOverflows] = useState(false);
@@ -72,11 +85,6 @@ export function CollapsibleMessageBody({
     window.addEventListener("resize", handleOverflow);
     return () => window.removeEventListener("resize", handleOverflow);
   }, []);
-
-  // New message → start collapsed again.
-  useEffect(() => {
-    setExpanded(false);
-  }, [contentKey]);
 
   const canCollapse = enabled && contentOverflows;
   const isCollapsed = canCollapse && !expanded;

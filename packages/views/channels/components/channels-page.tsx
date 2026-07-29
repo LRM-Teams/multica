@@ -204,6 +204,7 @@ import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
+import { useSelectionQuoteMenu } from "./selection-quote-menu";
 import {
   Composer,
   ConversationHeader,
@@ -685,6 +686,9 @@ export function ChannelsPage({
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
+  // LRM-695 — scopes the text-selection Quote/Copy mini-menu to the channel
+  // message area (the scroller inside ChannelMessageList).
+  const channelMessageAreaRef = useRef<HTMLDivElement>(null);
   const composerDrafts = useComposerDraftStore((s) => s.drafts);
   const storeSetComposerDraft = useComposerDraftStore((s) => s.setDraft);
   const storeClearComposerDraft = useComposerDraftStore((s) => s.clearDraft);
@@ -976,6 +980,13 @@ export function ChannelsPage({
   const setThreadQuoteTarget = useCallback((target: QuoteTarget | null) => {
     setQuoteState((current) => ({ ...current, threadTarget: target }));
   }, []);
+  // LRM-695 — text-selection Quote/Copy mini-menu over the channel message area
+  // (desktop, fine pointer). Quote appends a `>` blockquote (author as plain
+  // text, no @) to the channel composer via the editor markdown pipeline.
+  const channelSelectionMenu = useSelectionQuoteMenu({
+    containerRef: channelMessageAreaRef,
+    onQuote: (md: string) => editorRef.current?.insertMarkdown(md),
+  });
   const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
     if (!value.trim()) {
       storeClearComposerDraft(key);
@@ -3157,6 +3168,9 @@ export function ChannelsPage({
         highlightMessageId={isThreadDeepLink ? highlightMessageId : undefined}
         onReact={handleReactToMessage}
         onQuoteMessage={setThreadQuoteTarget}
+        onInsertSelectionQuote={(md: string) =>
+          threadEditorRef.current?.insertMarkdown(md)
+        }
         onRetrySend={handleRetrySend}
         onOpenAgent={handleOpenAgentPanel}
         quoteTarget={threadQuoteTarget}
@@ -3647,6 +3661,7 @@ export function ChannelsPage({
                 </output>
               )}
 
+              <div ref={channelMessageAreaRef} className="contents">
               <ChannelMessageList
                 key={active.id}
                 messages={messages}
@@ -3682,6 +3697,8 @@ export function ChannelsPage({
                 onRetrySend={isActiveArchived ? undefined : handleRetrySend}
                 onOpenAgent={handleOpenAgentPanel}
               />
+              </div>
+              {channelSelectionMenu.menu}
 
               {isActiveArchived ? (
                 <ReadOnlyConversationBanner>

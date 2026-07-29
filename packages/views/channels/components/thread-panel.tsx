@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import { ArrowLeft, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
+import { useSelectionQuoteMenu } from "./selection-quote-menu";
 import { ComposerQuotePreview } from "./message-quote";
 import {
   ComposerSendErrorBar,
@@ -46,6 +47,11 @@ export interface ThreadPanelProps {
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
   onQuoteMessage?: (message: ChannelMessage) => void;
+  /**
+   * LRM-695 — append a selection-quote markdown block (`>` blockquote) to the
+   * thread composer. Owned by the surface (channels-page holds threadEditorRef).
+   */
+  onInsertSelectionQuote?: (markdown: string) => void;
   /** Retry a failed optimistic send (reuses `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
   /** Click an agent author's avatar/name → open the agent side panel (parity
@@ -117,6 +123,7 @@ export function ThreadPanel({
   onRetry,
   onReact,
   onQuoteMessage,
+  onInsertSelectionQuote,
   onRetrySend,
   onOpenAgent,
   quoteTarget,
@@ -139,6 +146,12 @@ export function ThreadPanel({
   highlightMessageId,
 }: ThreadPanelProps) {
   const { t } = useT("channels");
+  // LRM-695 — text-selection Quote/Copy mini-menu over the thread message area.
+  const threadMessageAreaRef = useRef<HTMLDivElement>(null);
+  const threadSelectionMenu = useSelectionQuoteMenu({
+    containerRef: threadMessageAreaRef,
+    onQuote: (md: string) => onInsertSelectionQuote?.(md),
+  });
 
   // `leading` / `actions` on ConversationHeader and `leadingActions` on
   // Composer are non-allowlisted slot props, so their inline JSX is memoized to
@@ -249,6 +262,7 @@ export function ThreadPanel({
         actions={headerActions}
       />
 
+      <div ref={threadMessageAreaRef} className="contents">
       <ChannelMessageList
         key={`thread:${root.id}`}
         messages={replies}
@@ -274,6 +288,8 @@ export function ThreadPanel({
         onRetrySend={onRetrySend}
         onOpenAgent={onOpenAgent}
       />
+      </div>
+      {threadSelectionMenu.menu}
 
       {readOnly ? (
         <ReadOnlyConversationBanner>{readOnlyContent}</ReadOnlyConversationBanner>

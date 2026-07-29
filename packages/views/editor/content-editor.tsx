@@ -45,6 +45,7 @@ import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceSlug } from "@multica/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Attachment } from "@multica/core/types";
+import { Slice } from "@tiptap/pm/model";
 import {
   parseMarkdownChunked,
   MARKDOWN_CHUNK_THRESHOLD,
@@ -169,6 +170,14 @@ interface ContentEditorRef {
   insertText: (text: string) => void;
   /** Focus the editor and open the issue reference `#` picker. */
   openIssueReferences: () => void;
+  /**
+   * LRM-695 — append Markdown at the end of the document, parsing it through
+   * the same `@tiptap/markdown` pipeline as paste so block syntax (e.g. a `>`
+   * blockquote) becomes a real node instead of literal text. The caret lands at
+   * the end; nothing is sent. Falls back to plain-text insertion when the
+   * Markdown parser is unavailable (readonly/legacy mounts).
+   */
+  insertMarkdown: (md: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +513,28 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       openIssueReferences: () => {
         if (!editor) return;
         editor.chain().focus().insertContent("#").run();
+      },
+      insertMarkdown: (md: string) => {
+        if (!editor) return;
+        // No Markdown parser (readonly/legacy) → insert as plain text at end.
+        if (!editor.markdown) {
+          editor.chain().focus("end").insertContent(md).run();
+          return;
+        }
+        const json = editor.markdown.parse(md);
+        const node = editor.schema.nodeFromJSON(json);
+        // maxOpen lets ProseMirror stitch the block content in at the caret;
+        // mirrors the proven markdown-paste path (extensions/markdown-paste.ts).
+        const slice = Slice.maxOpen(node.content);
+        editor
+          .chain()
+          .focus("end")
+          .command(({ tr }) => {
+            tr.replaceSelection(slice);
+            return true;
+          })
+          .focus("end")
+          .run();
       },
     }));
 

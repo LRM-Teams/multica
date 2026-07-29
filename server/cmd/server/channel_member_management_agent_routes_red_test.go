@@ -216,6 +216,134 @@ func TestAgentMemberManagerUsesDedicatedWriteRoutes(t *testing.T) {
 	})
 }
 
+func TestAgentMemberSelfLeaveUsesAgentProvenance(t *testing.T) {
+	fixture := newAgentMemberManagementFixture(t, 0)
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_member
+		SET role = 'member'
+		WHERE channel_id = $1
+		  AND workspace_id = $2
+		  AND member_type = 'agent'
+		  AND member_id = $3`,
+		fixture.channel, testWorkspaceID, fixture.agentID); err != nil {
+		t.Fatalf("demote self-leaving agent to ordinary member: %v", err)
+	}
+
+	auditBefore := countAgentMemberActivityForRouteTest(t, fixture.channel, "member_left")
+	leftBefore := countAgentMemberSystemEventForRouteTest(t, fixture.channel, "channel_member_left")
+	removedBefore := countAgentMemberSystemEventForRouteTest(t, fixture.channel, "channel_member_removed")
+
+	resp := agentCredentialRequest(t, fixture.token, http.MethodDelete,
+		fmt.Sprintf(
+			"/api/agent/channels/%s/members/agent/%s?expected_remove_effect=none",
+			fixture.channel,
+			fixture.agentID,
+		),
+		nil,
+	)
+	requireResponseStatus(t, resp, http.StatusOK)
+	requireChannelMembershipCount(t, fixture.channel, "agent", fixture.agentID, 0)
+
+	if got := countAgentMemberActivityForRouteTest(t, fixture.channel, "member_left"); got != auditBefore+1 {
+		t.Fatalf("agent member_left audit count=%d want=%d", got, auditBefore+1)
+	}
+	var auditActorType, auditActorID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT actor_type, actor_id::text
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'member_left'
+		  AND details->>'channel_id' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`,
+		testWorkspaceID, fixture.channel,
+	).Scan(&auditActorType, &auditActorID); err != nil {
+		t.Fatalf("load agent member_left audit actor: %v", err)
+	}
+	if auditActorType != "agent" || auditActorID != fixture.agentID {
+		t.Fatalf("agent member_left audit actor=%s/%s want=agent/%s", auditActorType, auditActorID, fixture.agentID)
+	}
+
+	if got := countAgentMemberSystemEventForRouteTest(t, fixture.channel, "channel_member_left"); got != leftBefore+1 {
+		t.Fatalf("agent channel_member_left event count=%d want=%d", got, leftBefore+1)
+	}
+	if got := countAgentMemberSystemEventForRouteTest(t, fixture.channel, "channel_member_removed"); got != removedBefore {
+		t.Fatalf("agent self-leave emitted removed event count=%d want=%d", got, removedBefore)
+	}
+	var eventActorType, eventActorID, targetType, targetID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT parts->0->'event_params'->>'actor_type',
+		       parts->0->'event_params'->>'actor_id',
+		       parts->0->'event_params'->>'target_type',
+		       parts->0->'event_params'->>'target_id'
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' = 'channel_member_left'
+		ORDER BY seq DESC
+		LIMIT 1`,
+		fixture.channel,
+	).Scan(&eventActorType, &eventActorID, &targetType, &targetID); err != nil {
+		t.Fatalf("load agent self-leave system event provenance: %v", err)
+	}
+	if eventActorType != "agent" || eventActorID != fixture.agentID ||
+		targetType != "agent" || targetID != fixture.agentID {
+		t.Fatalf(
+			"agent self-leave system provenance actor=%s/%s target=%s/%s want agent/%s agent/%s",
+			eventActorType,
+			eventActorID,
+			targetType,
+			targetID,
+			fixture.agentID,
+			fixture.agentID,
+		)
+	}
+}
+
+func TestAgentMemberWriteRoutesRejectHumanSession(t *testing.T) {
+	fixture := newAgentMemberManagementFixture(t, 1)
+	targetID := fixture.userIDs[0]
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{
+			name:   "single_add",
+			method: http.MethodPost,
+			path:   fmt.Sprintf("/api/agent/channels/%s/members", fixture.channel),
+			body:   map[string]string{"member_type": "user", "member_id": targetID},
+		},
+		{
+			name:   "batch_add",
+			method: http.MethodPost,
+			path:   fmt.Sprintf("/api/agent/channels/%s/members/batch", fixture.channel),
+			body: map[string]any{"members": []map[string]string{{
+				"member_type": "user",
+				"member_id":   targetID,
+			}}},
+		},
+		{
+			name:   "remove",
+			method: http.MethodDelete,
+			path: fmt.Sprintf(
+				"/api/agent/channels/%s/members/user/%s?expected_remove_effect=none",
+				fixture.channel,
+				targetID,
+			),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := authRequest(t, tc.method, tc.path, tc.body)
+			requireResponseStatus(t, resp, http.StatusForbidden)
+			requireChannelMembershipCount(t, fixture.channel, "user", targetID, 0)
+		})
+	}
+}
+
 func TestAgentWorkspaceAdminCannotChangeItsOwnRole(t *testing.T) {
 	fixture := newAgentMemberManagementFixture(t, 0)
 	ctx := context.Background()
@@ -508,4 +636,36 @@ func TestAgentWorkspaceRoleSchemaExcludesOwner(t *testing.T) {
 	if role != "member" {
 		t.Fatalf("constraint failure changed workspace role to %q, want member", role)
 	}
+}
+
+func countAgentMemberActivityForRouteTest(t *testing.T, channelID, action string) int {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = $2
+		  AND details->>'channel_id' = $3`,
+		testWorkspaceID, action, channelID,
+	).Scan(&got); err != nil {
+		t.Fatalf("count agent member activity %s: %v", action, err)
+	}
+	return got
+}
+
+func countAgentMemberSystemEventForRouteTest(t *testing.T, channelID, event string) int {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' = $2`,
+		channelID, event,
+	).Scan(&got); err != nil {
+		t.Fatalf("count agent member system event %s: %v", event, err)
+	}
+	return got
 }

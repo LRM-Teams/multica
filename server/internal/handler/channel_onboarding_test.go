@@ -33,7 +33,7 @@ func addChannelAgentForOnboardingTest(t *testing.T, channelID, agentID string) {
 
 func removeChannelAgentForOnboardingTest(t *testing.T, channelID, agentID string) {
 	t.Helper()
-	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID, nil)
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withRouteParams(req, "channelId", channelID, "memberType", "agent", "memberId", agentID)
 	rec := httptest.NewRecorder()

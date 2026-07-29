@@ -11,9 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// These tests are the first executable RED slice for task #844. They pin
-// transport separation and the two authorization gaps that the shared
-// principal-neutral decision function must close. Keep them at the HTTP
+// These tests are the executable adapter/service RED slice for task #844.
+// They pin transport separation, authorization/no-op ordering, strict remove
+// confirmation, self-leave semantics, and success-artifact boundaries that
+// the shared principal-neutral service must close. Keep them at the HTTP
 // boundary: a green result must prove both the decision and the mutation.
 
 func TestMemberManagementHumanRoutesRejectAgentPrincipal(t *testing.T) {
@@ -61,8 +62,8 @@ func TestMemberManagementHumanRoutesRejectAgentPrincipal(t *testing.T) {
 			name: "remove",
 			run: func(t *testing.T, channelID, callerAgentID, targetUserID string) *httptest.ResponseRecorder {
 				req := newRequest(http.MethodDelete,
-					"/api/channels/"+channelID+"/members/user/"+targetUserID,
-					map[string]string{"expected_remove_effect": "none"})
+					"/api/channels/"+channelID+"/members/user/"+targetUserID+"?expected_remove_effect=none",
+					nil)
 				req = withAgentPrincipal(req, callerAgentID, testWorkspaceID, testUserID)
 				req = withChannelTestWorkspaceCtx(t, req, testUserID)
 				req = withRouteParams(req,
@@ -141,8 +142,8 @@ func TestChannelManagerCanRemoveOrdinaryMember(t *testing.T) {
 	}
 
 	req := newRequestAs(managerID, http.MethodDelete,
-		"/api/channels/"+channelID+"/members/user/"+targetID,
-		map[string]string{"expected_remove_effect": "none"})
+		"/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=none",
+		nil)
 	req = withChannelTestWorkspaceCtx(t, req, managerID)
 	req = withRouteParams(req,
 		"channelId", channelID,
@@ -165,8 +166,8 @@ func TestChannelManagerCanRemoveOrdinaryMember(t *testing.T) {
 	} {
 		t.Run("cannot_remove_"+protected.name, func(t *testing.T) {
 			req := newRequestAs(managerID, http.MethodDelete,
-				"/api/channels/"+channelID+"/members/user/"+protected.id,
-				map[string]string{"expected_remove_effect": "none"})
+				"/api/channels/"+channelID+"/members/user/"+protected.id+"?expected_remove_effect=none",
+				nil)
 			req = withChannelTestWorkspaceCtx(t, req, managerID)
 			req = withRouteParams(req,
 				"channelId", channelID,
@@ -212,8 +213,8 @@ func TestNonMemberWorkspaceAdminCanManageOrdinaryMembers(t *testing.T) {
 			name: "remove",
 			run: func(t *testing.T, channelID, adminID, targetID string) *httptest.ResponseRecorder {
 				req := newRequestAs(adminID, http.MethodDelete,
-					"/api/channels/"+channelID+"/members/user/"+targetID,
-					map[string]string{"expected_remove_effect": "none"})
+					"/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=none",
+					nil)
 				req = withChannelTestWorkspaceCtx(t, req, adminID)
 				req = withRouteParams(req,
 					"channelId", channelID,
@@ -257,19 +258,25 @@ func TestRemoveChannelMemberRequiresExpectedEffect(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name string
-		body any
+		name  string
+		query string
+		body  any
 	}{
 		{name: "missing", body: nil},
-		{name: "malformed", body: map[string]string{"expected_remove_effect": "surprise_side_effect"}},
+		{name: "malformed", query: "?expected_remove_effect=surprise_side_effect", body: nil},
+		{
+			name: "body_only_valid_is_not_a_query_fallback",
+			body: map[string]string{"expected_remove_effect": "none"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			targetID := createChannelPlainMember(t)
 			channelID := seedChannelForTest(t, "remove-effect-required-"+tc.name+"-"+uuid.NewString(), testUserID, targetID)
+			auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
 			systemBefore := countChannelSystemMessagesForTest(t, channelID)
 
 			req := newRequestAs(testUserID, http.MethodDelete,
-				"/api/channels/"+channelID+"/members/user/"+targetID, tc.body)
+				"/api/channels/"+channelID+"/members/user/"+targetID+tc.query, tc.body)
 			req = withChannelTestWorkspaceCtx(t, req, testUserID)
 			req = withRouteParams(req,
 				"channelId", channelID,
@@ -283,9 +290,7 @@ func TestRemoveChannelMemberRequiresExpectedEffect(t *testing.T) {
 				t.Errorf("%s expected_remove_effect want 400 got %d: %s", tc.name, rec.Code, rec.Body.String())
 			}
 			assertChannelUserMembershipCount(t, channelID, targetID, 1)
-			if got := countChannelSystemMessagesForTest(t, channelID); got != systemBefore {
-				t.Errorf("%s system events got=%d want=%d", tc.name, got, systemBefore)
-			}
+			assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
 		})
 	}
 }
@@ -298,11 +303,12 @@ func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
 	t.Run("expected_none_but_target_is_bound", func(t *testing.T) {
 		channelID := seedChannelForTest(t, "remove-effect-bound-mismatch-"+uuid.NewString(), testUserID)
 		agentID := seedBoundGroupManagerAgent(t, channelID)
+		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
 		systemBefore := countChannelSystemMessagesForTest(t, channelID)
 
 		req := newRequestAs(testUserID, http.MethodDelete,
-			"/api/channels/"+channelID+"/members/agent/"+agentID,
-			map[string]string{"expected_remove_effect": "none"})
+			"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none",
+			nil)
 		req = withChannelTestWorkspaceCtx(t, req, testUserID)
 		req = withRouteParams(req,
 			"channelId", channelID,
@@ -315,19 +321,18 @@ func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
 		assertRemoveEffectChangedResponse(t, rec)
 		assertChannelAgentMembershipCount(t, context.Background(), channelID, agentID, 1)
 		assertGroupManagerBinding(t, channelID, agentID)
-		if got := countChannelSystemMessagesForTest(t, channelID); got != systemBefore {
-			t.Errorf("bound mismatch system events got=%d want=%d", got, systemBefore)
-		}
+		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
 	})
 
 	t.Run("expected_binding_clear_but_target_is_unbound", func(t *testing.T) {
 		targetID := createChannelPlainMember(t)
 		channelID := seedChannelForTest(t, "remove-effect-unbound-mismatch-"+uuid.NewString(), testUserID, targetID)
+		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
 		systemBefore := countChannelSystemMessagesForTest(t, channelID)
 
 		req := newRequestAs(testUserID, http.MethodDelete,
-			"/api/channels/"+channelID+"/members/user/"+targetID,
-			map[string]string{"expected_remove_effect": "clears_automation_binding"})
+			"/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=clears_automation_binding",
+			nil)
 		req = withChannelTestWorkspaceCtx(t, req, testUserID)
 		req = withRouteParams(req,
 			"channelId", channelID,
@@ -339,10 +344,165 @@ func TestRemoveChannelMemberRejectsEffectMismatch(t *testing.T) {
 
 		assertRemoveEffectChangedResponse(t, rec)
 		assertChannelUserMembershipCount(t, channelID, targetID, 1)
-		if got := countChannelSystemMessagesForTest(t, channelID); got != systemBefore {
-			t.Errorf("unbound mismatch system events got=%d want=%d", got, systemBefore)
-		}
+		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
 	})
+}
+
+func TestHumanMemberSelfLeaveUsesMemberLeftSemantics(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "human-member-self-leave-"+uuid.NewString(), testUserID, memberID)
+	auditBefore := countChannelMemberActivityForTest(t, channelID, "member_left")
+	leftBefore := countChannelMemberSystemEventForTest(t, channelID, channelMemberLeftEvent)
+	removedBefore := countChannelMemberSystemEventForTest(t, channelID, channelMemberRemovedEvent)
+
+	req := newRequestAs(memberID, http.MethodDelete,
+		"/api/channels/"+channelID+"/members/user/"+memberID+"?expected_remove_effect=none",
+		nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withRouteParams(req,
+		"channelId", channelID,
+		"memberType", "user",
+		"memberId", memberID,
+	)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("human self-leave want 200 got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertChannelUserMembershipCount(t, channelID, memberID, 0)
+	if got := countChannelMemberActivityForTest(t, channelID, "member_left"); got != auditBefore+1 {
+		t.Fatalf("member_left audit count=%d want=%d", got, auditBefore+1)
+	}
+	assertLatestChannelMemberActivityActorForTest(t, channelID, "member_left", "member", memberID)
+	if got := countChannelMemberSystemEventForTest(t, channelID, channelMemberLeftEvent); got != leftBefore+1 {
+		t.Fatalf("channel_member_left event count=%d want=%d", got, leftBefore+1)
+	}
+	if got := countChannelMemberSystemEventForTest(t, channelID, channelMemberRemovedEvent); got != removedBefore {
+		t.Fatalf("self-leave emitted remove event count=%d want=%d", got, removedBefore)
+	}
+	event := latestChannelSystemEventForTest(t, channelID)
+	assertChannelMemberSystemEvent(t, event, channelMemberLeftEvent, memberID, "human", memberID, "human")
+}
+
+func TestRemoveMemberDenialsLeaveZeroSuccessArtifacts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	t.Run("ordinary_member_cannot_remove_other", func(t *testing.T) {
+		memberID := createChannelPlainMember(t)
+		targetID := createChannelPlainMember(t)
+		channelID := seedChannelForTest(
+			t,
+			"ordinary-other-remove-denied-"+uuid.NewString(),
+			testUserID,
+			memberID,
+			targetID,
+		)
+		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
+		systemBefore := countChannelSystemMessagesForTest(t, channelID)
+
+		req := newRequestAs(memberID, http.MethodDelete,
+			"/api/channels/"+channelID+"/members/user/"+targetID+"?expected_remove_effect=none",
+			nil)
+		req = withChannelTestWorkspaceCtx(t, req, memberID)
+		req = withRouteParams(req,
+			"channelId", channelID,
+			"memberType", "user",
+			"memberId", targetID,
+		)
+		rec := httptest.NewRecorder()
+		testHandler.RemoveChannelMember(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("ordinary remove other want 403 got %d: %s", rec.Code, rec.Body.String())
+		}
+		assertChannelUserMembershipCount(t, channelID, targetID, 1)
+		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
+	})
+
+	t.Run("sole_owner_cannot_self_leave", func(t *testing.T) {
+		channelID := seedChannelForTest(t, "sole-owner-self-leave-denied-"+uuid.NewString(), testUserID)
+		auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
+		systemBefore := countChannelSystemMessagesForTest(t, channelID)
+
+		req := newRequestAs(testUserID, http.MethodDelete,
+			"/api/channels/"+channelID+"/members/user/"+testUserID+"?expected_remove_effect=none",
+			nil)
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		req = withRouteParams(req,
+			"channelId", channelID,
+			"memberType", "user",
+			"memberId", testUserID,
+		)
+		rec := httptest.NewRecorder()
+		testHandler.RemoveChannelMember(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("sole owner self-leave want 409 got %d: %s", rec.Code, rec.Body.String())
+		}
+		assertChannelUserMembershipCount(t, channelID, testUserID, 1)
+		assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
+	})
+}
+
+func TestDuplicateAddAuthorizesBeforeIdempotentNoop(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	targetAgentID := createHandlerTestAgent(t, "DuplicateAdd"+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "duplicate-add-authority-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'agent', $3, 'member')`,
+		channelID, testWorkspaceID, targetAgentID); err != nil {
+		t.Fatalf("seed existing agent member: %v", err)
+	}
+
+	auditBefore := countAllChannelMemberSuccessActivityForTest(t, channelID)
+	systemBefore := countChannelSystemMessagesForTest(t, channelID)
+	onboardingBefore := countChannelAgentOnboardingForTest(t, channelID, targetAgentID)
+
+	duplicateReq := newRequestAs(testUserID, http.MethodPost,
+		"/api/channels/"+channelID+"/members",
+		AddChannelMemberRequest{MemberType: "agent", MemberID: targetAgentID})
+	duplicateReq = withChannelTestWorkspaceCtx(t, duplicateReq, testUserID)
+	duplicateReq = withURLParam(duplicateReq, "channelId", channelID)
+	duplicateRec := httptest.NewRecorder()
+	testHandler.AddChannelMember(duplicateRec, duplicateReq)
+
+	if duplicateRec.Code != http.StatusOK {
+		t.Fatalf("authorized duplicate add want 200 got %d: %s", duplicateRec.Code, duplicateRec.Body.String())
+	}
+	assertChannelAgentMembershipCount(t, context.Background(), channelID, targetAgentID, 1)
+	assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
+	if got := countChannelAgentOnboardingForTest(t, channelID, targetAgentID); got != onboardingBefore {
+		t.Fatalf("duplicate add onboarding count=%d want=%d", got, onboardingBefore)
+	}
+
+	ordinaryNonMemberID := createChannelPlainMember(t)
+	deniedReq := newRequestAs(ordinaryNonMemberID, http.MethodPost,
+		"/api/channels/"+channelID+"/members",
+		AddChannelMemberRequest{MemberType: "agent", MemberID: targetAgentID})
+	deniedReq = withChannelTestWorkspaceCtx(t, deniedReq, ordinaryNonMemberID)
+	deniedReq = withURLParam(deniedReq, "channelId", channelID)
+	deniedRec := httptest.NewRecorder()
+	testHandler.AddChannelMember(deniedRec, deniedReq)
+
+	if deniedRec.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized duplicate add want 403 got %d: %s", deniedRec.Code, deniedRec.Body.String())
+	}
+	assertChannelAgentMembershipCount(t, context.Background(), channelID, targetAgentID, 1)
+	assertChannelMemberArtifactCountsUnchanged(t, channelID, auditBefore, systemBefore)
+	if got := countChannelAgentOnboardingForTest(t, channelID, targetAgentID); got != onboardingBefore {
+		t.Fatalf("denied duplicate add onboarding count=%d want=%d", got, onboardingBefore)
+	}
 }
 
 func TestRemoveBoundAgentClearsAutomationBinding(t *testing.T) {
@@ -352,10 +512,11 @@ func TestRemoveBoundAgentClearsAutomationBinding(t *testing.T) {
 
 	channelID := seedChannelForTest(t, "remove-bound-agent-"+uuid.NewString(), testUserID)
 	agentID := seedBoundGroupManagerAgent(t, channelID)
+	auditBefore := countChannelMemberActivityForTest(t, channelID, "member_removed")
 
 	req := newRequestAs(testUserID, http.MethodDelete,
-		"/api/channels/"+channelID+"/members/agent/"+agentID,
-		map[string]string{"expected_remove_effect": "clears_automation_binding"})
+		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=clears_automation_binding",
+		nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withRouteParams(req,
 		"channelId", channelID,
@@ -367,8 +528,37 @@ func TestRemoveBoundAgentClearsAutomationBinding(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("remove bound agent want 200 got %d: %s", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), "clears_automation_binding") {
+		t.Fatalf("remove bound agent response=%q want truthful effect", rec.Body.String())
+	}
 	assertChannelAgentMembershipCount(t, context.Background(), channelID, agentID, 0)
 	assertGroupManagerBinding(t, channelID, "")
+	if got := countChannelMemberActivityForTest(t, channelID, "member_removed"); got != auditBefore+1 {
+		t.Fatalf("bound-agent member_removed audit count=%d want=%d", got, auditBefore+1)
+	}
+	var previousBoundAgentID string
+	var bindingCleared bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT details->>'previous_group_manager_agent_id',
+		       COALESCE((details->>'group_manager_binding_cleared')::boolean, false)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'member_removed'
+		  AND details->>'channel_id' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`,
+		testWorkspaceID, channelID,
+	).Scan(&previousBoundAgentID, &bindingCleared); err != nil {
+		t.Fatalf("load bound-agent removal audit details: %v", err)
+	}
+	if previousBoundAgentID != agentID || !bindingCleared {
+		t.Fatalf(
+			"bound-agent audit previous=%q cleared=%t want=%q/true",
+			previousBoundAgentID,
+			bindingCleared,
+			agentID,
+		)
+	}
 }
 
 func TestNonMemberWorkspaceAdminStillCannotReadPrivateChannelContent(t *testing.T) {
@@ -486,8 +676,8 @@ func TestArchivedChannelDeniesHumanMemberMutationsForEveryAuthority(t *testing.T
 			}
 
 			removeReq := newRequestAs(actorID, http.MethodDelete,
-				"/api/channels/"+channelID+"/members/user/"+removeTargetID,
-				map[string]string{"expected_remove_effect": "none"})
+				"/api/channels/"+channelID+"/members/user/"+removeTargetID+"?expected_remove_effect=none",
+				nil)
 			removeReq = withChannelTestWorkspaceCtx(t, removeReq, actorID)
 			removeReq = withRouteParams(removeReq,
 				"channelId", channelID,
@@ -577,5 +767,97 @@ func assertChannelUserMembershipCount(t *testing.T, channelID, userID string, wa
 	}
 	if got != want {
 		t.Fatalf("channel user membership channel=%s user=%s got=%d want=%d", channelID, userID, got, want)
+	}
+}
+
+func countChannelMemberActivityForTest(t *testing.T, channelID, action string) int {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = $2
+		  AND details->>'channel_id' = $3`,
+		testWorkspaceID, action, channelID,
+	).Scan(&got); err != nil {
+		t.Fatalf("count channel member activity %s: %v", action, err)
+	}
+	return got
+}
+
+func countAllChannelMemberSuccessActivityForTest(t *testing.T, channelID string) int {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action IN ('member_added', 'member_removed', 'member_left')
+		  AND details->>'channel_id' = $2`,
+		testWorkspaceID, channelID,
+	).Scan(&got); err != nil {
+		t.Fatalf("count all channel member success activity: %v", err)
+	}
+	return got
+}
+
+func assertLatestChannelMemberActivityActorForTest(t *testing.T, channelID, action, wantActorType, wantActorID string) {
+	t.Helper()
+	var actorType, actorID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT actor_type, actor_id::text
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = $2
+		  AND details->>'channel_id' = $3
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`,
+		testWorkspaceID, action, channelID,
+	).Scan(&actorType, &actorID); err != nil {
+		t.Fatalf("load latest %s activity actor: %v", action, err)
+	}
+	if actorType != wantActorType || actorID != wantActorID {
+		t.Fatalf("%s activity actor=%s/%s want=%s/%s", action, actorType, actorID, wantActorType, wantActorID)
+	}
+}
+
+func countChannelMemberSystemEventForTest(t *testing.T, channelID, event string) int {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'system'
+		  AND parts->0->>'event' = $2`,
+		channelID, event,
+	).Scan(&got); err != nil {
+		t.Fatalf("count channel member system event %s: %v", event, err)
+	}
+	return got
+}
+
+func countChannelAgentOnboardingForTest(t *testing.T, channelID, agentID string) int {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_agent_onboarding
+		WHERE channel_id = $1 AND agent_id = $2`,
+		channelID, agentID,
+	).Scan(&got); err != nil {
+		t.Fatalf("count channel agent onboarding: %v", err)
+	}
+	return got
+}
+
+func assertChannelMemberArtifactCountsUnchanged(t *testing.T, channelID string, wantAudit, wantSystem int) {
+	t.Helper()
+	if got := countAllChannelMemberSuccessActivityForTest(t, channelID); got != wantAudit {
+		t.Fatalf("channel member success audit count=%d want=%d", got, wantAudit)
+	}
+	if got := countChannelSystemMessagesForTest(t, channelID); got != wantSystem {
+		t.Fatalf("channel member system message count=%d want=%d", got, wantSystem)
 	}
 }

@@ -183,7 +183,7 @@ func TestSystemGeneralHandlersReturnStableProtectedConflict(t *testing.T) {
 		{
 			name:    "remove member",
 			handler: testHandler.RemoveChannelMember,
-			req: fixture.request(http.MethodDelete, "/api/channels/"+fixture.channelID+"/members/user/"+testUserID, nil,
+			req: fixture.request(http.MethodDelete, "/api/channels/"+fixture.channelID+"/members/user/"+testUserID+"?expected_remove_effect=none", nil,
 				"channelId", fixture.channelID, "memberType", "user", "memberId", testUserID),
 		},
 		{

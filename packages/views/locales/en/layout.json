@@ -1,6 +1,7 @@
 {
   "nav": {
     "search": "Search",
+    "search_shortcut": "⌘K",
     "overview": "Overview",
     "inbox": "Activity",
     "my_issues": "My Issues",

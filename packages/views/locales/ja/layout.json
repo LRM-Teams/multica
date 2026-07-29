@@ -1,6 +1,7 @@
 {
   "nav": {
     "search": "検索",
+    "search_shortcut": "⌘K",
     "overview": "概要",
     "inbox": "アクティビティ",
     "my_issues": "マイイシュー",

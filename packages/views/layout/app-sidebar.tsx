@@ -608,8 +608,9 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
             >
               <SearchIcon className="size-4" />
               <span>{t(($) => $.nav.search) ?? "Search"}</span>
-              {/* eslint-disable-next-line i18next/no-literal-string -- ⌘K is a physical key combo, not translatable */}
-              <kbd className="ml-auto hidden rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">⌘K</kbd>
+              <kbd className="ml-auto hidden rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
+                {t(($) => $.nav.search_shortcut) ?? "⌘K"}
+              </kbd>
             </SidebarMenuButton>
           </div>
           <SidebarGroup>

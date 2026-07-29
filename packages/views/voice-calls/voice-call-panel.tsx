@@ -95,7 +95,9 @@ export function VoiceCallPanel({
         case "create":
           return $.voice_call.create_failed;
         case "media":
-          return $.voice_call.media_failed;
+          return error.code === "insecure_context"
+            ? $.composer.voice_secure_context_required
+            : $.voice_call.media_failed;
         case "stop":
           return $.voice_call.stop_failed;
         case "server":

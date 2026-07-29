@@ -386,6 +386,7 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 	}
 	if len(changes) > 0 {
 		_ = saveMemoryWriteSnapshot(agentRoot, next)
+		d.syncAgentMemoryCenter(ctx, task, changes)
 	}
 	_ = clearMemorySignalQueue(agentRoot)
 }

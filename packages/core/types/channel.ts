@@ -27,6 +27,8 @@ export interface Channel {
   kind: "group" | "dm";
   description: string | null;
   lark_chat_id: string | null;
+  /** Custom group avatar (uploaded-file link). Absent/null → `#` landmark. */
+  avatar_url?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

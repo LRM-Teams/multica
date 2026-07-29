@@ -227,6 +227,8 @@
     "description_failed": "説明の更新に失敗しました",
     "description_success": "説明を更新しました",
     "lark_failed": "Feishu chat_id の更新に失敗しました",
+    "avatar_success": "チャンネルアイコンを更新しました",
+    "avatar_failed": "チャンネルアイコンの更新に失敗しました。もう一度お試しください。",
     "lark_success": "Feishu chat_id を更新しました"
   },
   "details": {
@@ -261,7 +263,11 @@
     "notify_pref_all": "すべて",
     "notify_pref_off": "オフ",
     "description_label": "説明",
-    "avatar_pending": "カスタムチャンネルアイコンはまだ利用できません。当面はデフォルトの頭文字を表示します。",
+    "avatar_change": "アイコンを変更",
+    "avatar_change_aria": "チャンネルアイコンを変更",
+    "avatar_hint": "会話リストとチャンネルヘッダーに表示されます。",
+    "avatar_select_image": "画像ファイルを選択してください。",
+    "avatar_upload_failed": "画像のアップロードに失敗しました。もう一度お試しください。",
     "delete_group": "チャンネルを削除",
     "notifications": "通知",
     "share_link": "共有リンク",

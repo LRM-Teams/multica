@@ -1,11 +1,13 @@
 "use client";
 
-import { type ReactNode, type RefObject, useState } from "react";
+import { type ChangeEvent, type ReactNode, type RefObject, useRef, useState } from "react";
 import {
   Bell,
+  Camera,
   ChevronLeft,
   ChevronRight,
   ImageIcon,
+  Loader2,
   Search,
   Settings,
   Square,
@@ -14,6 +16,9 @@ import {
   VolumeX,
 } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
+import { api } from "@multica/core/api";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Switch } from "@multica/ui/components/ui/switch";
@@ -52,6 +57,7 @@ export type ChannelDetailsAccess = {
   renamePending?: boolean;
   descriptionPending?: boolean;
   larkPending?: boolean;
+  avatarPending?: boolean;
 };
 
 function resolveInitialView(
@@ -79,6 +85,7 @@ export function ChannelDetailsPanel({
   onRename,
   onUpdateDescription,
   onUpdateLarkChatId,
+  onUpdateAvatar,
   membersBody,
   initialTab = "about",
   onClose,
@@ -110,6 +117,8 @@ export function ChannelDetailsPanel({
   onRename: (name: string) => void;
   onUpdateDescription?: (description: string | null) => void;
   onUpdateLarkChatId: (larkChatId: string | null) => void;
+  /** LRM-724 — persists the uploaded channel icon (already-uploaded link). */
+  onUpdateAvatar?: (avatarUrl: string) => void;
   membersBody: ReactNode;
   initialTab?: ChannelDetailsTab;
   onClose: () => void;
@@ -146,6 +155,7 @@ export function ChannelDetailsPanel({
     renamePending,
     descriptionPending,
     larkPending,
+    avatarPending,
     projectBound,
     projectEditable,
   } = access;
@@ -162,6 +172,29 @@ export function ChannelDetailsPanel({
   const [descriptionDraft, setDescriptionDraft] = useState(channel.description ?? "");
   // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
   const [larkDraft, setLarkDraft] = useState(channel.lark_chat_id ?? "");
+
+  // LRM-724 — channel icon upload: pick → upload → parent persists the link
+  // via the channel-update mutation (toasts mirror rename/description).
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const { upload: uploadAvatarFile, uploading: avatarUploading } = useFileUpload(api);
+  const avatarBusy = avatarUploading || !!avatarPending;
+
+  const handleAvatarFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // allow re-selecting the same file
+    if (!file.type.startsWith("image/")) {
+      showErrorToast(t(($) => $.details.avatar_select_image));
+      return;
+    }
+    try {
+      const result = await uploadAvatarFile(file, { channelId: channel.id });
+      if (!result) return;
+      onUpdateAvatar?.(result.link);
+    } catch {
+      showErrorToast(t(($) => $.details.avatar_upload_failed));
+    }
+  };
 
   const muted = isConversationMuted(channel);
   const nameDirty = nameDraft.trim() !== channel.name;
@@ -226,7 +259,7 @@ export function ChannelDetailsPanel({
         >
           <section className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-start gap-3">
-              <ChannelDetailsHeroAvatar name={channel.name} />
+              <ChannelDetailsHeroAvatar name={channel.name} avatarUrl={channel.avatar_url} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-base font-bold tracking-tight">
                   <span className="text-muted-foreground">#</span>
@@ -462,11 +495,48 @@ export function ChannelDetailsPanel({
 
       {view === "avatar" ? (
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-          <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-6">
-            <ChannelDetailsHeroAvatar name={channel.name} />
-            <p className="text-center text-sm text-muted-foreground">
-              {t(($) => $.details.avatar_pending)}
+          <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-card p-6">
+            <button
+              type="button"
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={!settingsEditable || avatarBusy}
+              aria-label={t(($) => $.details.avatar_change_aria)}
+              data-testid="channel-details-avatar-change"
+              className="group relative rounded-full outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <ChannelDetailsHeroAvatar name={channel.name} avatarUrl={channel.avatar_url} />
+              <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 group-disabled:opacity-0">
+                {avatarBusy ? (
+                  <Loader2 className="size-5 animate-spin text-white" />
+                ) : (
+                  <Camera className="size-5 text-white" />
+                )}
+              </span>
+            </button>
+            <p className="text-center text-xs text-muted-foreground">
+              {t(($) => $.details.avatar_hint)}
             </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!settingsEditable || avatarBusy}
+              onClick={() => avatarInputRef.current?.click()}
+              data-testid="channel-details-avatar-upload"
+            >
+              {avatarBusy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : null}
+              {t(($) => $.details.avatar_change)}
+            </Button>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              aria-label={t(($) => $.details.avatar_change_aria)}
+              onChange={handleAvatarFile}
+            />
           </div>
           {!settingsEditable && manageDisabledReason ? (
             <p className="text-xs text-muted-foreground">{manageDisabledReason}</p>

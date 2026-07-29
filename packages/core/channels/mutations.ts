@@ -51,6 +51,7 @@ export function useUpdateChannel() {
       name?: string;
       description?: string | null;
       lark_chat_id?: string | null;
+      avatar_url?: string | null;
     }) => api.updateChannel(channelId, data),
     onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
   });

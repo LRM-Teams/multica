@@ -14,6 +14,7 @@ const (
 	channelMemberAddedEvent          = "channel_member_added"
 	channelMemberRemovedEvent        = "channel_member_removed"
 	channelMemberLeftEvent           = "channel_member_left"
+	channelMemberRoleChangedEvent    = "channel_member_role_changed"
 	channelOwnershipTransferredEvent = "channel_ownership_transferred"
 )
 
@@ -28,6 +29,61 @@ type channelMemberSystemEventParams struct {
 	TargetHandle      string `json:"target_handle,omitempty"`
 	TargetDisplayName string `json:"target_display_name,omitempty"`
 	TargetName        string `json:"target_name"`
+	PreviousRole      string `json:"previous_role,omitempty"`
+	NewRole           string `json:"new_role,omitempty"`
+}
+
+func (h *Handler) insertChannelMemberRoleChangedSystemEventExec(
+	ctx context.Context,
+	exec dbExecutor,
+	workspaceID string,
+	channelID pgtype.UUID,
+	actorID pgtype.UUID,
+	targetType string,
+	targetID pgtype.UUID,
+	previousRole, newRole string,
+) (ChannelMessageResponse, error) {
+	actorRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, "user", actorID)
+	targetRef := h.channelMemberSystemEventActorRefWithExec(ctx, exec, workspaceID, targetType, targetID)
+	params := channelMemberSystemEventParams{
+		ActorID:           uuidToString(actorID),
+		ActorType:         actorRef.Type,
+		ActorHandle:       actorRef.Handle,
+		ActorDisplayName:  actorRef.DisplayName,
+		ActorName:         actorRef.DisplayName,
+		TargetID:          uuidToString(targetID),
+		TargetType:        targetRef.Type,
+		TargetHandle:      targetRef.Handle,
+		TargetDisplayName: targetRef.DisplayName,
+		TargetName:        targetRef.DisplayName,
+		PreviousRole:      previousRole,
+		NewRole:           newRole,
+	}
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return ChannelMessageResponse{}, fmt.Errorf("marshal channel member role event: %w", err)
+	}
+	content := fmt.Sprintf(
+		"%s changed %s's role from %s to %s",
+		actorRef.DisplayName,
+		targetRef.DisplayName,
+		previousRole,
+		newRole,
+	)
+	inserted, err := insertChannelMessageWithPartsExec(
+		ctx, exec, channelID, parseUUID(workspaceID),
+		"system", pgtype.UUID{}, "system", content,
+		[]protocol.MessagePart{{
+			Type:   protocol.MessagePartTypeSystemEvent,
+			Event:  channelMemberRoleChangedEvent,
+			Params: paramsJSON,
+		}},
+		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0,
+	)
+	if err != nil {
+		return ChannelMessageResponse{}, fmt.Errorf("insert channel member role event: %w", err)
+	}
+	return inserted.Message, nil
 }
 
 type channelMemberSystemEventPart struct {

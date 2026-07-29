@@ -2190,33 +2190,15 @@ func TestWriteRuntimeConfigFileAlwaysInsertsFixedManagedSeparator(t *testing.T) 
 	}
 }
 
-func TestBuildMetaSkillContentUsesStructuralManagedRole(t *testing.T) {
-	withRole := buildMetaSkillContent("codex", TaskContextForEnv{
+func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
+	content := buildMetaSkillContent("codex", TaskContextForEnv{
 		ChatSessionID: "chat-1",
 		AgentName:     "ordinary-looking-name",
 		ManagedRole:   "group_manager",
 	})
-	if !strings.Contains(withRole, "### Managed Group Manager Role") ||
-		!strings.Contains(withRole, "server structurally assigned") ||
-		!strings.Contains(withRole, "Speak only when issue coordination is genuinely useful") ||
-		!strings.Contains(withRole, "Prefer private coordination for one recipient") ||
-		!strings.Contains(withRole, "Group chat quietness or chatter is not progress") ||
-		!strings.Contains(withRole, "system events plus their directed wakes already own work delivery") ||
-		!strings.Contains(withRole, "never duplicate them with start, unlock, progress-nudge, interrupt, or route-change commands") ||
-		!strings.Contains(withRole, "multica reminder snooze --id <reminder-id> --delay-seconds <900|1800|2700|3600>") ||
-		!strings.Contains(withRole, "never create, cancel, or mutate another patrol reminder") ||
-		!strings.Contains(withRole, "resets real issue progress to 15 minutes") ||
-		!strings.Contains(withRole, "makes no-active groups dormant") ||
-		!strings.Contains(withRole, "caps blocked work at 15 minutes") ||
-		!strings.Contains(withRole, "do not repeatedly disturb a blocked executor") {
-		t.Fatalf("managed group manager brief missing structural role contract: %q", withRole)
-	}
-	withoutRole := buildMetaSkillContent("codex", TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		AgentName:     "Beckham",
-	})
-	if strings.Contains(withoutRole, "### Managed Group Manager Role") {
-		t.Fatalf("display name inferred managed role: %q", withoutRole)
+	if strings.Contains(content, "**Group manager:") ||
+		strings.Contains(content, "### Managed Group Manager Role") {
+		t.Fatalf("legacy managed_role must not grant group manager duties: %q", content)
 	}
 }
 

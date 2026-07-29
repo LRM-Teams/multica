@@ -1693,9 +1693,57 @@ func (h *Handler) UpdateChannelMemberRole(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "channel member not found")
 		return
 	}
+	roleEvent, err := h.insertChannelMemberRoleChangedSystemEventExec(
+		r.Context(),
+		tx,
+		workspaceID,
+		channelID,
+		parseUUID(userID),
+		memberType,
+		memberID,
+		currentRole,
+		newRole,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record member role change")
+		return
+	}
+	var roleWakeID pgtype.UUID
+	if memberType == "agent" {
+		roleWakeID, err = insertChannelManagerRoleWakeExec(
+			r.Context(),
+			tx,
+			parseUUID(workspaceID),
+			channelID,
+			memberID,
+			parseUUID(userID),
+		)
+		if err != nil {
+			slog.Error("channel member role change: failed to insert agent wake",
+				"workspace_id", workspaceID,
+				"channel_id", uuidToString(channelID),
+				"agent_id", uuidToString(memberID),
+				"error", err,
+			)
+			writeError(w, http.StatusInternalServerError, "failed to wake agent after role change")
+			return
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update member role")
 		return
+	}
+	h.publishChannelToMembers(
+		r.Context(),
+		protocol.EventChannelMessage,
+		workspaceID,
+		"system",
+		"",
+		channelID,
+		roleEvent,
+	)
+	if roleWakeID.Valid {
+		h.publishChannelManagerRoleWake(r.Context(), roleWakeID)
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 	writeJSON(w, http.StatusOK, map[string]any{

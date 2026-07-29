@@ -468,18 +468,24 @@ type ChatAttachmentMeta struct {
 
 // TaskAgentData holds agent info included in claim responses so the daemon
 // can set up the execution environment (branch naming, skill files, instructions).
+type ManagerChannelData struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type TaskAgentData struct {
-	ID            string                    `json:"id"`
-	Name          string                    `json:"name"`
-	ManagedRole   string                    `json:"managed_role,omitempty"`
-	Instructions  string                    `json:"instructions"`
-	Skills        []service.AgentSkillData  `json:"skills,omitempty"`
-	Memories      []service.AgentMemoryData `json:"memories,omitempty"`
-	CustomEnv     map[string]string         `json:"custom_env,omitempty"`
-	CustomArgs    []string                  `json:"custom_args,omitempty"`
-	McpConfig     json.RawMessage           `json:"mcp_config,omitempty"`
-	Model         string                    `json:"model,omitempty"`
-	ThinkingLevel string                    `json:"thinking_level,omitempty"`
+	ID              string                    `json:"id"`
+	Name            string                    `json:"name"`
+	ManagedRole     string                    `json:"managed_role,omitempty"`
+	ManagerChannels []ManagerChannelData      `json:"manager_channels,omitempty"`
+	Instructions    string                    `json:"instructions"`
+	Skills          []service.AgentSkillData  `json:"skills,omitempty"`
+	Memories        []service.AgentMemoryData `json:"memories,omitempty"`
+	CustomEnv       map[string]string         `json:"custom_env,omitempty"`
+	CustomArgs      []string                  `json:"custom_args,omitempty"`
+	McpConfig       json.RawMessage           `json:"mcp_config,omitempty"`
+	Model           string                    `json:"model,omitempty"`
+	ThinkingLevel   string                    `json:"thinking_level,omitempty"`
 }
 
 // ArealProxyData is the wire shape of the RL proxy provider config stored at

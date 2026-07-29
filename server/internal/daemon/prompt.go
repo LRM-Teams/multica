@@ -24,6 +24,12 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 			return buildProtocolTurnPrompt(task)
 		}
 	}
+	if task.InboxEvent != nil && task.InboxEvent.Reason == protocol.ChannelRoleChangedReason {
+		return fmt.Sprintf(
+			"Your channel manager role changed for channel %s. Handle the transition from the current channel state. If you are now a manager, follow the responsibilities in your runtime brief and patrol only this channel.",
+			task.ChannelID,
+		)
+	}
 	// Transport/session identity does not select the work semantics. A
 	// chat-backed task that carries an issue must receive the issue prompt while
 	// retaining ChatSessionID for the resident backend and delivery transport.

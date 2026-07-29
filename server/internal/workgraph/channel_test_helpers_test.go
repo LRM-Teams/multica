@@ -52,8 +52,9 @@ func createWorkgraphChannel(t *testing.T, ctx context.Context, workspaceID, chan
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (
-		  channel_id, workspace_id, member_type, member_id, added_by
-		) VALUES ($1, $2, 'agent', $3, $4)
+		  channel_id, workspace_id, member_type, member_id,
+		  added_by_type, added_by_id
+		) VALUES ($1, $2, 'agent', $3, 'user', $4)
 	`, channelID, workspaceID, managerID, userID); err != nil {
 		t.Fatalf("add group manager to channel: %v", err)
 	}

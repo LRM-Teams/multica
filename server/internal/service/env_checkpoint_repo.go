@@ -169,7 +169,7 @@ func envCheckpointFromRow(row db.EnvCheckpoint) (EnvCheckpoint, error) {
 		SaveTimeoutMs: int(row.SaveTimeoutMs),
 		SaveStatus:    EnvCheckpointStatus(row.SaveStatus),
 	}
-	// A row written before migration 244 resolves to pause_in_place, matching the
+	// A row written before migration 246 resolves to pause_in_place, matching the
 	// column default. Leaving it empty would make ResumeFromCheckpoint see an
 	// unknown mode and reject a checkpoint that is perfectly resumable in place.
 	if cp.SaveMode == "" {

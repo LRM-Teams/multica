@@ -564,16 +564,16 @@ func TestMigration235ChannelListPerfIndexesRenumberedFrom233(t *testing.T) {
 	}
 }
 
-func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
+func TestMigration246AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(migrationsDir, "244_env_checkpoint_save_mode.up.sql"))
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "246_env_checkpoint_save_mode.up.sql"))
 	if err != nil {
-		t.Fatalf("read 244 up: %v", err)
+		t.Fatalf("read 246 up: %v", err)
 	}
 	contents := string(up)
 	for _, required := range []string{
@@ -587,7 +587,7 @@ func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
 		"WHERE checkpoint_id IS NOT NULL",
 	} {
 		if !strings.Contains(contents, required) {
-			t.Errorf("244 up missing %q", required)
+			t.Errorf("246 up missing %q", required)
 		}
 	}
 	// The default carries every pre-existing row, so no data migration is
@@ -599,18 +599,18 @@ func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
 		"DROP TABLE",
 	} {
 		if strings.Contains(contents, forbidden) {
-			t.Errorf("244 up must not backfill or destroy data; found %q", forbidden)
+			t.Errorf("246 up must not backfill or destroy data; found %q", forbidden)
 		}
 	}
 	// A savepoint nobody owns must stay legal, so the ownership column cannot
 	// be NOT NULL.
 	if strings.Contains(contents, "checkpoint_id uuid NOT NULL") {
-		t.Error("244 up must leave checkpoint_id nullable for unowned snapshots")
+		t.Error("246 up must leave checkpoint_id nullable for unowned snapshots")
 	}
 
-	down, err := os.ReadFile(filepath.Join(migrationsDir, "244_env_checkpoint_save_mode.down.sql"))
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "246_env_checkpoint_save_mode.down.sql"))
 	if err != nil {
-		t.Fatalf("read 244 down: %v", err)
+		t.Fatalf("read 246 down: %v", err)
 	}
 	for _, required := range []string{
 		"DROP INDEX IF EXISTS sandbox_snapshot_checkpoint_idx",
@@ -619,21 +619,21 @@ func TestMigration244AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
 		"DROP COLUMN IF EXISTS save_mode",
 	} {
 		if !strings.Contains(string(down), required) {
-			t.Errorf("244 down missing %q", required)
+			t.Errorf("246 down missing %q", required)
 		}
 	}
 }
 
-func TestMigration245CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testing.T) {
+func TestMigration247CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(migrationsDir, "245_env_checkpoint_lane.up.sql"))
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "247_env_checkpoint_lane.up.sql"))
 	if err != nil {
-		t.Fatalf("read 245 up: %v", err)
+		t.Fatalf("read 247 up: %v", err)
 	}
 	contents := string(up)
 	for _, required := range []string{
@@ -648,7 +648,7 @@ func TestMigration245CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testin
 		"WHERE status = 'provisioning'",
 	} {
 		if !strings.Contains(contents, required) {
-			t.Errorf("245 up missing %q", required)
+			t.Errorf("247 up missing %q", required)
 		}
 	}
 	// The lane's conversation must be its own and must be recorded, or a lane
@@ -656,7 +656,7 @@ func TestMigration245CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testin
 	// second channel on recovery.
 	for _, conversation := range []string{"channel_id UUID", "chat_session_id UUID", "source_message_id UUID"} {
 		if !strings.Contains(contents, conversation) {
-			t.Errorf("245 up missing per-lane %q", conversation)
+			t.Errorf("247 up missing per-lane %q", conversation)
 		}
 	}
 	// The per-step ids must stay nullable: a lane interrupted partway is
@@ -667,20 +667,20 @@ func TestMigration245CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testin
 		"channel_id", "chat_session_id", "source_message_id",
 	} {
 		if strings.Contains(contents, step+" UUID NOT NULL") {
-			t.Errorf("245 up makes %s NOT NULL, which breaks continuing an interrupted lane", step)
+			t.Errorf("247 up makes %s NOT NULL, which breaks continuing an interrupted lane", step)
 		}
 	}
 
-	down, err := os.ReadFile(filepath.Join(migrationsDir, "245_env_checkpoint_lane.down.sql"))
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "247_env_checkpoint_lane.down.sql"))
 	if err != nil {
-		t.Fatalf("read 245 down: %v", err)
+		t.Fatalf("read 247 down: %v", err)
 	}
 	for _, required := range []string{
 		"DROP INDEX IF EXISTS env_checkpoint_lane_provisioning_idx",
 		"DROP TABLE IF EXISTS env_checkpoint_lane",
 	} {
 		if !strings.Contains(string(down), required) {
-			t.Errorf("245 down missing %q", required)
+			t.Errorf("247 down missing %q", required)
 		}
 	}
 }
@@ -905,40 +905,40 @@ func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 	}
 }
 
-// TestMigration246RetiresTheCloneJobType pins both halves of retiring a job type:
+// TestMigration248RetiresTheCloneJobType pins both halves of retiring a job type:
 // the CHECK stops accepting it, and the down migration puts it back so an older
 // server image can still insert one.
-func TestMigration246RetiresTheCloneJobType(t *testing.T) {
+func TestMigration248RetiresTheCloneJobType(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(dir, "246_sandbox_job_retire_clone.up.sql"))
+	up, err := os.ReadFile(filepath.Join(dir, "248_sandbox_job_retire_clone.up.sql"))
 	if err != nil {
-		t.Fatalf("read migration 246 up: %v", err)
+		t.Fatalf("read migration 248 up: %v", err)
 	}
 	// Only the statement counts. The comment above it names the value it is
 	// dropping, which is worth keeping and is not part of the constraint.
 	upSQL := stripSQLComments(string(up))
 	if strings.Contains(upSQL, "'clone'") {
-		t.Error("migration 246 must drop 'clone' from sandbox_job_type_check")
+		t.Error("migration 248 must drop 'clone' from sandbox_job_type_check")
 	}
 	// Dropping the value must not drop the ones 181/182/187 added alongside it;
 	// that mistake is exactly what migration 187 existed to repair.
 	for _, kept := range []string{"'create_template'", "'delete_template'", "'exec'", "'message'"} {
 		if !strings.Contains(upSQL, kept) {
-			t.Errorf("migration 246 dropped %s along with clone", kept)
+			t.Errorf("migration 248 dropped %s along with clone", kept)
 		}
 	}
 
-	down, err := os.ReadFile(filepath.Join(dir, "246_sandbox_job_retire_clone.down.sql"))
+	down, err := os.ReadFile(filepath.Join(dir, "248_sandbox_job_retire_clone.down.sql"))
 	if err != nil {
-		t.Fatalf("read migration 246 down: %v", err)
+		t.Fatalf("read migration 248 down: %v", err)
 	}
 	if !strings.Contains(stripSQLComments(string(down)), "'clone'") {
-		t.Error("migration 246 down must restore 'clone'")
+		t.Error("migration 248 down must restore 'clone'")
 	}
 }
 
@@ -994,6 +994,6 @@ func TestNoPathEnqueuesOrHandlesACloneJob(t *testing.T) {
 		t.Fatalf("walk server tree: %v", err)
 	}
 	if len(offenders) != 0 {
-		t.Errorf("these sites still treat 'clone' as a sandbox job type, which migration 246 makes unacceptable: %v", offenders)
+		t.Errorf("these sites still treat 'clone' as a sandbox job type, which migration 248 makes unacceptable: %v", offenders)
 	}
 }

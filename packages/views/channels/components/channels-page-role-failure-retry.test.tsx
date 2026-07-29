@@ -47,6 +47,12 @@ const apiMock = vi.hoisted(() => {
   });
   return { proxy, updateChannelMemberRole };
 });
+// Stays local, deliberately: these tests construct a real `ApiError`, so the
+// mock must spread `importOriginal` to keep that export alive — a whole-module
+// replacement swallows it and the tests can no longer build the failures they
+// exist to check. `core/api` has a different factory in all seven
+// channels-page-* files, which is why the shared fixture excludes it: that is
+// a per-test fixture, not duplication.
 vi.mock("@multica/core/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/api")>()),
   api: apiMock.proxy,
@@ -120,37 +126,40 @@ vi.mock("@multica/core/projects/queries", () => ({
   projectListOptions: () => ({ queryKey: ["projects"], queryFn: async () => [] }),
 }));
 
-vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (selector: (s: { user: { id: string; name: string } }) => unknown) =>
-    selector({ user: { id: "user-1", name: "Alice" } }),
-}));
+// The six factories that were byte-identical across every channels-page-* file
+// now come from the shared fixture (#1364 step 2). `vi.mock` itself must stay
+// here — it is hoisted above imports, so the factory cannot be an imported
+// binding; only the body is shared, via a dynamic import that runs at
+// mock-resolution time.
+vi.mock("@multica/core/auth", async () => {
+  const { authMock } = await import("./__fixtures/channels-page-mocks");
+  return authMock();
+});
 
-vi.mock("@multica/core/hooks", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/hooks")>()),
-  useWorkspaceId: () => "ws-1",
-}));
+vi.mock("@multica/core/hooks", async (importOriginal) => {
+  const { hooksMock } = await import("./__fixtures/channels-page-mocks");
+  return hooksMock(importOriginal as never);
+});
 
-vi.mock("@multica/core/paths", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/paths")>()),
-  useWorkspacePaths: () => ({
-    channels: () => "/w/test/channels",
-    channelDetail: (id: string) => `/w/test/channels/${id}`,
-  }),
-}));
+vi.mock("@multica/core/paths", async (importOriginal) => {
+  const { pathsMock } = await import("./__fixtures/channels-page-mocks");
+  return pathsMock(importOriginal as never);
+});
 
-vi.mock("@multica/core/realtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/realtime")>()),
-  useWSEvent: vi.fn(),
-}));
+vi.mock("@multica/core/realtime", async (importOriginal) => {
+  const { realtimeMock } = await import("./__fixtures/channels-page-mocks");
+  return realtimeMock(importOriginal as never);
+});
 
-vi.mock("@multica/core/hooks/use-file-upload", () => ({
-  useFileUpload: () => ({ uploadWithToast: vi.fn() }),
-}));
+vi.mock("@multica/core/hooks/use-file-upload", async () => {
+  const { fileUploadMock } = await import("./__fixtures/channels-page-mocks");
+  return fileUploadMock();
+});
 
-vi.mock("@multica/core/dm", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/dm")>()),
-  dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => [] }),
-}));
+vi.mock("@multica/core/dm", async (importOriginal) => {
+  const { dmMock } = await import("./__fixtures/channels-page-mocks");
+  return dmMock(importOriginal as never);
+});
 
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/workspace/queries")>()),

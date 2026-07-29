@@ -208,12 +208,31 @@ jobs:
             # otherwise Node resolves it as a MODULE NAME and throws. Read the
             # file instead of requiring it (round 1 was voided by this bug: the
             # run itself was fine, but the cache-status evidence never printed).
+            # Per-task DURATION is printed alongside cache status because the
+            # step wall is only comparable between rounds when the cache
+            # pattern matches. `-- --maxWorkers=1` is folded into every task's
+            # hash (turbo), so the test step's typecheck misses when the arg is
+            # present and hits when it is not — round 1's 812s therefore
+            # included cold typecheck while the 804s baseline did not. Summing
+            # the `#test` tasks' own durations sidesteps that entirely: it
+            # measures the same work regardless of what typecheck did. The step
+            # wall is still reported, since serialising multiple test tasks is
+            # a real cost the per-task figures alone would hide.
+            #
+            # NB: the arg CANNOT simply be added to the build/typecheck/lint
+            # step to force hash parity — verified locally that `tsc` rejects
+            # it outright (`error TS5023: Unknown compiler option`).
             node -e '
               const fs = require("node:fs");
               const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              let testMs = 0;
               for (const t of (j.tasks || [])) {
-                console.log(`  ${t.taskId}  cache.status=${t.cache?.status}  local=${t.cache?.local}  remote=${t.cache?.remote}`);
-              }' "$f" || cat "$f"
+                const ms = (t.execution?.endTime ?? 0) - (t.execution?.startTime ?? 0);
+                if (t.taskId.endsWith("#test")) testMs += ms;
+                console.log(`  ${t.taskId}  cache.status=${t.cache?.status}  duration_ms=${ms}`);
+              }
+              console.log(`  SUM_OF_TEST_TASK_DURATIONS_ms=${testMs}`);
+            ' "$f" || cat "$f"
           done
           exit "${STATUS}"
 

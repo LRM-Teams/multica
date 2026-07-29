@@ -24,6 +24,7 @@ type selfReviewOutput struct {
 		Scope        string          `json:"scope"`
 		ScopeType    string          `json:"scope_type"`
 		ScopeID      string          `json:"scope_id"`
+		Topic        string          `json:"topic"`
 		Title        string          `json:"title"`
 		Content      string          `json:"content"`
 		Confidence   float64         `json:"confidence"`
@@ -379,7 +380,16 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, 
 		if confidence <= 0 || confidence > 1 {
 			confidence = 0.5
 		}
-		metadata := curationOutputMetadata(mapStringAny("scope_id", strings.TrimSpace(c.ScopeID), "sensitivity", strings.TrimSpace(c.Sensitivity)), "agent_self_review", c.Applies)
+		metadata := curationOutputMetadata(mapStringAny(
+			"scope_id", strings.TrimSpace(c.ScopeID),
+			"sensitivity", strings.TrimSpace(c.Sensitivity),
+			"topic", strings.TrimSpace(c.Topic),
+			"topic_key", strings.TrimSpace(c.Topic),
+		), "agent_self_review", c.Applies)
+		metadata = appendJSONObjectField(metadata, "shareable", selfReviewCandidateShareable(firstNonEmpty(c.Scope, c.ScopeType), strings.TrimSpace(c.Sensitivity)))
+		if topic := strings.TrimSpace(c.Topic); topic != "" {
+			metadata = appendJSONObjectField(metadata, "dedupe_key", memorycuration.NormalizeTopicKey(firstNonEmpty(c.Scope, c.ScopeType)+"+"+topic))
+		}
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO agent_memory_curation_candidate (
 			  workspace_id, source_agent_id, run_id, candidate_type, scope, title,
@@ -617,4 +627,19 @@ func normalizeTeamKnowledgeKind(v string) string {
 	default:
 		return "memory"
 	}
+}
+
+// selfReviewCandidateShareable marks user-private / sensitive prefs as not
+// eligible for team curator fan-out. Team curation still sees agent/workspace
+// artifacts, but must not promote these private rows.
+func selfReviewCandidateShareable(scope, sensitivity string) bool {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	sensitivity = strings.ToLower(strings.TrimSpace(sensitivity))
+	if scope == "user" {
+		return false
+	}
+	if sensitivity == "sensitive" || sensitivity == "unknown" {
+		return false
+	}
+	return true
 }

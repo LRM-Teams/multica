@@ -187,3 +187,37 @@ func TestDiffAgentMemoryWritesDetectsUpdate(t *testing.T) {
 		t.Fatalf("update diff: changes=%+v", changes)
 	}
 }
+
+func TestMemoryWriteTriggerText(t *testing.T) {
+	if got := memoryWriteTriggerText(Task{ChatMessage: "记住这个"}); got != "记住这个" {
+		t.Fatalf("got %q", got)
+	}
+	if got := memoryWriteTriggerText(Task{TriggerCommentContent: "以后都先反馈"}); got != "以后都先反馈" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLoadAndClearMemorySignals(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sync_queue", "memory-signal.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "{\"action\":\"write\",\"topic\":\"progress_feedback\",\"summary\":\"先反馈\"}\n{\"action\":\"none\"}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	signals := loadMemorySignals(root)
+	if len(signals) != 2 {
+		t.Fatalf("signals=%+v", signals)
+	}
+	if signals[0].Topic != "progress_feedback" {
+		t.Fatalf("topic=%q", signals[0].Topic)
+	}
+	if err := clearMemorySignalQueue(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected signal queue cleared, err=%v", err)
+	}
+}

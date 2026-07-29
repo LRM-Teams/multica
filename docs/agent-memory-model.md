@@ -75,6 +75,22 @@ Multica 的记忆分成两层：
 
 一句话：**自己轻量记；自审+Curator 负责整理。**
 
+### 3.3 同轮 memory signal + 漏写兜底（不另跑模型）
+
+主写入路径仍然是 agent 直接改本地 Markdown。平台**不**在每条消息后再同步调用小模型。
+
+可选增强：
+
+1. Agent 写完 `USER.md` / `RELATIONSHIP.md` 等后，可向 `sync_queue/memory-signal.jsonl` 追加一行短信号，例如：
+   `{"action":"write","kind":"feedback","scope":"user","topic":"progress_feedback","summary":"长任务开始前确认并持续反馈进度"}`
+2. 任务结束后 daemon 上报文件差分；若触发消息命中明确偏好句式（记住/以后都/别再/下次先…），或 signal 要求 write，但本轮没有任何 durable 文件写入（Daily 不算），平台异步写入一条 `agent_memory_curation_candidate`（`metadata.source=missed_write_guard|memory_signal`，`shareable=false`）。
+3. 当天 self-review 消费这些 pending 候选：补写正式文件，或放入 `REVIEW.md`。
+4. Team curator 跳过 `shareable=false` / `scope=user` 的私有候选。
+
+明确「记住这个」时，agent 仍须先完成 durable 写入再声称已记住；漏写由上述兜底进入自审，而不是再跑一遍同步 LLM。
+
+候选去重优先使用稳定 `topic` / `dedupe_key`（`scope[+subject]+kind+topic`），词法相似只作补充。
+
 ## 4. 单 agent 记忆与群体记忆
 
 ### 4.1 只让 agent A 永久记住

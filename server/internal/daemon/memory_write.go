@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/memorysignal"
 )
 
 const memoryWriteSnapshotRel = ".multica/memory-write-hashes.json"
@@ -335,6 +337,8 @@ func compactCloseoutValue(value string) string {
 	return value
 }
 
+const memorySignalQueueRel = "sync_queue/memory-signal.jsonl"
+
 func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 	if d == nil || d.client == nil {
 		return
@@ -350,7 +354,12 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 		return
 	}
 	next, changes, err := diffAgentMemoryWrites(agentRoot, prior)
-	if err != nil || len(changes) == 0 {
+	if err != nil {
+		return
+	}
+	triggerText := memoryWriteTriggerText(task)
+	signals := loadMemorySignals(agentRoot)
+	if len(changes) == 0 && !memorysignal.ShouldReportEvenWithoutWrites(triggerText, toMemorySignals(signals)) {
 		return
 	}
 	entries := make([]AgentMemoryWriteEntry, 0, len(changes))
@@ -364,15 +373,80 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 		})
 	}
 	report := AgentMemoryWriteReport{
-		AgentID:   agentID,
-		RuntimeID: task.RuntimeID,
-		TaskID:    task.ID,
-		Writes:    entries,
+		AgentID:     agentID,
+		RuntimeID:   task.RuntimeID,
+		TaskID:      task.ID,
+		TriggerText: triggerText,
+		InitiatorID: strings.TrimSpace(task.InitiatorID),
+		Signals:     signals,
+		Writes:      entries,
 	}
 	if err := d.client.ReportAgentMemoryWrites(ctx, report); err != nil {
 		return
 	}
-	_ = saveMemoryWriteSnapshot(agentRoot, next)
+	if len(changes) > 0 {
+		_ = saveMemoryWriteSnapshot(agentRoot, next)
+	}
+	_ = clearMemorySignalQueue(agentRoot)
+}
+
+func memoryWriteTriggerText(task Task) string {
+	if msg := strings.TrimSpace(task.ChatMessage); msg != "" {
+		return msg
+	}
+	if msg := strings.TrimSpace(task.TriggerCommentContent); msg != "" {
+		return msg
+	}
+	return strings.TrimSpace(task.QuickCreatePrompt)
+}
+
+func loadMemorySignals(agentRoot string) []AgentMemorySignal {
+	path := filepath.Join(agentRoot, filepath.FromSlash(memorySignalQueueRel))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	parsed := memorysignal.ParseSignalJSONL(string(data))
+	if len(parsed) == 0 {
+		return nil
+	}
+	out := make([]AgentMemorySignal, 0, len(parsed))
+	for _, s := range parsed {
+		out = append(out, AgentMemorySignal{
+			Action:     s.Action,
+			Kind:       s.Kind,
+			Scope:      s.Scope,
+			SubjectID:  s.SubjectID,
+			Topic:      s.Topic,
+			Summary:    s.Summary,
+			Importance: s.Importance,
+		})
+	}
+	return out
+}
+
+func clearMemorySignalQueue(agentRoot string) error {
+	path := filepath.Join(agentRoot, filepath.FromSlash(memorySignalQueueRel))
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func toMemorySignals(signals []AgentMemorySignal) []memorysignal.Signal {
+	out := make([]memorysignal.Signal, 0, len(signals))
+	for _, s := range signals {
+		out = append(out, memorysignal.Signal{
+			Action:     s.Action,
+			Kind:       s.Kind,
+			Scope:      s.Scope,
+			SubjectID:  s.SubjectID,
+			Topic:      s.Topic,
+			Summary:    s.Summary,
+			Importance: s.Importance,
+		})
+	}
+	return out
 }
 
 // AgentMemoryWriteEntry mirrors protocol.AgentMemoryWriteEntry for the client.
@@ -384,10 +458,24 @@ type AgentMemoryWriteEntry struct {
 	DeltaChars  int    `json:"delta_chars"`
 }
 
+// AgentMemorySignal mirrors protocol.AgentMemorySignal for the client.
+type AgentMemorySignal struct {
+	Action     string `json:"action"`
+	Kind       string `json:"kind,omitempty"`
+	Scope      string `json:"scope,omitempty"`
+	SubjectID  string `json:"subject_id,omitempty"`
+	Topic      string `json:"topic,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	Importance string `json:"importance,omitempty"`
+}
+
 // AgentMemoryWriteReport mirrors protocol.AgentMemoryWriteReport for the client.
 type AgentMemoryWriteReport struct {
-	AgentID   string                  `json:"agent_id"`
-	RuntimeID string                  `json:"runtime_id"`
-	TaskID    string                  `json:"task_id,omitempty"`
-	Writes    []AgentMemoryWriteEntry `json:"writes"`
+	AgentID     string                  `json:"agent_id"`
+	RuntimeID   string                  `json:"runtime_id"`
+	TaskID      string                  `json:"task_id,omitempty"`
+	TriggerText string                  `json:"trigger_text,omitempty"`
+	InitiatorID string                  `json:"initiator_id,omitempty"`
+	Signals     []AgentMemorySignal     `json:"signals,omitempty"`
+	Writes      []AgentMemoryWriteEntry `json:"writes"`
 }

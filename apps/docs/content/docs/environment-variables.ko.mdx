@@ -182,6 +182,20 @@ S3 앞에 CloudFront를 두는 경우 세 가지 변수가 적용됩니다: `CLO
 | `MULTICA_<PROVIDER>_PATH` | CLI 이름과 일치 | 각 AI 코딩 도구 실행 파일의 경로 (예: `MULTICA_CLAUDE_PATH`) |
 | `MULTICA_<PROVIDER>_MODEL` | 비어 있음 | 각 AI 코딩 도구의 기본 모델 |
 
+### 데몬 아웃바운드 프록시
+
+데몬, GitHub 자동 업데이트 다운로드, 환경을 상속하는 자식 프로세스는 표준 `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` 변수(소문자 표기도 지원)를 따릅니다. 작업 깨우기 WebSocket도 같은 규칙을 사용하며 `ws://`는 `HTTP_PROXY`, `wss://`는 `HTTPS_PROXY`를 따릅니다.
+
+머신/profile별로 영구 설정하려면:
+
+```bash
+multica config set proxy.http http://proxy.example:8080
+multica config set proxy.https http://proxy.example:8080
+multica config set proxy.no_proxy .corp.example,metadata.internal
+```
+
+환경 변수는 설정 파일의 프록시 URL보다 우선합니다. `NO_PROXY`, `no_proxy`, `proxy.no_proxy`는 합쳐지며 `127.0.0.1,localhost`는 항상 유지됩니다. 로컬 daemon/runtime 제어 트래픽이 프록시를 거치지 않도록 두 표기를 모두 내보냅니다. 프록시 URL에는 자격 증명이 포함될 수 있으므로 설정 파일은 `0600`으로 저장되고, `multica config show`는 HTTP(S) 프록시 원문 대신 `(set)`만 표시합니다.
+
 각 파라미터가 데몬 동작에 어떻게 영향을 미치는지에 대한 전체 설명은 [데몬과 런타임](/daemon-runtimes)을 참고하세요.
 
 ## 프론트엔드 액세스 제어

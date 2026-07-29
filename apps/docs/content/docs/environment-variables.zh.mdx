@@ -185,6 +185,20 @@ API 返回的 `download_url` 在未配置 CloudFront 签名时会指向 `GET /ap
 | `MULTICA_<PROVIDER>_PATH` | 对应 CLI 名 | 各 AI 编程工具的可执行文件路径（如 `MULTICA_CLAUDE_PATH`）|
 | `MULTICA_<PROVIDER>_MODEL` | 空 | 各 AI 编程工具的默认模型 |
 
+### 守护进程出站代理
+
+守护进程、GitHub 自动更新下载以及继承环境的子进程都遵循标准 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（也接受小写形式）。任务唤醒 WebSocket 使用同一规则：`ws://` 走 `HTTP_PROXY`，`wss://` 走 `HTTPS_PROXY`。
+
+需要按机器/profile 持久化时：
+
+```bash
+multica config set proxy.http http://proxy.example:8080
+multica config set proxy.https http://proxy.example:8080
+multica config set proxy.no_proxy .corp.example,metadata.internal
+```
+
+环境变量优先于配置文件中的代理 URL。`NO_PROXY`、`no_proxy` 与 `proxy.no_proxy` 会合并，并始终保留 `127.0.0.1,localhost`；守护进程同时导出大小写两种形式，保证本机 daemon/runtime 控制流量不经过代理。代理 URL 可能含凭据：配置文件权限为 `0600`，`multica config show` 对 HTTP(S) 代理只显示 `(set)`，不会打印原值。
+
 完整解释每个参数对守护进程行为的影响，见 [守护进程与运行时](/daemon-runtimes)。
 
 ## 前端访问控制

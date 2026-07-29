@@ -34,6 +34,14 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	timeout := opts.Timeout
 	runCtx, cancel := runContext(ctx, timeout)
 
+	// Materialise agent.mcp_config into `{cwd}/.cursor/mcp.json` before
+	// spawning cursor-agent. Cursor has no --mcp-config flag; the project
+	// file is the injection point (paired with --approve-mcps in argv).
+	if err := ensureCursorMcpConfig(opts.Cwd, opts.McpConfig, b.cfg.Logger); err != nil {
+		cancel()
+		return nil, fmt.Errorf("apply cursor mcp_config: %w", err)
+	}
+
 	args := buildCursorArgs(prompt, opts, b.cfg.Logger)
 	var promptFile string
 	if shouldSpillCursorPrompt(prompt, args) {
@@ -617,6 +625,7 @@ var cursorBlockedArgs = map[string]blockedArgMode{
 	"-p":              blockedStandalone, // non-interactive print mode
 	"--output-format": blockedWithValue,  // stream-json protocol
 	"--yolo":          blockedStandalone, // auto-approval for autonomous operation
+	"--approve-mcps":  blockedStandalone, // daemon owns MCP approval when mcp_config is set
 }
 
 // maxCursorArgvBytes is intentionally below common Linux ARG_MAX headroom once
@@ -646,7 +655,7 @@ func cursorArgsSize(args []string) int {
 //
 // Usage: cursor-agent -p <prompt> --output-format stream-json
 //
-//	--workspace <cwd> --yolo [--model <m>] [--resume <id>]
+//	--workspace <cwd> --yolo [--approve-mcps] [--model <m>] [--resume <id>]
 func buildCursorArgs(prompt string, opts ExecOptions, logger *slog.Logger) []string {
 	args := []string{
 		"-p", prompt,
@@ -655,6 +664,11 @@ func buildCursorArgs(prompt string, opts ExecOptions, logger *slog.Logger) []str
 	}
 	if opts.Cwd != "" {
 		args = append(args, "--workspace", opts.Cwd)
+	}
+	// Headless daemon runs cannot click through MCP approval prompts.
+	// When Multica owns mcp.json for this agent, auto-approve those servers.
+	if hasManagedMcpConfig(opts.McpConfig) {
+		args = append(args, "--approve-mcps")
 	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)

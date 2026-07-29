@@ -376,11 +376,11 @@ export interface Agent {
   /**
    * MCP server configuration forwarded to runtimes that consume
    * `agent.mcp_config` (see providerSupportsMcpConfig). Each backend
-   * materialises it in the runtime-native place: Claude flags, Codex
-   * config.toml, ACP session params, OpenCode env config, OpenClaw
-   * wrapper config, etc. `null` (or the field omitted on legacy backends)
-   * means no managed config; the daemon falls back to the CLI's own
-   * default. MUL-2764.
+ * materialises it in the runtime-native place: Claude/Pi flags, Cursor
+ * `.cursor/mcp.json`, Codex config.toml, ACP session params, OpenCode env
+ * config, OpenClaw wrapper config, etc. `null` (or the field omitted on
+ * legacy backends) means no managed config; the daemon falls back to the
+ * CLI's own default. MUL-2764.
    *
    * When the caller can't see secrets (an agent actor, or a non-owner
    * non-admin), the server replaces the value with `null` and sets

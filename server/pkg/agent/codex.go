@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -92,7 +91,7 @@ func buildCodexArgs(opts ExecOptions, logger *slog.Logger) []string {
 	// mcp_config present, daemon-written `$CODEX_HOME/config.toml` is the
 	// authoritative source and stray `-c mcp_servers.*` overrides are
 	// dropped to keep last-wins from re-shadowing it.
-	if hasManagedCodexMcpConfig(opts.McpConfig) {
+	if hasManagedMcpConfig(opts.McpConfig) {
 		extra = filterCodexCustomConfigOverrides(extra, logger)
 		custom = filterCodexCustomConfigOverrides(custom, logger)
 	}
@@ -101,20 +100,11 @@ func buildCodexArgs(opts ExecOptions, logger *slog.Logger) []string {
 	return args
 }
 
-// hasManagedCodexMcpConfig reports whether the agent's mcp_config field is
-// "present" in the API three-state sense: a non-null JSON value. Both
-// `{}` and `{"mcpServers":{}}` count as present (the admin saved an empty
-// managed set — strict mode, no global fallback); only SQL NULL or the
-// literal JSON `null` count as absent (CLI default).
+// hasManagedCodexMcpConfig is kept as a thin alias so older call sites and
+// comments that name the Codex three-state check keep compiling; the shared
+// implementation lives in hasManagedMcpConfig.
 func hasManagedCodexMcpConfig(raw json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return false
-	}
-	if bytes.Equal(trimmed, []byte("null")) {
-		return false
-	}
-	return true
+	return hasManagedMcpConfig(raw)
 }
 
 // codexManagedMcpConfigKeyRe matches the daemon-managed config namespace
@@ -221,7 +211,7 @@ func ensureCodexMcpConfig(configPath string, mcpConfig json.RawMessage, logger *
 	// converge on a clean state.
 	stripped := codexMcpBlockRe.ReplaceAllString(existing, "")
 
-	managed := hasManagedCodexMcpConfig(mcpConfig)
+	managed := hasManagedMcpConfig(mcpConfig)
 	block, _, renderErr := renderCodexMcpServersBlock(mcpConfig)
 	if renderErr != nil {
 		return renderErr
@@ -532,7 +522,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			cancel()
 			return nil, fmt.Errorf("apply codex mcp_config: %w", err)
 		}
-	} else if hasManagedCodexMcpConfig(opts.McpConfig) {
+	} else if hasManagedMcpConfig(opts.McpConfig) {
 		// Managed mcp_config saved but no CODEX_HOME to anchor it.
 		// Same reasoning as above: silently launching would inherit
 		// whatever MCP setup the host user has, which is the wrong

@@ -64,6 +64,10 @@ type ExecOptions struct {
 	// creates the per-run control extension. Callers outside this package cannot
 	// supply or override the trusted extension path.
 	piOutputLimitExtension string
+	// piMcpConfigPath is populated internally by the Pi backend after writing
+	// agent.mcp_config to a temp file. Callers outside this package cannot
+	// supply or override the path.
+	piMcpConfigPath string
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
 	// medium|high|xhigh", OpenCode's model variant names). Empty means

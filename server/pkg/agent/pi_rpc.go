@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -146,14 +147,15 @@ type piRPCBackend struct {
 }
 
 type piRPCProcess struct {
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	sessionPath string
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	sessionPath   string
+	mcpConfigPath string // temp file from agent.mcp_config; removed on dispose
 
-	writeMu  sync.Mutex
-	stateMu  sync.Mutex
-	turn     *piRPCTurn
-	pending  map[string]chan piRPCResponse // request-ID keyed control responses
+	writeMu sync.Mutex
+	stateMu sync.Mutex
+	turn    *piRPCTurn
+	pending map[string]chan piRPCResponse // request-ID keyed control responses
 }
 
 type piRPCTurn struct {
@@ -332,6 +334,15 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if err := ensurePiSessionFile(sessionPath); err != nil {
 		return nil, fmt.Errorf("Pi RPC session file: %w", err)
 	}
+	var mcpConfigPath string
+	if hasManagedMcpConfig(opts.McpConfig) {
+		path, err := writeMcpConfigToTemp(opts.McpConfig)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfigPath = path
+		opts.piMcpConfigPath = path
+	}
 	args := buildPiRPCArgs(sessionPath, opts, b.cfg.Logger)
 	argv0, cmdArgs := choosePiInvocation(execName, lookedUp, args, b.cfg.Logger)
 	cmd := exec.Command(argv0, cmdArgs...)
@@ -342,20 +353,38 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	cmd.Env = buildEnv(b.cfg.Env)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
 		return nil, fmt.Errorf("Pi RPC stdout: %w", err)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
 		return nil, fmt.Errorf("Pi RPC stdin: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
 		return nil, fmt.Errorf("Pi RPC stderr: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
 		return nil, fmt.Errorf("start Pi RPC: %w", err)
 	}
-	p := &piRPCProcess{cmd: cmd, stdin: stdin, sessionPath: sessionPath, pending: make(map[string]chan piRPCResponse)}
+	p := &piRPCProcess{
+		cmd:           cmd,
+		stdin:         stdin,
+		sessionPath:   sessionPath,
+		mcpConfigPath: mcpConfigPath,
+		pending:       make(map[string]chan piRPCResponse),
+	}
 	go b.readEvents(p, stdout)
 	go func() { _, _ = io.Copy(newLogWriter(b.cfg.Logger, "[pi-rpc:stderr] "), stderr) }()
 	b.cfg.Logger.Info("Pi RPC started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
@@ -630,6 +659,9 @@ func (b *piRPCBackend) disposeLocked(p *piRPCProcess) {
 		_ = p.cmd.Process.Kill()
 	}
 	_ = p.cmd.Wait()
+	if p.mcpConfigPath != "" {
+		_ = os.Remove(p.mcpConfigPath)
+	}
 }
 
 func trySendPiRPCResponse(ch chan<- piRPCResponse, response piRPCResponse) {
@@ -677,6 +709,9 @@ func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) [
 		}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
+	}
+	if path := strings.TrimSpace(opts.piMcpConfigPath); path != "" {
+		args = append(args, "--mcp-config", path)
 	}
 	return append(args, filterPiCustomArgs(opts, logger)...)
 }

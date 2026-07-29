@@ -1233,6 +1233,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/issues/{id}/rerun", h.RerunAgentIssue)
 				r.Put("/issues/{id}/channel", h.SetAgentIssueSourceChannel)
 				r.Get("/tasks/{taskId}/messages", h.ListAgentTaskMessages)
+				r.Post("/tasks/{taskId}/cancel", h.CancelAgentTask)
 				r.Get("/projects/{id}/resources", h.ListAgentProjectResources)
 				r.Get("/workspace", h.GetAgentWorkspace)
 				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)

@@ -68,6 +68,7 @@ export {
   useAddChannelMember,
   useAddChannelMembers,
   useRemoveChannelMember,
+  useUpdateChannelMemberRole,
 } from "./mutations";
 export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey } from "./stores";
 export { isImmutableSystemChannel } from "./system-channel";
@@ -88,3 +89,4 @@ export {
   contentMentionsViewer,
   messageMentionsViewer,
 } from "./mentions-viewer";
+export { classifyRoleChangeFailure, type RoleChangeFailure } from "./role-change-failure";

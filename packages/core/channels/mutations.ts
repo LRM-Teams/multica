@@ -1,5 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import type { ChannelMemberRole } from "../types";
+import { classifyRoleChangeFailure } from "./role-change-failure";
 import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
 import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache, upsertChannelMessageThreadInCache } from "./queries";
@@ -448,6 +450,52 @@ export function useAddChannelMembers() {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
       qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    },
+  });
+}
+
+/**
+ * Owner-only member role change — promote, demote, or transfer ownership
+ * (#832 / #814). The server distinguishes them by the target `role`.
+ *
+ * Deliberately no optimistic update: the failure modes here are not all
+ * retryable, and two of them (`owner_changed`, `conflict`) mean the caller's
+ * view of who holds what is already stale. Showing the new role first and
+ * rolling it back would flash a state that was never true — the surface would
+ * be asserting an outcome it does not have. Every failure kind lands on the
+ * caller via `classifyRoleChangeFailure`.
+ *
+ * `owner_changed` additionally invalidates the roster, because that response
+ * means ownership moved underneath us and the list on screen is wrong (#847).
+ */
+export function useUpdateChannelMemberRole() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      memberType,
+      memberId,
+      role,
+    }: {
+      channelId: string;
+      memberType: "user" | "agent";
+      memberId: string;
+      role: ChannelMemberRole;
+    }) => api.updateChannelMemberRole(channelId, memberType, memberId, role),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      // Ownership transfer changes what the viewer may do everywhere, not just
+      // in this row — the channel list carries role-derived affordances too.
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    },
+    onError: (error, vars) => {
+      // Refresh the roster on the two kinds that mean "your view is stale".
+      // Not a retry — the user is told what happened and decides.
+      const kind = classifyRoleChangeFailure(error);
+      if (kind === "owner_changed" || kind === "gone") {
+        qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      }
     },
   });
 }

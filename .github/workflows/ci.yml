@@ -54,6 +54,9 @@ jobs:
       - name: Test self-host env derivation
         run: bash scripts/selfhost-config.test.sh
 
+      - name: Verify Web-only workflow surface
+        run: bash scripts/web-only-workflows.test.sh
+
       - name: Verify reserved-slugs.ts is up to date
         # Re-runs the generator and fails on any drift from the
         # checked-in TypeScript output. The Go side embeds the JSON
@@ -72,9 +75,9 @@ jobs:
       - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.
-        # Mobile remains path-filtered in mobile-verify.yml; desktop packaging
-        # is out of the main release gate (#1320). Dependents of @multica/web
-        # (core/ui/views) are included via the `...` selector.
+        # Mobile verification and desktop packaging are outside GitHub Actions.
+        # Dependents of @multica/web (core/ui/views) are included via the `...`
+        # selector.
         # ⚠️ MEASUREMENT INSTRUMENTATION (task #855) — the `--cache-dir` /
         # `--cache` flags below are TEMPORARY and MUST be removed before merge.
         # They exist only so the verification rounds are genuinely cache-cold:

@@ -424,19 +424,15 @@ make check
 
 **Quick iteration:** If you know only TypeScript or Go is affected, run individual checks first for faster feedback, then finish with a full `make check` before marking work complete.
 
-## CLI Release
+## Release scope
 
-**Prerequisite:** A CLI release must accompany every Production deployment.
+GitHub Actions tag releases are Web-service-only: Go verification, amd64
+backend and web images, and the Helm chart. GitHub Actions does not build CLI,
+desktop, mobile, Windows, macOS, or ARM artifacts.
 
-1. Create a tag on the `main` branch: `git tag v0.x.x`
-2. Push the tag: `git push origin v0.x.x`
-3. GitHub Actions automatically triggers `release.yml`: runs Go tests → GoReleaser builds multi-platform binaries → publishes to GitHub Releases + Homebrew tap
-
-By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
-
-The main release is Web-focused: its gates are Go verification, CLI/daemon
-artifacts, backend and web images, and the Helm chart. Desktop App packaging is
-outside this release scope and must not be treated as a release gate.
+CLI/daemon, desktop, mobile, and non-amd64 releases require a separately
+approved manual release process. Do not treat those artifacts as a Web
+production deployment gate.
 
 ## Multi-tenancy
 

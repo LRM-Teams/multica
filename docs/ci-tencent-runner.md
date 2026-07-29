@@ -4,12 +4,12 @@
 >
 > | Role | Host / labels |
 > | --- | --- |
-> | **PR CI** (`ci.yml`, `mobile-verify.yml`) | Any runner with labels `[self-hosted, ci]`. **Aliyun** `101.200.210.144` **must** carry `ci` in addition to `aliyun`. Optional extra Tencent CI box may register the same `ci` label and share the queue. |
+> | **PR CI** (`ci.yml`) | Any runner with labels `[self-hosted, ci]`. **Aliyun** `101.200.210.144` **must** carry `ci` in addition to `aliyun`. Optional extra Tencent CI box may register the same `ci` label and share the queue. |
 > | **Shared Multica `dev` deploy** | Aliyun `101.200.210.144` (`leagent.me`), deploy job stays `runs-on: [self-hosted, aliyun]` — see `deploy.yml` / `docs/deploy-s89.md` |
 >
 > YAML does **not** need a second `runs-on` variant: GitHub matches **all** listed labels. Aliyun keeps `aliyun` for Deploy and adds `ci` so it can also pick up PR CI. When CI and Deploy share Aliyun, expect CPU contention during large frontend suites — prefer not to start a deploy mid-CI, or add a dedicated Tencent `ci` box later for relief.
 
-`.github/workflows/ci.yml` and `mobile-verify.yml` use `runs-on: [self-hosted, ci]`. Until at least one runner with those labels is online and idle, PR checks will queue.
+`.github/workflows/ci.yml` uses `runs-on: [self-hosted, ci]`. Until at least one runner with those labels is online and idle, PR checks will queue.
 
 macOS installer jobs are out of the PR CI gate (Frank 2026-07-29); do not reintroduce a GitHub-hosted macOS job into `ci.yml`.
 
@@ -98,11 +98,12 @@ If the host sits behind a corporate proxy, configure it for the **runner service
 
 ## What stays on GitHub-hosted runners
 
-Intentionally **not** moved by LRM-701:
+Only the Web-service tag release stays hosted: Go verification, amd64 backend
+and web image builds, manifest publication, and the Helm chart.
 
-- `deploy.yml` **prepare / build-image** jobs (still package on hosted runners; only the final deploy step runs on `[self-hosted, aliyun]`)
-- `release.yml` multi-arch image builds
-- `desktop-smoke.yml` (manual `workflow_dispatch`; Windows matrix still needs a Windows runner)
+PR CI and Deploy preparation/build run on `[self-hosted, ci]`; the final Deploy
+job runs on `[self-hosted, aliyun]`. Desktop, mobile, Windows, macOS, ARM, and
+CLI artifact jobs are not part of GitHub Actions.
 
 ## Verification checklist
 

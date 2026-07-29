@@ -57,53 +57,15 @@ jobs:
       - name: Run tests
         run: cd server && go test ./...
 
-  release:
-    needs: verify
-    # Only run on the canonical LRM repo. Forks should not publish release
-    # artifacts for the default install/update channel.
-    if: github.repository == 'LRM-Teams/multica'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Multi-arch images are built natively per platform on dedicated runners
-  # (amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm) and merged into a
-  # manifest list. This avoids QEMU emulation, which was making the Next.js
-  # arm64 build run for 30+ minutes per release.
+  # Web-service releases are amd64-only. Desktop/mobile/CLI artifacts and ARM
+  # images are intentionally outside the hosted Actions release surface.
   docker-backend-build:
     needs: verify
     if: github.repository == 'LRM-Teams/multica'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runs-on: ubuntu-latest
-          - platform: linux/arm64
-            runs-on: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: ubuntu-latest
     steps:
       - name: Prepare
-        run: |
-          platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+        run: echo "PLATFORM_PAIR=linux-amd64" >> "$GITHUB_ENV"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,7 +96,7 @@ jobs:
           context: .
           file: Dockerfile
           pull: true
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=release-backend-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=release-backend-${{ env.PLATFORM_PAIR }}
@@ -209,20 +171,10 @@ jobs:
   docker-web-build:
     needs: verify
     if: github.repository == 'LRM-Teams/multica'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runs-on: ubuntu-latest
-          - platform: linux/arm64
-            runs-on: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: ubuntu-latest
     steps:
       - name: Prepare
-        run: |
-          platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+        run: echo "PLATFORM_PAIR=linux-amd64" >> "$GITHUB_ENV"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -253,7 +205,7 @@ jobs:
           context: .
           file: Dockerfile.web
           pull: true
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=release-web-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=release-web-${{ env.PLATFORM_PAIR }}

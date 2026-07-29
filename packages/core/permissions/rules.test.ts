@@ -12,6 +12,7 @@ import {
   canEditSkill,
   canManageMembers,
   canUpdateWorkspaceSettings,
+  canViewAgentActivity,
 } from "./rules";
 
 const ALICE = "user-alice";
@@ -142,6 +143,67 @@ describe("canEditAgent", () => {
     expect(canEditAgent(orphan, { userId: BOB, role: "admin" }).allowed).toBe(
       true,
     );
+  });
+});
+
+describe("canViewAgentActivity", () => {
+  const privateAgent = makeAgent({ owner_id: ALICE, visibility: "private" });
+
+  it("allows the agent owner", () => {
+    expect(
+      canViewAgentActivity(privateAgent, { userId: ALICE, role: "member" })
+        .allowed,
+    ).toBe(true);
+  });
+
+  // The case the old `managed_role === "group_manager"` gate could not express:
+  // the backend already admits workspace admins (agent_access.go:51), the view
+  // layer did not, so admins could fetch activity but never saw the tab.
+  it("allows a workspace admin who does not own the agent", () => {
+    expect(
+      canViewAgentActivity(privateAgent, { userId: BOB, role: "admin" })
+        .allowed,
+    ).toBe(true);
+  });
+  it("allows the workspace owner who does not own the agent", () => {
+    expect(
+      canViewAgentActivity(privateAgent, { userId: BOB, role: "owner" })
+        .allowed,
+    ).toBe(true);
+  });
+
+  it("denies a plain member on a private agent they do not own", () => {
+    const d = canViewAgentActivity(privateAgent, { userId: BOB, role: "member" });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toBe("not_resource_owner");
+  });
+  it("allows a plain member on a workspace-visibility agent", () => {
+    const shared = makeAgent({ owner_id: ALICE, visibility: "workspace" });
+    expect(
+      canViewAgentActivity(shared, { userId: BOB, role: "member" }).allowed,
+    ).toBe(true);
+  });
+  it("denies a non-member even on a workspace-visibility agent", () => {
+    const shared = makeAgent({ owner_id: ALICE, visibility: "workspace" });
+    expect(
+      canViewAgentActivity(shared, { userId: BOB, role: null }).allowed,
+    ).toBe(false);
+  });
+  it("denies when signed out", () => {
+    const d = canViewAgentActivity(privateAgent, { userId: null, role: null });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toBe("not_authenticated");
+  });
+
+  it("ignores the agent's own managed_role marker", () => {
+    const marked = makeAgent({
+      owner_id: ALICE,
+      visibility: "private",
+      managed_role: "group_manager",
+    });
+    expect(
+      canViewAgentActivity(marked, { userId: BOB, role: "member" }).allowed,
+    ).toBe(false);
   });
 });
 

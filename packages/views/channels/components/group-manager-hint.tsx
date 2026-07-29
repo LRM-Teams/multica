@@ -19,9 +19,10 @@ import { readGroupManagerHintDismissed, dismissGroupManagerHint } from "./group-
  *     and the hint stays hidden — we never guess "this group has no manager"
  *     from absent data, and never imply a permission we can't verify.
  *   - It never assigns anything: the CTA only navigates to the member list.
- *     Designating a manager needs the server-authoritative role mutation, and
- *     until that exists the copy says so rather than offering a fake action
- *     (no auto-provisioned agent manager — Frank/Parker locked that).
+ *     That is deliberate, not a limitation — designating a manager is done in
+ *     the member list where the target and the consequence are both visible,
+ *     never inline from a hint (no auto-provisioned agent manager — Frank/
+ *     Parker locked that).
  *   - Dismissible per channel, remembered locally.
  */
 export function GroupManagerHint({
@@ -48,8 +49,9 @@ export function GroupManagerHint({
   // "member", which is exactly the distinction that matters here — a real
   // manager whose role the server omitted would otherwise be counted as an
   // ordinary member and the hint would announce "no manager yet" to a group
-  // that has one. Partial role data is the live state while #814 is in flight,
-  // so this is the case, not a theoretical one. (Iris/Wren review catch.)
+  // that has one. A roster that omits `role` for some members is a shape the
+  // server can still return, so this guard is load-bearing, not theoretical.
+  // (Iris/Wren review catch.)
   if (members.some((m) => m.role === undefined)) return null;
 
   const viewer = members.find(

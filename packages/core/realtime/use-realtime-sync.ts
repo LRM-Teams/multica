@@ -58,6 +58,8 @@ import {
 } from "../channels/queries";
 import { messageMentionsViewer } from "../channels/mentions-viewer";
 import { dmKeys } from "../dm/queries";
+import { applyResearchWSEvent } from "../research/ws-updaters";
+import type { WSMessage } from "../types/events";
 import { voiceCallKeys } from "../voice-calls/queries";
 import type { DMItem } from "../dm/types";
 import { useChatStore } from "../chat";
@@ -1360,6 +1362,20 @@ export function useRealtimeSync(
       invalidateVoiceCallFromRealtime(qc, payload as VoiceCallUpdatedPayload);
     });
 
+    const researchWsId = () => getCurrentWsId() ?? "";
+    const onResearchEvent = (type: WSMessage["type"]) => (payload: unknown) => {
+      const wsId = researchWsId();
+      if (!wsId) return;
+      applyResearchWSEvent(qc, wsId, { type, payload } as WSMessage);
+    };
+    const unsubResearchGraph = ws.on("research_session:graph_updated", onResearchEvent("research_session:graph_updated"));
+    const unsubResearchPresence = ws.on("research_session:presence", onResearchEvent("research_session:presence"));
+    const unsubResearchSources = ws.on("research_session:sources_updated", onResearchEvent("research_session:sources_updated"));
+    const unsubResearchReport = ws.on("research_session:report_updated", onResearchEvent("research_session:report_updated"));
+    const unsubResearchMessage = ws.on("research_session:message", onResearchEvent("research_session:message"));
+    const unsubResearchStageEval = ws.on("research_session:stage_eval", onResearchEvent("research_session:stage_eval"));
+    const unsubResearchStatus = ws.on("research_session:status_changed", onResearchEvent("research_session:status_changed"));
+
     return () => {
       unsubAny();
       unsubIssueUpdated();
@@ -1408,6 +1424,13 @@ export function useRealtimeSync(
       unsubChannelReactionRemoved();
       unsubChannelUpdated();
       unsubVoiceCallUpdated();
+      unsubResearchGraph();
+      unsubResearchPresence();
+      unsubResearchSources();
+      unsubResearchReport();
+      unsubResearchMessage();
+      unsubResearchStageEval();
+      unsubResearchStatus();
       timers.forEach(clearTimeout);
       timers.clear();
     };

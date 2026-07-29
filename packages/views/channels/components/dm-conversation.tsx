@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  channelAttachmentsOptions,
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
@@ -18,7 +17,6 @@ import {
   useAddChannelReaction,
   useRemoveChannelReaction,
   useEditChannelMessage,
-  useDeleteChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
 } from "@multica/core/channels";
@@ -471,10 +469,6 @@ function DmChannelConversation({
   // issue context). DmConversation remounts per DM (key={source:id} at the
   // call site), so switching conversations lands back on chat for free.
   const [dmView, setDmView] = useState<"chat" | "files">("chat");
-  // Files tab count badge. Same queryOptions as ChannelFilesPanel, so the
-  // panel shares this cache entry when the tab opens (no double fetch).
-  const { data: dmAttachments } = useQuery(channelAttachmentsOptions(channelId));
-  const dmFilesCount = dmAttachments?.length ?? 0;
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
     setSelectedMemberPanelId(null);
@@ -505,24 +499,16 @@ function DmChannelConversation({
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
   const editChannelMessage = useEditChannelMessage();
-  const deleteChannelMessage = useDeleteChannelMessage();
   const setThreadFollowed = useSetChannelThreadFollowed();
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
-  // DMs are never archived/closed, so (like onReact) edit/delete are always wired;
-  // the bubble still gates the affordance on the message being the viewer's own.
+  // DMs are never archived/closed, so (like onReact) edit is always wired.
   const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
     editChannelMessage.mutate(
       { channelId: message.channel_id, messageId: message.id, content },
       { onError: () => showErrorToast(t(($) => $.message.edit_failed_toast)) },
     );
   }, [editChannelMessage, t]);
-  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
-    deleteChannelMessage.mutate(
-      { channelId: message.channel_id, messageId: message.id },
-      { onError: () => showErrorToast(t(($) => $.message.delete_failed_toast)) },
-    );
-  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -1206,7 +1192,6 @@ function DmChannelConversation({
           onReact={supervisedReadOnly ? undefined : handleReactToMessage}
           onQuoteMessage={supervisedReadOnly ? undefined : setThreadQuoteTarget}
           onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
-          onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
           onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
         />
         <Composer
@@ -1341,11 +1326,6 @@ function DmChannelConversation({
             </TabsTrigger>
             <TabsTrigger value="files" className="flex-none px-3 py-2">
               {t(($) => $.view_tabs.files)}
-              {dmFilesCount > 0 && (
-                <span className="ml-1.5 text-xs font-normal tabular-nums text-muted-foreground">
-                  {dmFilesCount}
-                </span>
-              )}
             </TabsTrigger>
           </TabsList>
         </div>
@@ -1464,7 +1444,6 @@ function DmChannelConversation({
         onReact={supervisedReadOnly ? undefined : handleReactToMessage}
         onQuoteMessage={supervisedReadOnly ? undefined : setQuoteTarget}
         onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
-        onDeleteMessage={supervisedReadOnly ? undefined : handleDeleteMessage}
         onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
       />
       <Composer

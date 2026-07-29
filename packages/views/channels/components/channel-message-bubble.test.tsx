@@ -1952,18 +1952,18 @@ describe("ChannelMessageBubble", () => {
   // (canEdit=false) until the inline editor is rebuilt on the unified composer
   // (#258). Delete stays. This asserts Delete renders on the viewer's own
   // message while Edit never does.
-  it("shows delete but never edit on the viewer's own message", () => {
+  it("shows neither delete nor edit on the viewer's own message (LRM-695)", () => {
     const { rerender } = render(
       <ChannelMessageBubble
         message={ownMessage()}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
-    // Edit is unshipped — the entry point must not render even on own messages.
+    // LRM-695: message delete is removed from the UI (Frank: 只去删除). Edit is
+    // unshipped. Neither entry point renders, even on the viewer's own message.
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 
     // A peer / agent message from another author exposes no edit or delete.
@@ -1972,7 +1972,6 @@ describe("ChannelMessageBubble", () => {
         message={makeMessage({ type: "user", author_id: "user-2", author_name: "bob" })}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
@@ -1993,7 +1992,6 @@ describe("ChannelMessageBubble", () => {
         message={message}
         currentUserId="user-1"
         onEdit={onEdit}
-        onDelete={vi.fn()}
         onReact={onReact}
         onOpenThread={onOpenThread}
       />,
@@ -2027,7 +2025,6 @@ describe("ChannelMessageBubble", () => {
         message={ownMessage()}
         currentUserId="user-1"
         onEdit={onEdit}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -2080,7 +2077,6 @@ describe("ChannelMessageBubble", () => {
         })}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
         onReact={vi.fn()}
         onOpenThread={vi.fn()}
       />,
@@ -2095,25 +2091,20 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: "👍1" })).not.toBeInTheDocument();
   });
 
-  it("deletes through onDelete without a send/dispatch path", async () => {
-    const onDelete = vi.fn();
-    const onReact = vi.fn();
-    const message = ownMessage();
+  it("does not surface a delete affordance (LRM-695 removed it)", () => {
+    // LRM-695: message delete is fully removed from the UI (Frank/Wendy seq 4555 —
+    // entry code + calls deleted, not dormant). No button renders; the tombstone
+    // still renders for server-deleted messages (covered in the list test).
     render(
       <ChannelMessageBubble
-        message={message}
+        message={ownMessage()}
         currentUserId="user-1"
         onEdit={vi.fn()}
-        onDelete={onDelete}
-        onReact={onReact}
+        onReact={vi.fn()}
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-
-    expect(onDelete).toHaveBeenCalledTimes(1);
-    expect(onDelete).toHaveBeenCalledWith(message);
-    expect(onReact).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
   });
 
   it("renders an optimistic pending bubble silently (no Sending…)", () => {
@@ -2132,7 +2123,6 @@ describe("ChannelMessageBubble", () => {
         onReact={vi.fn()}
         onQuote={vi.fn()}
         onOpenThread={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -2161,7 +2151,6 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
         onRetrySend={onRetrySend}
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -2314,7 +2303,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         message={pending()}
         currentUserId="user-1"
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     act(() => vi.advanceTimersByTime(999));
@@ -2328,7 +2316,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         message={pending()}
         currentUserId="user-1"
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     act(() => vi.advanceTimersByTime(1000));
@@ -2348,7 +2335,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         currentUserId="user-1"
         onRetrySend={vi.fn()}
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     act(() => vi.advanceTimersByTime(1000));
@@ -2359,7 +2345,6 @@ describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {
         currentUserId="user-1"
         onRetrySend={vi.fn()}
         onReact={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
     expect(screen.queryByTestId("message-sending")).not.toBeInTheDocument();

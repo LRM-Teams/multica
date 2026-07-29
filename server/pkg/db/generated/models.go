@@ -156,18 +156,19 @@ type AgentInboxToken struct {
 }
 
 type AgentCredential struct {
-	ID          pgtype.UUID        `json:"id"`
-	TokenHash   string             `json:"token_hash"`
-	TokenPrefix string             `json:"token_prefix"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
-	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
-	DisabledAt  pgtype.Timestamptz `json:"disabled_at"`
-	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID             pgtype.UUID        `json:"id"`
+	TokenHash      string             `json:"token_hash"`
+	TokenPrefix    string             `json:"token_prefix"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
+	DisabledAt     pgtype.Timestamptz `json:"disabled_at"`
+	LastUsedAt     pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	IssuanceSource string             `json:"issuance_source"`
 }
 
 type AgentMemory struct {
@@ -1428,4 +1429,141 @@ type WorkEdge struct {
 	Evidence    []byte             `json:"evidence"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchFleet struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	LeadAgentID pgtype.UUID        `json:"lead_agent_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchFleetFeedback struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	FleetID     pgtype.UUID        `json:"fleet_id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	Stage       pgtype.Text        `json:"stage"`
+	Score       float64            `json:"score"`
+	Notes       string             `json:"notes"`
+	Metadata    []byte             `json:"metadata"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ResearchFleetMember struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	FleetID     pgtype.UUID        `json:"fleet_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Role        string             `json:"role"`
+	Status      string             `json:"status"`
+	IsLead      bool               `json:"is_lead"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchFleetPlaybook struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	FleetID           pgtype.UUID        `json:"fleet_id"`
+	Domain            string             `json:"domain"`
+	Version           int32              `json:"version"`
+	ContentMd         string             `json:"content_md"`
+	ResearchFleetOnly bool               `json:"research_fleet_only"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchGraphEdge struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	FromNodeID  pgtype.UUID        `json:"from_node_id"`
+	ToNodeID    pgtype.UUID        `json:"to_node_id"`
+	EdgeType    string             `json:"edge_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ResearchGraphNode struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	SessionID    pgtype.UUID        `json:"session_id"`
+	NodeType     string             `json:"node_type"`
+	Title        string             `json:"title"`
+	Summary      string             `json:"summary"`
+	Status       string             `json:"status"`
+	ActorAgentID pgtype.UUID        `json:"actor_agent_id"`
+	Payload      []byte             `json:"payload"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchMessage struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	SessionID     pgtype.UUID        `json:"session_id"`
+	SenderType    string             `json:"sender_type"`
+	SenderID      pgtype.UUID        `json:"sender_id"`
+	TargetAgentID pgtype.UUID        `json:"target_agent_id"`
+	Body          string             `json:"body"`
+	CardKind      string             `json:"card_kind"`
+	Meta          []byte             `json:"meta"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type ResearchReport struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	Revision    int32              `json:"revision"`
+	ContentMd   string             `json:"content_md"`
+	Structured  []byte             `json:"structured"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchSession struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	FleetID        pgtype.UUID        `json:"fleet_id"`
+	CreatedBy      pgtype.UUID        `json:"created_by"`
+	Title          string             `json:"title"`
+	Goal           string             `json:"goal"`
+	Status         string             `json:"status"`
+	CurrentStage   string             `json:"current_stage"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	ChannelID      pgtype.UUID        `json:"channel_id"`
+	HandoffSummary pgtype.Text        `json:"handoff_summary"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchSource struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	Url               string             `json:"url"`
+	Title             string             `json:"title"`
+	SourceClass       string             `json:"source_class"`
+	CredibilityWeight float64            `json:"credibility_weight"`
+	Stance            string             `json:"stance"`
+	Relevance         float64            `json:"relevance"`
+	Summary           string             `json:"summary"`
+	Excerpt           string             `json:"excerpt"`
+	Payload           []byte             `json:"payload"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchStageEval struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	Stage       string             `json:"stage"`
+	Passed      bool               `json:"passed"`
+	Score       float64            `json:"score"`
+	Findings    []byte             `json:"findings"`
+	Remediation string             `json:"remediation"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }

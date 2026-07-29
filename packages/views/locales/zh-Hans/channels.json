@@ -97,18 +97,30 @@
   "members": {
     "role_badge": {
       "owner": "群主",
-      "manager_agent": "群管",
-      "manager_human": "管理员"
+      "manager": "群管"
     },
     "menu": {
       "aria": "成员操作",
-      "promote_agent": "设为群管",
-      "promote_human": "设为管理员",
-      "demote_agent": "取消群管",
-      "demote_human": "取消管理员",
+      "promote": "设为群管",
+      "demote": "降为成员",
       "transfer": "转让群主",
       "remove": "移出群聊",
-      "role_actions_pending": "群管理权限即将推出；当前不会更改成员角色。"
+      "role_busy_promote": "正在设为群管…",
+      "role_busy_demote": "正在降为成员…",
+      "role_busy_transfer": "正在转让群主…",
+      "role_done_promote": "已设为群管",
+      "role_done_demote": "已降为成员",
+      "role_done_transfer": "已转让群主",
+      "role_transfer_title": "转让群主？",
+      "role_transfer_body": "将群主转让给 {{name}} 后，你将不再拥有本群的群主权限。新的群主可以继续调整成员角色和群管。",
+      "role_transfer_confirm": "确认转让",
+      "role_failed_owner_changed": "群主权限已变更，成员列表已刷新。",
+      "role_failed_generic": "未能更新成员角色。请刷新后重试。",
+      "role_failed_retryable": "未能更新成员角色。请重试。",
+      "role_failed_forbidden": "你没有权限修改该成员的角色。",
+      "role_failed_gone": "成员或频道状态已变化，请刷新后重试。",
+      "role_failed_retry": "重试",
+      "role_failed_dismiss": "关闭"
     },
     "select_user": "选择人类成员",
     "select_agent": "选择智能体",
@@ -392,9 +404,7 @@
     "voice_blocked_starting": "正在准备录音，请稍候。",
     "voice_blocked_uploading": "正在上传语音，请等待上传完成。",
     "voice_blocked_sending": "正在发送消息，请稍候再录制语音。",
-    "voice_blocked_text_draft": "当前有文字内容。发送或清空后即可录制语音。",
     "voice_blocked_attachment_draft": "当前有附件。发送或移除附件后即可录制语音。",
-    "voice_blocked_text_and_attachment_draft": "当前有文字内容和附件。发送或清空后即可录制语音。",
     "voice_permission_denied": "麦克风权限被拒绝。",
     "voice_secure_context_required": "浏览器仅允许通过 HTTPS 使用麦克风。请打开 HTTPS 地址后重试。",
     "voice_unavailable": "当前浏览器不支持语音录制。",
@@ -589,6 +599,7 @@
     "autoplay_blocked": "浏览器暂停了 {{name}} 的声音。",
     "stop_failed": "未能结束通话，请再次挂断。",
     "media_failed": "语音连接失败，请检查麦克风权限和网络。",
+    "rtc_diagnostic_code": "RTC 诊断码：{{code}}",
     "create_failed": "无法发起通话，请重试。",
     "server_failed": "语音服务出错，通话已结束。",
     "close": "关闭"

@@ -38,7 +38,6 @@ import {
   channelMembersOptions,
   channelInviteCandidatesOptions,
   channelProjectOptions,
-  channelAttachmentsOptions,
   useSetChannelProject,
   useAddChannelMembers,
   useCreateChannel,
@@ -51,10 +50,13 @@ import {
   useMarkChannelUnread,
   useMuteChannel,
   useRemoveChannelMember,
+  useUpdateChannelMemberRole,
+  useTransferChannelOwnership,
+  classifyRoleChangeFailure,
+  type RoleChangeFailure,
   useSendChannelMessage,
   useSendChannelThreadMessage,
   useEditChannelMessage,
-  useDeleteChannelMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
@@ -204,6 +206,7 @@ import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
+import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 import {
   Composer,
   ConversationHeader,
@@ -560,6 +563,14 @@ export function ChannelsPage({
     if (!isMobile && !isHeaderActionsCompact) setMobilePanel(null);
   }, [isMobile, isHeaderActionsCompact]);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<ChannelMember | null>(null);
+  // #832 — pending ownership transfer awaiting confirmation.
+  const [transferTarget, setTransferTarget] = useState<ChannelMember | null>(null);
+  // Retry must replay the action that failed, not re-derive one from current
+  // state — the row's role may have changed underneath us.
+  // Lazily initialised: `useRef(new Map())` would allocate a fresh Map on every
+  // render and immediately discard it (react-doctor).
+  const lastRoleActionRef = useRef<Map<string, "promote" | "demote" | "transfer"> | null>(null);
+  lastRoleActionRef.current ??= new Map();
   // #838 — a recording whose upload succeeded but whose send failed. Kept per
   // surface (channel / thread) because each has its own composer; the toast is
   // the announcement, this is the durable record. Cleared ONLY by a committed
@@ -685,6 +696,9 @@ export function ChannelsPage({
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
+  // LRM-695 — scopes the text-selection Quote/Copy mini-menu to the channel
+  // message area (the scroller inside ChannelMessageList).
+  const channelMessageAreaRef = useRef<HTMLDivElement>(null);
   const composerDrafts = useComposerDraftStore((s) => s.drafts);
   const storeSetComposerDraft = useComposerDraftStore((s) => s.setDraft);
   const storeClearComposerDraft = useComposerDraftStore((s) => s.clearDraft);
@@ -976,6 +990,13 @@ export function ChannelsPage({
   const setThreadQuoteTarget = useCallback((target: QuoteTarget | null) => {
     setQuoteState((current) => ({ ...current, threadTarget: target }));
   }, []);
+  // LRM-695 — text-selection Quote/Copy mini-menu over the channel message area
+  // (desktop, fine pointer). Quote appends a `>` blockquote (author as plain
+  // text, no @) to the channel composer via the editor markdown pipeline.
+  const channelSelectionMenu = useSelectionQuoteMenu({
+    containerRef: channelMessageAreaRef,
+    onQuote: (md: string) => editorRef.current?.insertMarkdown(md),
+  });
   const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
     if (!value.trim()) {
       storeClearComposerDraft(key);
@@ -1005,11 +1026,6 @@ export function ChannelsPage({
     }),
   );
   const activeChannelId = active?.id ?? "";
-  // LRM-675 AC#1: the Files tab carries the attachment count. Shares the
-  // react-query cache with ChannelFilesPanel, so no extra request when the tab
-  // content mounts.
-  const { data: activeChannelAttachments } = useQuery(channelAttachmentsOptions(activeChannelId));
-  const channelFilesCount = activeChannelAttachments?.length ?? 0;
   // Land on the conversation whenever the active channel changes; the Tasks tab
   // is a per-channel view, not a sticky global mode. Reset during render (the
   // React "adjust state on prop change" pattern used elsewhere in this file for
@@ -1117,7 +1133,6 @@ export function ChannelsPage({
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
   const editChannelMessage = useEditChannelMessage();
-  const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
@@ -1144,12 +1159,6 @@ export function ChannelsPage({
       { onError: () => showErrorToast(t(($) => $.message.edit_failed_toast)) },
     );
   }, [editChannelMessage, t]);
-  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
-    deleteChannelMessage.mutate(
-      { channelId: message.channel_id, messageId: message.id },
-      { onError: () => showErrorToast(t(($) => $.message.delete_failed_toast)) },
-    );
-  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -2414,8 +2423,8 @@ export function ChannelsPage({
       ? channelMemberBadge
       : undefined;
 
-  // The viewer's OWN channel role (owner|manager|member) drives the owner-only
-  // management menu. Fail-closed: absent membership / missing role → "member".
+  // The viewer's OWN channel role (owner|manager|member) drives the management
+  // menu. Fail-closed: absent membership / missing role → "member".
   const viewerChannelRole = useMemo(
     () =>
       channelMemberRole(
@@ -2426,18 +2435,22 @@ export function ChannelsPage({
     [channelMembers, currentUserId],
   );
   // Group-managed surface: supply the menu for EVERY viewer of an ordinary
-  // non-system group (same fail-closed gate as the badge). groupMemberActions
-  // returns zero actions for non-owners → they get no ⋯ trigger; the owner-only
-  // check lives inside it. Crucially, the mere PRESENCE of `memberMenu` tells the
-  // row this is a group-managed surface where the legacy workspace-admin Remove
-  // no longer applies — removal is owner-only via the menu (→ real mutation with
-  // #801). This closes the bypass where a non-channel-owner workspace admin, or
-  // the owner's own row, still got the old real Remove.
+  // non-system group (same fail-closed gate as the badge). Who may do what lives
+  // entirely inside `groupMemberActions`; a viewer it grants nothing gets no ⋯
+  // trigger. #845: that is no longer owner-only — a manager may remove ordinary
+  // members (and only that), so both the trigger and the removal path are now
+  // reachable for managers. Crucially, the mere PRESENCE of `memberMenu` tells
+  // the row this is a group-managed surface where the legacy workspace-admin
+  // Remove no longer applies — removal goes through this menu (→ real mutation
+  // with #801). This closes the bypass where a non-channel-owner workspace
+  // admin, or the owner's own row, still got the old real Remove.
   // #833: an ARCHIVED group gets no management menu at all. Removal is a real
   // mutation now (see handleGroupMemberAction below), and an archived channel is
   // read-only — offering an operable "remove member" there would be an action we
-  // shouldn't honour. Role rows are pending anyway (#832/#1321), so gating the
-  // whole menu is both correct and simpler than gating each row.
+  // shouldn't honour. #832: the role rows are real mutations now too, so the
+  // same reasoning covers them — an archived group must not offer promote,
+  // demote or transfer either. Gating the whole menu remains correct, but the
+  // reason is now "every item in it writes", not "the role rows are inert".
   const groupMemberMenu = useMemo(
     () =>
       active?.kind === "group" && !isActiveSystemChannel && !isActiveArchived
@@ -2524,19 +2537,150 @@ export function ChannelsPage({
   // all. Route it to the SAME handler the standalone button used: identical
   // permission gate (`canRemove` from core), identical confirm step.
   //
-  // promote / demote / transfer have no endpoint yet and are rendered disabled
-  // (#832), so they cannot reach this handler; they get no branch here rather
-  // than a toast that reads like success. Wire them for real once **#814's
-  // role-write API is merged AND served**.
-  //
-  // The condition names the task, not a PR: PRs roll (#1321 → #1326 → #1332 …),
-  // and keying this off a since-merged predecessor would read as "already
-  // satisfied" and invite wiring these up before the API is actually live.
+  // #832 — promote / demote / transfer are now real mutations and DO reach this
+  // handler: transfer opens its confirmation first (it gives away the viewer's
+  // own owner rights), promote and demote go straight to `runRoleChange`. They
+  // are no longer disabled placeholders, so every item in this menu writes.
+  // #832 — role-change failures and in-flight state, keyed per member exactly
+  // like the removal ones: a second failure must never silently replace an
+  // unresolved first one, and one member's state must never render on another.
+  const [roleFailures, setRoleFailures] = useState<
+    ReadonlyMap<string, RoleChangeFailure>
+  >(() => new Map());
+  const [rolePending, setRolePending] = useState<
+    ReadonlyMap<string, "promote" | "demote" | "transfer">
+  >(() => new Map());
+  const updateMemberRole = useUpdateChannelMemberRole();
+  const transferOwnership = useTransferChannelOwnership();
+
+  const runRoleChange = useCallback(
+    (m: ChannelMember, action: "promote" | "demote" | "transfer") => {
+      const channelId = active?.id;
+      if (!channelId) return;
+      const key = memberFailureKey(channelId, m);
+      lastRoleActionRef.current?.set(key, action);
+      setRolePending((prev) => new Map(prev).set(key, action));
+      setRoleFailures((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
+      // Transfer is a DIFFERENT ENDPOINT, not a different role value: the
+      // member-role PATCH rejects `owner` outright (channel.go:1761), so sending
+      // it there 400s every time. Caught by Felix in review — and invisible to
+      // the suite, because the api mock accepts any arguments. The request
+      // itself is now asserted (path + verb), not just "the mutation ran".
+      const settle = {
+          onSuccess: () => {
+            setRolePending((prev) => {
+              const next = new Map(prev);
+              next.delete(key);
+              return next;
+            });
+            toast.success(
+              action === "transfer"
+                ? t(($) => $.members.menu.role_done_transfer)
+                : action === "promote"
+                  ? t(($) => $.members.menu.role_done_promote)
+                  : t(($) => $.members.menu.role_done_demote),
+            );
+          },
+          onError: (error: unknown) => {
+            setRolePending((prev) => {
+              const next = new Map(prev);
+              next.delete(key);
+              return next;
+            });
+            // Classified, never message-matched: the server's text is a
+            // hard-coded locale we don't control (#844 boundary).
+            setRoleFailures((prev) =>
+              new Map(prev).set(key, classifyRoleChangeFailure(error)),
+            );
+          },
+      };
+      if (action === "transfer") {
+        transferOwnership.mutate(
+          { channelId, memberType: m.member_type, memberId: m.member_id },
+          settle,
+        );
+        return;
+      }
+      updateMemberRole.mutate(
+        {
+          channelId,
+          memberType: m.member_type,
+          memberId: m.member_id,
+          role: action === "promote" ? "manager" : "member",
+        },
+        settle,
+      );
+    },
+    [active?.id, updateMemberRole, transferOwnership, t],
+  );
+
+  // #832 — one sentence per failure kind. Copy is frontend-supplied in four
+  // locales; the server's message is never rendered (it is hard-coded to one
+  // language and cannot know the viewer's).
+  const roleFailureFor = useCallback(
+    (m: ChannelMember) => {
+      const key = memberFailureKey(active?.id ?? "", m);
+      const kind = roleFailures.get(key);
+      if (!kind) return undefined;
+      const dismiss = () =>
+        setRoleFailures((prev) => {
+          const next = new Map(prev);
+          next.delete(key);
+          return next;
+        });
+      const message =
+        kind === "owner_changed"
+          ? t(($) => $.members.menu.role_failed_owner_changed)
+          : kind === "forbidden"
+            ? t(($) => $.members.menu.role_failed_forbidden)
+            : kind === "gone"
+              ? t(($) => $.members.menu.role_failed_gone)
+              : kind === "conflict" || kind === "contract"
+                ? t(($) => $.members.menu.role_failed_generic)
+                : t(($) => $.members.menu.role_failed_retryable);
+      // Retry only where repeating the same call can succeed. For a moved
+      // roster or a denial, a retry button would promise what it can't deliver.
+      const retryable = kind === "transient";
+      return {
+        message,
+        dismissLabel: t(($) => $.members.menu.role_failed_dismiss),
+        onDismiss: dismiss,
+        ...(retryable
+          ? {
+              retryLabel: t(($) => $.members.menu.role_failed_retry),
+              onRetry: () => {
+                dismiss();
+                const last = lastRoleActionRef.current?.get(key);
+                if (last) runRoleChange(m, last);
+              },
+            }
+          : {}),
+      };
+    },
+    [active?.id, roleFailures, t, runRoleChange],
+  );
+
+  const rolePendingActionFor = useCallback(
+    (m: ChannelMember) => rolePending.get(memberFailureKey(active?.id ?? "", m)) ?? null,
+    [active?.id, rolePending],
+  );
+
   const handleGroupMemberAction = useCallback(
     (m: ChannelMember, action: GroupMemberActionKind) => {
-      if (action === "remove") handleRemoveMemberClick(m);
+      if (action === "remove") return handleRemoveMemberClick(m);
+      // Transfer hands away the viewer's own owner rights immediately, so it
+      // asks first. Promote/demote are ordinary edits the owner can undo from
+      // the same menu, so they don't (Iris: confirm because you lose something
+      // now, NOT because it's irreversible — the new owner can transfer back).
+      if (action === "transfer") return setTransferTarget(m);
+      runRoleChange(m, action);
     },
-    [handleRemoveMemberClick],
+    [handleRemoveMemberClick, runRoleChange],
   );
 
   // LRM-211 — Channel details Members tab reuses the same list as the
@@ -2609,6 +2753,8 @@ export function ChannelsPage({
         }}
         onRemove={handleRemoveMemberClick}
         removeFailureFor={removeFailureFor}
+        roleFailureFor={roleFailureFor}
+        rolePendingActionFor={rolePendingActionFor}
         dmPending={createOrFindDm.isPending}
         className="min-h-0 flex-1"
       />
@@ -3157,6 +3303,9 @@ export function ChannelsPage({
         highlightMessageId={isThreadDeepLink ? highlightMessageId : undefined}
         onReact={handleReactToMessage}
         onQuoteMessage={setThreadQuoteTarget}
+        onInsertSelectionQuote={(md: string) =>
+          threadEditorRef.current?.insertMarkdown(md)
+        }
         onRetrySend={handleRetrySend}
         onOpenAgent={handleOpenAgentPanel}
         quoteTarget={threadQuoteTarget}
@@ -3537,11 +3686,6 @@ export function ChannelsPage({
                     </TabsTrigger>
                     <TabsTrigger value="files" className="flex-none px-3 py-2">
                       {t(($) => $.view_tabs.files)}
-                      {channelFilesCount > 0 && (
-                        <span className="ml-1.5 text-xs font-normal tabular-nums text-muted-foreground">
-                          {channelFilesCount}
-                        </span>
-                      )}
                     </TabsTrigger>
                   </TabsList>
                 </div>
@@ -3647,6 +3791,7 @@ export function ChannelsPage({
                 </output>
               )}
 
+              <div ref={channelMessageAreaRef} className="contents">
               <ChannelMessageList
                 key={active.id}
                 messages={messages}
@@ -3678,10 +3823,11 @@ export function ChannelsPage({
                 onReact={handleReactToMessage}
                 onQuoteMessage={isActiveArchived ? undefined : setQuoteTarget}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
-                onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
                 onRetrySend={isActiveArchived ? undefined : handleRetrySend}
                 onOpenAgent={handleOpenAgentPanel}
               />
+              </div>
+              {channelSelectionMenu.menu}
 
               {isActiveArchived ? (
                 <ReadOnlyConversationBanner>
@@ -4064,6 +4210,57 @@ export function ChannelsPage({
           submitting={addMembers.isPending}
         />
       )}
+
+      {/* #832 — ownership transfer asks first. Not because it is irreversible
+          (the new owner can transfer back) but because the viewer loses their
+          own owner rights the moment it succeeds — the confirmation exists so
+          they know precisely what they are giving up (Iris). */}
+      <Sheet
+        open={transferTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setTransferTarget(null);
+        }}
+      >
+        <SheetContent side="bottom" showCloseButton={false} className="gap-0 rounded-t-2xl p-0">
+          <SheetHeader className="space-y-1 p-4 pb-2 text-left">
+            <SheetTitle>{t(($) => $.members.menu.role_transfer_title)}</SheetTitle>
+            <SheetDescription>
+              {t(($) => $.members.menu.role_transfer_body, {
+                name: transferTarget
+                  ? resolveActorDisplayName(
+                      transferTarget,
+                      transferTarget.member_type === "agent"
+                        ? t(($) => $.message.agent_badge)
+                        : t(($) => $.members.title),
+                    )
+                  : "",
+              })}
+            </SheetDescription>
+          </SheetHeader>
+          <SheetFooter className="gap-2 p-4 pt-2">
+            <Button
+              type="button"
+              className="min-h-11 w-full"
+              data-testid="group-member-transfer-confirm"
+              onClick={() => {
+                const target = transferTarget;
+                setTransferTarget(null);
+                if (target) runRoleChange(target, "transfer");
+              }}
+            >
+              {t(($) => $.members.menu.role_transfer_confirm)}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 w-full"
+              onClick={() => setTransferTarget(null)}
+            >
+              {t(($) => $.members.remove_cancel)}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       <Sheet
         open={removeMemberTarget !== null}

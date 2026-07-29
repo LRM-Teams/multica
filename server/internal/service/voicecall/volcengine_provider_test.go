@@ -11,7 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/volcenginertc"
 )
 
-func TestVolcengineProviderStartsWithTokenBeforeProviderTask(t *testing.T) {
+func TestVolcengineProviderPreparesMediaWithoutStartingTask(t *testing.T) {
 	var order []string
 	client := &fakeVolcengineClient{order: &order}
 	signer := &fakeVolcengineTokenSigner{
@@ -24,12 +24,15 @@ func TestVolcengineProviderStartsWithTokenBeforeProviderTask(t *testing.T) {
 	}
 	provider := newTestVolcengineProvider(t, client, signer)
 
-	result, err := provider.Start(context.Background(), validProviderStartInput())
+	result, err := provider.Prepare(
+		context.Background(),
+		ProviderPrepareInput{RoomID: "voice-call-1", TargetUserID: "member-1"},
+	)
 	if err != nil {
-		t.Fatalf("start provider: %v", err)
+		t.Fatalf("prepare media: %v", err)
 	}
-	if !reflect.DeepEqual(order, []string{"token", "start"}) {
-		t.Fatalf("order = %v, want token before start", order)
+	if !reflect.DeepEqual(order, []string{"token"}) || client.startCalls != 0 {
+		t.Fatalf("order = %v start calls=%d", order, client.startCalls)
 	}
 	if result.AppID != signer.appID ||
 		result.Token != signer.token.Value ||
@@ -39,8 +42,28 @@ func TestVolcengineProviderStartsWithTokenBeforeProviderTask(t *testing.T) {
 	if signer.roomID != "voice-call-1" || signer.userID != "member-1" {
 		t.Fatalf("token identity = room %q user %q", signer.roomID, signer.userID)
 	}
+}
+
+func TestVolcengineProviderConnectStartsTaskWithWelcomeMessage(t *testing.T) {
+	var order []string
+	client := &fakeVolcengineClient{order: &order}
+	provider := newTestVolcengineProvider(
+		t,
+		client,
+		validFakeVolcengineTokenSigner(&order),
+	)
+
+	if err := provider.Connect(
+		context.Background(),
+		validProviderConnectInput(),
+	); err != nil {
+		t.Fatalf("connect provider: %v", err)
+	}
+	if !reflect.DeepEqual(order, []string{"start"}) {
+		t.Fatalf("order = %v", order)
+	}
 	request := client.startRequest
-	if request.AppID != signer.appID ||
+	if request.AppID != "123456781234567812345678" ||
 		request.RoomID != "voice-call-1" ||
 		request.TaskID != "voice-task-1" {
 		t.Fatalf("start request identity = %+v", request)
@@ -58,50 +81,41 @@ func TestVolcengineProviderStartsWithTokenBeforeProviderTask(t *testing.T) {
 	}
 }
 
-func TestVolcengineProviderDoesNotStartWhenConfigurationOrTokenFails(t *testing.T) {
-	tests := []struct {
-		name      string
-		configure func(*ProviderStartInput, *fakeVolcengineTokenSigner)
-		want      string
-		tokenCall int
-	}{
-		{
-			name: "configuration",
-			configure: func(input *ProviderStartInput, _ *fakeVolcengineTokenSigner) {
-				input.SystemMessages = nil
-			},
-			want: "SystemMessages",
-		},
-		{
-			name: "token",
-			configure: func(_ *ProviderStartInput, signer *fakeVolcengineTokenSigner) {
-				signer.err = errors.New("entropy unavailable")
-			},
-			want:      "sign room token",
-			tokenCall: 1,
-		},
+func TestVolcengineProviderPreparationFailureDoesNotStartTask(t *testing.T) {
+	var order []string
+	client := &fakeVolcengineClient{order: &order}
+	signer := validFakeVolcengineTokenSigner(&order)
+	signer.err = errors.New("entropy unavailable")
+	provider := newTestVolcengineProvider(t, client, signer)
+
+	_, err := provider.Prepare(context.Background(), ProviderPrepareInput{
+		RoomID: "voice-call-1", TargetUserID: "member-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "sign room token") {
+		t.Fatalf("error = %v", err)
 	}
+	if client.startCalls != 0 {
+		t.Fatalf("preparation failure started provider %d times", client.startCalls)
+	}
+}
 
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			var order []string
-			client := &fakeVolcengineClient{order: &order}
-			signer := &fakeVolcengineTokenSigner{
-				order: &order,
-				appID: "123456781234567812345678",
-			}
-			provider := newTestVolcengineProvider(t, client, signer)
-			input := validProviderStartInput()
-			testCase.configure(&input, signer)
+func TestVolcengineProviderDoesNotStartWhenConfigurationFails(t *testing.T) {
+	var order []string
+	client := &fakeVolcengineClient{order: &order}
+	provider := newTestVolcengineProvider(
+		t,
+		client,
+		validFakeVolcengineTokenSigner(&order),
+	)
+	input := validProviderConnectInput()
+	input.SystemMessages = nil
 
-			_, err := provider.Start(context.Background(), input)
-			if err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("error = %v, want %q", err, testCase.want)
-			}
-			if signer.calls != testCase.tokenCall || client.startCalls != 0 {
-				t.Fatalf("token calls=%d start calls=%d", signer.calls, client.startCalls)
-			}
-		})
+	err := provider.Connect(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "SystemMessages") {
+		t.Fatalf("error = %v", err)
+	}
+	if client.startCalls != 0 {
+		t.Fatalf("invalid configuration started provider %d times", client.startCalls)
 	}
 }
 
@@ -117,7 +131,7 @@ func TestVolcengineProviderTreatsStructuredStartRejectionAsDefinitive(t *testing
 	signer := validFakeVolcengineTokenSigner(&order)
 	provider := newTestVolcengineProvider(t, client, signer)
 
-	_, err := provider.Start(context.Background(), validProviderStartInput())
+	err := provider.Connect(context.Background(), validProviderConnectInput())
 	var providerError *volcenginertc.ProviderError
 	if !errors.As(err, &providerError) {
 		t.Fatalf("error = %v, want ProviderError", err)
@@ -136,7 +150,7 @@ func TestVolcengineProviderCompensatesAmbiguousStartFailure(t *testing.T) {
 	requestContext, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := provider.Start(requestContext, validProviderStartInput())
+	err := provider.Connect(requestContext, validProviderConnectInput())
 	if !errors.Is(err, startErr) {
 		t.Fatalf("error = %v, want original start error", err)
 	}
@@ -144,7 +158,7 @@ func TestVolcengineProviderCompensatesAmbiguousStartFailure(t *testing.T) {
 	if errors.As(err, &uncertain) {
 		t.Fatalf("successful compensation returned uncertain error: %v", err)
 	}
-	if !reflect.DeepEqual(order, []string{"token", "start", "stop"}) {
+	if !reflect.DeepEqual(order, []string{"start", "stop"}) {
 		t.Fatalf("order = %v", order)
 	}
 	if client.stopContextErr != nil {
@@ -164,7 +178,7 @@ func TestVolcengineProviderReportsUncertainStartWhenCompensationFails(t *testing
 	signer := validFakeVolcengineTokenSigner(&order)
 	provider := newTestVolcengineProvider(t, client, signer)
 
-	_, err := provider.Start(context.Background(), validProviderStartInput())
+	err := provider.Connect(context.Background(), validProviderConnectInput())
 	var uncertain *ProviderStartUncertainError
 	if !errors.As(err, &uncertain) ||
 		!errors.Is(err, startErr) ||
@@ -215,9 +229,8 @@ func newTestVolcengineProvider(
 	return provider
 }
 
-func validProviderStartInput() ProviderStartInput {
-	return ProviderStartInput{
-		CallID:         "call-1",
+func validProviderConnectInput() ProviderConnectInput {
+	return ProviderConnectInput{
 		RoomID:         "voice-call-1",
 		TaskID:         "voice-task-1",
 		TargetUserID:   "member-1",

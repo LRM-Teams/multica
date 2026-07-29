@@ -146,6 +146,44 @@ describe("VoiceCallPanel", () => {
     expect(props.onRetry).toHaveBeenCalledOnce();
   });
 
+  it("shows a bounded RTC diagnostic code without exposing provider details", () => {
+    renderPanel({
+      phase: "failed",
+      error: {
+        source: "media",
+        code: "provider_error",
+        message: "provider response with account details",
+        providerCode: "-1000",
+      },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "RTC diagnostic code: -1000",
+    );
+    expect(screen.queryByText("provider response with account details"))
+      .not.toBeInTheDocument();
+  });
+
+  it("explains that an insecure origin cannot use browser voice calls", () => {
+    renderPanel({
+      phase: "failed",
+      error: {
+        source: "media",
+        code: "insecure_context",
+        message: "internal secure-context detail",
+      },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Browsers only allow microphone access over HTTPS. Open the HTTPS address and try again.",
+    );
+    expect(screen.queryByText("internal secure-context detail"))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText(
+      "Voice connection failed. Check microphone permission and network.",
+    )).not.toBeInTheDocument();
+  });
+
   it("lets the user resume browser-blocked remote audio", async () => {
     const user = userEvent.setup();
     const props = renderPanel({ autoplayBlocked: true });

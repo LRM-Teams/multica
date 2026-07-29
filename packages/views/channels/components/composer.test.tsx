@@ -304,7 +304,7 @@ describe("Composer — voice block reason (#858)", () => {
         <Composer
           surface={surface}
           {...base}
-          voiceBlock={{ hasTextDraft: true, hasAttachmentDraft: false }}
+          voiceBlock={{ hasTextDraft: false, hasAttachmentDraft: true }}
         />,
       );
       const line = status();
@@ -312,7 +312,7 @@ describe("Composer — voice block reason (#858)", () => {
       // Computed role, not the literal attribute: `<output>` maps to
       // role="status" implicitly, and what matters is what AT resolves.
       expect(screen.getByRole("status")).toBe(line);
-      expect(line).toHaveTextContent("COPY_TEXT");
+      expect(line).toHaveTextContent("COPY_ATTACHMENT");
 
       const button = mic();
       // Natively disabled — NOT aria-disabled, which stays clickable and lies
@@ -332,15 +332,26 @@ describe("Composer — voice block reason (#858)", () => {
       expect(button).not.toHaveAttribute("aria-describedby");
     });
 
+    // LRM-702 — text-only and text+attachment drafts no longer render an inline
+    // hint (silent disable); only the attachment-only draft still explains itself.
     it.each([
-      ["text only", { hasTextDraft: true, hasAttachmentDraft: false }, "COPY_TEXT"],
       ["attachment only", { hasTextDraft: false, hasAttachmentDraft: true }, "COPY_ATTACHMENT"],
-      // Its own sentence, never one of the singles: naming only the text leaves
-      // the mic disabled after the user clears it.
-      ["text + attachment", { hasTextDraft: true, hasAttachmentDraft: true }, "COPY_TEXT_AND_ATTACHMENT"],
     ])("says the true sentence for %s", (_label, voiceBlock, expected) => {
       render(<Composer surface={surface} {...base} voiceBlock={voiceBlock} />);
       expect(status()).toHaveTextContent(expected);
+    });
+
+    // LRM-702 — a text draft disables the mic but renders NO inline hint.
+    it("disables the mic for a text draft with no inline hint (LRM-702)", () => {
+      render(
+        <Composer
+          surface={surface}
+          {...base}
+          voiceBlock={{ hasTextDraft: true, hasAttachmentDraft: false }}
+        />,
+      );
+      expect(status()).toBeNull();
+      expect(mic()).toBeDisabled();
     });
   });
 

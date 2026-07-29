@@ -1,4 +1,5 @@
 import type {
+  ChannelMemberRole,
   Issue,
   CreateIssueRequest,
   UpdateIssueRequest,
@@ -2886,6 +2887,51 @@ export class ApiClient {
     await this.fetch(`/api/channels/${channelId}/members/${memberType}/${memberId}`, { method: "DELETE" });
   }
 
+  /**
+   * Owner-only member role change (#832 / #814). Handles promote, demote, and
+   * ownership transfer — the server distinguishes them by the target `role`.
+   *
+   * Failure codes the caller must keep apart (server contract, #1321/#1326):
+   *   403 + `code: "owner_changed"` — someone else took ownership mid-flight.
+   *     A PLAIN 403 deliberately carries no code, and the two must not be
+   *     collapsed: one means "refresh, the world moved", the other means
+   *     "you may not do this".
+   *   409 — currently only "sole owner must transfer first". Keyed on status
+   *     alone because that message has no stable code yet; see
+   *     `updateChannelMemberRole` in channels/mutations.ts for why the UI does
+   *     NOT name that reason.
+   */
+  /**
+   * Ownership transfer has its OWN route (#814). The member-role PATCH above
+   * explicitly rejects `role: "owner"` with 400 "use POST
+   * .../transfer-ownership" (channel.go:1761) — so transfer is a different
+   * request, not a different value.
+   */
+  async transferChannelOwnership(
+    channelId: string,
+    memberType: "user" | "agent",
+    memberId: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/channels/${channelId}/members/${memberType}/${memberId}/transfer-ownership`,
+      { method: "POST" },
+    );
+  }
+
+  async updateChannelMemberRole(
+    channelId: string,
+    memberType: "user" | "agent",
+    memberId: string,
+    // NOT ChannelMemberRole: the server rejects "owner" here and routes it to
+    // transferChannelOwnership above.
+    role: "manager" | "member",
+  ): Promise<{ role: ChannelMemberRole }> {
+    return this.fetch(`/api/channels/${channelId}/members/${memberType}/${memberId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    });
+  }
+
   async listChannelMessages(channelId: string): Promise<ChannelMessage[]> {
     const page = await this.listChannelMessagesPage(channelId);
     return page.messages;
@@ -3086,6 +3132,22 @@ export class ApiClient {
     );
   }
 
+  async connectVoiceCall(
+    workspaceId: string,
+    callId: string,
+  ): Promise<GetVoiceCallResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls/${encodeURIComponent(callId)}/connect`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      GetVoiceCallResponseSchema,
+      EMPTY_GET_VOICE_CALL_RESPONSE,
+      { endpoint: "POST /api/workspaces/{workspaceId}/voice-calls/{callId}/connect" },
+    );
+  }
+
   async stopVoiceCall(
     workspaceId: string,
     callId: string,
@@ -3154,10 +3216,6 @@ export class ApiClient {
       method: "PATCH",
       body: JSON.stringify(body),
     });
-  }
-
-  async deleteChannelMessage(channelId: string, messageId: string): Promise<void> {
-    await this.fetch(`/api/channels/${channelId}/messages/${messageId}`, { method: "DELETE" });
   }
 
   async addChannelReaction(channelId: string, messageId: string, emoji: string): Promise<ChannelReaction> {
@@ -3746,6 +3804,89 @@ export class ApiClient {
     return this.fetch(`/api/lark/binding/redeem`, {
       method: "POST",
       body: JSON.stringify({ token }),
+    });
+  }
+
+  // Research Fleet
+  async ensureResearchFleet(): Promise<import("../types/research").ResearchFleet> {
+    const { ResearchFleetSchema, EMPTY_RESEARCH_FLEET } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/fleet/ensure", { method: "POST" });
+    return parseWithFallback(raw, ResearchFleetSchema, EMPTY_RESEARCH_FLEET, {
+      endpoint: "POST /api/research/fleet/ensure",
+    });
+  }
+
+  async listResearchSessions(): Promise<import("../types/research").ListResearchSessionsResponse> {
+    const {
+      ListResearchSessionsResponseSchema,
+      EMPTY_RESEARCH_SESSIONS,
+    } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/sessions");
+    return parseWithFallback(raw, ListResearchSessionsResponseSchema, EMPTY_RESEARCH_SESSIONS, {
+      endpoint: "GET /api/research/sessions",
+    });
+  }
+
+  async createResearchSession(
+    data: import("../types/research").CreateResearchSessionRequest,
+  ): Promise<{ session: import("../types/research").ResearchSession; fleet: import("../types/research").ResearchFleet }> {
+    const {
+      ResearchFleetSchema,
+      EMPTY_RESEARCH_FLEET,
+      ResearchSessionSnapshotSchema,
+      EMPTY_RESEARCH_SNAPSHOT,
+    } = await import("../research/schemas");
+    const { z } = await import("zod");
+    const raw = await this.fetch("/api/research/sessions", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    const CreateSchema = z
+      .object({
+        session: ResearchSessionSnapshotSchema.shape.session,
+        fleet: ResearchFleetSchema,
+      })
+      .passthrough();
+    const parsed = parseWithFallback(
+      raw,
+      CreateSchema,
+      { session: EMPTY_RESEARCH_SNAPSHOT.session, fleet: EMPTY_RESEARCH_FLEET },
+      { endpoint: "POST /api/research/sessions" },
+    );
+    return { session: parsed.session, fleet: parsed.fleet };
+  }
+
+  async getResearchSessionSnapshot(
+    id: string,
+  ): Promise<import("../types/research").ResearchSessionSnapshot> {
+    const { ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}`);
+    return parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
+      endpoint: "GET /api/research/sessions/:id",
+    });
+  }
+
+  async postResearchMessage(
+    id: string,
+    data: { body: string; target_agent_id?: string },
+  ): Promise<import("../types/research").ResearchMessage> {
+    return this.fetch(`/api/research/sessions/${id}/messages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async confirmResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
+    return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
+  }
+
+  async researchSessionHandoff(
+    id: string,
+    data: import("../types/research").ResearchHandoffRequest,
+  ): Promise<import("../types/research").ResearchSession> {
+    return this.fetch(`/api/research/sessions/${id}/handoff`, {
+      method: "POST",
+      body: JSON.stringify(data),
     });
   }
 }

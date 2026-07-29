@@ -550,25 +550,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	directedChannelTask := h.isChannelAgentTask(r.Context(), task) && task.Priority >= 2
-	req.MustReplyFailure = directedChannelTask &&
-		!h.chatTaskHasAgentTransportVisibleOutput(r.Context(), task) &&
-		(req.TransportAttempted || h.agentInboxEventHasHumanSource(r.Context(), event))
 	result, err := json.Marshal(req.TaskCompleteRequest)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode inbox completion")
-		return
-	}
-	if req.MustReplyFailure && !h.inboxEventHasAgentTransportFreshnessHold(r.Context(), event.ID) {
-		const (
-			errText       = "directed agent run completed without a visible transport receipt"
-			failureReason = "missing_transport_receipt"
-		)
-		h.completeFailedAgentInboxEvent(
-			w, r, event, deliveryID, leaseToken,
-			errText, failureReason, failureReason,
-			req.SessionID, req.WorkDir, result, false, 0,
-		)
 		return
 	}
 	var executionID pgtype.UUID
@@ -644,9 +628,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 					} else {
 						terminalOutcome = "completed"
 					}
-					terminalOutcome = h.agentInboxCompletionOutcomeAfterMustReplyFailure(
-						r.Context(), event, terminalOutcome, isChannelOnboarding, req.MustReplyFailure,
-					)
 					if len(freshnessResolutionPublications) > 0 {
 						terminalOutcome = "no_reply"
 					}
@@ -766,9 +747,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		terminalOutcome = h.agentInboxCompletionOutcomeAfterMustReplyFailure(
-			r.Context(), event, terminalOutcome, isChannelOnboarding, req.MustReplyFailure,
-		)
 		if len(freshnessResolutionPublications) > 0 {
 			terminalOutcome = "no_reply"
 		}
@@ -805,9 +783,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	for _, wake := range collaborationWakes {
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}
-	if !req.MustReplyFailure {
-		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
-	}
+	h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 	if chatDonePayload != nil {
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
@@ -846,24 +822,6 @@ func persistAgentInboxCompletionTx(
 		WHERE id = $1`,
 		eventID, result, sessionID, workDir)
 	return err
-}
-
-func (h *Handler) agentInboxCompletionOutcomeAfterMustReplyFailure(
-	ctx context.Context,
-	event db.AgentInboxEvent,
-	terminalOutcome string,
-	isChannelOnboarding, mustReplyFailure bool,
-) string {
-	if isChannelOnboarding || !mustReplyFailure {
-		return terminalOutcome
-	}
-	// A Raft freshness hold already persisted the attempted output as a
-	// server draft. Acknowledging this execution must not relabel that draft
-	// as an explicit no-reply decision.
-	if h.inboxEventHasAgentTransportFreshnessHold(ctx, event.ID) {
-		return "held"
-	}
-	return "no_reply"
 }
 
 func setAgentInboxCompletionFinalizationTx(

@@ -1,5 +1,5 @@
 import type { VoiceCallMedia } from "@multica/core/types";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   VolcengineVoiceMediaSession,
   VoiceCallMediaError,
@@ -64,6 +64,32 @@ function createHarness(overrides: Partial<VoiceCallRTCEngine> = {}) {
 }
 
 describe("VolcengineVoiceMediaSession", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects insecure origins before loading the RTC SDK", async () => {
+    vi.stubGlobal("isSecureContext", false);
+    const harness = createHarness();
+    const loadDriver = vi.fn(async () => harness.driver);
+    const onError = vi.fn();
+    const session = new VolcengineVoiceMediaSession(
+      { onError },
+      loadDriver,
+    );
+
+    await expect(session.connect(media)).rejects.toMatchObject({
+      code: "insecure_context",
+    });
+
+    expect(loadDriver).not.toHaveBeenCalled();
+    expect(harness.driver.createEngine).not.toHaveBeenCalled();
+    expect(harness.engine.startAudioCapture).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "insecure_context" }),
+    );
+  });
+
   it("joins, captures, and publishes audio in order", async () => {
     const harness = createHarness();
     const states: string[] = [];
@@ -230,26 +256,70 @@ describe("VolcengineVoiceMediaSession", () => {
     expect(session.getState()).toBe("closed");
   });
 
-  it("does not expose provider errors as an untyped failure", async () => {
-    const harness = createHarness();
-    const onError = vi.fn();
+  it.each(["INVALID_TOKEN", "-1000"])(
+    "preserves bounded provider code %s from fatal callbacks",
+    async (providerCode) => {
+      const harness = createHarness();
+      const onError = vi.fn();
+      const session = new VolcengineVoiceMediaSession(
+        { onError },
+        async () => harness.driver,
+      );
+      await session.connect(media);
+
+      harness.getCallbacks()?.onFatalError(providerCode);
+
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining<Partial<VoiceCallMediaError>>({
+          code: "provider_error",
+          providerCode,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(harness.engine.destroy).toHaveBeenCalledOnce();
+      });
+      expect(session.getState()).toBe("failed");
+    },
+  );
+
+  it("preserves bounded provider enum codes from rejected SDK calls", async () => {
+    const harness = createHarness({
+      join: vi.fn(async () => {
+        harness.calls.push("join");
+        throw Object.assign(new Error("provider detail"), {
+          code: "JOIN_ROOM_FAILED",
+        });
+      }),
+    });
     const session = new VolcengineVoiceMediaSession(
-      { onError },
+      {},
       async () => harness.driver,
     );
-    await session.connect(media);
 
-    harness.getCallbacks()?.onFatalError("TOKEN_EXPIRED");
-
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining<Partial<VoiceCallMediaError>>({
-        code: "provider_error",
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(harness.engine.destroy).toHaveBeenCalledOnce();
+    await expect(session.connect(media)).rejects.toMatchObject({
+      code: "join_failed",
+      providerCode: "JOIN_ROOM_FAILED",
     });
-    expect(session.getState()).toBe("failed");
+  });
+
+  it("does not expose arbitrary rejection values as provider codes", async () => {
+    const harness = createHarness({
+      join: vi.fn(async () => {
+        harness.calls.push("join");
+        throw Object.assign(new Error("provider detail"), {
+          code: "raw provider message with spaces",
+        });
+      }),
+    });
+    const session = new VolcengineVoiceMediaSession(
+      {},
+      async () => harness.driver,
+    );
+
+    await expect(session.connect(media)).rejects.toMatchObject({
+      code: "join_failed",
+      providerCode: undefined,
+    });
   });
 
   it("serializes provider cleanup with a simultaneous user disconnect", async () => {

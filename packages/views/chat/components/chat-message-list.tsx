@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -38,6 +39,7 @@ import type { ChatTimelineItem } from "@multica/core/chat";
 import { parseStickerMessage } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { buildTimeline } from "../../common/task-transcript";
+import { CollapsibleMessageBody } from "../../common/collapsible-message-body";
 import { TaskStatusPill } from "./task-status-pill";
 import { StickerMessage } from "./sticker-message";
 import { MessagePartsRenderer } from "../../channels/components/message-parts-renderer";
@@ -386,9 +388,14 @@ function MessageBubble({
              * render them through the same pipeline as assistant replies.
              * Neutralise prose's leading/trailing margin so single-line
              * bubbles stay as compact as the plain-text version used to. */}
-            <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-              <Markdown attachments={message.attachments}>{message.content}</Markdown>
-            </div>
+            <ChatCollapsibleBody
+              contentKey={`user:${message.id}:${message.content.length}`}
+              fadeVariant="muted"
+            >
+              <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                <Markdown attachments={message.attachments}>{message.content}</Markdown>
+              </div>
+            </ChatCollapsibleBody>
             <AttachmentList
               attachments={message.attachments}
               content={message.content}
@@ -639,6 +646,32 @@ function FailureBubble({
   );
 }
 
+/** FAB / chat-session long bodies — same Slack clamp + 查看更多 as channel bubbles. */
+function ChatCollapsibleBody({
+  contentKey,
+  children,
+  enabled = true,
+  fadeVariant = "default",
+}: {
+  contentKey: string;
+  children: ReactNode;
+  enabled?: boolean;
+  fadeVariant?: import("../../common/mention-token").MessageCollapseFadeVariant;
+}) {
+  const { t } = useT("chat");
+  return (
+    <CollapsibleMessageBody
+      contentKey={contentKey}
+      enabled={enabled}
+      expandLabel={t(($) => $.message_list.expand_action)}
+      collapseLabel={t(($) => $.message_list.collapse_action)}
+      fadeVariant={fadeVariant}
+    >
+      {children}
+    </CollapsibleMessageBody>
+  );
+}
+
 /**
  * Renders assistant/user message body. Prefers denormalized `parts`, otherwise
  * unwraps a historical `action:message_send` envelope from `content` (same
@@ -653,6 +686,7 @@ function MessageProse({
   parts?: MessagePart[] | null;
   attachments?: import("@multica/core/types").Attachment[];
 }) {
+  const contentKey = `prose:${content.length}:${parts?.length ?? 0}:${content.slice(0, 48)}`;
   const resolved = resolveMessageParts(content, parts);
   if (resolved?.length) {
     const stickerOnly = resolved.every((p) => p.type === "sticker");
@@ -668,9 +702,11 @@ function MessageProse({
       );
     }
     return (
-      <div className={cn("text-sm leading-relaxed max-w-none", selectableMessageTextClass)}>
-        <MessagePartsRenderer parts={resolved} />
-      </div>
+      <ChatCollapsibleBody contentKey={contentKey}>
+        <div className={cn("text-sm leading-relaxed max-w-none", selectableMessageTextClass)}>
+          <MessagePartsRenderer parts={resolved} />
+        </div>
+      </ChatCollapsibleBody>
     );
   }
 
@@ -688,9 +724,11 @@ function MessageProse({
 
   const unwrapped = unwrapStructuredPreviewContent(content);
   return (
-    <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-      <Markdown attachments={attachments}>{unwrapped ?? content}</Markdown>
-    </div>
+    <ChatCollapsibleBody contentKey={contentKey}>
+      <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
+        <Markdown attachments={attachments}>{unwrapped ?? content}</Markdown>
+      </div>
+    </ChatCollapsibleBody>
   );
 }
 
@@ -746,11 +784,15 @@ function TimelineView({
   return (
     <>
       {preface.length > 0 && (
-        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-          <Markdown attachments={attachments}>
-            {preface.map((t) => t.content ?? "").join("\n\n")}
-          </Markdown>
-        </div>
+        <ChatCollapsibleBody
+          contentKey={`preface:${preface.map((t) => t.content ?? "").join("\n\n").length}`}
+        >
+          <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
+            <Markdown attachments={attachments}>
+              {preface.map((t) => t.content ?? "").join("\n\n")}
+            </Markdown>
+          </div>
+        </ChatCollapsibleBody>
       )}
       {panels && (panels.plan || panels.todos.length > 0 || panels.subagents.length > 0) && (
         <div className="space-y-1.5">

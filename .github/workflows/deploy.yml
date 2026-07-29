@@ -1,8 +1,8 @@
 name: Deploy
 
 # Continuous deployment to the Aliyun host (101.200.210.144, runner label
-# `aliyun`). Images build on GitHub-hosted runners and push to GHCR; the
-# self-hosted runner on that host pulls images and restarts Compose locally.
+# `aliyun`). Images build on self-hosted CI runners and push to GHCR; the
+# Aliyun runner pulls images and restarts Compose locally.
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
 # feature branch → PR → merge to `dev`, which builds images and deploys
@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   prepare:
-    # Package the exact committed deployment contract on a GitHub-hosted runner.
+    # Package the exact committed deployment contract on a self-hosted CI runner.
     # The Aliyun runner deliberately does not git-fetch the repository: mainland
     # GitHub fetches are slow and unreliable, and a deploy checkout is an unsafe
     # place for operators or privileged commands to reuse as a worktree.
@@ -53,6 +53,7 @@ jobs:
       github.repository_owner == 'LRM-Teams' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'))
+    # Hosted minutes blocked by org spending limit; prepare on self-hosted ci.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -107,6 +108,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/dev' &&
         github.event.inputs.image_tag == ''))
+    # Hosted minutes blocked by org spending limit; build on self-hosted ci.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -138,6 +140,13 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # The docker-container driver does not inherit the host daemon's
+          # registry mirrors. Docker Hub is unreachable from the Aliyun runner,
+          # so configure the two host-verified mirrors in BuildKit itself.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]
 
       - name: Log in to GHCR
         uses: docker/login-action@v3

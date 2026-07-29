@@ -18,6 +18,7 @@ const maxVoiceCallRequestBytes = 8 << 10
 
 type VoiceCallServiceAPI interface {
 	Start(context.Context, voicecall.StartInput) (voicecall.StartResult, error)
+	Connect(context.Context, voicecall.ConnectInput) (voicecall.Session, error)
 	Get(context.Context, string, string, string) (voicecall.Session, error)
 	Stop(context.Context, voicecall.StopInput) (voicecall.Session, error)
 }
@@ -148,6 +149,39 @@ func (h *Handler) CreateVoiceCall(w http.ResponseWriter, r *http.Request) {
 			Token:     result.Media.Token,
 			ExpiresAt: result.Media.ExpiresAt,
 		},
+	})
+}
+
+func (h *Handler) ConnectVoiceCall(w http.ResponseWriter, r *http.Request) {
+	if h.VoiceCallService == nil {
+		writeCodedError(
+			w,
+			http.StatusServiceUnavailable,
+			"voice_call_not_configured",
+			"voice calling is not configured",
+		)
+		return
+	}
+	workspaceID, userID, ok := voiceCallRequestScope(w, r)
+	if !ok {
+		return
+	}
+	callID, ok := voiceCallIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	session, err := h.VoiceCallService.Connect(r.Context(), voicecall.ConnectInput{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		CallID:      callID,
+	})
+	if err != nil {
+		writeVoiceCallServiceError(w, "connect", err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, getVoiceCallResponse{
+		Call: voiceCallResponseFromSession(session),
 	})
 }
 

@@ -426,17 +426,21 @@ make check
 
 ## CLI Release
 
-**Prerequisite:** A CLI release must accompany every Production deployment.
+**Web-only CI policy (Frank, 2026-07-29):** cross-platform CLI/daemon release
+artifacts are suspended to control Actions usage. Re-enable an explicitly
+reviewed release workflow before the next production deployment that requires
+a CLI release.
 
 1. Create a tag on the `main` branch: `git tag v0.x.x`
 2. Push the tag: `git push origin v0.x.x`
-3. GitHub Actions automatically triggers `release.yml`: runs Go tests → GoReleaser builds multi-platform binaries → publishes to GitHub Releases + Homebrew tap
+3. GitHub Actions automatically triggers `release.yml`: runs Go tests → builds Linux amd64 backend/web images → publishes the Helm chart
 
 By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
 
-The main release is Web-focused: its gates are Go verification, CLI/daemon
-artifacts, backend and web images, and the Helm chart. Desktop App packaging is
-outside this release scope and must not be treated as a release gate.
+The main release is Web-focused: its gates are Go verification, Linux amd64
+backend and web images, and the Helm chart. Mobile, desktop, Linux ARM, and
+CLI/daemon artifacts are outside this release scope and must not be treated as
+release gates.
 
 ## Multi-tenancy
 

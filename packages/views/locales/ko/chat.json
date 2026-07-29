@@ -40,6 +40,8 @@
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
+    "expand_action": "더 보기",
+    "collapse_action": "접기",
     "loading_older": "이전 메시지를 불러오는 중…",
     "scroll_to_top": "맨 위로 스크롤",
     "scroll_to_bottom": "맨 아래로 스크롤"

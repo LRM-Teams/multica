@@ -1,0 +1,49 @@
+{
+  "title": "Research",
+  "new": "New research",
+  "empty_title": "No research yet",
+  "empty_desc": "Describe what you want to understand. The research fleet runs a multi-source methodology for you.",
+  "goal_placeholder": "What do you want researched? (goal only — no need to name sites)",
+  "start": "Start research",
+  "status": {
+    "drafting": "Draft",
+    "running": "Running",
+    "awaiting_user_confirm": "Awaiting confirm",
+    "completed": "Completed",
+    "archived": "Archived"
+  },
+  "panel": {
+    "graph": "Exploration map",
+    "sources": "Source map",
+    "report": "Report",
+    "chat": "Fleet chat",
+    "chat_placeholder": "Course-correct with Ronaldo when needed…",
+    "hide_chat": "Close",
+    "delivery": "Sources & report",
+    "send": "Send",
+    "fleet": "Research fleet",
+    "confirm": "Confirm research complete",
+    "handoff_project": "Create development project",
+    "handoff_channel": "Create development channel",
+    "handoff": "Handoff",
+    "presence": "Working",
+    "weight": "Weight",
+    "fleet_badge": {
+      "lead": "리드",
+      "pending": "검토 대기"
+    }
+  },
+  "node": {
+    "goal": "Goal",
+    "subquestion": "Sub-question",
+    "probe": "Probe",
+    "finding": "Finding",
+    "conflict": "Conflict",
+    "dead_end": "Dead end",
+    "refuted": "Refuted",
+    "pivot": "Pivot",
+    "roster_change": "Roster change",
+    "stage_gate": "Stage gate",
+    "agent_activity": "Activity"
+  }
+}

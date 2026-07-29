@@ -1,5 +1,6 @@
 import {
   useCreateVoiceCall,
+  useConnectVoiceCall,
   useStopVoiceCall,
   voiceCallOptions,
 } from "@multica/core/voice-calls";
@@ -21,6 +22,11 @@ import {
   type VoiceCallMediaEvents,
   type VoiceCallMediaState,
 } from "./volcengine-media-session";
+import {
+  createVoiceCallRingback,
+  type VoiceCallRingback,
+  type VoiceCallRingbackFactory,
+} from "./voice-call-ringback";
 
 export type VoiceCallControllerPhase =
   | "idle"
@@ -43,6 +49,7 @@ export interface VoiceCallControllerError {
   source: VoiceCallControllerErrorSource;
   code: string;
   message: string;
+  providerCode?: string;
 }
 
 export interface VoiceCallMediaSession {
@@ -58,6 +65,7 @@ export type VoiceCallMediaSessionFactory = (
 
 export interface UseVoiceCallControllerOptions {
   mediaSessionFactory?: VoiceCallMediaSessionFactory;
+  ringbackFactory?: VoiceCallRingbackFactory;
 }
 
 export interface VoiceCallController {
@@ -93,6 +101,9 @@ function controllerError(
     source,
     code: error instanceof VoiceCallMediaError ? error.code : code,
     message: errorMessage(error, fallback),
+    providerCode: error instanceof VoiceCallMediaError
+      ? error.providerCode
+      : undefined,
   };
 }
 
@@ -141,7 +152,10 @@ export function useVoiceCallController(
 ): VoiceCallController {
   const mediaSessionFactory =
     options.mediaSessionFactory ?? createVolcengineVoiceMediaSession;
+  const ringbackFactory =
+    options.ringbackFactory ?? createVoiceCallRingback;
   const createCallMutation = useCreateVoiceCall(workspaceId);
+  const connectCallMutation = useConnectVoiceCall(workspaceId);
   const stopCallMutation = useStopVoiceCall(workspaceId);
   const [callId, setCallId] = useState("");
   const [localPhase, setLocalPhase] =
@@ -155,10 +169,12 @@ export function useVoiceCallController(
   const mountedRef = useRef(true);
   const activeCallIdRef = useRef("");
   const mediaSessionRef = useRef<VoiceCallMediaSession | null>(null);
+  const ringbackRef = useRef<VoiceCallRingback | null>(null);
   const startPromiseRef = useRef<Promise<string> | null>(null);
   const cancelRequestedRef = useRef(false);
   const endingRef = useRef(false);
   const mediaFailureRef = useRef<unknown>(null);
+  const providerStartedRef = useRef(false);
   const stoppedCallIdsRef = useRef(new Set<string>());
   const stopInFlightRef = useRef<{
     callId: string;
@@ -188,8 +204,29 @@ export function useVoiceCallController(
   const requestServerStopRef = useRef(requestServerStop);
   requestServerStopRef.current = requestServerStop;
 
+  const stopRingback = useCallback(() => {
+    ringbackRef.current?.stop();
+    ringbackRef.current = null;
+  }, []);
+
+  const startRingback = useCallback(() => {
+    stopRingback();
+    let ringback: VoiceCallRingback | null = null;
+    try {
+      ringback = ringbackFactory();
+      ringbackRef.current = ringback;
+      ringback.start();
+    } catch {
+      // Ringback is local call-progress feedback. A browser audio failure must
+      // not prevent the RTC call itself from connecting.
+      ringback?.stop();
+      ringbackRef.current = null;
+    }
+  }, [ringbackFactory, stopRingback]);
+
   const setMediaFailure = useCallback((error: unknown) => {
     if (endingRef.current || cancelRequestedRef.current) return;
+    stopRingback();
     mediaFailureRef.current = error;
     if (mountedRef.current) {
       setLocalError(controllerError(
@@ -215,7 +252,7 @@ export function useVoiceCallController(
         },
       );
     }
-  }, []);
+  }, [stopRingback]);
 
   const start = useCallback((
     input: CreateVoiceCallRequest,
@@ -233,16 +270,20 @@ export function useVoiceCallController(
     cancelRequestedRef.current = false;
     endingRef.current = false;
     mediaFailureRef.current = null;
+    providerStartedRef.current = false;
     setCallId("");
     setAutoplayBlockedUserId(null);
     setLocalError(null);
     setLocalPhase("creating");
+    startRingback();
 
     const operation = (async () => {
       let createdCallId = "";
       let cleanupAttempted = false;
+      let failureSource: VoiceCallControllerErrorSource = "create";
       try {
         const created = await createCallMutation.mutateAsync(input);
+        failureSource = "media";
         createdCallId = created.call.id;
         activeCallIdRef.current = createdCallId;
         if (mountedRef.current) {
@@ -274,6 +315,20 @@ export function useVoiceCallController(
 
         const events: VoiceCallMediaEvents = {
           onStateChange: (state) => {
+            if (
+              !providerStartedRef.current &&
+              (state === "connected" || state === "muted")
+            ) {
+              return;
+            }
+            if (
+              state === "connected" ||
+              state === "muted" ||
+              state === "failed" ||
+              state === "closed"
+            ) {
+              stopRingback();
+            }
             const nextPhase = phaseFromMediaState(state);
             if (nextPhase && mountedRef.current) {
               setLocalPhase(nextPhase);
@@ -316,8 +371,16 @@ export function useVoiceCallController(
             "Voice call startup was cancelled",
           );
         }
+        failureSource = "server";
+        await connectCallMutation.mutateAsync(createdCallId);
+        providerStartedRef.current = true;
+        stopRingback();
+        if (mountedRef.current) {
+          setLocalPhase("connected");
+        }
         return createdCallId;
       } catch (error) {
+        stopRingback();
         const cancelled =
           error instanceof VoiceCallMediaError && error.code === "cancelled";
         if (createdCallId && !cancelled && !cleanupAttempted) {
@@ -342,14 +405,20 @@ export function useVoiceCallController(
           }
         }
         if (!cancelled && mountedRef.current) {
-          const source = createdCallId ? "media" : "create";
+          const source = failureSource;
           setLocalError((current) => current ?? controllerError(
             source,
-            source === "create" ? "create_failed" : "media_failed",
+            source === "create"
+              ? "create_failed"
+              : source === "server"
+                ? "provider_start_failed"
+                : "media_failed",
             error,
             source === "create"
               ? "Failed to create voice call"
-              : "Failed to start voice call media",
+              : source === "server"
+                ? "Failed to start the voice call agent"
+                : "Failed to start voice call media",
           ));
           setLocalPhase("failed");
         }
@@ -371,9 +440,17 @@ export function useVoiceCallController(
       },
     );
     return operation;
-  }, [createCallMutation, mediaSessionFactory, setMediaFailure]);
+  }, [
+    createCallMutation,
+    connectCallMutation,
+    mediaSessionFactory,
+    setMediaFailure,
+    startRingback,
+    stopRingback,
+  ]);
 
   const hangUp = useCallback(async (): Promise<void> => {
+    stopRingback();
     cancelRequestedRef.current = true;
     endingRef.current = true;
     if (mountedRef.current) setLocalPhase("ending");
@@ -427,7 +504,7 @@ export function useVoiceCallController(
       }
       setLocalPhase("ended");
     }
-  }, []);
+  }, [stopRingback]);
 
   const setMuted = useCallback(async (muted: boolean): Promise<void> => {
     const session = mediaSessionRef.current;
@@ -484,13 +561,14 @@ export function useVoiceCallController(
 
   useEffect(() => {
     if (!callId || !TERMINAL_STATUSES.has(serverStatus ?? "")) return;
+    stopRingback();
     if (activeCallIdRef.current === callId) {
       activeCallIdRef.current = "";
     }
     const session = mediaSessionRef.current;
     mediaSessionRef.current = null;
     void session?.disconnect().catch(() => undefined);
-  }, [callId, serverStatus]);
+  }, [callId, serverStatus, stopRingback]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -498,6 +576,7 @@ export function useVoiceCallController(
       mountedRef.current = false;
       cancelRequestedRef.current = true;
       endingRef.current = true;
+      stopRingback();
       const targetCallId = activeCallIdRef.current;
       activeCallIdRef.current = "";
       void mediaSessionRef.current?.disconnect().catch(() => undefined);
@@ -506,7 +585,7 @@ export function useVoiceCallController(
         void requestServerStopRef.current(targetCallId).catch(() => undefined);
       }
     };
-  }, []);
+  }, [stopRingback]);
 
   const serverFailure = serverStatus === "failed" && serverCall
     ? {

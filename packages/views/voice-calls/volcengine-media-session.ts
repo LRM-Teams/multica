@@ -11,6 +11,7 @@ export type VoiceCallMediaState =
 
 export type VoiceCallMediaErrorCode =
   | "already_started"
+  | "insecure_context"
   | "unsupported"
   | "sdk_unavailable"
   | "cancelled"
@@ -27,6 +28,7 @@ export class VoiceCallMediaError extends Error {
   constructor(
     public readonly code: VoiceCallMediaErrorCode,
     message: string,
+    public readonly providerCode?: string,
     options?: ErrorOptions,
   ) {
     super(message, options);
@@ -140,7 +142,30 @@ function mediaError(
 ): VoiceCallMediaError {
   return cause instanceof VoiceCallMediaError
     ? cause
-    : new VoiceCallMediaError(code, message, { cause });
+    : new VoiceCallMediaError(
+      code,
+      message,
+      providerCodeFromCause(cause),
+      { cause },
+    );
+}
+
+function normalizeProviderCode(providerCode: unknown): string | undefined {
+  if (typeof providerCode !== "string" && typeof providerCode !== "number") {
+    return undefined;
+  }
+  const value = String(providerCode).trim();
+  return /^-?\d{1,10}$/.test(value) ||
+      /^[A-Z][A-Z0-9_]{0,63}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function providerCodeFromCause(cause: unknown): string | undefined {
+  if (typeof cause !== "object" || cause === null || !("code" in cause)) {
+    return undefined;
+  }
+  return normalizeProviderCode(cause.code);
 }
 
 export class VolcengineVoiceMediaSession {
@@ -188,6 +213,13 @@ export class VolcengineVoiceMediaSession {
     deviceId?: string,
   ): Promise<void> {
     try {
+      if (globalThis.isSecureContext === false) {
+        throw new VoiceCallMediaError(
+          "insecure_context",
+          "Voice calls require a secure HTTPS context",
+        );
+      }
+
       let driver: VoiceCallRTCDriver;
       try {
         driver = await this.loadDriver();
@@ -243,6 +275,7 @@ export class VolcengineVoiceMediaSession {
             const error = new VoiceCallMediaError(
               "provider_error",
               `Voice call media provider failed (${providerCode})`,
+              normalizeProviderCode(providerCode),
             );
             this.fatalError = error;
             this.disconnectRequested = true;

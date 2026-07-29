@@ -1387,7 +1387,7 @@ func isAssistantFollowupPrompt(m db.ChatMessage) bool {
 
 func chatFailureResumeUnsafe(reason string) bool {
 	switch reason {
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", "grok_tool_permission_failure", "missing_transport_receipt", "agent_error.context_overflow":
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", "grok_tool_permission_failure", "agent_error.context_overflow":
 		return true
 	default:
 		return false
@@ -1552,7 +1552,6 @@ type TaskCompleteRequest struct {
 	Parts                     []protocol.MessagePart        `json:"parts"`
 	Reaction                  *protocol.ChatReactionPayload `json:"reaction"`
 	OutputSuppressedReason    string                        `json:"output_suppressed_reason,omitempty"`
-	MustReplyFailure          bool                          `json:"must_reply_failure,omitempty"`
 	TransportAttempted        bool                          `json:"transport_attempted,omitempty"`
 	SessionID                 string                        `json:"session_id"` // Claude session ID for future resumption
 	WorkDir                   string                        `json:"work_dir"`   // working directory used during execution
@@ -1826,8 +1825,7 @@ func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason st
 }
 
 // suppressChannelTaskCompleteOutput normalizes completion-only channel output
-// to no_reply. Missing-receipt failure is derived separately from the daemon's
-// explicit transport-attempt signal, never from suppressed completion text.
+// to no_reply.
 func (h *Handler) suppressChannelTaskCompleteOutput(_ context.Context, _ db.AgentInboxEvent, req *TaskCompleteRequest, reason string) {
 	h.suppressTaskCompleteOutput(req, reason)
 }
@@ -1850,29 +1848,6 @@ func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentInboxEven
 		return false
 	}
 	return exists
-}
-
-func (h *Handler) agentInboxEventHasHumanSource(ctx context.Context, event db.AgentInboxEvent) bool {
-	if !event.SourceMessageID.Valid || !event.WorkspaceID.Valid {
-		return false
-	}
-	var authorType string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT author_type
-		FROM channel_message
-		WHERE id = $1
-		  AND workspace_id = $2
-	`, event.SourceMessageID, event.WorkspaceID).Scan(&authorType); err != nil {
-		if !isNotFound(err) {
-			slog.Warn("complete task: failed to resolve channel source author",
-				"task_id", uuidToString(event.ID),
-				"source_message_id", uuidToString(event.SourceMessageID),
-				"error", err,
-			)
-		}
-		return false
-	}
-	return channelMessageIsHumanAuthored(authorType)
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at

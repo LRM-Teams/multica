@@ -344,18 +344,11 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
   // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden in
   // the bubble (canEdit=false) until rebuilt on the unified composer (#258).
   // Delete stays, so a viewer's own DM message surfaces Delete but never Edit.
-  it("renders delete but never edit on the viewer's OWN DM message (real wiring)", async () => {
+  it("renders NEITHER edit nor delete on the viewer's OWN DM message (LRM-695)", async () => {
     renderDm();
     await screen.findByTestId("message-bubble");
-    // findByRole already asserts the Delete button is present at find-time — do
-    // NOT chain .toBeInTheDocument() on the awaited element. Under a loaded CI run
-    // the list can transiently re-render between the await resolving and the
-    // assertion, detaching that element reference → jest-dom reports "element
-    // could not be found in the document" (green locally, red only on overloaded
-    // CI). Re-query with waitFor so we assert against the currently-mounted node.
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
-    });
+    // LRM-695: delete removed from the UI (Frank: 只去删除); edit unshipped.
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 
@@ -388,16 +381,13 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
   });
 
-  it("routes a delete through deleteChannelMessage (soft-delete) and renders a tombstone", async () => {
-    const user = userEvent.setup();
+  it("does not surface a delete affordance on the DM (LRM-695 removed it)", async () => {
     renderDm();
     await screen.findByTestId("message-bubble");
 
-    await user.click(await screen.findByRole("button", { name: "Delete" }));
-
-    await waitFor(() => expect(apiMock.deleteChannelMessage).toHaveBeenCalledWith("dm-chan-1", "m-1"));
-    expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
-    expect(await screen.findByTestId("message-tombstone")).toBeInTheDocument();
+    // LRM-695: delete removed from the UI; the soft-delete wiring stays dormant.
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(apiMock.deleteChannelMessage).not.toHaveBeenCalled();
   });
 
   // #568 reaction-sheet exclusivity + LRM-495 (no permanent More): DM still

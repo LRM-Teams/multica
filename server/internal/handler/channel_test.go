@@ -1210,7 +1210,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 }
 
-func TestChannelAgentInboxCompleteDirectedMentionAfterNoPublicOutputObserveRecordsFailure(t *testing.T) {
+func TestChannelAgentInboxCompleteDirectedMentionAfterNoPublicOutputObserveCompletes(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1315,8 +1315,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertChannelMessageContentCount(t, channelID, reply, 0)
-	if chatDoneEvents != 0 {
-		t.Fatalf("completion chat-done events = %d, want 0 for must-reply failure", chatDoneEvents)
+	if chatDoneEvents != 1 {
+		t.Fatalf("completion chat-done events = %d, want 1 to finish the suppressed-output run", chatDoneEvents)
 	}
 	var completionReceipt struct {
 		OK              bool   `json:"ok"`
@@ -1326,8 +1326,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if err := json.Unmarshal(completeRec.Body.Bytes(), &completionReceipt); err != nil {
 		t.Fatalf("decode completion receipt: %v body=%s", err, completeRec.Body.String())
 	}
-	if !completionReceipt.OK || completionReceipt.TerminalOutcome != "failed" || !completionReceipt.ResumeUnsafe {
-		t.Fatalf("completion receipt = %+v, want ok=true terminal_outcome=failed resume_unsafe=true", completionReceipt)
+	if !completionReceipt.OK || completionReceipt.TerminalOutcome != "no_reply" || completionReceipt.ResumeUnsafe {
+		t.Fatalf("completion receipt = %+v, want ok=true terminal_outcome=no_reply resume_unsafe=false", completionReceipt)
 	}
 	var completionChatMessages int
 	if err := testPool.QueryRow(ctx, `
@@ -1361,11 +1361,11 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
 	}
-	if terminalOutcome != "failed" || terminalDeliveryID != got.DeliveryID || !retryable || !terminalAt.Valid {
-		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want failed/%s/retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	if terminalOutcome != "no_reply" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want no_reply/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
-	if failureReason != "missing_transport_receipt" || lastError != "directed agent run completed without a visible transport receipt" {
-		t.Fatalf("inbox completion failure = reason:%q error:%q", failureReason, lastError)
+	if failureReason != "" || lastError != "" {
+		t.Fatalf("inbox completion failure = reason:%q error:%q, want empty", failureReason, lastError)
 	}
 	var observeMode, observeResponseMode, observeStatus string
 	if err := testPool.QueryRow(ctx, `
@@ -1416,8 +1416,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&failureCount); err != nil {
 		t.Fatalf("query inbox failure activity: %v", err)
 	}
-	if failureCount != 1 {
-		t.Fatalf("inbox failure activity count = %d, want 1 for must-reply failure", failureCount)
+	if failureCount != 0 {
+		t.Fatalf("inbox failure activity count = %d, want 0", failureCount)
 	}
 }
 

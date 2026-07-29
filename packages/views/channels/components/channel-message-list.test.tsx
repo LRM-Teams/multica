@@ -639,18 +639,18 @@ describe("ChannelMessageList message edit / delete wiring", () => {
   // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
   // (canEdit=false) until rebuilt on the unified composer (#258). Delete stays,
   // so a wired own row surfaces Delete but never Edit.
-  it("surfaces delete but never edit on the viewer's own message when the list is wired", () => {
+  it("surfaces neither delete nor edit on the viewer's own message when wired (LRM-695)", () => {
     render(
       <ChannelMessageList
         messages={[makeOwnUserMessage()]}
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={vi.fn()}
-        onDeleteMessage={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    // LRM-695: delete removed from the UI (Frank: 只去删除); edit unshipped.
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 
@@ -668,7 +668,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={vi.fn()}
-        onDeleteMessage={vi.fn()}
       />,
     );
 
@@ -691,7 +690,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={onEditMessage}
-        onDeleteMessage={vi.fn()}
         onReact={onReact}
         onOpenThread={onOpenThread}
       />,
@@ -748,25 +746,10 @@ describe("ChannelMessageList message edit / delete wiring", () => {
     expect(empty.className).not.toContain("text-muted-foreground");
   });
 
-  it("deletes through onDeleteMessage and renders a tombstone (non-empty row) for a deleted message", async () => {
-    const onDeleteMessage = vi.fn();
-    const message = makeOwnUserMessage();
-    const { rerender } = render(
-      <ChannelMessageList
-        messages={[message]}
-        currentUserId="user-1"
-        emptyLabel="No messages"
-        onEditMessage={vi.fn()}
-        onDeleteMessage={onDeleteMessage}
-      />,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(onDeleteMessage).toHaveBeenCalledTimes(1);
-    expect(onDeleteMessage).toHaveBeenCalledWith(message);
-
-    // A soft-deleted message renders the tombstone placeholder, not a blank row.
-    rerender(
+  it("renders a tombstone (non-empty row) for a server-deleted message (LRM-695)", () => {
+    // LRM-695: the delete affordance is removed from the UI, but a message
+    // deleted via API / another client still renders the tombstone placeholder.
+    render(
       <ChannelMessageList
         messages={[
           makeOwnUserMessage({ deleted_at: "2026-06-17T09:25:00Z", content: "gone" }),
@@ -774,7 +757,6 @@ describe("ChannelMessageList message edit / delete wiring", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         onEditMessage={vi.fn()}
-        onDeleteMessage={onDeleteMessage}
       />,
     );
 

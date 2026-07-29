@@ -97,18 +97,30 @@
   "members": {
     "role_badge": {
       "owner": "소유자",
-      "manager_agent": "매니저",
-      "manager_human": "관리자"
+      "manager": "그룹 관리자"
     },
     "menu": {
       "aria": "멤버 작업",
-      "promote_agent": "그룹 매니저로 지정",
-      "promote_human": "관리자로 지정",
-      "demote_agent": "그룹 매니저 해제",
-      "demote_human": "관리자 해제",
+      "promote": "그룹 관리자로 지정",
+      "demote": "멤버로 변경",
       "transfer": "소유권 이전",
       "remove": "그룹에서 삭제",
-      "role_actions_pending": "그룹 관리 권한은 곧 제공됩니다. 현재 멤버 역할은 변경되지 않습니다."
+      "role_busy_promote": "그룹 관리자로 설정하는 중…",
+      "role_busy_demote": "멤버로 변경하는 중…",
+      "role_busy_transfer": "소유자를 이전하는 중…",
+      "role_done_promote": "그룹 관리자로 설정했습니다",
+      "role_done_demote": "멤버로 변경했습니다",
+      "role_done_transfer": "소유자를 이전했습니다",
+      "role_transfer_title": "소유자를 이전할까요?",
+      "role_transfer_body": "{{name}} 님에게 소유자를 이전하면 이 그룹의 소유자 권한을 잃게 됩니다. 새 소유자는 멤버 역할과 그룹 관리자를 계속 변경할 수 있습니다.",
+      "role_transfer_confirm": "이전 확인",
+      "role_failed_owner_changed": "소유자 권한이 변경되어 멤버 목록을 새로 고쳤습니다.",
+      "role_failed_generic": "멤버 역할을 업데이트하지 못했습니다. 새로 고친 후 다시 시도해 주세요.",
+      "role_failed_retryable": "멤버 역할을 업데이트하지 못했습니다. 다시 시도해 주세요.",
+      "role_failed_forbidden": "이 멤버의 역할을 변경할 권한이 없습니다.",
+      "role_failed_gone": "멤버 또는 채널 상태가 변경되었습니다. 새로 고친 후 다시 시도해 주세요.",
+      "role_failed_retry": "다시 시도",
+      "role_failed_dismiss": "닫기"
     },
     "select_user": "멤버 선택",
     "select_agent": "에이전트 선택",
@@ -392,9 +404,7 @@
     "voice_blocked_starting": "마이크를 준비하는 중입니다. 잠시만 기다려 주세요.",
     "voice_blocked_uploading": "음성 메시지를 업로드하는 중입니다. 완료될 때까지 기다려 주세요.",
     "voice_blocked_sending": "메시지를 보내는 중입니다. 잠시 후 녹음해 주세요.",
-    "voice_blocked_text_draft": "입력한 텍스트가 있습니다. 보내거나 지우면 음성을 녹음할 수 있습니다.",
     "voice_blocked_attachment_draft": "첨부 파일이 있습니다. 보내거나 삭제하면 음성을 녹음할 수 있습니다.",
-    "voice_blocked_text_and_attachment_draft": "텍스트와 첨부 파일이 있습니다. 보내거나 지우면 음성을 녹음할 수 있습니다.",
     "voice_permission_denied": "마이크 권한이 거부되었습니다.",
     "voice_secure_context_required": "브라우저에서 마이크를 사용하려면 HTTPS가 필요합니다. HTTPS 주소를 열고 다시 시도하세요.",
     "voice_unavailable": "이 브라우저는 음성 녹음을 지원하지 않습니다.",
@@ -589,6 +599,7 @@
     "autoplay_blocked": "브라우저가 {{name}}님의 오디오를 일시 중지했습니다.",
     "stop_failed": "통화를 종료하지 못했습니다. 다시 종료해 주세요.",
     "media_failed": "음성 연결에 실패했습니다. 마이크 권한과 네트워크를 확인하세요.",
+    "rtc_diagnostic_code": "RTC 진단 코드: {{code}}",
     "create_failed": "통화를 시작할 수 없습니다. 다시 시도해 주세요.",
     "server_failed": "음성 서비스 오류로 통화가 종료되었습니다.",
     "close": "닫기"

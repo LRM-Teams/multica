@@ -10,7 +10,8 @@ import enChannels from "../../locales/en/channels.json";
 import { DmConversation } from "./dm-conversation";
 
 // #656 Reminder anchor `?thread=<root>&message=<reply>` deep-link — the DM
-// counterpart of channels-page-reminder-thread-anchor.test.tsx. DMs render
+// counterpart of the channels-page reminder-anchor suite (now in
+// channels-page.test.tsx). DMs render
 // through this entirely separate component (own threadRoot/highlight state),
 // so the group-channel fix in channels-page.tsx doesn't cover this path —
 // this proves the equivalent DM wiring actually opens the thread and routes

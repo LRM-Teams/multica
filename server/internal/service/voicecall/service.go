@@ -115,13 +115,23 @@ type StopInput struct {
 	Reason      string
 }
 
+type ConnectInput struct {
+	WorkspaceID string
+	UserID      string
+	CallID      string
+}
+
 type ConversationContext struct {
 	WelcomeMessage string
 	SystemMessages []string
 }
 
-type ProviderStartInput struct {
-	CallID         string
+type ProviderPrepareInput struct {
+	RoomID       string
+	TargetUserID string
+}
+
+type ProviderConnectInput struct {
 	RoomID         string
 	TaskID         string
 	TargetUserID   string
@@ -130,7 +140,7 @@ type ProviderStartInput struct {
 	SystemMessages []string
 }
 
-type ProviderStartResult struct {
+type ProviderPrepareResult struct {
 	AppID     string
 	Token     string
 	ExpiresAt time.Time
@@ -180,10 +190,15 @@ type BeginEndingResult struct {
 	ProviderStopRequired bool
 }
 
+type BeginProviderStartResult struct {
+	Session               Session
+	ProviderStartRequired bool
+}
+
 type Store interface {
 	CreateStarting(ctx context.Context, input NewSession) (Session, error)
 	Get(ctx context.Context, workspaceID, userID, callID string) (Session, error)
-	MarkConnecting(ctx context.Context, workspaceID, callID string) (Session, error)
+	BeginProviderStart(ctx context.Context, workspaceID, callID string) (BeginProviderStartResult, error)
 	MarkFailed(ctx context.Context, workspaceID, callID, errorCode string) (Session, error)
 	BeginEnding(ctx context.Context, workspaceID, userID, callID, reason string) (BeginEndingResult, error)
 	MarkEnded(ctx context.Context, workspaceID, callID, reason string) (Session, error)
@@ -197,11 +212,12 @@ type ContextBuilder interface {
 	Build(ctx context.Context, scope Scope) (ConversationContext, error)
 }
 
-// Provider.Start must either return usable media credentials or return with no
-// provider task left running. It owns compensation for ambiguous transport
-// failures inside its protocol boundary.
+// Provider.Connect must either start the agent or return with no provider task
+// left running. It owns compensation for ambiguous transport failures inside
+// its protocol boundary.
 type Provider interface {
-	Start(ctx context.Context, input ProviderStartInput) (ProviderStartResult, error)
+	Prepare(ctx context.Context, input ProviderPrepareInput) (ProviderPrepareResult, error)
+	Connect(ctx context.Context, input ProviderConnectInput) error
 	Stop(ctx context.Context, identity ProviderCallIdentity) error
 }
 
@@ -277,7 +293,6 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 	roomID := providerRoomIDPrefix + nonce
 	taskID := providerTaskIDPrefix + nonce
 	memberUserID := providerMemberIDPrefix + nonce
-	agentUserID := providerAgentIDPrefix + nonce
 
 	session, err := service.store.CreateStarting(ctx, NewSession{
 		WorkspaceID:    scope.WorkspaceID,
@@ -292,65 +307,25 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 		return StartResult{}, fmt.Errorf("create starting voice call: %w", err)
 	}
 
-	conversationContext, err := service.contextBuilder.Build(ctx, scope)
-	if err != nil {
-		return StartResult{}, service.recordFailed(
-			ctx, session, "context_failed", fmt.Errorf("build voice call context: %w", err),
-		)
-	}
-	if err := validateConversationContext(conversationContext); err != nil {
-		return StartResult{}, service.recordFailed(ctx, session, "context_failed", err)
-	}
-
-	providerIdentity := ProviderCallIdentity{RoomID: roomID, TaskID: taskID}
-	providerResult, err := service.provider.Start(ctx, ProviderStartInput{
-		CallID:         session.ID,
-		RoomID:         roomID,
-		TaskID:         taskID,
-		TargetUserID:   memberUserID,
-		AgentUserID:    agentUserID,
-		WelcomeMessage: conversationContext.WelcomeMessage,
-		SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
+	providerResult, err := service.provider.Prepare(ctx, ProviderPrepareInput{
+		RoomID:       roomID,
+		TargetUserID: memberUserID,
 	})
 	if err != nil {
-		var uncertain *ProviderStartUncertainError
-		if errors.As(err, &uncertain) {
-			return StartResult{}, providerFailure(
-				fmt.Errorf("start voice call provider: %w", err),
-			)
-		}
 		return StartResult{}, providerFailure(
 			service.recordFailed(
 				ctx,
 				session,
-				"provider_start_failed",
-				fmt.Errorf("start voice call provider: %w", err),
+				"media_prepare_failed",
+				fmt.Errorf("prepare voice call media: %w", err),
 			),
 		)
 	}
-	if err := validateProviderStartResult(providerResult); err != nil {
+	if err := validateProviderPrepareResult(providerResult); err != nil {
 		return StartResult{}, providerFailure(
-			service.compensateStarted(
-				ctx,
-				session,
-				providerIdentity,
-				"provider_response_invalid",
-				err,
-			),
+			service.recordFailed(ctx, session, "provider_response_invalid", err),
 		)
 	}
-
-	connectingSession, err := service.store.MarkConnecting(ctx, session.WorkspaceID, session.ID)
-	if err != nil {
-		return StartResult{}, service.compensateStarted(
-			ctx,
-			session,
-			providerIdentity,
-			"state_transition_failed",
-			fmt.Errorf("mark voice call connecting: %w", err),
-		)
-	}
-	session = connectingSession
 	return StartResult{
 		Session: session,
 		Media: MediaCredentials{
@@ -361,6 +336,83 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 			ExpiresAt: providerResult.ExpiresAt,
 		},
 	}, nil
+}
+
+func (service *Service) Connect(ctx context.Context, input ConnectInput) (Session, error) {
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.UserID = strings.TrimSpace(input.UserID)
+	input.CallID = strings.TrimSpace(input.CallID)
+	if input.WorkspaceID == "" || input.UserID == "" || input.CallID == "" {
+		return Session{}, errors.New("voice call workspace, user, and call IDs are required")
+	}
+
+	session, err := service.store.Get(ctx, input.WorkspaceID, input.UserID, input.CallID)
+	if err != nil {
+		return Session{}, fmt.Errorf("get voice call for provider start: %w", err)
+	}
+	if err := service.authorizer.Authorize(ctx, sessionScope(session)); err != nil {
+		return Session{}, fmt.Errorf("authorize voice call provider start: %w", err)
+	}
+	switch session.Status {
+	case StatusConnecting, StatusActive, StatusReconnecting:
+		return session, nil
+	case StatusStarting:
+	default:
+		return Session{}, ErrScopeUnavailable
+	}
+
+	conversationContext, err := service.contextBuilder.Build(ctx, sessionScope(session))
+	if err != nil {
+		return Session{}, service.recordFailed(
+			ctx, session, "context_failed", fmt.Errorf("build voice call context: %w", err),
+		)
+	}
+	if err := validateConversationContext(conversationContext); err != nil {
+		return Session{}, service.recordFailed(ctx, session, "context_failed", err)
+	}
+
+	starting, err := service.store.BeginProviderStart(
+		ctx, session.WorkspaceID, session.ID,
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("claim voice call provider start: %w", err)
+	}
+	if !starting.ProviderStartRequired {
+		return starting.Session, nil
+	}
+	session = starting.Session
+
+	nonce := strings.TrimPrefix(session.RoomID, providerRoomIDPrefix)
+	if nonce == session.RoomID || nonce == "" {
+		return Session{}, service.recordFailed(
+			ctx, session, "provider_identity_invalid",
+			errors.New("voice call room ID does not contain the expected nonce"),
+		)
+	}
+	if err := service.provider.Connect(ctx, ProviderConnectInput{
+		RoomID:         session.RoomID,
+		TaskID:         session.ProviderTaskID,
+		TargetUserID:   providerMemberIDPrefix + nonce,
+		AgentUserID:    providerAgentIDPrefix + nonce,
+		WelcomeMessage: strings.TrimSpace(conversationContext.WelcomeMessage),
+		SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
+	}); err != nil {
+		var uncertain *ProviderStartUncertainError
+		if errors.As(err, &uncertain) {
+			return Session{}, providerFailure(
+				fmt.Errorf("start voice call provider: %w", err),
+			)
+		}
+		return Session{}, providerFailure(
+			service.recordFailed(
+				ctx,
+				session,
+				"provider_start_failed",
+				fmt.Errorf("start voice call provider: %w", err),
+			),
+		)
+	}
+	return session, nil
 }
 
 func (service *Service) Get(ctx context.Context, workspaceID, userID, callID string) (Session, error) {
@@ -405,6 +457,18 @@ func (service *Service) Stop(ctx context.Context, input StopInput) (Session, err
 		return Session{}, fmt.Errorf("begin ending voice call: %w", err)
 	}
 	if !ending.ProviderStopRequired {
+		if ending.Session.Status == StatusEnding {
+			session, err = service.store.MarkEnded(
+				cleanupContext,
+				ending.Session.WorkspaceID,
+				ending.Session.ID,
+				ending.Session.EndReason,
+			)
+			if err != nil {
+				return Session{}, fmt.Errorf("mark unstarted voice call ended: %w", err)
+			}
+			return session, nil
+		}
 		return ending.Session, nil
 	}
 
@@ -510,6 +574,9 @@ func validateNonce(value string) error {
 }
 
 func validateConversationContext(callContext ConversationContext) error {
+	if strings.TrimSpace(callContext.WelcomeMessage) == "" {
+		return errors.New("voice call context requires a welcome message")
+	}
 	if len(callContext.SystemMessages) == 0 {
 		return errors.New("voice call context requires at least one system message")
 	}
@@ -521,7 +588,7 @@ func validateConversationContext(callContext ConversationContext) error {
 	return nil
 }
 
-func validateProviderStartResult(result ProviderStartResult) error {
+func validateProviderPrepareResult(result ProviderPrepareResult) error {
 	if strings.TrimSpace(result.AppID) == "" ||
 		strings.TrimSpace(result.Token) == "" ||
 		result.ExpiresAt.IsZero() {

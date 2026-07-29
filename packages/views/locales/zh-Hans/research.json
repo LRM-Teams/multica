@@ -1,0 +1,49 @@
+{
+  "title": "调研",
+  "new": "新建调研",
+  "empty_title": "还没有调研",
+  "empty_desc": "描述你想搞清楚的方向，调研团会用自己的方法论去多源取证。",
+  "goal_placeholder": "你想调研什么？（只需说目标，不必指定网站）",
+  "start": "开始调研",
+  "status": {
+    "drafting": "草稿",
+    "running": "进行中",
+    "awaiting_user_confirm": "待确认",
+    "completed": "已完成",
+    "archived": "已归档"
+  },
+  "panel": {
+    "graph": "调研探索图",
+    "sources": "来源图谱",
+    "report": "调研报告",
+    "chat": "舰队对话",
+    "chat_placeholder": "方向不对时，告诉罗纳尔多你的纠偏…",
+    "hide_chat": "关闭",
+    "delivery": "来源与报告",
+    "send": "发送",
+    "fleet": "调研团",
+    "confirm": "确认调研完成",
+    "handoff_project": "建立开发项目",
+    "handoff_channel": "建立开发群",
+    "handoff": "交接并创建",
+    "presence": "正在工作",
+    "weight": "权重",
+    "fleet_badge": {
+      "lead": "主理",
+      "pending": "待审"
+    }
+  },
+  "node": {
+    "goal": "目标",
+    "subquestion": "子问题",
+    "probe": "探查",
+    "finding": "发现",
+    "conflict": "冲突",
+    "dead_end": "死胡同",
+    "refuted": "已否证",
+    "pivot": "转折",
+    "roster_change": "编制变更",
+    "stage_gate": "阶段门",
+    "agent_activity": "活动"
+  }
+}

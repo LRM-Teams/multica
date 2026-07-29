@@ -78,7 +78,8 @@ export type MessageCollapseFadeVariant =
   | "default"
   | "self-mention"
   | "highlighted"
-  | "search";
+  | "search"
+  | "muted";
 
 export function resolveMessageCollapseFadeVariant(options: {
   selfMentioned: boolean;
@@ -116,6 +117,11 @@ export function messageCollapseFadeClassName(
       return cn(
         layout,
         "bg-gradient-to-t from-[#fef9e8] via-[#fef9e8]/95 to-transparent dark:from-brand/[0.06] dark:via-brand/[0.06]/95",
+      );
+    case "muted":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-muted via-muted/95 to-transparent",
       );
     default:
       return cn(

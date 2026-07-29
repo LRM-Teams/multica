@@ -1,4 +1,6 @@
 import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -88,3 +90,18 @@ if (typeof CSSStyleDeclaration !== "undefined" && !("mozTransform" in CSSStyleDe
     },
   });
 }
+
+// React Testing Library registers its own `afterEach(cleanup)` when the module
+// is first imported. Under `isolate: true` (today's config) each test file gets
+// its own module registry, so that registration happens per file and this block
+// is a no-op. It exists for `isolate: false`, where the registry is shared per
+// worker: RTL would then register cleanup only for the FIRST file on each
+// worker, and every later file would leave its DOM mounted (measured: 241
+// "Found multiple elements" failures, 168 of 297 files red). setupFiles DO run
+// per test file, so registering here covers every file in both modes.
+// Prerequisite for the isolation work in
+// docs/superpowers/specs/2026-07-29-frontend-test-cost-design.md — on its own,
+// with isolation on, it buys nothing.
+afterEach(() => {
+  cleanup();
+});

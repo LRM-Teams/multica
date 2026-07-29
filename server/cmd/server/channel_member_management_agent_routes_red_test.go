@@ -165,6 +165,37 @@ func requireChannelMembershipCount(t *testing.T, channelID, memberType, memberID
 	}
 }
 
+func TestMemberManagementCapabilityRoutesAreWired(t *testing.T) {
+	fixture := newAgentMemberManagementFixture(t, 0)
+
+	t.Run("human route", func(t *testing.T) {
+		resp := authRequest(
+			t,
+			http.MethodGet,
+			fmt.Sprintf(
+				"/api/channels/%s/member-management-capabilities",
+				fixture.channel,
+			),
+			nil,
+		)
+		requireResponseStatus(t, resp, http.StatusOK)
+	})
+
+	t.Run("agent route", func(t *testing.T) {
+		resp := agentCredentialRequest(
+			t,
+			fixture.token,
+			http.MethodGet,
+			fmt.Sprintf(
+				"/api/agent/channels/%s/member-management-capabilities",
+				fixture.channel,
+			),
+			nil,
+		)
+		requireResponseStatus(t, resp, http.StatusOK)
+	})
+}
+
 func TestAgentMemberManagerUsesDedicatedWriteRoutes(t *testing.T) {
 	fixture := newAgentMemberManagementFixture(t, 4)
 

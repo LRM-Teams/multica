@@ -129,17 +129,19 @@ describe("AgentOverviewPane MCP tab visibility", () => {
   it.each([
     ["Claude", "claude"],
     ["Codex", "codex"],
+    ["Cursor", "cursor"],
     ["Hermes", "hermes"],
     ["Kimi", "kimi"],
     ["Kiro", "kiro"],
     ["OpenCode", "opencode"],
     ["OpenClaw", "openclaw"],
+    ["Pi", "pi"],
   ])("renders the MCP tab when the agent runs on the %s runtime", (_label, provider) => {
     renderPane([makeRuntime(provider)]);
     expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
   });
 
-  it.each([["Gemini", "gemini"], ["Pi", "pi"], ["Grok", "grok"]])(
+  it.each([["Gemini", "gemini"], ["Grok", "grok"]])(
     "hides the MCP tab for %s (backend does not read mcp_config)",
     (_label, provider) => {
       // Saving an MCP config on these providers would be a silent no-op at

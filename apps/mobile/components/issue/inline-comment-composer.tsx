@@ -10,7 +10,7 @@
  *
  * All UI / state / chip plumbing lives in `MessageComposer`. The chat
  * composer (`components/chat/chat-composer.tsx`) uses the same component
- * with chat-mode props.
+ * with conversation-composer props.
  */
 import { useCallback } from "react";
 import { useCreateComment } from "@/data/mutations/issues";

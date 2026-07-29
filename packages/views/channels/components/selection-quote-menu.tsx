@@ -50,7 +50,9 @@ export function SelectionQuoteMenu({
       data-testid="selection-quote-menu"
       // pointer-events-auto + a high z-index so the pill sits above message
       // content and the hover action bar while a selection is live.
-      className="pointer-events-auto fixed z-50 flex items-center gap-0.5 rounded-lg border border-border/70 bg-popover p-0.5 text-popover-foreground shadow-md"
+      // LRM-695 frozen v3 spec (UI Designer): bg-popover / rounded-md / h-8 items,
+      // horizontal Slack-style pill above the selection.
+      className="pointer-events-auto fixed z-50 flex items-center gap-0.5 rounded-md border border-border/70 bg-popover p-0.5 text-popover-foreground shadow-md"
       style={{ top, left }}
       // A pointerdown starting on the pill must not be treated as an outside
       // dismiss (the menu buttons own their clicks).
@@ -92,7 +94,7 @@ function MenuButton({
       onClick={onClick}
       onMouseDown={swallowMouseDown}
       className={cn(
-        "inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium",
+        "inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium",
         "text-popover-foreground/90 transition-colors",
         "hover:bg-muted hover:text-foreground",
         "focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none",

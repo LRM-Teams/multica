@@ -57,9 +57,36 @@ jobs:
       - name: Run tests
         run: cd server && go test ./...
 
+  # The release still needs a daemon artifact for the Linux fleet and for
+  # Frank's Apple-silicon machine that runs Wendy. Keep desktop installers and
+  # every other cross-platform target off the Actions budget.
+  release:
+    needs: verify
+    if: github.repository == 'LRM-Teams/multica'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # The web-only release policy publishes Linux amd64 images only. The served
-  # deployment target is amd64; ARM and cross-platform CLI artifacts stay off
-  # the Actions budget until explicitly re-enabled.
+  # deployment target is amd64. Daemon archives are handled by the release job
+  # above for Linux amd64 and Wendy's Darwin arm64 host only.
   docker-backend-build:
     needs: verify
     if: github.repository == 'LRM-Teams/multica'

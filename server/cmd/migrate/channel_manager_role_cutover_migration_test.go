@@ -102,6 +102,16 @@ func TestChannelManagerRoleCutoverMigrationRetiresLegacyState(t *testing.T) {
 			'group',
 			'71000000-0000-4000-8000-000000000004'
 		);
+		INSERT INTO channel (
+			id, workspace_id, name, created_by, kind, group_manager_agent_id
+		) VALUES (
+			'71000000-0000-4000-8000-000000000007',
+			'71000000-0000-4000-8000-000000000002',
+			'manager-cutover-orphan-channel',
+			'71000000-0000-4000-8000-000000000001',
+			'group',
+			'71000000-0000-4000-8000-000000000004'
+		);
 		INSERT INTO channel_member (
 			channel_id, workspace_id, member_type, member_id, role
 		) VALUES (
@@ -150,6 +160,34 @@ func TestChannelManagerRoleCutoverMigrationRetiresLegacyState(t *testing.T) {
 	}
 	if role != "manager" {
 		t.Fatalf("migrated channel role = %q, want manager", role)
+	}
+
+	var orphanMemberships, orphanOnboardingRows, migrationWakeEvents int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)
+		   FROM channel_member
+		   WHERE channel_id = '71000000-0000-4000-8000-000000000007'
+		     AND member_type = 'agent'
+		     AND member_id = '71000000-0000-4000-8000-000000000004'),
+		  (SELECT count(*)
+		   FROM channel_agent_onboarding
+		   WHERE channel_id = '71000000-0000-4000-8000-000000000007'
+		     AND agent_id = '71000000-0000-4000-8000-000000000004'),
+		  (SELECT count(*)
+		   FROM agent_inbox_event
+		   WHERE agent_id = '71000000-0000-4000-8000-000000000004'
+		     AND reason IN ('channel_onboarding', 'channel_role_changed'))
+	`).Scan(&orphanMemberships, &orphanOnboardingRows, &migrationWakeEvents); err != nil {
+		t.Fatalf("read orphan binding cutover state: %v", err)
+	}
+	if orphanMemberships != 0 || orphanOnboardingRows != 0 || migrationWakeEvents != 0 {
+		t.Fatalf(
+			"orphan binding manufactured state memberships=%d onboarding=%d wakeEvents=%d",
+			orphanMemberships,
+			orphanOnboardingRows,
+			migrationWakeEvents,
+		)
 	}
 
 	var managedRoleIsNull, legacyReminderRemoved bool

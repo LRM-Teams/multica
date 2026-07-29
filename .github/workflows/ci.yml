@@ -13,7 +13,7 @@ jobs:
     # Self-hosted CI (LRM-701). Hosted ubuntu-latest is currently blocked by
     # org spending-limit / billing (#1409); keep PR CI on [self-hosted, ci]
     # until that is raised. High Postgres/Redis host ports avoid Compose clash.
-    runs-on: [self-hosted, ci]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -245,7 +245,7 @@ jobs:
   backend:
     # Same [self-hosted, ci] pool as frontend (LRM-701). Requires Docker for
     # Postgres/Redis service containers — see docs/ci-tencent-runner.md.
-    runs-on: [self-hosted, ci]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: pgvector/pgvector:pg17

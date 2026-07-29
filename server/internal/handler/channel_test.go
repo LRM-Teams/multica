@@ -1315,8 +1315,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertChannelMessageContentCount(t, channelID, reply, 0)
-	if chatDoneEvents != 0 {
-		t.Fatalf("completion chat-done events = %d, want 0 for suppressed completion output", chatDoneEvents)
+	if chatDoneEvents != 1 {
+		t.Fatalf("completion chat-done events = %d, want 1 to finish the suppressed-output run", chatDoneEvents)
 	}
 	var completionReceipt struct {
 		OK              bool   `json:"ok"`

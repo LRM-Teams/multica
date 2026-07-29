@@ -81,6 +81,12 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	`, "radar-owner-"+suffix, "radar-owner-"+suffix+"@example.test").Scan(&userID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'owner')
+	`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata)
 		VALUES ($1, 'Radar Runtime', 'local', 'claude', 'online', '', '{}'::jsonb)
@@ -122,11 +128,11 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	var activeTaskID, completedTaskID, cancelledTaskID, failedTaskID, radarTaskID string
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary, wait_reason
+			workspace_id, agent_id, runtime_id, issue_id, status, priority, context, trigger_summary, wait_reason
 		)
-		VALUES ($1, $2, $3, 'waiting_local_directory', 1, '{"type":"issue"}'::jsonb, 'Implement issue', 'workspace lock busy')
+		VALUES ($1, $2, $3, $4, 'waiting_local_directory', 1, '{"type":"issue"}'::jsonb, 'Implement issue', 'workspace lock busy')
 		RETURNING id
-	`, peerAgentID, runtimeID, openIssueID).Scan(&activeTaskID); err != nil {
+	`, workspaceID, peerAgentID, runtimeID, openIssueID).Scan(&activeTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
@@ -137,42 +143,42 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	}
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
+			workspace_id, agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
 			completed_at, result
 		)
-		VALUES ($1, $2, $3, 'completed', 1, '{"type":"issue"}'::jsonb, 'Completed implementation',
+		VALUES ($1, $2, $3, $4, 'completed', 1, '{"type":"issue"}'::jsonb, 'Completed implementation',
 		        now(), '{"outcome":"shipped"}'::jsonb)
 		RETURNING id
-	`, peerAgentID, runtimeID, openIssueID).Scan(&completedTaskID); err != nil {
+	`, workspaceID, peerAgentID, runtimeID, openIssueID).Scan(&completedTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
+			workspace_id, agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
 			completed_at, error, failure_reason
 		)
-		VALUES ($1, $2, $3, 'cancelled', 1, '{"type":"issue"}'::jsonb, 'Cancelled implementation',
+		VALUES ($1, $2, $3, $4, 'cancelled', 1, '{"type":"issue"}'::jsonb, 'Cancelled implementation',
 		        now(), 'cancelled by owner', 'manual')
 		RETURNING id
-	`, peerAgentID, runtimeID, openIssueID).Scan(&cancelledTaskID); err != nil {
+	`, workspaceID, peerAgentID, runtimeID, openIssueID).Scan(&cancelledTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
+			workspace_id, agent_id, runtime_id, issue_id, status, priority, context, trigger_summary,
 			completed_at, error, failure_reason
 		)
-		VALUES ($1, $2, $3, 'failed', 1, '{"type":"issue"}'::jsonb, 'Failed implementation',
+		VALUES ($1, $2, $3, $4, 'failed', 1, '{"type":"issue"}'::jsonb, 'Failed implementation',
 		        now(), 'provider timeout', 'agent_error')
 		RETURNING id
-	`, peerAgentID, runtimeID, openIssueID).Scan(&failedTaskID); err != nil {
+	`, workspaceID, peerAgentID, runtimeID, openIssueID).Scan(&failedTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
-		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, context, trigger_summary)
-		VALUES ($1, $2, 'queued', 1, '{"type":"agent_radar"}'::jsonb, 'Radar housekeeping')
+		INSERT INTO agent_inbox_event (workspace_id, agent_id, runtime_id, status, priority, context, trigger_summary)
+		VALUES ($1, $2, $3, 'queued', 1, '{"type":"agent_radar"}'::jsonb, 'Radar housekeeping')
 		RETURNING id
-	`, supervisorID, runtimeID).Scan(&radarTaskID); err != nil {
+	`, workspaceID, supervisorID, runtimeID).Scan(&radarTaskID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,12 +207,12 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	}
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, status, priority, chat_session_id, context,
+			workspace_id, agent_id, runtime_id, status, priority, chat_session_id, context,
 			trigger_summary, error
-		) VALUES ($1, $2, 'running', 1, $3, '{"type":"chat"}'::jsonb,
+		) VALUES ($1, $2, $3, 'running', 1, $4, '{"type":"chat"}'::jsonb,
 		          'private DM task trigger', 'private DM task error')
 		RETURNING id
-	`, peerAgentID, runtimeID, dmChatSessionID).Scan(&dmTaskID); err != nil {
+	`, workspaceID, peerAgentID, runtimeID, dmChatSessionID).Scan(&dmTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(t.Context(), `
@@ -261,12 +267,12 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	}
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, status, priority, context, trigger_summary, completed_at
+			workspace_id, agent_id, runtime_id, status, priority, context, trigger_summary, completed_at
 		)
-		SELECT $1, $2, 'cancelled', 1, '{"type":"issue"}'::jsonb,
+		SELECT $1, $2, $3, 'cancelled', 1, '{"type":"issue"}'::jsonb,
 		       repeat('bulk terminal task evidence ', 10) || series::text, now()
 		FROM generate_series(1, 40) AS series
-	`, peerAgentID, runtimeID); err != nil {
+	`, workspaceID, peerAgentID, runtimeID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -442,12 +448,12 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 		var taskID string
 		if err := pool.QueryRow(t.Context(), `
 			INSERT INTO agent_inbox_event (
-				agent_id, runtime_id, issue_id, status, priority, context,
+				workspace_id, agent_id, runtime_id, issue_id, status, priority, context,
 				trigger_summary, created_at
-			) VALUES ($1, $2, $3, 'queued', 1, '{"type":"issue"}'::jsonb,
-			          $4, TIMESTAMPTZ '2026-01-03 00:00:00+00' + ($5::int * interval '1 minute'))
+			) VALUES ($1, $2, $3, $4, 'queued', 1, '{"type":"issue"}'::jsonb,
+			          $5, TIMESTAMPTZ '2026-01-03 00:00:00+00' + ($6::int * interval '1 minute'))
 			RETURNING id
-		`, workerID, runtimeID, issueIDs[index-1], "Rotation Task "+fmt.Sprint(index), index).Scan(&taskID); err != nil {
+		`, workspaceID, workerID, runtimeID, issueIDs[index-1], "Rotation Task "+fmt.Sprint(index), index).Scan(&taskID); err != nil {
 			t.Fatal(err)
 		}
 		if index == taskSectionPageSize+1 {

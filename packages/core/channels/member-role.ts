@@ -17,21 +17,30 @@ export function channelMemberRole(
  * Elevated-only badge, or `null` for ordinary members. Rendered ONLY in
  * management surfaces (the member list / settings) — never in the message
  * stream (Parker's durable rule: role markers stay out of content scenes).
- *   owner            → group owner (always human)
- *   manager + agent  → group manager ("群管")
- *   manager + human  → admin ("管理员")
- *   member           → no badge
+ *   owner   → group owner (always human)
+ *   manager → group manager, for humans and agents alike
+ *   member  → no badge
+ *
+ * #832: this used to split `manager` by member type ("群管" for agents,
+ * "管理员" for humans). One role now carries one name (Iris): showing an agent
+ * as a different role than a human holding the same role invented a
+ * distinction the permission model does not have, and — the part that decided
+ * it — the action and its result then read differently ("make admin" producing
+ * a row labelled "group manager").
+ *
+ * Display only. This value is never an authorization input: menu visibility
+ * reads backend capability, never a badge (#844 §14).
  */
-export type ChannelMemberBadge = "owner" | "manager_agent" | "manager_human";
+export type ChannelMemberBadge = "owner" | "manager";
 
 export function channelMemberBadge(
-  member: Pick<ChannelMember, "role" | "member_type">,
+  member: Pick<ChannelMember, "role">,
 ): ChannelMemberBadge | null {
   switch (channelMemberRole(member)) {
     case "owner":
       return "owner";
     case "manager":
-      return member.member_type === "agent" ? "manager_agent" : "manager_human";
+      return "manager";
     case "member":
       return null;
   }

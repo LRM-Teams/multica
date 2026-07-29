@@ -5,28 +5,37 @@ import type { ChannelMember } from "@multica/core/types";
 import type { GroupMemberActions } from "@multica/core/channels";
 
 /**
- * #832 — the role rows must be honestly unavailable, not fake-available.
+ * #832 — the role rows are real actions now.
  *
  * Frank set a group manager, got an info toast, and believed it had worked.
- * The role mutations don't exist yet (#1321), so promote / demote / transfer
- * render DISABLED with a persistent note. These assert the user-visible
- * contract Iris specified:
- *   - the rows cannot be activated (asserted at the callback boundary, not on
- *     styling) and carry aria-disabled;
- *   - the explanation is a real text node present BEFORE any interaction, and
- *     is referenced by each row's aria-describedby (not tooltip-only);
- *   - REMOVE is deliberately NOT in this group — it has a working endpoint, so
- *     telling the user it's "coming soon" would be the opposite lie. (Wiring it
- *     back to the real confirm flow is its own ticket, #833.)
+ * The interim fix made the three rows honestly unavailable while the mutations
+ * were unbuilt (#1321); those mutations now exist, so the rows dispatch. What
+ * this file guards is the user-visible contract Iris specified for the working
+ * version:
+ *   - each row dispatches its own action, asserted at the callback boundary
+ *     with the member and the kind — not on styling;
+ *   - the "coming soon" note is GONE (a disabled row explaining itself with an
+ *     expired reason is the defect this replaced);
+ *   - an in-flight action shows a NAMED status inside that member's row, not in
+ *     the menu — Radix closes the menu on select, so a menu-only indicator is
+ *     invisible for the entire time it matters;
+ *   - while it is in flight that row's role items stay aria-disabled, so
+ *     reopening the menu cannot issue the same change twice;
+ *   - a failure renders in that member's row, and offers Retry only when
+ *     retrying can help;
+ *   - REMOVE is deliberately outside this group — it always had a working
+ *     endpoint (#833 owns its confirm flow).
  *
- * HOW TO FLIP-VERIFY THESE (matters — there is no flag to toggle):
- * delete the `disabled` prop from the three rows in channel-members-list.tsx
- * → the three click cases go red; stop rendering the note → the note case goes
- * red. That is the regression they guard: rows becoming activatable again.
- * `disabled` is unconditional on purpose (a half-open flag would mean clickable
- * rows with no handler behind them), so there is nothing to toggle — a reviewer
- * flipping a boolean will see nothing move and may wrongly conclude these don't
- * discriminate.
+ * HOW TO FLIP-VERIFY: point a row's onClick at a different kind → that
+ * dispatch case goes red and the other two stay green (they discriminate the
+ * kind, not merely that something fired). Drop `aria-disabled`/the guard while
+ * rolePendingAction is set → the double-issue case goes red. Move the pending
+ * `<output>` back inside the menu → the in-flight case goes red, because it
+ * asserts before any menu interaction.
+ *
+ * The `dict` below does NOT derive from en.json: a key missing here renders as
+ * an empty string, so the failure reads "expected …, received (nothing)" and
+ * looks like a component bug. Keep it in step with the real dictionary.
  */
 
 vi.mock("../../i18n", () => ({
@@ -48,16 +57,23 @@ const dict = {
     title: "Members",
     menu: {
       aria: "Member actions",
-      promote_agent: "Set as group manager",
-      promote_human: "Set as admin",
-      demote_agent: "Remove group manager role",
-      demote_human: "Remove admin role",
+      // One label per action, not one per member type: Iris's ruling is that a
+      // group manager is a 群管 whether the member is a human or an agent, so
+      // the agent/human fork that used to live here is gone from the component,
+      // the four locales, and this mock alike.
+      promote: "Make group manager",
+      demote: "Demote to member",
       transfer: "Transfer ownership",
       remove: "Remove from group",
-      role_actions_pending:
-        "Group role management is coming soon; member roles are not changed yet.",
+      // #832 — the in-progress labels. This dictionary does NOT derive from
+      // en.json, so a missing key renders as empty string rather than failing:
+      // the assertion then reports "expected …, received (nothing)" and looks
+      // like a component bug. Fourth instance of that trap today.
+      role_busy_promote: "Making group manager…",
+      role_busy_demote: "Demoting to member…",
+      role_busy_transfer: "Transferring ownership…",
     },
-    role_badge: { owner: "Owner", manager_agent: "Group manager", manager_human: "Admin" },
+    role_badge: { owner: "Owner", manager: "Group manager" },
     remove_aria: "Remove",
   },
   message: { agent_badge: "Agent" },
@@ -84,10 +100,17 @@ const ALL_ACTIONS: GroupMemberActions = {
   canRemove: true,
 };
 
-function renderList(actions: GroupMemberActions = ALL_ACTIONS) {
+function renderList(
+  actions: GroupMemberActions = ALL_ACTIONS,
+  extra: {
+    roleFailureFor?: React.ComponentProps<typeof ChannelMembersList>["roleFailureFor"];
+    rolePendingActionFor?: React.ComponentProps<typeof ChannelMembersList>["rolePendingActionFor"];
+  } = {},
+) {
   const onGroupMemberAction = vi.fn();
   render(
     <ChannelMembersList
+      {...extra}
       members={[member("bob")]}
       emptyLabel="empty"
       noResultsLabel="none"
@@ -113,58 +136,112 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>) {
   expect(trigger).toHaveAttribute("aria-expanded", "true");
 }
 
-describe("ChannelMembersList — role rows are disabled while the write API is missing (#832)", () => {
+describe("ChannelMembersList — role rows are real actions (#832)", () => {
+  // These replace the interim suite, which asserted the three rows were
+  // disabled and explained by a "coming soon" note. That state was correct
+  // while #1321 was unshipped; it is now expired, and a test guarding it would
+  // block the correction rather than merely describe it.
   it.each([
     ["promote", "group-member-menu-promote"],
     ["demote", "group-member-menu-demote"],
     ["transfer", "group-member-menu-transfer"],
-  ])("the %s row is disabled and a click fires nothing", async (_kind, testId) => {
+  ])("the %s row dispatches its action", async (kind, testId) => {
     const user = userEvent.setup();
     const onGroupMemberAction = renderList();
     await openMenu(user);
 
-    const row = screen.getByTestId(testId);
-    expect(row).toHaveAttribute("aria-disabled", "true");
-
-    // The real contract is "no request happens" — assert at the callback
-    // boundary, not on styling. (`pointer-events-none` on a disabled row means
-    // userEvent would refuse a normal click, so go through the DOM directly:
-    // even a synthetic click must not reach the handler.)
-    row.click();
-    expect(onGroupMemberAction).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId(testId));
+    expect(onGroupMemberAction).toHaveBeenCalledWith(
+      expect.objectContaining({ member_id: "bob" }),
+      kind,
+    );
   });
 
-  // NO keyboard-activation test here, on purpose. Two attempts could not be
-  // made to discriminate in jsdom: arrow-key traversal skips disabled items (so
-  // Enter lands on an enabled row and the assertion passes without ever
-  // exercising a disabled one), and focusing a row + pressing Enter never
-  // reaches the item handler at all — this menu handles keys at the menu level,
-  // so the "fires nothing" assertion stays green with AND without `disabled`.
-  // A guard that cannot fail is worse than no guard: it reads like coverage.
-  //
-  // What actually protects the keyboard path: it is the SAME `disabled` prop
-  // the click cases above do discriminate against, plus the asserted
-  // `aria-disabled="true"`. Real keyboard/AT behaviour is verified in Iris's
-  // acceptance pass, not faked here.
-
-  it("the explanation is visible text before any interaction, and describes each disabled row", async () => {
+  it("the expired 'coming soon' note is gone — a disabled row with a stale reason is what this replaced", async () => {
     const user = userEvent.setup();
     renderList();
     await openMenu(user);
+    expect(screen.queryByTestId("group-member-menu-role-pending")).toBeNull();
+  });
 
-    const note = screen.getByTestId("group-member-menu-role-pending");
-    expect(note).toBeVisible();
-    expect(note.textContent).toContain("coming soon");
+  it("in-flight status renders in the ROW and is announced — the menu closes on select, so a menu-only indicator would be invisible", async () => {
+    renderList(ALL_ACTIONS, { rolePendingActionFor: () => "promote" });
+    // Visible without opening the menu, which is the whole point.
+    const status = screen.getByTestId("channel-members-row-role-pending");
+    expect(status).toHaveTextContent("Making group manager…");
+    // `<output>` maps to role=status implicitly — assert what AT resolves.
+    expect(screen.getByRole("status")).toBe(status);
+    // Named, not a bare spinner: with three actions the user must know which.
+    expect(status).not.toHaveTextContent("Demoting");
+  });
 
-    // aria-describedby → assistive tech announces the reason with the row,
-    // instead of just reporting "dimmed".
-    for (const testId of [
-      "group-member-menu-promote",
-      "group-member-menu-demote",
-      "group-member-menu-transfer",
-    ]) {
-      expect(screen.getByTestId(testId)).toHaveAttribute("aria-describedby", note.id);
+  it("while an action is in flight the row's role items stay disabled — reopening the menu can't issue it twice", async () => {
+    const user = userEvent.setup();
+    const onGroupMemberAction = renderList(ALL_ACTIONS, {
+      rolePendingActionFor: () => "promote",
+    });
+    await openMenu(user);
+    for (const id of ["group-member-menu-promote", "group-member-menu-demote", "group-member-menu-transfer"]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("aria-disabled", "true");
+      screen.getByTestId(id).click();
     }
+    expect(onGroupMemberAction).not.toHaveBeenCalled();
+  });
+
+  it("a role failure renders in THAT member's row, and offers retry only when retrying can help", () => {
+    const onDismiss = vi.fn();
+    const onRetry = vi.fn();
+    render(
+      <ChannelMembersList
+        members={[member("bob")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        badgeForMember={() => null}
+        memberMenu={() => ALL_ACTIONS}
+        onGroupMemberAction={vi.fn()}
+        roleFailureFor={() => ({
+          message: "Couldn't update the member's role. Please try again.",
+          retryLabel: "Retry",
+          dismissLabel: "Dismiss",
+          onRetry,
+          onDismiss,
+        })}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+    const notice = screen.getByTestId("channel-members-row-role-failed");
+    expect(notice).toHaveTextContent("Couldn't update the member's role.");
+    // Attached to the member's own row, not floated as a global banner.
+    expect(notice.closest('[data-testid="channel-members-row"]')).not.toBeNull();
+    screen.getByTestId("channel-members-row-role-retry").click();
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it("omits the retry button when retrying cannot help — a button that re-runs a call we know fails is worse than none", () => {
+    render(
+      <ChannelMembersList
+        members={[member("bob")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        badgeForMember={() => null}
+        memberMenu={() => ALL_ACTIONS}
+        onGroupMemberAction={vi.fn()}
+        roleFailureFor={() => ({
+          message: "Ownership has changed; the member list has been refreshed.",
+          dismissLabel: "Dismiss",
+          onDismiss: vi.fn(),
+        })}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+    expect(screen.getByTestId("channel-members-row-role-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-members-row-role-retry")).toBeNull();
   });
 
   it("does NOT show the pending note when only remove is available — remove works and must not be labelled 'coming soon'", async () => {

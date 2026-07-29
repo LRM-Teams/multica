@@ -1,4 +1,5 @@
 import type {
+  ChannelMemberRole,
   Issue,
   CreateIssueRequest,
   UpdateIssueRequest,
@@ -2884,6 +2885,51 @@ export class ApiClient {
 
   async removeChannelMember(channelId: string, memberType: "user" | "agent", memberId: string): Promise<void> {
     await this.fetch(`/api/channels/${channelId}/members/${memberType}/${memberId}`, { method: "DELETE" });
+  }
+
+  /**
+   * Owner-only member role change (#832 / #814). Handles promote, demote, and
+   * ownership transfer — the server distinguishes them by the target `role`.
+   *
+   * Failure codes the caller must keep apart (server contract, #1321/#1326):
+   *   403 + `code: "owner_changed"` — someone else took ownership mid-flight.
+   *     A PLAIN 403 deliberately carries no code, and the two must not be
+   *     collapsed: one means "refresh, the world moved", the other means
+   *     "you may not do this".
+   *   409 — currently only "sole owner must transfer first". Keyed on status
+   *     alone because that message has no stable code yet; see
+   *     `updateChannelMemberRole` in channels/mutations.ts for why the UI does
+   *     NOT name that reason.
+   */
+  /**
+   * Ownership transfer has its OWN route (#814). The member-role PATCH above
+   * explicitly rejects `role: "owner"` with 400 "use POST
+   * .../transfer-ownership" (channel.go:1761) — so transfer is a different
+   * request, not a different value.
+   */
+  async transferChannelOwnership(
+    channelId: string,
+    memberType: "user" | "agent",
+    memberId: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/channels/${channelId}/members/${memberType}/${memberId}/transfer-ownership`,
+      { method: "POST" },
+    );
+  }
+
+  async updateChannelMemberRole(
+    channelId: string,
+    memberType: "user" | "agent",
+    memberId: string,
+    // NOT ChannelMemberRole: the server rejects "owner" here and routes it to
+    // transferChannelOwnership above.
+    role: "manager" | "member",
+  ): Promise<{ role: ChannelMemberRole }> {
+    return this.fetch(`/api/channels/${channelId}/members/${memberType}/${memberId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    });
   }
 
   async listChannelMessages(channelId: string): Promise<ChannelMessage[]> {

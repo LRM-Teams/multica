@@ -97,18 +97,30 @@
   "members": {
     "role_badge": {
       "owner": "Owner",
-      "manager_agent": "Group manager",
-      "manager_human": "Admin"
+      "manager": "Group manager"
     },
     "menu": {
       "aria": "Member actions",
-      "promote_agent": "Set as group manager",
-      "promote_human": "Set as admin",
-      "demote_agent": "Remove group manager role",
-      "demote_human": "Remove admin role",
+      "promote": "Make group manager",
+      "demote": "Demote to member",
       "transfer": "Transfer ownership",
       "remove": "Remove from group",
-      "role_actions_pending": "Group role management is coming soon; member roles are not changed yet."
+      "role_busy_promote": "Making group manager…",
+      "role_busy_demote": "Demoting to member…",
+      "role_busy_transfer": "Transferring ownership…",
+      "role_done_promote": "Now a group manager",
+      "role_done_demote": "Demoted to member",
+      "role_done_transfer": "Ownership transferred",
+      "role_transfer_title": "Transfer ownership?",
+      "role_transfer_body": "After transferring ownership to {{name}}, you will no longer be the owner of this group. The new owner can continue to manage member roles and group managers.",
+      "role_transfer_confirm": "Confirm transfer",
+      "role_failed_owner_changed": "Ownership has changed; the member list has been refreshed.",
+      "role_failed_generic": "Couldn't update the member's role. Refresh and try again.",
+      "role_failed_retryable": "Couldn't update the member's role. Please try again.",
+      "role_failed_forbidden": "You don't have permission to change this member's role.",
+      "role_failed_gone": "The member or channel state has changed. Refresh and try again.",
+      "role_failed_retry": "Retry",
+      "role_failed_dismiss": "Dismiss"
     },
     "select_user": "Select a member",
     "select_agent": "Select an agent",

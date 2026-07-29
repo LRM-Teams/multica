@@ -155,6 +155,41 @@ func TestBusinessMetricsFreshnessHoldResolutionUsesThreeBoundedOutcomes(t *testi
 	}
 }
 
+func TestBusinessMetricsChannelTriggerDepthHasNoLabels(t *testing.T) {
+	m := NewBusinessMetrics()
+	m.ObserveChannelTriggerDepth(0)
+	m.ObserveChannelTriggerDepth(10)
+	m.ObserveChannelTriggerDepth(11)
+	m.ObserveChannelTriggerDepth(-1)
+
+	family := GatherForTest(t, m)["multica_channel_trigger_depth"]
+	if family == nil {
+		t.Fatal("channel trigger depth metric family missing")
+	}
+	if got := len(family.Metric); got != 1 {
+		t.Fatalf("channel trigger depth series=%d, want 1", got)
+	}
+	metric := family.Metric[0]
+	if got := len(metric.Label); got != 0 {
+		t.Fatalf("channel trigger depth labels=%+v, want none", metric.Label)
+	}
+	if got := metric.GetHistogram().GetSampleCount(); got != 3 {
+		t.Fatalf("channel trigger depth count=%d, want 3", got)
+	}
+	if got := metric.GetHistogram().GetSampleSum(); got != 21 {
+		t.Fatalf("channel trigger depth sum=%v, want 21", got)
+	}
+	var atTen uint64
+	for _, bucket := range metric.GetHistogram().Bucket {
+		if bucket.GetUpperBound() == 10 {
+			atTen = bucket.GetCumulativeCount()
+		}
+	}
+	if atTen != 2 {
+		t.Fatalf("channel trigger depth <=10 bucket=%d, want 2", atTen)
+	}
+}
+
 func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewBusinessMetrics()
@@ -171,6 +206,7 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.RecordChannelOutputSuppressed("legacy_protocol_output")
 	m.RecordChannelFullExecutionWake("legacy_full")
 	m.SetChannelFullExecutionAmplificationRatio(0.25)
+	m.ObserveChannelTriggerDepth(0)
 	m.ObserveFreshnessHoldResolution("send_draft", 1)
 	m.RecordLLMUsage("issue", "local", "codex", "gpt-5.4", 1, 1, 1, 1)
 	m.RecordLLMUsage("issue", "local", "custom-provider", "custom-model", 1, 0, 0, 0)

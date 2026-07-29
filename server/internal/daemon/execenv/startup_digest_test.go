@@ -27,6 +27,31 @@ func TestStartupStaticDigestIgnoresPerTurnFields(t *testing.T) {
 	}
 }
 
+func TestStartupStaticDigestTracksManagerChannelsForResidentBrief(t *testing.T) {
+	ordinary := TaskContextForEnv{AgentID: "agent-a", AgentName: "Agent A"}
+	manager := ordinary
+	manager.ManagerChannels = []ManagerChannelContextForEnv{{
+		ID: "channel-a", Name: "group-a",
+	}}
+
+	if StartupStaticDigest("grok", ordinary) == StartupStaticDigest("grok", manager) {
+		t.Fatal("manager promotion must rotate the resident startup brief")
+	}
+	static := StartupStaticContext(manager)
+	if len(static.ManagerChannels) != 1 || static.ManagerChannels[0].ID != "channel-a" {
+		t.Fatalf("manager channels missing from startup context: %+v", static.ManagerChannels)
+	}
+	brief := RenderStartupMaterializationPlan("grok", static).RuntimeBrief
+	if !containsIgnoreCase(brief, "**Group manager: #group-a.**") {
+		t.Fatalf("resident startup brief missing current manager role:\n%s", brief)
+	}
+
+	demoted := manager
+	demoted.ManagerChannels = nil
+	if StartupStaticDigest("grok", manager) == StartupStaticDigest("grok", demoted) {
+		t.Fatal("manager demotion must rotate the resident startup brief")
+	}
+}
 
 // Reviewer control: create-time AGENTS is a positive allowlist of durable
 // agent/runtime facts. Every value below is turn-scoped and therefore must

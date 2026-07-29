@@ -45,7 +45,8 @@ concurrency:
 
 jobs:
   mobile:
-    runs-on: ubuntu-latest
+    # Keep mobile verify on the same Tencent CI runner as ci.yml (LRM-701).
+    runs-on: [self-hosted, ci]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -10,7 +10,9 @@ concurrency:
 
 jobs:
   frontend:
-    runs-on: ubuntu-latest
+    # Tencent Cloud CI runner (LRM-701). Labels must match the registered
+    # self-hosted runner; do not fall back to ubuntu-latest (hosted minutes).
+    runs-on: [self-hosted, ci]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -237,7 +239,9 @@ jobs:
           exit "${STATUS}"
 
   backend:
-    runs-on: ubuntu-latest
+    # Same CI runner as frontend (LRM-701). Requires Docker for the Postgres /
+    # Redis service containers below — see docs/ci-tencent-runner.md.
+    runs-on: [self-hosted, ci]
     services:
       postgres:
         image: pgvector/pgvector:pg17

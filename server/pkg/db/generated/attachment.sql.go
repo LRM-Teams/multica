@@ -171,23 +171,38 @@ func (q *Queries) LinkAttachmentsToChatMessage(ctx context.Context, arg LinkAtta
 	return err
 }
 
-const linkAttachmentsToComment = `-- name: LinkAttachmentsToComment :exec
+const linkAttachmentsToComment = `-- name: LinkAttachmentsToComment :execrows
 UPDATE attachment
-SET comment_id = $1
-WHERE issue_id = $2
+SET comment_id = $1,
+    issue_id = $2
+WHERE workspace_id = $3
   AND comment_id IS NULL
-  AND id = ANY($3::uuid[])
+  AND (issue_id IS NULL OR issue_id = $2)
+  AND id = ANY($4::uuid[])
 `
 
 type LinkAttachmentsToCommentParams struct {
-	CommentID pgtype.UUID   `json:"comment_id"`
-	IssueID   pgtype.UUID   `json:"issue_id"`
-	Column3   []pgtype.UUID `json:"column_3"`
+	CommentID   pgtype.UUID   `json:"comment_id"`
+	IssueID     pgtype.UUID   `json:"issue_id"`
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	Column4     []pgtype.UUID `json:"column_4"`
 }
 
-func (q *Queries) LinkAttachmentsToComment(ctx context.Context, arg LinkAttachmentsToCommentParams) error {
-	_, err := q.db.Exec(ctx, linkAttachmentsToComment, arg.CommentID, arg.IssueID, arg.Column3)
-	return err
+// Bind attachments to a comment. Accepts:
+//   - already issue-scoped rows (issue_id = $2, comment_id IS NULL)
+//   - workspace-scoped unbound uploads (issue_id IS NULL) — same contract as
+//     LinkAttachmentsToIssue / `multica attachment upload` then `--attachment-id`
+func (q *Queries) LinkAttachmentsToComment(ctx context.Context, arg LinkAttachmentsToCommentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, linkAttachmentsToComment,
+		arg.CommentID,
+		arg.IssueID,
+		arg.WorkspaceID,
+		arg.Column4,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const linkAttachmentsToIssue = `-- name: LinkAttachmentsToIssue :exec
@@ -649,23 +664,34 @@ func (q *Queries) ListAttachmentsByIssue(ctx context.Context, arg ListAttachment
 const replaceCommentAttachments = `-- name: ReplaceCommentAttachments :exec
 UPDATE attachment
 SET comment_id = CASE
-  WHEN id = ANY($3::uuid[]) THEN $1
+  WHEN id = ANY($4::uuid[]) THEN $1
   ELSE NULL
+END,
+    issue_id = CASE
+  WHEN id = ANY($4::uuid[]) THEN $2
+  ELSE issue_id
 END
-WHERE issue_id = $2
+WHERE workspace_id = $3
   AND (
     comment_id = $1
-    OR (comment_id IS NULL AND id = ANY($3::uuid[]))
+    OR (
+      comment_id IS NULL
+      AND id = ANY($4::uuid[])
+      AND (issue_id IS NULL OR issue_id = $2)
+    )
   )
 `
 
 type ReplaceCommentAttachmentsParams struct {
 	CommentID     pgtype.UUID   `json:"comment_id"`
 	IssueID       pgtype.UUID   `json:"issue_id"`
+	WorkspaceID   pgtype.UUID   `json:"workspace_id"`
 	AttachmentIds []pgtype.UUID `json:"attachment_ids"`
 }
 
+// Replace the attachment set for a comment. Newly added ids may be unbound
+// workspace uploads (issue_id IS NULL) or already scoped to this issue.
 func (q *Queries) ReplaceCommentAttachments(ctx context.Context, arg ReplaceCommentAttachmentsParams) error {
-	_, err := q.db.Exec(ctx, replaceCommentAttachments, arg.CommentID, arg.IssueID, arg.AttachmentIds)
+	_, err := q.db.Exec(ctx, replaceCommentAttachments, arg.CommentID, arg.IssueID, arg.WorkspaceID, arg.AttachmentIds)
 	return err
 }

@@ -381,6 +381,23 @@ func parseUUIDSliceOrBadRequest(w http.ResponseWriter, ids []string, fieldName s
 	return uuids, true
 }
 
+func uniqueAttachmentUUIDs(ids []pgtype.UUID) []pgtype.UUID {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		key := util.UUIDToString(id)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 // publish sends a domain event through the event bus.
 func (h *Handler) publish(eventType, workspaceID, actorType, actorID string, payload any) {
 	h.Bus.Publish(events.Event{

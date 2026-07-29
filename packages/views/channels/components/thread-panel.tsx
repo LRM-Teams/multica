@@ -7,7 +7,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
-import { useSelectionQuoteMenu } from "./selection-quote-menu";
+import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 import { ComposerQuotePreview } from "./message-quote";
 import {
   ComposerSendErrorBar,

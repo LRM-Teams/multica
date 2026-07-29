@@ -204,7 +204,7 @@ import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
-import { useSelectionQuoteMenu } from "./selection-quote-menu";
+import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 import {
   Composer,
   ConversationHeader,

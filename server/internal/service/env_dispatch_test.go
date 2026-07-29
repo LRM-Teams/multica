@@ -141,6 +141,7 @@ type fakeEnvDispatchDeps struct {
 	channelRuns         []ChannelRunInput
 	triggers            []EnvCollaborationTrigger
 	provisionCalls      []EnvDispatchAgentProvisionInput
+	provisionErr        error
 	branchTrigger       EnvCollaborationTrigger
 	branchSourceSandbox string
 	copyMessageIDs      map[string]string
@@ -240,7 +241,11 @@ func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID stri
 func (f *fakeEnvDispatchDeps) ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error) {
 	f.mu.Lock()
 	f.provisionCalls = append(f.provisionCalls, in)
+	provisionErr := f.provisionErr
 	f.mu.Unlock()
+	if provisionErr != nil {
+		return EnvDispatchAgentProvisionResult{}, provisionErr
+	}
 	runtimeID, daemonID, err := f.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
 	if err != nil {
 		return EnvDispatchAgentProvisionResult{}, err
@@ -814,7 +819,7 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 	}
 }
 
-func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
+func TestBranchWakesOnlyTriggerAgentFromTheSavepoint(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	const stateEnv = "state-env-1"
 	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
@@ -829,7 +834,7 @@ func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
 	}
 	f.branchSourceSandbox = "source-sandbox-leader"
 
-	svc := NewEnvDispatchService(f, 1)
+	svc := NewEnvDispatchService(f, 1).WithBranchSavepoints(newFakeBranchSavepointProvider())
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
 		SourceProjectID: "source-proj-1",
@@ -840,12 +845,12 @@ func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 	r := res.Rollouts[0]
-	// Only the trigger agent is provisioned, with its source sandbox marked for clone.
+	// Only the trigger agent is provisioned, booting from the captured source.
 	if len(f.provisionCalls) != 1 || f.provisionCalls[0].AgentID != "leader" {
 		t.Fatalf("want 1 provision call for leader, got %+v", f.provisionCalls)
 	}
 	if f.provisionCalls[0].SourceSandboxInstanceID != "source-sandbox-leader" {
-		t.Fatalf("want clone source sandbox, got %q", f.provisionCalls[0].SourceSandboxInstanceID)
+		t.Fatalf("want the source sandbox recorded, got %q", f.provisionCalls[0].SourceSandboxInstanceID)
 	}
 	// Exactly one channel run for the trigger agent, on the provisioned runtime
 	// (not the agent default and not the source runtime).
@@ -884,7 +889,9 @@ func TestBranchContinuationGoesThroughTheSeam(t *testing.T) {
 		outcome: ContinuationOutcome{Status: TriggerExecuted, TaskID: "run-seam"},
 	}
 
-	svc := NewEnvDispatchService(f, 1).WithForkedContinuation(seam)
+	svc := NewEnvDispatchService(f, 1).
+		WithForkedContinuation(seam).
+		WithBranchSavepoints(newFakeBranchSavepointProvider())
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
 		SourceProjectID: "source-proj-1",

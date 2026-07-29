@@ -189,7 +189,12 @@ type MessageRoster struct {
 type EnvDispatchAgentProvisionInput struct {
 	WorkspaceID, UserID, EnvID, ProjectID, ChannelID, AgentID string
 	SourceSandboxInstanceID                                   string
-	SandboxConfig                                             json.RawMessage
+	// SavepointTemplate is the Cube template captured from the source sandbox.
+	// When set, the new sandbox is created from it, which is how a branch rollout
+	// inherits the source's filesystem without copying a running instance. Empty
+	// means there is nothing to inherit and the sandbox is built from scratch.
+	SavepointTemplate string
+	SandboxConfig     json.RawMessage
 }
 
 type EnvDispatchAgentProvisionResult struct {
@@ -487,6 +492,9 @@ type EnvDispatchService struct {
 	concurrency        int
 	lifecycle          SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
 	forkedContinuation ResumeAgentRunner      // optional; nil ⇒ built from deps
+	// branchSavepoints is required by branch+message dispatch and unused by every
+	// other path, so it stays an injected seam rather than a constructor argument.
+	branchSavepoints BranchSavepointProvider
 }
 
 // SandboxInstanceCreator creates a sandbox_instance-backed environment
@@ -527,6 +535,15 @@ func (s *EnvDispatchService) WithSandboxLifecycle(lc SandboxInstanceCreator) *En
 // chaining.
 func (s *EnvDispatchService) WithForkedContinuation(strategy ResumeAgentRunner) *EnvDispatchService {
 	s.forkedContinuation = strategy
+	return s
+}
+
+// WithBranchSavepoints injects the seam that captures a branch dispatch's source
+// sandbox and tracks the lanes booted from that capture. Branch+message dispatch
+// requires it: the live filesystem clone it replaces is gone, so without it there
+// is no way to continue the source state. Returns the service for chaining.
+func (s *EnvDispatchService) WithBranchSavepoints(p BranchSavepointProvider) *EnvDispatchService {
+	s.branchSavepoints = p
 	return s
 }
 
@@ -637,6 +654,13 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 	}
 
+	// Capture the branch source before anything is built from it: once for the
+	// whole group, and early enough that an uncapturable source costs no rollback.
+	branchSavepoint, err := s.captureBranchSource(ctx, in)
+	if err != nil {
+		return EnvDispatchResult{}, err
+	}
+
 	rollouts := make([]EnvRollout, in.GroupSize)
 	sem := make(chan struct{}, s.concurrency)
 	var wg sync.WaitGroup
@@ -720,7 +744,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			defer dispatchWG.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			s.dispatchOne(ctx, in, &rollouts[idx], idx)
+			s.dispatchOne(ctx, in, &rollouts[idx], idx, branchSavepoint)
 		}(i)
 	}
 	dispatchWG.Wait()
@@ -1273,13 +1297,13 @@ func rolloutSandboxInstanceID(in EnvDispatchInput, r EnvRollout) string {
 
 // dispatchOne runs the dispatch phase for one rollout (§7.3). Best-effort:
 // failures recorded in r.Error, no rollback.
-func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int, branchSavepoint *BranchSavepoint) {
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch && r.ChannelID != "" {
 		s.dispatchScratchChannelMessage(ctx, in, r, idx)
 		return
 	}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch && r.ChannelID != "" {
-		s.dispatchBranchChannelMessage(ctx, in, r, idx)
+		s.dispatchBranchChannelMessage(ctx, in, r, idx, branchSavepoint)
 		return
 	}
 	runtimeID := rolloutRuntimeID(in, *r)
@@ -1445,7 +1469,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 // provisioned lazily on first mention. The request's message.content, when
 // non-empty, is appended as nondispatching channel context before the
 // continuation enqueue, without changing the trigger-selected agent.
-func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int, branchSavepoint *BranchSavepoint) {
 	if in.BranchMessageSource == nil {
 		r.Error = "internal: missing validated branch message source"
 		return
@@ -1488,21 +1512,51 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		}
 	}
 
+	// Claim the lane before building anything from the savepoint. The lane row is
+	// what reclamation reads to know the snapshot is still in use, so a sandbox
+	// booted from a savepoint no lane refers to could have its template released
+	// underneath it.
+	lane, err := s.claimBranchLane(ctx, in, branchSavepoint, r, idx)
+	if err != nil {
+		r.Error = fmt.Sprintf("claim branch lane: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	savepointTemplate := ""
+	if branchSavepoint != nil {
+		savepointTemplate = branchSavepoint.Template
+	}
+
 	provisioned, err := s.deps.ProvisionEnvDispatchAgent(ctx, EnvDispatchAgentProvisionInput{
-		WorkspaceID:             in.WorkspaceID,
-		UserID:                  in.UserID,
-		EnvID:                   r.EnvID,
-		ProjectID:               r.ProjectID,
-		ChannelID:               r.ChannelID,
-		AgentID:                 dst.AgentID,
+		WorkspaceID: in.WorkspaceID,
+		UserID:      in.UserID,
+		EnvID:       r.EnvID,
+		ProjectID:   r.ProjectID,
+		ChannelID:   r.ChannelID,
+		AgentID:     dst.AgentID,
+		// The source instance still identifies the binding's lineage; what
+		// changed is that the new sandbox is created from the savepoint's
+		// template rather than copied from that instance while it runs.
 		SourceSandboxInstanceID: in.BranchMessageSource.TriggerSourceSandboxInstanceID,
+		SavepointTemplate:       savepointTemplate,
 		SandboxConfig:           json.RawMessage(`{}`),
 	})
 	if err != nil {
+		s.settleBranchLane(ctx, in.WorkspaceID, lane, BranchLaneSettleInput{
+			Status: LaneStatusFailed, Error: err.Error(),
+		})
 		r.Error = fmt.Sprintf("provision branch trigger agent: %v", err)
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
+	s.settleBranchLane(ctx, in.WorkspaceID, lane, BranchLaneSettleInput{
+		Status:        LaneStatusReady,
+		InstanceID:    provisioned.SandboxInstanceID,
+		RuntimeID:     provisioned.RuntimeID,
+		DaemonID:      provisioned.DaemonID,
+		AgentID:       provisioned.AgentID,
+		ChatSessionID: provisioned.ChatSessionID,
+	})
 	defer func() {
 		if r.AgentRunID == "" {
 			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provisioned.RuntimeID)

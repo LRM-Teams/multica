@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Issue, IssueStatus, IssuePriority, IssueAssigneeType } from "@multica/core/types";
 import {
   DialogContent,
@@ -235,7 +236,7 @@ export function ManualCreatePanel({
         }
         const failed = results.filter((r) => r.status === "rejected").length;
         if (failed > 0) {
-          toast.error(
+          showErrorToast(
             failed === childIssues.length
               ? t(($) => $.create_issue.toast_link_subissues_all_failed)
               : t(($) => $.create_issue.toast_link_subissues_partial, {
@@ -331,7 +332,7 @@ export function ManualCreatePanel({
           return;
         }
       }
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.create_issue.toast_failed),
@@ -395,7 +396,7 @@ export function ManualCreatePanel({
                 { id: backlogHintIssueId, status: "todo" },
                 {
                   onError: (err) =>
-                    toast.error(
+                    showErrorToast(
                       err instanceof Error && err.message
                         ? err.message
                         : t(($) => $.backlog_hint.toast_status_failed),

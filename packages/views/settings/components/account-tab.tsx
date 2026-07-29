@@ -8,6 +8,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -78,7 +79,7 @@ export function AccountTab() {
       void refreshMemberLists();
       toast.success(t(($) => $.account.toast_avatar_updated));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.account.toast_avatar_failed));
+      showErrorToast(err instanceof Error ? err.message : t(($) => $.account.toast_avatar_failed));
     }
   };
 
@@ -94,7 +95,7 @@ export function AccountTab() {
       void refreshMemberLists();
       toast.success(t(($) => $.account.toast_profile_updated));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.account.toast_profile_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.account.toast_profile_failed));
     } finally {
       setProfileSaving(false);
     }

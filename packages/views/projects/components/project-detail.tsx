@@ -7,6 +7,7 @@ import { useQuery, type QueryKey } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Issue, IssueAssigneeGroup, ProjectStatus, ProjectPriority, UpdateIssueRequest } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { projectDetailOptions } from "@multica/core/projects/queries";
@@ -217,7 +218,7 @@ function ProjectIssuesContent({
         { id: issueId, ...updates },
         {
           onError: (err) =>
-            toast.error(
+            showErrorToast(
               err instanceof Error && err.message
                 ? err.message
                 : t(($) => $.detail.toast_move_issue_failed),

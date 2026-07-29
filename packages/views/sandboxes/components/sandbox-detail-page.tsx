@@ -21,6 +21,7 @@ import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
 import { SandboxRuntimeForm } from "./sandbox-runtime-form";
@@ -100,7 +101,7 @@ function SandboxDetailEditor({
           : t(($) => $.sandboxes_page.save_success),
       );
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.save_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.sandboxes_page.save_failed));
     }
   };
 

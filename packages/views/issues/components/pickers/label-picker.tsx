@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Tag, Plus, Settings2 } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -125,7 +125,7 @@ export function LabelPicker({
           setFilter("");
         },
         onError: (err: unknown) => {
-          toast.error(err instanceof Error ? err.message : t(($) => $.pickers.label.create_failed));
+          showErrorToast(err instanceof Error ? err.message : t(($) => $.pickers.label.create_failed));
         },
         onSettled: () => {
           creatingRef.current = false;

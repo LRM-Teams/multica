@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2, AlertCircle } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   completeOnboarding,
@@ -84,7 +84,7 @@ export function StepFirstIssue({
       const msg =
         err instanceof Error ? err.message : t(($) => $.first_issue.retry_failed);
       setError(msg);
-      toast.error(msg);
+      showErrorToast(msg);
     } finally {
       setRetrying(false);
     }

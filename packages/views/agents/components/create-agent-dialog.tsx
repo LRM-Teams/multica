@@ -41,6 +41,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CharCounter } from "./char-counter";
 import {
   HomeChannelBindPanel,
@@ -224,12 +225,12 @@ export function CreateAgentDialog({
       if (useNewHome) {
         if (!newChannelName.trim()) {
           setHomeInvalid(true);
-          toast.error(t(($) => $.visibility_bind.new_channel_name_required));
+          showErrorToast(t(($) => $.visibility_bind.new_channel_name_required));
           return;
         }
       } else if (!homeChannelId) {
         setHomeInvalid(true);
-        toast.error(t(($) => $.visibility_bind.home_required));
+        showErrorToast(t(($) => $.visibility_bind.home_required));
         return;
       }
     }
@@ -299,7 +300,7 @@ export function CreateAgentDialog({
       }
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.create_dialog.create_failed_toast));
+      showErrorToast(err instanceof Error ? err.message : t(($) => $.create_dialog.create_failed_toast));
       setCreating(false);
     }
   };

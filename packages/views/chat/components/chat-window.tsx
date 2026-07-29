@@ -13,7 +13,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -535,7 +535,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         sessionId = await ensureSession(finalContent);
       } catch (err) {
         apiLogger.error("sendChatMessage.ensureSession.error", err);
-        toast.error(t(($) => $.input.send_failed_toast));
+        showErrorToast(t(($) => $.input.send_failed_toast));
         return false;
       }
       if (!sessionId) {
@@ -591,7 +591,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         stopRequestedBeforeTaskRef.current = false;
         removeChatMessageFromCaches(qc, sessionId, optimistic.id);
         qc.setQueryData(chatKeys.pendingTask(sessionId), {});
-        toast.error(t(($) => $.input.send_failed_toast));
+        showErrorToast(t(($) => $.input.send_failed_toast));
         return false;
       }
       apiLogger.info("sendChatMessage.success", {

@@ -11,7 +11,7 @@ import {
 import { useWorkspaceId } from "@multica/core/hooks";
 import type { MemberWithUser } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { AgentSidePanel } from "../channels/components/agent-side-panel";
 import { useT } from "../i18n/use-t";
 import { ActorProfileContent } from "./actor-profile-popover";
@@ -107,7 +107,7 @@ export function ResolvedAgentSidePanel({
   useEffect(() => {
     if (!openFailed || toastedRef.current) return;
     toastedRef.current = true;
-    toast.error(t(($) => $.profile_popover.no_permission_toast));
+    showErrorToast(t(($) => $.profile_popover.no_permission_toast));
   }, [openFailed, t]);
 
   if (agent) {

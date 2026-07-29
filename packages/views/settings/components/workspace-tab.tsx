@@ -18,6 +18,7 @@ import {
   AlertDialogAction,
 } from "@multica/ui/components/ui/alert-dialog";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useLeaveWorkspace, useDeleteWorkspace } from "@multica/core/workspace/mutations";
@@ -170,7 +171,7 @@ export function WorkspaceTab() {
       }
       toast.success(t(($) => $.workspace.toast_saved));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.workspace.toast_save_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.workspace.toast_save_failed));
     } finally {
       setSaving(false);
     }
@@ -211,7 +212,7 @@ export function WorkspaceTab() {
       );
       toast.success(t(($) => $.workspace.toast_logo_updated));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.workspace.toast_logo_failed));
+      showErrorToast(err instanceof Error ? err.message : t(($) => $.workspace.toast_logo_failed));
     }
   };
 
@@ -227,7 +228,7 @@ export function WorkspaceTab() {
         try {
           await leaveWorkspace.mutateAsync(workspace.id);
         } catch (e) {
-          toast.error(e instanceof Error ? e.message : t(($) => $.workspace.toast_leave_failed));
+          showErrorToast(e instanceof Error ? e.message : t(($) => $.workspace.toast_leave_failed));
         } finally {
           setActionId(null);
         }
@@ -247,7 +248,7 @@ export function WorkspaceTab() {
     try {
       await deleteWorkspace.mutateAsync(workspace.id);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.workspace.toast_delete_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.workspace.toast_delete_failed));
     } finally {
       setActionId(null);
     }

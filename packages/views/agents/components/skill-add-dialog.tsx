@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent, SkillSummary } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -87,7 +87,7 @@ export function SkillAddDialog({
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       handleOpenChange(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.tab_body.skills.add_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.tab_body.skills.add_failed_toast));
     } finally {
       setSaving(false);
     }

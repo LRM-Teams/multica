@@ -16,7 +16,7 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@multica/ui/components/ui/alert-dialog";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { labelListOptions, useCreateLabel, useUpdateLabel, useDeleteLabel } from "@multica/core/labels";
 import type { Label } from "@multica/core/types";
@@ -61,7 +61,7 @@ export function LabelsPanel() {
           setNewColor(DEFAULT_COLOR_DEFAULT);
         },
         onError: (err: unknown) => {
-          toast.error(err instanceof Error ? err.message : t(($) => $.labels_panel.create_failed));
+          showErrorToast(err instanceof Error ? err.message : t(($) => $.labels_panel.create_failed));
         },
       },
     );
@@ -96,7 +96,7 @@ export function LabelsPanel() {
       {
         onSuccess: cancelEdit,
         onError: (err: unknown) => {
-          toast.error(err instanceof Error ? err.message : t(($) => $.labels_panel.update_failed));
+          showErrorToast(err instanceof Error ? err.message : t(($) => $.labels_panel.update_failed));
         },
       },
     );
@@ -244,7 +244,7 @@ export function LabelsPanel() {
                 del.mutate(pendingDeletion.id, {
                   onSuccess: () => setPendingDeletion(null),
                   onError: (err: unknown) => {
-                    toast.error(err instanceof Error ? err.message : t(($) => $.labels_panel.delete_failed));
+                    showErrorToast(err instanceof Error ? err.message : t(($) => $.labels_panel.delete_failed));
                   },
                 });
               }}

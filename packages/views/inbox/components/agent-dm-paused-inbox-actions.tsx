@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, PauseCircle, Plus } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAgentDMControl, useAgentDMGlobalControl } from "@multica/core/dm";
@@ -33,7 +33,7 @@ export function AgentDMPausedInboxActions({ item }: { item: InboxItem }) {
   const data = parseAgentDMPausedInbox(item);
   if (!data) return null;
 
-  const onError = { onError: () => toast.error(t(($) => $.dm.agent_pair.action_failed)) };
+  const onError = { onError: () => showErrorToast(t(($) => $.dm.agent_pair.action_failed)) };
 
   const actionButton = (action: AgentDMControlAction) => {
     switch (action) {

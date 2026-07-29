@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n/use-t";
 
 export function NodeSnapshotsPanel({
@@ -44,7 +45,7 @@ export function NodeSnapshotsPanel({
       toast.success(t(($) => $.sandboxes_page.snapshot_delete_success));
       setPendingDelete(null);
     } catch (e) {
-      toast.error(
+      showErrorToast(
         e instanceof Error ? e.message : t(($) => $.sandboxes_page.snapshot_delete_failed),
       );
     }

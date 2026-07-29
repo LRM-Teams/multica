@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,7 +40,7 @@ export function DeleteIssueConfirmModal({
       onClose();
       if (navigateTo) navigation.push(navigateTo);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.delete_issue.toast_delete_failed),

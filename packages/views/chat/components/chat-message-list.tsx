@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
 import { cn } from "@multica/ui/lib/utils";
@@ -521,7 +522,7 @@ function MessageCopyButton({
     if (await copyText(extractCopyText(message, timeline))) {
       toast.success(t(($) => $.message_list.copied_toast));
     } else {
-      toast.error(t(($) => $.message_list.copy_failed_toast));
+      showErrorToast(t(($) => $.message_list.copy_failed_toast));
     }
   };
   return (

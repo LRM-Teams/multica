@@ -4,6 +4,7 @@ import * as React from "react";
 import { Bot, CheckCircle2, Globe, Hash, Lock, Loader2, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import {
   VISIBILITY_DESCRIPTION,
@@ -109,7 +110,7 @@ export function WindyCreateAgentLink({
           });
       setDraft(createdDraft);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load agent draft");
+      showErrorToast(err instanceof Error ? err.message : "Failed to load agent draft");
     } finally {
       setCreatingDraft(false);
     }
@@ -248,12 +249,12 @@ function InlineCreateAgentDialog({
       if (useNewHome) {
         if (!newChannelName.trim()) {
           setHomeInvalid(true);
-          toast.error(t(($) => $.visibility_bind.new_channel_name_required));
+          showErrorToast(t(($) => $.visibility_bind.new_channel_name_required));
           return;
         }
       } else if (!homeChannelId) {
         setHomeInvalid(true);
-        toast.error(t(($) => $.visibility_bind.home_required));
+        showErrorToast(t(($) => $.visibility_bind.home_required));
         return;
       }
     }
@@ -291,7 +292,7 @@ function InlineCreateAgentDialog({
       onCreated(created.display_name || draft.name);
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create agent");
+      showErrorToast(err instanceof Error ? err.message : "Failed to create agent");
     } finally {
       setCreating(false);
     }

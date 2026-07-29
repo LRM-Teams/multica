@@ -33,6 +33,7 @@ import type { Editor } from "@tiptap/core";
 import { posToDOMRect } from "@tiptap/core";
 import { NodeSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
 import { modKey } from "@multica/core/platform";
@@ -425,7 +426,7 @@ function CreateSubIssueButton({
         .run();
       toast.success(t(($) => $.bubble_menu.sub_issue.created, { identifier: newIssue.identifier }));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.bubble_menu.sub_issue.create_failed),

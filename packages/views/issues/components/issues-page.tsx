@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo } from "react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ListTodo, Plus } from "lucide-react";
 import type { UpdateIssueRequest } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -185,7 +185,7 @@ export function IssuesPage() {
         { id: issueId, ...updates },
         {
           onError: (err) =>
-            toast.error(
+            showErrorToast(
               err instanceof Error && err.message
                 ? err.message
                 : t(($) => $.page.move_failed),

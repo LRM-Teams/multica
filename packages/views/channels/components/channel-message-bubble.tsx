@@ -13,6 +13,7 @@ import {
 } from "react";
 import { Copy, Loader2, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -559,7 +560,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     if (await copyText(copyPayload)) {
       toast.success(t(($) => $.message.copied_toast));
     } else {
-      toast.error(t(($) => $.message.copy_failed_toast));
+      showErrorToast(t(($) => $.message.copy_failed_toast));
     }
   };
   const runMobileAction = (action: () => void | Promise<void>) => {

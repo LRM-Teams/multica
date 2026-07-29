@@ -21,7 +21,7 @@ import type { InboxItem, UserActivityItem, UserActivityTab } from "@multica/core
 
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Activity, Archive, ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -220,7 +220,7 @@ export function InboxPage() {
     if (!selectedInboxId || selectedInboxRead) return;
     markReadMutate(selectedInboxId, {
       onError: (err) =>
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.errors.mark_read_failed),
@@ -235,7 +235,7 @@ export function InboxPage() {
       const channelId = item.channel_id;
       const rootId = item.thread_root_message_id ?? item.id;
       if (!channelId) {
-        toast.error(t(($) => $.activity.open_thread_failed));
+        showErrorToast(t(($) => $.activity.open_thread_failed));
         return;
       }
       // Pin before URL/mark-read so Unread optimistic drop cannot blank the pane.
@@ -248,7 +248,7 @@ export function InboxPage() {
           { channelId, messageId: rootId },
           {
             onError: (err) =>
-              toast.error(
+              showErrorToast(
                 err instanceof Error && err.message
                   ? err.message
                   : t(($) => $.errors.mark_read_failed),
@@ -262,7 +262,7 @@ export function InboxPage() {
 
     const inbox = inboxItemFromActivity(item);
     if (!inbox) {
-      toast.error(t(($) => $.activity.open_item_failed));
+      showErrorToast(t(($) => $.activity.open_item_failed));
       return;
     }
     stickySelectedRef.current = item;
@@ -275,7 +275,7 @@ export function InboxPage() {
     }
     archiveMutation.mutate(id, {
       onError: (err) =>
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.errors.archive_failed),
@@ -286,7 +286,7 @@ export function InboxPage() {
   const handleMarkAllRead = () => {
     markAllReadMutation.mutate(undefined, {
       onError: (err) =>
-        toast.error(
+        showErrorToast(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.errors.mark_all_read_failed),

@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { DaemonPanel } from "./daemon-panel";
 import { reauthenticateDaemon } from "../platform/daemon-reauth";
 import type { DaemonStatus } from "../../../shared/daemon-types";
@@ -77,7 +78,7 @@ export function DaemonRuntimeActions() {
     const result = await window.daemonAPI.start();
     if (!result.success) {
       setActionLoading(false);
-      toast.error("Failed to start daemon", { description: result.error });
+      showErrorToast("Failed to start daemon", { description: result.error });
     }
   }, []);
 
@@ -85,7 +86,7 @@ export function DaemonRuntimeActions() {
     setActionLoading(true);
     const result = await window.daemonAPI.stop();
     if (!result.success) {
-      toast.error("Failed to stop daemon", { description: result.error });
+      showErrorToast("Failed to stop daemon", { description: result.error });
     }
   }, []);
 
@@ -101,7 +102,7 @@ export function DaemonRuntimeActions() {
     setActionLoading(true);
     const result = await window.daemonAPI.restart();
     if (!result.success) {
-      toast.error("Failed to restart daemon", { description: result.error });
+      showErrorToast("Failed to restart daemon", { description: result.error });
       return;
     }
     toast.success("Restarting daemon", {

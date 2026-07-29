@@ -1,7 +1,7 @@
 "use client";
 
 import { PauseCircle, PlayCircle, Plus } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useAgentDMControl, useAgentDMGlobalControl } from "@multica/core/dm";
@@ -59,7 +59,7 @@ export function AgentDMControlStrip({
   );
 
   const run = (action: Exclude<AgentDMControlAction, "view_dm">) => {
-    const onError = { onError: () => toast.error(t(($) => $.dm.agent_pair.action_failed)) };
+    const onError = { onError: () => showErrorToast(t(($) => $.dm.agent_pair.action_failed)) };
     // Global pause/resume is a workspace-level action with its own endpoint +
     // source-of-truth state (Barry's contract) — never derive it from this DM
     // channel. Pair/exchange actions stay on the per-channel control endpoint.

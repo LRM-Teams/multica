@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { computePosition, offset, flip, shift } from "@floating-ui/dom";
 import { ExternalLink, Copy } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useWorkspaceSlug } from "@multica/core/paths";
@@ -185,7 +186,7 @@ function LinkHoverCard({
     if (await copyText(href)) {
       toast.success(t(($) => $.link_hover.link_copied));
     } else {
-      toast.error(t(($) => $.link_hover.copy_failed));
+      showErrorToast(t(($) => $.link_hover.copy_failed));
     }
   };
 

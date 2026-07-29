@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@multica/core/api";
 import type { Agent, AgentRuntime } from "@multica/core/types";
@@ -152,7 +152,7 @@ export function DeleteRuntimeDialog({
     // reachable at this step, but a local daemon that came back online
     // while the dialog was open should still block the action.
     if (isSelfHealingRuntime(runtime)) {
-      toast.error(t(($) => $.detail.delete_dialog.self_healing_blocked_toast));
+      showErrorToast(t(($) => $.detail.delete_dialog.self_healing_blocked_toast));
       return;
     }
 
@@ -181,7 +181,7 @@ export function DeleteRuntimeDialog({
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.detail.delete_dialog.delete_failed_toast);
-      toast.error(message);
+      showErrorToast(message);
     } finally {
       setSubmitting(false);
     }

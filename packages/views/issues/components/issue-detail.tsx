@@ -49,6 +49,7 @@ import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { formatDateOnly } from "@multica/core/issues/date";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StartDatePicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
 import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
@@ -606,7 +607,7 @@ function SubIssueRow({ child }: { child: Issue }) {
         { id: child.id, ...updates },
         {
           onError: (err) =>
-            toast.error(
+            showErrorToast(
               err instanceof Error && err.message
                 ? err.message
                 : t(($) => $.detail.update_failed),

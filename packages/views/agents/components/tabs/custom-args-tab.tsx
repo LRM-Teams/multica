@@ -7,6 +7,7 @@ import { createSafeId } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../../i18n";
 
 interface ArgEntry {
@@ -72,7 +73,7 @@ export function CustomArgsTab({
       await onSave({ custom_args: currentArgs });
       toast.success(t(($) => $.tab_body.custom_args.saved_toast));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.tab_body.custom_args.save_failed_toast),

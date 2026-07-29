@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import { api } from "@multica/core/api";
@@ -99,7 +100,7 @@ export function AgentRowActions({
       invalidateAgents();
       toast.success(t(($) => $.row_actions.agent_archived_toast));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.row_actions.archive_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.row_actions.archive_failed_toast));
     }
   };
 
@@ -109,7 +110,7 @@ export function AgentRowActions({
       invalidateAgents();
       toast.success(t(($) => $.row_actions.agent_restored_toast));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.row_actions.restore_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.row_actions.restore_failed_toast));
     }
   };
 
@@ -123,7 +124,7 @@ export function AgentRowActions({
           : t(($) => $.row_actions.cancelled_tasks_toast, { count: cancelled }),
       );
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.row_actions.cancel_failed_toast));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.row_actions.cancel_failed_toast));
     }
   };
 

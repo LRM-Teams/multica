@@ -77,6 +77,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { getCurrentWsId } from "@multica/core/platform";
 import { api } from "@multica/core/api";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
@@ -293,7 +294,7 @@ export function SandboxesPage() {
       dispatch({ type: "close_snapshot" });
       toast.success(t(($) => $.sandboxes_page.create_template_success));
     } catch (e) {
-      toast.error(
+      showErrorToast(
         e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_template_failed),
       );
     }
@@ -343,9 +344,9 @@ export function SandboxesPage() {
     } catch (e) {
       const message = e instanceof Error ? e.message : "";
       if (/insufficient permissions/i.test(message)) {
-        toast.error(t(($) => $.sandboxes_page.add_node_permission_denied));
+        showErrorToast(t(($) => $.sandboxes_page.add_node_permission_denied));
       } else {
-        toast.error(message || t(($) => $.sandboxes_page.add_node_failed));
+        showErrorToast(message || t(($) => $.sandboxes_page.add_node_failed));
       }
     } finally {
       dispatch({ type: "set_creating_node", value: false });
@@ -366,7 +367,7 @@ export function SandboxesPage() {
       dispatch({ type: "set_selected_node", value: createForm.nodeId });
       toast.success(t(($) => $.sandboxes_page.create_success));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_failed));
     }
   };
 

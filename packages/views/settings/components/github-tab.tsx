@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ExternalLink, GitCommitHorizontal, Link2, PanelRight } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
@@ -83,7 +84,7 @@ export function GitHubTab() {
         old?.map((ws) => (ws.id === updated.id ? updated : ws)),
       );
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.github.toast_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.github.toast_failed));
     } finally {
       setSavingKey(null);
     }
@@ -94,12 +95,12 @@ export function GitHubTab() {
     try {
       const resp = await api.getGitHubConnectURL(wsId);
       if (!resp.configured || !resp.url) {
-        toast.error(t(($) => $.github.toast_not_configured));
+        showErrorToast(t(($) => $.github.toast_not_configured));
         return;
       }
       window.open(resp.url, "_blank", "noopener");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.github.toast_open_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.github.toast_open_failed));
     } finally {
       setConnecting(false);
     }
@@ -114,7 +115,7 @@ export function GitHubTab() {
       toast.success(t(($) => $.github.toast_disconnected));
       setDisconnectTarget(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.github.toast_disconnect_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.github.toast_disconnect_failed));
     } finally {
       setDisconnecting(false);
     }

@@ -101,6 +101,7 @@ describe("CreateWorkspaceModal", () => {
 
     expect(mockToastError).toHaveBeenCalledWith(
       "Choose a different workspace URL",
+      expect.objectContaining({ duration: Infinity, closeButton: true }),
     );
     expect(mockCreateWorkspaceMutate).toHaveBeenCalledWith(
       { name: "My Team", slug: "my-team" },

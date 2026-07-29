@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   dmListOptions,
   useSetDMPinned,
@@ -674,7 +674,7 @@ export function useDmRowActions() {
   const markUnread = useMarkDMUnread();
   const closeDM = useCloseDM();
   const muteDM = useMuteDM();
-  const onError = () => toast.error(t(($) => $.dm.action_failed));
+  const onError = () => showErrorToast(t(($) => $.dm.action_failed));
 
   return {
     togglePin: (dm: DMItem) =>

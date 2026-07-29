@@ -36,6 +36,7 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
 import {
   DropdownMenu,
@@ -274,7 +275,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
       toast.success(t(($) => $.create_project.toast_created));
       router.push(wsPaths.projectDetail(project.id));
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : t(($) => $.create_project.toast_failed),

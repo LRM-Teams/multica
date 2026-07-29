@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   Check,
   ChevronDown,
@@ -412,7 +413,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
           // Partial success: autopilot saved, schedule failed. Show the
           // server-provided reason so the user can act on it (cron syntax
           // error, conflict, etc.) instead of seeing a generic message.
-          toast.error(formatSchedulePartialFailureToast(t, "create", triggerErrMessage));
+          showErrorToast(formatSchedulePartialFailureToast(t, "create", triggerErrMessage));
         }
       } else {
         await updateAutopilot.mutateAsync({
@@ -479,11 +480,11 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
         if (triggerOk) {
           toast.success(t(($) => $.dialog.toast_updated));
         } else {
-          toast.error(formatSchedulePartialFailureToast(t, "update", triggerErrMessage));
+          showErrorToast(formatSchedulePartialFailureToast(t, "update", triggerErrMessage));
         }
       }
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error && err.message
           ? err.message
           : isCreate
@@ -1115,7 +1116,7 @@ function WebhookCreatedPanel({
       toast.success(t(($) => $.trigger_row.url_copied));
       setTimeout(() => setCopied(false), 1500);
     } else {
-      toast.error(t(($) => $.trigger_row.url_copy_failed));
+      showErrorToast(t(($) => $.trigger_row.url_copy_failed));
     }
   };
 

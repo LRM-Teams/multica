@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ApiError } from "@multica/core/api";
 import { useCreateOrFindDM } from "@multica/core/dm";
 import type { CreateOrFindDMBody, DMItem } from "@multica/core/dm";
@@ -35,9 +35,9 @@ export function useOpenDM(): {
         return dm;
       } catch (err) {
         if (err instanceof ApiError && err.status === 403) {
-          toast.error(t(($) => $.dm.open_forbidden));
+          showErrorToast(t(($) => $.dm.open_forbidden));
         } else {
-          toast.error(t(($) => $.dm.open_failed));
+          showErrorToast(t(($) => $.dm.open_failed));
         }
         return null;
       }

@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { childIssuesOptions } from "@multica/core/issues/queries";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
@@ -41,7 +42,7 @@ export function SetParentIssueModal({
           { id: issueId, parent_issue_id: selected.id },
           {
             onError: (err) =>
-              toast.error(
+              showErrorToast(
                 err instanceof Error && err.message
                   ? err.message
                   : t(($) => $.set_parent.toast_failed),

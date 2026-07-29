@@ -1,5 +1,5 @@
 import { useAuthStore } from "@multica/core/auth";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 
 /**
  * Re-establish the local daemon's credentials after it failed to authenticate
@@ -36,12 +36,12 @@ export async function reauthenticateDaemon(): Promise<void> {
       return;
     }
     // Transient failure — keep the user signed in and let them retry.
-    toast.error("Couldn't reconnect the daemon", {
+    showErrorToast("Couldn't reconnect the daemon", {
       description: result.message || "Please try again in a moment.",
     });
   } catch (err) {
     // An unexpected IPC error is not an auth failure — never log out on it.
-    toast.error("Couldn't reconnect the daemon", {
+    showErrorToast("Couldn't reconnect the daemon", {
       description: err instanceof Error ? err.message : "Please try again.",
     });
   }

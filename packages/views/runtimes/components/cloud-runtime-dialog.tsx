@@ -5,6 +5,7 @@ import type { FormEvent, HTMLAttributes } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cloud, Loader2, RefreshCw, Rocket, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { CloudRuntimeNode } from "@multica/core/runtimes";
 import {
   cloudRuntimeNodeListOptions,
@@ -69,7 +70,7 @@ export function CloudRuntimeDialog({ onClose }: { onClose: () => void }) {
       ? Number(diskSizeGB.trim())
       : DEFAULT_DISK_SIZE_GB;
     if (!Number.isInteger(diskSize) || diskSize <= 0) {
-      toast.error(t(($) => $.cloud_runtime.validation.disk_size_invalid));
+      showErrorToast(t(($) => $.cloud_runtime.validation.disk_size_invalid));
       return;
     }
 
@@ -84,7 +85,7 @@ export function CloudRuntimeDialog({ onClose }: { onClose: () => void }) {
       setInstanceType(DEFAULT_INSTANCE_TYPE);
       setDiskSizeGB(String(DEFAULT_DISK_SIZE_GB));
     } catch (error) {
-      toast.error(
+      showErrorToast(
         error instanceof Error
           ? error.message
           : t(($) => $.cloud_runtime.toast_create_failed),
@@ -330,7 +331,7 @@ function CloudRuntimeNodeRow({ node, wsId }: { node: CloudRuntimeNode; wsId: str
             deleteNode.mutate(node.instance_id, {
               onSuccess: () => toast.success(t(($) => $.cloud_runtime.toast_deleted)),
               onError: (err) =>
-                toast.error(
+                showErrorToast(
                   err instanceof Error
                     ? err.message
                     : t(($) => $.cloud_runtime.toast_delete_failed),

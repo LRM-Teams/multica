@@ -1,6 +1,6 @@
 "use client";
 
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { BacklogAgentHintDialog } from "../issues/components/backlog-agent-hint-dialog";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
@@ -31,7 +31,7 @@ export function BacklogAgentHintModal({
             { id: issueId, status: "todo" },
             {
               onError: (err) =>
-                toast.error(
+                showErrorToast(
                   err instanceof Error && err.message
                     ? err.message
                     : t(($) => $.backlog_hint.toast_status_failed),

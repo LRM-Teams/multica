@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent, UpdateAgentRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { agentDetailKeys } from "@multica/core/agents";
@@ -127,7 +128,7 @@ export function useUpdateAgent(wsId: string) {
       }
       qc.invalidateQueries({ queryKey: listKey });
       qc.invalidateQueries({ queryKey: detailKey });
-      toast.error(
+      showErrorToast(
         e instanceof Error ? e.message : t(($) => $.detail.update_failed_toast),
       );
       throw e;

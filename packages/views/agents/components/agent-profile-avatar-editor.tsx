@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { Camera, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { agentDetailKeys } from "@multica/core/agents";
@@ -110,18 +111,18 @@ export function AgentProfileAvatarEditor({
 
     const typeError = validateSelection(file);
     if (typeError) {
-      toast.error(typeError);
+      showErrorToast(typeError);
       return;
     }
     // Dimensions require decoding the image; enforce ≥256² before cropping.
     try {
       const dims = await readImageDimensions(file);
       if (dims.width < AVATAR_MIN_DIMENSION || dims.height < AVATAR_MIN_DIMENSION) {
-        toast.error(t(($) => $.side_panel.avatar_err_dimensions));
+        showErrorToast(t(($) => $.side_panel.avatar_err_dimensions));
         return;
       }
     } catch {
-      toast.error(t(($) => $.side_panel.avatar_err_type));
+      showErrorToast(t(($) => $.side_panel.avatar_err_type));
       return;
     }
 
@@ -151,7 +152,7 @@ export function AgentProfileAvatarEditor({
     try {
       result = await upload(cropped);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error
           ? err.message
           : t(($) => $.inspector.avatar_upload_failed_toast),

@@ -4,6 +4,7 @@ import { useMemo, useReducer } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -152,7 +153,7 @@ export function WindySetupModal({ open, onOpenChange, onConfigured }: WindySetup
       onOpenChange?.(false);
       toast.success("Wendy is ready and pinned in Direct Messages.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set up Wendy");
+      showErrorToast(err instanceof Error ? err.message : "Failed to set up Wendy");
     } finally {
       updateState({ saving: false });
     }

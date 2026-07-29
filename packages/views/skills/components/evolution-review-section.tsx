@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   Bot,
   CheckCircle2,
@@ -103,7 +104,7 @@ export function EvolutionReviewSection() {
       setApplyReviewSuggestions(false);
       await invalidateReviewQueue();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
+    onError: (e) => showErrorToast(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
   });
 
   const toggleSkill = useMutation({
@@ -115,7 +116,7 @@ export function EvolutionReviewSection() {
       toast.success(t(($) => $.evolution_review.skill_assignment_updated));
       await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
+    onError: (e) => showErrorToast(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
   });
 
   const reject = useMutation({
@@ -126,7 +127,7 @@ export function EvolutionReviewSection() {
       setReason("");
       await invalidateReviewQueue();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
+    onError: (e) => showErrorToast(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
   });
 
   const currentUserId = useAuthStore((state) => state.user?.id ?? null);

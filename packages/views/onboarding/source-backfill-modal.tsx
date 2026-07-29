@@ -10,7 +10,7 @@ import {
   Newspaper,
   Users,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { captureEvent } from "@multica/core/analytics";
 import { useAuthStore } from "@multica/core/auth";
 import {
@@ -286,7 +286,7 @@ function SourceBackfillDialogBody({
       onComplete();
     } catch (err) {
       setBusy(false);
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      showErrorToast(err instanceof Error ? err.message : "Failed to save");
     }
   }, [canSubmit, answers.source, answers.source_other, onComplete]);
 
@@ -307,7 +307,7 @@ function SourceBackfillDialogBody({
       onComplete();
     } catch (err) {
       setBusy(false);
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      showErrorToast(err instanceof Error ? err.message : "Failed to save");
     }
   }, [busy, onComplete]);
 

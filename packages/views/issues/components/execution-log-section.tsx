@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, CheckCircle2, ChevronRight, Loader2, RotateCcw, Square, XCircle } from "lucide-react";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
 import type { AgentTask, TaskFailureReason } from "@multica/core/types";
@@ -286,7 +286,7 @@ export function ActiveTaskRow({
     try {
       await api.cancelTask(issueId, task.id);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.execution_log.cancel_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.execution_log.cancel_failed));
       setCancelling(false);
     }
   };
@@ -380,7 +380,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
     try {
       await api.rerunIssue(issueId, task.id);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.execution_log.retry_failed));
+      showErrorToast(e instanceof Error ? e.message : t(($) => $.execution_log.retry_failed));
     } finally {
       // Reset on both success and failure: the past row stays mounted
       // (its task.id is unchanged), so leaving `retrying` true on success

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { captureEvent } from "@multica/core/analytics";
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
@@ -208,7 +208,7 @@ export function OnboardingFlow({
       setAnswers((a) => {
         const next = { ...a, ...patch };
         void saveQuestionnaire(next).catch((err) => {
-          if (err instanceof Error) toast.error(err.message);
+          if (err instanceof Error) showErrorToast(err.message);
         });
         return next;
       });
@@ -226,7 +226,7 @@ export function OnboardingFlow({
     try {
       await completeOnboarding("skip_existing", workspaces[0]?.id);
     } catch (err) {
-      toast.error(
+      showErrorToast(
         err instanceof Error ? err.message : t(($) => $.errors.skip_failed),
       );
       return;
@@ -276,7 +276,7 @@ export function OnboardingFlow({
           workspace.id,
         );
       } catch (err) {
-        toast.error(
+        showErrorToast(
           err instanceof Error ? err.message : t(($) => $.errors.skip_failed),
         );
         return;

@@ -54,8 +54,13 @@ const dict = {
       demote_human: "Remove admin role",
       transfer: "Transfer ownership",
       remove: "Remove from group",
-      role_actions_pending:
-        "Group role management is coming soon; member roles are not changed yet.",
+      // #832 — the in-progress labels. This dictionary does NOT derive from
+      // en.json, so a missing key renders as empty string rather than failing:
+      // the assertion then reports "expected …, received (nothing)" and looks
+      // like a component bug. Fourth instance of that trap today.
+      role_busy_promote: "Making group manager…",
+      role_busy_demote: "Demoting to member…",
+      role_busy_transfer: "Transferring ownership…",
     },
     role_badge: { owner: "Owner", manager: "Group manager" },
     remove_aria: "Remove",
@@ -84,10 +89,17 @@ const ALL_ACTIONS: GroupMemberActions = {
   canRemove: true,
 };
 
-function renderList(actions: GroupMemberActions = ALL_ACTIONS) {
+function renderList(
+  actions: GroupMemberActions = ALL_ACTIONS,
+  extra: {
+    roleFailureFor?: React.ComponentProps<typeof ChannelMembersList>["roleFailureFor"];
+    rolePendingActionFor?: React.ComponentProps<typeof ChannelMembersList>["rolePendingActionFor"];
+  } = {},
+) {
   const onGroupMemberAction = vi.fn();
   render(
     <ChannelMembersList
+      {...extra}
       members={[member("bob")]}
       emptyLabel="empty"
       noResultsLabel="none"
@@ -113,58 +125,107 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>) {
   expect(trigger).toHaveAttribute("aria-expanded", "true");
 }
 
-describe("ChannelMembersList — role rows are disabled while the write API is missing (#832)", () => {
+describe("ChannelMembersList — role rows are real actions (#832)", () => {
+  // These replace the interim suite, which asserted the three rows were
+  // disabled and explained by a "coming soon" note. That state was correct
+  // while #1321 was unshipped; it is now expired, and a test guarding it would
+  // block the correction rather than merely describe it.
   it.each([
     ["promote", "group-member-menu-promote"],
     ["demote", "group-member-menu-demote"],
     ["transfer", "group-member-menu-transfer"],
-  ])("the %s row is disabled and a click fires nothing", async (_kind, testId) => {
+  ])("the %s row dispatches its action", async (kind, testId) => {
     const user = userEvent.setup();
     const onGroupMemberAction = renderList();
     await openMenu(user);
 
-    const row = screen.getByTestId(testId);
-    expect(row).toHaveAttribute("aria-disabled", "true");
-
-    // The real contract is "no request happens" — assert at the callback
-    // boundary, not on styling. (`pointer-events-none` on a disabled row means
-    // userEvent would refuse a normal click, so go through the DOM directly:
-    // even a synthetic click must not reach the handler.)
-    row.click();
-    expect(onGroupMemberAction).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId(testId));
+    expect(onGroupMemberAction).toHaveBeenCalledWith(
+      expect.objectContaining({ member_id: "bob" }),
+      kind,
+    );
   });
 
-  // NO keyboard-activation test here, on purpose. Two attempts could not be
-  // made to discriminate in jsdom: arrow-key traversal skips disabled items (so
-  // Enter lands on an enabled row and the assertion passes without ever
-  // exercising a disabled one), and focusing a row + pressing Enter never
-  // reaches the item handler at all — this menu handles keys at the menu level,
-  // so the "fires nothing" assertion stays green with AND without `disabled`.
-  // A guard that cannot fail is worse than no guard: it reads like coverage.
-  //
-  // What actually protects the keyboard path: it is the SAME `disabled` prop
-  // the click cases above do discriminate against, plus the asserted
-  // `aria-disabled="true"`. Real keyboard/AT behaviour is verified in Iris's
-  // acceptance pass, not faked here.
-
-  it("the explanation is visible text before any interaction, and describes each disabled row", async () => {
+  it("the expired 'coming soon' note is gone — a disabled row with a stale reason is what this replaced", async () => {
     const user = userEvent.setup();
     renderList();
     await openMenu(user);
+    expect(screen.queryByTestId("group-member-menu-role-pending")).toBeNull();
+  });
 
-    const note = screen.getByTestId("group-member-menu-role-pending");
-    expect(note).toBeVisible();
-    expect(note.textContent).toContain("coming soon");
+  it("while one role action is in flight, every role row is disabled and the running one says which", async () => {
+    const user = userEvent.setup();
+    const onGroupMemberAction = renderList(ALL_ACTIONS, {
+      rolePendingActionFor: () => "promote",
+    });
+    await openMenu(user);
 
-    // aria-describedby → assistive tech announces the reason with the row,
-    // instead of just reporting "dimmed".
-    for (const testId of [
-      "group-member-menu-promote",
-      "group-member-menu-demote",
-      "group-member-menu-transfer",
-    ]) {
-      expect(screen.getByTestId(testId)).toHaveAttribute("aria-describedby", note.id);
+    // The row that is running names the action, not a bare spinner.
+    expect(screen.getByTestId("group-member-menu-promote")).toHaveTextContent(
+      "Making group manager…",
+    );
+    // …and the others are held so the same member can't be double-changed.
+    for (const id of ["group-member-menu-promote", "group-member-menu-demote", "group-member-menu-transfer"]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("aria-disabled", "true");
+      screen.getByTestId(id).click();
     }
+    expect(onGroupMemberAction).not.toHaveBeenCalled();
+  });
+
+  it("a role failure renders in THAT member's row, and offers retry only when retrying can help", () => {
+    const onDismiss = vi.fn();
+    const onRetry = vi.fn();
+    render(
+      <ChannelMembersList
+        members={[member("bob")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        badgeForMember={() => null}
+        memberMenu={() => ALL_ACTIONS}
+        onGroupMemberAction={vi.fn()}
+        roleFailureFor={() => ({
+          message: "Couldn't update the member's role. Please try again.",
+          retryLabel: "Retry",
+          dismissLabel: "Dismiss",
+          onRetry,
+          onDismiss,
+        })}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+    const notice = screen.getByTestId("channel-members-row-role-failed");
+    expect(notice).toHaveTextContent("Couldn't update the member's role.");
+    // Attached to the member's own row, not floated as a global banner.
+    expect(notice.closest('[data-testid="channel-members-row"]')).not.toBeNull();
+    screen.getByTestId("channel-members-row-role-retry").click();
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it("omits the retry button when retrying cannot help — a button that re-runs a call we know fails is worse than none", () => {
+    render(
+      <ChannelMembersList
+        members={[member("bob")]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={() => "member"}
+        badgeForMember={() => null}
+        memberMenu={() => ALL_ACTIONS}
+        onGroupMemberAction={vi.fn()}
+        roleFailureFor={() => ({
+          message: "Ownership has changed; the member list has been refreshed.",
+          dismissLabel: "Dismiss",
+          onDismiss: vi.fn(),
+        })}
+        canRemove
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+    expect(screen.getByTestId("channel-members-row-role-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("channel-members-row-role-retry")).toBeNull();
   });
 
   it("does NOT show the pending note when only remove is available — remove works and must not be labelled 'coming soon'", async () => {

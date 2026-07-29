@@ -56,6 +56,8 @@ function MemberRow({
   onRemove,
   dmPending,
   removeFailure,
+  roleFailure,
+  rolePendingAction,
 }: {
   m: ChannelMember;
   /**
@@ -70,6 +72,29 @@ function MemberRow({
     onRetry: () => void;
     onDismiss: () => void;
   };
+  /**
+   * #832 — in-row record of a failed ROLE change for THIS member. Same shape and
+   * same per-row rule as `removeFailure`: one member's failure must never render
+   * on another's. Separate from it because both can be present at once and
+   * collapsing them would drop one.
+   *
+   * `onRetry` is optional on purpose: for the kinds where repeating the same
+   * call cannot help (the roster moved, or you were never permitted), a retry
+   * button would promise something it can't deliver.
+   */
+  roleFailure?: {
+    message: string;
+    retryLabel?: string;
+    dismissLabel: string;
+    onRetry?: () => void;
+    onDismiss: () => void;
+  };
+  /**
+   * Which role action is in flight for THIS member. The menu deliberately stays
+   * open while it runs — closing it would hide the outcome the user is waiting
+   * for — and all role items disable so the same change can't be issued twice.
+   */
+  rolePendingAction?: "promote" | "demote" | "transfer" | null;
   roleForMember: (member: ChannelMember) => MemberRoleLabel;
   badgeForMember?: (member: ChannelMember) => ChannelMemberBadge | null;
   memberMenu?: (member: ChannelMember) => GroupMemberActions | null;
@@ -85,6 +110,16 @@ function MemberRow({
 }) {
   const { t } = useT("channels");
   const isAgent = m.member_type === "agent";
+  // Names the action actually running rather than a bare spinner: with three
+  // items in one menu, "…" leaves the user unsure which one they triggered.
+  const rolePendingLabel =
+    rolePendingAction === "transfer"
+      ? t(($) => $.members.menu.role_busy_transfer)
+      : rolePendingAction === "demote"
+        ? t(($) => $.members.menu.role_busy_demote)
+        : rolePendingAction === "promote"
+          ? t(($) => $.members.menu.role_busy_promote)
+          : null;
   const presentation: ActorIdentityPresentation = resolveActorIdentityPresentation(
     m,
     isAgent ? t(($) => $.message.agent_badge) : t(($) => $.members.title),
@@ -155,12 +190,6 @@ function MemberRow({
   // no handler behind them, i.e. the original bug minus even the toast. This
   // block has exactly one valid exit: delete it and replace it with rows wired
   // to the real authorized mutation. One exit ⇒ no switch. (Parker)
-  const rolePendingNoteId = `group-member-role-pending-${m.member_type}-${m.member_id}`;
-  const showRolePendingNote =
-    !!menuActions &&
-    (menuActions.canPromoteToManager ||
-      menuActions.canDemoteToMember ||
-      menuActions.canTransferOwnership);
 
   return (
     <div
@@ -240,49 +269,46 @@ function MemberRow({
           <DropdownMenuContent align="end">
             {menuActions.canPromoteToManager && (
               <DropdownMenuItem
-                disabled
-                aria-describedby={rolePendingNoteId}
+                disabled={!!rolePendingAction}
                 data-testid="group-member-menu-promote"
+                onClick={() => onGroupMemberAction(m, "promote")}
               >
-                {isAgent
+                {rolePendingAction === "promote" ? rolePendingLabel : (
+                  <>
+                    {isAgent
                   ? t(($) => $.members.menu.promote_agent)
                   : t(($) => $.members.menu.promote_human)}
+                  </>
+                )}
               </DropdownMenuItem>
             )}
             {menuActions.canDemoteToMember && (
               <DropdownMenuItem
-                disabled
-                aria-describedby={rolePendingNoteId}
+                disabled={!!rolePendingAction}
                 data-testid="group-member-menu-demote"
+                onClick={() => onGroupMemberAction(m, "demote")}
               >
-                {isAgent
+                {rolePendingAction === "demote" ? rolePendingLabel : (
+                  <>
+                    {isAgent
                   ? t(($) => $.members.menu.demote_agent)
                   : t(($) => $.members.menu.demote_human)}
+                  </>
+                )}
               </DropdownMenuItem>
             )}
             {menuActions.canTransferOwnership && (
               <DropdownMenuItem
-                disabled
-                aria-describedby={rolePendingNoteId}
+                disabled={!!rolePendingAction}
                 data-testid="group-member-menu-transfer"
+                onClick={() => onGroupMemberAction(m, "transfer")}
               >
-                {t(($) => $.members.menu.transfer)}
+                {rolePendingAction === "transfer" ? rolePendingLabel : (
+                  <>
+                    {t(($) => $.members.menu.transfer)}
+                  </>
+                )}
               </DropdownMenuItem>
-            )}
-            {showRolePendingNote && (
-              // #832 — persistent, always-visible explanation. NOT a tooltip and
-              // NOT a post-click toast: the user must see "this can't be done
-              // yet" BEFORE reaching for it. Rendered as a real text node (and
-              // referenced by each disabled row's aria-describedby) so assistive
-              // tech announces the reason together with the row, rather than
-              // just "dimmed".
-              <p
-                id={rolePendingNoteId}
-                data-testid="group-member-menu-role-pending"
-                className="px-2 py-1.5 text-xs leading-relaxed text-muted-foreground"
-              >
-                {t(($) => $.members.menu.role_actions_pending)}
-              </p>
             )}
             {menuActions.canRemove && (
               <>
@@ -352,6 +378,43 @@ function MemberRow({
           </button>
         </output>
       ) : null}
+      {/* #832 — role-change failure, same in-row treatment as the removal notice
+          above so it stays attached to the member it belongs to. A separate node
+          rather than a shared one: a member can hold a failed removal AND a
+          failed role change, and merging them would silently drop one. */}
+      {roleFailure ? (
+        <output
+          className="mx-2.5 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+          data-testid="channel-members-row-role-failed"
+        >
+          <span className="min-w-0 flex-1">{roleFailure.message}</span>
+          {roleFailure.onRetry && roleFailure.retryLabel ? (
+            <button
+              type="button"
+              onClick={roleFailure.onRetry}
+              className={cn(
+                "shrink-0 font-semibold underline underline-offset-2 hover:no-underline",
+                isMobile && "min-h-11 px-1",
+              )}
+              data-testid="channel-members-row-role-retry"
+            >
+              {roleFailure.retryLabel}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={roleFailure.onDismiss}
+            aria-label={roleFailure.dismissLabel}
+            className={cn(
+              "shrink-0 text-muted-foreground hover:text-foreground",
+              isMobile && "min-h-11 px-1",
+            )}
+            data-testid="channel-members-row-role-dismiss"
+          >
+            <X className="size-3.5" />
+          </button>
+        </output>
+      ) : null}
     </div>
   );
 }
@@ -379,6 +442,8 @@ export function ChannelMembersList({
   dmPending,
   headerSlot,
   removeFailureFor,
+  roleFailureFor,
+  rolePendingActionFor,
   className,
 }: {
   /**
@@ -386,6 +451,19 @@ export function ChannelMembersList({
    * per member (not a single "last error") so a second failure cannot silently
    * replace an unresolved first one.
    */
+  /**
+   * #832 — same per-member contract as `removeFailureFor`: a role-change failure
+   * belongs to one member and must never surface on another's row.
+   */
+  roleFailureFor?: (member: ChannelMember) => {
+    message: string;
+    retryLabel?: string;
+    dismissLabel: string;
+    onRetry?: () => void;
+    onDismiss: () => void;
+  } | undefined;
+  /** #832 — which role action is in flight for a given member, if any. */
+  rolePendingActionFor?: (member: ChannelMember) => "promote" | "demote" | "transfer" | null;
   removeFailureFor?: (member: ChannelMember) => {
     message: string;
     retryLabel: string;
@@ -493,6 +571,8 @@ export function ChannelMembersList({
                 onRemove={onRemove}
                 dmPending={dmPending}
                 removeFailure={removeFailureFor?.(m)}
+                roleFailure={roleFailureFor?.(m)}
+                rolePendingAction={rolePendingActionFor?.(m) ?? null}
               />
             ))}
           </div>
@@ -519,6 +599,8 @@ export function ChannelMembersList({
                 onRemove={onRemove}
                 dmPending={dmPending}
                 removeFailure={removeFailureFor?.(m)}
+                roleFailure={roleFailureFor?.(m)}
+                rolePendingAction={rolePendingActionFor?.(m) ?? null}
               />
             ))}
           </div>

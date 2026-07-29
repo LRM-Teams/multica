@@ -1,0 +1,634 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Command as CommandPrimitive } from "cmdk";
+import { useQuery } from "@tanstack/react-query";
+import { SearchIcon, X, ArrowLeft, RotateCw, Hash, User } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@multica/ui/components/ui/dialog";
+import { cn } from "@multica/ui/lib/utils";
+import { useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspaceId } from "@multica/core";
+import { workspaceSearchOptions } from "@multica/core/search/queries";
+import type {
+  WorkspaceSearchChannel,
+  WorkspaceSearchDM,
+  WorkspaceSearchMessage,
+  WorkspaceSearchPerson,
+  WorkspaceSearchResponse,
+  WorkspaceSearchScope,
+} from "@multica/core/types";
+import { useNavigation } from "../navigation";
+import { useOpenDM } from "../common/use-open-dm";
+import { ActorAvatar } from "../common/actor-avatar";
+import { useT } from "../i18n";
+import { HighlightText } from "./highlight-text";
+import { useGlobalSearchStore } from "./global-search-store";
+import {
+  deriveGlobalSearchStatus,
+  scopeCount,
+  type GlobalSearchStatus,
+} from "./global-search-status";
+
+const SCOPES: WorkspaceSearchScope[] = ["all", "messages", "channels", "dms", "people"];
+
+function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
+function relativeTime(iso: string): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diff = Date.now() - then;
+  const min = 60_000;
+  const hour = 60 * min;
+  const day = 24 * hour;
+  if (diff < min) return "now";
+  if (diff < hour) return `${Math.floor(diff / min)}m`;
+  if (diff < day) return `${Math.floor(diff / hour)}h`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)}d`;
+  return new Date(iso).toLocaleDateString();
+}
+
+export function GlobalSearchDialog() {
+  const { t } = useT("search");
+  const open = useGlobalSearchStore((s) => s.open);
+  const setOpen = useGlobalSearchStore((s) => s.setOpen);
+  const scope = useGlobalSearchStore((s) => s.scope);
+  const setScope = useGlobalSearchStore((s) => s.setScope);
+  const recordRecent = useGlobalSearchStore((s) => s.recordRecent);
+  const forgetRecent = useGlobalSearchStore((s) => s.forgetRecent);
+  const recentByWorkspace = useGlobalSearchStore((s) => s.recentByWorkspace);
+
+  const wsId = useWorkspaceId();
+  const p = useWorkspacePaths();
+  const { push } = useNavigation();
+  const { openDM } = useOpenDM();
+
+  const [query, setQuery] = useState("");
+  const debouncedQuery = useDebounced(query, 250);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const recent = recentByWorkspace[wsId] ?? [];
+
+  const { data, isFetching, isLoading, isError, refetch } = useQuery({
+    ...workspaceSearchOptions(wsId, debouncedQuery, scope, { limit: 20 }),
+    enabled: open && debouncedQuery.trim().length > 0,
+  });
+
+  const status: GlobalSearchStatus = useMemo(
+    () => deriveGlobalSearchStatus({ query: debouncedQuery, isFetching, isLoading, isError, data }),
+    [debouncedQuery, isFetching, isLoading, isError, data],
+  );
+
+  const scopeLabel = useMemo<Record<WorkspaceSearchScope, string>>(
+    () => ({
+      all: t(($) => $.globalSearch.scope.all),
+      messages: t(($) => $.globalSearch.scope.messages),
+      channels: t(($) => $.globalSearch.scope.channels),
+      dms: t(($) => $.globalSearch.scope.dms),
+      people: t(($) => $.globalSearch.scope.people),
+    }),
+    [t],
+  );
+
+  // Entry point note (LRM-454 Lock A / AC#1):
+  //   Header Search button (sidebar) opens this dialog via the store. The
+  //   global ⌘K / Ctrl-K reallocation is intentionally DEFERRED: the existing
+  //   SearchCommand palette (issue/project/nav/member/agent search) still owns
+  //   ⌘K, and reclaiming it is a destructive, cross-cutting change that must
+  //   land atomically with the BE contract (LRM-605) — wiring it now would
+  //   both double-trigger (two ⌘K listeners) and point ⌘K at an endpoint that
+  //   404s until BE ships. See the gated migration note on LRM-606.
+  //   When BE lands, move ⌘K here and retire SearchCommand in one reviewed step.
+
+  // Esc closes (capture phase, before base-ui Dialog).
+  useEffect(() => {
+    if (!open) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onEsc, true);
+    return () => document.removeEventListener("keydown", onEsc, true);
+  }, [open, setOpen]);
+
+  // Reset on close; focus input on open.
+  useEffect(() => {
+    if (!open) {
+      setQuery("");
+      return;
+    }
+    const id = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(id);
+  }, [open]);
+
+  const closeAndReset = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+  }, [setOpen]);
+
+  const commitSearch = useCallback(
+    (q: string) => {
+      const trimmed = q.trim();
+      if (trimmed) recordRecent(wsId, trimmed);
+    },
+    [recordRecent, wsId],
+  );
+
+  const goto = useCallback(
+    (path: string) => {
+      commitSearch(query);
+      closeAndReset();
+      push(path);
+    },
+    [commitSearch, query, closeAndReset, push],
+  );
+
+  const openMessage = useCallback(
+    (m: WorkspaceSearchMessage) => {
+      const params = new URLSearchParams({ message: m.message_id });
+      if (m.thread_root_message_id) params.set("thread", m.thread_root_message_id);
+      goto(`${p.channelDetail(m.channel_id)}?${params.toString()}`);
+    },
+    [goto, p],
+  );
+
+  const openChannel = useCallback((c: WorkspaceSearchChannel) => goto(p.channelDetail(c.channel_id)), [goto, p]);
+  const openDm = useCallback((d: WorkspaceSearchDM) => goto(p.channelDetail(d.channel_id)), [goto, p]);
+  const openPerson = useCallback(
+    (person: WorkspaceSearchPerson) => {
+      goto(person.actor_type === "agent" ? p.agentDetail(person.actor_id) : p.memberDetail(person.actor_id));
+    },
+    [goto, p],
+  );
+
+  const startDm = useCallback(
+    (peerType: "user" | "agent", peerId: string) => {
+      commitSearch(query);
+      setOpen(false);
+      void openDM({ peer_type: peerType, peer_id: peerId });
+    },
+    [commitSearch, query, setOpen, openDM],
+  );
+
+  const handleSubmitRecent = useCallback((q: string) => {
+    setQuery(q);
+    inputRef.current?.focus();
+  }, []);
+
+  const countsFor = (s: WorkspaceSearchScope) => (data ? scopeCount(data, s) : 0);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : closeAndReset())}>
+      <DialogContent
+        showCloseButton={false}
+        finalFocus={false}
+        aria-describedby={undefined}
+        className={cn(
+          // Mobile: full-screen page. Desktop (sm+): top-anchored floating panel + scrim.
+          "fixed inset-0 top-auto grid max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none bg-popover p-0 text-popover-foreground ring-0",
+          "sm:inset-x-0 sm:top-[12vh] sm:mx-auto sm:h-fit sm:w-[min(640px,calc(100vw-2rem))] sm:max-w-[640px] sm:left-1/2 sm:-translate-x-1/2 sm:rounded-xl sm:ring-1 sm:ring-foreground/10",
+        )}
+      >
+        <DialogHeader className="sr-only">
+          <DialogTitle>{t(($) => $.globalSearch.title)}</DialogTitle>
+          <DialogDescription>{t(($) => $.globalSearch.description)}</DialogDescription>
+        </DialogHeader>
+
+        <CommandPrimitive shouldFilter={false} className="flex size-full flex-col overflow-hidden" loop>
+          {/* Search bar */}
+          <div className="flex items-center gap-2 border-b px-3 py-3 sm:px-4">
+            <button
+              type="button"
+              aria-label="Back"
+              className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground sm:hidden"
+              onClick={closeAndReset}
+            >
+              <ArrowLeft className="size-4" />
+            </button>
+            <SearchIcon className="size-5 shrink-0 text-muted-foreground" />
+            <CommandPrimitive.Input
+              ref={inputRef}
+              placeholder={t(($) => $.globalSearch.placeholder)}
+              value={query}
+              onValueChange={setQuery}
+              className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
+            />
+            {query ? (
+              <button
+                type="button"
+                aria-label="Clear"
+                onClick={() => {
+                  setQuery("");
+                  inputRef.current?.focus();
+                }}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent"
+              >
+                <X className="size-4" />
+              </button>
+            ) : null}
+            <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
+              ESC
+            </kbd>
+          </div>
+
+          {/* Scope tabs */}
+          <div className="flex items-center gap-1 overflow-x-auto border-b px-2 py-1.5">
+            {SCOPES.map((s) => {
+              const active = s === scope;
+              const n = countsFor(s);
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setScope(s)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
+                    active
+                      ? "bg-accent font-semibold text-accent-foreground"
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  )}
+                >
+                  {scopeLabel[s]}
+                  {n > 0 ? <span className="text-xs text-muted-foreground">{n}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Body */}
+          <CommandPrimitive.List className="max-h-[min(420px,60vh)] overflow-y-auto overflow-x-hidden sm:max-h-[min(440px,56vh)]">
+            {status === "loading" && <SearchSkeleton />}
+            {status === "error" && <ErrorState onRetry={() => void refetch()} />}
+            {status === "empty" && <EmptyState query={debouncedQuery} />}
+
+            {status === "success" && data && (
+              <SearchResults
+                data={data}
+                scope={scope}
+                query={debouncedQuery}
+                onOpenMessage={openMessage}
+                onOpenChannel={openChannel}
+                onOpenDm={openDm}
+                onOpenPerson={openPerson}
+                onStartDm={startDm}
+              />
+            )}
+
+            {status === "idle" && (
+              <IdleState
+                recent={recent}
+                onPickRecent={handleSubmitRecent}
+                onForgetRecent={(q) => forgetRecent(wsId, q)}
+                onJump={(path) => {
+                  closeAndReset();
+                  push(path);
+                }}
+              />
+            )}
+          </CommandPrimitive.List>
+
+          {/* Footer keyboard hints (desktop) */}
+          <div className="hidden items-center gap-4 border-t px-4 py-2 text-[11px] text-muted-foreground sm:flex">
+            <Hint keys={["↑", "↓"]} label={t(($) => $.globalSearch.scope.all)} />
+            <Hint keys={["↵"]} label={t(($) => $.globalSearch.actions.open_message)} />
+            <Hint keys={["Esc"]} label={t(($) => $.globalSearch.scope.all)} />
+          </div>
+        </CommandPrimitive>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ---------- Result rows ---------- */
+
+function SearchResults(props: {
+  data: WorkspaceSearchResponse;
+  scope: WorkspaceSearchScope;
+  query: string;
+  onOpenMessage: (m: WorkspaceSearchMessage) => void;
+  onOpenChannel: (c: WorkspaceSearchChannel) => void;
+  onOpenDm: (d: WorkspaceSearchDM) => void;
+  onOpenPerson: (p: WorkspaceSearchPerson) => void;
+  onStartDm: (peerType: "user" | "agent", peerId: string) => void;
+}) {
+  const { data, scope } = props;
+  const show = (s: WorkspaceSearchScope) => scope === "all" || scope === s;
+
+  return (
+    <>
+      {show("channels") && data.channels.length > 0 && (
+        <Group labelKey="channels">
+          {data.channels.map((c) => (
+            <ChannelRow key={`ch:${c.channel_id}`} channel={c} query={props.query} onOpen={() => props.onOpenChannel(c)} />
+          ))}
+        </Group>
+      )}
+
+      {show("dms") && data.dms.length > 0 && (
+        <Group labelKey="dms">
+          {data.dms.map((d) => (
+            <DmRow key={`dm:${d.channel_id}`} dm={d} query={props.query} onOpen={() => props.onOpenDm(d)} />
+          ))}
+        </Group>
+      )}
+
+      {show("messages") && data.messages.length > 0 && (
+        <Group labelKey="messages">
+          {data.messages.map((m) => (
+            <MessageRow key={`msg:${m.message_id}`} message={m} query={props.query} onOpen={() => props.onOpenMessage(m)} />
+          ))}
+        </Group>
+      )}
+
+      {show("people") && data.people.length > 0 && (
+        <Group labelKey="people">
+          {data.people.map((person) => (
+            <PersonRow
+              key={`p:${person.actor_type}:${person.actor_id}`}
+              person={person}
+              query={props.query}
+              onOpen={() => props.onOpenPerson(person)}
+              onStartDm={() => props.onStartDm(person.actor_type === "agent" ? "agent" : "user", person.actor_id)}
+            />
+          ))}
+        </Group>
+      )}
+    </>
+  );
+}
+
+function Group({ labelKey, children }: { labelKey: "channels" | "dms" | "messages" | "people"; children: React.ReactNode }) {
+  const { t } = useT("search");
+  const label =
+    labelKey === "channels"
+      ? t(($) => $.globalSearch.groups.channels)
+      : labelKey === "dms"
+        ? t(($) => $.globalSearch.groups.dms)
+        : labelKey === "messages"
+          ? t(($) => $.globalSearch.groups.messages)
+          : t(($) => $.globalSearch.groups.people);
+  return (
+    <CommandPrimitive.Group className="p-2">
+      <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {children}
+    </CommandPrimitive.Group>
+  );
+}
+
+function RowShell({ onSelect, children }: { onSelect: () => void; children: React.ReactNode }) {
+  return (
+    <CommandPrimitive.Item
+      onSelect={onSelect}
+      className="flex cursor-default select-none items-center gap-3 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+    >
+      {children}
+    </CommandPrimitive.Item>
+  );
+}
+
+function ChannelRow({ channel, query, onOpen }: { channel: WorkspaceSearchChannel; query: string; onOpen: () => void }) {
+  return (
+    <RowShell onSelect={onOpen}>
+      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+        <Hash className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium">
+          <HighlightText text={channel.name} query={query} />
+        </div>
+        {channel.description ? (
+          <div className="truncate text-xs text-muted-foreground">
+            <HighlightText text={channel.description} query={query} />
+          </div>
+        ) : null}
+      </div>
+    </RowShell>
+  );
+}
+
+function DmRow({ dm, query, onOpen }: { dm: WorkspaceSearchDM; query: string; onOpen: () => void }) {
+  const { t } = useT("search");
+  // V0 contract: BE returns DMs in channel shape (channel_id/name/kind) with no
+  // peer payload. Render the channel name, falling back to a localized
+  // "私信" placeholder when the server returns no DM name.
+  const label = dm.name?.trim() || t(($) => $.globalSearch.row.dm_placeholder);
+  return (
+    <RowShell onSelect={onOpen}>
+      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+        <User className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium">
+          <HighlightText text={label} query={query} />
+        </div>
+      </div>
+    </RowShell>
+  );
+}
+
+function MessageRow({ message, query, onOpen }: { message: WorkspaceSearchMessage; query: string; onOpen: () => void }) {
+  const { t } = useT("search");
+  const isThread = message.hit_count > 1;
+  return (
+    <RowShell onSelect={onOpen}>
+      <ActorAvatar
+        actorType={message.author_type ?? "user"}
+        actorId={message.author_id ?? ""}
+        size={32}
+        name={message.author_name}
+        profileLink={false}
+        className="shrink-0"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          {isThread ? (
+            <span className="shrink-0 rounded border border-primary/40 px-1 text-[10px] font-semibold text-primary">
+              {t(($) => $.globalSearch.row.thread_hits, { count: message.hit_count })}
+            </span>
+          ) : null}
+          <span className="truncate font-medium">{message.author_name}</span>
+          <span className="truncate text-xs text-muted-foreground">
+            · {message.channel_kind === "dm" ? "DM" : `#${message.channel_name}`}
+          </span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(message.created_at)}</span>
+        </div>
+        <div className="line-clamp-2 text-sm text-muted-foreground">
+          <HighlightText text={message.snippet} query={query} />
+        </div>
+      </div>
+    </RowShell>
+  );
+}
+
+function PersonRow({
+  person,
+  query,
+  onOpen,
+  onStartDm,
+}: {
+  person: WorkspaceSearchPerson;
+  query: string;
+  onOpen: () => void;
+  onStartDm: () => void;
+}) {
+  const { t } = useT("search");
+  const secondary = person.name && person.name !== person.display_name ? person.name : "";
+  return (
+    <RowShell onSelect={onOpen}>
+      <ActorAvatar
+        actorType={person.actor_type}
+        actorId={person.actor_id}
+        size={32}
+        avatarUrlHint={person.avatar_url}
+        name={person.display_name}
+        profileLink={false}
+        className="shrink-0"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium">
+          <HighlightText text={person.display_name} query={query} />
+        </div>
+        {secondary ? (
+          <div className="truncate text-xs text-muted-foreground">
+            <HighlightText text={secondary} query={query} />
+          </div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onStartDm();
+        }}
+        className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {t(($) => $.globalSearch.actions.open_dm)}
+      </button>
+    </RowShell>
+  );
+}
+
+/* ---------- States ---------- */
+
+function SearchSkeleton() {
+  return (
+    <div data-testid="global-search-skeleton" className="p-4" aria-busy="true">
+      {[40, 88, 70, 82, 60].map((w, i) => (
+        <div key={i} className="mb-2 h-3 animate-pulse rounded bg-muted" style={{ width: `${w}%` }} />
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ query }: { query: string }) {
+  const { t } = useT("search");
+  return (
+    <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+      {t(($) => $.globalSearch.states.empty, { query: query.trim() })}
+    </div>
+  );
+}
+
+function ErrorState({ onRetry }: { onRetry: () => void }) {
+  const { t } = useT("search");
+  return (
+    <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+      <div className="mb-1">{t(($) => $.globalSearch.states.error_title)}</div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-primary hover:bg-accent"
+      >
+        <RotateCw className="size-3.5" />
+        {t(($) => $.globalSearch.states.retry)}
+      </button>
+    </div>
+  );
+}
+
+function IdleState(props: {
+  recent: string[];
+  onPickRecent: (q: string) => void;
+  onForgetRecent: (q: string) => void;
+  onJump: (path: string) => void;
+}) {
+  const { recent, onPickRecent, onForgetRecent } = props;
+  const { t } = useT("search");
+  return (
+    <>
+      {recent.length > 0 && (
+        <CommandPrimitive.Group className="p-2">
+          <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t(($) => $.globalSearch.states.recent)}
+          </div>
+          {recent.map((q) => (
+            <CommandPrimitive.Item
+              key={q}
+              value={`recent:${q}`}
+              onSelect={() => onPickRecent(q)}
+              className="flex cursor-default select-none items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none data-selected:bg-accent"
+            >
+              <span className="text-muted-foreground">🕘</span>
+              <span className="flex-1 truncate">{q}</span>
+              <button
+                type="button"
+                aria-label="Remove"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onForgetRecent(q);
+                }}
+                className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            </CommandPrimitive.Item>
+          ))}
+        </CommandPrimitive.Group>
+      )}
+      <div className="px-5 py-4 text-center text-xs text-muted-foreground">
+        {t(($) => $.globalSearch.placeholder)}
+      </div>
+    </>
+  );
+}
+
+function Hint({ keys, label }: { keys: string[]; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      {keys.map((k) => (
+        <kbd key={k} className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">
+          {k}
+        </kbd>
+      ))}
+      <span>{label}</span>
+    </span>
+  );
+}

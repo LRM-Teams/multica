@@ -325,3 +325,13 @@ export type {
   ChannelProjectFiles,
   ChannelProjectFileContent,
 } from "./channel";
+
+export type {
+  WorkspaceSearchScope,
+  WorkspaceSearchCounts,
+  WorkspaceSearchMessage,
+  WorkspaceSearchChannel,
+  WorkspaceSearchDM,
+  WorkspaceSearchPerson,
+  WorkspaceSearchResponse,
+} from "./search";

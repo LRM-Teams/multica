@@ -56,6 +56,8 @@
     "./channels": "./channels/index.ts",
     "./channels/queries": "./channels/queries.ts",
     "./channels/mutations": "./channels/mutations.ts",
+    "./search": "./search/index.ts",
+    "./search/queries": "./search/queries.ts",
     "./dm": "./dm/index.ts",
     "./dm/queries": "./dm/queries.ts",
     "./dm/mutations": "./dm/mutations.ts",

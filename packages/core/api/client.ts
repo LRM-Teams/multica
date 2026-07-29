@@ -132,6 +132,8 @@ import type {
   ChannelProjectFiles,
   ChannelProjectFileContent,
   CancelTaskResponse,
+  WorkspaceSearchResponse,
+  WorkspaceSearchScope,
   Project,
   CreateProjectRequest,
   UpdateProjectRequest,
@@ -251,6 +253,7 @@ import {
   EMPTY_STICKER_CATALOG_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
+  EMPTY_WORKSPACE_SEARCH_RESPONSE,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
@@ -262,6 +265,7 @@ import {
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
+  WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
   EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
   StickerCatalogResponseSchema,
@@ -2959,6 +2963,36 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/channels/${channelId}/messages/search?${params.toString()}`);
     return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
       endpoint: "GET /api/channels/{channelId}/messages/search",
+    });
+  }
+
+  /**
+   * Workspace-level global search (LRM-605 / `GET /api/search`). Returns
+   * collaboration content (Messages/Channels/DMs/People) within the viewer's
+   * permission boundary.
+   *
+   * Authorization (LRM-606 AC#3 option b, aligned to Slack): the server filters
+   * to only content the viewer can see (SQL `JOIN channel_member viewer`).
+   * There is no `denied` flag — a query matching only hidden content returns
+   * an empty result (not faked as anything else); whole-request auth failure
+   * surfaces as a 401/403 error (retryable, no silent fallback, LRM-238).
+   */
+  async searchWorkspace(
+    // workspaceId is retained for caller-side query-key isolation but is NOT
+    // part of the request URL: the server resolves the workspace from the
+    // auth context (ctxWorkspaceID). See LRM-605 / channel.go SearchGlobal.
+    _workspaceId: string,
+    params: { q: string; scope?: WorkspaceSearchScope; limit?: number; signal?: AbortSignal },
+  ): Promise<WorkspaceSearchResponse> {
+    const search = new URLSearchParams({ q: params.q });
+    if (params.scope) search.set("scope", params.scope);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/search?${search.toString()}`,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    return parseWithFallback(raw, WorkspaceSearchResponseSchema, EMPTY_WORKSPACE_SEARCH_RESPONSE, {
+      endpoint: "GET /api/search",
     });
   }
 

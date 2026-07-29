@@ -693,19 +693,39 @@ func TestMemberManagementCapabilitiesFailClosedForCreatorAndOrdinaryNonmember(t 
 		testUserID,
 	)
 	ctx := context.Background()
-	if _, err := testPool.Exec(ctx, `
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin ownership transfer fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
 		UPDATE channel_member
-		SET role = CASE WHEN member_id = $3 THEN 'owner' ELSE 'member' END
+		SET role = 'member'
 		WHERE channel_id = $1
 		  AND workspace_id = $2
 		  AND member_type = 'user'
-		  AND member_id = ANY($4::uuid[])`,
+		  AND member_id = $3`,
+		channelID,
+		testWorkspaceID,
+		creatorID,
+	); err != nil {
+		t.Fatalf("demote historical creator fixture: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE channel_member
+		SET role = 'owner'
+		WHERE channel_id = $1
+		  AND workspace_id = $2
+		  AND member_type = 'user'
+		  AND member_id = $3`,
 		channelID,
 		testWorkspaceID,
 		testUserID,
-		[]string{creatorID, testUserID},
 	); err != nil {
-		t.Fatalf("transfer ownership away from creator: %v", err)
+		t.Fatalf("promote successor owner fixture: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit ownership transfer fixture: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		DELETE FROM channel_member

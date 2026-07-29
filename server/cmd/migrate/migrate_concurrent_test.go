@@ -240,6 +240,38 @@ func (f *fixture) tableExists(t *testing.T, name string) bool {
 	return exists
 }
 
+// TestRunMigrationsAppliesLateLowerVersions proves that migration application
+// is keyed by each version's bookkeeping row, not by the highest version ever
+// recorded. This is the production rollout shape where migration 246 may
+// already be applied before an older branch lands migrations 244 and 245.
+func TestRunMigrationsAppliesLateLowerVersions(t *testing.T) {
+	f := newFixture(t)
+
+	highestOnly := f.opts()
+	highestOnly.Files = []string{f.files[len(f.files)-1]}
+	if err := runMigrations(context.Background(), f.pool, highestOnly); err != nil {
+		t.Fatalf("apply highest migration first: %v", err)
+	}
+	if got, want := f.appliedVersions(t), f.versions[len(f.versions)-1:]; !equalStrings(got, want) {
+		t.Fatalf("schema_migrations after highest-only run = %v, want %v", got, want)
+	}
+	if !f.tableExists(t, f.tableNames[len(f.tableNames)-1]) {
+		t.Fatalf("expected highest-version table %s.%s to exist", f.schema, f.tableNames[len(f.tableNames)-1])
+	}
+
+	if err := runMigrations(context.Background(), f.pool, f.opts()); err != nil {
+		t.Fatalf("apply late lower migrations: %v", err)
+	}
+	if got, want := f.appliedVersions(t), f.versions; !equalStrings(got, want) {
+		t.Fatalf("schema_migrations after late lower versions = %v, want %v", got, want)
+	}
+	for _, tableName := range f.tableNames {
+		if !f.tableExists(t, tableName) {
+			t.Fatalf("expected table %s.%s to exist after late lower versions", f.schema, tableName)
+		}
+	}
+}
+
 // TestRunMigrationsConcurrentPending fires N goroutines at runMigrations
 // against a fresh schema where none of the migrations have been applied
 // yet. The advisory lock must serialize them so that exactly one of

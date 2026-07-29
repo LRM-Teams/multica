@@ -195,11 +195,11 @@ describe("canViewAgentActivity", () => {
     expect(d.reason).toBe("not_authenticated");
   });
 
-  it("ignores the agent's own managed_role marker", () => {
+  it("ignores the agent's own research-fleet managed_role marker", () => {
     const marked = makeAgent({
       owner_id: ALICE,
       visibility: "private",
-      managed_role: "group_manager",
+      managed_role: "research_fleet",
     });
     expect(
       canViewAgentActivity(marked, { userId: BOB, role: "member" }).allowed,

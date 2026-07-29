@@ -568,7 +568,7 @@ describe("AgentSidePanel", () => {
 
   it("keeps visited page tabs mounted in equal-width 44px mobile targets", () => {
     activityPermission.allowed = true;
-    const { container } = renderPanel("user-owner", undefined, "page");
+    const { container } = renderPanel("user-owner", "page");
 
     expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
@@ -591,7 +591,7 @@ describe("AgentSidePanel", () => {
 
   it("restores a visited page tab's scroll position after switching tabs", () => {
     activityPermission.allowed = true;
-    const { container } = renderPanel("user-owner", undefined, "page");
+    const { container } = renderPanel("user-owner", "page");
     const tabBody = container.querySelector(".overflow-y-auto") as HTMLDivElement;
 
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
@@ -654,19 +654,7 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
-  // #871: the `group_manager` marker no longer grants any member edit rights.
-  // Runtime config now follows `canEdit` alone, which already admits the agent
-  // owner and workspace owners/admins.
-  it("keeps runtime pickers READ-ONLY for a member on a group_manager agent when canEdit denies", () => {
-    permission.allowed = false;
-    renderPanel("user-other", "group_manager");
-
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
-      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
-    }
-  });
-
-  it("renders EDITABLE runtime pickers when canEdit allows, marker or not", () => {
+  it("renders EDITABLE runtime pickers when canEdit allows", () => {
     // Visibility stays editable too (LRM-387: Frank — must support modify).
     permission.allowed = true;
     renderPanel("user-other");

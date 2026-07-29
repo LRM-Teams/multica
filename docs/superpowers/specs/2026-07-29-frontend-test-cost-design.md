@@ -5,6 +5,8 @@
 **Status:** proposal — no implementation authorised. Sequencing and go/no-go are Parker's; Frank set the direction ("前端的测试可以改为长期方案").
 **Related:** task #855 (archived conclusion in its task thread) · PR #1356 (merged) · task #853
 
+> **Picking this up cold?** Read §2 (where the time goes) and §3 (why the obvious lever doesn't work) before anything else. Everything here was measured, not estimated; every number states the machine and mode it came from. **Nothing in §5 is authorised** — it is a menu with prices, not a plan of record. The three things most likely to mislead you are called out in §2 (a red run's wall time is not comparable), §3 (the cheap-looking fix is a prerequisite, not a win), and §4a (this mode's failure count is nondeterministic — do not quote a single run).
+
 ---
 
 ## 1. Why this exists
@@ -57,7 +59,16 @@ import { cleanup } from "@testing-library/react";
 afterEach(() => cleanup());
 ```
 
-Effect: `Found multiple elements` **241 → 0**, failing files **168 → 86**, and the 225 never-reported cases came back.
+Effect, flip-verified against a **true control on the same base** (the file reverted with `git checkout origin/dev -- packages/views/test/setup.ts`, same command):
+
+| `vitest run --no-isolate` | `Found multiple elements` | failing files |
+|---|---|---|
+| control (line absent) | **412** | 168 / 304 |
+| with the line | **0** | 112 / 304 |
+
+On an earlier base the same change also brought back **225 cases that were never reported at all** — which independently confirmed both that the truncation was real and that the un-patched run's wall time was meaningless.
+
+> ⚠️ Method note, because it nearly produced a fake result: the first attempt at this control used `git stash push` on a file that was **already committed** — a no-op. "Control" and "treatment" were the same code, and the comparison looked entirely reasonable. Use `git checkout <base> -- <file>`, and sanity-check that the control file really lacks the thing you removed.
 
 > ⚠️ **This line is a no-op under today's `isolate: true` config** — per-file registries already make RTL's own cleanup work, which is why the baseline is green. It is a **prerequisite for step 2, not a standalone win.** It must not be recorded as "168 → 86 fixed" while isolation is on.
 
@@ -77,6 +88,21 @@ I first suspected the known automock/factory-mixing bug. **It is not that:** 106
 Under a shared registry, **which factory wins depends on file load order.** That is the `Unable to find an element` class (63 occurrences) — the mirror image of root cause 1: not leftover DOM, but *the wrong module*.
 
 There is no one-line fix. Collapsing hundreds of per-file mocks into shared fixtures is real engineering.
+
+## 4a. ⚠️ `--no-isolate` failure counts are nondeterministic — never quote one run
+
+Two runs of **identical code and an identical command** on the same machine gave:
+
+| run | failing files (of 304) |
+|---|---|
+| 1 | **112** |
+| 2 | **81** |
+
+A 31-file swing with nothing changed. This follows directly from root cause 2: which mock factory wins depends on **file load order**, and load order varies between runs. A single run's number is a sample from a distribution, not a measurement of the code.
+
+**Consequence for anyone continuing this work:** if you compare "before" and "after" using one run each, you can manufacture any conclusion you like, in either direction. Ranking the options in §4 on single-run counts would be **wrong regardless of which option came out ahead**. Use repeated runs and report the spread, or compare something that doesn't vary — the per-file `import`/`environment` totals are stable across runs and are what the options actually target.
+
+The one measurement here that *is* clean is the flip-verify in §3 (412 → 0): it isolates a single failure signature with a true control on the same base, and the effect size dwarfs the noise.
 
 ## 4. Options, with honest costs
 

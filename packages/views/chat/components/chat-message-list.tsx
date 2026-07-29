@@ -77,6 +77,8 @@ interface ChatListChrome {
   liveTaskMessages: readonly TaskMessagePayload[];
   availability: AgentAvailability | undefined;
   loadingOlderLabel: string;
+  /** Stable key so process-fold open state survives live remounts (LRM-690). */
+  liveFoldKey?: string;
 }
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
@@ -100,7 +102,12 @@ function ChatMessageListFooter() {
     <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
       {chrome.hasLive && (
         <div className="w-full space-y-1.5">
-          <TimelineView items={chrome.liveTimeline} isStreaming enhanced={chrome.isDmBubble} />
+          <TimelineView
+            items={chrome.liveTimeline}
+            isStreaming
+            enhanced={chrome.isDmBubble}
+            foldKey={chrome.liveFoldKey}
+          />
         </div>
       )}
       {chrome.showStatusPill && chrome.pendingTask && (
@@ -228,6 +235,7 @@ export function ChatMessageList({
       liveTaskMessages: liveTaskMessages ?? [],
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
+      liveFoldKey: pendingTaskId ? `task:${pendingTaskId}` : undefined,
     }),
     [
       isFetchingOlderMessages,
@@ -239,6 +247,7 @@ export function ChatMessageList({
       liveTaskMessages,
       availability,
       t,
+      pendingTaskId,
     ],
   );
 
@@ -452,6 +461,7 @@ function AssistantMessage({
           enhanced={enhanced}
           messageParts={message.parts}
           messageContent={message.content}
+          foldKey={taskId ? `task:${taskId}` : `msg:${message.id}`}
         />
       ) : (
         <MessageProse
@@ -614,7 +624,13 @@ function FailureBubble({
           )}
         </div>
       </div>
-      {timeline.length > 0 && <TimelineView items={timeline} enhanced={enhanced} />}
+      {timeline.length > 0 && (
+        <TimelineView
+          items={timeline}
+          enhanced={enhanced}
+          foldKey={`fail:${reason}:${timeline[0]?.seq ?? 0}`}
+        />
+      )}
       {elapsedMs != null && (
         <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
       )}
@@ -681,8 +697,8 @@ function MessageProse({
 //
 // splitTimeline (lib/copy-text.ts) carves the items into:
 //   preface — text before the first thinking/tool item
-//   middle  — first → last non-text item (inclusive, may sandwich text)
-//   final   — text after the last non-text item
+//   middle  — process rows (thinking/tool/error); sandwiched text peeled out
+//   final   — peeled narration + text after the last non-text item
 //
 // We render preface + final outside an outer Collapsible ("X steps") that
 // wraps middle. The inner row Collapsibles (ThinkingRow / ToolCallRow /
@@ -691,6 +707,9 @@ function MessageProse({
 // closed: preface + final, never middle. See extractCopyText for the
 // authoritative copy logic.
 
+/** Survives Virtuoso Footer / live→persisted remounts within a task (LRM-690). */
+const processFoldOpenByKey = new Map<string, boolean>();
+
 function TimelineView({
   items,
   isStreaming,
@@ -698,6 +717,7 @@ function TimelineView({
   enhanced,
   messageParts,
   messageContent,
+  foldKey,
 }: {
   items: ChatTimelineItem[];
   isStreaming?: boolean;
@@ -707,10 +727,17 @@ function TimelineView({
   /** Assistant message parts — used when the final region is an envelope. */
   messageParts?: MessagePart[] | null;
   messageContent?: string;
+  /** Persist fold open across remounts for the same live/persisted task. */
+  foldKey?: string;
 }) {
   const { preface, middle, final } = splitTimeline(items);
   const panels = enhanced ? deriveBubbleCursorPanels(middle) : null;
-  const finalText = final.map((t) => t.content ?? "").join("");
+  const finalPieces: string[] = [];
+  for (const t of final) {
+    const c = t.content ?? "";
+    if (c.length > 0) finalPieces.push(c);
+  }
+  const finalText = finalPieces.join("\n\n");
   // Prefer timeline final text; if empty (e.g. sticker-only completion), fall
   // back to the persisted chat_message body so envelopes still unwrap.
   const proseContent = finalText || messageContent || "";
@@ -720,7 +747,7 @@ function TimelineView({
       {preface.length > 0 && (
         <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={attachments}>
-            {preface.map((t) => t.content ?? "").join("")}
+            {preface.map((t) => t.content ?? "").join("\n\n")}
           </Markdown>
         </div>
       )}
@@ -736,8 +763,10 @@ function TimelineView({
       {middle.length > 0 && (
         <OuterProcessFold
           items={middle}
+          foldKey={foldKey}
           // Always start collapsed (product: tap to expand). Streaming still
           // surfaces the active step on the collapsed header via activeSummary.
+          // foldKey restores a prior open choice across remounts.
           defaultOpen={false}
           attachments={attachments}
           enhanced={enhanced}
@@ -757,29 +786,37 @@ function TimelineView({
 
 function OuterProcessFold({
   items,
+  foldKey,
   defaultOpen,
   attachments,
   enhanced,
   isStreaming,
 }: {
   items: ChatTimelineItem[];
+  foldKey?: string;
   defaultOpen?: boolean;
   attachments?: import("@multica/core/types").Attachment[];
   enhanced?: boolean;
   isStreaming?: boolean;
 }) {
   const { t } = useT("chat");
-  // useState seeds once at mount — subsequent renders never overwrite the
-  // user's manual toggle. The streaming → completed transition unmounts
-  // the live <TimelineView> and mounts the persisted AssistantMessage's
-  // own <TimelineView>, so the persisted instance starts closed (default)
-  // even if the live one was open. That's the desired collapsed-default.
-  const [open, setOpen] = useState(defaultOpen ?? false);
+  // Seed from the task-scoped map when present so live Footer remounts and
+  // the live→persisted handoff keep the user's expand choice (LRM-690).
+  const [open, setOpen] = useState(() => {
+    if (foldKey && processFoldOpenByKey.has(foldKey)) {
+      return processFoldOpenByKey.get(foldKey)!;
+    }
+    return defaultOpen ?? false;
+  });
+  const handleOpenChange = (next: boolean) => {
+    if (foldKey) processFoldOpenByKey.set(foldKey, next);
+    setOpen(next);
+  };
   const stepCount = items.length;
   const activeSummary = enhanced ? activeBubbleStepSummary(items) : null;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <Collapsible open={open} onOpenChange={handleOpenChange}>
       <CollapsibleTrigger
         className={cn(
           // ≥32px touch target; collapsed state reads as a real control, not a

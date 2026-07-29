@@ -57,8 +57,9 @@ describe("splitTimeline", () => {
     const f1 = text(5, "final answer");
     const out = splitTimeline([t1, u1, x1, u2, f1]);
     expect(out.preface).toEqual([]);
-    expect(out.middle).toEqual([t1, u1, x1, u2]);
-    expect(out.final).toEqual([f1]);
+    // LRM-690: sandwiched narration is peeled into final (visible outside fold)
+    expect(out.middle).toEqual([t1, u1, u2]);
+    expect(out.final).toEqual([x1, f1]);
   });
 
   it("collects multiple trailing text segments into final", () => {
@@ -79,6 +80,15 @@ describe("splitTimeline", () => {
     expect(out.middle).toEqual([u]);
     expect(out.final).toEqual([f]);
   });
+
+  it("peels empty-ish text out of middle without inventing rows", () => {
+    const u1 = tool(1);
+    const blank = text(2, "   ");
+    const u2 = tool(3);
+    const out = splitTimeline([u1, blank, u2]);
+    expect(out.middle).toEqual([u1, blank, u2]);
+    expect(out.final).toEqual([]);
+  });
 });
 
 describe("extractCopyText", () => {
@@ -92,28 +102,28 @@ describe("extractCopyText", () => {
     ).toBe("hello\n\nworld");
   });
 
-  it("returns only the final text for the standard tool-using shape", () => {
+  it("includes peeled intermediate text with the final answer (LRM-690)", () => {
     expect(
       extractCopyText(message(""), [
         thinking(1),
         tool(2),
-        text(3, "intermediate — should be excluded"),
+        text(3, "intermediate — now visible"),
         tool(4),
         text(5, "final answer"),
       ]),
-    ).toBe("final answer");
+    ).toBe("intermediate — now visible\n\nfinal answer");
   });
 
-  it("includes preface and final, excludes middle text", () => {
+  it("includes preface, peeled middle narration, and final", () => {
     expect(
       extractCopyText(message(""), [
         text(1, "preface"),
         tool(2),
-        text(3, "middle — excluded"),
+        text(3, "middle — now included"),
         tool(4),
         text(5, "final"),
       ]),
-    ).toBe("preface\n\nfinal");
+    ).toBe("preface\n\nmiddle — now included\n\nfinal");
   });
 
   it("falls back to message.content when timeline has no text items", () => {

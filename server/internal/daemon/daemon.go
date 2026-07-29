@@ -3758,9 +3758,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 	}
 
+	// Full Grok/Pi resident turns materialize their create-only static brief in
+	// the stable turn.WorkDir inside tryCanonicalChatBackend. Do not also write
+	// a task-scoped runtime brief here: that legacy path is neither executed nor
+	// read by the resident process and can retain stale issue/surface context.
+	canonicalResidentTask := usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task)
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief := restrictedExecutionSystemPrompt(profile)
-	if !restrictedExecution {
+	if !restrictedExecution && !canonicalResidentTask {
 		runtimeBrief, err = execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
 		if err != nil {
 			d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
@@ -4078,7 +4083,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			selfBinForCanonical = bin
 		}
 	}
-	if usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task) {
+	if canonicalResidentTask {
 		cBackend, cRelease, _, cUsed, cErr := d.tryCanonicalChatBackend(
 			task, provider, profile, agentID, agentToken, selfBinForCanonical, agentEnv, entry, backendCfg, &execOpts, taskCtx, taskLog,
 		)

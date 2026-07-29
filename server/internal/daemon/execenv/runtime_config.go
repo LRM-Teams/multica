@@ -786,7 +786,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	renderPinnedRules(&b, ctx)
 
-	if ctx.ChatSessionID != "" {
+	if ctx.ChatSessionID != "" && ctx.IssueID == "" {
 		renderChatRuntimeBrief(&b, provider, ctx)
 		return b.String()
 	}
@@ -864,7 +864,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
 	// run-only autopilot don't carry an issue id and would just generate a
 	// failed `metadata list` call on every entry.
-	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == ""
+	hasIssueContext := ctx.IssueID != ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
 		b.WriteString("High-signal issue KV scratchpad; most runs write nothing.\n")
@@ -874,7 +874,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Reuse snake_case keys: `pr_url` · `pr_number` · `pipeline_status` · `deploy_url` · `external_issue_url` · `waiting_on` · `blocked_reason` · `decision`.\n\n")
 	}
 
-	isAssignmentTriggered := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && ctx.TriggerCommentID == ""
+	isAssignmentTriggered := hasIssueContext && ctx.TriggerCommentID == ""
 	if isAssignmentTriggered {
 		b.WriteString("## Instruction Precedence\n\n")
 		b.WriteString("Agent Identity instructions have priority over the assignment workflow below. ")
@@ -983,9 +983,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// parent-notification guidance was dropped in MUL-2538: the platform
 	// now posts a system comment on the parent itself when a child enters
 	// `done`, and the agent has nothing to do or avoid on that path.
-	// Section is skipped for chat, quick-create, and run-only autopilot
-	// runs (no parent/child semantics there).
-	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && !terminalAssignment {
+	// Section is skipped when no issue exists; chat transport does not suppress
+	// parent/child semantics for a real issue.
+	if hasIssueContext && !terminalAssignment {
 		b.WriteString("## Sub-issue Creation\n\n")
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
@@ -1246,10 +1246,10 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("## Project Context\n\n")
 	if ctx.ProjectTitle != "" {
 		switch {
-		case ctx.ChatSessionID != "":
-			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.IssueID != "":
 			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
+		case ctx.ChatSessionID != "":
+			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.AgentRadarPrompt != "":
 			fmt.Fprintf(b, "This proactive review is scoped to **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.QuickCreatePrompt != "":

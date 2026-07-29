@@ -870,6 +870,28 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 	}
 }
 
+func TestChatBackedIssueUsesSemanticIssueWorkflow(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("pi", TaskContextForEnv{
+		ChatSessionID: "resident-session-1",
+		IssueID:       "11111111-2222-3333-4444-555555555555",
+		ProjectID:     "project-1",
+		ProjectTitle:  "Launch Project",
+	})
+	for _, want := range []string{
+		"## Pinned Rules",
+		"## Issue Metadata",
+		"This issue belongs to **Launch Project**.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat-backed issue brief missing semantic issue content %q", want)
+		}
+	}
+	if strings.Contains(out, "## Chat Mode") || strings.Contains(out, "**You are in chat mode.**") {
+		t.Fatalf("chat-backed issue must not select a separate chat workflow\n---\n%s", out)
+	}
+}
+
 func TestCloseoutStatusInstructionStaysCompact(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

@@ -18,6 +18,21 @@ builds:
       - linux
     goarch:
       - amd64
+  - id: multica-linux-arm64
+    main: ./cmd/multica
+    dir: server
+    binary: multica
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - arm64
   - id: multica-darwin-arm64
     main: ./cmd/multica
     dir: server

@@ -34,4 +34,9 @@ if ! perl -0ne 'exit(!/- id: multica-darwin-arm64\n.*?goos:\s*\n\s*- darwin.*?go
   exit 1
 fi
 
+if ! perl -0ne 'exit(!/- id: multica-linux-arm64\n.*?goos:\s*\n\s*- linux.*?goarch:\s*\n\s*- arm64/s)' <<<"$goreleaser_config"; then
+  echo "Linux arm64 daemon CLI target must stay enabled"
+  exit 1
+fi
+
 echo "release workflow policy ok"

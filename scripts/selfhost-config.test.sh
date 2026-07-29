@@ -123,8 +123,12 @@ fi
 deploy_job="$(awk '/^  deploy:/{capture=1} capture{print}' .github/workflows/deploy.yml)"
 prepare_job="$(awk '/^  prepare:/{capture=1; next} /^  build:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
 build_job="$(awk '/^  build:/{capture=1; next} /^  deploy:/{capture=0} capture{print}' .github/workflows/deploy.yml)"
-require_config "$prepare_job" 'runs-on: [self-hosted, ci]'
-require_config "$build_job" 'runs-on: [self-hosted, ci]'
+# prepare/build run on GitHub-hosted runners (Frank, 2026-07-29): they only
+# package, and keeping them in the self-hosted pool made deploys queue behind
+# every PR's CI. The deploy job below stays self-hosted — that one must run on
+# the target host, and its assertions are what this file actually guards.
+require_config "$prepare_job" 'runs-on: ubuntu-latest'
+require_config "$build_job" 'runs-on: ubuntu-latest'
 require_config "$build_job" 'buildkitd-config-inline: |'
 require_config "$build_job" '[registry."docker.io"]'
 require_config "$build_job" 'mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]'

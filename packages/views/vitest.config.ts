@@ -1,18 +1,18 @@
-import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
-// Vitest's default `maxWorkers` is `availableParallelism() - 1`. Reserving a
-// core for the main process is right on a workstation, where an editor and
-// language server want it, but it collapses to a single worker on a 2-vCPU CI
-// runner — measured on run 30442811673, where this package's phase totals
-// (645.3s) matched its wall time (672.5s), i.e. no parallelism at all, against
-// 88s locally on ten cores for the same suite.
+// Worker count is left at vitest's default (`availableParallelism() - 1`) on
+// purpose. Raising it to use every core was tried and measured on run
+// 30445676119: effective parallelism went 0.96 → 1.89, so the extra worker
+// really did start, but every phase total roughly doubled (environment
+// 211.5s → 428.3s, import 205.2s → 403.8s) and wall time moved 672.5s → 657.4s,
+// i.e. not at all. The runner reports `nproc=2`, and one worker already
+// saturates it — jsdom, V8 and the compiler are themselves multi-threaded.
 //
-// So override on CI only: there the box does nothing else, and using every core
-// costs no extra billed minutes because it is the same job on the same machine.
-// Locally the default stands, which is what the paragraph above argues for.
-const maxWorkers = process.env.CI ? Math.max(1, availableParallelism()) : undefined;
+// So "cores - 1 wastes half the machine" is false here, and adding workers on
+// one box only slices the same CPU more finely. Making CI faster needs either
+// less work per file (import/environment are 62% of this suite) or more
+// machines (sharding) — not a different worker count.
 
 export default defineConfig({
   plugins: [react()],
@@ -21,6 +21,5 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./test/setup.ts"],
     include: ["**/*.test.{ts,tsx}"],
-    maxWorkers,
   },
 });

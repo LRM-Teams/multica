@@ -154,4 +154,3 @@ func TestBarryMaterializeSlimSkillIndexPointsAtDurableReadableMirror(t *testing.
 		t.Fatalf("skill index advertises provider-CWD path that slim never creates:\n%s", brief)
 	}
 }
-

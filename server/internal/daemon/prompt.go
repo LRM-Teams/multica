@@ -24,7 +24,17 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 			return buildProtocolTurnPrompt(task)
 		}
 	}
-	if task.ChatSessionID != "" {
+	// Transport/session identity does not select the work semantics. A
+	// chat-backed task that carries an issue must receive the issue prompt while
+	// retaining ChatSessionID for the resident backend and delivery transport.
+	if task.IssueID != "" {
+		if task.TriggerCommentID != "" {
+			return buildCommentPrompt(task, provider)
+		}
+		if task.AssignmentSnapshot != nil {
+			return buildAssignmentPrompt(task)
+		}
+	} else if task.ChatSessionID != "" {
 		if provider == "pi" {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
 				return command

@@ -66,9 +66,17 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 			WorkspaceID:            workspaceID,
 			RuntimeID:              runtimeID,
 			ChatSessionID:          chatSessionID,
+			ChatMessage:            "investigate the issue",
+			TriggerCommentID:       "comment-" + turnID,
+			TriggerCommentContent:  "Please investigate.",
+			IssueID:                issueMarker,
 			PriorSessionID:         priorSession,
 			RuntimeStateGeneration: 3,
 			AuthToken:              "token-a",
+		}
+		prompt := BuildPrompt(task, "grok", "")
+		if !strings.Contains(prompt, "Your assigned issue ID is: "+issueMarker) || strings.Contains(prompt, "You are running as a chat assistant") {
+			t.Fatalf("chat-backed canonical turn did not select issue semantics:\n%s", prompt)
 		}
 		execOpts := agent.ExecOptions{
 			Cwd:           taskWorkDir,

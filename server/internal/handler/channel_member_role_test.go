@@ -158,7 +158,7 @@ func TestRemoveSoleOwnerBlocked(t *testing.T) {
 	}
 	// Self-leave as sole owner must fail.
 	del := newRequestAs(testUserID, http.MethodDelete,
-		"/api/channels/"+ch.ID+"/members/user/"+testUserID, nil)
+		"/api/channels/"+ch.ID+"/members/user/"+testUserID+"?expected_remove_effect=none", nil)
 	del = withChannelTestWorkspaceCtx(t, del, testUserID)
 	del = withRouteParams(del, "channelId", ch.ID, "memberType", "user", "memberId", testUserID)
 	delRec := httptest.NewRecorder()

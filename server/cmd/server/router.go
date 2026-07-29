@@ -677,6 +677,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// Sandboxes "Add node" flow after workspace switch for
 					// non-admins with a raw "insufficient permissions" error.
 					r.Post("/sandbox/bindings", h.BindSandboxNodeToWorkspace)
+					r.Patch("/agents/{agentId}/role", h.UpdateAgentWorkspaceRole)
 					// Read-only inventory/diagnostic for fleet update visibility
 					// (#815 companion). Does not mutate update state.
 					r.Get("/runtimes/update-inventory-diagnostic", h.GetWorkspaceUpdateInventoryDiagnostic)
@@ -1226,6 +1227,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Use(middleware.RequireAgentPrincipal)
 				r.Get("/channels", h.ListAgentChannels)
 				r.Get("/channels/{channelId}/members", h.ListAgentChannelMembers)
+				r.Get("/channels/{channelId}/member-management-capabilities", h.GetAgentChannelMemberManagementCapabilities)
+				r.Post("/channels/{channelId}/members", h.AddAgentChannelMember)
+				r.Post("/channels/{channelId}/members/batch", h.AddAgentChannelMembers)
+				r.Delete("/channels/{channelId}/members/{memberType}/{memberId}", h.RemoveAgentChannelMember)
 				r.Put("/channels/{channelId}/mute", h.MuteAgentChannel)
 				r.Delete("/channels/{channelId}/mute", h.UnmuteAgentChannel)
 				r.Get("/attachments/{id}", h.GetAgentAttachment)
@@ -1321,6 +1326,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/active-tasks", h.ListChannelActiveTasks)
 					r.Get("/issues", h.ListChannelSourceIssues)
 					r.Get("/members", h.ListChannelMembers)
+					r.Get("/member-management-capabilities", h.GetChannelMemberManagementCapabilities)
 					r.Get("/invite-candidates", h.ListChannelInviteCandidates)
 					r.Post("/members", h.AddChannelMember)
 					r.Post("/members/batch", h.AddChannelMembers)

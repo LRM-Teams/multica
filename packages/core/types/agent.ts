@@ -412,6 +412,8 @@ export interface Agent {
    * person). Older backends omit the field — treat undefined as "ordinary".
    */
   managed_role?: "group_manager" | "research_fleet";
+  /** Workspace-level authority. Agents can be members or admins, never owners. */
+  workspace_role: "member" | "admin";
   max_concurrent_tasks: number;
   model: string;
   /**

@@ -24,6 +24,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     custom_args: [],
     visibility: "workspace",
     status: "idle",
+    workspace_role: "member",
     max_concurrent_tasks: 6,
     model: "",
     owner_id: null,

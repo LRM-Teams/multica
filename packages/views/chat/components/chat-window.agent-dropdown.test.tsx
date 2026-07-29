@@ -19,6 +19,7 @@ function makeAgent(overrides: Partial<Agent> & Pick<Agent, "id" | "name" | "owne
   const displayName = overrides.display_name ?? overrides.name;
   return {
     workspace_id: "ws-1",
+    workspace_role: "member",
     runtime_id: "runtime-1",
     description: "",
     instructions: "",

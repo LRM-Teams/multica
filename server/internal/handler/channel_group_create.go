@@ -40,12 +40,21 @@ func createOrdinaryGroupWithOwnerTx(
 // Idempotent: migration 237/239 may already auto-seed created_by as owner on
 // ordinary group INSERT; ON CONFLICT re-asserts role=owner.
 func insertChannelHumanOwnerTx(ctx context.Context, tx pgx.Tx, channelID string, workspaceID, userID pgtype.UUID) error {
+	actor := channelMemberUserActor(userID)
+	if err := validateChannelMemberActorWithExec(ctx, tx, uuidToString(workspaceID), actor); err != nil {
+		return fmt.Errorf("validate channel owner actor: %w", err)
+	}
 	_, err := tx.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
-		VALUES ($1::uuid, $2, 'user', $3, 'owner')
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id, role,
+		  added_by_type, added_by_id, join_source
+		)
+		VALUES ($1::uuid, $2, 'user', $3, 'owner', $4, $5, 'manual')
 		ON CONFLICT (channel_id, member_type, member_id) DO UPDATE
-		SET role = 'owner'`,
-		channelID, workspaceID, userID)
+		SET role = 'owner',
+		    added_by_type = EXCLUDED.added_by_type,
+		    added_by_id = EXCLUDED.added_by_id`,
+		channelID, workspaceID, userID, actor.Type, actor.ID)
 	if err != nil {
 		return fmt.Errorf("insert channel owner: %w", err)
 	}

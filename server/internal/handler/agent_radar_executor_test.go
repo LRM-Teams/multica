@@ -577,7 +577,8 @@ func TestExecuteRadarMentionAgentRejectsUnsafeTargetsWithoutArtifacts(t *testing
 		otherWorkspaceID := createOtherTestWorkspace(t)
 		targetID := createForeignRadarAgentForExecutorTest(t, otherWorkspaceID)
 		channelID := seedChannelForTest(t, "radar-foreign-target-"+uuid.NewString(), testUserID)
-		addRadarAgentMembersForExecutorTest(t, channelID, uuidToString(supervisor.ID), targetID)
+		addRadarAgentMembersForExecutorTest(t, channelID, uuidToString(supervisor.ID))
+		addForeignRadarAgentMemberCorruptionForExecutorTest(t, channelID, targetID)
 
 		assertRadarMentionRejectedWithoutArtifactsForExecutorTest(t, supervisor, channelID, targetID, "cross-workspace target must not run")
 	})
@@ -1996,6 +1997,37 @@ func addRadarAgentMembersForExecutorTest(t *testing.T, channelID string, agentID
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("add radar agent %s to channel: %v", agentID, err)
 		}
+	}
+}
+
+func addForeignRadarAgentMemberCorruptionForExecutorTest(t *testing.T, channelID, agentID string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin foreign radar member corruption fixture: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// This test deliberately exercises the executor's defense against a
+	// pre-existing cross-workspace membership row. Migration 245 correctly
+	// prevents production code from creating that row, so bypass triggers only
+	// inside this fixture transaction rather than weakening the production
+	// invariant or the ordinary membership helper.
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("bypass triggers for foreign radar member corruption fixture: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("insert foreign radar member corruption fixture: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = origin`); err != nil {
+		t.Fatalf("restore triggers after foreign radar member corruption fixture: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit foreign radar member corruption fixture: %v", err)
 	}
 }
 

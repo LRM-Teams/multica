@@ -221,7 +221,7 @@ func seedBoundaryClaimRace(t *testing.T) boundaryRevokeSeed {
 func removeAgentMemberRequest(t *testing.T, channelID, agentID string) *http.Request {
 	t.Helper()
 	req := newRequestAs(testUserID, http.MethodDelete,
-		"/api/channels/"+channelID+"/members/agent/"+agentID, nil)
+		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	return withRouteParams(req, "channelId", channelID, "memberType", "agent", "memberId", agentID)
 }

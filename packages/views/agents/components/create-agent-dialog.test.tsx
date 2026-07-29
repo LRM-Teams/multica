@@ -109,6 +109,7 @@ function makeTemplate(runtimeId: string): Agent {
   return {
     id: "agent-template",
     workspace_id: "ws-1",
+    workspace_role: "member",
     runtime_id: runtimeId,
     name: "Template Agent",
     display_name: "Template Agent",

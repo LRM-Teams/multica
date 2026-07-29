@@ -2426,8 +2426,8 @@ export function ChannelsPage({
       ? channelMemberBadge
       : undefined;
 
-  // The viewer's OWN channel role (owner|manager|member) drives the owner-only
-  // management menu. Fail-closed: absent membership / missing role → "member".
+  // The viewer's OWN channel role (owner|manager|member) drives the management
+  // menu. Fail-closed: absent membership / missing role → "member".
   const viewerChannelRole = useMemo(
     () =>
       channelMemberRole(
@@ -2438,13 +2438,15 @@ export function ChannelsPage({
     [channelMembers, currentUserId],
   );
   // Group-managed surface: supply the menu for EVERY viewer of an ordinary
-  // non-system group (same fail-closed gate as the badge). groupMemberActions
-  // returns zero actions for non-owners → they get no ⋯ trigger; the owner-only
-  // check lives inside it. Crucially, the mere PRESENCE of `memberMenu` tells the
-  // row this is a group-managed surface where the legacy workspace-admin Remove
-  // no longer applies — removal is owner-only via the menu (→ real mutation with
-  // #801). This closes the bypass where a non-channel-owner workspace admin, or
-  // the owner's own row, still got the old real Remove.
+  // non-system group (same fail-closed gate as the badge). Who may do what lives
+  // entirely inside `groupMemberActions`; a viewer it grants nothing gets no ⋯
+  // trigger. #845: that is no longer owner-only — a manager may remove ordinary
+  // members (and only that), so both the trigger and the removal path are now
+  // reachable for managers. Crucially, the mere PRESENCE of `memberMenu` tells
+  // the row this is a group-managed surface where the legacy workspace-admin
+  // Remove no longer applies — removal goes through this menu (→ real mutation
+  // with #801). This closes the bypass where a non-channel-owner workspace
+  // admin, or the owner's own row, still got the old real Remove.
   // #833: an ARCHIVED group gets no management menu at all. Removal is a real
   // mutation now (see handleGroupMemberAction below), and an archived channel is
   // read-only — offering an operable "remove member" there would be an action we

@@ -71,7 +71,7 @@ export function MentionSuggestionBar({
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const isChat = mode === "chat";
 
-  // Comment-mode data — disabled in chat mode to avoid wasted fetches.
+  // Inline-comment data — disabled in the conversation composer to avoid wasted fetches.
   const { data: members = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !isChat && !!wsId,
@@ -81,7 +81,7 @@ export function MentionSuggestionBar({
     enabled: !isChat && !!wsId,
   });
 
-  // Chat-mode data.
+  // Conversation-composer data.
   const userId = useAuthStore((s) => s.user?.id ?? null);
   const viewedIds = useViewedIssuesStore(selectViewedIssueIds(wsId));
   const recentIds = useMemo(

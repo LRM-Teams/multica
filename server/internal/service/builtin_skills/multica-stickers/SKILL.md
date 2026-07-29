@@ -35,9 +35,9 @@ These ids are stable; use them straight from this table — do **not** look them
 
 ## How to reply
 
-Follow the current Chat Mode delivery contract. There are two distinct paths.
+Follow the current delivery contract. Delivery depends only on `ChannelID`.
 
-### Standalone chat session
+### No `ChannelID`
 
 The final assistant output is delivered back to the current session
 automatically. Do not run `multica message send`.
@@ -53,13 +53,13 @@ Sticker plus explanation (for example user assigns work and you need to answer):
 
 Return exactly one JSON object as final output, with no surrounding commentary.
 
-If you mistakenly run `multica message send` in a standalone session and the
+If you mistakenly run `multica message send` without `ChannelID` and the
 CLI returns `agent task is not a channel task` (403): **stop immediately**.
-That error means the task shape is standalone, not that Multica CLI is broken.
+That error means there is no channel transport target, not that Multica CLI is broken.
 Do not chase help pages, env vars, transcripts, or daemon status — reply with
 final output (sticker JSON or text) instead.
 
-### DM, channel, or thread
+### `ChannelID` present
 
 Use the task-scoped transport with the explicit target supplied by the current
 surface:

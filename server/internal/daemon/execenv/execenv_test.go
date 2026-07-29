@@ -821,9 +821,9 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 	s := string(content)
 	for _, want := range []string{
 		"## Pinned Rules",
-		"Pinned rules are high-frequency or safety-critical",
+		"All Multica platform I/O via `multica` CLI. No raw HTTP.",
 		"## Available Commands",
-		"always-needed command forms for the core agent loop",
+		"Common forms stay inline",
 		"`multica <command> --help`",
 		"multica issue get <id> --output json",
 		"multica issue comment list <issue-id>",
@@ -834,8 +834,7 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica repo checkout <url>",
 		"multica issue status <id> <status>",
 		"multica issue comment add <issue-id>",
-		"multica issue comment add --help",
-				"## Lazy References",
+		"## Lazy References",
 		"CLI details: inspect `multica ... --help`",
 	} {
 		if !strings.Contains(s, want) {
@@ -850,7 +849,7 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica label list",
 		"multica workspace member list",
 		"multica agent list",
-				"multica issue runs",
+		"multica issue runs",
 		"multica issue run-messages",
 		"multica attachment view",
 		"multica autopilot list",
@@ -3404,22 +3403,14 @@ func TestInjectRuntimeConfigMentionLoopHardening(t *testing.T) {
 		return string(data)
 	}
 
-	t.Run("mentions-section-lists-loop-protocol", func(t *testing.T) {
+	t.Run("dedicated-mentions-section-is-deleted", func(t *testing.T) {
 		t.Parallel()
 		s := readClaudeMD(t, assignmentCtx)
-		for _, want := range []string{
-			"plain `@handle` / `@display name` text",
-			"server resolution",
-			"enqueues a new run for that agent",
-			"When NOT to use an @mention",
-			"When a mention IS appropriate",
-			"end with no mention at all",
-			"Silence ends conversations",
-			"do not invent raw mention links",
-		} {
-			if !strings.Contains(s, want) {
-				t.Errorf("Mentions section missing %q\n---\n%s", want, s)
-			}
+		if strings.Contains(s, "## Mentions") {
+			t.Errorf("CLAUDE.md still contains the deleted Mentions section\n---\n%s", s)
+		}
+		if !strings.Contains(s, "do not invent raw mention links") {
+			t.Errorf("issue reference guardrail must remain after mention-section deletion")
 		}
 	})
 
@@ -3976,7 +3967,7 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 	// subcommand syntax.
 	coreDiscoveryLines := []string{
 		"multica issue metadata list|set|delete ...",
-		"subcommand help for exact flags",
+		"load exact flags when needed",
 	}
 
 	type wantSection struct {
@@ -3991,11 +3982,11 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 	withSection := wantSection{
 		present: []string{
 			"## Issue Metadata",
-			"high-signal scratchpad",
-			"**Read on entry.**",
-			"**Write on exit.**",
-			"**What NOT to pin.**",
-			"**Recommended keys**",
+			"High-signal issue KV scratchpad",
+			"Read on entry as hints.",
+			"Write on exit only when important",
+			"Never store secrets",
+			"Reuse snake_case keys",
 			// Recommended-key list — both lea's killer-use-case keys
 			// (pr_number, pipeline_status) and the broader set from
 			// review must be named so the workspace converges on shared
@@ -4011,10 +4002,10 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 			// Safety boundaries — these are the negative rules that
 			// keep metadata from rotting into a second description /
 			// log dump.
-			"No secrets, tokens, or API keys",
-			"No logs",
+			"secrets",
+			"logs",
 			"runtime bookkeeping",
-			"snake_case ASCII",
+			"snake_case keys",
 		},
 	}
 	withoutSection := wantSection{
@@ -4025,9 +4016,9 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 		// pointer back to it.
 		absent: []string{
 			"## Issue Metadata",
-			"high-signal scratchpad",
-			"**Read on entry.**",
-			"**Write on exit.**",
+			"High-signal issue KV scratchpad",
+			"Read on entry as hints.",
+			"Write on exit only when important",
 			"See the `## Issue Metadata` section above",
 		},
 	}

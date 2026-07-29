@@ -46,14 +46,14 @@ export function ChannelSettingsSidePanel({
   const leading = useMemo(
     () => (
       <div className="flex min-w-0 items-center gap-1.5">
-        <ChannelHashLandmark size="sm" />
+        <ChannelHashLandmark size="sm" avatarUrl={channel.avatar_url} />
         <div className="flex min-w-0 flex-col">
           <p className="min-w-0 truncate text-sm font-semibold">{channel.name}</p>
           <p className="truncate text-xs text-muted-foreground">{settingsLabel}</p>
         </div>
       </div>
     ),
-    [channel.name, settingsLabel],
+    [channel.name, channel.avatar_url, settingsLabel],
   );
 
   return (

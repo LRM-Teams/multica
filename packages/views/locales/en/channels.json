@@ -227,6 +227,8 @@
     "description_failed": "Failed to update description",
     "description_success": "Description updated",
     "lark_failed": "Failed to update Feishu chat_id",
+    "avatar_success": "Channel icon updated",
+    "avatar_failed": "Failed to update the channel icon. Please try again.",
     "lark_success": "Feishu chat_id updated"
   },
   "details": {
@@ -261,7 +263,11 @@
     "notify_pref_all": "All",
     "notify_pref_off": "Off",
     "description_label": "Description",
-    "avatar_pending": "Custom channel icons aren't available yet. Showing the default initial for now.",
+    "avatar_change": "Change icon",
+    "avatar_change_aria": "Change channel icon",
+    "avatar_hint": "Shown in the conversation list and channel header.",
+    "avatar_select_image": "Please choose an image file.",
+    "avatar_upload_failed": "Image upload failed. Please try again.",
     "delete_group": "Delete channel",
     "notifications": "Notifications",
     "share_link": "Share link",

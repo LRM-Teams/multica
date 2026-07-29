@@ -227,6 +227,8 @@
     "description_failed": "설명 업데이트 실패",
     "description_success": "설명이 업데이트되었습니다",
     "lark_failed": "Feishu chat_id 업데이트 실패",
+    "avatar_success": "채널 아이콘이 업데이트되었습니다",
+    "avatar_failed": "채널 아이콘 업데이트에 실패했습니다. 다시 시도해 주세요.",
     "lark_success": "Feishu chat_id가 업데이트되었습니다"
   },
   "details": {
@@ -261,7 +263,11 @@
     "notify_pref_all": "전체",
     "notify_pref_off": "끔",
     "description_label": "설명",
-    "avatar_pending": "사용자 지정 채널 아이콘은 아직 사용할 수 없습니다. 지금은 기본 이니셜을 표시합니다.",
+    "avatar_change": "아이콘 변경",
+    "avatar_change_aria": "채널 아이콘 변경",
+    "avatar_hint": "대화 목록과 채널 헤더에 표시됩니다.",
+    "avatar_select_image": "이미지 파일을 선택해 주세요.",
+    "avatar_upload_failed": "이미지 업로드에 실패했습니다. 다시 시도해 주세요.",
     "delete_group": "채널 삭제",
     "notifications": "알림",
     "share_link": "공유 링크",

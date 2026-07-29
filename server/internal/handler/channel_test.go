@@ -201,6 +201,75 @@ func TestCreateChannelDuplicateNameReturnsCodedConflict(t *testing.T) {
 	}
 }
 
+func TestUpdateChannelSetsAvatarURL(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	name := "avatar-channel-" + uuid.NewString()
+	create := httptest.NewRecorder()
+	req := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/channels", map[string]any{"name": name}), testUserID)
+	testHandler.CreateChannel(create, req)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created ChannelResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created channel: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, created.ID)
+	})
+	if created.AvatarURL != nil {
+		t.Fatalf("new channel avatar_url = %v, want nil", *created.AvatarURL)
+	}
+
+	avatar := "https://cdn.example.com/files/channel-icon.png"
+	patch := httptest.NewRecorder()
+	req = withChannelTestWorkspaceCtx(t, newRequest(http.MethodPatch, "/api/channels/"+created.ID, map[string]any{"avatar_url": avatar}), testUserID)
+	req = withRouteParams(req, "channelId", created.ID)
+	testHandler.UpdateChannel(patch, req)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("update avatar: status=%d body=%s", patch.Code, patch.Body.String())
+	}
+	var updated ChannelResponse
+	if err := json.Unmarshal(patch.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated channel: %v", err)
+	}
+	if updated.AvatarURL == nil || *updated.AvatarURL != avatar {
+		t.Fatalf("updated avatar_url = %v, want %q", updated.AvatarURL, avatar)
+	}
+
+	list := httptest.NewRecorder()
+	req = withChannelTestWorkspaceCtx(t, newRequest(http.MethodGet, "/api/channels", nil), testUserID)
+	testHandler.ListChannels(list, req)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list: status=%d body=%s", list.Code, list.Body.String())
+	}
+	var channels []ChannelResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &channels); err != nil {
+		t.Fatalf("decode channels: %v", err)
+	}
+	found := false
+	for _, ch := range channels {
+		if ch.ID == created.ID {
+			found = ch.AvatarURL != nil && *ch.AvatarURL == avatar
+		}
+	}
+	if !found {
+		t.Fatalf("ListChannels did not expose avatar_url for %s", created.ID)
+	}
+
+	tooLong := strings.Repeat("a", channelAvatarURLMaxLen+1)
+	reject := httptest.NewRecorder()
+	req = withChannelTestWorkspaceCtx(t, newRequest(http.MethodPatch, "/api/channels/"+created.ID, map[string]any{"avatar_url": tooLong}), testUserID)
+	req = withRouteParams(req, "channelId", created.ID)
+	testHandler.UpdateChannel(reject, req)
+	if reject.Code != http.StatusBadRequest {
+		t.Fatalf("oversized avatar_url: status=%d body=%s", reject.Code, reject.Body.String())
+	}
+}
+
 func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -2794,7 +2794,7 @@ export class ApiClient {
 
   async updateChannel(
     channelId: string,
-    data: { name?: string; description?: string | null; lark_chat_id?: string | null },
+    data: { name?: string; description?: string | null; lark_chat_id?: string | null; avatar_url?: string | null },
   ): Promise<Channel> {
     return this.fetch(`/api/channels/${channelId}`, {
       method: "PATCH",

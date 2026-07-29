@@ -227,6 +227,8 @@
     "description_failed": "更新描述失败",
     "description_success": "描述已更新",
     "lark_failed": "更新飞书 chat_id 失败",
+    "avatar_success": "群头像已更新",
+    "avatar_failed": "群头像更新失败，请重试。",
     "lark_success": "飞书 chat_id 已更新"
   },
   "details": {
@@ -261,7 +263,11 @@
     "notify_pref_all": "全部",
     "notify_pref_off": "已关闭",
     "description_label": "群描述",
-    "avatar_pending": "自定义群头像尚未开放，当前显示默认首字母头像。",
+    "avatar_change": "更换头像",
+    "avatar_change_aria": "更换群头像",
+    "avatar_hint": "会显示在会话列表和频道头部。",
+    "avatar_select_image": "请选择图片文件。",
+    "avatar_upload_failed": "图片上传失败，请重试。",
     "delete_group": "删除群",
     "notifications": "通知",
     "share_link": "分享链接",

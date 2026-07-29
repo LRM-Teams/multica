@@ -82,6 +82,7 @@ import { notificationPreferenceOptions } from "@multica/core/notification-prefer
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type {
   AgentPanelIdentitySnapshot,
@@ -2850,8 +2851,9 @@ export function ChannelsPage({
                   {pinned && (
                     <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                   )}
-                  {/* LRM-254 A1 — text-level # landmark; no member collage. */}
-                  <ChannelHashLandmark size="sm" />
+                  {/* LRM-254 A1 — text-level # landmark; no member collage.
+                      LRM-724 — custom channel icon replaces the glyph. */}
+                  <ChannelHashLandmark size="sm" avatarUrl={channel.avatar_url} />
                   <span className="truncate">{channel.name}</span>
                   {isMuted && (
                     <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
@@ -3167,7 +3169,7 @@ export function ChannelsPage({
                             >
                               <div className="min-w-0 flex-1">
                                 <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-muted-foreground">
-                                  <ChannelHashLandmark size="sm" />
+                                  <ChannelHashLandmark size="sm" avatarUrl={channel.avatar_url} />
                                   <span className="truncate">{channel.name}</span>
                                 </span>
                               </div>
@@ -3446,6 +3448,7 @@ export function ChannelsPage({
           renamePending: updateChannel.isPending,
           descriptionPending: updateChannel.isPending,
           larkPending: updateChannel.isPending,
+          avatarPending: updateChannel.isPending,
           stopAllDisabled: !hasStoppableChannelTasks || isStoppingAllChannelTasks,
         },
         manageDisabledReason,
@@ -3495,6 +3498,15 @@ export function ChannelsPage({
             {
               onSuccess: () => toast.success(t(($) => $.settings.lark_success)),
               onError: () => showErrorToast(t(($) => $.settings.lark_failed)),
+            },
+          );
+        },
+        onUpdateAvatar: (avatarUrl: string) => {
+          updateChannel.mutate(
+            { channelId: active.id, avatar_url: avatarUrl },
+            {
+              onSuccess: () => toast.success(t(($) => $.settings.avatar_success)),
+              onError: () => showErrorToast(t(($) => $.settings.avatar_failed)),
             },
           );
         },
@@ -3551,6 +3563,14 @@ export function ChannelsPage({
                 >
                   <ArrowLeft className="size-5" />
                 </Button>
+              ) : active.avatar_url ? (
+                // LRM-724 — custom channel icon in the desktop left meta slot.
+                <img
+                  src={resolvePublicFileUrl(active.avatar_url) ?? undefined}
+                  alt=""
+                  data-testid="channel-header-meta-tile"
+                  className="size-7 shrink-0 rounded-md border border-primary/30 object-cover"
+                />
               ) : (
                 // LRM-447 slots3 left meta — brand-tinted # tile (design A).
                 <span
@@ -3581,7 +3601,7 @@ export function ChannelsPage({
                     "bg-black/[0.06] dark:bg-white/[0.08]",
                 )}
               >
-                {isMobile ? <ChannelHashLandmark size="lg" /> : null}
+                {isMobile ? <ChannelHashLandmark size="lg" avatarUrl={active.avatar_url} /> : null}
                 <span className="min-w-0 flex-1 truncate font-bold tracking-tight">
                   {active.name}
                 </span>

@@ -365,19 +365,36 @@ function createComponents(
         return <AppLink href={href}>{highlight(children)}</AppLink>
       }
 
+      // #836: cancel the browser's own behaviour ONLY when a handler is
+      // actually taking over. This used to call preventDefault() unconditionally
+      // and then re-implement the anchor with
+      // `window.open(href, '_blank', 'noopener,noreferrer')` — which is strictly
+      // worse than what it replaced: it needs popup permission, it cannot detect
+      // its own failure (with `noopener`, window.open returns null whether it was
+      // blocked or not), and it gives no feedback either way. An attachment link
+      // whose popup was blocked and one that downloaded silently are
+      // indistinguishable — to the user AND to us. That is the reported bug:
+      // clicking an attachment link appeared to do nothing, while the server was
+      // returning a perfectly good `Content-Disposition: attachment` response.
+      //
+      // Verified on served (leagent.me): no view passes `onUrlClick`, so every
+      // link in message content took the window.open branch.
       const handleClick = (e: React.MouseEvent): void => {
-        e.preventDefault()
-        if (href) {
-          // Check if it's a file path
-          if (FILE_PATH_REGEX.test(href) && onFileClick) {
-            onFileClick(href)
-          } else if (onUrlClick) {
-            onUrlClick(href)
-          } else {
-            // Default: open in new window
-            window.open(href, '_blank', 'noopener,noreferrer')
-          }
+        if (!href) return
+        if (FILE_PATH_REGEX.test(href) && onFileClick) {
+          e.preventDefault()
+          onFileClick(href)
+          return
         }
+        if (onUrlClick) {
+          e.preventDefault()
+          onUrlClick(href)
+          return
+        }
+        // No handler: let the anchor do its own job. `target="_blank"` below is
+        // a user-initiated navigation, not a popup, so nothing can silently
+        // block it; a download resolves through Content-Disposition and a real
+        // failure is shown by the browser instead of being swallowed.
       }
 
       // LRM-555/561 reading-flow: links share one brand accent (not near-black
@@ -387,6 +404,13 @@ function createComponents(
         <a
           href={href}
           onClick={handleClick}
+          // Preserves the new-tab behaviour the old window.open call provided,
+          // without needing popup permission. On desktop, Electron routes a
+          // native target="_blank" through the same setWindowOpenHandler →
+          // openExternalSafely path it already used for window.open, so the
+          // external-link behaviour there is unchanged (main/index.ts:200).
+          target="_blank"
+          rel="noopener noreferrer"
           className="cursor-pointer text-brand font-medium underline decoration-brand/35 underline-offset-2 hover:decoration-brand"
         >
           {highlight(children)}

@@ -69,24 +69,38 @@ RETURNING
   is_interrupted,
   provider_turn_id;
 
--- name: MarkVoiceCallConnecting :one
-UPDATE voice_call_session
-SET
-  status = CASE
-    WHEN status = 'starting' THEN 'connecting'
-    WHEN status = 'connecting' AND connected_at IS NOT NULL THEN 'active'
-    ELSE status
-  END,
-  updated_at = CASE
-    WHEN status = 'starting'
-      OR (status = 'connecting' AND connected_at IS NOT NULL)
-      THEN now()
-    ELSE updated_at
-  END
-WHERE id = sqlc.arg('id')
-  AND workspace_id = sqlc.arg('workspace_id')
-  AND status IN ('starting', 'connecting', 'active')
-RETURNING *;
+-- name: BeginVoiceCallProviderStart :one
+WITH current_session AS (
+  SELECT session.id, session.status
+  FROM voice_call_session AS session
+  WHERE session.id = sqlc.arg('id')
+    AND session.workspace_id = sqlc.arg('workspace_id')
+    AND session.status IN ('starting', 'connecting', 'active', 'reconnecting')
+  FOR UPDATE
+),
+updated AS (
+  UPDATE voice_call_session AS call
+  SET
+    status = CASE
+      WHEN current_session.status = 'starting' THEN 'connecting'
+      WHEN current_session.status = 'connecting' AND call.connected_at IS NOT NULL
+        THEN 'active'
+      ELSE call.status
+    END,
+    updated_at = CASE
+      WHEN current_session.status = 'starting'
+        OR (current_session.status = 'connecting' AND call.connected_at IS NOT NULL)
+        THEN now()
+      ELSE call.updated_at
+    END
+  FROM current_session
+  WHERE call.id = current_session.id
+  RETURNING
+    call.*,
+    current_session.status = 'starting' AS provider_start_required
+)
+SELECT *
+FROM updated;
 
 -- name: MarkVoiceCallFailed :one
 UPDATE voice_call_session
@@ -183,7 +197,7 @@ updated AS (
   WHERE call.id = current_session.id
   RETURNING
     call.*,
-    current_session.status NOT IN ('ended', 'failed') AS provider_stop_required
+    current_session.status NOT IN ('starting', 'ended', 'failed') AS provider_stop_required
 )
 SELECT *
 FROM updated;

@@ -27,10 +27,10 @@ type VoiceCallQueries interface {
 		ctx context.Context,
 		params db.UpsertVoiceCallProviderTurnParams,
 	) (db.UpsertVoiceCallProviderTurnRow, error)
-	MarkVoiceCallConnecting(
+	BeginVoiceCallProviderStart(
 		ctx context.Context,
-		params db.MarkVoiceCallConnectingParams,
-	) (db.VoiceCallSession, error)
+		params db.BeginVoiceCallProviderStartParams,
+	) (db.BeginVoiceCallProviderStartRow, error)
 	MarkVoiceCallFailed(
 		ctx context.Context,
 		params db.MarkVoiceCallFailedParams,
@@ -189,26 +189,52 @@ func (store *PostgresStore) UpsertProviderTurn(
 	return voiceCallTurnFromDB(row)
 }
 
-func (store *PostgresStore) MarkConnecting(
+func (store *PostgresStore) BeginProviderStart(
 	ctx context.Context,
 	workspaceID string,
 	callID string,
-) (Session, error) {
+) (BeginProviderStartResult, error) {
 	parsedWorkspaceID, parsedCallID, err := workspaceCallUUIDs(workspaceID, callID)
 	if err != nil {
-		return Session{}, err
+		return BeginProviderStartResult{}, err
 	}
-	row, err := store.queries.MarkVoiceCallConnecting(
+	row, err := store.queries.BeginVoiceCallProviderStart(
 		ctx,
-		db.MarkVoiceCallConnectingParams{
+		db.BeginVoiceCallProviderStartParams{
 			ID:          parsedCallID,
 			WorkspaceID: parsedWorkspaceID,
 		},
 	)
 	if err != nil {
-		return Session{}, fmt.Errorf("update voice call to connecting: %w", err)
+		return BeginProviderStartResult{}, fmt.Errorf("begin voice call provider start: %w", err)
 	}
-	return voiceCallSessionFromDB(row)
+	session, err := voiceCallSessionFromDB(db.VoiceCallSession{
+		ID:             row.ID,
+		WorkspaceID:    row.WorkspaceID,
+		ChannelID:      row.ChannelID,
+		AgentID:        row.AgentID,
+		UserID:         row.UserID,
+		Provider:       row.Provider,
+		ProviderTaskID: row.ProviderTaskID,
+		RoomID:         row.RoomID,
+		Status:         row.Status,
+		StartedAt:      row.StartedAt,
+		ConnectedAt:    row.ConnectedAt,
+		EndedAt:        row.EndedAt,
+		EndReason:      row.EndReason,
+		ErrorCode:      row.ErrorCode,
+		InputAudioMs:   row.InputAudioMs,
+		OutputAudioMs:  row.OutputAudioMs,
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
+	})
+	if err != nil {
+		return BeginProviderStartResult{}, err
+	}
+	return BeginProviderStartResult{
+		Session:               session,
+		ProviderStartRequired: row.ProviderStartRequired,
+	}, nil
 }
 
 func (store *PostgresStore) MarkFailed(

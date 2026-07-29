@@ -3132,6 +3132,22 @@ export class ApiClient {
     );
   }
 
+  async connectVoiceCall(
+    workspaceId: string,
+    callId: string,
+  ): Promise<GetVoiceCallResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls/${encodeURIComponent(callId)}/connect`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      GetVoiceCallResponseSchema,
+      EMPTY_GET_VOICE_CALL_RESPONSE,
+      { endpoint: "POST /api/workspaces/{workspaceId}/voice-calls/{callId}/connect" },
+    );
+  }
+
   async stopVoiceCall(
     workspaceId: string,
     callId: string,

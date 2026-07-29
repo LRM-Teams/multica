@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
+func TestServiceStartPreparesMediaWithoutStartingProvider(t *testing.T) {
 	deps := newTestDependencies()
 	service := newTestService(t, deps)
 	expiresAt := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
-	deps.provider.startResult = ProviderStartResult{
+	deps.provider.prepareResult = ProviderPrepareResult{
 		AppID:     "rtc-app",
 		Token:     "room-token",
 		ExpiresAt: expiresAt,
@@ -30,12 +30,12 @@ func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
 		t.Fatalf("start call: %v", err)
 	}
 
-	wantOrder := []string{"authorize", "create", "context", "provider_start", "connecting"}
+	wantOrder := []string{"authorize", "create", "provider_prepare"}
 	if !reflect.DeepEqual(deps.order, wantOrder) {
 		t.Fatalf("order = %v, want %v", deps.order, wantOrder)
 	}
-	if result.Session.Status != StatusConnecting {
-		t.Fatalf("status = %q, want %q", result.Session.Status, StatusConnecting)
+	if result.Session.Status != StatusStarting {
+		t.Fatalf("status = %q, want %q", result.Session.Status, StatusStarting)
 	}
 	if result.Media.AppID != "rtc-app" ||
 		result.Media.RoomID != "voice-call-nonce-1" ||
@@ -44,8 +44,46 @@ func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
 		!result.Media.ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("media = %+v", result.Media)
 	}
-	wantProviderInput := ProviderStartInput{
-		CallID:         "call-1",
+	wantProviderInput := ProviderPrepareInput{
+		RoomID:       "voice-call-nonce-1",
+		TargetUserID: "voice-member-nonce-1",
+	}
+	if !reflect.DeepEqual(deps.provider.prepareInput, wantProviderInput) {
+		t.Fatalf("provider input = %+v, want %+v", deps.provider.prepareInput, wantProviderInput)
+	}
+	if deps.provider.connectCalls != 0 {
+		t.Fatalf("provider started before caller joined: %d", deps.provider.connectCalls)
+	}
+}
+
+func TestServiceConnectStartsProviderWithWelcomeOnlyAfterCallerJoined(t *testing.T) {
+	deps := newTestDependencies()
+	service := newTestService(t, deps)
+	_, err := service.Start(context.Background(), validStartInput())
+	if err != nil {
+		t.Fatalf("start call: %v", err)
+	}
+	if deps.provider.connectCalls != 0 {
+		t.Fatalf("provider calls before room join = %d, want 0", deps.provider.connectCalls)
+	}
+	deps.order = nil
+
+	session, err := service.Connect(context.Background(), ConnectInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	})
+	if err != nil {
+		t.Fatalf("connect after room join: %v", err)
+	}
+
+	if session.ID != "call-1" || session.Status != StatusConnecting {
+		t.Fatalf("session = %+v", session)
+	}
+	if deps.provider.connectCalls != 1 {
+		t.Fatalf("provider calls = %d, want 1", deps.provider.connectCalls)
+	}
+	wantProviderInput := ProviderConnectInput{
 		RoomID:         "voice-call-nonce-1",
 		TaskID:         "voice-task-nonce-1",
 		TargetUserID:   "voice-member-nonce-1",
@@ -53,8 +91,29 @@ func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
 		WelcomeMessage: "你好，我是贝克汉姆。",
 		SystemMessages: []string{"You are Beckham.", "Use the current DM context."},
 	}
-	if !reflect.DeepEqual(deps.provider.startInput, wantProviderInput) {
-		t.Fatalf("provider input = %+v, want %+v", deps.provider.startInput, wantProviderInput)
+	if !reflect.DeepEqual(deps.provider.connectInput, wantProviderInput) {
+		t.Fatalf("provider input = %+v, want %+v", deps.provider.connectInput, wantProviderInput)
+	}
+	if !reflect.DeepEqual(
+		deps.order,
+		[]string{"get", "authorize", "context", "provider_start_claim", "provider_connect"},
+	) {
+		t.Fatalf("order = %v", deps.order)
+	}
+
+	deps.order = nil
+	if _, err := service.Connect(context.Background(), ConnectInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	}); err != nil {
+		t.Fatalf("repeat connect: %v", err)
+	}
+	if deps.provider.connectCalls != 1 {
+		t.Fatalf("repeat connect started provider %d times", deps.provider.connectCalls)
+	}
+	if !reflect.DeepEqual(deps.order, []string{"get", "authorize"}) {
+		t.Fatalf("repeat order = %v", deps.order)
 	}
 }
 
@@ -67,12 +126,27 @@ func TestServiceStartRejectsUnauthorizedCallBeforePersistence(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "authorize voice call") {
 		t.Fatalf("error = %v", err)
 	}
-	if deps.store.createCalls != 0 || deps.provider.startCalls != 0 {
-		t.Fatalf("unauthorized call reached store/provider: store=%d provider=%d", deps.store.createCalls, deps.provider.startCalls)
+	if deps.store.createCalls != 0 || deps.provider.prepareCalls != 0 {
+		t.Fatalf("unauthorized call reached store/provider: store=%d provider=%d", deps.store.createCalls, deps.provider.prepareCalls)
 	}
 }
 
-func TestServiceStartRecordsContextAndProviderFailures(t *testing.T) {
+func TestServiceStartRecordsMediaPreparationFailure(t *testing.T) {
+	deps := newTestDependencies()
+	deps.provider.prepareErr = errors.New("token unavailable")
+	service := newTestService(t, deps)
+
+	_, err := service.Start(context.Background(), validStartInput())
+	if !errors.Is(err, ErrProviderFailure) {
+		t.Fatalf("error = %v, want ErrProviderFailure", err)
+	}
+	if deps.store.session.Status != StatusFailed ||
+		deps.store.session.ErrorCode != "media_prepare_failed" {
+		t.Fatalf("session = %+v", deps.store.session)
+	}
+}
+
+func TestServiceConnectRecordsContextAndProviderFailures(t *testing.T) {
 	tests := []struct {
 		name      string
 		configure func(*testDependencies)
@@ -88,7 +162,7 @@ func TestServiceStartRecordsContextAndProviderFailures(t *testing.T) {
 		{
 			name: "provider",
 			configure: func(deps *testDependencies) {
-				deps.provider.startErr = errors.New("provider unavailable")
+				deps.provider.connectErr = errors.New("provider unavailable")
 			},
 			wantCode: "provider_start_failed",
 		},
@@ -97,12 +171,19 @@ func TestServiceStartRecordsContextAndProviderFailures(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			deps := newTestDependencies()
-			testCase.configure(deps)
 			service := newTestService(t, deps)
+			if _, err := service.Start(context.Background(), validStartInput()); err != nil {
+				t.Fatalf("prepare call: %v", err)
+			}
+			testCase.configure(deps)
 
-			_, err := service.Start(context.Background(), validStartInput())
+			_, err := service.Connect(context.Background(), ConnectInput{
+				WorkspaceID: "workspace-1",
+				UserID:      "member-1",
+				CallID:      "call-1",
+			})
 			if err == nil {
-				t.Fatal("start call succeeded")
+				t.Fatal("connect call succeeded")
 			}
 			if testCase.name == "provider" && !errors.Is(err, ErrProviderFailure) {
 				t.Fatalf("provider error = %v, want ErrProviderFailure", err)
@@ -118,14 +199,21 @@ func TestServiceStartRecordsContextAndProviderFailures(t *testing.T) {
 	}
 }
 
-func TestServiceStartLeavesSessionRecoverableWhenProviderStartIsUncertain(t *testing.T) {
+func TestServiceConnectLeavesSessionRecoverableWhenProviderStartIsUncertain(t *testing.T) {
 	deps := newTestDependencies()
-	deps.provider.startErr = &ProviderStartUncertainError{
+	deps.provider.connectErr = &ProviderStartUncertainError{
 		Err: errors.New("start timed out and compensating stop failed"),
 	}
 	service := newTestService(t, deps)
+	if _, err := service.Start(context.Background(), validStartInput()); err != nil {
+		t.Fatalf("prepare call: %v", err)
+	}
 
-	_, err := service.Start(context.Background(), validStartInput())
+	_, err := service.Connect(context.Background(), ConnectInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	})
 	var uncertain *ProviderStartUncertainError
 	if !errors.As(err, &uncertain) {
 		t.Fatalf("error = %v, want ProviderStartUncertainError", err)
@@ -133,50 +221,65 @@ func TestServiceStartLeavesSessionRecoverableWhenProviderStartIsUncertain(t *tes
 	if !errors.Is(err, ErrProviderFailure) {
 		t.Fatalf("error = %v, want ErrProviderFailure", err)
 	}
-	if deps.store.session.Status != StatusStarting {
-		t.Fatalf("status = %q, want recoverable starting", deps.store.session.Status)
+	if deps.store.session.Status != StatusConnecting {
+		t.Fatalf("status = %q, want recoverable connecting", deps.store.session.Status)
 	}
 	if deps.store.markFailedCalls != 0 {
 		t.Fatalf("failed transition calls = %d, want 0", deps.store.markFailedCalls)
 	}
 }
 
-func TestServiceStartCompensatesProviderWhenConnectingTransitionFails(t *testing.T) {
+func TestServiceConnectDoesNotStartProviderWhenClaimFails(t *testing.T) {
 	deps := newTestDependencies()
 	deps.store.markConnectingErr = errors.New("database unavailable")
 	service := newTestService(t, deps)
+	if _, err := service.Start(context.Background(), validStartInput()); err != nil {
+		t.Fatalf("prepare call: %v", err)
+	}
+	deps.order = nil
 
-	_, err := service.Start(context.Background(), validStartInput())
-	if err == nil || !strings.Contains(err.Error(), "mark voice call connecting") {
+	_, err := service.Connect(context.Background(), ConnectInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "claim voice call provider start") {
 		t.Fatalf("error = %v", err)
 	}
-	wantOrder := []string{"authorize", "create", "context", "provider_start", "connecting", "provider_stop", "failed"}
+	wantOrder := []string{"get", "authorize", "context", "provider_start_claim"}
 	if !reflect.DeepEqual(deps.order, wantOrder) {
 		t.Fatalf("order = %v, want %v", deps.order, wantOrder)
 	}
-	if deps.store.session.Status != StatusFailed ||
-		deps.store.session.ErrorCode != "state_transition_failed" {
+	if deps.store.session.Status != StatusStarting || deps.provider.connectCalls != 0 {
 		t.Fatalf("session = %+v", deps.store.session)
 	}
 }
 
-func TestServiceStartLeavesSessionRecoverableWhenCompensationFails(t *testing.T) {
+func TestServiceStopEndsPreparedCallWithoutStoppingAbsentProvider(t *testing.T) {
 	deps := newTestDependencies()
-	deps.store.markConnectingErr = errors.New("database unavailable")
-	deps.provider.stopErr = errors.New("provider stop unavailable")
 	service := newTestService(t, deps)
+	if _, err := service.Start(context.Background(), validStartInput()); err != nil {
+		t.Fatalf("prepare call: %v", err)
+	}
+	deps.order = nil
 
-	_, err := service.Start(context.Background(), validStartInput())
-	if err == nil ||
-		!strings.Contains(err.Error(), "database unavailable") ||
-		!strings.Contains(err.Error(), "provider stop unavailable") {
-		t.Fatalf("error = %v", err)
+	session, err := service.Stop(context.Background(), StopInput{
+		WorkspaceID: deps.store.session.WorkspaceID,
+		UserID:      deps.store.session.UserID,
+		CallID:      deps.store.session.ID,
+		Reason:      "browser_closed",
+	})
+	if err != nil {
+		t.Fatalf("stop prepared call: %v", err)
 	}
-	if deps.store.session.Status != StatusStarting {
-		t.Fatalf("status = %q, want recoverable starting", deps.store.session.Status)
+	if session.Status != StatusEnded || deps.provider.stopCalls != 0 {
+		t.Fatalf("session=%+v provider stops=%d", session, deps.provider.stopCalls)
 	}
-	if deps.store.markFailedCalls != 0 {
-		t.Fatalf("failed transition calls = %d, want 0", deps.store.markFailedCalls)
+	if !reflect.DeepEqual(
+		deps.order,
+		[]string{"get", "authorize", "ending", "ended"},
+	) {
+		t.Fatalf("order = %v", deps.order)
 	}
 }
 
@@ -328,7 +431,7 @@ func newTestDependencies() *testDependencies {
 	}
 	deps.provider = &fakeProvider{
 		order: &deps.order,
-		startResult: ProviderStartResult{
+		prepareResult: ProviderPrepareResult{
 			AppID:     "rtc-app",
 			Token:     "room-token",
 			ExpiresAt: time.Now().Add(time.Hour),
@@ -395,16 +498,24 @@ func (store *fakeStore) Get(_ context.Context, workspaceID, userID, callID strin
 	return store.session, nil
 }
 
-func (store *fakeStore) MarkConnecting(_ context.Context, workspaceID, callID string) (Session, error) {
-	*store.order = append(*store.order, "connecting")
+func (store *fakeStore) BeginProviderStart(
+	_ context.Context,
+	workspaceID,
+	callID string,
+) (BeginProviderStartResult, error) {
+	*store.order = append(*store.order, "provider_start_claim")
 	if store.markConnectingErr != nil {
-		return Session{}, store.markConnectingErr
+		return BeginProviderStartResult{}, store.markConnectingErr
 	}
 	if store.session.WorkspaceID != workspaceID || store.session.ID != callID {
-		return Session{}, errors.New("not found")
+		return BeginProviderStartResult{}, errors.New("not found")
 	}
+	required := store.session.Status == StatusStarting
 	store.session.Status = StatusConnecting
-	return store.session, nil
+	return BeginProviderStartResult{
+		Session:               store.session,
+		ProviderStartRequired: required,
+	}, nil
 }
 
 func (store *fakeStore) MarkFailed(_ context.Context, workspaceID, callID, errorCode string) (Session, error) {
@@ -430,6 +541,10 @@ func (store *fakeStore) BeginEnding(_ context.Context, workspaceID, userID, call
 		return BeginEndingResult{Session: store.session}, nil
 	case StatusEnding:
 		return BeginEndingResult{Session: store.session, ProviderStopRequired: true}, nil
+	case StatusStarting:
+		store.session.Status = StatusEnding
+		store.session.EndReason = reason
+		return BeginEndingResult{Session: store.session}, nil
 	default:
 		store.session.Status = StatusEnding
 		store.session.EndReason = reason
@@ -471,20 +586,36 @@ func (builder *fakeContextBuilder) Build(_ context.Context, _ Scope) (Conversati
 
 type fakeProvider struct {
 	order          *[]string
-	startInput     ProviderStartInput
-	startResult    ProviderStartResult
-	startErr       error
+	prepareInput   ProviderPrepareInput
+	prepareResult  ProviderPrepareResult
+	prepareErr     error
+	connectInput   ProviderConnectInput
+	connectErr     error
 	stopErr        error
-	startCalls     int
+	prepareCalls   int
+	connectCalls   int
 	stopCalls      int
 	stopContextErr error
 }
 
-func (provider *fakeProvider) Start(_ context.Context, input ProviderStartInput) (ProviderStartResult, error) {
-	*provider.order = append(*provider.order, "provider_start")
-	provider.startCalls++
-	provider.startInput = input
-	return provider.startResult, provider.startErr
+func (provider *fakeProvider) Prepare(
+	_ context.Context,
+	input ProviderPrepareInput,
+) (ProviderPrepareResult, error) {
+	*provider.order = append(*provider.order, "provider_prepare")
+	provider.prepareCalls++
+	provider.prepareInput = input
+	return provider.prepareResult, provider.prepareErr
+}
+
+func (provider *fakeProvider) Connect(
+	_ context.Context,
+	input ProviderConnectInput,
+) error {
+	*provider.order = append(*provider.order, "provider_connect")
+	provider.connectCalls++
+	provider.connectInput = input
+	return provider.connectErr
 }
 
 func (provider *fakeProvider) Stop(ctx context.Context, _ ProviderCallIdentity) error {
@@ -495,5 +626,5 @@ func (provider *fakeProvider) Stop(ctx context.Context, _ ProviderCallIdentity) 
 }
 
 func (provider *fakeProvider) String() string {
-	return fmt.Sprintf("start=%d stop=%d", provider.startCalls, provider.stopCalls)
+	return fmt.Sprintf("connect=%d stop=%d", provider.connectCalls, provider.stopCalls)
 }

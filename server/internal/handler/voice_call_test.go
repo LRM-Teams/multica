@@ -37,7 +37,7 @@ func TestCreateVoiceCallReturnsScopedMediaWithoutProviderIdentity(t *testing.T) 
 				Provider:       "volcengine",
 				ProviderTaskID: "secret-provider-task",
 				RoomID:         "voice-room",
-				Status:         voicecall.StatusConnecting,
+				Status:         voicecall.StatusStarting,
 				StartedAt:      startedAt,
 				CreatedAt:      startedAt,
 				UpdatedAt:      startedAt,
@@ -126,6 +126,31 @@ func TestVoiceCallHandlersUseAuthenticatedScopeAndServerStopReason(t *testing.T)
 		published = event
 	})
 	handler := &Handler{VoiceCallService: service, Bus: bus}
+
+	connectRequest := voiceCallAPIRequest(
+		http.MethodPost,
+		"/api/workspaces/"+testVoiceAPIWorkspaceID+"/voice-calls/"+testVoiceAPICallID+"/connect",
+		"",
+	)
+	connectRequest = withRouteParams(
+		connectRequest,
+		"id",
+		testVoiceAPIWorkspaceID,
+		"callId",
+		testVoiceAPICallID,
+	)
+	connectResponse := httptest.NewRecorder()
+	handler.ConnectVoiceCall(connectResponse, connectRequest)
+	if connectResponse.Code != http.StatusOK {
+		t.Fatalf("connect status = %d, body = %s", connectResponse.Code, connectResponse.Body.String())
+	}
+	if service.connectInput != (voicecall.ConnectInput{
+		WorkspaceID: testVoiceAPIWorkspaceID,
+		UserID:      testVoiceAPIUserID,
+		CallID:      testVoiceAPICallID,
+	}) {
+		t.Fatalf("connect input = %+v", service.connectInput)
+	}
 
 	getRequest := voiceCallAPIRequest(
 		http.MethodGet,
@@ -339,11 +364,20 @@ type fakeVoiceCallService struct {
 	getErr         error
 	stopErr        error
 	startInput     voicecall.StartInput
+	connectInput   voicecall.ConnectInput
 	stopInput      voicecall.StopInput
 	startCalls     int
 	getWorkspaceID string
 	getUserID      string
 	getCallID      string
+}
+
+func (service *fakeVoiceCallService) Connect(
+	_ context.Context,
+	input voicecall.ConnectInput,
+) (voicecall.Session, error) {
+	service.connectInput = input
+	return service.session, nil
 }
 
 func (service *fakeVoiceCallService) Start(

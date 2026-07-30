@@ -1211,11 +1211,16 @@ ON CONFLICT DO NOTHING`, ambientChannelID, testWorkspaceID, agentID); err != nil
 	assertChannelAgentInboxEventCounts(t, dmChannelID, agentID, 0, 1)
 }
 
-func TestPrivateAgentDMChannelRejectsUnauthorizedMember(t *testing.T) {
+// TestPrivateAgentDMChannelAllowsAnyChannelMemberPostBatch908 supersedes the
+// old "private-agent DM channel rejects unauthorized member" regression: the
+// member here is a genuine participant of this specific DM channel (seeded
+// as a channel_member), so the only thing that used to deny them was the
+// agent's own private-visibility gate — which task #908 retires. DM
+// read/send is now unconditional for any member of the DM channel.
+func TestPrivateAgentDMChannelAllowsAnyChannelMemberPostBatch908(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	ctx := context.Background()
 	agentID, _, memberID := privateAgentTestFixture(t)
 	cleanupDMArtifacts(t)
 	channelID := seedAgentDMChannelForUser(t, memberID, agentID)
@@ -1225,28 +1230,17 @@ func TestPrivateAgentDMChannelRejectsUnauthorizedMember(t *testing.T) {
 	listReq = withURLParam(listReq, "channelId", channelID)
 	listRec := httptest.NewRecorder()
 	testHandler.ListChannelMessages(listRec, listReq)
-	if listRec.Code != http.StatusForbidden {
-		t.Fatalf("list private-agent dm as unauthorized member: status=%d body=%s", listRec.Code, listRec.Body.String())
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list private-agent dm as channel member: expected 200 (unconditional post-#908), status=%d body=%s", listRec.Code, listRec.Body.String())
 	}
 
-	sendReq := newRequestAs(memberID, http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]string{"content": "hello private agent"})
+	sendReq := newRequestAs(memberID, http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]string{"content": "hello agent"})
 	sendReq = withChannelTestWorkspaceCtx(t, sendReq, memberID)
 	sendReq = withURLParam(sendReq, "channelId", channelID)
 	sendRec := httptest.NewRecorder()
 	testHandler.SendChannelMessage(sendRec, sendReq)
-	if sendRec.Code != http.StatusForbidden {
-		t.Fatalf("send private-agent dm as unauthorized member: status=%d body=%s", sendRec.Code, sendRec.Body.String())
-	}
-
-	var sessions int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_agent_session
-		WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessions); err != nil {
-		t.Fatalf("count channel agent sessions: %v", err)
-	}
-	if sessions != 0 {
-		t.Fatalf("unauthorized private-agent dm dispatch created %d session(s)", sessions)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("send private-agent dm as channel member: expected 201 (unconditional post-#908), status=%d body=%s", sendRec.Code, sendRec.Body.String())
 	}
 }
 

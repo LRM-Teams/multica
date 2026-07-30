@@ -683,8 +683,10 @@ func TestGetMemberProfile_PrivateAgentReturnsIdentityOnlyForPlainMember(t *testi
 	if profile.ProfileAccess != "identity_only" {
 		t.Fatalf("profile_access = %q, want identity_only", profile.ProfileAccess)
 	}
-	if profile.Status != nil {
-		t.Fatalf("identity-only profile status = %q, want nil", *profile.Status)
+	// Task #908: presence status is universal ("能不能干活" — Parker), even in
+	// the identity_only branch; RecentActivity/MemoryGrowth stay gated below.
+	if profile.Status == nil || *profile.Status != "offline" {
+		t.Fatalf("identity-only profile status = %v, want \"offline\" (presence unconditional post-#908)", profile.Status)
 	}
 	if len(profile.RecentActivity) != 0 {
 		t.Fatalf("identity-only profile leaked activity: %#v", profile.RecentActivity)

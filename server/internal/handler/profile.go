@@ -100,9 +100,14 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Task #908: identity + presence status (name/avatar/description/status
+	// — "is it around, can it work") are unconditional for every workspace
+	// member. RecentActivity/MemoryGrowth are internal-construction/history
+	// data and stay gated by canAccessAgentInternals, same as GetAgent.
 	workspaceID := uuidToString(agent.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+	status := agent.Status
+	if !h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID) {
 		writeJSON(w, http.StatusOK, MemberProfileResponse{
 			MemberType:     "agent",
 			MemberID:       uuidToString(agent.ID),
@@ -111,7 +116,7 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 			AvatarURL:      textToPtr(agent.AvatarUrl),
 			Description:    agent.Description,
 			Role:           "Agent",
-			Status:         nil,
+			Status:         &status,
 			RecentActivity: []AgentRecentActivityItem{},
 			ProfileAccess:  "identity_only",
 		})
@@ -123,7 +128,6 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, "failed to load member profile")
 		return
 	}
-	status := agent.Status
 	growth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load member profile")

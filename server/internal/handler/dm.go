@@ -139,11 +139,6 @@ func (h *Handler) createOrFindAgentDM(w http.ResponseWriter, r *http.Request, wo
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
-		return
-	}
 	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agentDisplayName(agent), AvatarURL: textToPtr(agent.AvatarUrl)}
 
 	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agentID))
@@ -311,11 +306,6 @@ func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Req
 	})
 	if err != nil || agent.ArchivedAt.Valid {
 		writeError(w, http.StatusNotFound, "direct message peer not found")
-		return false
-	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return false
 	}
 	return true
@@ -968,10 +958,6 @@ func (h *Handler) agentDMParticipants(ctx context.Context, workspaceID, channelI
 // live in dispatchChannelAgentReply, so an agent's own reply never re-triggers.
 func (h *Handler) dispatchDMAgentReply(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
-		if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(initiatorUserID), ch.WorkspaceID) {
-			slog.Warn("skip dm agent dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
-			continue
-		}
 		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "dm"); err == nil && h.Metrics != nil {
 			h.Metrics.RecordChannelFullExecutionWake("dm")
 		}
@@ -987,10 +973,6 @@ func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse,
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
-			if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(initiatorUserID), ch.WorkspaceID) {
-				slog.Warn("skip dm thread mention dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
-				continue
-			}
 			if trigger.ThreadRootMessageID != nil {
 				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 			}
@@ -1004,10 +986,6 @@ func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse,
 		return
 	}
 	for _, agent := range h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
-		if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(initiatorUserID), ch.WorkspaceID) {
-			slog.Warn("skip dm thread follower dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
-			continue
-		}
 		if _, err := h.dispatchChannelThreadContinuation(ctx, ch, agent, trigger, initiatorUserID); err == nil && h.Metrics != nil {
 			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
 		}

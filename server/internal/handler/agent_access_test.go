@@ -146,32 +146,85 @@ func newRequestAs(userID, method, path string, body any) *http.Request {
 // neither the agent owner nor a workspace owner/admin gets 403, while the
 // agent owner and workspace owner both succeed. Mirrors the four-entry-point
 // gate (chat, history, edit, delete) on its read surface.
-func TestGetAgent_PrivateAgentForbidsPlainMember(t *testing.T) {
+// TestGetAgent_UnconditionalButInternalsGated is the task #908 successor:
+// GetAgent no longer 403s for any workspace member (existence/identity is
+// unconditional — Parker, #multica f83df812, 2026-07-30 14:50 "端点保持
+// 200，不然成员点详情页直接坏"), but Instructions/RuntimeConfig/CustomArgs
+// (the agent's internal construction) stay redacted to non-owner/non-admin
+// viewers via canAccessAgentInternals.
+func TestGetAgent_UnconditionalButInternalsGated(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	agentID, ownerID, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		   SET instructions = 'secret system prompt',
+		       custom_args = '["--secret-flag"]'::jsonb,
+		       runtime_config = '{"secret_key":"secret_value"}'::jsonb
+		 WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("seed internals: %v", err)
+	}
 
-	// Workspace owner (testUserID): allowed via role.
+	// Workspace owner: 200, sees internals.
 	w := httptest.NewRecorder()
 	testHandler.GetAgent(w, withURLParam(newRequest("GET", "/api/agents/"+agentID, nil), "id", agentID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetAgent as workspace owner: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
+	var ownerResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &ownerResp); err != nil {
+		t.Fatalf("decode owner response: %v", err)
+	}
+	if ownerResp.Instructions != "secret system prompt" {
+		t.Fatalf("GetAgent as workspace owner: instructions = %q, want populated", ownerResp.Instructions)
+	}
+	if len(ownerResp.CustomArgs) != 1 || ownerResp.CustomArgs[0] != "--secret-flag" {
+		t.Fatalf("GetAgent as workspace owner: custom_args = %#v, want populated", ownerResp.CustomArgs)
+	}
+	if rc, ok := ownerResp.RuntimeConfig.(map[string]any); !ok || rc["secret_key"] != "secret_value" {
+		t.Fatalf("GetAgent as workspace owner: runtime_config = %#v, want populated", ownerResp.RuntimeConfig)
+	}
 
-	// Agent owner (plain member who happens to own the agent): allowed.
+	// Agent owner: 200, sees internals.
 	w = httptest.NewRecorder()
 	testHandler.GetAgent(w, withURLParam(newRequestAs(ownerID, "GET", "/api/agents/"+agentID, nil), "id", agentID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetAgent as agent owner: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
+	var agentOwnerResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &agentOwnerResp); err != nil {
+		t.Fatalf("decode agent-owner response: %v", err)
+	}
+	if agentOwnerResp.Instructions != "secret system prompt" {
+		t.Fatalf("GetAgent as agent owner: instructions = %q, want populated", agentOwnerResp.Instructions)
+	}
 
-	// Plain member (not in allowed_principals): denied with 403.
+	// Plain member: 200 (existence unconditional), but internals redacted.
 	w = httptest.NewRecorder()
 	testHandler.GetAgent(w, withURLParam(newRequestAs(memberID, "GET", "/api/agents/"+agentID, nil), "id", agentID))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("GetAgent as plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgent as plain member: expected 200 (existence unconditional post-#908), got %d: %s", w.Code, w.Body.String())
+	}
+	var memberResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &memberResp); err != nil {
+		t.Fatalf("decode plain-member response: %v", err)
+	}
+	if memberResp.Instructions != "" {
+		t.Fatalf("GetAgent as plain member: instructions = %q, want redacted (empty)", memberResp.Instructions)
+	}
+	if len(memberResp.CustomArgs) != 0 {
+		t.Fatalf("GetAgent as plain member: custom_args = %#v, want redacted (empty)", memberResp.CustomArgs)
+	}
+	if memberResp.RuntimeConfig != nil {
+		t.Fatalf("GetAgent as plain member: runtime_config = %#v, want redacted (nil)", memberResp.RuntimeConfig)
+	}
+	if memberResp.MemoryGrowth != nil {
+		t.Fatalf("GetAgent as plain member: memory_growth = %#v, want redacted (nil)", memberResp.MemoryGrowth)
+	}
+	if memberResp.ID != agentID || memberResp.DisplayName == "" {
+		t.Fatalf("GetAgent as plain member: identity fields must still be populated, got %+v", memberResp)
 	}
 }
 
@@ -256,19 +309,21 @@ func TestPublishAgentVisibilityEventBroadcastsNormalAgent(t *testing.T) {
 	}
 }
 
-// TestWendyListedForEveryoneButDetailStaysOwnerOnly verifies the split that
-// task #908 introduces: existence/listing is unconditional for every agent
-// including Wendy (task #870/#902's personal onboarding agent), but the
-// detail/sensitive-tab gate (still driven by canAccessPrivateAgent, which
-// keeps its own owner-only carve-out for Wendy — batch 2 of #908) is
-// untouched by this batch.
-func TestWendyListedForEveryoneButDetailStaysOwnerOnly(t *testing.T) {
+// TestWendyListedAndDetailFollowsGenericInternalsRule verifies task #908's
+// full retirement: existence/listing is unconditional for every agent
+// including Wendy (task #870/#902's personal onboarding agent), and Wendy's
+// detail view no longer gets a name-based owner-only carve-out — she now
+// follows the same generic canAccessAgentInternals rule as any other agent
+// (owner OR workspace owner/admin). The old isWindyAgentName-driven
+// "excludes even admin" exception was itself the display-name-inference
+// anti-pattern task #902 exists to eliminate; batch 2 removes its last use.
+func TestWendyListedAndDetailFollowsGenericInternalsRule(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	agentID, ownerID, _ := privateAgentTestFixture(t)
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+	agentID, ownerID, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy', instructions = 'wendy secret prompt' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("rename private agent to Wendy: %v", err)
 	}
 
@@ -290,12 +345,35 @@ func TestWendyListedForEveryoneButDetailStaysOwnerOnly(t *testing.T) {
 		t.Fatalf("ListAgents as Wendy owner did not include Wendy %s", agentID)
 	}
 
-	// Detail access is untouched by this batch: canAccessPrivateAgent still
-	// gates GetAgent and still carves Wendy out as owner-only.
+	// Detail access is now unconditional (200) for everyone, same as any
+	// other agent — including workspace admin, which the old name-based
+	// carve-out used to specifically exclude for Wendy.
 	w = httptest.NewRecorder()
 	testHandler.GetAgent(w, withURLParam(newRequest("GET", "/api/agents/"+agentID, nil), "id", agentID))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("GetAgent as workspace owner for another user's Wendy: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgent as workspace owner for another user's Wendy: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var ownerResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &ownerResp); err != nil {
+		t.Fatalf("decode workspace-owner response: %v", err)
+	}
+	if ownerResp.Instructions != "wendy secret prompt" {
+		t.Fatalf("GetAgent as workspace owner (admin role) for Wendy: instructions = %q, want populated — admin is no longer excluded", ownerResp.Instructions)
+	}
+
+	// A plain member (neither Wendy's owner nor workspace owner/admin) still
+	// gets internals redacted.
+	w = httptest.NewRecorder()
+	testHandler.GetAgent(w, withURLParam(newRequestAs(memberID, "GET", "/api/agents/"+agentID, nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgent as plain member for Wendy: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var memberResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &memberResp); err != nil {
+		t.Fatalf("decode plain-member response: %v", err)
+	}
+	if memberResp.Instructions != "" {
+		t.Fatalf("GetAgent as plain member for Wendy: instructions = %q, want redacted", memberResp.Instructions)
 	}
 }
 
@@ -404,11 +482,11 @@ func TestListAgentTasks_PrivateAgentForbidsPlainMember(t *testing.T) {
 	}
 }
 
-// TestCreateIssue_AssignToPrivateAgentForbidsPlainMember verifies that the
-// issue-assignment surface is gated by the same predicate. Without this gate
-// a plain workspace member could side-step chat/@-mention by assigning a
-// private agent to an issue and letting normal task dispatch run it.
-func TestCreateIssue_AssignToPrivateAgentForbidsPlainMember(t *testing.T) {
+// TestCreateIssue_AssignToAgentUnconditionalPostBatch908 supersedes the old
+// private-agent assignment gate: task #908 makes assigning an issue to any
+// workspace agent unconditional for every member (Felix's option ① —
+// "agent = colleague, seeing it should mean being able to work with it").
+func TestCreateIssue_AssignToAgentUnconditionalPostBatch908(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -417,7 +495,7 @@ func TestCreateIssue_AssignToPrivateAgentForbidsPlainMember(t *testing.T) {
 
 	body := func(actorID string) map[string]any {
 		return map[string]any{
-			"title":         "assign-to-private-agent test " + actorID,
+			"title":         "assign-to-agent test " + actorID,
 			"status":        "todo",
 			"priority":      "medium",
 			"assignee_type": "agent",
@@ -432,29 +510,30 @@ func TestCreateIssue_AssignToPrivateAgentForbidsPlainMember(t *testing.T) {
 		t.Fatalf("CreateIssue as workspace owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Agent owner (plain member who happens to own the agent): allowed.
+	// Agent owner: allowed.
 	w = httptest.NewRecorder()
 	testHandler.CreateIssue(w, newRequestAs(ownerID, "POST", "/api/issues?workspace_id="+testWorkspaceID, body(ownerID)))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("CreateIssue as agent owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Plain member: denied with 403 — closes the back door where issue
-	// assignment would otherwise hand the agent a task without going
-	// through chat / @-mention.
+	// Plain member: also allowed now — assignment no longer depends on
+	// visibility/ownership, only on the agent existing in this workspace.
 	w = httptest.NewRecorder()
 	testHandler.CreateIssue(w, newRequestAs(memberID, "POST", "/api/issues?workspace_id="+testWorkspaceID, body(memberID)))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("CreateIssue as plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue as plain member: expected 201 (assignment unconditional post-#908), got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 // TestCreateChatSession_PrivateAgentForbidsPlainMember verifies that members
-// who can't access the private agent cannot start a chat session against it.
-// The chat handler reads workspace context from middleware, so we set it
-// explicitly via middleware.SetMemberContext before invoking the handler
-// (the test harness doesn't run the real middleware chain).
-func TestCreateChatSession_PrivateAgentForbidsPlainMember(t *testing.T) {
+// who could not access a private agent are now allowed to start a chat
+// session against it (task #908: chat is a "use" surface, unconditional for
+// every workspace member). The chat handler reads workspace context from
+// middleware, so we set it explicitly via middleware.SetMemberContext before
+// invoking the handler (the test harness doesn't run the real middleware
+// chain).
+func TestCreateChatSession_UnconditionalPostBatch908(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -472,50 +551,65 @@ func TestCreateChatSession_PrivateAgentForbidsPlainMember(t *testing.T) {
 
 	body := map[string]any{
 		"agent_id": agentID,
-		"title":    "should be denied",
+		"title":    "should be allowed",
 	}
 	w := httptest.NewRecorder()
 	req := newRequestAs(memberID, "POST", "/api/chat/sessions", body)
 	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, memberRow))
 	testHandler.CreateChatSession(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("CreateChatSession as plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateChatSession as plain member: expected 201 (unconditional post-#908), got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestGetAgent_RejectsForgedAgentIDHeader is the regression test for the
-// #2359 review finding "X-Agent-ID can be forged by a plain member to bypass
-// the private gate". A workspace member sets X-Agent-ID to any visible
-// agent's UUID without supplying a valid X-Task-ID — resolveActor must now
-// fall back to the member identity, so the private-agent gate stays effective.
-func TestGetAgent_RejectsForgedAgentIDHeader(t *testing.T) {
+// TestGetAgent_ForgedAgentIDHeaderStillRedactsInternals is the task #908
+// successor to the #2359 "X-Agent-ID can be forged" regression test. The
+// original concern (a plain member setting X-Agent-ID to bypass the private
+// gate) no longer applies to the endpoint's 200/403 status — GetAgent is
+// unconditional now. What must still hold: canAccessAgentInternals grants
+// its actorType=="agent" bypass only to a *genuine* agent actor (agent +
+// valid X-Task-ID pair), not to a member who merely sets the header. A member
+// setting X-Agent-ID without a valid X-Task-ID must fall back to member
+// identity and still get Instructions/RuntimeConfig redacted.
+func TestGetAgent_ForgedAgentIDHeaderStillRedactsInternals(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	agentID, _, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent SET instructions = 'secret system prompt' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("seed instructions: %v", err)
+	}
 
 	w := httptest.NewRecorder()
 	req := newRequestAs(memberID, "GET", "/api/agents/"+agentID, nil)
 	// Forge X-Agent-ID without X-Task-ID. Pre-fix this would have made
-	// resolveActor return ("agent", agentID) and canAccessPrivateAgent
-	// would have unconditionally allowed the read.
+	// resolveActor return ("agent", agentID) and canAccessAgentInternals
+	// would have unconditionally allowed the internal fields through.
 	req.Header.Set("X-Agent-ID", agentID)
 	req = withURLParam(req, "id", agentID)
 	testHandler.GetAgent(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("GetAgent with forged X-Agent-ID: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgent with forged X-Agent-ID: expected 200 (existence unconditional post-#908), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Instructions != "" {
+		t.Fatalf("GetAgent with forged X-Agent-ID (no valid X-Task-ID): instructions = %q, want redacted — resolveActor must still fall back to member identity", resp.Instructions)
 	}
 }
 
-// TestListChatMessages_PrivateAgentForbidsAfterAccessRevoked is the regression
-// test for the #2359 review finding "chat history read path doesn't re-gate".
-// A member who created a chat session is later denied access to the agent
-// (here simulated by the member never being on the allowlist for a private
-// agent owned by someone else; the equivalent of an after-the-fact ownership
-// transfer). The session row still names them as creator, but the read
-// endpoints must refuse to surface the transcript.
-func TestListChatMessages_PrivateAgentForbidsAfterAccessRevoked(t *testing.T) {
+// TestListChatMessages_ReadableRegardlessOfAgentPrivacy supersedes the old
+// #2359 "chat history read path doesn't re-gate" regression test — that test
+// depended on a private agent being able to fall out of a member's reach,
+// which task #908 retires (chat is unconditional now). The creator-only
+// check in loadChatSessionForUser (unrelated to agent visibility) is what
+// remains as the real boundary here; this asserts a session's own creator
+// can still read it even when the target agent was created as "private".
+func TestListChatMessages_ReadableRegardlessOfAgentPrivacy(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -523,14 +617,10 @@ func TestListChatMessages_PrivateAgentForbidsAfterAccessRevoked(t *testing.T) {
 	ctx := context.Background()
 	agentID, _, memberID := privateAgentTestFixture(t)
 
-	// Insert a chat session row directly with the plain member as creator,
-	// bypassing CreateChatSession's own gate. This represents a session
-	// that existed before the member lost access (or before the gate
-	// landed).
 	var sessionID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, status)
-		VALUES ($1, $2, $3, 'pre-revocation session', 'active')
+		VALUES ($1, $2, $3, 'session', 'active')
 		RETURNING id
 	`, testWorkspaceID, agentID, memberID).Scan(&sessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
@@ -552,8 +642,8 @@ func TestListChatMessages_PrivateAgentForbidsAfterAccessRevoked(t *testing.T) {
 	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, memberRow))
 	req = withURLParam(req, "sessionId", sessionID)
 	testHandler.ListChatMessages(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("ListChatMessages on stale session: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListChatMessages as the session's own creator: expected 200 (unconditional post-#908), got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -681,39 +771,31 @@ func TestMentionAgent_RejectsCrossWorkspaceAgentUUID(t *testing.T) {
 	}
 }
 
-// TestShouldEnqueueOnComment_PrivateAgentGate is the regression test for
-// GH #3300: after an owner/admin assigns a private agent to an issue, the
-// agent's UUID is "welded" onto that issue and any member with comment
-// access could previously dispatch a new task to the private agent simply by
-// posting a plain (non-@mention) comment, bypassing the visibility gate that
-// #2359 added to chat / @mention / assignment.
-//
-// The gate must:
-//   - reject plain workspace members (not owner, not admin, not agent owner)
-//   - allow the agent owner
-//   - allow workspace owners/admins
-//   - allow agent-to-agent traffic regardless of agent visibility
-func TestShouldEnqueueOnComment_PrivateAgentGate(t *testing.T) {
+// TestShouldEnqueueOnComment_UnconditionalPostBatch908 supersedes GH #3300's
+// visibility gate: task #908 makes issue-comment dispatch unconditional for
+// every workspace member, same as chat/@mention/assignment. Once an agent is
+// assigned to an issue, any member commenting on it should be able to
+// trigger it — that's the "agent = colleague" principle applied to this
+// surface. This test now asserts the gate never blocks based on actor.
+func TestShouldEnqueueOnComment_UnconditionalPostBatch908(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	agentID, ownerID, memberID := privateAgentTestFixture(t)
+	agentID, _, _ := privateAgentTestFixture(t)
 
-	// Assign the private agent to a fresh issue. Owner/admin would normally
-	// be the one performing this step; we insert directly so the test
-	// focuses on the on_comment trigger path.
+	// Assign the agent to a fresh issue.
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id,
 		                   assignee_type, assignee_id, number)
-		VALUES ($1, 'on_comment private-agent gate test', 'todo', 'medium', 'member', $2,
+		VALUES ($1, 'on_comment dispatch test', 'todo', 'medium', 'member', $2,
 		        'agent', $3,
 		        COALESCE((SELECT MAX(number) FROM issue WHERE workspace_id = $1), 0) + 1)
 		RETURNING id
 	`, testWorkspaceID, testUserID, agentID).Scan(&issueID); err != nil {
-		t.Fatalf("create issue assigned to private agent: %v", err)
+		t.Fatalf("create issue assigned to agent: %v", err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
@@ -724,50 +806,7 @@ func TestShouldEnqueueOnComment_PrivateAgentGate(t *testing.T) {
 		t.Fatalf("load issue: %v", err)
 	}
 
-	cases := []struct {
-		name      string
-		actorType string
-		actorID   string
-		want      bool
-		reason    string
-	}{
-		{
-			name:      "plain member — denied",
-			actorType: "member",
-			actorID:   memberID,
-			want:      false,
-			reason:    "GH #3300: plain members must not be able to dispatch a task to a private agent via on_comment",
-		},
-		{
-			name:      "agent owner — allowed",
-			actorType: "member",
-			actorID:   ownerID,
-			want:      true,
-			reason:    "agent owner is always in the allowed_principals set",
-		},
-		{
-			name:      "workspace owner — allowed",
-			actorType: "member",
-			actorID:   testUserID,
-			want:      true,
-			reason:    "workspace owners/admins are in the allowed_principals set",
-		},
-		{
-			name:      "agent-to-agent — allowed",
-			actorType: "agent",
-			actorID:   agentID,
-			want:      true,
-			reason:    "A2A traffic bypasses the visibility gate by design",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := testHandler.shouldEnqueueOnComment(ctx, issue, tc.actorType, tc.actorID)
-			if got != tc.want {
-				t.Fatalf("%s\n  actor=%s/%s got=%v want=%v",
-					tc.reason, tc.actorType, tc.actorID, got, tc.want)
-			}
-		})
+	if !testHandler.shouldEnqueueOnComment(ctx, issue) {
+		t.Fatal("shouldEnqueueOnComment: want true for a runtime-bound, non-archived assigned agent — visibility no longer gates this surface")
 	}
 }

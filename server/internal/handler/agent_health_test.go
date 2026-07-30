@@ -112,23 +112,46 @@ func TestGetAgentHealth_OfflineAgesIntoReconnecting(t *testing.T) {
 	}
 }
 
-func TestGetAgentHealth_PrivateAgentForbidsPlainMember(t *testing.T) {
+// TestGetAgentHealth_SummaryUnconditionalEventsGated is the task #908
+// successor: online/health presence is unconditional for every workspace
+// member (Parker: "能不能干活，全员"), but the raw health_events diagnostic
+// log stays admin|owner-gated via canAccessAgentInternals.
+func TestGetAgentHealth_SummaryUnconditionalEventsGated(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	agentID, ownerID, memberID := privateAgentTestFixture(t)
+	runtimeID := handlerTestRuntimeID(t)
+	createAgentHealthEvent(t, agentID, runtimeID, agentHealthEventServerPing, agentHealthStateOnline, "heartbeat_received")
 
 	w := httptest.NewRecorder()
 	testHandler.GetAgentHealth(w, withURLParam(newRequestAs(ownerID, "GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetAgentHealth as owner: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
+	var ownerResp AgentHealthResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &ownerResp); err != nil {
+		t.Fatalf("decode owner response: %v", err)
+	}
+	if len(ownerResp.Events) == 0 {
+		t.Fatalf("GetAgentHealth as owner: events = %+v, want at least the seeded event", ownerResp.Events)
+	}
 
 	w = httptest.NewRecorder()
 	testHandler.GetAgentHealth(w, withURLParam(newRequestAs(memberID, "GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("GetAgentHealth as plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth as plain member: expected 200 (presence unconditional post-#908), got %d: %s", w.Code, w.Body.String())
+	}
+	var memberResp AgentHealthResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &memberResp); err != nil {
+		t.Fatalf("decode plain-member response: %v", err)
+	}
+	if memberResp.Summary.AgentID != agentID {
+		t.Fatalf("GetAgentHealth as plain member: summary missing, got %+v", memberResp.Summary)
+	}
+	if len(memberResp.Events) != 0 {
+		t.Fatalf("GetAgentHealth as plain member: events = %+v, want redacted (empty)", memberResp.Events)
 	}
 }
 

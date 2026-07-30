@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  formatListTime,
   formatMessageTime,
   fullTimestamp,
   messageDayLabel,
@@ -38,6 +39,41 @@ describe("formatMessageTime", () => {
     expect(formatMessageTime(value, NOW, "UTC", LABELS)).toBe("15:00");
     // Shanghai (UTC+8): value = 07-06 23:00, now = 07-07 04:00 -> yesterday.
     expect(formatMessageTime(value, NOW, "Asia/Shanghai", LABELS)).toBe("Yesterday 23:00");
+  });
+});
+
+// LRM-763 sidebar-list contract: today -> HH:MM; yesterday -> 昨天;
+// 2..6 days -> weekday; older -> date. No clock on day-granular buckets.
+describe("formatListTime", () => {
+  // NOW = 2026-07-06T20:00Z, a Monday in UTC.
+  it("today -> HH:MM only", () => {
+    expect(formatListTime(Date.parse("2026-07-06T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("09:36");
+  });
+
+  it("yesterday -> {yesterday} with no clock", () => {
+    expect(formatListTime(Date.parse("2026-07-05T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("Yesterday");
+  });
+
+  it("2..6 local days ago -> localized weekday", () => {
+    // 2026-07-04 was a Saturday, 2026-07-01 a Wednesday.
+    expect(formatListTime(Date.parse("2026-07-04T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("Saturday");
+    expect(formatListTime(Date.parse("2026-07-01T09:36:00Z"), NOW, "UTC", "zh-Hans", LABELS)).toBe("星期三");
+  });
+
+  it("7+ days ago, same year -> MM/DD", () => {
+    expect(formatListTime(Date.parse("2026-06-28T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("06/28");
+  });
+
+  it("previous years -> YYYY/MM/DD", () => {
+    expect(formatListTime(Date.parse("2025-12-30T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("2025/12/30");
+  });
+
+  it("buckets by the viewing timezone, not UTC", () => {
+    const value = Date.parse("2026-07-06T15:00:00Z");
+    // UTC: same day as NOW -> clock.
+    expect(formatListTime(value, NOW, "UTC", "en", LABELS)).toBe("15:00");
+    // Shanghai: value = 07-06 23:00 local, now = 07-07 04:00 local -> yesterday.
+    expect(formatListTime(value, NOW, "Asia/Shanghai", "en", LABELS)).toBe("Yesterday");
   });
 });
 

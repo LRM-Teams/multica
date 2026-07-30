@@ -33,6 +33,7 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
+import { Time } from "../../i18n/time";
 import {
   mentionResolverFrom,
   projectReferencesToText,
@@ -217,14 +218,14 @@ function ChannelSystemMessageRow({
           // inline clock the rest of the list uses, never a full timestamp.
           <span className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground/60">
             {"· "}
-            {messageTime.format(message.created_at)}
+            <Time kind="message" value={message.created_at} title={false} />
           </span>
         ) : (
           <span
             aria-hidden
             className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
           >
-            {messageTime.full(message.created_at)}
+            <Time kind="full" value={message.created_at} title={false} />
           </span>
         )}
       </div>
@@ -785,7 +786,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           title={messageTime.full(message.created_at)}
           aria-hidden
         >
-          {messageTime.clock(message.created_at)}
+          <Time kind="clock" value={message.created_at} title={false} />
         </span>
       ) : profileActorType && profileActorId ? (
         <ActorProfileTrigger
@@ -833,7 +834,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               className="shrink-0 text-[11px] text-muted-foreground/60"
               title={messageTime.full(message.created_at)}
             >
-              {messageTime.format(message.created_at)}
+              <Time kind="message" value={message.created_at} title={false} />
             </span>
             {isEdited && (
               <span

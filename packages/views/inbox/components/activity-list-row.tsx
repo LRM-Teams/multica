@@ -3,18 +3,16 @@
 import { MessageSquare, CircleDot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import type { UserActivityItem } from "@multica/core/types";
-import { useT } from "../../i18n";
+import { useT, Time } from "../../i18n";
 
 export function ActivityListRow({
   item,
   isSelected,
   onClick,
-  timeAgo,
 }: {
   item: UserActivityItem;
   isSelected: boolean;
   onClick: () => void;
-  timeAgo: (dateStr: string) => string;
 }) {
   const { t } = useT("inbox");
   const isUnread = item.unread_count > 0;
@@ -86,7 +84,7 @@ export function ActivityListRow({
           </span>
         ) : null}
         <span className="text-[11px] text-muted-foreground">
-          {timeAgo(item.updated_at)}
+          <Time kind="relative" value={item.updated_at} />
         </span>
       </div>
     </button>

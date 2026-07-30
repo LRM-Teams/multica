@@ -256,7 +256,7 @@ const channelAgentOnboardingLegacyFixture = `
 INSERT INTO workspace (id) VALUES ('10000000-0000-0000-0000-000000000001');
 INSERT INTO "user" (id, name, email, display_name)
 VALUES ('20000000-0000-0000-0000-000000000001', 'owner', 'owner@example.test', 'Owner');
-INSERT INTO agent (id, workspace_id, name, display_name)
+INSERT INTO agent (id, workspace_id, name, display_name, model, model)
 VALUES ('50000000-0000-0000-0000-000000000001',
         '10000000-0000-0000-0000-000000000001', 'fixture-agent', 'Fixture Agent');
 INSERT INTO channel (id, workspace_id, kind, system_key)
@@ -267,5 +267,5 @@ VALUES
 INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 VALUES ('40000000-0000-0000-0000-000000000001',
         '10000000-0000-0000-0000-000000000001', 'agent',
-        '50000000-0000-0000-0000-000000000001');
+        '50000000-0000-0000-0000-000000000001', 'composer-1.5', 'composer-1.5');
 `

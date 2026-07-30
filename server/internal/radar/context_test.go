@@ -97,7 +97,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, 'Wendy', 'local', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, 'Wendy', 'local', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 		RETURNING id
 	`, workspaceID, "radar-supervisor-"+suffix, runtimeID, userID).Scan(&supervisorID); err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, 'Backend Engineer', 'Owns backend APIs and database changes', 'local', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, 'Backend Engineer', 'Owns backend APIs and database changes', 'local', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 		RETURNING id
 	`, workspaceID, "radar-peer-"+suffix, runtimeID, userID).Scan(&peerAgentID); err != nil {
 		t.Fatal(err)
@@ -248,9 +248,9 @@ func TestContextBuilderPreservesWorkspaceSnapshotAndRecentTerminalTasksAtCapacit
 		INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id,
 			max_concurrent_tasks, owner_id
-		)
+		, model)
 		SELECT $1, 'bulk-agent-' || $4 || '-' || series::text, repeat('A', 100),
-		       'local', '{}'::jsonb, $2, 1, $3
+		       'local', '{}'::jsonb, $2, 1, $3, 'composer-1.5'
 		FROM generate_series(1, 100) AS series
 	`, workspaceID, runtimeID, userID, suffix); err != nil {
 		t.Fatal(err)
@@ -386,7 +386,7 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, created_at
-		) VALUES ($1, $2, 'Wendy', 'Workspace supervisor', 'local', '{}'::jsonb, $3, 1, $4, TIMESTAMPTZ '2026-01-01 00:00:00+00')
+		, model) VALUES ($1, $2, 'Wendy', 'Workspace supervisor', 'local', '{}'::jsonb, $3, 1, $4, TIMESTAMPTZ '2026-01-01 00:00:00+00', 'composer-1.5')
 		RETURNING id
 	`, workspaceID, "rotation-wendy-"+suffix, runtimeID, userID).Scan(&supervisorID); err != nil {
 		t.Fatal(err)
@@ -406,7 +406,7 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 		if err := pool.QueryRow(t.Context(), `
 			INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, created_at
-		) VALUES ($1, $2, $3, 'Rotation worker', 'local', '{}'::jsonb, $4, 1, $5, TIMESTAMPTZ '2026-01-01 00:00:00+00' + ($6::int * interval '1 minute'))
+		, model) VALUES ($1, $2, $3, 'Rotation worker', 'local', '{}'::jsonb, $4, 1, $5, TIMESTAMPTZ '2026-01-01 00:00:00+00' + ($6::int * interval '1 minute'), 'composer-1.5')
 			RETURNING id
 		`, workspaceID, "rotation-agent-"+suffix+"-"+fmt.Sprint(index), "Rotation Agent "+fmt.Sprint(index), runtimeID, userID, index).Scan(&agentID); err != nil {
 			t.Fatal(err)

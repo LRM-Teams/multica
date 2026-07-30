@@ -368,10 +368,9 @@ func TestSystemGeneralMigration204PreservesCollisionsAndMaintainsRoster(t *testi
 	updatedAt := time.Date(2026, 7, 20, 11, 12, 13, 0, time.UTC)
 
 	if _, err := fixture.conn.Exec(fixture.ctx, `
-		INSERT INTO agent (id, workspace_id, visibility, archived_at) VALUES
-			($1, $4, 'workspace', NULL),
+		INSERT INTO agent (id, workspace_id, visibility, archived_at, model) VALUES ($1, $4, 'workspace', NULL),
 			($2, $4, 'private', NULL),
-			($3, $4, 'workspace', now())
+			($3, $4, 'workspace', now(), 'composer-1.5')
 	`, generalVisibleA, generalPrivateA, generalArchivedA, generalWorkspaceA); err != nil {
 		t.Fatalf("seed agents: %v", err)
 	}
@@ -531,7 +530,7 @@ func TestSystemGeneralMigration204PreservesCollisionsAndMaintainsRoster(t *testi
 	if _, err := fixture.conn.Exec(fixture.ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')`, generalWorkspaceA, newHuman); err != nil {
 		t.Fatalf("add eligible workspace member: %v", err)
 	}
-	if _, err := fixture.conn.Exec(fixture.ctx, `INSERT INTO agent (id, workspace_id, visibility) VALUES ($1, $2, 'workspace')`, newAgent, generalWorkspaceA); err != nil {
+	if _, err := fixture.conn.Exec(fixture.ctx, `INSERT INTO agent (id, workspace_id, visibility, model) VALUES ($1, $2, 'workspace', 'composer-1.5')`, newAgent, generalWorkspaceA); err != nil {
 		t.Fatalf("add eligible agent: %v", err)
 	}
 	assertSystemGeneralRosterMember(t, fixture, systemA, "user", newHuman, true)

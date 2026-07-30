@@ -39,7 +39,7 @@ func createWorkgraphChannel(t *testing.T, ctx context.Context, workspaceID, chan
 		INSERT INTO agent (
 		  id, workspace_id, name, display_name, runtime_mode, runtime_config,
 		  runtime_id
-		) VALUES ($1, $2, $3, 'Manager', 'local', '{}'::jsonb, $4)
+		, model) VALUES ($1, $2, $3, 'Manager', 'local', '{}'::jsonb, $4, 'composer-1.5')
 	`, managerID, workspaceID, "wg-manager-"+uuid.NewString(), runtimeID); err != nil {
 		t.Fatalf("create manager agent: %v", err)
 	}

@@ -105,7 +105,7 @@ func createForeignWorkspaceAgent(t *testing.T) string {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
-		) VALUES ($1, 'Foreign Cancel Agent', '', 'cloud', '{}'::jsonb, $2, 1)
+		, model) VALUES ($1, 'Foreign Cancel Agent', '', 'cloud', '{}'::jsonb, $2, 1, 'composer-1.5')
 		RETURNING id
 	`, workspaceID, runtimeID).Scan(&agentID); err != nil {
 		t.Fatalf("create foreign agent: %v", err)

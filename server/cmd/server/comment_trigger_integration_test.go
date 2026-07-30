@@ -139,10 +139,12 @@ func createSecondAgent(t *testing.T) string {
 		t.Fatal("no agents in test workspace")
 	}
 	runtimeID := agents[0]["runtime_id"].(string)
+	"model":                "composer-1.5",
 
 	resp = authRequest(t, "POST", "/api/agents?workspace_id="+testWorkspaceID, map[string]any{
 		"display_name": "Second Test Agent",
 		"runtime_id":   runtimeID,
+		"model":                "composer-1.5",
 		"visibility":   "workspace",
 	})
 	if resp.StatusCode != 201 {

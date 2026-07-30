@@ -349,7 +349,7 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 	`, workspaceID, "Handler Test Agent", runtimeID, userID); err != nil {
 		return "", "", err
 	}
@@ -476,7 +476,7 @@ func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) 
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
-		) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, $6)
+		, model) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, $6, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, handle, displayName, handlerTestRuntimeID(t), testUserID, mcpConfig).Scan(&agentID); err != nil {
 		t.Fatalf("failed to create handler test agent: %v", err)
@@ -2148,6 +2148,7 @@ func TestCreateAgentRejectsMalformedRuntimeID(t *testing.T) {
 	req := newRequest("POST", "/api/agents", map[string]any{
 		"display_name": "Malformed runtime agent",
 		"runtime_id":   "not-a-uuid",
+		"model":                "composer-1.5",
 	})
 	testHandler.CreateAgent(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -2580,6 +2581,7 @@ func TestCreateAgentMcpConfigNullStoresSQLNull(t *testing.T) {
 	req := newRequest("POST", "/api/agents", map[string]any{
 		"display_name": "Handler Mcp Create Null",
 		"runtime_id":   handlerTestRuntimeID(t),
+		"model":                "composer-1.5",
 		"mcp_config":   nil,
 		"custom_env":   map[string]string{},
 		"custom_args":  []string{},

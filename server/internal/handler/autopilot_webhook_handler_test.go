@@ -26,7 +26,7 @@ func createWebhookTestAgent(t *testing.T, name string) string {
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
-		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+		, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, name, testRuntimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)

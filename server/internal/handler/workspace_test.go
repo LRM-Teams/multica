@@ -613,7 +613,7 @@ RETURNING id
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, 'Target Agent', '', 'local', '{}'::jsonb, $2, 1, $3)
+		, model) VALUES ($1, 'Target Agent', '', 'local', '{}'::jsonb, $2, 1, $3, 'composer-1.5')
 RETURNING id
 `, wsID, runtimeID, targetUserID).Scan(&agentID); err != nil {
 		t.Fatalf("insert agent: %v", err)

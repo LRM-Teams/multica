@@ -88,15 +88,15 @@ func TestMemoryCurationBackfillSkipsIdleAndSucceededDays(t *testing.T) {
 	}
 	var curatorAgentID, targetAgentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions)
-		VALUES ($1, 'memory_curator_backfill', 'Memory Curator Backfill', 'local', $2, $3, 'Keep durable facts concise.')
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions, model)
+		VALUES ($1, 'memory_curator_backfill', 'Memory Curator Backfill', 'local', $2, $3, 'Keep durable facts concise.', 'composer-1.5')
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&curatorAgentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, 'memory_target_backfill', 'Memory Target Backfill', 'local', $2, $3)
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, 'memory_target_backfill', 'Memory Target Backfill', 'local', $2, $3, 'composer-1.5')
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&targetAgentID); err != nil {
 		t.Fatal(err)

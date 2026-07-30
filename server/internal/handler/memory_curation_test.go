@@ -50,8 +50,8 @@ func TestAgentIDsBelongToWorkspaceRejectsForeignAgent(t *testing.T) {
 
 	var foreignAgentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, 'foreign memory curation agent', 'local', $2, $3)
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, 'foreign memory curation agent', 'local', $2, $3, 'composer-1.5')
 		RETURNING id
 	`, otherWorkspaceID, runtimeID, testUserID).Scan(&foreignAgentID); err != nil {
 		t.Fatal(err)
@@ -226,8 +226,8 @@ func TestMemoryCurationActiveHeartbeatRefreshesBeforeExpirySweep(t *testing.T) {
 	}
 	var parentRunID, agentRunID, agentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, 'memory_curator_active_hb', 'Memory Curator Active HB', 'local', $2, $3)
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, 'memory_curator_active_hb', 'Memory Curator Active HB', 'local', $2, $3, 'composer-1.5')
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatal(err)
@@ -365,15 +365,15 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	}
 	var curatorAgentID, targetAgentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions)
-		VALUES ($1, 'memory_curator_test', 'Memory Curator Test', 'local', $2, $3, 'Keep durable facts concise.')
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions, model)
+		VALUES ($1, 'memory_curator_test', 'Memory Curator Test', 'local', $2, $3, 'Keep durable facts concise.', 'composer-1.5')
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&curatorAgentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, 'memory_target_test', 'Memory Target Test', 'local', $2, $3)
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, 'memory_target_test', 'Memory Target Test', 'local', $2, $3, 'composer-1.5')
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&targetAgentID); err != nil {
 		t.Fatal(err)
@@ -541,8 +541,8 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	const applicabilityProjectID = "22222222-2222-2222-2222-222222222222"
 	var agentID, runID, candidateID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id,name,runtime_mode,runtime_id,owner_id)
-		VALUES ($1,$2,'local',$3,$4) RETURNING id::text
+		INSERT INTO agent (workspace_id,name,runtime_mode,runtime_id,owner_id, model)
+		VALUES ($1,$2,'local',$3,$4, 'composer-1.5') RETURNING id::text
 	`, testWorkspaceID, "curation-lifecycle-"+suffix, testRuntimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatal(err)
 	}

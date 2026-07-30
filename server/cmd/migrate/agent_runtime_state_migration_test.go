@@ -69,7 +69,7 @@ func TestAgentRuntimeStateMigration218BackfillsCurrentPairWithoutMutatingLegacyR
 
 		INSERT INTO agent_runtime (id, name)
 		VALUES ('10000000-0000-4000-8000-000000000218', 'current runtime');
-		INSERT INTO agent (id, runtime_id, name)
+		INSERT INTO agent (id, runtime_id, name, model, model)
 		VALUES (
 			'20000000-0000-4000-8000-000000000218',
 			'10000000-0000-4000-8000-000000000218',
@@ -110,7 +110,7 @@ func TestAgentRuntimeStateMigration218BackfillsCurrentPairWithoutMutatingLegacyR
 			'/legacy/issue',
 			'completed',
 			'2026-07-23 00:02:00+00'
-		);
+		, 'composer-1.5', 'composer-1.5');
 	`); err != nil {
 		t.Fatalf("create pre-218 fixture: %v", err)
 	}

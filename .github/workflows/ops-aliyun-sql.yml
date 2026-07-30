@@ -13,6 +13,7 @@ on:
           - research_fleet_runtime_match_wendy
           - voice_call_diagnose
           - research_wake_diagnose
+          - research_wake_followup
 
 jobs:
   run:
@@ -491,4 +492,81 @@ jobs:
 
           echo "=== backend wake logs ==="
           docker logs multica-backend-1 --since 6h 2>&1 | grep -iE 'research agent wake|wake failed|not a research fleet|enqueue research' | tail -40 || true
+
+      - name: research_wake_followup
+        if: inputs.action == 'research_wake_followup'
+        run: |
+          set -euo pipefail
+          dotenv_value() {
+            python3 - "$1" "${2:-}" <<'PY'
+          import sys
+          from pathlib import Path
+          key, default = sys.argv[1], sys.argv[2]
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith(key + "="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  raise SystemExit(0)
+          print(default)
+          PY
+          }
+          db_user="$(dotenv_value POSTGRES_USER multica)"
+          db_name="$(dotenv_value POSTGRES_DB multica)"
+          db_password="$(dotenv_value POSTGRES_PASSWORD)"
+          postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '$1 ~ /postgres/ {print $2; exit}')"
+          run_sql() {
+            printf '%s\n' "$1" | docker exec -i -e PGPASSWORD="$db_password" "$postgres_id" \
+              psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1
+          }
+
+          LEAD=ccb015de-bebc-4635-8e83-c925174ff784
+          echo "=== chat sessions for research lead ==="
+          run_sql "SELECT id::text, title, status, agent_id::text, runtime_id::text, created_at AT TIME ZONE 'Asia/Shanghai' AS created_cst, updated_at AT TIME ZONE 'Asia/Shanghai' AS updated_cst FROM chat_session WHERE agent_id='$LEAD'::uuid ORDER BY created_at DESC LIMIT 10;"
+
+          echo "=== recent chat messages for research: sessions ==="
+          run_sql "$(cat <<SQL
+          SELECT cs.title, cm.role, left(cm.content,80) AS content,
+                 cm.created_at AT TIME ZONE 'Asia/Shanghai' AS created_cst,
+                 cm.task_id::text
+          FROM chat_message cm
+          JOIN chat_session cs ON cs.id = cm.chat_session_id
+          WHERE cs.agent_id = '$LEAD'::uuid
+            AND cs.title LIKE 'research:%'
+          ORDER BY cm.created_at DESC
+          LIMIT 20;
+          SQL
+          )"
+
+          echo "=== recent inbox/tasks for lead ==="
+          run_sql "$(cat <<SQL
+          SELECT t.id::text, t.status, t.task_type, left(coalesce(t.error,''),80) AS err,
+                 t.created_at AT TIME ZONE 'Asia/Shanghai' AS created_cst,
+                 t.updated_at AT TIME ZONE 'Asia/Shanghai' AS updated_cst,
+                 t.runtime_id::text
+          FROM agent_task t
+          WHERE t.agent_id = '$LEAD'::uuid
+          ORDER BY t.created_at DESC
+          LIMIT 15;
+          SQL
+          )" 2>&1 || run_sql "$(cat <<SQL
+          SELECT column_name FROM information_schema.columns WHERE table_name='agent_inbox_event' ORDER BY 1;
+          SQL
+          )"
+
+          echo "=== agent_inbox_event for lead runtime ==="
+          run_sql "$(cat <<SQL
+          SELECT e.id::text, e.status, e.event_type, left(coalesce(e.error,''),100) AS err,
+                 e.created_at AT TIME ZONE 'Asia/Shanghai' AS created_cst,
+                 e.runtime_id::text
+          FROM agent_inbox_event e
+          WHERE e.agent_id = '$LEAD'::uuid
+          ORDER BY e.created_at DESC
+          LIMIT 15;
+          SQL
+          )" 2>&1 || true
+
+          echo "=== backend logs around wake (today) ==="
+          docker logs multica-backend-1 --since 8h 2>&1 | grep -iE 'research|wake|ccb015de|EnqueueChat|chat task|MAOZH2' | tail -60 || true
+
+          echo "=== daemon connectivity: runtime last seen ==="
+          run_sql "SELECT id::text, name, status, last_seen_at AT TIME ZONE 'Asia/Shanghai' AS last_seen_cst, updated_at AT TIME ZONE 'Asia/Shanghai' AS updated_cst FROM agent_runtime WHERE id IN ('5fac011a-aaa3-4000-a3b5-9daf3a17219f'::uuid, '89757d75-aca0-4f33-adf6-91817d75a4f3'::uuid);"
 

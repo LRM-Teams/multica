@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -14,7 +14,7 @@ import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Loader2, Telescope } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { ResearchEmptyState } from "./research-empty-state";
@@ -31,6 +31,7 @@ export function ResearchListPage() {
   const qc = useQueryClient();
   const [goal, setGoal] = useState("");
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
+  const composerCardRef = useRef<HTMLDivElement>(null);
 
   useQuery(researchFleetOptions(wsId));
   const { data, isLoading, isError, error, refetch } = useQuery(
@@ -74,31 +75,116 @@ export function ResearchListPage() {
     queueMicrotask(focusComposer);
   };
 
+  const submitCreate = () => {
+    const value = goal.trim();
+    if (!value || create.isPending) return;
+    create.mutate();
+  };
+
+  // LRM-787: keep the draft on failure and surface the error inside the card.
+  const createError =
+    create.isError && create.error instanceof Error && create.error.message
+      ? create.error.message
+      : create.isError
+        ? t(($) => $.home.create_failed)
+        : null;
+
+  const retryCreate = () => {
+    create.reset();
+    focusComposer();
+  };
+
+  // Scroll the composer into view once the error banner mounts so the retry is visible.
+  useEffect(() => {
+    if (!createError) return;
+    composerCardRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [createError]);
+
   const renderRow = (s: ResearchSession) => (
     <ResearchSessionRow key={s.id} session={s} href={paths.researchDetail(s.id)} />
   );
 
   return (
-    <div className="flex h-full flex-col gap-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t(($) => $.title)}</h1>
-      </div>
+    <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
+      {/* LRM-787: hero composer card — brand presence, focus ring, inline failure. */}
+      <section
+        ref={composerCardRef}
+        aria-label={t(($) => $.home.composer_label)}
+        className="relative w-full max-w-3xl overflow-hidden rounded-2xl border bg-card shadow-sm"
+      >
+        <div className="pointer-events-none absolute inset-0 bg-brand/4" aria-hidden />
+        <div className="relative flex flex-col gap-4 p-6 sm:p-8">
+          <div className="flex items-start gap-3">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
+              <Telescope className="size-5" aria-hidden />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                {t(($) => $.home.hero_title)}
+              </h1>
+              <p className="text-sm text-muted-foreground sm:text-base">
+                {t(($) => $.home.hero_desc)}
+              </p>
+            </div>
+          </div>
 
-      <div className="max-w-2xl space-y-3 rounded-lg border p-4">
-        <Textarea
-          ref={goalInputRef}
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          placeholder={t(($) => $.goal_placeholder)}
-          rows={3}
-        />
-        <Button
-          disabled={!goal.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          {t(($) => $.start)}
-        </Button>
-      </div>
+          <div
+            className={
+              // Brand focus ring without a new hex token; 22% mix ≈ ring brand/22.
+              "rounded-xl border bg-background transition-shadow focus-within:border-brand/40 focus-within:ring-3 focus-within:ring-brand/22"
+            }
+          >
+            <Textarea
+              ref={goalInputRef}
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder={t(($) => $.goal_placeholder)}
+              rows={4}
+              className="border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  submitCreate();
+                }
+              }}
+            />
+            <div className="flex items-center justify-between gap-3 border-t px-3 py-2">
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.home.composer_hint)}
+              </p>
+              <Button
+                onClick={submitCreate}
+                disabled={!goal.trim() || create.isPending}
+                className="shrink-0"
+              >
+                {create.isPending ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                    {t(($) => $.home.creating)}
+                  </>
+                ) : (
+                  t(($) => $.start)
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {createError ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/9 px-3 py-2"
+            >
+              <div className="flex min-w-0 items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="size-4 shrink-0" aria-hidden />
+                <span className="truncate">{createError}</span>
+              </div>
+              <Button variant="outline" size="sm" onClick={retryCreate}>
+                {t(($) => $.list.retry)}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </section>
 
       {isLoading ? (
         <div className="space-y-2" aria-busy="true" aria-label={t(($) => $.list.loading)}>

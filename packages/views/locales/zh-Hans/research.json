@@ -81,12 +81,6 @@
     "process_tag": "过程事件",
     "empty": "画布推进时，舰队对话与过程事件会出现在这里。"
   },
-  "stage": {
-    "s1_plan": "S1 · 定义",
-    "s2_sources": "S2 · 探索",
-    "s3_validation": "S3 · 验证",
-    "s4_delivery": "S4 · 交付"
-  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",
@@ -99,5 +93,13 @@
     "roster_change": "编制变更",
     "stage_gate": "阶段门",
     "agent_activity": "活动"
+  },
+  "home": {
+    "composer_label": "创建调研会话",
+    "hero_title": "调研，不再靠几十个标签页",
+    "hero_desc": "说清目标——调研团去多源取证、梳理发现，并把报告交到你手上。",
+    "composer_hint": "按 ⌘⏎ 开始",
+    "creating": "组建舰队中…",
+    "create_failed": "调研会话创建失败"
   }
 }

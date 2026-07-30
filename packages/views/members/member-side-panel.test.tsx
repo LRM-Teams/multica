@@ -285,4 +285,24 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     expect(screen.queryByTestId("member-side-panel-edit-profile")).toBeNull();
     expect(screen.getByTestId("member-side-panel-message")).toBeTruthy();
   });
+
+  // LRM-812: avatar dedup — the top bar leading is name text only (no 22px
+  // avatar, no handle); the member's single avatar lives in the 64px body
+  // identity block, matching the Agent card chrome. (CREATED AGENTS rows have
+  // their own agent avatars — unrelated to the member-identity dedup.)
+  it("renders the member avatar exactly once (body identity); top bar is name text only", () => {
+    renderPanel("u-frank");
+
+    const memberAvatars = screen.getAllByTestId("avatar-u-frank");
+    expect(memberAvatars).toHaveLength(1);
+
+    // The shell header bar (leading + message/close chrome) carries no avatar.
+    const closeButton = screen.getByLabelText("Close");
+    const headerBar = closeButton.closest("div.border-b");
+    expect(headerBar).not.toBeNull();
+    expect(headerBar!.querySelector('[data-testid^="avatar-"]')).toBeNull();
+    // Name text only — no handle line in the top bar.
+    expect(headerBar!.textContent).toContain("Frank An");
+    expect(headerBar!.textContent).not.toContain("@frank-an");
+  });
 });

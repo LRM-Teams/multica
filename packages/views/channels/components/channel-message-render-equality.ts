@@ -53,6 +53,7 @@ export type ChannelMessageBubbleMemoProps = {
   onEdit?: unknown;
   onDelete?: unknown;
   onOpenAgent?: unknown;
+  onOpenMember?: unknown;
   onRetrySend?: unknown;
 };
 
@@ -76,6 +77,7 @@ export function areChannelMessageBubblePropsEqual(
   if (prev.onEdit !== next.onEdit) return false;
   if (prev.onDelete !== next.onDelete) return false;
   if (prev.onOpenAgent !== next.onOpenAgent) return false;
+  if (prev.onOpenMember !== next.onOpenMember) return false;
   if (prev.onRetrySend !== next.onRetrySend) return false;
   return true;
 }

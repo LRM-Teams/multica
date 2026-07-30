@@ -168,6 +168,8 @@ type MessageViewportProps = {
   /** Opens the side agent file/public-info panel for an agent-authored message
    *  (LRM-292: agentId + optional row identity snapshot). */
   onOpenAgent?: OpenAgentPanelFn;
+  /** Opens the LRM-619 member Profile dock for a human-authored message. */
+  onOpenMember?: (userId: string) => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -206,6 +208,7 @@ function MessageViewport({
   onEditMessage,
   onRetrySend,
   onOpenAgent,
+  onOpenMember,
   searchHitIds,
   searchQuery,
   loading,
@@ -513,6 +516,7 @@ function MessageViewport({
             onEdit={onEditMessage}
             onRetrySend={onRetrySend}
             onOpenAgent={onOpenAgent}
+            onOpenMember={onOpenMember}
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
             compact={compact}

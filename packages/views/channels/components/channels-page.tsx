@@ -3310,6 +3310,7 @@ export function ChannelsPage({
         }
         onRetrySend={handleRetrySend}
         onOpenAgent={handleOpenAgentPanel}
+        onOpenMember={handleOpenMemberPanel}
         quoteTarget={threadQuoteTarget}
         onClearQuote={() => setThreadQuoteTarget(null)}
         sendError={channelThreadSendError}
@@ -3845,6 +3846,7 @@ export function ChannelsPage({
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onRetrySend={isActiveArchived ? undefined : handleRetrySend}
                 onOpenAgent={handleOpenAgentPanel}
+                onOpenMember={handleOpenMemberPanel}
               />
               </div>
               {channelSelectionMenu.menu}

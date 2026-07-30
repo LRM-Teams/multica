@@ -101,11 +101,6 @@ func (r actorIdentityResolver) resolve(actorType, actorID string) ActorIdentity 
 			identity.DisplayName = "Deleted agent"
 			return identity
 		}
-		if r.viewerActorType == "member" && (agent.Visibility == "private" || privateAgentOwnerOnly(agent)) && !memberAllowedForPrivateAgent(agent, r.viewerActorID, r.viewerRole) {
-			identity.Status = "hidden"
-			identity.DisplayName = "Hidden agent"
-			return identity
-		}
 		identity.Status = "visible"
 		if agent.ArchivedAt.Valid {
 			identity.Status = "deleted"

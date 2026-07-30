@@ -265,7 +265,7 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ws, wok := p.WorkspaceUUID()
-	selfID, aok := p.AgentUUID()
+	_, aok := p.AgentUUID()
 	if !wok || !aok {
 		writeError(w, http.StatusForbidden, "access denied")
 		return
@@ -291,10 +291,6 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 	for _, a := range agents {
 		homeID := homeByAgent[uuidToString(a.ID)]
 		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
-			continue
-		}
-		// Public agents + self only — never other private agents via owner role.
-		if (a.Visibility == "private" || privateAgentOwnerOnly(a)) && uuidToString(a.ID) != uuidToString(selfID) {
 			continue
 		}
 		item := AgentDirectoryItem{

@@ -74,6 +74,7 @@ jobs:
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
           install -m 0755 scripts/run-aliyun-backend-migration.sh "${bundle}/scripts/run-aliyun-backend-migration.sh"
           install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
+          install -m 0755 scripts/assert-oss-compose-credentials.sh "${bundle}/scripts/assert-oss-compose-credentials.sh"
 
       - name: Validate deploy bundle
         run: |

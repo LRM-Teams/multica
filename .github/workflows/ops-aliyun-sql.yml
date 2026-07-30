@@ -21,12 +21,15 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(id -un)"
-          if [ "$actual" != "dev" ]; then
-            echo "::error::expected runner user=dev, got=${actual}"
+          echo "runner user=${actual} uid=$(id -u) groups=$(id -Gn)"
+          echo "home=${HOME:-} pwd=$(pwd)"
+          ls -la /data/multica/.env /data/multica/docker-compose.yml /data/multica/docker-compose.aliyun.yml 2>&1 || true
+          # Deploy owner is `dev`; some runner registrations may use another login
+          # that is still in the docker group and can read the host dotenv.
+          if [ ! -r /data/multica/.env ]; then
+            echo "::error::cannot read /data/multica/.env as ${actual}"
             exit 1
           fi
-          test -f /data/multica/.env
-          test -f /data/multica/docker-compose.aliyun.yml || test -f /data/multica/docker-compose.yml
 
       - name: research_fleet_runtime_match_wendy
         if: inputs.action == 'research_fleet_runtime_match_wendy'

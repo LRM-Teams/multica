@@ -45,10 +45,17 @@ export function MachineDeleteControl({
   machine,
   wsId,
   onDeleted,
+  layout = "button",
 }: {
   machine: RuntimeMachine;
   wsId: string;
   onDeleted?: () => void;
+  /**
+   * "button" — compact outline button (legacy header slot).
+   * "row" — full-width danger-zone row at the bottom of the machine detail
+   * panel (LRM-745 frozen v3). Same dialog + permission rules either way.
+   */
+  layout?: "button" | "row";
 }) {
   const { t } = useT("runtimes");
   const user = useAuthStore((s) => s.user);
@@ -66,18 +73,31 @@ export function MachineDeleteControl({
 
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-        onClick={() => setOpen(true)}
-        data-testid="delete-computer-button"
-        aria-label={t(($) => $.machine.delete_computer.button)}
-      >
-        <Trash2 className="h-3.5 w-3.5" aria-hidden />
-        {t(($) => $.machine.delete_computer.button)}
-      </Button>
+      {layout === "row" ? (
+        <button
+          type="button"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl border bg-card px-4 py-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/5"
+          onClick={() => setOpen(true)}
+          data-testid="delete-computer-button"
+          aria-label={t(($) => $.machine.delete_computer.button)}
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          {t(($) => $.machine.delete_danger_row)}
+        </button>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => setOpen(true)}
+          data-testid="delete-computer-button"
+          aria-label={t(($) => $.machine.delete_computer.button)}
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          {t(($) => $.machine.delete_computer.button)}
+        </Button>
+      )}
       <DeleteComputerDialog
         open={open}
         onOpenChange={setOpen}

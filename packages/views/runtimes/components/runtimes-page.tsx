@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useDefaultLayout } from "react-resizable-panels";
 import {
+  ChevronLeft,
+  ChevronRight,
   Cloud,
   Monitor,
   Plus,
-  Search,
   Server,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,25 +14,17 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
-import { useUpdatableRuntimeIds } from "@multica/core/runtimes/hooks";
 import { useWSEvent } from "@multica/core/realtime";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
-import { Input } from "@multica/ui/components/ui/input";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@multica/ui/components/ui/resizable";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
-import { ProviderLogo } from "./provider-logo";
 import { formatRuntimeUpdateError } from "./update-error";
-import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
+import { RuntimeRows, buildWorkloadIndex } from "./runtime-list";
 import { MachineDeleteControl } from "./delete-computer-dialog";
 import {
   buildRuntimeMachines,
@@ -44,9 +36,12 @@ import {
 } from "./runtime-machines";
 import {
   HealthDot,
+  ProviderChip,
   RuntimeConnectivityStatus,
   RuntimeHealthStateBadge,
+  useHealthLabel,
 } from "./shared";
+import { formatLastSeen } from "../utils";
 import { useT } from "../../i18n/use-t";
 
 const MACHINE_FILTERS: RuntimeMachineFilter[] = ["all", "online", "issues"];
@@ -88,6 +83,15 @@ function useNowTick(intervalMs = 30_000): number {
   return now;
 }
 
+/**
+ * LRM-745 (design gate v3, Frank-frozen): chat-style two-pane shell.
+ * Desktop = fixed machine-list column (~300px, conversation-list style) +
+ * detail panel side by side. Mobile = list page › drill into a detail page
+ * with a back button — only one view renders at a time, so the main
+ * content is always a single vertical scroller (this is what structurally
+ * absorbs LRM-737 "page won't scroll on phones": no more shrink-0 sidebar
+ * stacked above the detail with no bounded scroll container).
+ */
 export function RuntimesPage({
   localDaemonId,
   localMachineName,
@@ -96,16 +100,19 @@ export function RuntimesPage({
   bootstrapping,
   cloudRuntimeEnabled = false,
 }: RuntimesPageProps = {}) {
+  const { t } = useT("runtimes");
   const isLoading = useAuthStore((s) => s.isLoading);
   const currentUserId = useAuthStore((s) => s.user?.id);
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const [machineFilter, setMachineFilter] =
     useState<RuntimeMachineFilter>("all");
-  const [machineSearch, setMachineSearch] = useState("");
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(
     null,
   );
+  // Mobile drill-in: list page until a row is tapped, then the detail page
+  // until Back. Desktop ignores this flag (both panes stay visible).
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   // Tracks whether the user has explicitly picked a machine. Until then,
   // auto-default keeps preferring the Local section (which on desktop may
   // appear later than remotes — `localDaemonId` is fetched async).
@@ -113,12 +120,11 @@ export function RuntimesPage({
   const handleSelectMachine = useCallback((id: string) => {
     userSelectedRef.current = true;
     setSelectedMachineId(id);
+    setMobileDetailOpen(true);
   }, []);
+  const handleMobileBack = useCallback(() => setMobileDetailOpen(false), []);
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [showCloudRuntimeDialog, setShowCloudRuntimeDialog] = useState(false);
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "multica_runtimes_layout",
-  });
   const isMobile = useIsMobile();
 
   const { data: runtimes = [], isLoading: fetching } = useQuery(
@@ -133,7 +139,6 @@ export function RuntimesPage({
   useWSEvent("daemon:register", handleDaemonEvent);
   useWSEvent("daemon:runtime_updated", handleDaemonEvent);
 
-  const updatableIds = useUpdatableRuntimeIds(wsId);
   const now = useNowTick();
 
   const workloadIndex = useMemo(
@@ -165,11 +170,14 @@ export function RuntimesPage({
   const machineCounts = useMemo(() => runtimeMachineCounts(machines), [machines]);
 
   const filteredMachines = useMemo(
-    () => filterRuntimeMachines(machines, machineSearch, machineFilter),
-    [machines, machineSearch, machineFilter],
+    () => filterRuntimeMachines(machines, "", machineFilter),
+    [machines, machineFilter],
   );
 
   useEffect(() => {
+    // Mobile shows the list page until the user drills in — there is no
+    // default selection to compute.
+    if (isMobile) return;
     if (filteredMachines.length === 0) {
       if (selectedMachineId !== null) setSelectedMachineId(null);
       return;
@@ -184,12 +192,11 @@ export function RuntimesPage({
     const local = filteredMachines.find((m) => m.section === "local");
     const nextId = local?.id ?? filteredMachines[0]?.id ?? null;
     if (nextId !== selectedMachineId) setSelectedMachineId(nextId);
-  }, [filteredMachines, selectedMachineId]);
+  }, [filteredMachines, selectedMachineId, isMobile]);
 
   const selectedMachine =
-    machines.find((machine) => machine.id === selectedMachineId) ??
-    filteredMachines[0] ??
-    null;
+    machines.find((machine) => machine.id === selectedMachineId) ?? null;
+  const desktopMachine = selectedMachine ?? filteredMachines[0] ?? null;
 
   if (isLoading || fetching) return <RuntimesPageSkeleton />;
 
@@ -198,87 +205,106 @@ export function RuntimesPage({
   // "register a runtime" empty state would hide the Start button.
   const showEmpty = totalCount === 0 && !bootstrapping && !hasLocalMachine;
 
-  return (
-    <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeaderBar
-        totalCount={totalCount}
-        onConnectRemote={() => setShowConnectDialog(true)}
-        cloudRuntimeEnabled={cloudRuntimeEnabled}
-        onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
-      />
+  const handleComputerDeleted = () => {
+    setSelectedMachineId(null);
+    setMobileDetailOpen(false);
+  };
 
-      {showEmpty ? (
-        <div className="flex flex-1 items-center justify-center p-6">
+  if (showEmpty) {
+    return (
+      <div className="flex flex-1 min-h-0 flex-col">
+        <PageHeader className="justify-between px-5">
+          <div className="flex items-center gap-2">
+            <Server className="h-4 w-4 text-muted-foreground" />
+            <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
+          </div>
+        </PageHeader>
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
           <EmptyState onConnectRemote={() => setShowConnectDialog(true)} />
         </div>
-      ) : isMobile ? (
-        <div className="flex min-h-0 flex-1 flex-col border-t bg-background">
-          <MachineSidebar
-            machines={filteredMachines}
-            totalMachines={machines.length}
-            counts={machineCounts}
-            selectedMachineId={selectedMachine?.id ?? null}
-            search={machineSearch}
-            setSearch={setMachineSearch}
-            filter={machineFilter}
-            setFilter={setMachineFilter}
-            onSelect={handleSelectMachine}
-          />
+        {showConnectDialog && (
+          <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
+        )}
+      </div>
+    );
+  }
+
+  const listHeader = (
+    <MachineListHeader
+      machines={machines}
+      onAdd={() => setShowConnectDialog(true)}
+      cloudRuntimeEnabled={cloudRuntimeEnabled}
+      onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
+    />
+  );
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col">
+      {isMobile ? (
+        mobileDetailOpen && selectedMachine ? (
           <MachineDetail
             machine={selectedMachine}
-            updatableIds={updatableIds}
+            now={now}
+            wsId={wsId}
+            actions={
+              selectedMachine.isCurrent ? localMachineActions : undefined
+            }
+            onComputerDeleted={handleComputerDeleted}
+            onBack={handleMobileBack}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <PageHeader className="justify-between gap-2 px-4">
+              <MachineListSummary machines={machines} />
+              <MachineListActions
+                onAdd={() => setShowConnectDialog(true)}
+                cloudRuntimeEnabled={cloudRuntimeEnabled}
+                onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
+              />
+            </PageHeader>
+            <MachineFilterBar
+              counts={machineCounts}
+              filter={machineFilter}
+              setFilter={setMachineFilter}
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <MachineRows
+                machines={filteredMachines}
+                totalMachines={machines.length}
+                selectedMachineId={null}
+                showChevron
+                card
+                onSelect={handleSelectMachine}
+              />
+            </div>
+          </div>
+        )
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex min-h-0 w-[300px] shrink-0 flex-col border-r">
+            {listHeader}
+            <MachineFilterBar
+              counts={machineCounts}
+              filter={machineFilter}
+              setFilter={setMachineFilter}
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto py-1">
+              <MachineRows
+                machines={filteredMachines}
+                totalMachines={machines.length}
+                selectedMachineId={desktopMachine?.id ?? null}
+                onSelect={handleSelectMachine}
+              />
+            </div>
+          </aside>
+          <MachineDetail
+            machine={desktopMachine}
             now={now}
             bootstrapping={bootstrapping}
             wsId={wsId}
-            actions={
-              selectedMachine?.isCurrent ? localMachineActions : undefined
-            }
-            onComputerDeleted={() => setSelectedMachineId(null)}
+            actions={desktopMachine?.isCurrent ? localMachineActions : undefined}
+            onComputerDeleted={handleComputerDeleted}
           />
-        </div>
-      ) : (
-        <div className="min-h-0 flex-1 border-t bg-background">
-          <ResizablePanelGroup
-            orientation="horizontal"
-            className="min-h-0 flex-1"
-            defaultLayout={defaultLayout}
-            onLayoutChanged={onLayoutChanged}
-          >
-            <ResizablePanel
-              id="machines"
-              defaultSize={300}
-              minSize={240}
-              maxSize={420}
-              groupResizeBehavior="preserve-pixel-size"
-            >
-              <MachineSidebar
-                machines={filteredMachines}
-                totalMachines={machines.length}
-                counts={machineCounts}
-                selectedMachineId={selectedMachine?.id ?? null}
-                search={machineSearch}
-                setSearch={setMachineSearch}
-                filter={machineFilter}
-                setFilter={setMachineFilter}
-                onSelect={handleSelectMachine}
-                className="h-full border-b-0 border-r"
-              />
-            </ResizablePanel>
-            <ResizableHandle />
-            <ResizablePanel id="detail" minSize="45%">
-              <MachineDetail
-                machine={selectedMachine}
-                updatableIds={updatableIds}
-                now={now}
-                bootstrapping={bootstrapping}
-                wsId={wsId}
-                actions={
-                  selectedMachine?.isCurrent ? localMachineActions : undefined
-                }
-                onComputerDeleted={() => setSelectedMachineId(null)}
-              />
-            </ResizablePanel>
-          </ResizablePanelGroup>
         </div>
       )}
 
@@ -293,162 +319,110 @@ export function RuntimesPage({
 }
 
 // ---------------------------------------------------------------------------
-// Header bar — minimal: only icon + title + count, matching Skills.
-// Page-level actions (Search, scope, filter) live in the card below.
+// Machine list column (frozen v3): title + "N machines · M online" summary,
+// ＋ add-computer entry, All / Online / Issues chips, then flat rows —
+// conversation-list style, no Local/Remote/Cloud section dividers.
 // ---------------------------------------------------------------------------
 
-function PageHeaderBar({
-  totalCount,
-  onConnectRemote,
+function MachineListSummary({ machines }: { machines: RuntimeMachine[] }) {
+  const { t } = useT("runtimes");
+  const onlineRuntimes = machines.reduce((sum, m) => sum + m.onlineCount, 0);
+  return (
+    <div className="min-w-0">
+      <h1 className="text-sm font-semibold">{t(($) => $.page.title)}</h1>
+      <p className="text-[11px] text-muted-foreground">
+        {t(($) => $.machine.machine_count, { count: machines.length })}
+        {" · "}
+        {t(($) => $.machine.online_count, { count: onlineRuntimes })}
+      </p>
+    </div>
+  );
+}
+
+function MachineListActions({
+  onAdd,
   cloudRuntimeEnabled,
   onOpenCloudRuntime,
 }: {
-  totalCount: number;
-  onConnectRemote: () => void;
+  onAdd: () => void;
   cloudRuntimeEnabled: boolean;
   onOpenCloudRuntime: () => void;
 }) {
   const { t } = useT("runtimes");
   return (
-    <PageHeader className="justify-between px-5">
-      <div className="flex items-center gap-2">
-        <Server className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
-        {totalCount > 0 && (
-          <span className="font-mono text-xs tabular-nums text-muted-foreground/70">
-            {totalCount}
-          </span>
-        )}
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-        {cloudRuntimeEnabled && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onOpenCloudRuntime}
-          >
-            <Cloud className="h-3 w-3" />
-            {t(($) => $.cloud_runtime.action)}
-          </Button>
-        )}
-        <Button type="button" size="sm" onClick={onConnectRemote}>
-          <Plus className="h-3 w-3" />
-          {t(($) => $.page.connect_remote)}
+    <div className="flex shrink-0 items-center gap-1">
+      {cloudRuntimeEnabled && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={onOpenCloudRuntime}
+          aria-label={t(($) => $.cloud_runtime.action)}
+          title={t(($) => $.cloud_runtime.action)}
+        >
+          <Cloud className="h-4 w-4" />
         </Button>
-      </div>
-    </PageHeader>
+      )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        onClick={onAdd}
+        aria-label={t(($) => $.page.connect_remote)}
+        title={t(($) => $.page.connect_remote)}
+      >
+        <Plus className="h-4 w-4" />
+      </Button>
+    </div>
   );
 }
 
-function MachineSidebar({
+function MachineListHeader({
   machines,
-  totalMachines,
-  counts,
-  selectedMachineId,
-  search,
-  setSearch,
-  filter,
-  setFilter,
-  onSelect,
-  className,
+  onAdd,
+  cloudRuntimeEnabled,
+  onOpenCloudRuntime,
 }: {
   machines: RuntimeMachine[];
-  totalMachines: number;
+  onAdd: () => void;
+  cloudRuntimeEnabled: boolean;
+  onOpenCloudRuntime: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center justify-between gap-2 px-4 pb-2 pt-4">
+      <MachineListSummary machines={machines} />
+      <MachineListActions
+        onAdd={onAdd}
+        cloudRuntimeEnabled={cloudRuntimeEnabled}
+        onOpenCloudRuntime={onOpenCloudRuntime}
+      />
+    </div>
+  );
+}
+
+function MachineFilterBar({
+  counts,
+  filter,
+  setFilter,
+}: {
   counts: { all: number; online: number; issues: number };
-  selectedMachineId: string | null;
-  search: string;
-  setSearch: (value: string) => void;
   filter: RuntimeMachineFilter;
   setFilter: (value: RuntimeMachineFilter) => void;
-  onSelect: (id: string) => void;
-  className?: string;
 }) {
   const { t } = useT("runtimes");
-  const sections = [
-    {
-      key: "local" as const,
-      label: t(($) => $.machine.section_local),
-      machines: machines.filter((machine) => machine.section === "local"),
-    },
-    {
-      key: "remote" as const,
-      label: t(($) => $.machine.section_remote),
-      machines: machines.filter((machine) => machine.section === "remote"),
-    },
-    {
-      key: "cloud" as const,
-      label: t(($) => $.machine.section_cloud),
-      machines: machines.filter((machine) => machine.section === "cloud"),
-    },
-  ].filter((section) => section.machines.length > 0);
-
   return (
-    <aside
-      className={cn(
-        "flex min-h-0 shrink-0 flex-col border-b bg-muted/20",
-        className,
-      )}
-    >
-      <div className="shrink-0 border-b bg-background p-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={t(($) => $.machine.search_placeholder)}
-            className="h-9 pl-8 text-sm"
-          />
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 overflow-x-auto">
-          {MACHINE_FILTERS.map((key) => (
-            <MachineFilterChip
-              key={key}
-              active={filter === key}
-              onClick={() => setFilter(key)}
-              label={t(($) => $.machine.filters[key])}
-              count={counts[key]}
-              tone={key}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto py-2">
-        {sections.length > 0 ? (
-          sections.map((section) => (
-            <div key={section.key} className="mb-3 last:mb-0">
-              <div className="mb-1 flex items-center gap-2 px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                <span>{section.label}</span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-              <div>
-                {section.machines.map((machine) => (
-                  <MachineRow
-                    key={machine.id}
-                    machine={machine}
-                    active={machine.id === selectedMachineId}
-                    onClick={() => onSelect(machine.id)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-            <Search className="h-8 w-8 text-muted-foreground/40" />
-            <p className="mt-3 text-sm font-medium">
-              {t(($) => $.machine.no_matches_title)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {totalMachines > 0
-                ? t(($) => $.machine.no_matches_hint)
-                : t(($) => $.page.bootstrapping.hint)}
-            </p>
-          </div>
-        )}
-      </div>
-    </aside>
+    <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b px-4 py-2">
+      {MACHINE_FILTERS.map((key) => (
+        <MachineFilterChip
+          key={key}
+          active={filter === key}
+          onClick={() => setFilter(key)}
+          label={t(($) => $.machine.filters[key])}
+          count={counts[key]}
+          tone={key}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -492,40 +466,87 @@ function MachineFilterChip({
   );
 }
 
+function MachineRows({
+  machines,
+  totalMachines,
+  selectedMachineId,
+  showChevron = false,
+  card = false,
+  onSelect,
+}: {
+  machines: RuntimeMachine[];
+  totalMachines: number;
+  selectedMachineId: string | null;
+  showChevron?: boolean;
+  card?: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const { t } = useT("runtimes");
+  if (machines.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
+        <Server className="h-8 w-8 text-muted-foreground/40" />
+        <p className="mt-3 text-sm font-medium">
+          {t(($) => $.machine.no_matches_title)}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {totalMachines > 0
+            ? t(($) => $.machine.no_matches_hint)
+            : t(($) => $.page.bootstrapping.hint)}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div
+      className={cn(card && "overflow-hidden rounded-xl border bg-card")}
+    >
+      {machines.map((machine, idx) => (
+        <MachineRow
+          key={machine.id}
+          machine={machine}
+          active={machine.id === selectedMachineId}
+          showChevron={showChevron}
+          divider={card && idx < machines.length - 1}
+          onClick={() => onSelect(machine.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function MachineRow({
   machine,
   active,
+  showChevron,
+  divider,
   onClick,
 }: {
   machine: RuntimeMachine;
   active: boolean;
+  showChevron: boolean;
+  divider: boolean;
   onClick: () => void;
 }) {
   const { t } = useT("runtimes");
   const Icon = machine.section === "cloud" ? Cloud : Monitor;
-  const busyCount = machine.runningCount + machine.queuedCount;
-  const runtimeCount = t(($) => $.machine.runtime_count, {
-    count: machine.runtimes.length,
-  });
-  const updateIssue = machine.updateError
-    ? formatRuntimeUpdateError({
-        rawError: machine.updateError,
-        currentVersion: machine.cliVersion,
-        targetVersion: machine.updateTargetVersion,
-        t,
-      })
-    : "";
+  const updateLabel =
+    machine.runtimeHealth === "update_available" ||
+    machine.runtimeHealth === "ready_to_apply"
+      ? t(($) => $.machine.update_available)
+      : null;
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "group flex w-full min-w-0 items-start gap-3 px-4 py-2.5 text-left transition-colors",
+        "group flex w-full min-w-0 items-center gap-3 px-3.5 py-2.5 text-left transition-colors",
+        divider && "border-b",
         active ? "bg-accent" : "hover:bg-accent/50",
       )}
     >
-      <span className="relative mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background">
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-background">
+        <Icon className="h-4 w-4 text-muted-foreground" />
         <HealthDot
           health={machine.health}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-background"
@@ -549,72 +570,103 @@ function MachineRow({
             </span>
           )}
         </span>
-        <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
-          <ProviderIconStack providers={machine.providerNames} />
-          {busyCount > 0 ? (
-            <span className="ml-auto shrink-0 text-xs font-medium text-primary">
-              {t(($) => $.machine.busy_count, { count: busyCount })}
-            </span>
-          ) : (
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-              {runtimeCount}
-            </span>
-          )}
-        </span>
-        {updateIssue && (
-          <span className="mt-1 block truncate text-xs text-destructive">
-            {updateIssue}
-          </span>
-        )}
+        <MachineRowMeta machine={machine} />
       </span>
+      {/* Frozen v3: update availability is incremental small text only —
+          the action itself lives in the machine detail. */}
+      {updateLabel && (
+        <span className="shrink-0 text-[11px] font-medium text-brand">
+          {updateLabel}
+        </span>
+      )}
+      {showChevron && (
+        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />
+      )}
     </button>
   );
 }
 
-function ProviderIconStack({ providers }: { providers: string[] }) {
-  const visible = providers.slice(0, 4);
-  const extra = providers.length - visible.length;
+// Spec line under the machine name (frozen v3): "在线 · N 运行时 · M 运行中"
+// while reachable — "M 运行中" only when something is actually busy,
+// otherwise 空闲; unreachable machines show the connectivity label plus
+// last-seen instead of runtime counts.
+function MachineRowMeta({ machine }: { machine: RuntimeMachine }) {
+  const { t } = useT("runtimes");
+  const labelOf = useHealthLabel();
+  const busyCount = machine.runningCount + machine.queuedCount;
+
+  if (machine.health !== "online") {
+    return (
+      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <HealthDot health={machine.health} />
+        <span className="truncate">
+          {labelOf(machine.health)}
+          {machine.lastSeenAt && (
+            <span className="text-muted-foreground/70">
+              {" · "}
+              {formatLastSeen(machine.lastSeenAt)}
+            </span>
+          )}
+        </span>
+      </span>
+    );
+  }
+
   return (
-    <span className="flex min-w-0 items-center -space-x-1">
-      {visible.map((provider) => (
-        <span
-          key={provider}
-          className="inline-flex h-5 w-5 items-center justify-center rounded bg-background ring-1 ring-border"
-        >
-          <ProviderLogo provider={provider} className="h-3.5 w-3.5" />
-        </span>
-      ))}
-      {extra > 0 && (
-        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground ring-1 ring-border">
-          +{extra}
-        </span>
+    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <HealthDot health={machine.health} />
+      <span>{labelOf(machine.health)}</span>
+      {machine.runtimes.length > 0 && (
+        <>
+          <span className="text-muted-foreground/40">·</span>
+          <span className="shrink-0">
+            {t(($) => $.machine.runtime_count, {
+              count: machine.runtimes.length,
+            })}
+          </span>
+          <span className="text-muted-foreground/40">·</span>
+          {busyCount > 0 ? (
+            <span className="shrink-0 font-medium text-primary">
+              {t(($) => $.machine.running_count, { count: busyCount })}
+            </span>
+          ) : (
+            <span className="shrink-0">{t(($) => $.machine.idle)}</span>
+          )}
+        </>
       )}
     </span>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Machine detail panel (frozen v3): header summary → Runtimes section
+// (rows drill into each runtime's existing detail route) → Basic info card
+// → bottom red "Delete this computer" row (same confirm flow as before).
+// ---------------------------------------------------------------------------
+
 function MachineDetail({
   machine,
-  updatableIds,
   now,
   bootstrapping,
   actions,
   wsId,
   onComputerDeleted,
+  onBack,
 }: {
   machine: RuntimeMachine | null;
-  updatableIds: Set<string>;
   now: number;
   bootstrapping?: boolean;
   actions?: React.ReactNode;
   wsId: string;
   onComputerDeleted?: () => void;
+  /** Mobile only: renders the back bar and turns the panel into a page. */
+  onBack?: () => void;
 }) {
   const { t } = useT("runtimes");
 
   if (!machine) {
     return (
-      <main className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center px-6 text-center">
         {bootstrapping ? (
           <>
             <Server className="h-8 w-8 animate-pulse text-muted-foreground/40" />
@@ -637,58 +689,8 @@ function MachineDetail({
     );
   }
 
-  const headerActions =
-    actions || machine.runtimes.length > 0 ? (
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {actions}
-        <MachineDeleteControl
-          machine={machine}
-          wsId={wsId}
-          onDeleted={onComputerDeleted}
-        />
-      </div>
-    ) : null;
-
-  const runtimeTotal = machine.runtimes.length;
+  const Icon = machine.section === "cloud" ? Cloud : Monitor;
   const busyCount = machine.runningCount + machine.queuedCount;
-  const workloadLabel =
-    busyCount > 0
-      ? t(($) => $.machine.metrics.workload_hint, {
-          running: machine.runningCount,
-          queued: machine.queuedCount,
-        })
-      : t(($) => $.machine.metrics.workload_idle);
-  const runtimesMeta = t(($) => $.machine.metrics.runtimes_hint, {
-    count: machine.onlineCount,
-  });
-  // Single inline meta strip replaces the old 4-card grid. Health is already
-  // shown as a chip in the title row; CLI / daemon id are scanning-grade
-  // info, not headline numbers — they belong in muted secondary text.
-  const metaParts: React.ReactNode[] = [
-    <span key="runtimes">
-      <span className="font-medium tabular-nums text-foreground">
-        {t(($) => $.machine.runtime_count, { count: runtimeTotal })}
-      </span>
-      {runtimeTotal > 0 && <> · {runtimesMeta}</>}
-    </span>,
-    <span key="workload" className={busyCount > 0 ? "text-primary" : undefined}>
-      {workloadLabel}
-    </span>,
-  ];
-  if (machine.cliVersion) {
-    metaParts.push(
-      <span key="cli" className="font-mono">
-        {machine.cliVersion}
-      </span>,
-    );
-  }
-  if (machine.subtitle) {
-    metaParts.push(
-      <span key="subtitle" className="truncate font-mono">
-        {machine.subtitle}
-      </span>,
-    );
-  }
   const updateIssue = machine.updateError
     ? formatRuntimeUpdateError({
         rawError: machine.updateError,
@@ -707,57 +709,166 @@ function MachineDetail({
   );
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="shrink-0 border-b bg-background px-5 py-4">
-        <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h2 className="truncate text-xl font-semibold tracking-tight">
-                {machine.title}
-              </h2>
-              {/* LRM-624 / Plan A: single connectivity dot+label — no bordered
-               * chip wall, no wifi-icon stack. Connectivity is expressed
-               * exactly once here. */}
-              <RuntimeConnectivityStatus health={machine.health} />
-              {/* Secondary badge = incremental update info only
-               * (update_available / ready_to_apply / updating / failed). A
-               * runtimeHealth "offline" that duplicates the connectivity dot
-               * above is suppressed — see headerRuntimeHealthBadge. */}
-              {headerBadge ? (
-                <RuntimeHealthStateBadge health={headerBadge} />
-              ) : null}
-              {machine.isCurrent && (
-                <span className="rounded-md bg-foreground px-2 py-0.5 text-xs font-medium text-background">
-                  {t(($) => $.machine.local_badge)}
-                </span>
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {onBack && (
+        <PageHeader className="gap-1 px-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onBack}
+            aria-label={t(($) => $.machine.back_to_list)}
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </Button>
+          <span className="truncate text-sm font-medium">{machine.title}</span>
+        </PageHeader>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[760px] flex-col gap-5 px-4 py-5 md:px-6">
+          {/* Header summary */}
+          <div className="flex items-start gap-3">
+            <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-background">
+              <Icon className="h-4 w-4 text-muted-foreground" />
+              <HealthDot
+                health={machine.health}
+                className="absolute -bottom-0.5 -right-0.5 ring-2 ring-background"
+              />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h2 className="truncate text-lg font-semibold tracking-tight">
+                  {machine.title}
+                </h2>
+                {machine.isCurrent && (
+                  <span className="shrink-0 rounded bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-background">
+                    {t(($) => $.machine.this_machine)}
+                  </span>
+                )}
+                {headerBadge ? (
+                  <RuntimeHealthStateBadge health={headerBadge} />
+                ) : null}
+              </div>
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                {/* LRM-624 / Plan A: single connectivity dot+label —
+                    connectivity is expressed exactly once here. */}
+                <RuntimeConnectivityStatus health={machine.health} />
+                {machine.health !== "online" && machine.lastSeenAt ? (
+                  <span className="text-muted-foreground/70">
+                    · {formatLastSeen(machine.lastSeenAt)}
+                  </span>
+                ) : null}
+                {machine.health === "online" && machine.runtimes.length > 0 && (
+                  <>
+                    <span className="text-muted-foreground/40">·</span>
+                    <span>
+                      {t(($) => $.machine.runtime_count, {
+                        count: machine.runtimes.length,
+                      })}
+                    </span>
+                    <span className="text-muted-foreground/40">·</span>
+                    {busyCount > 0 ? (
+                      <span className="font-medium text-primary">
+                        {t(($) => $.machine.running_count, { count: busyCount })}
+                      </span>
+                    ) : (
+                      <span>{t(($) => $.machine.idle)}</span>
+                    )}
+                  </>
+                )}
+              </div>
+              {updateIssue && (
+                <p className="mt-2 max-w-2xl break-words text-xs text-destructive">
+                  {updateIssue}
+                </p>
               )}
             </div>
-            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              {metaParts.map((part, idx) => (
-                <React.Fragment key={idx}>
-                  {idx > 0 && (
-                    <span className="text-muted-foreground/40">·</span>
-                  )}
-                  {part}
-                </React.Fragment>
-              ))}
-            </div>
-            {updateIssue && (
-              <p className="mt-2 max-w-2xl break-words text-xs text-destructive">
-                {updateIssue}
-              </p>
-            )}
+            {actions && <div className="shrink-0">{actions}</div>}
           </div>
-          {headerActions && <div className="shrink-0">{headerActions}</div>}
+
+          {/* Runtimes on this machine */}
+          <section>
+            <SectionTitle>{t(($) => $.machine.runtimes_section)}</SectionTitle>
+            <RuntimeRows runtimes={machine.runtimes} now={now} />
+          </section>
+
+          {/* Basic info — machine name is read-only: the runtime PATCH
+              endpoint only accepts `visibility`, and the display name is
+              reported by the daemon itself (frozen v3 note: ✎ dropped
+              because BE cannot persist a rename). */}
+          <section>
+            <SectionTitle>{t(($) => $.machine.info_section)}</SectionTitle>
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <InfoRow label={t(($) => $.machine.info_name)}>
+                <span className="truncate text-sm font-medium">
+                  {machine.title}
+                </span>
+              </InfoRow>
+              {machine.cliVersion && (
+                <InfoRow label={t(($) => $.machine.info_cli)}>
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    {machine.cliVersion}
+                  </span>
+                </InfoRow>
+              )}
+              {machine.daemonId && (
+                <InfoRow label={t(($) => $.machine.info_daemon_id)}>
+                  <span
+                    className="truncate font-mono text-xs text-muted-foreground"
+                    title={machine.daemonId}
+                  >
+                    {machine.daemonId}
+                  </span>
+                </InfoRow>
+              )}
+              {machine.providerNames.length > 0 && (
+                <InfoRow label={t(($) => $.machine.info_providers)}>
+                  <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    {machine.providerNames.map((provider) => (
+                      <ProviderChip key={provider} provider={provider} />
+                    ))}
+                  </span>
+                </InfoRow>
+              )}
+            </div>
+          </section>
+
+          {/* Danger zone — same one-click computer delete + confirm flow,
+              relocated from the header to the bottom red row per frozen v3. */}
+          <MachineDeleteControl
+            machine={machine}
+            wsId={wsId}
+            onDeleted={onComputerDeleted}
+            layout="row"
+          />
         </div>
       </div>
-
-      <RuntimeList
-        runtimes={machine.runtimes}
-        updatableIds={updatableIds}
-        now={now}
-      />
     </main>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      {children}
+    </h3>
+  );
+}
+
+function InfoRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0">
+      <span className="w-28 shrink-0 text-xs text-muted-foreground">
+        {label}
+      </span>
+      <span className="flex min-w-0 flex-1 items-center">{children}</span>
+    </div>
   );
 }
 
@@ -791,41 +902,55 @@ function EmptyState({ onConnectRemote }: { onConnectRemote: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Loading skeleton — laid out like the split runtime page so the layout
-// does not jump on first paint.
+// Loading skeleton — laid out like the new shell: list column on the left
+// (full-width on mobile, where the detail pane only exists after drill-in),
+// detail panel beside it on desktop.
 // ---------------------------------------------------------------------------
 
 function RuntimesPageSkeleton() {
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeader className="justify-between px-5">
-        <Skeleton className="h-4 w-24" />
-      </PageHeader>
-      <div className="flex min-h-0 flex-1 border-t">
-        <div className="hidden w-[300px] shrink-0 border-r p-3 md:block">
-          <Skeleton className="h-9 w-full rounded-md" />
-          <div className="mt-3 flex gap-2">
-            <Skeleton className="h-7 w-16 rounded-md" />
-            <Skeleton className="h-7 w-20 rounded-md" />
-            <Skeleton className="h-7 w-20 rounded-md" />
-          </div>
-          <div className="mt-5 space-y-2">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-20 w-full rounded-lg" />
-            ))}
-          </div>
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 w-full shrink-0 flex-col border-r md:w-[300px]">
+        <div className="px-4 pb-2 pt-4">
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="mt-1.5 h-3 w-32" />
         </div>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-b p-5">
-            <Skeleton className="h-6 w-64 rounded-md" />
-            <Skeleton className="mt-3 h-4 w-full max-w-md rounded-md" />
+        <div className="flex gap-2 border-b px-4 py-2">
+          <Skeleton className="h-7 w-16 rounded-md" />
+          <Skeleton className="h-7 w-20 rounded-md" />
+          <Skeleton className="h-7 w-20 rounded-md" />
+        </div>
+        <div className="space-y-1 py-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-3.5 py-2.5">
+              <Skeleton className="h-9 w-9 rounded-lg" />
+              <div className="flex-1">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="mt-1.5 h-3 w-36" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="hidden min-w-0 flex-1 flex-col md:flex">
+        <div className="px-6 py-5">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-lg" />
+            <div>
+              <Skeleton className="h-5 w-44" />
+              <Skeleton className="mt-2 h-3 w-56" />
+            </div>
           </div>
-          <div className="h-12 border-b px-4 py-2">
-            <Skeleton className="h-8 w-40 rounded-full" />
-          </div>
-          <div className="space-y-2 p-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 w-full rounded-md" />
+          <Skeleton className="mt-6 h-3 w-16" />
+          <div className="mt-2 space-y-0 rounded-xl border">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
+              >
+                <Skeleton className="h-6 w-6 rounded-full" />
+                <Skeleton className="h-4 w-32" />
+              </div>
             ))}
           </div>
         </div>

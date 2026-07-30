@@ -27,6 +27,7 @@
     "workspace_fallback": "ワークスペース",
     "tabs": {
       "profile": "プロフィール",
+      "honor": "栄誉",
       "preferences": "環境設定",
       "notifications": "通知",
       "tokens": "API トークン",
@@ -37,6 +38,25 @@
       "labs": "ラボ",
       "members": "メンバー"
     }
+  },
+  "honor": {
+    "loading": "栄誉情報を読み込み中…",
+    "title": "マイ栄誉",
+    "level": "レベル",
+    "total_xp": "合計 XP",
+    "name_style": "名前スタイル",
+    "next_level": "次のレベルまで",
+    "max_level": "最高レベルに到達",
+    "pillars_title": "柱の進捗",
+    "badges_title": "バッジ（1 つ装備）",
+    "recent_xp_title": "最近の XP",
+    "rules_hint": "スコアリングルールは公開されています",
+    "account_link": "栄誉の詳細を見る",
+    "account_level": "栄誉レベル Lv.{{level}}",
+    "level_value": "Lv.{{level}}",
+    "xp_to_next": "+{{xp}} XP",
+    "pillar_tier_only": "Tier {{tier}}",
+    "pillar_tier_progress": "Tier {{tier}} · {{current}}/{{next}}"
   },
   "account": {
     "section_profile": "プロフィール",

@@ -1,5 +1,7 @@
 "use client";
 
+import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
+import type { HonorSnapshot } from "@multica/core/types/honor";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -7,6 +9,7 @@ import {
   shouldShowActorHandleLabel,
   type ActorIdentityFields,
 } from "@multica/core/identity";
+import { ActorStyledName } from "./actor-styled-name";
 
 export interface ActorIdentityRowProps {
   /** Actor record or explicit labels. */
@@ -17,6 +20,12 @@ export interface ActorIdentityRowProps {
   handle?: string | null;
   /** Force show/hide of the weak @handle row. Defaults to identity rules. */
   showHandle?: boolean;
+  /** Platform honor styling for human users. */
+  honor?: HonorSnapshot | null;
+  /** Agent fleet rank badge for agents. */
+  fleet?: AgentFleetRank | null;
+  /** Inline surfaces cap glow at tier III; profile allows full VII. */
+  honorSurface?: "inline" | "profile";
   primaryClassName?: string;
   secondaryClassName?: string;
   className?: string;
@@ -31,6 +40,9 @@ export function ActorIdentityRow({
   displayName: displayNameProp,
   handle: handleProp,
   showHandle,
+  honor,
+  fleet,
+  honorSurface = "inline",
   primaryClassName = "truncate",
   secondaryClassName = "truncate text-xs text-muted-foreground",
   className = "min-w-0 flex-1",
@@ -44,7 +56,13 @@ export function ActorIdentityRow({
 
   return (
     <span className={className}>
-      <span className={`block ${primaryClassName}`}>{displayName}</span>
+      <ActorStyledName
+        displayName={displayName}
+        honor={honor}
+        fleet={fleet}
+        honorSurface={honorSurface}
+        className={primaryClassName}
+      />
       {showHandleLabel && handleLabel ? (
         <span className={`block ${secondaryClassName}`}>{handleLabel}</span>
       ) : null}

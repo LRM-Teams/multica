@@ -44,7 +44,7 @@ func TestCountActiveTrainingTasks_Integration(t *testing.T) {
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "sweep-agent", DisplayName: "Sweep Agent",
 		Description: "test", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-		RuntimeID: rtID, Visibility: "workspace", MaxConcurrentTasks: 1,
+		RuntimeID: rtID, MaxConcurrentTasks: 1,
 		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 	})
 	require.NoError(t, err)

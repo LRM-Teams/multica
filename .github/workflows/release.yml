@@ -221,6 +221,12 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: oss-cn-beijing
+      # AWS SDK v2's default PutObject checksum encoding
+      # (STREAMING-UNSIGNED-PAYLOAD-TRAILER) isn't supported by Aliyun OSS's
+      # S3-compatible layer ("NotImplemented"). Same fix already documented
+      # for the app's own S3-compatible attachment storage (.env.example).
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
       OSS_ENDPOINT_URL: https://oss-cn-beijing.aliyuncs.com
       OSS_BUCKET: lrm-2-0-release
       # Public HTTPS base objects are readable at. Not a secret (it's the
@@ -231,6 +237,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # AWS CLI defaults to path-style addressing (endpoint/bucket/key)
+      # against a bare regional --endpoint-url. Aliyun OSS's S3-compatible
+      # API rejects that for this bucket ("SecondLevelDomainForbidden:
+      # Please use virtual hosted style to access") and requires
+      # bucket.endpoint/key instead — force it globally for this job rather
+      # than fighting per-command flags.
+      - name: Configure AWS CLI for OSS virtual-hosted-style addressing
+        run: aws configure set default.s3.addressing_style virtual
 
       - name: Download release archives + checksums from GitHub
         env:

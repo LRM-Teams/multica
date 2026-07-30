@@ -305,7 +305,7 @@ func (q *Queries) AddAgentSkillWithSource(ctx context.Context, arg AddAgentSkill
 }
 
 const listActiveAgentsByWorkspace = `-- name: ListActiveAgentsByWorkspace :many
-SELECT id, workspace_id, name, display_name, description, instructions, avatar_url, runtime_mode, runtime_config, runtime_id, visibility, status, max_concurrent_tasks, owner_id, custom_env, custom_args, mcp_config, model, thinking_level, archived_at, created_at, updated_at, workspace_role FROM agent
+SELECT id, workspace_id, name, display_name, description, instructions, avatar_url, runtime_mode, runtime_config, runtime_id, status, max_concurrent_tasks, owner_id, custom_env, custom_args, mcp_config, model, thinking_level, archived_at, created_at, updated_at, workspace_role FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -321,7 +321,7 @@ func (q *Queries) ListActiveAgentsByWorkspace(ctx context.Context, workspaceID p
 		var item Agent
 		if err := rows.Scan(
 			&item.ID, &item.WorkspaceID, &item.Name, &item.DisplayName, &item.Description, &item.Instructions,
-			&item.AvatarUrl, &item.RuntimeMode, &item.RuntimeConfig, &item.RuntimeID, &item.Visibility, &item.Status,
+			&item.AvatarUrl, &item.RuntimeMode, &item.RuntimeConfig, &item.RuntimeID, &item.Status,
 			&item.MaxConcurrentTasks, &item.OwnerID, &item.CustomEnv, &item.CustomArgs, &item.McpConfig, &item.Model,
 			&item.ThinkingLevel, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt, &item.WorkspaceRole,
 		); err != nil {

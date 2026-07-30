@@ -112,10 +112,6 @@ func TestBoundary_Directory_PrivateAgentListedForPeer(t *testing.T) {
 		t.Skip("database not available")
 	}
 	privateID := createHandlerTestAgent(t, "DirPrivatePeer", []byte("[]"))
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent SET visibility = 'private' WHERE id = $1`, privateID); err != nil {
-		t.Fatalf("set private: %v", err)
-	}
 	callerID := createHandlerTestAgent(t, "DirPrivateCaller", []byte("[]"))
 
 	req := newRequest(http.MethodGet, "/api/agent/agents", nil)
@@ -150,7 +146,7 @@ func TestBoundary_Directory_NoSecretInstructionValue(t *testing.T) {
 	const secret = "SECRET_SYSTEM_PROMPT_DO_NOT_LEAK_BOUNDARY"
 	victimID := createHandlerTestAgent(t, "DirSecretVictim", []byte("[]"))
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent SET visibility = 'workspace', instructions = $2
+		UPDATE agent SET instructions = $2
 		WHERE id = $1`, victimID, secret); err != nil {
 		t.Fatalf("seed secret instructions: %v", err)
 	}

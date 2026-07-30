@@ -274,11 +274,8 @@ func createChannelCompletionTaskWithCapabilities(t *testing.T, channelKind strin
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config
-		)
-		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, NULL)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, NULL)
 		RETURNING id
 	`, testWorkspaceID, "Complete Output Agent "+uuid.NewString(), runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("setup: create completion agent: %v", err)
@@ -432,10 +429,8 @@ func createClaimReclaimAgentAndIssue(t *testing.T, ctx context.Context, runtimeI
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
 		RETURNING id
 	`, testWorkspaceID, name, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("setup: create agent: %v", err)
@@ -1873,10 +1868,8 @@ func setupForeignWorkspaceFixture(t *testing.T) (string, string) {
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1)
 		RETURNING id
 	`, foreignWorkspaceID, "Foreign Agent", runtimeID).Scan(&agentID); err != nil {
 		t.Fatalf("setup: create foreign agent: %v", err)
@@ -2250,8 +2243,9 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime(t *testing.T) {
 	// An agent bound to the legacy runtime.
 	var legacyAgentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks)
-		VALUES ($1, 'legacy-agent', 'local', '{}'::jsonb, $2, 'workspace', 1)
+		INSERT INTO agent (
+			workspace_id, name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, 'legacy-agent', 'local', '{}'::jsonb, $2, 1)
 		RETURNING id
 	`, testWorkspaceID, legacyRuntimeID).Scan(&legacyAgentID); err != nil {
 		t.Fatalf("seed legacy agent: %v", err)
@@ -2518,16 +2512,18 @@ func TestDaemonRegister_MergesAllCaseDuplicateLegacyRuntimes(t *testing.T) {
 	// Bind one agent to each legacy row to verify both sides get reassigned.
 	var upperAgentID, lowerAgentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks)
-		VALUES ($1, 'dup-agent-upper', 'local', '{}'::jsonb, $2, 'workspace', 1)
+		INSERT INTO agent (
+			workspace_id, name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, 'dup-agent-upper', 'local', '{}'::jsonb, $2, 1)
 		RETURNING id
 	`, testWorkspaceID, legacyUpperID).Scan(&upperAgentID); err != nil {
 		t.Fatalf("seed upper agent: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, upperAgentID) })
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks)
-		VALUES ($1, 'dup-agent-lower', 'local', '{}'::jsonb, $2, 'workspace', 1)
+		INSERT INTO agent (
+			workspace_id, name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, 'dup-agent-lower', 'local', '{}'::jsonb, $2, 1)
 		RETURNING id
 	`, testWorkspaceID, legacyLowerID).Scan(&lowerAgentID); err != nil {
 		t.Fatalf("seed lower agent: %v", err)
@@ -4518,10 +4514,8 @@ func createRuntimeGuardAgent(t *testing.T, ctx context.Context) (agentID, runtim
 
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks
-		)
-		VALUES ($1, $2, 'local', '{}'::jsonb, $3, 'workspace', 3)
+			workspace_id, name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, $2, 'local', '{}'::jsonb, $3, 3)
 		RETURNING id
 	`, testWorkspaceID, "Runtime Guard Agent "+t.Name(), runtimeID).Scan(&agentID); err != nil {
 		t.Fatalf("setup: create runtime guard agent: %v", err)

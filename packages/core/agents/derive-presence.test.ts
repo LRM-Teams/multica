@@ -22,7 +22,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility: "workspace",
     status: "idle",
     workspace_role: "member",
     max_concurrent_tasks: 6,

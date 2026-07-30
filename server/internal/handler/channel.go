@@ -1302,12 +1302,12 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 	qLike := "%" + qLower + "%"
 	includeAll := qLower == ""
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike, actorType, parseUUID(actorID), h.channelInviteRequesterRole(r.Context(), userID, workspaceID)}
+	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike, actorType, parseUUID(actorID)}
 	limitClause := ""
 	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
 		limit := boundedQueryInt(r, "limit", 200, 500)
 		args = append(args, limit)
-		limitClause = " LIMIT $8"
+		limitClause = " LIMIT $7"
 	}
 
 	query := `
@@ -1324,10 +1324,7 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 			  AND (
 				$5::text = 'agent'
 				OR a.owner_id = $6::uuid
-				OR (
-					COALESCE(NULLIF(a.display_name, ''), a.name) NOT IN ('Wendy', 'Windy', 'Joe')
-					AND (a.visibility <> 'private' OR $7::text IN ('owner', 'admin'))
-				)
+				OR COALESCE(NULLIF(a.display_name, ''), a.name) NOT IN ('Wendy', 'Windy', 'Joe')
 			  )
 			  AND (
 				$3::boolean
@@ -1385,13 +1382,6 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, ChannelInviteCandidatesResponse{Candidates: out})
-}
-
-func (h *Handler) channelInviteRequesterRole(ctx context.Context, userID, workspaceID string) string {
-	if member, err := h.getWorkspaceMember(ctx, userID, workspaceID); err == nil {
-		return member.Role
-	}
-	return "member"
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
@@ -2516,9 +2506,8 @@ func (h *Handler) globalSearchPeople(w http.ResponseWriter, r *http.Request, wor
 			FROM agent a
 			WHERE a.workspace_id = $1
 			  AND a.archived_at IS NULL
-			  AND (a.visibility = 'workspace' OR a.owner_id = $3)
 			  AND (a.name ILIKE $2 ESCAPE '\' OR COALESCE(a.display_name, '') ILIKE $2 ESCAPE '\')
-		) people`, workspaceID, pattern, userID).Scan(&resp.Counts.People); err != nil {
+		) people`, workspaceID, pattern).Scan(&resp.Counts.People); err != nil {
 		writeCodedError(w, http.StatusInternalServerError, "global_search_people_count_failed", "failed to count people search results")
 		return false
 	}
@@ -2535,11 +2524,10 @@ func (h *Handler) globalSearchPeople(w http.ResponseWriter, r *http.Request, wor
 			FROM agent a
 			WHERE a.workspace_id = $1
 			  AND a.archived_at IS NULL
-			  AND (a.visibility = 'workspace' OR a.owner_id = $3)
 			  AND (a.name ILIKE $2 ESCAPE '\' OR COALESCE(a.display_name, '') ILIKE $2 ESCAPE '\')
 		) people
 		ORDER BY sort_at DESC, display_name ASC
-		LIMIT $4`, workspaceID, pattern, userID, limit)
+		LIMIT $3`, workspaceID, pattern, limit)
 	if err != nil {
 		writeCodedError(w, http.StatusInternalServerError, "global_search_people_failed", "failed to search people")
 		return false
@@ -4765,6 +4753,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// Ack first: agent wake fanout (and Feishu sync) are O(agents)/network and
 	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
+	h.awardHonorXP(r.Context(), parseUUID(userID), "channel.message", msg.ID)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
 		if channelMessageNeedsVoiceTranscription(msg.Parts) {
 			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
@@ -5920,7 +5909,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 		}
 	}
 	rows, err := h.DB.Query(ctx, `
-		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name
 		FROM channel_member cm
@@ -5933,7 +5922,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
@@ -5947,7 +5936,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 
 func (h *Handler) channelThreadFollowerAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
 	return h.channelThreadAgentsFromQuery(ctx, `
-		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name
 		FROM thread_participant tp
@@ -5972,7 +5961,7 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
 			continue
 		}
 		out = append(out, a)

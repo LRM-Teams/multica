@@ -15,6 +15,7 @@ import { QueryProvider } from "../provider";
 import { createLogger } from "../logger";
 import { defaultStorage } from "./storage";
 import { AuthInitializer } from "./auth-initializer";
+import { HonorPresenceHeartbeat } from "./honor-presence-heartbeat";
 import type { CoreProviderProps, ClientIdentity } from "./types";
 import type { StorageAdapter } from "../types/storage";
 
@@ -99,6 +100,7 @@ export function CoreProvider({
           cookieAuth={cookieAuth}
           identity={identity}
         >
+          <HonorPresenceHeartbeat />
           {children}
         </WSProvider>
       </AuthInitializer>

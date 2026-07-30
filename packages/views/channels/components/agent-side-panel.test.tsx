@@ -128,11 +128,6 @@ vi.mock("../../agents/components/inspector/thinking-prop-row", () => ({
     <div data-testid="thinking-picker" data-can-edit={String(!!p.canEdit)} />
   ),
 }));
-vi.mock("../../agents/components/inspector/visibility-picker", () => ({
-  VisibilityPicker: (p: { canEdit?: boolean }) => (
-    <div data-testid="visibility-picker" data-can-edit={String(!!p.canEdit)} />
-  ),
-}));
 vi.mock("../../common/prop-row", () => ({
   PropRow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -151,7 +146,14 @@ vi.mock("@multica/core/permissions", () => ({
 vi.mock("../../runtimes/components/shared", () => ({
   useRuntimeHealthStateLabel: () => (state: string) => state,
 }));
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getAgentFleetRank: () => undefined,
+    getMemberHonor: () => undefined,
+  }),
+}));
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: (options: unknown) => options,
   useQuery: (options: { kind?: string; queryKey?: unknown[] }) => ({
     data:
       options.kind === "usage-by-agent"
@@ -259,10 +261,7 @@ const ownerMember: MemberWithUser = {
 
 const members: MemberWithUser[] = [ownerMember];
 
-function makeAgent(
-  ownerId = "user-owner",
-  visibility: Agent["visibility"] = "workspace",
-): Agent {
+function makeAgent(ownerId = "user-owner"): Agent {
   return {
     id: "agent-1",
     workspace_id: "ws-1",
@@ -276,7 +275,6 @@ function makeAgent(
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility,
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
@@ -441,7 +439,7 @@ describe("AgentSidePanel", () => {
 
     render(
       <AgentSidePanel
-        agent={makeAgent("user-owner", "private")}
+        agent={makeAgent("user-owner")}
         currentUserId="user-other"
         members={[...members, workspaceMember]}
         onClose={() => {}}
@@ -491,7 +489,7 @@ describe("AgentSidePanel", () => {
 
     render(
       <AgentSidePanel
-        agent={makeAgent("user-owner", "private")}
+        agent={makeAgent("user-owner")}
         currentUserId="user-other"
         members={[...members, workspaceMember]}
         onClose={() => {}}

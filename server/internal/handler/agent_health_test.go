@@ -329,73 +329,6 @@ func TestGetAgentHealth_PublicRuntimeOwnedByAnotherMemberStaysOnline(t *testing.
 	}
 }
 
-func TestAgentRuntimeRunnableForAgent_Pure(t *testing.T) {
-	ownerID := parseUUID("11111111-1111-1111-1111-111111111111")
-	otherID := parseUUID("22222222-2222-2222-2222-222222222222")
-	tests := []struct {
-		name    string
-		agent   db.Agent
-		runtime db.AgentRuntime
-		want    bool
-	}{
-		{
-			name: "workspace agent can use public runtime",
-			agent: db.Agent{
-				Visibility: "workspace",
-				OwnerID:    ownerID,
-			},
-			runtime: db.AgentRuntime{
-				Visibility: "public",
-				OwnerID:    otherID,
-			},
-			want: true,
-		},
-		{
-			name: "workspace agent cannot count private runtime as shared capacity",
-			agent: db.Agent{
-				Visibility: "workspace",
-				OwnerID:    ownerID,
-			},
-			runtime: db.AgentRuntime{
-				Visibility: "private",
-				OwnerID:    ownerID,
-			},
-			want: false,
-		},
-		{
-			name: "private agent can use same-owner private runtime",
-			agent: db.Agent{
-				Visibility: "private",
-				OwnerID:    ownerID,
-			},
-			runtime: db.AgentRuntime{
-				Visibility: "private",
-				OwnerID:    ownerID,
-			},
-			want: true,
-		},
-		{
-			name: "private agent cannot use another owner's private runtime",
-			agent: db.Agent{
-				Visibility: "private",
-				OwnerID:    ownerID,
-			},
-			runtime: db.AgentRuntime{
-				Visibility: "private",
-				OwnerID:    otherID,
-			},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := agentRuntimeRunnableForAgent(tt.agent, tt.runtime); got != tt.want {
-				t.Fatalf("agentRuntimeRunnableForAgent() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func createAgentHealthFixture(t *testing.T, status string, lastSeen, updatedAt time.Time) (agentID, runtimeID string) {
 	return createAgentHealthFixtureWithRuntimeAccess(t, status, lastSeen, updatedAt, testUserID, "public")
 }
@@ -415,11 +348,8 @@ func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, last
 	}
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, "health-agent-"+randomID(), runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create health agent: %v", err)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Lock, UserMinus } from "lucide-react";
+import { UserMinus } from "lucide-react";
 import type { Agent, IssueAssigneeType, UpdateIssueRequest } from "@multica/core/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -214,11 +214,6 @@ export function AssigneePicker({
                 disabled={!allowed}
                 tooltip={!allowed ? decision.message : undefined}
                 labelClassName={allowed ? "" : "text-muted-foreground"}
-                trailing={
-                  a.visibility === "private" ? (
-                    <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
-                  ) : undefined
-                }
                 onClick={() => {
                   if (!allowed) return;
                   onUpdate({

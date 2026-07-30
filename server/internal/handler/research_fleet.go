@@ -154,7 +154,6 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 			RuntimeMode:        runtime.RuntimeMode,
 			RuntimeConfig:      []byte("{}"),
 			RuntimeID:          runtime.ID,
-			Visibility:         agentVisibilityPrivate,
 			MaxConcurrentTasks: 4,
 			OwnerID:            userID,
 			CustomEnv:          []byte("{}"),

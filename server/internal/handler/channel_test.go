@@ -7027,11 +7027,8 @@ func TestChannelOfflineRuntimeQueuesButDoesNotShowActiveTask(t *testing.T) {
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config
-		)
-		VALUES ($1, 'Offline Channel Agent', '', 'local', '{}'::jsonb, $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, 'Offline Channel Agent', '', 'local', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create offline agent: %v", err)
@@ -7686,13 +7683,18 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 }
 
-func TestListChannelInviteCandidatesExcludesExistingMembersAndPrivateAgents(t *testing.T) {
+// TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents
+// supersedes the old "excludes private agents" contract (task #908: agent
+// usage — including channel invites — is unconditional for every workspace
+// member; only the Windy/Wendy owner-only carve-out remains, and this fixture
+// doesn't use that name).
+func TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	privateAgentID, _, memberID := privateAgentTestFixture(t)
+	otherOwnedAgentID, _, memberID := privateAgentTestFixture(t)
 	candidateID := createChannelPlainMember(t)
 	channelID := seedChannelForTest(t, "invite-candidates-"+uuid.NewString(), memberID)
 
@@ -7715,8 +7717,8 @@ func TestListChannelInviteCandidatesExcludesExistingMembersAndPrivateAgents(t *t
 	if channelInviteCandidatesContain(resp.Candidates, "user", memberID) {
 		t.Fatalf("existing channel member %s leaked into invite candidates", memberID)
 	}
-	if channelInviteCandidatesContain(resp.Candidates, "agent", privateAgentID) {
-		t.Fatalf("private agent %s leaked into plain-member invite candidates", privateAgentID)
+	if !channelInviteCandidatesContain(resp.Candidates, "agent", otherOwnedAgentID) {
+		t.Fatalf("agent %s owned by someone else missing from invite candidates (existence/usage is unconditional post-#908): %+v", otherOwnedAgentID, resp.Candidates)
 	}
 
 	var fullMemberCount int
@@ -7737,7 +7739,11 @@ func channelInviteCandidatesContain(candidates []ChannelInviteCandidateResponse,
 	return false
 }
 
-func TestAddChannelMembersRejectsPrivateAgentForPlainMember(t *testing.T) {
+// TestAddChannelMembersAllowsAnyAgentForPlainMember supersedes the old
+// "rejects private agent for plain member" contract (task #908: adding an
+// agent to a channel is a usage surface, not an internal-control surface, so
+// it widens to every workspace member regardless of who owns the agent).
+func TestAddChannelMembersAllowsAnyAgentForPlainMember(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -7753,8 +7759,8 @@ func TestAddChannelMembersRejectsPrivateAgentForPlainMember(t *testing.T) {
 	req = withURLParam(req, "channelId", channelID)
 	rec := httptest.NewRecorder()
 	testHandler.AddChannelMembers(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("batch add private agent as plain member: status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+		t.Fatalf("batch add agent as plain member: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	var count int
@@ -7762,10 +7768,10 @@ func TestAddChannelMembersRejectsPrivateAgentForPlainMember(t *testing.T) {
 		SELECT count(*)
 		FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'agent' AND member_id = $3`, channelID, testWorkspaceID, agentID).Scan(&count); err != nil {
-		t.Fatalf("count private agent channel members: %v", err)
+		t.Fatalf("count agent channel members: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("private agent was added by unauthorized batch request; count=%d", count)
+	if count != 1 {
+		t.Fatalf("agent was not added by batch request; count=%d", count)
 	}
 }
 

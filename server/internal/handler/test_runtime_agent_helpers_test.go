@@ -16,8 +16,9 @@ func setupBoundRuntimeAgent(t *testing.T, provider string) (agentID, runtimeID s
 		t.Fatalf("create runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, description, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
 		RETURNING id
 	`, testWorkspaceID, provider+" agent", runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)

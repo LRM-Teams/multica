@@ -34,7 +34,6 @@ function makeAgent(over: Partial<Agent> & Pick<Agent, "id" | "name">): Agent {
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility: "workspace",
     status: "idle",
     max_concurrent_tasks: 1,
     model: "sonnet",

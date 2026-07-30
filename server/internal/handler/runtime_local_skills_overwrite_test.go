@@ -47,10 +47,8 @@ func bindAgentToSkill(t *testing.T, skillID string) string {
 	var agentID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
 		RETURNING id
 	`, testWorkspaceID, agentName, testRuntimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)

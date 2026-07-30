@@ -2,14 +2,6 @@ export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
 
-/**
- * Agent discoverability / invite / @mention surface (LRM-240).
- * - `workspace` — visible workspace-wide
- * - `private` — Personal; owner + workspace admins
- * - `channel` — 「仅本群」; must bind a single `home_channel_id`
- */
-export type AgentVisibility = "workspace" | "private" | "channel";
-
 export type RuntimeUpdateState =
   | "idle"
   | "pending"
@@ -402,11 +394,11 @@ export interface Agent {
    * Older backends omit this field; treat `undefined` as false.
    */
   mcp_config_redacted?: boolean;
-  visibility: AgentVisibility;
   /**
-   * Bound home group when `visibility === "channel"` (LRM-240 / LRM-370).
-   * Required for channel visibility; omit/null for workspace/private.
-   * Illegal combinations must 4xx — never silently remap to private (LRM-238).
+   * Retired with agent.visibility (#908, task #908 batch3) — the channel-scoped
+   * binding this used to require no longer exists server-side. The backend
+   * always returns `null` here and rejects a non-null value on write; the
+   * field itself is deleted in a later batch alongside the DB column.
    */
   home_channel_id?: string | null;
   status: AgentStatus;
@@ -498,7 +490,6 @@ export interface AgentCreationDraft {
   description: string;
   instructions: string;
   avatar_url?: string | null;
-  visibility: AgentVisibility;
   project_id?: string | null;
   channel_id?: string | null;
   can_execute_code: boolean;
@@ -518,7 +509,6 @@ export interface CreateAgentDraftRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string | null;
-  visibility?: AgentVisibility;
   project_id?: string | null;
   channel_id?: string | null;
   can_execute_code?: boolean;
@@ -552,10 +542,10 @@ export interface CreateAgentRequest {
   runtime_config?: Record<string, unknown>;
   custom_env?: Record<string, string>;
   custom_args?: string[];
-  visibility?: AgentVisibility;
   /**
-   * Required when `visibility === "channel"`. Omitted for other tiers.
-   * Server rejects channel-without-home and home-without-channel (LRM-370).
+   * Retired with agent.visibility (#908, task #908 batch3) — the server
+   * always rejects a non-null value here now. Field itself is deleted in
+   * a later batch alongside the DB column.
    */
   home_channel_id?: string | null;
   max_concurrent_tasks?: number;
@@ -616,7 +606,6 @@ export interface CreateAgentFromTemplateRequest {
   display_name?: string;
   runtime_id: string;
   model?: string;
-  visibility?: AgentVisibility;
   max_concurrent_tasks?: number;
   /** Optional overrides applied to the template before creation. nil/omit
    *  uses the template's own value. */
@@ -679,12 +668,10 @@ export interface UpdateAgentRequest {
    *     validate / translate it according to their own MCP integration
    */
   mcp_config?: unknown | null;
-  visibility?: AgentVisibility;
   /**
-   * Tri-state with `visibility` (LRM-370):
-   * - omit → no change when visibility unchanged
-   * - `null` → clear (only valid when leaving `channel`)
-   * - string → bind home group (required when setting `visibility: "channel"`)
+   * Retired with agent.visibility (#908, task #908 batch3) — the server
+   * always rejects a non-null value here now. Field itself is deleted in
+   * a later batch alongside the DB column.
    */
   home_channel_id?: string | null;
   status?: AgentStatus;

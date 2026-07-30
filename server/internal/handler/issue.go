@@ -2336,6 +2336,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	resp := issueToResponse(issue, prefix)
 	resp.Attachments = buildAttachmentResponses(res.Attachments)
+	if creatorType == "member" {
+		h.awardHonorXP(r.Context(), parseUUID(actualCreatorID), "issue.create", uuidToString(issue.ID))
+	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -2639,6 +2642,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// output, so only human-driven done should release the occupied agent slot.
 	if statusChanged && (issue.Status == "cancelled" || (issue.Status == "done" && actorType == "member")) {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
+	}
+	if statusChanged && issue.Status == "done" && actorType == "member" {
+		h.awardHonorXP(r.Context(), parseUUID(actorID), "issue.close", uuidToString(issue.ID))
 	}
 
 	// Platform-driven parent notification: when this issue transitions into

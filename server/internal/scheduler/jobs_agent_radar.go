@@ -240,7 +240,6 @@ func repairWorkspaceRadarSupervisorBindings(ctx context.Context, pool *pgxpool.P
 		    candidate.id AS agent_id,
 		    (runtime.status = 'online') AS runtime_online,
 		    (COALESCE(NULLIF(candidate.display_name, ''), candidate.name) = 'Wendy') AS canonical_wendy,
-		    (candidate.visibility = 'private') AS private_wendy,
 		    candidate.updated_at,
 		    candidate.created_at
 		  FROM repairable_workspaces repairable
@@ -264,7 +263,6 @@ func repairWorkspaceRadarSupervisorBindings(ctx context.Context, pool *pgxpool.P
 		      ORDER BY
 		        candidate_pool.runtime_online DESC NULLS LAST,
 		        candidate_pool.canonical_wendy DESC,
-		        candidate_pool.private_wendy DESC,
 		        candidate_pool.updated_at DESC,
 		        candidate_pool.created_at DESC,
 		        candidate_pool.agent_id ASC

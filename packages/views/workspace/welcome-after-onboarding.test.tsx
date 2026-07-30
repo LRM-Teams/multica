@@ -162,7 +162,6 @@ describe("WelcomeAfterOnboarding", () => {
         name: "Multica Helper",
         description: "Built-in workspace assistant.",
         avatar_url: null,
-        visibility: "workspace",
       });
       useWelcomeStore.getState().set({
         workspaceId: "ws-1",
@@ -204,7 +203,6 @@ describe("WelcomeAfterOnboarding", () => {
           name: "Multica Helper",
           description: "",
           avatar_url: null,
-          visibility: "workspace",
           archived_at: null,
         },
       ]);
@@ -229,7 +227,6 @@ describe("WelcomeAfterOnboarding", () => {
         name: "Multica Helper",
         description: "",
         avatar_url: null,
-        visibility: "workspace",
       });
       // Pick 2 cards — `intro` then `welcome_page`. Issues come back in
       // STARTER_CARD_IDS order (intro first), so navigate target is the
@@ -305,7 +302,6 @@ describe("WelcomeAfterOnboarding", () => {
         name: "Multica Helper",
         description: "",
         avatar_url: null,
-        visibility: "workspace",
       });
       mockCreateIssue.mockResolvedValueOnce({
         id: "issue-intro",
@@ -352,7 +348,6 @@ describe("WelcomeAfterOnboarding", () => {
         name: "Multica Helper",
         description: "",
         avatar_url: null,
-        visibility: "workspace",
       });
       mockCreateIssue.mockResolvedValueOnce({
         id: "issue-intro",

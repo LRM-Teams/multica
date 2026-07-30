@@ -102,6 +102,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getActorName: () => "Test Actor",
     getActorInitials: () => "TA",
     getMemberRole: () => null,
+    getMemberHonor: () => undefined,
+    getAgentFleetRank: () => undefined,
   }),
 }));
 

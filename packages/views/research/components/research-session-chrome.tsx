@@ -1,10 +1,44 @@
 "use client";
 
-import { Badge } from "@multica/ui/components/ui/badge";
+import { useState } from "react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@multica/ui/components/ui/popover";
+import { cn } from "@multica/ui/lib/utils";
 import type { ResearchSession } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
+
+type StatusTone = { text: string; dot: string };
+
+// Semantic status dot (design lock LRM-792: 状态中文+语义点).
+const STATUS_TONES: Record<string, StatusTone> = {
+  running: { text: "text-brand", dot: "bg-brand" },
+  awaiting_user_confirm: { text: "text-warning", dot: "bg-warning" },
+  completed: { text: "text-success", dot: "bg-success" },
+};
+const DEFAULT_TONE: StatusTone = {
+  text: "text-muted-foreground",
+  dot: "bg-muted-foreground",
+};
+
+function StageChip({ label, className }: { label: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase",
+        className,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
 
 export function ResearchSessionChrome({
   session,
@@ -36,66 +70,103 @@ export function ResearchSessionChrome({
   selectedSummary?: string | null;
 }) {
   const { t } = useT("research");
+  const [handoffOpen, setHandoffOpen] = useState(false);
+
+  const status = session.status;
+  const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
+  const statusLabel = t(($) => $.status[status as keyof typeof $.status] ?? status);
+  const stageLabel = t(
+    ($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage,
+  );
+
+  // One primary action per state (design lock): awaiting_user_confirm →
+  // 确认并继续, completed → 交付移交, running → none.
+  const showConfirm = status === "awaiting_user_confirm" && canConfirm;
+  const showHandoff = status === "completed" && canHandoff;
+
+  const primaryClass = "bg-brand text-brand-foreground hover:bg-brand/90";
 
   return (
-    <header className="flex shrink-0 flex-col gap-2 border-b bg-background/80 px-4 py-3 backdrop-blur">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="truncate text-base font-semibold tracking-tight">{session.title}</h1>
-            <Badge variant="secondary">
-              {t(($) => $.status[session.status as keyof typeof $.status] ?? session.status)}
-            </Badge>
-            <Badge variant="outline" className="font-mono text-[10px] uppercase">
-              {session.current_stage}
-            </Badge>
-          </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">{session.goal}</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+    <header className="shrink-0 border-b bg-background/85 backdrop-blur">
+      <div className="flex items-center gap-2.5 px-4 pt-2.5 pb-1">
+        <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
+          {session.title}
+        </h1>
+        <span
+          className={cn("flex shrink-0 items-center gap-1.5 text-xs font-semibold", tone.text)}
+        >
+          <span
+            className={cn(
+              "size-2 rounded-full",
+              tone.dot,
+              status === "running" && "animate-pulse",
+            )}
+          />
+          {statusLabel}
+        </span>
+        <StageChip label={stageLabel} className="hidden sm:inline-flex" />
+      </div>
+      <div className="flex items-center justify-between gap-3 px-4 pb-2.5">
+        <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
+          {selectedSummary ?? session.goal}
+        </p>
+        <StageChip label={stageLabel} className="sm:hidden" />
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {showConfirm ? (
+            <Button
+              size="sm"
+              className={primaryClass}
+              onClick={onConfirm}
+              disabled={confirmPending}
+            >
+              {t(($) => $.panel.confirm_continue)}
+            </Button>
+          ) : null}
+          {showHandoff ? (
+            <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>
+              <PopoverTrigger
+                render={<Button size="sm" className={primaryClass} />}
+              >
+                {t(($) => $.panel.handoff_title)}
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 gap-3 p-3">
+                <PopoverHeader>
+                  <PopoverTitle>{t(($) => $.panel.handoff_title)}</PopoverTitle>
+                </PopoverHeader>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={createProject}
+                    onCheckedChange={(v) => onCreateProjectChange(v === true)}
+                  />
+                  {t(($) => $.panel.handoff_project)}
+                </label>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={createChannel}
+                    onCheckedChange={(v) => onCreateChannelChange(v === true)}
+                  />
+                  {t(($) => $.panel.handoff_channel)}
+                </label>
+                <Button
+                  size="sm"
+                  disabled={handoffPending || (!createProject && !createChannel)}
+                  onClick={() => {
+                    onHandoff();
+                    setHandoffOpen(false);
+                  }}
+                >
+                  {t(($) => $.panel.handoff)}
+                </Button>
+              </PopoverContent>
+            </Popover>
+          ) : null}
           {onOpenDelivery ? (
             <Button size="sm" variant="outline" onClick={onOpenDelivery}>
-              {t(($) => $.panel.delivery)}
+              {t(($) => $.panel.view_delivery)}
             </Button>
-          ) : null}
-          {canConfirm && session.status !== "completed" ? (
-            <Button size="sm" onClick={onConfirm} disabled={confirmPending}>
-              {t(($) => $.panel.confirm)}
-            </Button>
-          ) : null}
-          {canHandoff ? (
-            <>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Checkbox
-                  checked={createProject}
-                  onCheckedChange={(v) => onCreateProjectChange(v === true)}
-                />
-                {t(($) => $.panel.handoff_project)}
-              </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Checkbox
-                  checked={createChannel}
-                  onCheckedChange={(v) => onCreateChannelChange(v === true)}
-                />
-                {t(($) => $.panel.handoff_channel)}
-              </label>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={handoffPending || (!createProject && !createChannel)}
-                onClick={onHandoff}
-              >
-                {t(($) => $.panel.handoff)}
-              </Button>
-            </>
           ) : null}
         </div>
       </div>
-      {selectedSummary ? (
-        <p className="line-clamp-2 rounded-md border bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
-          {selectedSummary}
-        </p>
-      ) : null}
     </header>
   );
 }

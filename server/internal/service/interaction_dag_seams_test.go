@@ -131,7 +131,7 @@ func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 	require.NoError(t, err)
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "seam-agent", DisplayName: "Seam Agent", Description: "test",
-		RuntimeMode: "cloud", RuntimeConfig: []byte("{}"), RuntimeID: rtID, Visibility: "workspace",
+		RuntimeMode: "cloud", RuntimeConfig: []byte("{}"), RuntimeID: rtID,
 		MaxConcurrentTasks: 1, Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 	})
 	require.NoError(t, err)

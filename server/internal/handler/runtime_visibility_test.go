@@ -258,12 +258,8 @@ func TestUpdateAgent_RejectsRebindToPrivateRuntime(t *testing.T) {
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args
-		)
-		VALUES ($1, 'rebind-test-agent', '', 'cloud', '{}'::jsonb,
-		        $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
+		) VALUES ($1, 'rebind-test-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, publicRuntimeID, plainMemberID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent on public runtime: %v", err)

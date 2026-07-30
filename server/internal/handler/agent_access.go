@@ -31,9 +31,10 @@ func (h *Handler) canAccessAgentInternals(ctx context.Context, agent db.Agent, a
 	return roleAllowed(member.Role, "owner", "admin")
 }
 
-// memberAllowedForPrivateAgent is the pure predicate used by both
-// canAccessPrivateAgent and the ListAgents filter loop. Caller must have
-// already confirmed agent.Visibility == "private".
+// memberAllowedForPrivateAgent is the pure predicate used by
+// accessibleAgentIDs for the one remaining owner-only agent class
+// (privateAgentOwnerOnly — Windy/Wendy) now that task #908 retired
+// agent.visibility itself.
 func memberAllowedForPrivateAgent(agent db.Agent, userID, role string) bool {
 	if privateAgentOwnerOnly(agent) {
 		return uuidToString(agent.OwnerID) == userID
@@ -58,8 +59,12 @@ func (h *Handler) publishAgentVisibilityEvent(eventType, workspaceID, actorType,
 
 // accessibleAgentIDs returns the set of agent IDs in the workspace the actor
 // is allowed to see, for use by workspace-wide aggregation endpoints
-// (run counts, activity histograms, task snapshots) that need to filter out
-// private agents the member can't access. Returns nil and false on error.
+// (run counts, activity histograms, task snapshots). Task #908 retired
+// agent.visibility for usage/aggregate surfaces (Parker, #multica thread
+// f83df812, 2026-07-30 18:31: "accessibleAgentIDs 不动，喂列表页聚合，全员
+// 可见") — the only remaining owner-only class is Windy/Wendy
+// (privateAgentOwnerOnly), not a general private-agent concept. Returns nil
+// and false on error.
 func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType, actorID, role string) (map[string]struct{}, bool) {
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
@@ -71,7 +76,7 @@ func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType
 	}
 	allowed := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
-		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
+		if actorType == "member" && privateAgentOwnerOnly(a) {
 			if !memberAllowedForPrivateAgent(a, actorID, role) {
 				continue
 			}

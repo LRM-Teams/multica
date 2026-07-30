@@ -789,67 +789,6 @@ func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T
 	}
 }
 
-// TestCreateAgent_DefaultVisibilityIsWorkspace proves task #908's default
-// flip (Parker, #multica thread f83df812, 2026-07-30 17:58): an agent
-// created without a visibility field defaults to "workspace", not the old
-// "private" — so omitting the field no longer silently contradicts the
-// "default public" product decision.
-func TestCreateAgent_DefaultVisibilityIsWorkspace(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	displayName := "Default Visibility Agent " + uuid.NewString()[:8]
-	body := map[string]any{
-		"display_name":         displayName,
-		"description":          "no visibility field set",
-		"runtime_id":           testRuntimeID,
-		"max_concurrent_tasks": 1,
-	}
-
-	w := httptest.NewRecorder()
-	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateAgent without visibility: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp AgentResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, resp.ID)
-	})
-	if resp.Visibility != "workspace" {
-		t.Fatalf("visibility = %q, want workspace", resp.Visibility)
-	}
-}
-
-// TestCreateAgent_RejectsRetiredChannelVisibility locks the ORDER, not just
-// the outcome: visibility=channel must be rejected by application-layer
-// validation (400) before any DB write, not surface as a raw CHECK-constraint
-// violation (500). Nash's #1533 review (#multica thread f83df812, 2026-07-30
-// 18:37-18:39): this ordering is exactly the kind of thing a refactor could
-// silently invert, and "no test" means nothing will complain when it does.
-func TestCreateAgent_RejectsRetiredChannelVisibility(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	body := map[string]any{
-		"display_name":         "Retired Channel Visibility " + uuid.NewString()[:8],
-		"description":          "must be rejected before any DB write",
-		"runtime_id":           testRuntimeID,
-		"visibility":           "channel",
-		"max_concurrent_tasks": 1,
-	}
-
-	w := httptest.NewRecorder()
-	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("CreateAgent with visibility=channel: expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
 func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -1194,11 +1133,8 @@ func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config
-		)
-		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, agentName, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1278,11 +1214,8 @@ func TestAgentResponseRuntimeNamePrefersDisplayName(t *testing.T) {
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config
-		)
-		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, agentName, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1968,7 +1901,7 @@ func TestBindWorkspaceRadarSupervisorReplacesArchivedPriorAndCancelsOnlyItsRadar
 		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 			WorkspaceID: workspace.ID, Name: name + "-" + suffix, DisplayName: "Wendy",
 			Description: "workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-			RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerID,
+			RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		})
 		if err != nil {
@@ -2215,11 +2148,11 @@ func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, instructions, avatar_url,
-			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			archived_at, archived_by
 		)
 		VALUES ($1, $2, 'Wendy', 'archived Wendy', 'instructions', '/legacy.png',
-			'cloud', '{}'::jsonb, $3, 'private', 1, $4, now(), $4)
+			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4)
 		RETURNING id
 	`, testWorkspaceID, "archived_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("seed archived Wendy agent: %v", err)
@@ -2255,6 +2188,41 @@ func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T
 	}
 }
 
+// TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate proves task #908's
+// fix (Parker, #multica thread f83df812, 2026-07-30 18:05, "直接删掉这个强制
+// 转换：它跟 Frank『默认public』直接冲突"): restoring an archived Wendy agent
+// must not silently coerce it back to visibility=private.
+func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, instructions, avatar_url,
+			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
+			archived_at, archived_by
+		)
+		VALUES ($1, $2, 'Wendy', 'archived workspace-visible Wendy', 'instructions', '/legacy.png',
+			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4)
+		RETURNING id
+	`, testWorkspaceID, "archived_workspace_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("seed archived workspace-visible Wendy agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+	resetTestWorkspaceOnboardingAgent(t, ctx)
+
+	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
+	updated, _, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
+	if err != nil {
+		t.Fatalf("ensureWindyAgent: %v", err)
+	}
+	if uuidToString(updated.ID) != agentID {
+		t.Fatalf("ensureWindyAgent reused agent %q, want restored %q", uuidToString(updated.ID), agentID)
+	}
+}
+
 func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("handler test fixture unavailable")
@@ -2265,11 +2233,11 @@ func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, instructions, avatar_url,
-			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			created_at, updated_at
 		)
 		VALUES ($1, $2, 'Wendy', 'active Wendy', '', '/wendy.png',
-			'cloud', '{}'::jsonb, $3, 'private', 1, $4, now() - interval '2 hours', now() - interval '2 hours')
+			'cloud', '{}'::jsonb, $3, 1, $4, now() - interval '2 hours', now() - interval '2 hours')
 		RETURNING id
 	`, testWorkspaceID, "active_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), activeRuntime, testUserID).Scan(&activeID); err != nil {
 		t.Fatalf("seed active Wendy: %v", err)
@@ -2277,11 +2245,11 @@ func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, instructions, avatar_url,
-			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			created_at, updated_at, archived_at, archived_by
 		)
 		VALUES ($1, $2, 'Wendy', 'archived newer Wendy', '', '/wendy.png',
-			'cloud', '{}'::jsonb, $3, 'private', 1, $4,
+			'cloud', '{}'::jsonb, $3, 1, $4,
 			now() - interval '1 hour', now() - interval '1 hour', now(), $4)
 		RETURNING id
 	`, testWorkspaceID, "archived_newer_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), activeRuntime, testUserID).Scan(&archivedID); err != nil {
@@ -2334,11 +2302,8 @@ func TestEnsureWindyRenamesLegacyWindyAgent(t *testing.T) {
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, display_name, description, instructions, avatar_url,
-			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, $2, 'Windy', 'legacy windy', 'legacy instructions', '/legacy.png',
-			'cloud', '{}'::jsonb, $3, 'private', 1, $4)
+			workspace_id, name, display_name, description, instructions, avatar_url, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, 'Windy', 'legacy windy', 'legacy instructions', '/legacy.png', 'cloud', '{}'::jsonb, $3, 1, $4)
 		RETURNING id
 	`, testWorkspaceID, "legacy_windy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("seed legacy Windy agent: %v", err)
@@ -2365,13 +2330,13 @@ func TestEnsureWindyRenamesLegacyWindyAgent(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM agent
-		WHERE workspace_id = $1 AND owner_id = $2 AND visibility = 'private'
+		WHERE workspace_id = $1 AND owner_id = $2
 		  AND display_name IN ('Windy', 'Wendy')
 	`, testWorkspaceID, testUserID).Scan(&count); err != nil {
 		t.Fatalf("count Windy/Wendy agents: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("Windy/Wendy private agent count = %d, want 1", count)
+		t.Fatalf("Windy/Wendy agent count = %d, want 1", count)
 	}
 }
 
@@ -2530,7 +2495,7 @@ func TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull(t *testing.T) {
 		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 			WorkspaceID: workspace.ID, Name: name, DisplayName: name,
 			Description: "cas test agent", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-			RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerID,
+			RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		})
 		if err != nil {

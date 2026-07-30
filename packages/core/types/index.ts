@@ -14,7 +14,6 @@ export type {
   AgentMemoryGrowthNext,
   AgentStatus,
   AgentRuntimeMode,
-  AgentVisibility,
   RuntimeUpdateState,
   RuntimeHealthState,
   AgentTask,
@@ -153,6 +152,16 @@ export type {
   TeamKnowledgeListResponse,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
+export type {
+  HonorBadge,
+  HonorDashboard,
+  HonorNameStyleKey,
+  HonorPublicWall,
+  HonorPillarProgress,
+  HonorRulesDocument,
+  HonorSnapshot,
+  HonorXPEvent,
+} from "./honor";
 export type {
   Workspace,
   WorkspaceRepo,

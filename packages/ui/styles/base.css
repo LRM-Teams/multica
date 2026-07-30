@@ -301,3 +301,236 @@
     }
   }
 }
+
+/* User honor name styles */
+.honor-name--default {
+  color: inherit;
+}
+
+.honor-name--member {
+  color: #ef4444;
+}
+
+.honor-name--gold,
+.honor-name--founding {
+  color: #f59e0b;
+}
+
+.honor-name--founding {
+  text-shadow: 0 0 8px color-mix(in srgb, #f59e0b 45%, transparent);
+}
+
+.honor-name--prismatic {
+  background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.honor-name--glow {
+  color: #fde68a;
+  text-shadow: 0 0 6px #f59e0b, 0 0 14px color-mix(in srgb, #f59e0b 50%, transparent);
+}
+
+.honor-name--shimmer {
+  background: linear-gradient(110deg, #fef3c7 0%, #f59e0b 45%, #fff7ed 55%, #f59e0b 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: honor-shimmer 2.8s linear infinite;
+}
+
+.honor-name--animated-prismatic {
+  background: linear-gradient(270deg, #ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7, #ef4444);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: honor-prismatic 6s linear infinite;
+}
+
+.honor-name--animated-glow {
+  color: #fde68a;
+  animation: honor-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes honor-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes honor-prismatic {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
+@keyframes honor-glow {
+  0%, 100% { text-shadow: 0 0 4px #f59e0b; }
+  50% { text-shadow: 0 0 10px #fde68a, 0 0 18px #f59e0b; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .honor-name--shimmer,
+  .honor-name--animated-prismatic,
+  .honor-name--animated-glow {
+    animation: none;
+  }
+  .honor-name--animated-prismatic {
+    background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7);
+  }
+  .honor-name-glow[data-honor-glow-tier] {
+    animation: none !important;
+  }
+}
+
+/* Level-based luminosity tiers (I–VII). Halo uses pseudo-element; text stays readable. */
+.honor-name-glow {
+  --honor-glow-color: #f59e0b;
+  --honor-pulse-duration: 3s;
+  --honor-halo-opacity: 0.28;
+  position: relative;
+  isolation: isolate;
+}
+
+.honor-name-glow::before {
+  content: "";
+  position: absolute;
+  inset: -0.15em -0.35em;
+  border-radius: 0.35em;
+  pointer-events: none;
+  z-index: -1;
+  opacity: var(--honor-halo-opacity);
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--honor-glow-color) 55%, transparent) 0%,
+    transparent 72%
+  );
+}
+
+.honor-name-glow[data-honor-glow-tier="1"] {
+  --honor-halo-opacity: 0.18;
+  text-shadow: 0 0 4px color-mix(in srgb, var(--honor-glow-color) 35%, transparent);
+}
+
+.honor-name-glow[data-honor-glow-tier="2"] {
+  --honor-halo-opacity: 0.24;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--honor-glow-color) 40%, transparent);
+}
+
+.honor-name-glow[data-honor-glow-tier="3"] {
+  --honor-halo-opacity: 0.32;
+  animation: honor-tier-breathe var(--honor-pulse-duration) ease-in-out infinite;
+}
+
+.honor-name-glow[data-honor-glow-tier="4"] {
+  --honor-glow-color: #a78bfa;
+  --honor-halo-opacity: 0.38;
+  animation: honor-tier-breathe var(--honor-pulse-duration) ease-in-out infinite;
+}
+
+.honor-name-glow[data-honor-glow-tier="4"]::after {
+  content: "";
+  position: absolute;
+  inset: -0.2em -0.45em;
+  border-radius: 0.4em;
+  pointer-events: none;
+  z-index: -2;
+  opacity: 0.22;
+  background: radial-gradient(circle at 30% 30%, #c4b5fd 0%, transparent 55%);
+  animation: honor-tier-sparkle calc(var(--honor-pulse-duration) * 1.4) ease-in-out infinite;
+}
+
+.honor-name-glow[data-honor-glow-tier="5"] {
+  --honor-glow-color: #67e8f9;
+  --honor-halo-opacity: 0.4;
+  animation: honor-tier-sweep calc(var(--honor-pulse-duration) * 2) linear infinite;
+}
+
+.honor-name-glow[data-honor-glow-tier="6"] {
+  --honor-glow-color: #818cf8;
+  --honor-halo-opacity: 0.42;
+  animation: honor-tier-nebula calc(var(--honor-pulse-duration) * 2.5) ease-in-out infinite;
+}
+
+.honor-name-glow[data-honor-glow-tier="7"] {
+  --honor-glow-color: #fde68a;
+  --honor-halo-opacity: 0.45;
+  animation: honor-tier-legend calc(var(--honor-pulse-duration) * 2) ease-in-out infinite;
+}
+
+.honor-name-glow[data-honor-glow-tier="7"]::after {
+  content: "";
+  position: absolute;
+  inset: -0.25em -0.5em;
+  border-radius: 0.45em;
+  pointer-events: none;
+  z-index: -2;
+  opacity: 0.3;
+  background: conic-gradient(
+    from 0deg,
+    #ef4444,
+    #f59e0b,
+    #22c55e,
+    #3b82f6,
+    #a855f7,
+    #ef4444
+  );
+  filter: blur(6px);
+  animation: honor-tier-legend-ring calc(var(--honor-pulse-duration) * 3) linear infinite;
+}
+
+@keyframes honor-tier-breathe {
+  0%, 100% { filter: brightness(1); opacity: 1; }
+  50% { filter: brightness(1.08); opacity: 0.92; }
+}
+
+@keyframes honor-tier-sparkle {
+  0%, 100% { opacity: 0.12; transform: scale(0.98); }
+  50% { opacity: 0.28; transform: scale(1.02); }
+}
+
+@keyframes honor-tier-sweep {
+  0% { filter: hue-rotate(0deg) brightness(1); }
+  50% { filter: hue-rotate(18deg) brightness(1.06); }
+  100% { filter: hue-rotate(0deg) brightness(1); }
+}
+
+@keyframes honor-tier-nebula {
+  0%, 100% {
+    --honor-glow-color: #818cf8;
+    filter: brightness(1);
+  }
+  33% {
+    --honor-glow-color: #c084fc;
+    filter: brightness(1.05);
+  }
+  66% {
+    --honor-glow-color: #22d3ee;
+    filter: brightness(1.03);
+  }
+}
+
+@keyframes honor-tier-legend {
+  0%, 100% { text-shadow: 0 0 8px color-mix(in srgb, var(--honor-glow-color) 45%, transparent); }
+  50% { text-shadow: 0 0 12px color-mix(in srgb, var(--honor-glow-color) 55%, transparent); }
+}
+
+@keyframes honor-tier-legend-ring {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .honor-name-glow[data-honor-glow-tier="3"],
+  .honor-name-glow[data-honor-glow-tier="4"],
+  .honor-name-glow[data-honor-glow-tier="5"],
+  .honor-name-glow[data-honor-glow-tier="6"],
+  .honor-name-glow[data-honor-glow-tier="7"] {
+    animation: none;
+  }
+  .honor-name-glow[data-honor-glow-tier="4"]::after,
+  .honor-name-glow[data-honor-glow-tier="7"]::after {
+    animation: none;
+  }
+}

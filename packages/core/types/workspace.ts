@@ -1,4 +1,5 @@
 import type { AgentMemoryGrowth } from "./agent";
+import type { HonorSnapshot } from "./honor";
 
 export type MemberRole = "owner" | "admin" | "member";
 
@@ -88,6 +89,7 @@ export interface MemberWithUser {
   email: string;
   avatar_url: string | null;
   profile_description: string;
+  honor?: HonorSnapshot;
 }
 
 export interface MemberProfileActivityItem {
@@ -127,6 +129,7 @@ export interface MemberProfile {
    * ≥1 valid write; omitted for users, identity_only, and zero writes.
    */
   memory_growth?: AgentMemoryGrowth | null;
+  honor?: HonorSnapshot;
 }
 
 export interface Invitation {

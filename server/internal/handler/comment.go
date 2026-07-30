@@ -1067,6 +1067,9 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), rootComment, uuidToString(issue.WorkspaceID), authorType, authorID)
 
 	h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, suppressAgentIDs)
+	if authorType == "member" {
+		h.awardHonorXP(r.Context(), parseUUID(authorID), "comment.create", uuidToString(comment.ID))
+	}
 
 	writeJSON(w, http.StatusCreated, resp)
 }

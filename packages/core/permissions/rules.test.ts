@@ -31,7 +31,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility: "workspace",
     status: "idle",
     workspace_role: "member",
     max_concurrent_tasks: 1,
@@ -147,7 +146,7 @@ describe("canEditAgent", () => {
 });
 
 describe("canViewAgentSensitiveTabs", () => {
-  const privateAgent = makeAgent({ owner_id: ALICE, visibility: "private" });
+  const privateAgent = makeAgent({ owner_id: ALICE });
 
   it("allows the agent owner", () => {
     expect(
@@ -181,13 +180,13 @@ describe("canViewAgentSensitiveTabs", () => {
   // their OWN agent's activity). This assertion is inverted from what it was,
   // deliberately — it is the branch that was deleted.
   it("denies a plain member on someone else's agent regardless of visibility", () => {
-    const shared = makeAgent({ owner_id: ALICE, visibility: "workspace" });
+    const shared = makeAgent({ owner_id: ALICE });
     expect(
       canViewAgentSensitiveTabs(shared, { userId: BOB, role: "member" }).allowed,
     ).toBe(false);
   });
   it("denies a non-member even on a workspace-visibility agent", () => {
-    const shared = makeAgent({ owner_id: ALICE, visibility: "workspace" });
+    const shared = makeAgent({ owner_id: ALICE });
     expect(
       canViewAgentSensitiveTabs(shared, { userId: BOB, role: null }).allowed,
     ).toBe(false);
@@ -201,7 +200,6 @@ describe("canViewAgentSensitiveTabs", () => {
   it("ignores the agent's own research-fleet managed_role marker", () => {
     const marked = makeAgent({
       owner_id: ALICE,
-      visibility: "private",
       managed_role: "research_fleet",
     });
     expect(
@@ -212,25 +210,25 @@ describe("canViewAgentSensitiveTabs", () => {
 
 describe("canAssignAgentToIssue", () => {
   it("allows any member to assign workspace-visibility agents", () => {
-    const a = makeAgent({ visibility: "workspace", owner_id: ALICE });
+    const a = makeAgent({ owner_id: ALICE });
     expect(
       canAssignAgentToIssue(a, { userId: BOB, role: "member" }).allowed,
     ).toBe(true);
   });
   it("denies non-members from assigning workspace agents", () => {
-    const a = makeAgent({ visibility: "workspace", owner_id: ALICE });
+    const a = makeAgent({ owner_id: ALICE });
     const d = canAssignAgentToIssue(a, { userId: BOB, role: null });
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("not_member");
   });
   it("allows the owner to assign their private agent", () => {
-    const a = makeAgent({ visibility: "private", owner_id: ALICE });
+    const a = makeAgent({ owner_id: ALICE });
     expect(
       canAssignAgentToIssue(a, { userId: ALICE, role: "member" }).allowed,
     ).toBe(true);
   });
   it("allows workspace admin to assign someone else's private agent", () => {
-    const a = makeAgent({ visibility: "private", owner_id: ALICE });
+    const a = makeAgent({ owner_id: ALICE });
     expect(
       canAssignAgentToIssue(a, { userId: BOB, role: "admin" }).allowed,
     ).toBe(true);
@@ -240,25 +238,25 @@ describe("canAssignAgentToIssue", () => {
   // server remains the boundary — ListAgents (agent.go:800) does not hand a
   // member another member's private agent in the first place.
   it("allows a plain member to assign any agent it was given", () => {
-    const a = makeAgent({ visibility: "private", owner_id: ALICE });
+    const a = makeAgent({ owner_id: ALICE });
     const d = canAssignAgentToIssue(a, { userId: BOB, role: "member" });
     expect(d.allowed).toBe(true);
   });
 
   it("still requires membership — a non-member cannot assign", () => {
-    const a = makeAgent({ visibility: "workspace" });
+    const a = makeAgent({});
     const d = canAssignAgentToIssue(a, { userId: BOB, role: null });
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("not_member");
   });
   it("denies logged-out users", () => {
-    const a = makeAgent({ visibility: "workspace" });
+    const a = makeAgent({});
     const d = canAssignAgentToIssue(a, { userId: null, role: null });
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("not_authenticated");
   });
   it("allows any member to assign channel-visibility agents already in view", () => {
-    const a = makeAgent({ visibility: "channel", owner_id: ALICE });
+    const a = makeAgent({ owner_id: ALICE });
     expect(
       canAssignAgentToIssue(a, { userId: BOB, role: "member" }).allowed,
     ).toBe(true);

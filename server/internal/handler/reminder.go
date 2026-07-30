@@ -1068,19 +1068,20 @@ type agentReminderChangedPayload struct {
 }
 
 // publishAgentReminderChanged emits only the invalidation key needed by human
-// clients. Private-agent events use the same visibility boundary as the human
-// read endpoint rather than leaking reminder or anchor metadata workspace-wide.
+// clients. Task #908 retired agent.visibility — reminder-changed events now
+// broadcast workspace-wide like any other usage surface, except for the
+// onboarding agent (Wendy), which keeps the owner/admin-only scope
+// privateAgentOwnerOnly-style surfaces use elsewhere.
 func (h *Handler) publishAgentReminderChanged(ctx context.Context, workspaceID, agentID pgtype.UUID) {
 	if h == nil || h.Bus == nil || !workspaceID.Valid || !agentID.Valid {
 		return
 	}
 	payload := agentReminderChangedPayload{AgentID: uuidToString(agentID)}
-	var visibility string
 	var ownerID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
-		SELECT visibility, owner_id
+		SELECT owner_id
 		FROM agent
-		WHERE id = $1 AND workspace_id = $2`, agentID, workspaceID).Scan(&visibility, &ownerID); err != nil {
+		WHERE id = $1 AND workspace_id = $2`, agentID, workspaceID).Scan(&ownerID); err != nil {
 		return
 	}
 	// The onboarding agent's identity comes only from workspace.onboarding_agent_id
@@ -1089,7 +1090,7 @@ func (h *Handler) publishAgentReminderChanged(ctx context.Context, workspaceID, 
 	isOnboardingAgent := err == nil && onboardingAgentID.Valid && uuidToString(onboardingAgentID) == uuidToString(agentID)
 
 	workspace := uuidToString(workspaceID)
-	if visibility != "private" && !isOnboardingAgent {
+	if !isOnboardingAgent {
 		h.publish(protocol.EventAgentReminderChanged, workspace, "system", "", payload)
 		return
 	}

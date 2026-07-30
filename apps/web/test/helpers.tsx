@@ -69,7 +69,6 @@ export const mockAgents: Agent[] = [
     runtime_mode: "cloud",
     runtime_config: {},
     custom_args: [],
-    visibility: "workspace",
     max_concurrent_tasks: 3,
     model: "",
     owner_id: null,

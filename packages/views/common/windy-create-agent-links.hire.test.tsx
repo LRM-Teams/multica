@@ -112,7 +112,6 @@ function makeDraft(
     name: "Group Bot",
     description: "Hired for one group",
     instructions: "Be helpful",
-    visibility: "channel",
     channel_id: "ch-home",
     project_id: null,
     can_execute_code: false,
@@ -184,7 +183,6 @@ describe("Windy hire card create path", () => {
     createAgent.mockResolvedValue({
       id: "agent-1",
       display_name: "Group Bot",
-      visibility: "channel",
       home_channel_id: "ch-home",
     });
   });

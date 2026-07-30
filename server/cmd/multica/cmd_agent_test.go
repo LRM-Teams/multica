@@ -210,7 +210,6 @@ func TestAgentUpdateNoFieldsErrorPointsAtEnvCommand(t *testing.T) {
 	cmd.Flags().String("runtime-config", "", "")
 	cmd.Flags().String("model", "", "")
 	cmd.Flags().String("custom-args", "", "")
-	cmd.Flags().String("visibility", "", "")
 	cmd.Flags().String("status", "", "")
 	cmd.Flags().Int32("max-concurrent-tasks", 0, "")
 	cmd.Flags().String("output", "json", "")
@@ -309,7 +308,6 @@ func freshAgentCreateCmd() *cobra.Command {
 	c.Flags().Bool("mcp-config-stdin", false, "")
 	c.Flags().String("mcp-config-file", "", "")
 	c.Flags().String("model", "", "")
-	c.Flags().String("visibility", "", "")
 	c.Flags().Int32("max-concurrent-tasks", 0, "")
 	c.Flags().String("output", "table", "")
 	return c
@@ -1232,7 +1230,6 @@ func TestAgentGetTableIncludesAvatarURL(t *testing.T) {
 			"name":         "TestAgent",
 			"status":       "active",
 			"runtime_mode": "cloud",
-			"visibility":   "workspace",
 			"avatar_url":   "https://cdn.example.com/avatar.png",
 			"description":  "A test agent",
 		})

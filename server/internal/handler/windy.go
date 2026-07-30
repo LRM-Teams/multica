@@ -79,7 +79,7 @@ Generated system instructions should be an executable SOP, not a one-line summar
 
 Use create-agent links for stable identity and creation parameters only:
 
-[Create Agent: <agent name>](multica://create-agent?name=<urlencoded name>&description=<urlencoded short description>&instructions=<urlencoded generated instructions>&visibility=private&can_execute_code=<true-or-false>)
+[Create Agent: <agent name>](multica://create-agent?name=<urlencoded name>&description=<urlencoded short description>&instructions=<urlencoded generated instructions>&can_execute_code=<true-or-false>)
 
 When the user wants agents in a specific group channel, do not silently create or place them there yourself. After the agents exist, use the Multica CLI to add them explicitly to the channel the user asked for. The command is: multica channel member add --target <channel> <agent> [<agent>...]. Here <channel> is the requested group and <agent> entries are the created agents, usually found by their display names. Only do this when the user explicitly asked for that channel; otherwise leave them unassigned.
 
@@ -142,7 +142,6 @@ type AgentCreationDraftResponse struct {
 	Description       string            `json:"description"`
 	Instructions      string            `json:"instructions"`
 	AvatarURL         *string           `json:"avatar_url,omitempty"`
-	Visibility        string            `json:"visibility"`
 	ProjectID         *string           `json:"project_id,omitempty"`
 	ChannelID         *string           `json:"channel_id,omitempty"`
 	CanExecuteCode    bool              `json:"can_execute_code"`
@@ -162,7 +161,6 @@ type CreateAgentDraftRequest struct {
 	Description       string            `json:"description"`
 	Instructions      string            `json:"instructions"`
 	AvatarURL         *string           `json:"avatar_url"`
-	Visibility        string            `json:"visibility"`
 	ProjectID         *string           `json:"project_id"`
 	ChannelID         *string           `json:"channel_id"`
 	CanExecuteCode    bool              `json:"can_execute_code"`
@@ -518,7 +516,6 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID pgtype.UUID, run
 			RuntimeMode:        runtime.RuntimeMode,
 			RuntimeConfig:      []byte("{}"),
 			RuntimeID:          runtime.ID,
-			Visibility:         "private",
 			MaxConcurrentTasks: 6,
 			OwnerID:            ownerID,
 			CustomEnv:          []byte("{}"),
@@ -612,9 +609,6 @@ func preferWindyAgent(candidate, current db.Agent) bool {
 	if candidate.RuntimeID.Valid != current.RuntimeID.Valid {
 		return candidate.RuntimeID.Valid
 	}
-	if (candidate.Visibility == "private") != (current.Visibility == "private") {
-		return candidate.Visibility == "private"
-	}
 	candidateIsWendy := agentDisplayName(candidate) == windyAgentName
 	currentIsWendy := agentDisplayName(current) == windyAgentName
 	if candidateIsWendy != currentIsWendy {
@@ -640,7 +634,7 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 		}
 		restored = true
 	}
-	if agentDisplayName(updated) != windyAgentName || updated.Visibility != "private" {
+	if agentDisplayName(updated) != windyAgentName {
 		normalized, err := h.normalizeWindyAgent(r, updated)
 		if err != nil {
 			return db.Agent{}, err
@@ -684,7 +678,6 @@ func (h *Handler) normalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent
 	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
 		ID:          agent.ID,
 		DisplayName: pgtype.Text{String: windyAgentName, Valid: true},
-		Visibility:  pgtype.Text{String: "private", Valid: true},
 	})
 	if err != nil {
 		return db.Agent{}, err
@@ -721,7 +714,7 @@ func (h *Handler) GetAgentDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	row := h.DB.QueryRow(r.Context(), `
 		SELECT id, workspace_id, created_by_agent_id, target_user_id, name,
-			description, instructions, avatar_url, visibility, project_id, channel_id,
+			description, instructions, avatar_url, project_id, channel_id,
 			can_execute_code, suggested_channels, recommended_tools, initial_notes,
 			initial_memory, status, used_agent_id, created_at, updated_at, used_at
 		FROM agent_creation_draft
@@ -796,10 +789,6 @@ func (h *Handler) validateAgentDraftRequest(w http.ResponseWriter, req *CreateAg
 	req.Name = strings.TrimSpace(req.Name)
 	req.Description = strings.TrimSpace(req.Description)
 	req.Instructions = strings.TrimSpace(req.Instructions)
-	req.Visibility = strings.TrimSpace(req.Visibility)
-	if req.Visibility == "" {
-		req.Visibility = "private"
-	}
 	if req.Name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return false
@@ -814,10 +803,6 @@ func (h *Handler) validateAgentDraftRequest(w http.ResponseWriter, req *CreateAg
 	}
 	if utf8.RuneCountInString(req.Instructions) > windyMaxDraftTextLen {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("instructions must be %d characters or fewer", windyMaxDraftTextLen))
-		return false
-	}
-	if req.Visibility != "workspace" && req.Visibility != "private" {
-		writeError(w, http.StatusBadRequest, "visibility must be workspace or private")
 		return false
 	}
 	req.SuggestedChannels = cleanWindyStringList(req.SuggestedChannels, windyMaxDraftListSize)
@@ -917,30 +902,30 @@ func (h *Handler) insertAgentDraft(r *http.Request, workspaceID, targetUserID, c
 	row := h.DB.QueryRow(r.Context(), `
 		INSERT INTO agent_creation_draft (
 			workspace_id, created_by_agent_id, target_user_id, name, description,
-			instructions, avatar_url, visibility, project_id, channel_id,
+			instructions, avatar_url, project_id, channel_id,
 			can_execute_code, suggested_channels, recommended_tools, initial_notes,
 			initial_memory
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, workspace_id, created_by_agent_id, target_user_id, name,
-			description, instructions, avatar_url, visibility, project_id, channel_id,
+			description, instructions, avatar_url, project_id, channel_id,
 			can_execute_code, suggested_channels, recommended_tools, initial_notes,
 			initial_memory, status, used_agent_id, created_at, updated_at, used_at`,
 		workspaceID, nullableUUID(createdByAgentID), targetUserID, req.Name, req.Description,
-		req.Instructions, ptrToText(req.AvatarURL), req.Visibility, nullableUUID(projectID), nullableUUID(channelID),
+		req.Instructions, ptrToText(req.AvatarURL), nullableUUID(projectID), nullableUUID(channelID),
 		req.CanExecuteCode, suggestedChannels, recommendedTools, marshalStringMap(req.InitialNotes), marshalStringMap(req.InitialMemory))
 	return scanAgentDraft(row)
 }
 
 func scanAgentDraft(row rowScanner) (AgentCreationDraftResponse, error) {
 	var id, workspaceID, createdByAgentID, targetUserID, projectID, channelID, usedAgentID pgtype.UUID
-	var name, description, instructions, visibility, status string
+	var name, description, instructions, status string
 	var avatarURL pgtype.Text
 	var canExecuteCode bool
 	var suggestedChannelsRaw, recommendedToolsRaw, initialNotesRaw, initialMemoryRaw []byte
 	var createdAt, updatedAt, usedAt pgtype.Timestamptz
 	if err := row.Scan(
 		&id, &workspaceID, &createdByAgentID, &targetUserID, &name,
-		&description, &instructions, &avatarURL, &visibility, &projectID, &channelID,
+		&description, &instructions, &avatarURL, &projectID, &channelID,
 		&canExecuteCode, &suggestedChannelsRaw, &recommendedToolsRaw, &initialNotesRaw,
 		&initialMemoryRaw, &status, &usedAgentID, &createdAt, &updatedAt, &usedAt,
 	); err != nil {
@@ -955,7 +940,6 @@ func scanAgentDraft(row rowScanner) (AgentCreationDraftResponse, error) {
 		Description:       description,
 		Instructions:      instructions,
 		AvatarURL:         textToPtr(avatarURL),
-		Visibility:        visibility,
 		ProjectID:         uuidToPtr(projectID),
 		ChannelID:         uuidToPtr(channelID),
 		CanExecuteCode:    canExecuteCode,

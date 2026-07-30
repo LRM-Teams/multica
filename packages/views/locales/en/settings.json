@@ -27,6 +27,7 @@
     "workspace_fallback": "Workspace",
     "tabs": {
       "profile": "Profile",
+      "honor": "Honor",
       "preferences": "Preferences",
       "notifications": "Notifications",
       "tokens": "API Tokens",
@@ -37,6 +38,25 @@
       "labs": "Labs",
       "members": "Members"
     }
+  },
+  "honor": {
+    "loading": "Loading honor…",
+    "title": "My Honor",
+    "level": "Level",
+    "total_xp": "Total XP",
+    "name_style": "Name style",
+    "next_level": "Progress to next level",
+    "max_level": "Max level reached",
+    "pillars_title": "Pillar progress",
+    "badges_title": "Badges (equip one)",
+    "recent_xp_title": "Recent XP",
+    "rules_hint": "Scoring rules are public — see honor rules API",
+    "account_link": "View honor details",
+    "account_level": "Honor level Lv.{{level}}",
+    "level_value": "Lv.{{level}}",
+    "xp_to_next": "+{{xp}} XP",
+    "pillar_tier_only": "Tier {{tier}}",
+    "pillar_tier_progress": "Tier {{tier}} · {{current}}/{{next}}"
   },
   "account": {
     "section_profile": "Profile",

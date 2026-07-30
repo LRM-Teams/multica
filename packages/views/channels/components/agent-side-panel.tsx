@@ -7,6 +7,7 @@ import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
 import { deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
+import { useActorName } from "@multica/core/workspace/hooks";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -27,6 +28,7 @@ import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
+import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
@@ -78,6 +80,8 @@ export function AgentSidePanel({
   // it is "who is this agent", which everyone may see now that agent
   // visibility is retired.
   const { canEdit, canViewSensitiveTabs } = useAgentPermissions(agent, agent.workspace_id);
+  const { getAgentFleetRank } = useActorName();
+  const fleetRank = getAgentFleetRank(agent.id);
   const canViewSensitive = canViewSensitiveTabs.allowed;
   const availableTabs: OwnerTab[] = ["profile"];
   if (canViewSensitive) availableTabs.push("activity");
@@ -141,7 +145,12 @@ export function AgentSidePanel({
           onUpdate={handleUpdate}
         />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-base font-bold leading-tight">{displayName}</p>
+          <ActorStyledName
+            displayName={displayName}
+            fleet={fleetRank}
+            honorSurface="profile"
+            className="text-base font-bold leading-tight text-foreground"
+          />
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {handleLabel || `@${agent.name}`}
             {agent.archived_at ? (

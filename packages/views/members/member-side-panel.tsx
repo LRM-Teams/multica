@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare, Pencil } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
-import { agentRunCounts30dOptions } from "@multica/core/agents";
+import { agentRunCounts30dOptions, agentFleetRankingsOptions } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   formatActorHandleLabel,
@@ -33,10 +33,13 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import { cn } from "@multica/ui/lib/utils";
+import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
+import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import { InlineFieldEditor } from "../agents/components/inline-field-editor";
 import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
+import { ActorStyledName } from "../common/actor-styled-name";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { AppLink } from "../navigation";
 import { useT } from "../i18n/use-t";
@@ -176,6 +179,12 @@ function MemberSidePanelReady({
   const openAgentFromContext = useOpenAgentPanel();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: runCounts = [] } = useQuery(agentRunCounts30dOptions(wsId));
+  const { data: fleetRankings = [] } = useQuery(agentFleetRankingsOptions(wsId));
+  const fleetByAgentId = useMemo(() => {
+    const m = new Map<string, AgentFleetRank>();
+    for (const row of fleetRankings) m.set(row.agent_id, row);
+    return m;
+  }, [fleetRankings]);
   const messageAriaLabel = t(($) => $.panel.message_aria);
 
   const displayName = useMemo(() => {
@@ -379,9 +388,12 @@ function MemberSidePanelReady({
                 testId="member-profile-name"
               />
             ) : (
-              <p className="truncate text-[15px] font-bold leading-tight">
-                {displayName}
-              </p>
+              <ActorStyledName
+                displayName={displayName}
+                honor={member?.honor}
+                honorSurface="profile"
+                className="text-[15px] font-bold leading-tight"
+              />
             )}
             {(showHandle && handle) || youSuffix ? (
               <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -457,6 +469,7 @@ function MemberSidePanelReady({
                 <CreatedAgentRow
                   key={agent.id}
                   agent={agent}
+                  fleet={fleetByAgentId.get(agent.id)}
                   href={paths.agentDetail(agent.id)}
                   onOpenPanel={
                     openAgentFromContext
@@ -523,10 +536,12 @@ function RoleSoftPill({ role }: { role: string }) {
 
 function CreatedAgentRow({
   agent,
+  fleet,
   href,
   onOpenPanel,
 }: {
   agent: Agent;
+  fleet?: AgentFleetRank;
   href: string;
   onOpenPanel?: () => void;
 }) {
@@ -550,12 +565,22 @@ function CreatedAgentRow({
         size={28}
         avatarUrlHint={agent.avatar_url}
         showStatusDot
+        fleetRank={fleet?.fleet_rank}
         profileLink={false}
         className="rounded-md"
       />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-xs font-semibold text-foreground">
-          {title}
+        <div className="flex min-w-0 items-center gap-1">
+          <div className="truncate text-xs font-semibold text-foreground">{title}</div>
+          {fleet ? (
+            <FleetRankBadge
+              classId={fleet.class_id}
+              classLabel={fleet.class_label}
+              fleetRank={fleet.fleet_rank}
+              frozen={fleet.frozen}
+              compact
+            />
+          ) : null}
         </div>
         {runtimeLabel ? (
           <div className="truncate text-[11px] text-muted-foreground">

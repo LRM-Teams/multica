@@ -997,7 +997,7 @@ func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse,
 // channelMentionedAgents minus the mention filter; used by DM auto-dispatch.
 func (h *Handler) channelAgentMembers(ctx context.Context, workspaceID, channelID string) []db.Agent {
 	rows, err := h.DB.Query(ctx, `
-		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name
 		FROM channel_member cm
@@ -1010,7 +1010,7 @@ func (h *Handler) channelAgentMembers(ctx context.Context, workspaceID, channelI
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
 			continue
 		}
 		out = append(out, a)

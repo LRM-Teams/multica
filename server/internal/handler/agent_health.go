@@ -140,11 +140,10 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent health")
 		return
 	}
-	// LRM-548: presence chrome follows the bound runtime's heartbeat, not the
+	// LRM-548: presence chrome follows the bound runtime's heartbeat, not a
 	// claim/capacity "runnable" predicate. A channel/workspace agent on the
 	// owner's private runtime (e.g. after switching to Grok) still shows
 	// Online when last_seen is fresh — Runtime Config already does.
-	// agentRuntimeRunnableForAgent remains for task dispatch elsewhere.
 
 	events, err := h.listAgentHealthEvents(r.Context(), agent, rt.ID, defaultAgentHealthEventLimit)
 	if err != nil {
@@ -255,20 +254,6 @@ func agentHealthMissingRuntimeSummary(agent db.Agent) AgentHealthSummary {
 		State:      agentHealthStateOffline,
 		ReasonCode: "runtime_missing",
 	}
-}
-
-func agentRuntimeRunnableForAgent(agent db.Agent, rt db.AgentRuntime) bool {
-	// A raw runtime row is not enough for a workspace-visible agent to be
-	// available. The runtime must be public to serve as shared workspace
-	// capacity. A private runtime only counts for a private agent owned by the
-	// same user, which keeps the predicate objective for every viewer.
-	if rt.Visibility == "public" {
-		return true
-	}
-	if agent.Visibility != "private" || !rt.OwnerID.Valid || !agent.OwnerID.Valid {
-		return false
-	}
-	return uuidToString(rt.OwnerID) == uuidToString(agent.OwnerID)
 }
 
 func agentHealthSummary(agent db.Agent, rt db.AgentRuntime, events []AgentHealthEvent, now time.Time) AgentHealthSummary {

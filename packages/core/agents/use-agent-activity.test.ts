@@ -40,7 +40,6 @@ const fullHistoryAgent: Agent = {
   runtime_mode: "cloud",
   runtime_config: {},
   custom_args: [],
-  visibility: "workspace",
   status: "idle",
   workspace_role: "member",
   max_concurrent_tasks: 1,

@@ -27,6 +27,7 @@ import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
+import { useActorName } from "@multica/core/workspace/hooks";
 import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
@@ -44,6 +45,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
+import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
 import { MemberSidePanel } from "../../members/member-side-panel";
@@ -274,6 +276,7 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
+  const { getMemberHonor, getAgentFleetRank } = useActorName();
   const peerId = dm.peer.id;
   const peerType = dm.peer.type;
   const isMuted = isConversationMuted(dm);
@@ -321,6 +324,16 @@ function DmHeader({
       </>
     ),
     [isAgentPair, mutedBadge, t],
+  );
+  const peerHonor = !agentPair && peerType === "user" ? getMemberHonor(peerId) : undefined;
+  const peerFleet = !agentPair && peerType === "agent" ? getAgentFleetRank(peerId) : undefined;
+  const peerTitle = (
+    <ActorStyledName
+      displayName={dm.peer.name}
+      honor={peerHonor}
+      fleet={peerFleet}
+      className="truncate text-sm font-semibold text-foreground"
+    />
   );
   const peerAvatar = (
     <ActorAvatar
@@ -398,7 +411,7 @@ function DmHeader({
         agentPair ? (
           <span className="block truncate">{`${agentPair.a.name} · ${agentPair.b.name}`}</span>
         ) : (
-          wrapPeerTrigger(<span className="block truncate">{dm.peer.name}</span>)
+          wrapPeerTrigger(<span className="block min-w-0 max-w-full truncate">{peerTitle}</span>)
         )
       }
       meta={headerMeta}

@@ -26,6 +26,7 @@ import {
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useReactionActorName } from "../../common/use-reaction-actor-name";
+import { ActorStyledName } from "../../common/actor-styled-name";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -303,7 +304,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
 // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
+  const { getActorName, getMemberHonor, getAgentFleetRank } = useActorName();
   // LRM-364: group managers miss ListAgents → resolve via member-profile, never
   // surface "Unknown Agent" in the reaction hover card.
   const getReactionActorName = useReactionActorName(message.reactions ?? []);
@@ -506,6 +507,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // avatar itself, so that when the avatar sits inside the fixed-size presence
   // box the box hugs the avatar exactly (a margin on the inner avatar would
   // overflow the box and lift the dot off the avatar's bottom edge).
+  const authorFleet =
+    isAgent && message.author_id ? getAgentFleetRank(message.author_id) : undefined;
   const avatarNode =
     identityActorType && message.author_id ? (
       <ActorAvatar
@@ -517,18 +520,22 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         avatarUrlHint={message.author_avatar_url}
         showStatusDot={isAgent || message.type === "user"}
         showXpBurst={isAgent}
+        fleetRank={authorFleet?.fleet_rank}
         profileLink={false}
       />
     ) : null;
   const avatar = avatarNode ? (
     <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
   ) : null;
+  const authorHonor =
+    message.type === "user" && message.author_id ? getMemberHonor(message.author_id) : undefined;
   const nameLabel = (
-    // LRM-555/561 reading-flow baseline: author sits one step above body
-    // (13.5px semibold foreground), not bold-ink competing with prose.
-    <span className="truncate text-[13.5px] font-semibold text-foreground">
-      {displayName}
-    </span>
+    <ActorStyledName
+      displayName={displayName}
+      honor={authorHonor}
+      fleet={authorFleet}
+      className="truncate text-[13.5px] font-semibold text-foreground"
+    />
   );
 
   const localSendStatus = message.local_send_status ?? null;

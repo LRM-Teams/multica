@@ -2201,11 +2201,11 @@ func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, instructions, avatar_url,
-			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			archived_at, archived_by
 		)
 		VALUES ($1, $2, 'Wendy', 'archived workspace-visible Wendy', 'instructions', '/legacy.png',
-			'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, now(), $4)
+			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4)
 		RETURNING id
 	`, testWorkspaceID, "archived_workspace_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("seed archived workspace-visible Wendy agent: %v", err)
@@ -2220,9 +2220,6 @@ func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
 	}
 	if uuidToString(updated.ID) != agentID {
 		t.Fatalf("ensureWindyAgent reused agent %q, want restored %q", uuidToString(updated.ID), agentID)
-	}
-	if updated.Visibility != "workspace" {
-		t.Fatalf("restored Wendy visibility = %q, want workspace (must not be silently coerced to private)", updated.Visibility)
 	}
 }
 

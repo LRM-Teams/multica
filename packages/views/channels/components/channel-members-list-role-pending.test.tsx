@@ -48,6 +48,12 @@ vi.mock("../../common/actor-profile-popover", () => ({
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => <div data-testid="avatar" />,
 }));
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getMemberHonor: () => undefined,
+    getAgentFleetRank: () => undefined,
+  }),
+}));
 vi.mock("./agent-compact-activity", () => ({
   AgentCompactActivity: () => null,
 }));

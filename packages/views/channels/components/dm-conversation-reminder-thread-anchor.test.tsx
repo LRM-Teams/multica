@@ -177,7 +177,12 @@ vi.mock("@multica/core/hooks/use-file-upload", () => ({
 }));
 
 vi.mock("@multica/core/workspace/hooks", () => ({
-  useActorName: () => ({ getActorAvatarUrl: () => null, getActorName: () => null }),
+  useActorName: () => ({
+    getActorAvatarUrl: () => null,
+    getActorName: () => null,
+    getMemberHonor: () => undefined,
+    getAgentFleetRank: () => undefined,
+  }),
 }));
 vi.mock("@multica/core/agents", () => ({ useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multica/core/paths", async (importOriginal) => ({

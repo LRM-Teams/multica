@@ -22,7 +22,9 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare, MoreHorizontal, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorStyledName } from "../../common/actor-styled-name";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n";
 import { AgentCompactActivity } from "./agent-compact-activity";
@@ -113,6 +115,7 @@ function MemberRow({
   dmPending?: boolean;
 }) {
   const { t } = useT("channels");
+  const { getMemberHonor, getAgentFleetRank } = useActorName();
   const isAgent = m.member_type === "agent";
   // Names the action actually running rather than a bare spinner: with three
   // items in one menu, "…" leaves the user unsure which one they triggered.
@@ -176,6 +179,9 @@ function MemberRow({
       menuActions.canTransferOwnership ||
       menuActions.canRemove);
 
+  const actorHonor = !isAgent ? getMemberHonor(m.member_id) : undefined;
+  const actorFleet = isAgent ? getAgentFleetRank(m.member_id) : undefined;
+
   return (
     <div
       className="rounded-lg"
@@ -200,13 +206,17 @@ function MemberRow({
           avatarUrlHint={m.avatar_url}
           size={36}
           showStatusDot
+          fleetRank={actorFleet?.fleet_rank}
           profileLink={false}
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-1.5">
-            <span className="truncate text-sm font-semibold text-ink">
-              {presentation.displayName}
-            </span>
+            <ActorStyledName
+              displayName={presentation.displayName}
+              honor={actorHonor}
+              fleet={actorFleet}
+              className="text-sm font-semibold text-ink"
+            />
             {mutedRoleLabel ? (
               <span
                 data-testid="member-role-label"

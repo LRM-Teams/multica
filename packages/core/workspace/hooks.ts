@@ -2,16 +2,20 @@
 
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { agentFleetRankingsOptions } from "../agents/fleet-queries";
 import { useWorkspaceId } from "../hooks";
 import { memberListOptions, agentListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
 import { resolveActorDisplayName, resolveActorHandle } from "../identity";
 import type { MemberRole } from "../types/workspace";
+import type { HonorSnapshot } from "../types/honor";
+import type { AgentFleetRank } from "../types/agent-fleet";
 
 export function useActorName() {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: fleetRankings = [] } = useQuery(agentFleetRankingsOptions(wsId));
 
   // Each resolver takes an optional fallback used when the id isn't in the
   // workspace cache — e.g. a mention to someone who left the workspace, or an
@@ -32,6 +36,21 @@ export function useActorName() {
   const getMemberRole = useCallback((userId: string): MemberRole | null => {
     return members.find((m) => m.user_id === userId)?.role ?? null;
   }, [members]);
+
+  const getMemberHonor = useCallback((userId: string): HonorSnapshot | undefined => {
+    return members.find((m) => m.user_id === userId)?.honor;
+  }, [members]);
+
+  const fleetByAgentId = useMemo(() => {
+    const m = new Map<string, AgentFleetRank>();
+    for (const row of fleetRankings) m.set(row.agent_id, row);
+    return m;
+  }, [fleetRankings]);
+
+  const getAgentFleetRank = useCallback(
+    (agentId: string): AgentFleetRank | undefined => fleetByAgentId.get(agentId),
+    [fleetByAgentId],
+  );
 
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
     const a = agents.find((a) => a.id === agentId);
@@ -83,6 +102,8 @@ export function useActorName() {
       getMemberName,
       getMemberHandle,
       getMemberRole,
+      getMemberHonor,
+      getAgentFleetRank,
       getAgentName,
       getAgentHandle,
       getActorName,
@@ -100,6 +121,8 @@ export function useActorName() {
       getMemberHandle,
       getMemberName,
       getMemberRole,
+      getMemberHonor,
+      getAgentFleetRank,
     ],
   );
 }

@@ -51,8 +51,10 @@ import {
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type { Agent, MemberWithUser } from "@multica/core/types";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { ActorStyledName } from "../../common/actor-styled-name";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
 import { Time } from "../../i18n/time";
@@ -332,6 +334,7 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const { openDM, isPending } = useOpenDM();
+  const { getMemberHonor, getAgentFleetRank } = useActorName();
   const [search, setSearch] = useState("");
 
   const { data: agents = [], isLoading: agentsLoading } = useQuery(
@@ -425,6 +428,8 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 displayName={item.presentation.displayName}
                 handle={item.presentation.handle}
                 showHandle={item.presentation.showHandleLabel}
+                honor={item.kind === "user" ? getMemberHonor(item.id) : undefined}
+                fleet={item.kind === "agent" ? getAgentFleetRank(item.id) : undefined}
                 primaryClassName="truncate text-sm font-medium text-foreground"
               />
               <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -477,6 +482,7 @@ export function DmConversationRow({
   onClose: () => void;
 }) {
   const { t } = useT("channels");
+  const { getMemberHonor, getAgentFleetRank } = useActorName();
   const last = dm.last_message;
   // System rows (issue/member/project/reminder events) carry their own
   // localized narrative from the same structured facts the full in-channel
@@ -523,6 +529,11 @@ export function DmConversationRow({
   const [pairA, pairB] = dm.participants ?? [];
   const agentPair = dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
   const title = agentPair ? `${agentPair.a.name} · ${agentPair.b.name}` : dm.peer.name;
+  const peerHonor =
+    !agentPair && dm.peer.type === "user" ? getMemberHonor(dm.peer.id) : undefined;
+  const peerFleet =
+    !agentPair && dm.peer.type === "agent" ? getAgentFleetRank(dm.peer.id) : undefined;
+  const titleWeightClass = realUnread > 0 ? "font-semibold" : "font-medium";
 
   return (
     <ContextMenu>
@@ -576,17 +587,23 @@ export function DmConversationRow({
                 {pinned && (
                   <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                 )}
-                <span
-                  className={cn(
-                    "truncate text-sm text-foreground",
-                    // Slack-style: an unread conversation reads as a BOLD name
-                    // (#3); LRM-767 extends the bold to muted rows too — the
-                    // bold name is then their only unread signal (no badge).
-                    realUnread > 0 ? "font-semibold" : "font-medium",
-                  )}
-                >
-                  {title}
-                </span>
+                {agentPair ? (
+                  <span
+                    className={cn(
+                      "truncate text-sm text-foreground",
+                      titleWeightClass,
+                    )}
+                  >
+                    {title}
+                  </span>
+                ) : (
+                  <ActorStyledName
+                    displayName={title}
+                    honor={peerHonor}
+                    fleet={peerFleet}
+                    className={cn("text-sm text-foreground", titleWeightClass)}
+                  />
+                )}
                 {agentPair && (
                   <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">
                     {t(($) => $.dm.agent_pair.pill)}

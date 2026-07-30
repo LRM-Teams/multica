@@ -10,11 +10,13 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { api } from "@multica/core/api";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 // Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
@@ -25,7 +27,12 @@ const MAX_PROFILE_DESCRIPTION_LEN = 2000;
 
 export function AccountTab() {
   const { t } = useT("settings");
+  const navigation = useNavigation();
   const user = useAuthStore((s) => s.user);
+  const { data: honor } = useQuery({
+    queryKey: ["honor", "me"],
+    queryFn: () => api.getMyHonor(),
+  });
   const setUser = useAuthStore((s) => s.setUser);
   const qc = useQueryClient();
 
@@ -103,6 +110,23 @@ export function AccountTab() {
 
   return (
     <div className="space-y-8">
+      {honor ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+          <span>{t(($) => $.honor.account_level, { level: honor.level })}</span>
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto p-0"
+            onClick={() => {
+              const params = new URLSearchParams(navigation.searchParams);
+              params.set("tab", "honor");
+              navigation.replace(`${navigation.pathname}?${params.toString()}`);
+            }}
+          >
+            {t(($) => $.honor.account_link)}
+          </Button>
+        </div>
+      ) : null}
       <section className="space-y-4">
         <h2 className="text-sm font-semibold">{t(($) => $.account.section_profile)}</h2>
 

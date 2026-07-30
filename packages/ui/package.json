@@ -10,6 +10,7 @@
   "exports": {
     "./components/ui/*": "./components/ui/*.tsx",
     "./components/common/*": "./components/common/*.tsx",
+    "./components/honor/*": "./components/honor/*.tsx",
     "./markdown": "./markdown/index.ts",
     "./markdown/*": "./markdown/*.tsx",
     "./markdown/linkify": "./markdown/linkify.ts",
@@ -18,6 +19,9 @@
     "./lib/utils": "./lib/utils.ts",
     "./lib/fleet-class": "./lib/fleet-class.ts",
     "./components/fleet/*": "./components/fleet/*.tsx",
+    "./lib/honor-glow": "./lib/honor-glow.ts",
+    "./lib/honor-name-display": "./lib/honor-name-display.ts",
+    "./components/honor/*": "./components/honor/*.tsx",
     "./lib/data-table": "./lib/data-table.ts",
     "./lib/code-style": "./lib/code-style.ts",
     "./lib/clipboard": "./lib/clipboard.ts",

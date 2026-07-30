@@ -33,7 +33,9 @@ const SIDEBAR_WIDTH_MIN = 200
 const SIDEBAR_WIDTH_MAX = 360
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
-const SIDEBAR_WIDTH_ICON = "3rem"
+// LRM-765: collapsed preference persists across reloads (Feishu-style icon rail).
+const SIDEBAR_OPEN_STORAGE_KEY = "sidebar_open"
+const SIDEBAR_WIDTH_ICON = "3.5rem"
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -96,6 +98,14 @@ function SidebarProvider({
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen)
   const open = openProp ?? _open
+  // Restore the persisted collapsed preference (uncontrolled usage only, so a
+  // controlled parent never gets its prop overridden after mount).
+  React.useEffect(() => {
+    if (openProp !== undefined) return
+    const stored = localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY)
+    if (stored !== null) _setOpen(stored === "true")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value
@@ -107,6 +117,7 @@ function SidebarProvider({
 
       // This sets the cookie to keep the sidebar state.
       document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(openState))
     },
     [setOpenProp, open]
   )

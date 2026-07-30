@@ -39,6 +39,25 @@
       "members": "멤버"
     }
   },
+  "honor": {
+    "loading": "명예 정보 불러오는 중…",
+    "title": "내 명예",
+    "level": "레벨",
+    "total_xp": "총 XP",
+    "name_style": "이름 스타일",
+    "next_level": "다음 레벨까지",
+    "max_level": "최고 레벨 도달",
+    "pillars_title": "기둥 진행도",
+    "badges_title": "배지 (1개 장착)",
+    "recent_xp_title": "최근 XP",
+    "rules_hint": "점수 규칙은 공개되어 있습니다",
+    "account_link": "명예 상세 보기",
+    "account_level": "명예 레벨 Lv.{{level}}",
+    "level_value": "Lv.{{level}}",
+    "xp_to_next": "+{{xp}} XP",
+    "pillar_tier_only": "Tier {{tier}}",
+    "pillar_tier_progress": "Tier {{tier}} · {{current}}/{{next}}"
+  },
   "account": {
     "section_profile": "프로필",
     "click_avatar_hint": "클릭해서 아바타 업로드",

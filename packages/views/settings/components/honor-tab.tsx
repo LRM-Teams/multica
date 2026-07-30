@@ -70,7 +70,9 @@ export function HonorTab() {
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <div className="text-xs text-muted-foreground">{t(($) => $.honor.level)}</div>
-              <div className="text-2xl font-bold">Lv.{dashboard.level}</div>
+              <div className="text-2xl font-bold">
+                {t(($) => $.honor.level_value, { level: dashboard.level })}
+              </div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground">{t(($) => $.honor.total_xp)}</div>
@@ -90,7 +92,11 @@ export function HonorTab() {
           <div>
             <div className="mb-1 flex justify-between text-xs text-muted-foreground">
               <span>{t(($) => $.honor.next_level)}</span>
-              <span>{dashboard.xp_to_next_level > 0 ? `+${dashboard.xp_to_next_level} XP` : t(($) => $.honor.max_level)}</span>
+              <span>
+                {dashboard.xp_to_next_level > 0
+                  ? t(($) => $.honor.xp_to_next, { xp: dashboard.xp_to_next_level })
+                  : t(($) => $.honor.max_level)}
+              </span>
             </div>
             <Progress value={levelProgress} />
           </div>
@@ -106,8 +112,13 @@ export function HonorTab() {
             <div key={pillar.pillar} className="rounded-lg border border-border p-3">
               <div className="text-sm font-medium">{pillar.pillar}</div>
               <div className="text-xs text-muted-foreground">
-                Tier {pillar.tier}
-                {pillar.next_tier_at ? ` · ${pillar.counter_value}/${pillar.next_tier_at}` : ""}
+                {pillar.next_tier_at
+                  ? t(($) => $.honor.pillar_tier_progress, {
+                      tier: pillar.tier,
+                      current: pillar.counter_value,
+                      next: pillar.next_tier_at,
+                    })
+                  : t(($) => $.honor.pillar_tier_only, { tier: pillar.tier })}
               </div>
             </div>
           ))}

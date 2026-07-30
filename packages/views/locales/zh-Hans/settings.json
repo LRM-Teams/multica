@@ -52,7 +52,11 @@
     "recent_xp_title": "最近获得经验",
     "rules_hint": "评分规则公开透明",
     "account_link": "查看荣誉详情",
-    "account_level": "荣誉等级 Lv.{{level}}"
+    "account_level": "荣誉等级 Lv.{{level}}",
+    "level_value": "Lv.{{level}}",
+    "xp_to_next": "+{{xp}} 经验",
+    "pillar_tier_only": "Tier {{tier}}",
+    "pillar_tier_progress": "Tier {{tier}} · {{current}}/{{next}}"
   },
   "account": {
     "section_profile": "个人资料",

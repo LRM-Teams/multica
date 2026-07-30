@@ -52,7 +52,11 @@
     "recent_xp_title": "Recent XP",
     "rules_hint": "Scoring rules are public — see honor rules API",
     "account_link": "View honor details",
-    "account_level": "Honor level Lv.{{level}}"
+    "account_level": "Honor level Lv.{{level}}",
+    "level_value": "Lv.{{level}}",
+    "xp_to_next": "+{{xp}} XP",
+    "pillar_tier_only": "Tier {{tier}}",
+    "pillar_tier_progress": "Tier {{tier}} · {{current}}/{{next}}"
   },
   "account": {
     "section_profile": "Profile",

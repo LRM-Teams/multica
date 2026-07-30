@@ -14,6 +14,7 @@ on:
           - voice_call_diagnose
           - research_wake_diagnose
           - research_wake_followup
+          - research_mirror_check
 
 jobs:
   run:
@@ -570,3 +571,67 @@ jobs:
           echo "=== daemon connectivity: runtime last seen ==="
           run_sql "SELECT id::text, name, status, last_seen_at AT TIME ZONE 'Asia/Shanghai' AS last_seen_cst, updated_at AT TIME ZONE 'Asia/Shanghai' AS updated_cst FROM agent_runtime WHERE id IN ('5fac011a-aaa3-4000-a3b5-9daf3a17219f'::uuid, '89757d75-aca0-4f33-adf6-91817d75a4f3'::uuid);"
 
+      - name: research_mirror_check
+        if: inputs.action == 'research_mirror_check'
+        run: |
+          set -euo pipefail
+          dotenv_value() {
+            python3 - "$1" "${2:-}" <<'PY'
+          import sys
+          from pathlib import Path
+          key, default = sys.argv[1], sys.argv[2]
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith(key + "="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  raise SystemExit(0)
+          print(default)
+          PY
+          }
+          db_user="$(dotenv_value POSTGRES_USER multica)"
+          db_name="$(dotenv_value POSTGRES_DB multica)"
+          db_password="$(dotenv_value POSTGRES_PASSWORD)"
+          postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '$1 ~ /postgres/ {print $2; exit}')"
+          run_sql() {
+            printf '%s\n' "$1" | docker exec -i -e PGPASSWORD="$db_password" "$postgres_id" \
+              psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1
+          }
+          echo "=== backend image ==="
+          docker inspect multica-backend-1 --format 'image={{.Config.Image}} created={{.Created}}'
+          echo "=== mirror warn logs ==="
+          docker logs multica-backend-1 --since 48h 2>&1 | grep -i 'research chat mirror' | tail -30 || echo '(none)'
+          echo "=== research_messages today ==="
+          run_sql "SELECT created_at AT TIME ZONE 'Asia/Shanghai' AS cst, sender_type, card_kind, left(body,120) AS body, meta::text FROM research_message WHERE created_at > now() - interval '12 hours' ORDER BY created_at;"
+          echo "=== backfill missing assistant mirror for latest research chat ==="
+          run_sql "$(cat <<'SQL'
+          WITH chat AS (
+            SELECT cm.id AS chat_msg_id, cm.content, cm.created_at, cs.workspace_id, cs.agent_id,
+                   substring(cs.title from 10) AS research_session_id
+            FROM chat_message cm
+            JOIN chat_session cs ON cs.id = cm.chat_session_id
+            WHERE cs.title LIKE 'research:%'
+              AND cm.role = 'assistant'
+              AND cm.created_at > now() - interval '12 hours'
+          ),
+          missing AS (
+            SELECT c.*, rs.id AS session_uuid
+            FROM chat c
+            JOIN research_session rs
+              ON rs.id = c.research_session_id::uuid
+             AND rs.workspace_id = c.workspace_id
+            WHERE NOT EXISTS (
+              SELECT 1 FROM research_message rm
+              WHERE rm.session_id = rs.id
+                AND rm.sender_type = 'agent'
+                AND rm.sender_id = c.agent_id
+                AND rm.body = c.content
+            )
+          )
+          INSERT INTO research_message (
+            workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta, created_at
+          )
+          SELECT workspace_id, session_uuid, 'agent', agent_id, NULL, content, 'chat',
+                 '{"mirrored_from":"chat","backfill":true}'::jsonb, created_at
+          FROM missing
+          RETURNING id::text, session_id::text, left(body,80) AS body, created_at AT TIME ZONE 'Asia/Shanghai' AS cst;
+          SQL
+          )"

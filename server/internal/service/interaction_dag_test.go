@@ -1061,8 +1061,9 @@ func assembleDAGTestService(t *testing.T) (*InteractionDAGService, *db.Queries, 
 // reads back recorded segment/edge/env_snapshot/session_run rows for a project
 // and projects them into AssembledDag with EXACTLY the SegmentSpec fields
 // (segment_id, agent_run_id, issue_id, trajectory_id, tensor_ref,
-// closing_event, trajectory_source, trainable, trajectory, env_snapshot) - no
-// judge scores, no turn indices, no message text cross this boundary. Real
+// closing_event, trajectory_source, trainable, trajectory, env_snapshot,
+// assistant_turn_seqs) - no judge scores, no raw turn indices, no message text
+// cross this boundary. Real
 // Postgres, tx-rollback (hermetic).
 func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	svc, q, ctx, _ := assembleDAGTestService(t)
@@ -1111,7 +1112,7 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	assert.Equal(t, "snap-1", *seg.EnvSnapshot.IssueSnapshotID)
 	assert.JSONEq(t, `{"k":"v"}`, string(seg.EnvSnapshot.EnvState))
 
-	// NO judge scores, NO turn indices, NO message text: marshal the segment and
+	// NO judge scores, NO raw turn indices, NO message text: marshal the segment and
 	// confirm none of the banned SegmentSpec keys leak through (the struct must
 	// carry EXACTLY the keys AReaL's SegmentSpec(**s) accepts - extras would
 	// TypeError at parse time on the areal side).

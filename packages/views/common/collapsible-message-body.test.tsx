@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CollapsibleMessageBody } from "./collapsible-message-body";
@@ -42,6 +42,37 @@ describe("CollapsibleMessageBody", () => {
     await userEvent.click(screen.getByRole("button", { name: "See less" }));
     expect(body).toHaveAttribute("data-collapsed", "true");
     expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
+  });
+
+  it("notifies when expanded state changes", async () => {
+    const onExpandedChange = vi.fn();
+    render(
+      <CollapsibleMessageBody
+        contentKey="m3"
+        expandLabel="See more"
+        collapseLabel="See less"
+        onExpandedChange={onExpandedChange}
+      >
+        <div>
+          {Array.from({ length: 20 }, (_, index) => (
+            <p key={index}>Line {index}</p>
+          ))}
+        </div>
+      </CollapsibleMessageBody>,
+    );
+
+    const body = screen.getByTestId("collapsible-message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    await userEvent.click(await screen.findByRole("button", { name: "See more" }));
+    expect(onExpandedChange).toHaveBeenLastCalledWith(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "See less" }));
+    expect(onExpandedChange).toHaveBeenLastCalledWith(false);
   });
 
   it("does not collapse when enabled is false", async () => {

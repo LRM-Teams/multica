@@ -28,6 +28,7 @@ type CollapsibleMessageBodyProps = {
   collapseLabel: string;
   fadeVariant?: MessageCollapseFadeVariant;
   className?: string;
+  onExpandedChange?: (expanded: boolean) => void;
 };
 
 /**
@@ -54,6 +55,7 @@ function CollapsibleMessageBodyInner({
   collapseLabel,
   fadeVariant = "default",
   className,
+  onExpandedChange,
 }: CollapsibleMessageBodyProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<() => void>(() => {});
@@ -109,7 +111,10 @@ function CollapsibleMessageBodyInner({
             <button
               type="button"
               className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => setExpanded(true)}
+              onClick={() => {
+                setExpanded(true);
+                onExpandedChange?.(true);
+              }}
             >
               {expandLabel}
             </button>
@@ -121,7 +126,10 @@ function CollapsibleMessageBodyInner({
           <button
             type="button"
             className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            onClick={() => setExpanded(false)}
+            onClick={() => {
+              setExpanded(false);
+              onExpandedChange?.(false);
+            }}
           >
             {collapseLabel}
           </button>

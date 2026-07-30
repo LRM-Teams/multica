@@ -40,13 +40,14 @@ type ResearchFleetResponse struct {
 }
 
 type ResearchFleetMemberResp struct {
-	ID          string `json:"id"`
-	AgentID     string `json:"agent_id"`
-	Role        string `json:"role"`
-	Status      string `json:"status"`
-	IsLead      bool   `json:"is_lead"`
-	Name        string `json:"name,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
+	ID          string  `json:"id"`
+	AgentID     string  `json:"agent_id"`
+	Role        string  `json:"role"`
+	Status      string  `json:"status"`
+	IsLead      bool    `json:"is_lead"`
+	Name        string  `json:"name,omitempty"`
+	DisplayName string  `json:"display_name,omitempty"`
+	AvatarURL   *string `json:"avatar_url,omitempty"`
 }
 
 func (h *Handler) EnsureResearchFleet(w http.ResponseWriter, r *http.Request) {
@@ -289,8 +290,32 @@ func (h *Handler) researchFleetToResponse(ctx context.Context, fleet db.Research
 		if agent, err := h.Queries.GetAgent(ctx, m.AgentID); err == nil {
 			item.Name = agent.Name
 			item.DisplayName = agent.DisplayName
+			item.AvatarURL = textToPtr(agent.AvatarUrl)
 		}
 		out.Members = append(out.Members, item)
+	}
+	return out
+}
+
+// researchFleetPreview builds a capped avatar stack for session list rows.
+func (h *Handler) researchFleetPreview(ctx context.Context, fleet db.ResearchFleet, members []db.ResearchFleetMember, limit int) []ResearchFleetPreviewMember {
+	if limit <= 0 {
+		limit = 5
+	}
+	resp := h.researchFleetToResponse(ctx, fleet, members)
+	out := make([]ResearchFleetPreviewMember, 0, min(limit, len(resp.Members)))
+	for _, m := range resp.Members {
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, ResearchFleetPreviewMember{
+			AgentID:     m.AgentID,
+			Name:        m.Name,
+			DisplayName: m.DisplayName,
+			AvatarURL:   m.AvatarURL,
+			Role:        m.Role,
+			IsLead:      m.IsLead,
+		})
 	}
 	return out
 }

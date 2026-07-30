@@ -26,6 +26,28 @@ type ResearchSessionResponse struct {
 	UpdatedAt      string  `json:"updated_at"`
 }
 
+// ResearchFleetPreviewMember is a list-row avatar stack item (LRM-805).
+type ResearchFleetPreviewMember struct {
+	AgentID     string  `json:"agent_id"`
+	Name        string  `json:"name,omitempty"`
+	DisplayName string  `json:"display_name,omitempty"`
+	AvatarURL   *string `json:"avatar_url"`
+	Role        string  `json:"role,omitempty"`
+	IsLead      bool    `json:"is_lead,omitempty"`
+}
+
+// ResearchSessionListItem extends the session row with a workspace fleet preview.
+type ResearchSessionListItem struct {
+	ResearchSessionResponse
+	FleetPreview []ResearchFleetPreviewMember `json:"fleet_preview"`
+}
+
+// ResearchPresenceEntry is one agent's live activity caption for a session.
+type ResearchPresenceEntry struct {
+	Activity  string `json:"activity"`
+	UpdatedAt int64  `json:"updated_at"` // unix ms
+}
+
 type ResearchSessionSnapshot struct {
 	Session  ResearchSessionResponse `json:"session"`
 	Fleet    ResearchFleetResponse   `json:"fleet"`
@@ -46,8 +68,10 @@ type ResearchGraphNodeResp struct {
 	Status       string          `json:"status"`
 	ActorAgentID *string         `json:"actor_agent_id"`
 	Payload      json.RawMessage `json:"payload"`
-	CreatedAt    string          `json:"created_at"`
-	UpdatedAt    string          `json:"updated_at"`
+	// Confidence is projected from payload.confidence when present (LRM-806).
+	Confidence *float64 `json:"confidence,omitempty"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
 }
 
 type ResearchGraphEdgeResp struct {
@@ -132,17 +156,33 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var preview []ResearchFleetPreviewMember
 	if userID := requestUserID(r); userID != "" {
-		_, _, _ = h.ensureResearchFleet(r.Context(), wsUUID, parseUUID(userID))
+		fleet, members, err := h.ensureResearchFleet(r.Context(), wsUUID, parseUUID(userID))
+		if err == nil {
+			preview = h.researchFleetPreview(r.Context(), fleet, members, 5)
+		}
+	} else if fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID); err == nil {
+		members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
+			FleetID:     fleet.ID,
+			WorkspaceID: wsUUID,
+		})
+		preview = h.researchFleetPreview(r.Context(), fleet, members, 5)
+	}
+	if preview == nil {
+		preview = []ResearchFleetPreviewMember{}
 	}
 	rows, err := h.Queries.ListResearchSessions(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list research sessions")
 		return
 	}
-	out := make([]ResearchSessionResponse, 0, len(rows))
+	out := make([]ResearchSessionListItem, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, researchSessionToResponse(row))
+		out = append(out, ResearchSessionListItem{
+			ResearchSessionResponse: researchSessionToResponse(row),
+			FleetPreview:            preview,
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
@@ -275,6 +315,7 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 func mapNodes(rows []db.ResearchGraphNode) []ResearchGraphNodeResp {
 	out := make([]ResearchGraphNodeResp, 0, len(rows))
 	for _, n := range rows {
+		payload := json.RawMessage(n.Payload)
 		out = append(out, ResearchGraphNodeResp{
 			ID:           uuidToString(n.ID),
 			SessionID:    uuidToString(n.SessionID),
@@ -283,10 +324,65 @@ func mapNodes(rows []db.ResearchGraphNode) []ResearchGraphNodeResp {
 			Summary:      n.Summary,
 			Status:       n.Status,
 			ActorAgentID: uuidToPtr(n.ActorAgentID),
-			Payload:      json.RawMessage(n.Payload),
+			Payload:      payload,
+			Confidence:   confidenceFromPayload(payload),
 			CreatedAt:    timestampToString(n.CreatedAt),
 			UpdatedAt:    timestampToString(n.UpdatedAt),
 		})
+	}
+	return out
+}
+
+func confidenceFromPayload(payload json.RawMessage) *float64 {
+	if len(payload) == 0 {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return nil
+	}
+	raw, ok := obj["confidence"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		return &v
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return nil
+		}
+		return &f
+	default:
+		return nil
+	}
+}
+
+// buildResearchPresenceMap rebuilds ephemeral presence from the latest
+// agent_activity graph node per actor (GET bootstrap for LRM-804/775).
+func buildResearchPresenceMap(nodes []db.ResearchGraphNode) map[string]ResearchPresenceEntry {
+	out := map[string]ResearchPresenceEntry{}
+	for _, n := range nodes {
+		if n.NodeType != "agent_activity" || !n.ActorAgentID.Valid {
+			continue
+		}
+		agentID := uuidToString(n.ActorAgentID)
+		activity := strings.TrimSpace(n.Title)
+		if activity == "" {
+			activity = strings.TrimSpace(n.Summary)
+		}
+		if activity == "" {
+			continue
+		}
+		updatedAt := n.UpdatedAt.Time.UnixMilli()
+		if !n.UpdatedAt.Valid {
+			updatedAt = n.CreatedAt.Time.UnixMilli()
+		}
+		prev, ok := out[agentID]
+		if !ok || updatedAt >= prev.UpdatedAt {
+			out[agentID] = ResearchPresenceEntry{Activity: activity, UpdatedAt: updatedAt}
+		}
 	}
 	return out
 }

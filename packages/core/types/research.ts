@@ -44,6 +44,16 @@ export interface ResearchFleetMember {
   is_lead: boolean;
   name?: string;
   display_name?: string;
+  avatar_url?: string | null;
+}
+
+export interface ResearchFleetPreviewMember {
+  agent_id: string;
+  name?: string;
+  display_name?: string;
+  avatar_url?: string | null;
+  role?: string;
+  is_lead?: boolean;
 }
 
 export interface ResearchFleet {
@@ -69,6 +79,8 @@ export interface ResearchSession {
   handoff_summary: string | null;
   created_at: string;
   updated_at: string;
+  /** Present on list responses (LRM-805). */
+  fleet_preview?: ResearchFleetPreviewMember[];
 }
 
 export interface ResearchGraphNode {
@@ -80,6 +92,8 @@ export interface ResearchGraphNode {
   status: string;
   actor_agent_id: string | null;
   payload: Record<string, unknown> | unknown;
+  /** Projected from payload.confidence when present (LRM-806). */
+  confidence?: number | null;
   created_at: string;
   updated_at: string;
 }

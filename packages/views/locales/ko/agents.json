@@ -17,6 +17,7 @@
   },
   "sort": {
     "label_recent": "최근 활동",
+    "label_fleet": "전투력순",
     "label_name": "이름",
     "label_runs": "실행 많은 순",
     "label_created": "최근 생성"
@@ -681,6 +682,19 @@
     "runtime_offline": "데몬 오프라인",
     "runtime_recovery": "데몬 재시작됨",
     "manual": "사용자가 취소함"
+  },
+  "fleet": {
+    "title": "함대 전투력",
+    "score_label": "전투력",
+    "rank_of": "활성 {{size}}명 중 #{{rank}}",
+    "frozen_hint": "보관 시 동결",
+    "warming_up": "준비 중 · {{current}}/{{required}} 작업",
+    "pillars": {
+      "delivery": "전달",
+      "evolution": "진화",
+      "growth": "성장",
+      "efficiency": "효율"
+    }
   },
   "dashboard": {
     "all_agents": "모든 에이전트",

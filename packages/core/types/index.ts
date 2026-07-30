@@ -1,5 +1,11 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats, IssueSourceMessageRef, IssueSourceRefs, IssueSourceChannelRef, ProjectChannel } from "./issue";
 export type {
+  FleetClassId,
+  AgentFleetRank,
+  AgentFleetPillarScores,
+  AgentFleetRulesDocument,
+} from "./agent-fleet";
+export type {
   Agent,
   AgentMemoryGrowth,
   AgentMemoryGrowthTier,

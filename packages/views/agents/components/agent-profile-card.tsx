@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { ApiError } from "@multica/core/api";
-import { agentDetailOptions, memberProfileOptions, validateAgentUsername } from "@multica/core/agents";
+import { agentDetailOptions, memberProfileOptions, validateAgentUsername, agentFleetRankOptions } from "@multica/core/agents";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { useAuthStore } from "@multica/core/auth";
@@ -26,6 +26,7 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useT } from "../../i18n/use-t";
 import { ActorProfileContentLoaded } from "../../common/actor-profile-popover";
 import { MemoryGrowthField } from "./memory-growth-field";
+import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 
 interface AgentProfileCardProps {
   agentId: string;
@@ -70,6 +71,11 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
 
   const isLoading =
     detailPending || (detailForbidden && identityPending);
+
+  const { data: fleet } = useQuery({
+    ...agentFleetRankOptions(wsId, agentId),
+    enabled: !!agentId && !!agent,
+  });
 
   if (isLoading) {
     return (
@@ -187,6 +193,14 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
 
       {/* LRM-304: Memory growth — profile/card only; omitted when zero writes. */}
       <MemoryGrowthField growth={agent.memory_growth} />
+      {fleet ? (
+        <FleetRankBadge
+          classId={fleet.class_id}
+          classLabel={fleet.class_label}
+          fleetRank={fleet.fleet_rank}
+          frozen={fleet.frozen || isArchived}
+        />
+      ) : null}
 
       {/* Meta rows. Runtime / model / thinking are the SAME inline pickers
           the detail inspector uses (reused, not reimplemented): editable for

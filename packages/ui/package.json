@@ -16,6 +16,8 @@
     "./markdown/mentions": "./markdown/mentions.ts",
     "./hooks/*": "./hooks/*.ts",
     "./lib/utils": "./lib/utils.ts",
+    "./lib/fleet-class": "./lib/fleet-class.ts",
+    "./components/fleet/*": "./components/fleet/*.tsx",
     "./lib/data-table": "./lib/data-table.ts",
     "./lib/code-style": "./lib/code-style.ts",
     "./lib/clipboard": "./lib/clipboard.ts",

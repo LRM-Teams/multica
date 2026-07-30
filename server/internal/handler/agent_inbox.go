@@ -2711,6 +2711,12 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 			if err := q.SetUnreadSinceIfNull(ctx, event.ChatSessionID); err != nil {
 				slog.Warn("agent inbox complete: failed to set unread_since", "chat_session_id", uuidToString(event.ChatSessionID), "error", err)
 			}
+			// Research fleet wakes use chat_session title research:<sessionUUID>.
+			// Production completions go through this inbox path (not TaskService.
+			// CompleteTask), so mirror here or the Research UI never sees replies.
+			if h.TaskService != nil {
+				h.TaskService.MirrorResearchChatReply(ctx, event, row)
+			}
 		}
 	} else if outputType == protocol.ChatOutputKindMessage {
 		visibleContent = redact.Text(body)

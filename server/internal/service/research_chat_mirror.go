@@ -13,10 +13,13 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// mirrorResearchChatReply copies an assistant chat reply into research_message
+// MirrorResearchChatReply copies an assistant chat reply into research_message
 // when the chat session title is research:<sessionUUID>, so the Research UI
 // drawer shows agent answers (not only process cards / CLI posts).
-func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.AgentInboxEvent, msg db.ChatMessage) {
+//
+// Called from both TaskService.CompleteTask and the agent-inbox complete
+// handler — production chat completions primarily use the inbox path.
+func (s *TaskService) MirrorResearchChatReply(ctx context.Context, task db.AgentInboxEvent, msg db.ChatMessage) {
 	if s == nil || s.Queries == nil || !task.ChatSessionID.Valid {
 		return
 	}

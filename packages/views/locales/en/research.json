@@ -81,12 +81,6 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
-  "stage": {
-    "s1_plan": "S1 · Plan",
-    "s2_sources": "S2 · Explore",
-    "s3_validation": "S3 · Validate",
-    "s4_delivery": "S4 · Deliver"
-  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -99,5 +93,13 @@
     "roster_change": "Roster change",
     "stage_gate": "Stage gate",
     "agent_activity": "Activity"
+  },
+  "home": {
+    "composer_label": "Create a research session",
+    "hero_title": "Research, without the tab chaos",
+    "hero_desc": "Describe the goal — the research fleet explores sources, maps findings, and hands you a report.",
+    "composer_hint": "Press ⌘⏎ to start",
+    "creating": "Assembling fleet…",
+    "create_failed": "Couldn't create the research session"
   }
 }

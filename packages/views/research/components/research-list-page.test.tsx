@@ -19,12 +19,22 @@ const sessionsQueryRef = vi.hoisted(() => ({
   },
 }));
 
+const mutationRef = vi.hoisted(() => ({
+  current: {
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null as unknown,
+    reset: vi.fn(),
+  },
+}));
+
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey?: unknown[] }) =>
     opts?.queryKey?.[2] === "sessions"
       ? sessionsQueryRef.current
       : { data: undefined, isLoading: false },
-  useMutation: () => ({ mutate: vi.fn(), isPending: false }),
+  useMutation: () => mutationRef.current,
   useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
 }));
 
@@ -120,6 +130,7 @@ function setQuery(partial: Partial<typeof sessionsQueryRef.current>) {
 
 beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  mutationRef.current = { mutate: vi.fn(), isPending: false, isError: false, error: null, reset: vi.fn() };
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
@@ -263,3 +274,63 @@ describe("ResearchListPage first-visit empty state (LRM-816)", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("ResearchListPage composer hero (LRM-787)", () => {
+  beforeEach(() => {
+    setQuery({ data: { sessions: [] } });
+  });
+
+  it("renders hero title, description, and start CTA inside a card", () => {
+    render(<ResearchListPage />);
+    expect(screen.getByText(enResearch.home.hero_title)).toBeInTheDocument();
+    expect(screen.getByText(enResearch.home.hero_desc)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
+  });
+
+  it("disables start until the goal is non-empty", () => {
+    render(<ResearchListPage />);
+    const start = screen.getByRole("button", { name: enResearch.start });
+    expect(start).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
+      target: { value: "Vector DB comparison" },
+    });
+    expect(start).toBeEnabled();
+  });
+
+  it("⌘⏎ submits the composer", () => {
+    const mutate = vi.fn();
+    mutationRef.current = { ...mutationRef.current, mutate };
+    render(<ResearchListPage />);
+    const textarea = screen.getByPlaceholderText(enResearch.goal_placeholder);
+    fireEvent.change(textarea, { target: { value: "Vector DB comparison" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows creating state while pending", () => {
+    mutationRef.current = { ...mutationRef.current, isPending: true };
+    render(<ResearchListPage />);
+    expect(screen.getByText(enResearch.home.creating)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(enResearch.home.creating) })).toBeDisabled();
+  });
+
+  it("creation failure shows an inline error row with retry and keeps the draft", () => {
+    const reset = vi.fn();
+    mutationRef.current = {
+      mutate: vi.fn(),
+      isPending: false,
+      isError: true,
+      error: new Error("network down"),
+      reset,
+    };
+    render(<ResearchListPage />);
+    const textarea = screen.getByPlaceholderText(enResearch.goal_placeholder) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Vector DB comparison" } });
+    expect(textarea.value).toBe("Vector DB comparison");
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByText("network down")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: enResearch.list.retry }));
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+});
+

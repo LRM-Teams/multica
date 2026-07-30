@@ -81,12 +81,6 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
-  "stage": {
-    "s1_plan": "S1 · 定義",
-    "s2_sources": "S2 · 探索",
-    "s3_validation": "S3 · 検証",
-    "s4_delivery": "S4 · 納品"
-  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -99,5 +93,13 @@
     "roster_change": "Roster change",
     "stage_gate": "Stage gate",
     "agent_activity": "Activity"
+  },
+  "home": {
+    "composer_label": "調査セッションを作成",
+    "hero_title": "リサーチを、タブ地獄なしで",
+    "hero_desc": "ゴールを書くだけ——調査団がソースを探索し、発見を整理し、レポートまで届けます。",
+    "composer_hint": "⌘⏎ で開始",
+    "creating": "艦隊を編成中…",
+    "create_failed": "調査セッションを作成できませんでした"
   }
 }

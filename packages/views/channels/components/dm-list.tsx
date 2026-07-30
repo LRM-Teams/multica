@@ -583,9 +583,10 @@ export function DmConversationRow({
                 <span
                   className={cn(
                     "truncate text-sm text-foreground",
-                    // Slack-style: an unread (non-muted) conversation reads as a
-                    // BOLD name, replacing the old saturated count block (#3).
-                    realUnread > 0 && !isMuted ? "font-semibold" : "font-medium",
+                    // Slack-style: an unread conversation reads as a BOLD name
+                    // (#3); LRM-767 extends the bold to muted rows too — the
+                    // bold name is then their only unread signal (no badge).
+                    realUnread > 0 ? "font-semibold" : "font-medium",
                   )}
                 >
                   {title}
@@ -625,6 +626,9 @@ export function DmConversationRow({
                 realUnread={realUnread}
                 isManualDot={isManualDot}
                 isMuted={isMuted}
+                unreadLabel={t(($) => $.sidebar.unread_indicator, {
+                  count: realUnread,
+                })}
               />
             </div>
           </div>

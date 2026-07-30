@@ -2843,9 +2843,10 @@ export function ChannelsPage({
                 <span
                   className={cn(
                     "flex min-w-0 items-center gap-1 truncate text-sm text-foreground",
-                    // Slack-style: an unread (non-muted) channel reads as a BOLD
-                    // name, replacing the old saturated count block (#3).
-                    realUnread > 0 && !isMuted ? "font-semibold" : "font-medium",
+                    // Slack-style: an unread channel reads as a BOLD name
+                    // (#3); LRM-767 extends the bold to muted rows too — the
+                    // bold name is then their only unread signal (no badge).
+                    realUnread > 0 ? "font-semibold" : "font-medium",
                   )}
                 >
                   {pinned && (
@@ -2866,6 +2867,9 @@ export function ChannelsPage({
                   realUnread={realUnread}
                   isManualDot={isManualDot}
                   isMuted={isMuted}
+                  unreadLabel={t(($) => $.sidebar.unread_indicator, {
+                    count: realUnread,
+                  })}
                   mentionCount={channel.mention_unread_count ?? 0}
                   mentionLabel={t(($) => $.sidebar.mention_indicator)}
                   mentionTooltip={t(($) => $.sidebar.mention_tooltip, {

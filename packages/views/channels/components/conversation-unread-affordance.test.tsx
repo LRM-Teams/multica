@@ -5,35 +5,44 @@ import { render } from "@testing-library/react";
 import { ConversationUnreadAffordance } from "./conversation-muted";
 
 /**
- * Anchor 7 (A4 / A6) + the Parker "no visible fake count" gate. The unread
- * affordance must render the read-model `real_unread`-backed REAL count — never
- * a constant / fabricated number — and must present muted conversations
- * silently (dimmed, not the salient primary/red badge).
+ * LRM-767 (design gate locked, Slack-aligned): an active conversation's plain
+ * unread shows the REAL read-model-backed count in a neutral pill; a muted
+ * conversation shows nothing (bold name is its only signal); a manual "mark
+ * as unread" stays a dot (no honest count exists); the @-mention pill keeps
+ * its existing semantics (pierces mute, brand accent).
  */
 describe("ConversationUnreadAffordance", () => {
-  it("renders a plain (non-@) unread as a subtle neutral dot, not a saturated count (#3 Slack-style)", () => {
-    const { container } = render(
-      <ConversationUnreadAffordance realUnread={7} isManualDot={false} isMuted={false} />,
+  it("renders a plain (non-@) unread as a numeric badge with the real count (LRM-767)", () => {
+    const { container, getByText } = render(
+      <ConversationUnreadAffordance
+        realUnread={7}
+        isManualDot={false}
+        isMuted={false}
+        unreadLabel="7 unread messages"
+      />,
     );
-    const dot = container.querySelector("span");
-    expect(dot).not.toBeNull();
-    // No saturated count block — the unread signal is the bold channel name in
-    // the row; the numeric block is reserved for the @-mention pill.
-    expect(dot).toHaveClass("size-2");
-    expect(dot).toHaveClass("bg-muted-foreground");
-    expect(dot).not.toHaveClass("bg-primary");
-    expect(dot?.textContent ?? "").toBe("");
+    const badge = getByText("7");
+    // Neutral pill — not the brand/destructive accent reserved for @-mentions.
+    expect(badge).toHaveClass("bg-muted");
+    expect(badge).toHaveClass("text-[10px]");
+    expect(badge).not.toHaveClass("bg-brand-solid");
+    expect(badge).not.toHaveClass("bg-destructive");
+    expect(badge).toHaveAttribute("aria-label", "7 unread messages");
+    expect(container.querySelector(".size-2")).toBeNull();
   });
 
-  it("renders a muted plain-unread as a DIMMER dot with no count (Parker: muted is quietest, never a number)", () => {
+  it("caps the numeric badge at 99+", () => {
+    const { getByText } = render(
+      <ConversationUnreadAffordance realUnread={150} isManualDot={false} isMuted={false} />,
+    );
+    expect(getByText("99+")).toBeTruthy();
+  });
+
+  it("renders NOTHING for a muted plain-unread — bold name is the only signal (LRM-767)", () => {
     const { container } = render(
       <ConversationUnreadAffordance realUnread={150} isManualDot={false} isMuted />,
     );
-    const dot = container.querySelector("span");
-    expect(dot).toHaveClass("size-2");
-    expect(dot).toHaveClass("bg-muted-foreground/50");
-    // No surviving number — a muted row must never be more salient than an active one.
-    expect(dot?.textContent ?? "").toBe("");
+    expect(container.querySelector("span")).toBeNull();
     expect(container).not.toHaveTextContent("99+");
   });
 
@@ -50,20 +59,6 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot).toHaveClass("rounded-full");
     // No digits: the manual dot is a marker, not a count.
     expect(dot?.textContent ?? "").toBe("");
-  });
-
-  it("keeps a muted unread dot DIMMER than an active one (no asymmetry — muted never louder)", () => {
-    const active = render(
-      <ConversationUnreadAffordance realUnread={3} isManualDot={false} isMuted={false} />,
-    );
-    const muted = render(
-      <ConversationUnreadAffordance realUnread={3} isManualDot={false} isMuted />,
-    );
-    expect(active.container.querySelector("span")).toHaveClass("bg-muted-foreground");
-    expect(muted.container.querySelector("span")).toHaveClass("bg-muted-foreground/50");
-    // Neither shows a numeric count — the unread signal is the bold name in the row.
-    expect(active.container).not.toHaveTextContent("3");
-    expect(muted.container).not.toHaveTextContent("3");
   });
 
   it("dims the manual dot for muted conversations (A6)", () => {
@@ -129,8 +124,8 @@ describe("ConversationUnreadAffordance", () => {
     expect(container).not.toHaveTextContent("3");
   });
 
-  it("renders a no-@ unread row as a neutral dot, never an @N pill (Iris regression guard)", () => {
-    const { container } = render(
+  it("renders a no-@ unread row as a neutral numeric badge, never an @N pill (Iris regression guard)", () => {
+    const { container, getByText } = render(
       <ConversationUnreadAffordance
         realUnread={4}
         isManualDot={false}
@@ -138,11 +133,7 @@ describe("ConversationUnreadAffordance", () => {
         mentionCount={0}
       />,
     );
-    const dot = container.querySelector("span");
-    // Plain unread is a subtle neutral dot — no saturated count, no @N pill.
-    expect(dot).toHaveClass("size-2");
-    expect(dot).toHaveClass("bg-muted-foreground");
-    expect(dot).not.toHaveClass("bg-primary");
+    expect(getByText("4")).toBeTruthy();
     expect(container.querySelector(".bg-brand-solid")).toBeNull();
     expect(container.querySelector(".bg-destructive")).toBeNull();
   });

@@ -24,12 +24,12 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 			return buildProtocolTurnPrompt(task)
 		}
 	}
-	withCurrentRoleAuthority := func(prompt string) string {
-		return currentRoleAuthorityOverlay(task) + prompt
+	withCurrentStateOverlay := func(prompt string) string {
+		return currentStateOverlay(task) + prompt
 	}
 	if task.InboxEvent != nil && task.InboxEvent.Reason == protocol.ChannelRoleChangedReason {
-		return withCurrentRoleAuthority(fmt.Sprintf(
-			"Your channel manager role changed for channel %s. Handle the transition from the current channel state. If you are now a manager, follow the responsibilities in your runtime brief and patrol only this channel.",
+		return withCurrentStateOverlay(fmt.Sprintf(
+			"Your channel manager role changed for channel %s. The state above (server-claimed, this wake) is authoritative: if it lists this channel, follow those duties and patrol only this channel; if it does not, you are no longer that channel's manager.",
 			task.ChannelID,
 		))
 	}
@@ -38,10 +38,10 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 	// retaining ChatSessionID for the resident backend and delivery transport.
 	if task.IssueID != "" {
 		if task.TriggerCommentID != "" {
-			return withCurrentRoleAuthority(buildCommentPrompt(task, provider))
+			return withCurrentStateOverlay(buildCommentPrompt(task, provider))
 		}
 		if task.AssignmentSnapshot != nil {
-			return withCurrentRoleAuthority(buildAssignmentPrompt(task))
+			return withCurrentStateOverlay(buildAssignmentPrompt(task))
 		}
 	} else if task.ChatSessionID != "" {
 		if provider == "pi" {
@@ -52,56 +52,72 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 				return command
 			}
 		}
-		return withCurrentRoleAuthority(buildChatPrompt(task, agentRoot))
+		return withCurrentStateOverlay(buildChatPrompt(task, agentRoot))
 	}
 	if task.TriggerCommentID != "" {
-		return withCurrentRoleAuthority(buildCommentPrompt(task, provider))
+		return withCurrentStateOverlay(buildCommentPrompt(task, provider))
 	}
 	if task.AutopilotRunID != "" {
-		return withCurrentRoleAuthority(buildAutopilotPrompt(task))
+		return withCurrentStateOverlay(buildAutopilotPrompt(task))
 	}
 	if task.QuickCreatePrompt != "" {
-		return withCurrentRoleAuthority(buildQuickCreatePrompt(task))
+		return withCurrentStateOverlay(buildQuickCreatePrompt(task))
 	}
 	if task.AgentRadarPrompt != "" {
-		return withCurrentRoleAuthority(task.AgentRadarPrompt)
+		return withCurrentStateOverlay(task.AgentRadarPrompt)
 	}
 	if task.AssignmentSnapshot != nil {
-		return withCurrentRoleAuthority(buildAssignmentPrompt(task))
+		return withCurrentStateOverlay(buildAssignmentPrompt(task))
 	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
-	return withCurrentRoleAuthority(b.String())
+	return withCurrentStateOverlay(b.String())
 }
 
-// currentRoleAuthorityOverlay is the server-claimed role truth for this wake.
-// It deliberately lives in the per-turn prompt rather than the startup AGENTS
-// materialization: provider sessions may resume after a promotion or demotion.
-// A missing Agent means an old server did not supply an authority snapshot, so
-// we preserve its existing behavior rather than inventing a negative role.
-func currentRoleAuthorityOverlay(task Task) string {
+// currentStateSlots are the server-claimed per-wake facts injected ahead of
+// every real provider turn. They exist because resident/resumed sessions
+// don't naturally pick up changes after session start: the create-time AGENTS
+// brief is startup-only (see execenv.buildMetaSkillContent), so a promotion,
+// demotion, or config change would otherwise go unseen until the session
+// restarts. Slots are additive — a future permission/config slot attaches the
+// same way — but only the manager-role slot is implemented today.
+var currentStateSlots = []func(Task) string{
+	managerRoleStateSlot,
+}
+
+func currentStateOverlay(task Task) string {
+	var b strings.Builder
+	for _, slot := range currentStateSlots {
+		b.WriteString(slot(task))
+	}
+	return b.String()
+}
+
+// managerRoleStateSlot is the sole source of manager-channel truth: the
+// startup brief no longer renders it. A missing Agent means an old server
+// sent no authority snapshot, so existing (no-overlay) behavior is preserved
+// rather than inventing a negative role.
+func managerRoleStateSlot(task Task) string {
 	if task.Agent == nil {
 		return ""
 	}
+	channels := task.Agent.ManagerChannels
+	if len(channels) == 0 {
+		return "Group manager this wake (server-claimed): none. Drop any manager duties/reminders from an older session or brief.\n\n"
+	}
 
+	refs := make([]string, 0, len(channels))
+	for _, channel := range channels {
+		// %q keeps a user-controlled channel name as quoted data, not instructions.
+		refs = append(refs, fmt.Sprintf("id=%q name=%q", channel.ID, channel.Name))
+	}
 	var b strings.Builder
-	b.WriteString("Current role authority for THIS wake (server-claimed and authoritative):\n")
-	if len(task.Agent.ManagerChannels) == 0 {
-		b.WriteString("- You are not a group manager for any channel on this wake. Do not perform group-manager duties or keep group-manager reminders based on an older session or startup brief; cancel any such reminders that no longer match your current channels.\n\n")
-		return b.String()
-	}
-
-	b.WriteString("- You are a group manager only for these channels:\n")
-	for _, channel := range task.Agent.ManagerChannels {
-		// %q keeps user-controlled channel names as data, not instructions.
-		fmt.Fprintf(&b, "  - id=%q name=%q\n", channel.ID, channel.Name)
-	}
-	b.WriteString("- For each listed channel, close open loops: unanswered questions, unclaimed todo work, stale in-progress/in-review work, and people blocked on one owner. Nudge in that channel, not DM.\n")
-	b.WriteString("- Ensure each listed channel has its own anchored patrol reminder when ongoing patrol is needed; do not combine channels and do not create duplicate reminders.\n")
-	b.WriteString("- Do not treat any older provider session, AGENTS startup brief, or prior turn as authority for roles not listed above.\n\n")
+	fmt.Fprintf(&b, "Group manager this wake (server-claimed): %s. Ignore any other session/brief for roles not listed.\n", strings.Join(refs, ", "))
+	b.WriteString("Per channel: close open loops — unanswered questions · unclaimed `todo` · stale `in_progress`/`in_review` · someone blocked on one owner. Nudge in-channel, not DM.\n")
+	b.WriteString("One anchored `multica reminder schedule` per channel; cancel any that don't match this list.\n\n")
 	return b.String()
 }
 

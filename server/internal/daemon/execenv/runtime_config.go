@@ -782,7 +782,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		}
 	}
 
-	renderGroupManagerBrief(&b, ctx)
 	b.WriteString(executionDisciplineBrief)
 	b.WriteString("\n\n")
 
@@ -1214,39 +1213,6 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	}
 	b.WriteString(compactCloseoutStatusInstruction)
 	b.WriteString("\n")
-}
-
-func renderGroupManagerBrief(b *strings.Builder, ctx TaskContextForEnv) {
-	if len(ctx.ManagerChannels) == 0 {
-		return
-	}
-	refs := make([]string, 0, len(ctx.ManagerChannels))
-	for _, channel := range ctx.ManagerChannels {
-		name := sanitizeNameForBriefMarkdown(channel.Name)
-		if name == "" {
-			name = "channel"
-		}
-		refs = append(refs, "#"+name)
-	}
-
-	fmt.Fprintf(b, "**Group manager: %s.**\n\n", strings.Join(refs, ", "))
-	b.WriteString("Per channel, close open loops:\n")
-	b.WriteString("unanswered questions · unclaimed `todo` · `in_progress`/`in_review` gone stale ·\n")
-	b.WriteString("someone blocked on one person.\n\n")
-	b.WriteString("Act, don't narrate: @mention whoever unblocks it, or claim/reassign.\n")
-	b.WriteString("Nudge in-channel, not DM — other managers see an in-channel nudge and won't\n")
-	b.WriteString("double up. No periodic \"all clear\" posts.\n\n")
-	b.WriteString("Nothing patrols for you. `multica reminder schedule` anchored per channel —\n")
-	b.WriteString("one each, not one combined. Woken by one → patrol that channel only.\n\n")
-	b.WriteString("Scope: role is per channel; ")
-	if len(refs) > 1 {
-		fmt.Fprintf(b, "manager of %s grants nothing in %s. ", refs[0], refs[1])
-	} else {
-		fmt.Fprintf(b, "manager of %s grants nothing in another group. ", refs[0])
-	}
-	b.WriteString("No extra read\n")
-	b.WriteString("access — private still follows membership. Demoted/removed → actions start\n")
-	b.WriteString("failing; cancel that channel's reminder.\n\n")
 }
 
 func chatRuntimeSkills(ctx TaskContextForEnv) []SkillContextForEnv {

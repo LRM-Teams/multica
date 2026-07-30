@@ -14,7 +14,7 @@ import (
 const createWorkspace = `-- name: CreateWorkspace :one
 INSERT INTO workspace (name, slug, description, context, issue_prefix)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id, onboarding_agent_id
 `
 
 type CreateWorkspaceParams struct {
@@ -48,6 +48,7 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		&i.IssueCounter,
 		&i.AvatarUrl,
 		&i.DefaultSelfPlayEnvID,
+		&i.OnboardingAgentID,
 	)
 	return i, err
 }
@@ -97,7 +98,7 @@ func (q *Queries) SetDefaultSelfPlayEnv(ctx context.Context, arg SetDefaultSelfP
 }
 
 const getWorkspace = `-- name: GetWorkspace :one
-SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id FROM workspace
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id, onboarding_agent_id FROM workspace
 WHERE id = $1
 `
 
@@ -118,12 +119,13 @@ func (q *Queries) GetWorkspace(ctx context.Context, id pgtype.UUID) (Workspace, 
 		&i.IssueCounter,
 		&i.AvatarUrl,
 		&i.DefaultSelfPlayEnvID,
+		&i.OnboardingAgentID,
 	)
 	return i, err
 }
 
 const getWorkspaceBySlug = `-- name: GetWorkspaceBySlug :one
-SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id FROM workspace
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id, onboarding_agent_id FROM workspace
 WHERE slug = $1
 `
 
@@ -144,8 +146,63 @@ func (q *Queries) GetWorkspaceBySlug(ctx context.Context, slug string) (Workspac
 		&i.IssueCounter,
 		&i.AvatarUrl,
 		&i.DefaultSelfPlayEnvID,
+		&i.OnboardingAgentID,
 	)
 	return i, err
+}
+
+const getFirstWorkspaceOwnerUserID = `-- name: GetFirstWorkspaceOwnerUserID :one
+SELECT user_id
+  FROM member
+ WHERE workspace_id = $1 AND role = 'owner'
+ ORDER BY created_at ASC
+ LIMIT 1
+`
+
+// "First" by member.created_at is a pragmatic, stable tie-break for the rare
+// multi-owner case; it is not a claim that workspaces have a canonical owner
+// column (see docs/engineering-principles.md on that open question).
+func (q *Queries) GetFirstWorkspaceOwnerUserID(ctx context.Context, workspaceID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getFirstWorkspaceOwnerUserID, workspaceID)
+	var user_id pgtype.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
+const getWorkspaceOnboardingAgentID = `-- name: GetWorkspaceOnboardingAgentID :one
+SELECT onboarding_agent_id
+  FROM workspace
+ WHERE id = $1
+`
+
+func (q *Queries) GetWorkspaceOnboardingAgentID(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceOnboardingAgentID, id)
+	var onboarding_agent_id pgtype.UUID
+	err := row.Scan(&onboarding_agent_id)
+	return onboarding_agent_id, err
+}
+
+const setWorkspaceOnboardingAgentID = `-- name: SetWorkspaceOnboardingAgentID :exec
+UPDATE workspace
+   SET onboarding_agent_id = $2,
+       updated_at = now()
+ WHERE id = $1
+   AND onboarding_agent_id IS NULL
+`
+
+type SetWorkspaceOnboardingAgentIDParams struct {
+	ID                pgtype.UUID `json:"id"`
+	OnboardingAgentID pgtype.UUID `json:"onboarding_agent_id"`
+}
+
+// SetWorkspaceOnboardingAgentID conditionally binds the per-workspace
+// onboarding agent only when unset, so the first of N concurrent ensure()
+// callers wins and the rest are no-ops (the caller re-reads
+// GetWorkspaceOnboardingAgentID to pick up the canonical winner and archives
+// its own losing agent). Mirrors SetDefaultSelfPlayEnv.
+func (q *Queries) SetWorkspaceOnboardingAgentID(ctx context.Context, arg SetWorkspaceOnboardingAgentIDParams) error {
+	_, err := q.db.Exec(ctx, setWorkspaceOnboardingAgentID, arg.ID, arg.OnboardingAgentID)
+	return err
 }
 
 const incrementIssueCounter = `-- name: IncrementIssueCounter :one
@@ -236,7 +293,7 @@ UPDATE workspace SET
     avatar_url = COALESCE($8, avatar_url),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id, onboarding_agent_id
 `
 
 type UpdateWorkspaceParams struct {
@@ -276,6 +333,7 @@ func (q *Queries) UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams
 		&i.IssueCounter,
 		&i.AvatarUrl,
 		&i.DefaultSelfPlayEnvID,
+		&i.OnboardingAgentID,
 	)
 	return i, err
 }

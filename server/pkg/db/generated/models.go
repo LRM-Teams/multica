@@ -1385,6 +1385,7 @@ type Workspace struct {
 	IssueCounter         int32              `json:"issue_counter"`
 	AvatarUrl            pgtype.Text        `json:"avatar_url"`
 	DefaultSelfPlayEnvID pgtype.UUID        `json:"default_self_play_env_id"`
+	OnboardingAgentID    pgtype.UUID        `json:"onboarding_agent_id"`
 }
 
 type WorkspaceInvitation struct {

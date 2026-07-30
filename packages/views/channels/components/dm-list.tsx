@@ -45,6 +45,7 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import {
+  computeDuplicatedHandleLabels,
   matchesActorIdentitySearch,
   resolveActorDisplayName,
   resolveActorIdentityPresentation,
@@ -529,6 +530,14 @@ export function DmConversationRow({
   const [pairA, pairB] = dm.participants ?? [];
   const agentPair = dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
   const title = agentPair ? `${agentPair.a.name} · ${agentPair.b.name}` : dm.peer.name;
+  // LRM-749/LRM-710: only a display-name collision earns a weak gray @handle
+  // next to the peer name — unique names get zero extra pixels.
+  const dupHandleLabel = useMemo(() => {
+    if (dm.mode === "agent_pair" || dm.peer.type !== "agent") return null;
+    return (
+      computeDuplicatedHandleLabels(agents.filter((a) => !a.archived_at)).get(dm.peer.id) ?? null
+    );
+  }, [agents, dm.mode, dm.peer.id, dm.peer.type]);
   const peerHonor =
     !agentPair && dm.peer.type === "user" ? getMemberHonor(dm.peer.id) : undefined;
   const peerFleet =
@@ -597,12 +606,19 @@ export function DmConversationRow({
                     {title}
                   </span>
                 ) : (
-                  <ActorStyledName
-                    displayName={title}
-                    honor={peerHonor}
-                    fleet={peerFleet}
-                    className={cn("text-sm text-foreground", titleWeightClass)}
-                  />
+                  <>
+                    <ActorStyledName
+                      displayName={title}
+                      honor={peerHonor}
+                      fleet={peerFleet}
+                      className={cn("text-sm text-foreground", titleWeightClass)}
+                    />
+                    {dupHandleLabel && (
+                      <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                        {dupHandleLabel}
+                      </span>
+                    )}
+                  </>
                 )}
                 {agentPair && (
                   <span className="shrink-0 rounded border border-border px-1 text-[10px] font-medium leading-tight text-muted-foreground">

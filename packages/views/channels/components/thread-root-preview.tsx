@@ -8,6 +8,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { messageCollapseFadeClassName } from "../../common/mention-token";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorStyledName } from "../../common/actor-styled-name";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
@@ -45,7 +46,7 @@ export function ThreadRootPreview({
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
-  const { getActorName } = useActorName();
+  const { getActorName, getMemberHonor, getAgentFleetRank } = useActorName();
   const isAgent = message.type === "agent";
   const voicePresentation = resolveVoiceMessagePresentation(message);
   const hidesVoiceTranscript =
@@ -81,11 +82,16 @@ export function ThreadRootPreview({
       : undefined;
   const handleOpenProfileCapture = handleOpenAgentCapture ?? handleOpenMemberCapture;
   const avatarActorType = isAgent ? "agent" : "member";
+  const authorHonor =
+    message.type === "user" && profileActorId ? getMemberHonor(profileActorId) : undefined;
+  const authorFleet =
+    isAgent && profileActorId ? getAgentFleetRank(profileActorId) : undefined;
   const avatar = profileActorId ? (
     <ActorAvatar
       actorType={avatarActorType}
       actorId={profileActorId}
       size={30}
+      fleetRank={authorFleet?.fleet_rank}
       profileLink={false}
     />
   ) : (
@@ -112,7 +118,14 @@ export function ThreadRootPreview({
     ) : (
       avatar
     );
-  const nameNode = <span className="font-medium text-foreground">{displayName}</span>;
+  const nameNode = (
+    <ActorStyledName
+      displayName={displayName}
+      honor={authorHonor}
+      fleet={authorFleet}
+      className="text-sm font-medium text-foreground"
+    />
+  );
 
   // Same long-message See more / See less as the main column (LRM-268 / LRM-572).
   const collapseIdentity = `${message.id}\0${message.content ?? ""}\0${message.parts?.length ?? 0}\0${message.attachments?.length ?? 0}`;

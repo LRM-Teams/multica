@@ -1,5 +1,6 @@
 "use client";
 
+import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import type { HonorSnapshot } from "@multica/core/types/honor";
 import {
   formatActorHandleLabel,
@@ -8,13 +9,7 @@ import {
   shouldShowActorHandleLabel,
   type ActorIdentityFields,
 } from "@multica/core/identity";
-import { HonorBadgeIcon, honorNameDisplayProps } from "@multica/ui/components/honor/honor-badge";
-import { cn } from "@multica/ui/lib/utils";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
+import { ActorStyledName } from "./actor-styled-name";
 
 export interface ActorIdentityRowProps {
   /** Actor record or explicit labels. */
@@ -27,6 +22,8 @@ export interface ActorIdentityRowProps {
   showHandle?: boolean;
   /** Platform honor styling for human users. */
   honor?: HonorSnapshot | null;
+  /** Agent fleet rank badge for agents. */
+  fleet?: AgentFleetRank | null;
   /** Inline surfaces cap glow at tier III; profile allows full VII. */
   honorSurface?: "inline" | "profile";
   primaryClassName?: string;
@@ -44,6 +41,7 @@ export function ActorIdentityRow({
   handle: handleProp,
   showHandle,
   honor,
+  fleet,
   honorSurface = "inline",
   primaryClassName = "truncate",
   secondaryClassName = "truncate text-xs text-muted-foreground",
@@ -55,36 +53,16 @@ export function ActorIdentityRow({
   const handleLabel = formatActorHandleLabel(handle);
   const showHandleLabel =
     showHandle ?? (handleLabel !== null && shouldShowActorHandleLabel(displayName, handle));
-  const nameDisplay = honor
-    ? honorNameDisplayProps({
-        nameStyle: honor.name_style,
-        level: honor.level,
-        surface: honorSurface,
-      })
-    : null;
 
   return (
     <span className={className}>
-      <span className={`flex min-w-0 items-center gap-1 ${primaryClassName}`}>
-        <span
-          className={cn("truncate", nameDisplay?.className)}
-          data-honor-glow-tier={nameDisplay?.["data-honor-glow-tier"]}
-          style={nameDisplay?.style}
-        >
-          {displayName}
-        </span>
-        {honor?.equipped_badge ? (
-          <Tooltip>
-            <TooltipTrigger className="inline-flex shrink-0">
-              <HonorBadgeIcon
-                svgKey={honor.equipped_badge.svg_key}
-                title={honor.equipped_badge.title}
-              />
-            </TooltipTrigger>
-            <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
-          </Tooltip>
-        ) : null}
-      </span>
+      <ActorStyledName
+        displayName={displayName}
+        honor={honor}
+        fleet={fleet}
+        honorSurface={honorSurface}
+        className={primaryClassName}
+      />
       {showHandleLabel && handleLabel ? (
         <span className={`block ${secondaryClassName}`}>{handleLabel}</span>
       ) : null}

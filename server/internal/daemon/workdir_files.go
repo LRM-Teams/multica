@@ -170,6 +170,39 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 	d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
 }
 
+// handleDeleteDirRequest removes one confined directory under WorkspacesRoot.
+// Used for agent workspace cleanup (including orphan dirs after agent delete).
+func (d *Daemon) handleDeleteDirRequest(req protocol.DeleteWorkdirDirRequestPayload, writes chan<- []byte) {
+	resp := protocol.DeleteWorkdirDirResponsePayload{RequestID: req.RequestID}
+
+	base, err := filepath.Abs(d.cfg.WorkspacesRoot)
+	if err != nil {
+		resp.Error = "workspaces root unavailable"
+	} else {
+		rel := filepath.Clean(filepath.FromSlash(strings.TrimSpace(req.RelPath)))
+		if rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+			resp.Error = "invalid path"
+		} else {
+			target, _ := filepath.Abs(filepath.Join(base, rel))
+			if target == base || !strings.HasPrefix(target, base+string(os.PathSeparator)) {
+				resp.Error = "invalid path"
+			} else if info, statErr := os.Stat(target); statErr != nil {
+				if os.IsNotExist(statErr) {
+					resp.Missing = true
+				} else {
+					resp.Error = "failed to stat directory"
+				}
+			} else if !info.IsDir() {
+				resp.Error = "not a directory"
+			} else if removeErr := os.RemoveAll(target); removeErr != nil {
+				resp.Error = "failed to delete directory"
+			}
+		}
+	}
+
+	d.sendDaemonFrame(protocol.EventDaemonDeleteDirResponse, resp, req.RequestID, writes)
+}
+
 // handleListFilesRequest resolves a project workdir under WorkspacesRoot, walks
 // it, and writes the response frame back over the wakeup socket. Runs inline on
 // the read loop — the walk is bounded (entry/depth caps) and projects are

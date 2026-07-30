@@ -170,6 +170,11 @@ const (
 	// hash or conflict/error. Correlated by RequestID.
 	EventDaemonWriteFileRequest  = "daemon:write_file_request"
 	EventDaemonWriteFileResponse = "daemon:write_file_response"
+	// Workdir directory delete RPC: server asks the daemon to remove one
+	// confined directory under WorkspacesRoot (used for agent workspace
+	// cleanup, including orphan dirs). Correlated by RequestID.
+	EventDaemonDeleteDirRequest  = "daemon:delete_dir_request"
+	EventDaemonDeleteDirResponse = "daemon:delete_dir_response"
 	// Agent initial-context seed RPC: server pushes Wendy-created notes/memory
 	// metadata after agent creation; daemon initializes the agent root and appends
 	// only whitelisted markdown files. Correlated by RequestID.

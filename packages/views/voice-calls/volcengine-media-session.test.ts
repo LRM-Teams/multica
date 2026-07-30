@@ -236,8 +236,15 @@ describe("VolcengineVoiceMediaSession", () => {
     );
   });
 
-  it("reports the first decoded remote audio frame as an answered call", async () => {
-    const harness = createHarness();
+  it("starts remote playback before reporting decoded audio as audible", async () => {
+    let resolvePlayback: (() => void) | undefined;
+    const harness = createHarness({
+      playRemoteAudio: vi.fn(() =>
+        new Promise<void>((resolve) => {
+          resolvePlayback = resolve;
+        })
+      ),
+    });
     const onRemoteAudioStarted = vi.fn();
     const session = new VolcengineVoiceMediaSession(
       { onRemoteAudioStarted },
@@ -246,6 +253,41 @@ describe("VolcengineVoiceMediaSession", () => {
     await session.connect(media);
 
     harness.getCallbacks()?.onRemoteAudioStarted("voice-agent-call-1");
+
+    expect(harness.engine.playRemoteAudio).toHaveBeenCalledWith(
+      "voice-agent-call-1",
+    );
+    expect(onRemoteAudioStarted).not.toHaveBeenCalled();
+
+    resolvePlayback?.();
+    await vi.waitFor(() => {
+      expect(onRemoteAudioStarted).toHaveBeenCalledWith("voice-agent-call-1");
+    });
+  });
+
+  it("requests a user gesture when explicit remote playback is rejected", async () => {
+    const harness = createHarness({
+      playRemoteAudio: vi.fn(async () => {
+        throw new DOMException("Autoplay blocked", "NotAllowedError");
+      }),
+    });
+    const onRemoteAudioStarted = vi.fn();
+    const onAutoplayBlocked = vi.fn();
+    const session = new VolcengineVoiceMediaSession(
+      { onRemoteAudioStarted, onAutoplayBlocked },
+      async () => harness.driver,
+    );
+    await session.connect(media);
+
+    harness.getCallbacks()?.onRemoteAudioStarted("voice-agent-call-1");
+
+    await vi.waitFor(() => {
+      expect(onAutoplayBlocked).toHaveBeenCalledWith("voice-agent-call-1");
+    });
+    expect(onRemoteAudioStarted).not.toHaveBeenCalled();
+
+    harness.engine.playRemoteAudio = vi.fn(async () => undefined);
+    await session.resumeRemoteAudio("voice-agent-call-1");
 
     expect(onRemoteAudioStarted).toHaveBeenCalledWith("voice-agent-call-1");
   });

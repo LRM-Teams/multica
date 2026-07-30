@@ -7,7 +7,7 @@
 Give this instruction to your AI agent:
 
 ```
-Fetch https://github.com/LRM-Teams/multica/blob/main/CLI_INSTALL.md and follow the instructions to install Multica CLI, log in, and start the daemon on this machine.
+Fetch https://cdn.leagent.me/computer/CLI_INSTALL.md and follow the instructions to install Multica CLI, log in, and start the daemon on this machine.
 ```
 
 ---
@@ -37,7 +37,7 @@ printf 'Multica path: %s\n' "${CLI_PATH:-not installed}"
 Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 Then verify:
@@ -48,11 +48,11 @@ multica version
 
 If the version prints successfully, skip to **Step 3**.
 
-### Option B: Download from GitHub Releases (macOS/Linux)
+### Option B: Download directly from the release feed (macOS/Linux)
 
-If the install script is not suitable for your environment, download the binary directly.
+If the install script is not suitable for your environment, download the binary directly. This reads the same manifest `scripts/install.sh` uses — not GitHub Releases: an unauthenticated request to the private LRM-Teams/multica repo's GitHub API/asset host always 404s, so there is no working GitHub fallback here.
 
-Detect OS and architecture, then download the correct archive:
+Requires `jq` or `python3` to parse the manifest.
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # "darwin" or "linux"
@@ -62,18 +62,26 @@ ARCH=$(uname -m)                                # "x86_64" or "arm64"
 if [ "$ARCH" = "x86_64" ]; then
   ARCH="amd64"
 fi
+PLATFORM="${OS}-${ARCH}"
 
-# Get the latest release tag from GitHub
-LATEST=$(curl -sI https://github.com/LRM-Teams/multica/releases/latest | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n')
+# Fetch the release manifest
+curl -fsSL https://cdn.leagent.me/computer/latest.json -o /tmp/latest.json
+LATEST=$(jq -r '.tag' /tmp/latest.json)
+URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
+SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
 
-# Download and extract
-VERSION="${LATEST#v}"
-curl -sL "https://github.com/LRM-Teams/multica/releases/download/${LATEST}/multica-cli-${VERSION}-${OS}-${ARCH}.tar.gz" -o /tmp/multica.tar.gz
+# Download, verify, and extract
+curl -sL "$URL" -o /tmp/multica.tar.gz
+ACTUAL_SHA256=$(shasum -a 256 /tmp/multica.tar.gz 2>/dev/null | awk '{print $1}' || sha256sum /tmp/multica.tar.gz | awk '{print $1}')
+if [ "$ACTUAL_SHA256" != "$SHA256" ]; then
+  echo "Checksum mismatch: expected $SHA256, got $ACTUAL_SHA256" >&2
+  exit 1
+fi
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
 mkdir -p "$HOME/.local/bin"
 mv /tmp/multica "$HOME/.local/bin/multica"
 chmod +x "$HOME/.local/bin/multica"
-rm /tmp/multica.tar.gz
+rm /tmp/multica.tar.gz /tmp/latest.json
 ```
 
 Make the user-owned directory available in the current shell:
@@ -160,10 +168,10 @@ Do not restart while an agent task is active. Adoption is complete when
 Run in PowerShell (no admin required):
 
 ```powershell
-irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex
+irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
-This downloads the latest Windows binary from GitHub Releases, installs it to `%USERPROFILE%\.multica\bin\`, and adds it to your user PATH.
+This downloads the latest Windows binary from the release feed, installs it to `%USERPROFILE%\.multica\bin\`, and adds it to your user PATH.
 
 Verify:
 

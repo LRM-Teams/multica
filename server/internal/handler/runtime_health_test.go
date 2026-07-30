@@ -287,25 +287,23 @@ func TestRuntimeListCoalescesNewestUpdateByDaemon(t *testing.T) {
 	}
 }
 
-func TestRuntimeReleaseFromGitHubRequiresStableChecksummedCLIRelease(t *testing.T) {
-	valid := cli.GitHubRelease{
+func TestRuntimeReleaseFromManifestRequiresStableReleaseWithPlatforms(t *testing.T) {
+	valid := cli.ReleaseManifest{
 		TagName: "v0.3.1",
-		Assets: []cli.GitHubReleaseAsset{
-			{Name: cli.ChecksumManifestName},
-			{Name: "multica-cli-0.3.1-darwin-arm64.tar.gz"},
+		Platforms: map[string]cli.ReleaseAsset{
+			"darwin-arm64": {URL: "https://example/multica-cli-0.3.1-darwin-arm64.tar.gz", SHA256: "deadbeef"},
 		},
 	}
-	if release, err := runtimeReleaseFromGitHub(&valid); err != nil || release == nil || release.TagName != "v0.3.1" {
-		t.Fatalf("runtimeReleaseFromGitHub(valid) = %+v err=%v, want v0.3.1", release, err)
+	if release, err := runtimeReleaseFromManifest(&valid); err != nil || release == nil || release.TagName != "v0.3.1" {
+		t.Fatalf("runtimeReleaseFromManifest(valid) = %+v err=%v, want v0.3.1", release, err)
 	}
 
-	for _, release := range []cli.GitHubRelease{
-		{TagName: "v0.3.1-beta.1", Assets: valid.Assets},
-		{TagName: "v0.3.1", Assets: []cli.GitHubReleaseAsset{{Name: "multica-cli-0.3.1-darwin-arm64.tar.gz"}}},
-		{TagName: "v0.3.1", Assets: []cli.GitHubReleaseAsset{{Name: cli.ChecksumManifestName}}},
+	for _, manifest := range []cli.ReleaseManifest{
+		{TagName: "v0.3.1-beta.1", Platforms: valid.Platforms},
+		{TagName: "v0.3.1", Platforms: map[string]cli.ReleaseAsset{}},
 	} {
-		if got, err := runtimeReleaseFromGitHub(&release); err == nil || got != nil {
-			t.Fatalf("runtimeReleaseFromGitHub(%+v) = %+v err=%v, want error", release, got, err)
+		if got, err := runtimeReleaseFromManifest(&manifest); err == nil || got != nil {
+			t.Fatalf("runtimeReleaseFromManifest(%+v) = %+v err=%v, want error", manifest, got, err)
 		}
 	}
 }

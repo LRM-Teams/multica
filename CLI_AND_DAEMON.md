@@ -7,7 +7,7 @@ The `multica` CLI connects your local machine to Multica. It handles authenticat
 ### Install Script (macOS/Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 ### Build from Source

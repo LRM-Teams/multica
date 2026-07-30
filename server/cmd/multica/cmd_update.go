@@ -30,7 +30,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 
 	fmt.Fprintf(os.Stderr, "Current version: %s (commit: %s, built: %s)\n", version, commit, date)
 
-	// Check latest version from GitHub.
+	// Check latest version from the release feed.
 	latest, err := cli.FetchLatestRelease()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not check latest version: %v\n", err)
@@ -61,12 +61,12 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		fmt.Fprintln(os.Stderr, "Homebrew install detected, but MULTICA_BREW_PACKAGE is not configured or points at the legacy upstream tap; using direct release download.")
 	}
 
-	// Not installed via brew — download binary directly from GitHub Releases.
+	// Not installed via brew — download binary directly from the release feed.
 	if latest == nil {
-		return fmt.Errorf("could not determine latest version; check %s/latest", cli.ReleaseWebURL)
+		return fmt.Errorf("could not determine latest version; check %s", cli.ReleaseWebURL)
 	}
 	targetVersion := latest.TagName
-	fmt.Fprintf(os.Stderr, "Downloading %s from GitHub Releases...\n", targetVersion)
+	fmt.Fprintf(os.Stderr, "Downloading %s from the Multica release feed...\n", targetVersion)
 	output, err := cli.UpdateViaDownloadWithTimeout(targetVersion, updateDownloadTimeout)
 	if err != nil {
 		return fmt.Errorf("update failed: %w", err)

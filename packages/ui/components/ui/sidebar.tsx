@@ -33,7 +33,9 @@ const SIDEBAR_WIDTH_MIN = 200
 const SIDEBAR_WIDTH_MAX = 360
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
-const SIDEBAR_WIDTH_ICON = "3rem"
+// LRM-765: collapsed preference persists across reloads (Feishu-style icon rail).
+const SIDEBAR_OPEN_STORAGE_KEY = "sidebar_open"
+const SIDEBAR_WIDTH_ICON = "3.5rem"
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -80,12 +82,12 @@ function SidebarProvider({
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
 
-  const [width, _setWidth] = React.useState(SIDEBAR_WIDTH_DEFAULT)
-  const [isResizing, setIsResizing] = React.useState(false)
-  React.useEffect(() => {
+  const [width, _setWidth] = React.useState(() => {
+    if (typeof window === "undefined") return SIDEBAR_WIDTH_DEFAULT
     const stored = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
-    if (stored) _setWidth(Number(stored))
-  }, [])
+    return stored ? Number(stored) : SIDEBAR_WIDTH_DEFAULT
+  })
+  const [isResizing, setIsResizing] = React.useState(false)
   const setWidth = React.useCallback((w: number) => {
     const clamped = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, w))
     _setWidth(clamped)
@@ -94,7 +96,14 @@ function SidebarProvider({
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
+  // The persisted collapsed preference is restored lazily on first render
+  // (uncontrolled usage only, so a controlled parent never gets its prop
+  // overridden). Client-only consumers: web SPA + desktop renderer.
+  const [_open, _setOpen] = React.useState(() => {
+    if (openProp !== undefined || typeof window === "undefined") return defaultOpen
+    const stored = localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY)
+    return stored !== null ? stored === "true" : defaultOpen
+  })
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
@@ -107,6 +116,7 @@ function SidebarProvider({
 
       // This sets the cookie to keep the sidebar state.
       document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(openState))
     },
     [setOpenProp, open]
   )

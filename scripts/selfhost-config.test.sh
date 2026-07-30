@@ -181,6 +181,7 @@ bash scripts/compose-environment-value.test.sh
 bash scripts/assert-oss-compose-credentials.test.sh
 SELFHOST_CONFIG_STATIC_ONLY=true bash scripts/run-aliyun-backend-migration.test.sh
 bash scripts/validate-rtc-environment.test.sh
+bash scripts/check-exit-status.test.sh
 
 if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then
   echo "self-host static topology ok"

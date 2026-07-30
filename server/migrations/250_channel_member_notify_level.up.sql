@@ -1,4 +1,6 @@
 -- LRM-769: channel notification preference four-state (default/all/mentions/muted).
+-- Renumbered from 249 → 250 after 249_workspace_onboarding_agent landed on dev first.
+-- Idempotent: safe if an environment already applied the old 249_channel_member_notify_level stem.
 -- NULL notify_level means "default" (never stored as the literal 'default').
 -- Backfill: prior mute (muted_at set) maps to mentions (legacy mute = @-only).
 

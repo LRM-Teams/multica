@@ -11,6 +11,7 @@ on:
         type: choice
         options:
           - research_fleet_runtime_match_wendy
+          - voice_call_diagnose
 
 jobs:
   run:
@@ -232,5 +233,130 @@ jobs:
           LEFT JOIN agent_runtime r ON r.id = a.runtime_id
           WHERE m.status <> 'archived'
           ORDER BY m.is_lead DESC, a.name;
+          SQL
+          )"
+
+      - name: voice_call_diagnose
+        if: inputs.action == 'voice_call_diagnose'
+        run: |
+          set -euo pipefail
+          DEPLOY_DIR=/data/multica
+          cd "$DEPLOY_DIR"
+
+          dotenv_value() {
+            local key="$1" default="${2:-}"
+            python3 - "$key" "$default" <<'PY'
+          import sys
+          from pathlib import Path
+          key, default = sys.argv[1], sys.argv[2]
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith(key + "="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  raise SystemExit(0)
+          print(default)
+          PY
+          }
+
+          echo "=== RTC-related env (redacted) ==="
+          python3 <<'PY'
+          from pathlib import Path
+          keys = [
+            "MULTICA_PUBLIC_URL","MULTICA_APP_URL","FRONTEND_ORIGIN",
+            "VOLCENGINE_RTC_APP_ID","VOLCENGINE_RTC_ARK_ENDPOINT_ID",
+            "VOLCENGINE_RTC_ASR_APP_ID","VOLCENGINE_RTC_TTS_APP_ID",
+            "VOLCENGINE_RTC_CALLBACK_URL","VOLCENGINE_RTC_CALLBACK_SIGNATURE",
+            "VOLCENGINE_RTC_ACCESS_KEY_ID","VOLCENGINE_RTC_APP_KEY",
+            "DOUBAO_SPEECH_API_KEY","VOLCENGINE_RTC_TTS_VOICE_ID",
+          ]
+          vals = {}
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if "=" in line and not line.strip().startswith("#"):
+                  k,v = line.split("=",1)
+                  vals[k.strip()] = v.strip().strip('"').strip("'")
+          # Also check docker inspect backend env
+          import subprocess, json
+          try:
+              out = subprocess.check_output(["docker","inspect","multica-backend-1"], text=True)
+              env = {e.split("=",1)[0]: e.split("=",1)[1] for e in json.loads(out)[0]["Config"]["Env"] if "=" in e}
+          except Exception as e:
+              env = {"_inspect_error": str(e)}
+          print("host .env:")
+          for k in keys:
+              v = vals.get(k,"")
+              if not v:
+                  print(f"  {k}=<missing>")
+              elif "KEY" in k or "SECRET" in k or "SIGNATURE" in k or "PASSWORD" in k or k.endswith("_ID") and "ARK" not in k and "ASR" not in k and "TTS" not in k and "APP_ID" not in k:
+                  print(f"  {k}=set(len={len(v)})")
+              elif k in ("VOLCENGINE_RTC_APP_KEY","VOLCENGINE_RTC_ACCESS_KEY_ID","VOLCENGINE_RTC_CALLBACK_SIGNATURE","DOUBAO_SPEECH_API_KEY"):
+                  print(f"  {k}=set(len={len(v)})")
+              else:
+                  print(f"  {k}={v}")
+          print("backend container env:")
+          for k in keys:
+              v = env.get(k,"")
+              if not v:
+                  print(f"  {k}=<missing>")
+              elif any(x in k for x in ("KEY","SECRET","SIGNATURE","PASSWORD")):
+                  print(f"  {k}=set(len={len(v)})")
+              else:
+                  print(f"  {k}={v}")
+          PY
+
+          echo "=== local callback reachability ==="
+          curl -sk --max-time 5 -o /tmp/cb.out -w "loopback8090:%{http_code}\n" -X POST http://127.0.0.1:8090/api/voice-calls/callback -H 'content-type: application/json' -d '{}' || true
+          head -c 200 /tmp/cb.out; echo
+          curl -sk --max-time 5 -o /tmp/hz.out -w "loopback443:%{http_code}\n" https://127.0.0.1/healthz || true
+          curl -sk --max-time 5 -o /tmp/hz2.out -w "public_leagent:%{http_code}\n" https://leagent.me/healthz || true
+
+          echo "=== backend logs (voice) ==="
+          docker logs multica-backend-1 --since 48h 2>&1 | grep -iE 'voice call|voicecall|StartVoiceChat|callback|volcengine' | tail -80 || true
+
+          echo "=== caddy logs (callback) ==="
+          docker logs multica-caddy --since 72h 2>&1 | grep -iE 'voice-calls/callback|voice-calls' | tail -40 || true
+
+          db_user="$(dotenv_value POSTGRES_USER multica)"
+          db_name="$(dotenv_value POSTGRES_DB multica)"
+          db_password="$(dotenv_value POSTGRES_PASSWORD)"
+          postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '$1 ~ /postgres/ {print $2; exit}')"
+          echo "postgres=${postgres_id}"
+
+          run_sql() {
+            printf '%s\n' "$1" | docker exec -i -e PGPASSWORD="$db_password" "$postgres_id" \
+              psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1
+          }
+
+          echo "=== recent voice_call_session ==="
+          run_sql "$(cat <<'SQL'
+          SELECT id::text, status, error_code,
+                 connected_at IS NOT NULL AS has_connected,
+                 input_audio_ms, output_audio_ms,
+                 left(room_id,40) AS room_id,
+                 created_at AT TIME ZONE 'Asia/Shanghai' AS created_cst,
+                 updated_at AT TIME ZONE 'Asia/Shanghai' AS updated_cst
+          FROM voice_call_session
+          ORDER BY created_at DESC
+          LIMIT 20;
+          SQL
+          )"
+
+          echo "=== status histogram (7d) ==="
+          run_sql "$(cat <<'SQL'
+          SELECT status, error_code, count(*) 
+          FROM voice_call_session
+          WHERE created_at > now() - interval '7 days'
+          GROUP BY 1,2 ORDER BY 3 DESC;
+          SQL
+          )"
+
+          echo "=== turns for latest 3 calls ==="
+          run_sql "$(cat <<'SQL'
+          WITH latest AS (
+            SELECT id FROM voice_call_session ORDER BY created_at DESC LIMIT 3
+          )
+          SELECT t.call_session_id::text, t.sequence, t.speaker, left(coalesce(t.transcript,''),60) AS transcript,
+                 t.spoken_duration_ms
+          FROM voice_call_turn t
+          JOIN latest l ON l.id = t.call_session_id
+          ORDER BY t.call_session_id, t.sequence;
           SQL
           )"

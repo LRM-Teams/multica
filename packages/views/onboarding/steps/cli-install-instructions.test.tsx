@@ -22,7 +22,7 @@ describe("CliInstallInstructions", () => {
 
     expect(
       screen.getByText(
-        "curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash",
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash",
       ),
     ).toBeTruthy();
   });
@@ -48,7 +48,7 @@ describe("CliInstallInstructions", () => {
 
     expect(
       screen.getByText(
-        "irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex",
+        "irm https://cdn.leagent.me/computer/install.ps1 | iex",
       ),
     ).toBeTruthy();
     expect(screen.getByText("multica setup")).toBeTruthy();

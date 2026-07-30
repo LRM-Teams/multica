@@ -64,6 +64,7 @@ import {
   buildChatMessageParts,
   useComposerPendingAttachments,
 } from "../hooks/use-composer-pending-attachments";
+import { useComposerDraftHydrateSignal } from "../hooks/use-composer-draft-hydrate-signal";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import {
@@ -621,6 +622,7 @@ function DmChannelConversation({
     [channelId, upload],
   );
   const dmDraftKey = `dm:${channelId}` as const;
+  const dmDraftHydrateSignal = useComposerDraftHydrateSignal(dmDraftKey);
   const dmPending = useComposerPendingAttachments({
     upload: uploadForDm,
     resetKey: channelId,
@@ -630,6 +632,7 @@ function DmChannelConversation({
         useComposerDraftStore.getState().drafts[dmDraftKey]?.attachments,
       save: (attachments) =>
         useComposerDraftStore.getState().setDraftAttachments(dmDraftKey, attachments),
+      hydrateSignal: dmDraftHydrateSignal,
     },
   });
   const threadPending = useComposerPendingAttachments({

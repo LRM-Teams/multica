@@ -477,5 +477,51 @@ describe("useComposerPendingAttachments", () => {
         expect.objectContaining({ attachmentId: "att-a" }),
       ]);
     });
+
+    // Hard-refresh race: zustand persist rehydrates async. Until hydrateSignal
+    // leaves "", an empty tray must not save([]) over draft attachments.
+    it("holds empty save until hydrateSignal, then restores late attachments", async () => {
+      let saved: ComposerDraftAttachment[] = [
+        {
+          attachmentId: "att-late",
+          filename: "late.png",
+          contentType: "image/png",
+          sizeBytes: 4,
+          previewUrl: "https://cdn.example/att-late",
+        },
+      ];
+      let hydrateSignal = "";
+      const upload = vi.fn(() => new Promise<UploadResult | null>(() => {}));
+
+      const { result, rerender } = renderHook(
+        ({ signal }: { signal: string }) =>
+          useComposerPendingAttachments({
+            upload,
+            resetKey: "channel-a",
+            persistence: {
+              // Simulate pre-rehydrate: load sees [] until signal flips.
+              load: () => (signal === "" ? [] : saved),
+              save: (items) => {
+                saved = items;
+              },
+              hydrateSignal: signal,
+            },
+          }),
+        { initialProps: { signal: hydrateSignal } },
+      );
+
+      expect(result.current.pending).toHaveLength(0);
+      // Empty save must not run while still rehydrating.
+      expect(saved).toHaveLength(1);
+
+      hydrateSignal = "att-late";
+      rerender({ signal: hydrateSignal });
+      expect(result.current.pending).toHaveLength(1);
+      expect(result.current.pending[0]?.attachmentId).toBe("att-late");
+      expect(result.current.pending[0]?.previewUrl).toBe("https://cdn.example/att-late");
+      expect(saved).toEqual([
+        expect.objectContaining({ attachmentId: "att-late" }),
+      ]);
+    });
   });
 });

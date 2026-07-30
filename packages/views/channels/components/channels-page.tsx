@@ -186,6 +186,7 @@ import {
   buildChatMessageParts,
   useComposerPendingAttachments,
 } from "../hooks/use-composer-pending-attachments";
+import { useComposerDraftHydrateSignal } from "../hooks/use-composer-draft-hydrate-signal";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import {
@@ -967,6 +968,7 @@ export function ChannelsPage({
   const isActiveSystemChannel = active ? isImmutableSystemChannel(active) : false;
   const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
+  const channelDraftHydrateSignal = useComposerDraftHydrateSignal(activeDraftKey);
   const activeDraftEmpty = !activeDraft.trim();
   // #838 H0 — the record only exists for the surface it was recorded on. The
   // state outlives channel switches, so without this a failure in A would show
@@ -1218,6 +1220,7 @@ export function ChannelsPage({
           load: () =>
             useComposerDraftStore.getState().drafts[activeDraftKey]?.attachments,
           save: (attachments) => storeSetDraftAttachments(activeDraftKey, attachments),
+          hydrateSignal: channelDraftHydrateSignal,
         }
       : undefined,
   });

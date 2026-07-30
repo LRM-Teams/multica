@@ -11,7 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/migrations"
 )
 
-func TestChannelMemberNotifyLevelMigration249BackfillsAndRejectsDefaultLiteral(t *testing.T) {
+func TestChannelMemberNotifyLevelMigration250BackfillsAndRejectsDefaultLiteral(t *testing.T) {
 	pool := openAgentWakeCutoverDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -20,54 +20,54 @@ func TestChannelMemberNotifyLevelMigration249BackfillsAndRejectsDefaultLiteral(t
 	if err != nil {
 		t.Fatalf("list up migrations: %v", err)
 	}
-	var before249 []string
-	var up249 string
+	var before250 []string
+	var up250 string
 	for _, file := range upFiles {
-		if migrations.ExtractVersion(file) == "249_channel_member_notify_level" {
-			up249 = file
+		if migrations.ExtractVersion(file) == "250_channel_member_notify_level" {
+			up250 = file
 			break
 		}
-		before249 = append(before249, file)
+		before250 = append(before250, file)
 	}
-	if up249 == "" {
-		t.Fatal("249_channel_member_notify_level up migration not found")
+	if up250 == "" {
+		t.Fatal("250_channel_member_notify_level up migration not found")
 	}
 	downFiles, err := migrations.Files("down")
 	if err != nil {
 		t.Fatalf("list down migrations: %v", err)
 	}
-	var down249 string
+	var down250 string
 	for _, file := range downFiles {
-		if migrations.ExtractVersion(file) == "249_channel_member_notify_level" {
-			down249 = file
+		if migrations.ExtractVersion(file) == "250_channel_member_notify_level" {
+			down250 = file
 			break
 		}
 	}
-	if down249 == "" {
-		t.Fatal("249_channel_member_notify_level down migration not found")
+	if down250 == "" {
+		t.Fatal("250_channel_member_notify_level down migration not found")
 	}
 
 	lockKey := int64(rand.Uint64()&0x7fffffffffffffff) | 1
 	if err := runMigrations(ctx, pool, runOptions{
 		Direction:       "up",
-		Files:           before249,
+		Files:           before250,
 		AdvisoryLockKey: lockKey,
 		Hooks:           preMigrationHooks,
 	}); err != nil {
-		t.Fatalf("apply migrations before 249: %v", err)
+		t.Fatalf("apply migrations before 250: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx, channelMemberNotifyLevelLegacyFixture); err != nil {
-		t.Fatalf("seed pre-249 notify-level fixture: %v", err)
+		t.Fatalf("seed pre-250 notify-level fixture: %v", err)
 	}
 
 	if err := runMigrations(ctx, pool, runOptions{
 		Direction:       "up",
-		Files:           []string{up249},
+		Files:           []string{up250},
 		AdvisoryLockKey: lockKey,
 		Hooks:           preMigrationHooks,
 	}); err != nil {
-		t.Fatalf("apply migration 249 up: %v", err)
+		t.Fatalf("apply migration 250 up: %v", err)
 	}
 
 	assertNotifyLevel(t, ctx, pool, "79000000-0000-4000-8000-000000000004", "79000000-0000-4000-8000-000000000001", "mentions")
@@ -90,11 +90,11 @@ func TestChannelMemberNotifyLevelMigration249BackfillsAndRejectsDefaultLiteral(t
 
 	if err := runMigrations(ctx, pool, runOptions{
 		Direction:       "down",
-		Files:           []string{down249},
+		Files:           []string{down250},
 		AdvisoryLockKey: lockKey,
 		Hooks:           preMigrationHooks,
 	}); err != nil {
-		t.Fatalf("apply migration 249 down: %v", err)
+		t.Fatalf("apply migration 250 down: %v", err)
 	}
 	var colExists bool
 	if err := pool.QueryRow(ctx, `
@@ -110,11 +110,11 @@ func TestChannelMemberNotifyLevelMigration249BackfillsAndRejectsDefaultLiteral(t
 
 	if err := runMigrations(ctx, pool, runOptions{
 		Direction:       "up",
-		Files:           []string{up249},
+		Files:           []string{up250},
 		AdvisoryLockKey: lockKey,
 		Hooks:           preMigrationHooks,
 	}); err != nil {
-		t.Fatalf("re-apply migration 249 up: %v", err)
+		t.Fatalf("re-apply migration 250 up: %v", err)
 	}
 	// muted_at still set on owner after down/up → backfill again
 	assertNotifyLevel(t, ctx, pool, "79000000-0000-4000-8000-000000000004", "79000000-0000-4000-8000-000000000001", "mentions")

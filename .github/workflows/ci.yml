@@ -166,6 +166,20 @@ jobs:
           go-version: "1.26.1"
           cache-dependency-path: server/go.sum
 
+      - name: Reject duplicate migration version numbers
+        # Incremental only. `dev` already carries 59 duplicated numbers, and the
+        # migrator records `version` as the full filename, so renaming an applied
+        # migration would make production treat it as never run — existing
+        # duplicates must stay. See scripts/migration-numbers.test.sh.
+        #
+        # The checkout above is shallow and has no origin/dev ref, so fetch it
+        # here rather than assuming it exists.
+        env:
+          BASE_REF: origin/dev
+        run: |
+          git fetch --no-tags --depth=1 origin dev:refs/remotes/origin/dev
+          bash scripts/migration-numbers.test.sh
+
       - name: Build
         run: cd server && go build ./...
 

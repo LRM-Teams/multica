@@ -86,18 +86,6 @@ type criticTaskCreator interface {
 	CreateCriticTask(ctx context.Context, arg db.CreateCriticTaskParams) (db.AgentInboxEvent, error)
 }
 
-// Diagnoser runs the Pi diagnosis agent for a project, returning one StepReward
-// per LLM output (per-turn, project-scoped process rewards). The real
-// implementation is *DiagnosisAgentRunner; tests inject a fakeDiagnoser. The
-// diagnosis agent views the WHOLE project segment DAG (all agents), distinct
-// from the per-agent scalar critic.
-type Diagnoser interface {
-	Diagnose(ctx context.Context, projectID, workspaceID string) ([]StepReward, error)
-}
-
-// Compile-check that the real runner satisfies the Diagnoser seam.
-var _ Diagnoser = (*DiagnosisAgentRunner)(nil)
-
 // TrainingSessionDeps bundles the collaborators the session-open/close hooks need.
 // A nil *TrainingSessionDeps means training is not configured for this
 // deployment, in which case the hook is a no-op. Construction/wiring of the
@@ -128,14 +116,6 @@ type TrainingSessionDeps struct {
 	// construction (NewInteractionDAGService with the real arealrl client) is
 	// wired in U10; U7.2 adds the field + the calls + tests construct it.
 	DAG *InteractionDAGService
-	// Diagnosis, when non-nil, runs the Pi diagnosis agent at root-task terminal
-	// to emit per-LLM-output process rewards, recorded via DAG.RecordStepRewards
-	// BEFORE the RL close hook fires (SetReward). Nil = diagnosis not
-	// configured (no-op); the INTERACTION_DAG_ENABLED gate (DAG.Enabled()) is the
-	// second condition, and the root-task gate (agent_id == train_agent_id) the
-	// third. Production construction (NewDiagnosisAgentRunner from env) is wired
-	// in a later config task; the trigger + this field + tests land here.
-	Diagnosis Diagnoser
 }
 
 // trainingDefaultReward is the fallback reward when deps.DefaultReward is
@@ -606,47 +586,6 @@ func hasSandboxLifecycleContext(raw []byte) bool {
 	return ok
 }
 
-// maybeDiagnoseProject runs the Pi diagnosis agent at root-task terminal and
-// records the emitted per-LLM-output step rewards BEFORE the RL close hook
-// fires. Gated by DIAGNOSIS_AGENT_ENABLED (deps.Diagnosis != nil) ∧
-// INTERACTION_DAG_ENABLED (deps.DAG != nil && deps.DAG.Enabled()) ∧ the task
-// being the project's root training task (agent_id == dispatch.train_agent_id):
-// diagnosis scores the WHOLE project segment DAG, so it fires once at the root
-// task's terminal transition (matching /dag's GetRootTrainingTaskStatusForProject
-// signal), not per squad member - distinct from the per-agent scalar critic.
-//
-// Soft-fail: a Diagnose error (timeout/non-zero-exit/parse/empty) is logged and
-// does NOT call RecordStepRewards or block the close hook. A RecordStepRewards
-// error is logged and still lets the close hook proceed. Best-effort, never
-// fatal - the task is already terminal.
-func maybeDiagnoseProject(ctx context.Context, deps *TrainingSessionDeps, task db.AgentInboxEvent, projectID pgtype.UUID, dispatch db.TrainingDispatch) {
-	if deps == nil || deps.Diagnosis == nil || deps.DAG == nil || !deps.DAG.Enabled() {
-		return
-	}
-	// Root training task only: agent_id == train_agent_id. Both must be valid;
-	// an invalid TrainAgentID (no training target) means no diagnosis.
-	if !task.AgentID.Valid || !dispatch.TrainAgentID.Valid || task.AgentID != dispatch.TrainAgentID {
-		return
-	}
-	projectIDStr := util.UUIDToString(projectID)
-	rewards, err := deps.Diagnosis.Diagnose(ctx, projectIDStr, util.UUIDToString(dispatch.WorkspaceID))
-	if err != nil {
-		slog.Warn("diagnosis agent: soft-fail, no step rewards recorded",
-			"task_id", util.UUIDToString(task.ID),
-			"project_id", projectIDStr,
-			"error", err,
-		)
-		return
-	}
-	if err := deps.DAG.RecordStepRewards(ctx, projectIDStr, rewards); err != nil {
-		slog.Warn("diagnosis agent: failed to record step rewards",
-			"task_id", util.UUIDToString(task.ID),
-			"project_id", projectIDStr,
-			"error", err,
-		)
-	}
-}
-
 func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.AgentInboxEvent) {
 	if s.Training == nil {
 		return
@@ -691,13 +630,6 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 	// Checkpoint trigger: fire for trained rollout structural events (§6.2).
 	// Skips autopilot, sweeper-failed, and sandbox lifecycle tasks internally.
 	maybeTriggerCheckpoint(ctx, s.Training, task, projectID)
-	// Diagnosis (Pi agent): at root-task terminal, run the diagnosis agent and
-	// record per-LLM-output step rewards BEFORE the RL close hook fires (the
-	// no-critic close below, or the critic-spawn path deferring close to
-	// critic-terminal). Gated + soft-fail inside maybeDiagnoseProject; views the
-	// whole-project segment DAG, distinct from the per-agent critic. Fires only
-	// for the root training task (agent_id == train_agent_id).
-	maybeDiagnoseProject(ctx, s.Training, task, projectID, dispatch)
 	if !dispatch.CriticAgentID.Valid {
 		// T10: when the terminal task has children (delegated via @-mentions),
 		// close the session immediately (handoff point).  When it has no

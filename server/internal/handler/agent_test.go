@@ -1205,7 +1205,7 @@ func TestAgentResponseRuntimeNamePrefersDisplayName(t *testing.T) {
 		  workspace_id, daemon_id, name, display_name, runtime_mode, provider, status,
 		  device_info, metadata, visibility, last_seen_at
 		) VALUES ($1, $2, $3, $4, 'local', 'claude', 'online',
-		  '', '{}'::jsonb, 'workspace', now())
+		  '', '{}'::jsonb, 'private', now())
 		RETURNING id
 	`, testWorkspaceID, "runtime-display-name-daemon-"+suffix, daemonName, userLabel).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
@@ -1219,7 +1219,7 @@ func TestAgentResponseRuntimeNamePrefersDisplayName(t *testing.T) {
 			runtime_id, visibility, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args, mcp_config
 		)
-		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 'workspace', 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, agentName, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)

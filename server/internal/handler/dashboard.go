@@ -27,10 +27,14 @@ import (
 // dimension is intentionally preserved on the wire (same convention as the
 // per-runtime usage endpoints).
 //
-// Access control: workspace membership only — we don't filter by per-agent
-// visibility on the dashboard because token spend / run time are workspace-
-// level operational metrics. Agent-detail pages still gate on per-agent
-// access (see GetWorkspaceAgentRunCounts).
+// Access control: workspace membership, plus a per-agent detail gate on
+// usage/by-agent specifically (task #908: run-time/task-count are aggregate
+// counts and stay visible to every member; per-agent token spend is detail
+// and is gated to admin|owner-or-owning-member, see
+// filterDashboardUsageByAgentInternalsAccess). The other three endpoints are
+// workspace-level operational metrics with no per-agent filter — see also
+// GetWorkspaceAgentRunCounts, which is the aggregate-only counterpart for
+// the Agents-list RUNS column and is explicitly not gated further.
 // ---------------------------------------------------------------------------
 
 // parseProjectIDParam reads ?project_id=<uuid> off the URL. Returns a
@@ -132,9 +136,17 @@ type DashboardUsageByAgentResponse struct {
 // GetDashboardUsageByAgent returns per-(agent, model) token aggregates
 // for the workspace, optionally scoped to a project. Backed by
 // agent_usage_hourly with the viewer's tz applied to the `?days=` cutoff.
+//
+// Per-agent spend detail is the "明细" half of task #908's aggregate-vs-detail
+// split (#multica thread f83df812, Parker 2026-07-30 17:46): aggregate counts
+// like run totals stay visible to every member, but line-item spend is an
+// internal/control surface gated to admin|owner (or the agent's own owner).
+// GetWorkspaceAgentRunCounts and accessibleAgentIDs are the aggregate half
+// and are explicitly NOT touched by this change.
 func (h *Handler) GetDashboardUsageByAgent(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
-	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
 		return
 	}
 	projectID, ok := parseProjectIDParam(w, r)
@@ -151,7 +163,50 @@ func (h *Handler) GetDashboardUsageByAgent(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to list usage by agent")
 		return
 	}
+
+	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	resp, err = h.filterDashboardUsageByAgentInternalsAccess(r.Context(), workspaceID, actorType, actorID, member.Role, resp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// filterDashboardUsageByAgentInternalsAccess drops per-agent usage rows the
+// viewer isn't allowed to see the spend detail of. Admins/owners and agent
+// actors (A2A) see every row; a plain member sees only rows for agents they
+// own — same admin|owner-or-owner rule as canAccessAgentInternals, applied
+// per row since this endpoint spans every agent in the workspace at once.
+func (h *Handler) filterDashboardUsageByAgentInternalsAccess(
+	ctx context.Context,
+	workspaceID, actorType, actorID, role string,
+	rows []DashboardUsageByAgentResponse,
+) ([]DashboardUsageByAgentResponse, error) {
+	if actorType == "agent" || roleAllowed(role, "owner", "admin") {
+		return rows, nil
+	}
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	agents, err := h.Queries.ListAllAgents(ctx, wsUUID)
+	if err != nil {
+		return nil, err
+	}
+	owned := make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		if uuidToString(a.OwnerID) == actorID {
+			owned[uuidToString(a.ID)] = struct{}{}
+		}
+	}
+	filtered := make([]DashboardUsageByAgentResponse, 0, len(rows))
+	for _, row := range rows {
+		if _, ok := owned[row.AgentID]; ok {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, nil
 }
 
 func (h *Handler) listDashboardUsageByAgent(

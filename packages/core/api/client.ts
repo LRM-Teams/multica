@@ -3842,31 +3842,28 @@ export class ApiClient {
 
   async createResearchSession(
     data: import("../types/research").CreateResearchSessionRequest,
-  ): Promise<{ session: import("../types/research").ResearchSession; fleet: import("../types/research").ResearchFleet }> {
+  ): Promise<import("../types/research").CreateResearchSessionResponse> {
     const {
-      ResearchFleetSchema,
-      EMPTY_RESEARCH_FLEET,
-      ResearchSessionSnapshotSchema,
+      CreateResearchSessionResponseSchema,
       EMPTY_RESEARCH_SNAPSHOT,
+      EMPTY_RESEARCH_FLEET,
     } = await import("../research/schemas");
-    const { z } = await import("zod");
     const raw = await this.fetch("/api/research/sessions", {
       method: "POST",
       body: JSON.stringify(data),
     });
-    const CreateSchema = z
-      .object({
-        session: ResearchSessionSnapshotSchema.shape.session,
-        fleet: ResearchFleetSchema,
-      })
-      .passthrough();
-    const parsed = parseWithFallback(
+    return parseWithFallback(
       raw,
-      CreateSchema,
-      { session: EMPTY_RESEARCH_SNAPSHOT.session, fleet: EMPTY_RESEARCH_FLEET },
+      CreateResearchSessionResponseSchema,
+      {
+        session: EMPTY_RESEARCH_SNAPSHOT.session,
+        fleet: EMPTY_RESEARCH_FLEET,
+        nodes: [],
+        edges: [],
+        messages: [],
+      },
       { endpoint: "POST /api/research/sessions" },
     );
-    return { session: parsed.session, fleet: parsed.fleet };
   }
 
   async getResearchSessionSnapshot(

@@ -34,4 +34,38 @@ describe("research schemas", () => {
     );
     expect(parsed.sessions).toEqual([]);
   });
+
+  it("defaults message card_kind and meta when missing", () => {
+    const raw = {
+      session: { id: "s1", workspace_id: "w1" },
+      fleet: { id: "f1", workspace_id: "w1", members: [] },
+      messages: [{ id: "m1", body: "kickoff", sender_type: "system" }],
+    };
+    const parsed = parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
+      endpoint: "test",
+    });
+    expect(parsed.messages[0]?.card_kind).toBe("chat");
+    expect(parsed.messages[0]?.meta).toEqual({});
+  });
+
+  it("keeps process card fields", () => {
+    const raw = {
+      session: { id: "s1", workspace_id: "w1" },
+      fleet: { id: "f1", workspace_id: "w1", members: [] },
+      messages: [
+        {
+          id: "m1",
+          body: "调研团已就位",
+          sender_type: "system",
+          card_kind: "process",
+          meta: { op: "session_kickoff" },
+        },
+      ],
+    };
+    const parsed = parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
+      endpoint: "test",
+    });
+    expect(parsed.messages[0]?.card_kind).toBe("process");
+    expect((parsed.messages[0]?.meta as { op?: string })?.op).toBe("session_kickoff");
+  });
 });

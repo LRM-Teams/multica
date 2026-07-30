@@ -123,7 +123,19 @@ const ResearchMessageSchema = z
     sender_id: z.string().nullable().optional().default(null),
     target_agent_id: z.string().nullable().optional().default(null),
     body: z.string().optional().default(""),
+    card_kind: z.string().optional().default("chat"),
+    meta: z.unknown().optional().default({}),
     created_at: z.string().optional().default(""),
+  })
+  .passthrough();
+
+export const CreateResearchSessionResponseSchema = z
+  .object({
+    session: ResearchSessionSchema,
+    fleet: ResearchFleetSchema,
+    nodes: z.array(ResearchGraphNodeSchema).optional().default([]),
+    edges: z.array(ResearchGraphEdgeSchema).optional().default([]),
+    messages: z.array(ResearchMessageSchema).optional().default([]),
   })
   .passthrough();
 

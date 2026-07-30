@@ -18,7 +18,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "贝克汉姆通话测试", []byte("[]"))
-	homeChannelID := seedChannelForTest(t, "voice-call-home-"+uuid.NewString(), testUserID)
+	dmChannelID := seedAgentDMChannel(t, agentID)
 
 	var projectID, otherProjectID string
 	if err := testPool.QueryRow(ctx, `
@@ -40,7 +40,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 	if _, err := testPool.Exec(
 		ctx,
 		`UPDATE channel SET project_id = $2 WHERE id = $1`,
-		homeChannelID,
+		dmChannelID,
 		projectID,
 	); err != nil {
 		t.Fatalf("bind voice call project: %v", err)
@@ -48,32 +48,11 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent
 		SET description = '规格驱动的群管理',
-		    instructions = '保持贝克汉姆身份；审核、拆解、派活、催办。',
-		    visibility = 'channel',
-		    home_channel_id = $2
+		    instructions = '保持贝克汉姆身份；审核、拆解、派活、催办。'
 		WHERE id = $1`,
 		agentID,
-		homeChannelID,
 	); err != nil {
-		t.Fatalf("bind agent home channel: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `
-			UPDATE agent
-			SET visibility = 'private', home_channel_id = NULL
-			WHERE id = $1`,
-			agentID,
-		)
-	})
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`,
-		homeChannelID,
-		testWorkspaceID,
-		agentID,
-	); err != nil {
-		t.Fatalf("add agent to home channel: %v", err)
+		t.Fatalf("set agent identity: %v", err)
 	}
 
 	var activeIssueID, unrelatedIssueID string
@@ -118,7 +97,6 @@ ON CONFLICT DO NOTHING`,
 		t.Fatalf("create unrelated project issue: %v", err)
 	}
 
-	dmChannelID := seedAgentDMChannel(t, agentID)
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, dmChannelID)
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = ANY($1::uuid[])`, []string{
@@ -253,7 +231,6 @@ ON CONFLICT DO NOTHING`,
 		"保持贝克汉姆身份",
 		"偏好直接结论和可执行下一步",
 		"工作区要求：所有结论给出依据",
-		"voice-call-home-",
 		"语音项目",
 		"沟通偏好",
 		"先确认事实，再承诺结果",

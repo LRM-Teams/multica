@@ -63,10 +63,11 @@ type AgentResponse struct {
 	HasCustomEnv      bool   `json:"has_custom_env"`
 	CustomEnvKeyCount int    `json:"custom_env_key_count"`
 	McpConfigRedacted bool   `json:"mcp_config_redacted"`
-	Visibility        string `json:"visibility"`
-	// HomeChannelID is set when visibility=channel (LRM-240 / LRM-370). Null
-	// for workspace/private. Encodes the single group the agent may be
-	// discovered/invited/@-mentioned in.
+	Visibility string `json:"visibility"`
+	// HomeChannelID is always null (task #908 retired the channel-scoped-agent
+	// mechanism this field described). Left in the payload shape rather than
+	// removed pending the coordinated FE/BE cut that drops it along with the
+	// rest of the visibility field — see agent_channel_visibility.go.
 	HomeChannelID *string `json:"home_channel_id"`
 	Status        string  `json:"status"`
 	// ManagedRole is reserved for independent platform-managed agent classes
@@ -749,31 +750,12 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	// Research Fleet agents are infrastructure and stay out of the workspace
 	// agent directory / issue assignee picker.
-	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
-	if listChannelID != "" {
-		if _, ok := parseUUIDOrBadRequest(w, listChannelID, "channel_id"); !ok {
-			return
-		}
-	}
-	agentIDs := make([]pgtype.UUID, 0, len(agents))
-	for _, a := range agents {
-		agentIDs = append(agentIDs, a.ID)
-	}
-	homeByAgent := h.loadAgentHomeChannelIDs(r.Context(), agentIDs)
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
 		if a.ManagedRole.Valid && a.ManagedRole.String == managedRoleResearchFleet {
 			continue
 		}
-		homeID := homeByAgent[uuidToString(a.ID)]
-		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
-			continue
-		}
 		resp := agentToResponse(a)
-		if homeID != "" {
-			h := homeID
-			resp.HomeChannelID = &h
-		}
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
 		}
@@ -810,10 +792,6 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
 	hasInternalsAccess := h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID)
 	resp := agentToResponse(agent)
-	if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
-		homeID := uuidToString(home)
-		resp.HomeChannelID = &homeID
-	}
 	// Use the summary query (no `content` column) — the embedded
 	// AgentSkillSummary only needs id/name/description, and reading large
 	// SKILL.md bodies just to discard them is the exact regression we fixed
@@ -873,8 +851,8 @@ type CreateAgentRequest struct {
 	CustomArgs      []string              `json:"custom_args"`
 	McpConfig       json.RawMessage       `json:"mcp_config"`
 	Visibility      string                `json:"visibility"`
-	// HomeChannelID binds a channel-visibility agent to exactly one group
-	// (LRM-370). Required when visibility=channel; forbidden otherwise.
+	// HomeChannelID is no longer supported (task #908 retired the
+	// channel-scoped-agent mechanism) — any non-empty value is rejected.
 	HomeChannelID      *string           `json:"home_channel_id"`
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
@@ -947,7 +925,13 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Visibility == "" {
-		req.Visibility = "private"
+		// Task #908 (#multica thread f83df812, Parker 2026-07-30 17:58): the
+		// unset default flips private→workspace so "no report of the field"
+		// no longer silently contradicts the "default public" product
+		// decision. This default is itself a transitional value — it goes
+		// away entirely once the visibility field is dropped from the
+		// payload/DB.
+		req.Visibility = "workspace"
 	}
 	if req.MaxConcurrentTasks == 0 {
 		req.MaxConcurrentTasks = 6
@@ -963,7 +947,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, homeChannelProvided := rawFields["home_channel_id"]
-	binding, ok := h.resolveAgentVisibilityBinding(r.Context(), w, workspaceID, req.Visibility, req.HomeChannelID, homeChannelProvided)
+	binding, ok := h.resolveAgentVisibilityBinding(w, req.Visibility, req.HomeChannelID, homeChannelProvided)
 	if !ok {
 		return
 	}
@@ -1067,10 +1051,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Instructions:  req.Instructions,
 		RuntimeMode:   runtime.RuntimeMode,
 		RuntimeConfig: rc,
-		RuntimeID:     runtime.ID,
-		// Insert-safe visibility: channel requires home_channel_id which is
-		// applied immediately after insert (CHECK forbids channel without home).
-		Visibility:         insertSafeAgentVisibility(binding),
+		RuntimeID:          runtime.ID,
+		Visibility:         binding.Visibility,
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            parseUUID(ownerID),
 		CustomEnv:          ce,
@@ -1110,17 +1092,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return
 	}
-	if err := h.applyAgentHomeChannel(r.Context(), created.ID, binding); err != nil {
-		slog.Warn("apply agent home channel failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(created.ID))...)
-		_, _ = h.Queries.ArchiveAgent(r.Context(), db.ArchiveAgentParams{ID: created.ID, ArchivedBy: parseUUID(ownerID)})
-		writeError(w, http.StatusInternalServerError, "failed to bind home_channel_id")
-		return
-	}
-	created, err = h.reloadAgentAfterHomeChannelRefresh(r.Context(), created.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reload agent")
-		return
-	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
@@ -1137,10 +1108,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := agentToResponse(created)
-	if binding.Visibility == agentVisibilityChannel {
-		home := uuidToString(binding.HomeChannelID)
-		resp.HomeChannelID = &home
-	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
@@ -1205,9 +1172,8 @@ type UpdateAgentRequest struct {
 	CustomArgs *[]string        `json:"custom_args"`
 	McpConfig  *json.RawMessage `json:"mcp_config"`
 	Visibility *string          `json:"visibility"`
-	// HomeChannelID follows the same pointer semantics as Visibility: omitted
-	// means no change; when Visibility becomes channel it is required; when
-	// Visibility becomes workspace/private it must be omitted/empty.
+	// HomeChannelID is no longer supported (task #908 retired the
+	// channel-scoped-agent mechanism) — any non-empty value is rejected.
 	HomeChannelID      *string `json:"home_channel_id"`
 	Status             *string `json:"status"`
 	MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
@@ -1502,36 +1468,17 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
 	}
-	var visibilityBinding *agentChannelVisibilityBinding
 	if req.Visibility != nil || rawFields["home_channel_id"] != nil {
 		targetVisibility := existing.Visibility
 		if req.Visibility != nil {
 			targetVisibility = *req.Visibility
 		}
-		// Group managers (贝克汉姆) may change visibility like any other agent
-		// (Frank / LRM-387): the previous "must stay channel" gate made the
-		// profile picker look broken. Default create still binds channel+home.
 		_, homeProvided := rawFields["home_channel_id"]
-		var homePtr *string
-		if homeProvided {
-			homePtr = req.HomeChannelID
-		} else if existing.Visibility == agentVisibilityChannel && targetVisibility == agentVisibilityChannel {
-			// Keep existing home when staying on channel and home_channel_id omitted.
-			if existingHome, ok := h.loadAgentHomeChannelID(r.Context(), existing.ID); ok {
-				home := uuidToString(existingHome)
-				homePtr = &home
-				homeProvided = true
-			}
-		}
-		binding, ok := h.resolveAgentVisibilityBinding(
-			r.Context(), w, uuidToString(existing.WorkspaceID), targetVisibility, homePtr, homeProvided || targetVisibility == agentVisibilityChannel,
-		)
+		binding, ok := h.resolveAgentVisibilityBinding(w, targetVisibility, req.HomeChannelID, homeProvided)
 		if !ok {
 			return
 		}
-		visibilityBinding = &binding
-		// Visibility is applied with home_channel_id after UpdateAgent so a
-		// failed metadata update cannot leave a half-applied visibility row.
+		params.Visibility = pgtype.Text{String: binding.Visibility, Valid: true}
 	}
 	if req.Status != nil {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
@@ -1657,24 +1604,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if visibilityBinding != nil {
-		if err := h.applyAgentHomeChannel(r.Context(), updated.ID, *visibilityBinding); err != nil {
-			slog.Warn("update agent home channel failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
-			writeError(w, http.StatusInternalServerError, "failed to update visibility/home_channel_id")
-			return
-		}
-		updated, err = h.reloadAgentAfterHomeChannelRefresh(r.Context(), updated.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to reload agent")
-			return
-		}
-	}
-
 	resp := agentToResponse(updated)
-	if home, ok := h.loadAgentHomeChannelID(r.Context(), updated.ID); ok {
-		homeID := uuidToString(home)
-		resp.HomeChannelID = &homeID
-	}
 	// agentToResponse always initialises Skills as []; junction-table rows
 	// are untouched by the SQL update, so we reload them here to keep the
 	// response (and the broadcast that mirrors it) in sync with reality.

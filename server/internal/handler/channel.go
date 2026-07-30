@@ -967,9 +967,10 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// LRM-397/398: do NOT auto-provision 贝克汉姆 / group_manager on channel create.
-	// Group managers enter via Wendy hire or POST .../group-manager (InviteGroupManager),
-	// with visibility=channel + home_channel_id bound to that group.
+	// LRM-397/398: do NOT auto-provision a group-manager agent on channel
+	// create. #1436 replaced the agent-based group manager (贝克汉姆) with a
+	// channel-role assignment instead — see agent_workspace_role.go /
+	// channel_manager_role_wake.go.
 	if projectID.Valid {
 		// Creating an already-bound group is still a project/channel association.
 		// Record the same typed system fact as a later settings change so the
@@ -1142,20 +1143,6 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	wsUUID := parseUUID(workspaceID)
-
-	// agent.home_channel_id is ON DELETE RESTRICT and pairs with visibility=channel
-	// via CHECK — clear the binding (promote to workspace) before channel DELETE.
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent
-		SET visibility = 'workspace',
-		    home_channel_id = NULL,
-		    updated_at = now()
-		WHERE workspace_id = $1
-		  AND home_channel_id = $2`,
-		wsUUID, channelID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clear agent home channel bindings")
-		return
-	}
 
 	// voice_call_session.channel_id has no ON DELETE clause (default RESTRICT).
 	if _, err := tx.Exec(ctx, `
@@ -1330,7 +1317,6 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 			FROM agent a
 			WHERE a.workspace_id = $1
 			  AND a.archived_at IS NULL
-			  AND (a.visibility <> 'channel' OR a.home_channel_id = $2)
 			  AND NOT EXISTS (
 				SELECT 1 FROM channel_member cm
 				WHERE cm.channel_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
@@ -4936,14 +4922,6 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: memberID, WorkspaceID: parseUUID(workspaceID)})
 		if err != nil || agent.ArchivedAt.Valid {
 			writeError(w, http.StatusNotFound, "agent not found")
-			return false
-		}
-		homeChannelID := ""
-		if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
-			homeChannelID = uuidToString(home)
-		}
-		if ok, msg := canInviteAgentToChannel(agent, homeChannelID, uuidToString(channelID)); !ok {
-			writeError(w, http.StatusBadRequest, msg)
 			return false
 		}
 		return true

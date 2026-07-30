@@ -43,11 +43,10 @@ type VoiceCallContextBuilder struct {
 }
 
 type voiceCallContextScope struct {
-	DMChannel   ChannelResponse
-	HomeChannel *ChannelResponse
-	Project     *db.Project
-	Issues      []voiceCallIssueSummary
-	Resources   []db.ProjectResource
+	DMChannel ChannelResponse
+	Project   *db.Project
+	Issues    []voiceCallIssueSummary
+	Resources []db.ProjectResource
 }
 
 type voiceCallIssueSummary struct {
@@ -185,35 +184,10 @@ func (builder *VoiceCallContextBuilder) loadScope(
 	agent db.Agent,
 ) (voiceCallContextScope, error) {
 	result := voiceCallContextScope{DMChannel: dmChannel}
-	var homeID pgtype.UUID
-	if err := builder.handler.DB.QueryRow(
-		ctx,
-		`SELECT home_channel_id FROM agent WHERE id = $1 AND workspace_id = $2`,
-		agent.ID,
-		workspace.ID,
-	).Scan(&homeID); err != nil {
-		return voiceCallContextScope{}, fmt.Errorf("load voice call Agent home group: %w", err)
-	}
-	if homeID.Valid {
-		home, homeFound := builder.handler.getChannel(
-			ctx,
-			uuidToString(workspace.ID),
-			homeID,
-		)
-		if !homeFound || home.Kind != "group" {
-			return voiceCallContextScope{}, errors.New("voice call Agent home group is invalid")
-		}
-		result.HomeChannel = &home
-	}
 
 	projectID := ""
 	if dmChannel.ProjectID != nil {
 		projectID = strings.TrimSpace(*dmChannel.ProjectID)
-	}
-	if projectID == "" &&
-		result.HomeChannel != nil &&
-		result.HomeChannel.ProjectID != nil {
-		projectID = strings.TrimSpace(*result.HomeChannel.ProjectID)
 	}
 	if projectID == "" {
 		return result, nil
@@ -309,10 +283,6 @@ func (builder *VoiceCallContextBuilder) loadMemories(
 		projectID = uuidToString(contextScope.Project.ID)
 	}
 	channelIDs := []string{contextScope.DMChannel.ID}
-	if contextScope.HomeChannel != nil &&
-		contextScope.HomeChannel.ID != contextScope.DMChannel.ID {
-		channelIDs = append(channelIDs, contextScope.HomeChannel.ID)
-	}
 
 	seen := make(map[string]struct{})
 	memories := make([]service.AgentMemoryData, 0)
@@ -377,14 +347,6 @@ func voiceCallScopeBody(
 	fmt.Fprintf(&body, "Workspace ID: %s\n", uuidToString(workspace.ID))
 	fmt.Fprintf(&body, "Workspace name: %s\n", workspace.Name)
 	fmt.Fprintf(&body, "DM channel ID: %s\n", contextScope.DMChannel.ID)
-	if contextScope.HomeChannel != nil {
-		fmt.Fprintf(
-			&body,
-			"Agent home group: %s (%s)\n",
-			contextScope.HomeChannel.Name,
-			contextScope.HomeChannel.ID,
-		)
-	}
 	if contextScope.Project != nil {
 		fmt.Fprintf(
 			&body,

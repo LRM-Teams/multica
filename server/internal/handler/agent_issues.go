@@ -276,23 +276,8 @@ func (h *Handler) ListAgentDirectoryAgents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
-	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
-	if listChannelID != "" {
-		if _, ok := parseUUIDOrBadRequest(w, listChannelID, "channel_id"); !ok {
-			return
-		}
-	}
-	agentIDs := make([]pgtype.UUID, 0, len(agents))
-	for _, a := range agents {
-		agentIDs = append(agentIDs, a.ID)
-	}
-	homeByAgent := h.loadAgentHomeChannelIDs(r.Context(), agentIDs)
 	visible := make([]AgentDirectoryItem, 0, len(agents))
 	for _, a := range agents {
-		homeID := homeByAgent[uuidToString(a.ID)]
-		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
-			continue
-		}
 		item := AgentDirectoryItem{
 			ID:   uuidToString(a.ID),
 			Name: a.Name,

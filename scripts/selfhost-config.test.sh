@@ -82,6 +82,7 @@ require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
 require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
 require_config "$deploy_workflow" 'scripts/assert-served-app-image-provenance.sh'
 require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
+require_config "$deploy_workflow" 'scripts/assert-oss-compose-credentials.sh'
 require_config "$deploy_workflow" 'scripts/run-aliyun-backend-migration.sh'
 require_config "$deploy_workflow" 'scripts/validate-rtc-environment.sh'
 require_config "$deploy_workflow" '- name: Run database migration'
@@ -172,6 +173,7 @@ fi
 bash scripts/runner-workspace-ownership.test.sh
 bash scripts/served-app-image-provenance.test.sh
 bash scripts/compose-environment-value.test.sh
+bash scripts/assert-oss-compose-credentials.test.sh
 SELFHOST_CONFIG_STATIC_ONLY=true bash scripts/run-aliyun-backend-migration.test.sh
 bash scripts/validate-rtc-environment.test.sh
 

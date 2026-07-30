@@ -54,7 +54,8 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, session.id) });
       toast.success(t(($) => $.actions.stop_done));
     },
-    onError: (err) => showErrorToast(err),
+    onError: (err) =>
+      showErrorToast(err instanceof Error ? err.message : String(err)),
   });
 
   const del = useMutation({
@@ -65,7 +66,8 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
       toast.success(t(($) => $.actions.delete_done));
       setConfirmDelete(false);
     },
-    onError: (err) => showErrorToast(err),
+    onError: (err) =>
+      showErrorToast(err instanceof Error ? err.message : String(err)),
   });
 
   return (

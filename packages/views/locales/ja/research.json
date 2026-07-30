@@ -21,6 +21,16 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "groups": {
+    "in_progress": "進行中",
+    "completed": "完了"
+  },
+  "list": {
+    "loading": "リサーチを読み込んでいます",
+    "load_failed": "リサーチの読み込みに失敗しました",
+    "retry": "再試行",
+    "empty_cta": "最初のリサーチを始める"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",
@@ -43,6 +53,9 @@
     "send": "Send",
     "fleet": "Research fleet",
     "confirm": "Confirm research complete",
+    "confirm_continue": "確認して続行",
+    "handoff_title": "成果の引き継ぎ",
+    "view_delivery": "成果を見る",
     "handoff_project": "Create development project",
     "handoff_channel": "Create development channel",
     "handoff": "Handoff",
@@ -61,6 +74,12 @@
     "system": "System",
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
+  },
+  "stage": {
+    "s1_plan": "S1 · 定義",
+    "s2_sources": "S2 · 探索",
+    "s3_validation": "S3 · 検証",
+    "s4_delivery": "S4 · 納品"
   },
   "node": {
     "goal": "Goal",

@@ -124,7 +124,8 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 		Instructions:       "",
 		CustomEnv:          []byte("{}"),
 		CustomArgs:         []byte("[]"),
-	})
+			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+})
 	require.NoError(t, err)
 
 	// Project carries an env_id; D9 requires the child's StartSession env_id to
@@ -506,7 +507,7 @@ func TestMaybeCleanupEphemeralSandbox(t *testing.T) {
 	var agentID pgtype.UUID
 	err = tx.QueryRow(ctx, `INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
-		) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		, model) VALUES ($1, $2, $3, $4, $5, $6, $7, 'composer-1.5') RETURNING id`,
 		ws.ID, "eph-agent", "Eph Agent", "local", []byte("{}"), rtID, 1,
 	).Scan(&agentID)
 	require.NoError(t, err)
@@ -581,7 +582,7 @@ func TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker(t *testing.T) {
 	var agentID pgtype.UUID
 	err = tx.QueryRow(ctx, `INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
-		) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		, model) VALUES ($1, $2, $3, $4, $5, $6, $7, 'composer-1.5') RETURNING id`,
 		ws.ID, "nm-agent", "NM", "local", []byte("{}"), rtID, 1,
 	).Scan(&agentID)
 	require.NoError(t, err)
@@ -640,7 +641,7 @@ func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
 	var agentID pgtype.UUID
 	err = tx.QueryRow(ctx, `INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
-		) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		, model) VALUES ($1, $2, $3, $4, $5, $6, $7, 'composer-1.5') RETURNING id`,
 		ws.ID, "sib-agent", "SA", "local", []byte("{}"), rtID, 1,
 	).Scan(&agentID)
 	require.NoError(t, err)

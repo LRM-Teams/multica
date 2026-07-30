@@ -291,7 +291,7 @@ func createCascadeFixtureAgent(t *testing.T, ctx context.Context, runtimeID, nam
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, name, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("insert cascade fixture agent: %v", err)

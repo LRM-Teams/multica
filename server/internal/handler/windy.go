@@ -521,7 +521,7 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID pgtype.UUID, run
 			CustomEnv:          []byte("{}"),
 			CustomArgs:         []byte("[]"),
 			McpConfig:          nil,
-			Model:              pgtype.Text{},
+			Model:              pgTextModelForRuntime(runtime.Provider),
 			ThinkingLevel:      pgtype.Text{},
 		}, windyAgentName, windyAgentName)
 		if err != nil {
@@ -646,6 +646,10 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 		return db.Agent{}, err
 	}
 	updated = refreshed
+	updated, err = h.ensureWindyAgentModel(r.Context(), updated)
+	if err != nil {
+		return db.Agent{}, err
+	}
 	if restored {
 		resp := agentToResponse(updated)
 		h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
@@ -654,6 +658,20 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 		}
 	}
 	return updated, nil
+}
+
+func (h *Handler) ensureWindyAgentModel(ctx context.Context, agent db.Agent) (db.Agent, error) {
+	if strings.TrimSpace(agent.Model.String) != "" {
+		return agent, nil
+	}
+	if !agent.RuntimeID.Valid {
+		return agent, fmt.Errorf("wendy agent %s has no runtime for model backfill", uuidToString(agent.ID))
+	}
+	runtime, err := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	return ensureAgentHasExplicitModel(ctx, h.Queries, agent, runtime.Provider)
 }
 
 func (h *Handler) refreshWindyInstructionsIfStale(r *http.Request, agent db.Agent) (db.Agent, error) {

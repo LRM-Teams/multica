@@ -92,14 +92,14 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
 	`, workspaceID, "curator_scheduler_"+suffix, runtimeID, userID).Scan(&curatorAgentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
 	`, workspaceID, "curator_target_"+suffix, runtimeID, userID).Scan(&targetAgentID); err != nil {
 		t.Fatal(err)
 	}
@@ -188,20 +188,20 @@ func TestMemoryCurationSchedulerSkipsInactiveTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
 	`, workspaceID, "curator_scheduler_inactive_"+suffix, runtimeID, userID).Scan(&curatorAgentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
 	`, workspaceID, "curator_active_"+suffix, runtimeID, userID).Scan(&activeAgentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
-		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
 	`, workspaceID, "curator_inactive_"+suffix, runtimeID, userID).Scan(&inactiveAgentID); err != nil {
 		t.Fatal(err)
 	}

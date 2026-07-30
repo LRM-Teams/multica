@@ -7028,7 +7028,7 @@ func TestChannelOfflineRuntimeQueuesButDoesNotShowActiveTask(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
-		) VALUES ($1, 'Offline Channel Agent', '', 'local', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+		, model) VALUES ($1, 'Offline Channel Agent', '', 'local', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create offline agent: %v", err)

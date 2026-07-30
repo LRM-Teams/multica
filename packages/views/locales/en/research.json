@@ -21,6 +21,16 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "groups": {
+    "in_progress": "In progress",
+    "completed": "Completed"
+  },
+  "list": {
+    "loading": "Loading research sessions",
+    "load_failed": "Couldn't load research sessions",
+    "retry": "Retry",
+    "empty_cta": "Start your first research"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",
@@ -43,6 +53,9 @@
     "send": "Send",
     "fleet": "Research fleet",
     "confirm": "Confirm research complete",
+    "confirm_continue": "Confirm & continue",
+    "handoff_title": "Handoff delivery",
+    "view_delivery": "View delivery",
     "handoff_project": "Create development project",
     "handoff_channel": "Create development channel",
     "handoff": "Handoff",
@@ -61,6 +74,12 @@
     "system": "System",
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
+  },
+  "stage": {
+    "s1_plan": "S1 · Plan",
+    "s2_sources": "S2 · Explore",
+    "s3_validation": "S3 · Validate",
+    "s4_delivery": "S4 · Deliver"
   },
   "node": {
     "goal": "Goal",

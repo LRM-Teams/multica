@@ -937,7 +937,7 @@ func TestExecuteScheduledRadarActionDedupeSurvivesWendyRebind(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, 'Replacement Wendy', '', 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, 'Replacement Wendy', '', 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 		RETURNING id
 	`, fixture.workspaceID, "replacement-wendy-"+uuid.NewString(), fixture.supervisor.RuntimeID, fixture.ownerUserID).Scan(&replacementID); err != nil {
 		t.Fatalf("create replacement Wendy: %v", err)
@@ -2022,7 +2022,7 @@ func createForeignRadarAgentForExecutorTest(t *testing.T, workspaceID string) st
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
-		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb)
+		, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, workspaceID, "Foreign Radar Target "+uuid.NewString(), runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create foreign radar target: %v", err)
@@ -2095,7 +2095,7 @@ func createScheduledRadarExecutorFixture(t *testing.T) scheduledRadarExecutorFix
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5)
+		, model) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5, 'composer-1.5')
 		RETURNING id
 	`, foreign.workspaceID, "scheduled-radar-target-"+uuid.NewString(), "Scheduled Radar Target", supervisor.RuntimeID, foreign.userID).Scan(&targetID); err != nil {
 		t.Fatalf("create scheduled radar target: %v", err)

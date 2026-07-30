@@ -90,6 +90,7 @@ func TestAgentAvatar_AttachmentBindsAtMostOneAgentUnderConcurrentCreate(t *testi
 			testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
 				"display_name":         fmt.Sprintf("avatar-unique-%d-%s", i, marker),
 				"runtime_id":           testRuntimeID,
+				"model":                "composer-1.5",
 				"visibility":           "private",
 				"max_concurrent_tasks": 1,
 				"avatar_selection": map[string]any{
@@ -165,6 +166,7 @@ func TestAgentAvatar_TrustedDraftMapsAvatarToAssigned(t *testing.T) {
 	testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
 		"display_name":         "avatar-from-draft-" + marker,
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 		"draft_id":             draftID,
@@ -191,6 +193,7 @@ func TestAgentAvatar_CreateAndUpdateRejectRawURL(t *testing.T) {
 	body := map[string]any{
 		"display_name":         "avatar-raw-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 		"avatar_url":           "/uploads/unverified.png",
@@ -243,6 +246,7 @@ func TestAgentAvatar_UploadSelectionFailsClosed(t *testing.T) {
 			body := map[string]any{
 				"display_name":         "avatar-invalid-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 				"runtime_id":           testRuntimeID,
+				"model":                "composer-1.5",
 				"visibility":           "private",
 				"max_concurrent_tasks": 1,
 				"avatar_selection": map[string]any{
@@ -268,7 +272,7 @@ func TestAgentAvatar_DirectInsertUsesSameDurableBoundary(t *testing.T) {
 	err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 		RETURNING id, avatar_url, avatar_source
 	`, testWorkspaceID, name, testRuntimeID, testUserID).Scan(&agentID, &avatarURL, &avatarSource)
 	if err != nil {
@@ -301,6 +305,7 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 			recorder := httptest.NewRecorder()
 			testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
 				"display_name": name, "runtime_id": testRuntimeID, "visibility": "private", "max_concurrent_tasks": 1,
+				"model":                "composer-1.5",
 			}))
 			if recorder.Code != http.StatusCreated {
 				errCh <- fmt.Errorf("api create %d: %s", recorder.Code, recorder.Body.String())
@@ -326,7 +331,7 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 			err := testPool.QueryRow(context.Background(), `
 				INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 				RETURNING id, avatar_url, avatar_source
 			`, testWorkspaceID, name, testRuntimeID, testUserID).Scan(&id, &avatarURL, &source)
 			if err != nil {
@@ -455,6 +460,7 @@ func createAvatarTestAgent(t *testing.T, displayName string, selection map[strin
 	body := map[string]any{
 		"display_name":         displayName,
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}

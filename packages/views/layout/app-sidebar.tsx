@@ -473,7 +473,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   }, [pathname]);
 
   return (
-      <Sidebar variant="inset">
+      <Sidebar variant="inset" collapsible="icon">
         {topSlot}
         {/* Workspace Switcher */}
         <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
@@ -636,6 +636,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                         onMouseEnter={prefetchActivity}
                         onFocus={prefetchActivity}
@@ -702,6 +703,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />
@@ -726,6 +728,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />

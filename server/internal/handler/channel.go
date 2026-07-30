@@ -24,6 +24,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/promptcontext"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -5291,6 +5292,9 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	} else if ok {
 		return coalesced, nil
 	}
+	if err := service.RequireAgentModel(agent.Model.String); err != nil {
+		return channelAgentPromptTxResult{}, fmt.Errorf("channel agent wake: %w", err)
+	}
 	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, trigger)
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
@@ -5911,7 +5915,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.instructions, a.archived_at, a.display_name
+		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND a.archived_at IS NULL`, parseUUID(channelID), parseUUID(workspaceID))
@@ -5922,7 +5926,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
@@ -5938,7 +5942,7 @@ func (h *Handler) channelThreadFollowerAgents(ctx context.Context, workspaceID, 
 	return h.channelThreadAgentsFromQuery(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.instructions, a.archived_at, a.display_name
+		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM thread_participant tp
 		JOIN channel_message root ON root.id = tp.root_message_id
 		JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
@@ -5961,7 +5965,7 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
 			continue
 		}
 		out = append(out, a)

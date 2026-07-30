@@ -159,7 +159,7 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 			CustomEnv:          []byte("{}"),
 			CustomArgs:         []byte("[]"),
 			McpConfig:          nil,
-			Model:              pgtype.Text{},
+			Model:              pgTextModelForRuntime(runtime.Provider),
 			ThinkingLevel:      pgtype.Text{},
 		}, seed.Name, seed.Name)
 		if err != nil {

@@ -296,7 +296,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			if err := testPool.QueryRow(ctx, `
 				INSERT INTO agent (
 			workspace_id, name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, 'local', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, 'local', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 				RETURNING id
 			`, testWorkspaceID, "Poison Cap Agent "+uuid.NewString()[:8], runtimeID, testUserID).Scan(&agentID); err != nil {
 				t.Fatalf("create poison agent %d: %v", i, err)

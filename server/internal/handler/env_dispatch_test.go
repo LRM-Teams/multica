@@ -810,7 +810,7 @@ func seedHandlerDagNonTrainingCompletedRoot(t *testing.T, ctx context.Context, w
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
-		) VALUES ($1, 'dag-test-agent', 'DAG Test Agent', '', 'cloud', '{}'::jsonb, $2, 1, NULL, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+		, model) VALUES ($1, 'dag-test-agent', 'DAG Test Agent', '', 'cloud', '{}'::jsonb, $2, 1, NULL, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, workspaceID, runtimeID).Scan(&agentID); err != nil {
 		t.Fatalf("create test agent: %v", err)

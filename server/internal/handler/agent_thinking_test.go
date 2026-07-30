@@ -37,6 +37,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-empty",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "",
@@ -52,6 +53,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-known",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "high",
@@ -75,6 +77,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-codex-only",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "none",
@@ -90,6 +93,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-garbage",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "supersonic",
@@ -394,7 +398,7 @@ func createAgentOnRuntime(t *testing.T, name, runtimeID, level string) string {
 	err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, thinking_level
-		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)
+		, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, name, runtimeID, testUserID, levelArg).Scan(&agentID)
 	if err != nil {

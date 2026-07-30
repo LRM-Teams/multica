@@ -21,6 +21,16 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "groups": {
+    "in_progress": "진행 중",
+    "completed": "완료"
+  },
+  "list": {
+    "loading": "리서치를 불러오는 중입니다",
+    "load_failed": "리서치를 불러오지 못했습니다",
+    "retry": "다시 시도",
+    "empty_cta": "첫 리서치 시작하기"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",
@@ -43,6 +53,9 @@
     "send": "Send",
     "fleet": "Research fleet",
     "confirm": "Confirm research complete",
+    "confirm_continue": "확인 후 계속",
+    "handoff_title": "결과 인계",
+    "view_delivery": "결과 보기",
     "handoff_project": "Create development project",
     "handoff_channel": "Create development channel",
     "handoff": "Handoff",
@@ -61,6 +74,12 @@
     "system": "System",
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
+  },
+  "stage": {
+    "s1_plan": "S1 · 정의",
+    "s2_sources": "S2 · 탐색",
+    "s3_validation": "S3 · 검증",
+    "s4_delivery": "S4 · 전달"
   },
   "node": {
     "goal": "Goal",

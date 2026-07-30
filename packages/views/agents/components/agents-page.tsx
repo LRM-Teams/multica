@@ -792,7 +792,6 @@ export function AgentsPage({
           currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}
           draft={createDraft}
-          defaultHomeChannelId={createDraft?.channel_id ?? null}
           onClose={() => {
             setShowCreate(false);
             setCreateDraft(null);

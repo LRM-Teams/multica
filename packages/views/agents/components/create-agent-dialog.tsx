@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { Globe, Hash, Lock } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
@@ -13,14 +12,12 @@ import { api } from "@multica/core/api";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
 } from "@multica/core/agents";
-import { channelsOptions } from "@multica/core/channels";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
   AgentAvatarSelection,
-  AgentVisibility,
   RuntimeDevice,
   MemberWithUser,
   CreateAgentRequest,
@@ -40,23 +37,8 @@ import { Label } from "@multica/ui/components/ui/label";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CharCounter } from "./char-counter";
-import {
-  type HomeChannelMode,
-} from "./home-channel-bind-panel";
 import { randomPickedAvatarSelection } from "./avatar-preset";
 import { useT } from "../../i18n";
-
-function VisibilityOptionIcon({
-  value,
-  className,
-}: {
-  value: AgentVisibility;
-  className?: string;
-}) {
-  if (value === "private") return <Lock className={className} />;
-  if (value === "channel") return <Hash className={className} />;
-  return <Globe className={className} />;
-}
 
 export function CreateAgentDialog({
   runtimes,
@@ -65,7 +47,6 @@ export function CreateAgentDialog({
   currentUserId,
   template,
   draft,
-  defaultHomeChannelId,
   onClose,
   onCreate,
 }: {
@@ -98,15 +79,6 @@ export function CreateAgentDialog({
   const isDraft = !!draft && !isDuplicate;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
-  const { data: channels = [], isLoading: channelsLoading } = useQuery(
-    channelsOptions(wsId),
-  );
-  const groups = useMemo(
-    () => channels.filter((c) => c.kind === "group" && !c.archived_at),
-    [channels],
-  );
-  const hasGroups = groups.length > 0;
-
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
     template

@@ -1,5 +1,6 @@
 "use client";
 
+import { dedupeResearchFleetMembers } from "@multica/core/research";
 import type { ResearchFleetMember } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentCompactActivity } from "../../channels/components/agent-compact-activity";
@@ -8,7 +9,7 @@ import { useT } from "../../i18n/use-t";
 
 export function ResearchFleetStrip({ members }: { members: ResearchFleetMember[] }) {
   const { t } = useT("research");
-  const active = members.filter((m) => m.status !== "archived");
+  const active = dedupeResearchFleetMembers(members);
   if (active.length === 0) return null;
 
   return (

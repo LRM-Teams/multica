@@ -1971,6 +1971,7 @@ func (s *TaskService) completeTask(
 					if err := s.Queries.SetUnreadSinceIfNull(ctx, task.ChatSessionID); err != nil {
 						slog.Warn("failed to set unread_since", "chat_session_id", util.UUIDToString(task.ChatSessionID), "error", err)
 					}
+					s.mirrorResearchChatReply(ctx, task, row)
 				}
 			}
 		}

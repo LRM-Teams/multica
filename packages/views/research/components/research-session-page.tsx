@@ -6,6 +6,7 @@ import { MessageSquare } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
+  dedupeResearchFleetMembers,
   researchKeys,
   researchSessionSnapshotOptions,
   useResearchUiStore,
@@ -114,7 +115,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     );
   }
 
-  const { session, fleet, messages, report, sources } = data;
+  const { session, messages, report, sources } = data;
+  const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
+  const fleet = { ...data.fleet, members: fleetMembers };
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
 

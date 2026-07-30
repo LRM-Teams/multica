@@ -387,7 +387,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wake the target fleet agent (default: 罗纳尔多). Failures are logged but
-	// do not roll back the persisted research message — user can retry.
+	// do not roll back the persisted research message — surface a process card.
 	if target.Valid && senderType == "user" {
 		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, target, parseUUID(userID), req.Body, senderType); wakeErr != nil {
 			slog.Warn("research agent wake failed",
@@ -395,9 +395,15 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 				"agent_id", uuidToString(target),
 				"error", wakeErr,
 			)
+			h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{
+				Op:      "wake_failed",
+				Title:   "唤醒失败",
+				Body:    fmt.Sprintf("未能唤醒目标 agent：%v。请确认 runtime/daemon 在线后重试。", wakeErr),
+				ActorID: target,
+				Meta:    map[string]any{"error": wakeErr.Error()},
+			})
 		}
 	} else if target.Valid && senderType == "agent" {
-		// Lead/member dispatch to another fleet member.
 		initiator := session.CreatedBy
 		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, target, initiator, req.Body, senderType); wakeErr != nil {
 			slog.Warn("research dispatch wake failed",
@@ -405,7 +411,21 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 				"agent_id", uuidToString(target),
 				"error", wakeErr,
 			)
+			h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{
+				Op:      "wake_failed",
+				Title:   "调度失败",
+				Body:    fmt.Sprintf("未能唤醒目标 agent：%v", wakeErr),
+				ActorID: target,
+				Meta:    map[string]any{"error": wakeErr.Error()},
+			})
 		}
+	} else if senderType == "user" && !target.Valid {
+		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{
+			Op:    "wake_failed",
+			Title: "无主理人",
+			Body:  "调研团 lead（罗纳尔多）未就绪，消息已保存但无人接收。",
+			Meta:  map[string]any{"reason": "missing_lead"},
+		})
 	}
 
 	resp := mapMessages([]db.ResearchMessage{msg})[0]

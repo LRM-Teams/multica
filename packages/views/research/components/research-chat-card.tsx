@@ -4,6 +4,7 @@ import type { ResearchFleetMember, ResearchMessage } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
+import { speakerMemberForMessage } from "../lib/research-chat-speaker";
 
 function metaString(meta: unknown, key: string): string | null {
   if (!meta || typeof meta !== "object") return null;
@@ -18,19 +19,6 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-function memberForMessage(
-  message: ResearchMessage,
-  members: ResearchFleetMember[],
-): ResearchFleetMember | undefined {
-  const actorFromMeta = metaString(message.meta, "actor_agent_id");
-  const agentId =
-    actorFromMeta ||
-    (message.sender_type === "agent" ? message.sender_id : null) ||
-    message.target_agent_id;
-  if (!agentId) return undefined;
-  return members.find((m) => m.agent_id === agentId);
-}
-
 export function ResearchChatCard({
   message,
   members,
@@ -41,14 +29,24 @@ export function ResearchChatCard({
   const { t } = useT("research");
   const isProcess = message.card_kind === "process";
   const isUser = message.sender_type === "user";
-  const member = memberForMessage(message, members);
-  const role = member?.role ?? metaString(message.meta, "op") ?? message.sender_type;
-  const name =
-    member?.display_name ||
-    member?.name ||
-    (isUser ? t(($) => $.chat.you) : isProcess ? t(($) => $.chat.process) : t(($) => $.chat.system));
+  const member = speakerMemberForMessage(message, members);
+  const target = isUser
+    ? members.find((m) => m.agent_id === message.target_agent_id)
+    : undefined;
+  const role = isUser
+    ? t(($) => $.chat.from_you)
+    : member?.role ?? metaString(message.meta, "op") ?? message.sender_type;
+  const name = isUser
+    ? t(($) => $.chat.you)
+    : member?.display_name ||
+      member?.name ||
+      (isProcess ? t(($) => $.chat.process) : t(($) => $.chat.system));
   const op = metaString(message.meta, "op");
   const agentId = member?.agent_id;
+  const routedTo =
+    isUser && message.target_agent_id
+      ? target?.display_name || target?.name || t(($) => $.chat.to_lead)
+      : null;
 
   return (
     <article
@@ -84,6 +82,7 @@ export function ResearchChatCard({
           <div className="truncate text-[10px] text-muted-foreground">
             {isProcess ? t(($) => $.chat.process_tag) : role}
             {op && isProcess ? ` · ${op}` : ""}
+            {routedTo ? ` · → ${routedTo}` : ""}
             {message.created_at ? ` · ${formatTime(message.created_at)}` : ""}
           </div>
         </div>

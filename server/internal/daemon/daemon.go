@@ -3760,11 +3760,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 	}
 
-	// Full Grok/Pi resident turns materialize their create-only static brief in
-	// the stable turn.WorkDir inside tryCanonicalChatBackend. Do not also write
-	// a task-scoped runtime brief here: that legacy path is neither executed nor
-	// read by the resident process and can retain stale issue/surface context.
-	canonicalResidentTask := usesPersistentGrokChatRuntime(provider, task) || usesPersistentPiChatRuntime(provider, task)
+	// Full Grok/Pi/Cursor resident turns materialize their create-only static
+	// brief in the stable turn.WorkDir inside tryCanonicalChatBackend. Do not
+	// also write a task-scoped runtime brief here: that legacy path is neither
+	// executed nor read by the resident process and can retain stale
+	// issue/surface context.
+	canonicalResidentTask := usesCanonicalResidentChatRuntime(provider, task)
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief := restrictedExecutionSystemPrompt(profile)
 	if !restrictedExecution && !canonicalResidentTask {
@@ -4076,7 +4077,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	var backend agent.Backend
 	var releasePersistentRuntime func(bool)
-	// D6-1b: full Grok/Pi chat uses only the canonical agent×runtime pool.
+	// D6-1b: full Grok/Pi/Cursor chat uses only the canonical agent×runtime pool.
 	// No generation==0 dual path to ChatSession-keyed pools (Frank: no permanent
 	// compat). D6-1a is served; missing generation fails closed inside the entry.
 	selfBinForCanonical := ""

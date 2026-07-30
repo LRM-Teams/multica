@@ -27,11 +27,8 @@ import {
   memberProfileOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import { cn } from "@multica/ui/lib/utils";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
@@ -230,9 +227,6 @@ function MemberSidePanelReady({
   const role = (member?.role ?? profile?.role ?? "") as MemberRole | string;
   const email = member?.email?.trim() || "";
   const joinedAt = member?.created_at ?? null;
-  const avatarUrl = resolvePublicFileUrl(
-    member?.avatar_url ?? profile?.avatar_url ?? null,
-  );
   const canMessage = !!onMessage && !isSelf;
   const youSuffix = isSelf ? ` ${t(($) => $.panel.you_suffix)}` : "";
 
@@ -253,30 +247,14 @@ function MemberSidePanelReady({
       });
   }, [agents, runCountById, userId]);
 
+  // LRM-812: top bar carries the name text only — no 22px avatar, no handle.
+  // The single avatar lives in the body identity block (64px + presence +
+  // name + handle), matching the Agent card chrome (resolved-agent-side-panel).
   const identityLeading = useMemo(
     () => (
-      <>
-        <ActorAvatarBase
-          name={displayName || "?"}
-          initials={avatarGlyph(displayName || "?")}
-          avatarUrl={avatarUrl}
-          size={22}
-          toneSeed={`member:${userId}`}
-          className="rounded-[5px]"
-        />
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-[12.5px] font-semibold">
-            {displayName}
-          </div>
-          {showHandle && handle ? (
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {handle}
-            </div>
-          ) : null}
-        </div>
-      </>
+      <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
     ),
-    [avatarUrl, displayName, handle, showHandle, userId],
+    [displayName],
   );
 
   const messageActions = useMemo(

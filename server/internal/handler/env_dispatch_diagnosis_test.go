@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestDiagnoseEnvDispatchProject_WithoutEnablementFlags(t *testing.T) {
@@ -31,6 +33,9 @@ func TestDiagnoseEnvDispatchProject_WithoutEnablementFlags(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := withURLParam(newRequest(http.MethodPost, "/api/v1/env-dispatch/"+projectID+"/diagnosis", nil), "projectID", projectID)
+	// Direct handler calls skip RequireWorkspaceMember middleware; attach the
+	// workspace the same way production requests get it via context.
+	r = r.WithContext(middleware.SetMemberContext(r.Context(), testWorkspaceID, db.Member{}))
 	testHandler.DiagnoseEnvDispatchProject(w, r)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "valid terminal DAG must reach the runner seam: %s", w.Body.String())

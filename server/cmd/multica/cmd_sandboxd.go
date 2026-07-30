@@ -1280,8 +1280,10 @@ func redactedRuntimeEnv(env map[string]string) map[string]string {
 }
 
 func (c *sandboxdClient) stopRuntimeInCube(ctx context.Context, sandboxID string) error {
+	// Use the [m]ultica trick so `python -c` /execute payloads that embed this
+	// snippet cannot match and kill themselves via pkill -f.
 	code := `import subprocess, time
-subprocess.run(["bash", "-lc", "pkill -f 'multica daemon' || pkill -f 'multica-daemon' || true"], check=False)
+subprocess.run(["bash", "-lc", "pkill -f '[m]ultica daemon' || pkill -f '[m]ultica-daemon' || true"], check=False)
 time.sleep(2)
 print("runtime stopped")
 `
@@ -1344,9 +1346,13 @@ func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID strin
 // and leftover profile-scoped daemon.id files can trigger legacy runtime merge
 // that steals the source row.
 func buildStartRuntimeInCubeCode(runtimeEnv map[string]string) string {
+	// pkill patterns use the [m]ultica trick: a `python3 -c '…pkill…'` process
+	// embeds this source in argv, so a literal `multica daemon` pattern would
+	// match and SIGTERM itself (exit 143) before configure-pi can write
+	// ~/.pi/agent/models.json — which is exactly how Docker reconfigure failed.
 	return fmt.Sprintf(`import json, os, pathlib, subprocess, time
 runtime_env = json.loads(%q)
-subprocess.run(["bash", "-lc", "pkill -f 'multica daemon' || pkill -f 'multica-daemon' || true"], check=False)
+subprocess.run(["bash", "-lc", "pkill -f '[m]ultica daemon' || pkill -f '[m]ultica-daemon' || true"], check=False)
 time.sleep(1)
 daemon_id = (runtime_env.get("MULTICA_DAEMON_ID") or "").strip()
 multica = pathlib.Path.home() / ".multica"

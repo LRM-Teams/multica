@@ -73,7 +73,7 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 		"MULTICA_DAEMON_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 	})
 	for _, want := range []string{
-		"pkill -f 'multica daemon'",
+		"pkill -f '[m]ultica daemon'",
 		`daemon_file.write_text(daemon_id + "\n")`,
 		`profiles.glob("*/daemon.id")`,
 		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -82,6 +82,11 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 		if !strings.Contains(code, want) {
 			t.Fatalf("start runtime code missing %q\n%s", want, code)
 		}
+	}
+	// A literal "multica daemon" substring in python -c argv would make pkill
+	// kill the reconfigure process itself before models.json is written.
+	if strings.Contains(code, "pkill -f 'multica daemon'") {
+		t.Fatal("pkill pattern must use [m]ultica trick to avoid self-match under python -c")
 	}
 }
 
@@ -100,13 +105,13 @@ func TestDockerRuntimeEntrypointKeepsContainerAlive(t *testing.T) {
 
 func TestDockerEntrypointKeepaliveDoesNotMatchDaemonPkill(t *testing.T) {
 	// Keepalive must satisfy legacy `pgrep -f 'multica .*daemon start'` while
-	// surviving `pkill -f 'multica daemon'` from buildStartRuntimeInCubeCode.
+	// surviving `pkill -f '[m]ultica daemon'` from buildStartRuntimeInCubeCode.
 	if !strings.Contains(dockerEntrypointKeepaliveCmdline, "multica") ||
 		!strings.Contains(dockerEntrypointKeepaliveCmdline, "daemon start") {
 		t.Fatalf("keepalive %q should match entrypoint pgrep pattern", dockerEntrypointKeepaliveCmdline)
 	}
 	if strings.Contains(dockerEntrypointKeepaliveCmdline, "multica daemon") {
-		t.Fatalf("keepalive %q must not match pkill -f 'multica daemon'", dockerEntrypointKeepaliveCmdline)
+		t.Fatalf("keepalive %q must not match pkill -f '[m]ultica daemon'", dockerEntrypointKeepaliveCmdline)
 	}
 }
 

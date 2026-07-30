@@ -248,6 +248,20 @@ func (h *Hub) RequestWriteFile(ctx context.Context, req protocol.WriteWorkdirFil
 	return &resp, nil
 }
 
+// RequestDeleteDir pushes a delete-dir request to req.RuntimeID's daemon and
+// waits for the correlated response. ErrRuntimeOffline if no daemon is connected.
+func (h *Hub) RequestDeleteDir(ctx context.Context, req protocol.DeleteWorkdirDirRequestPayload) (*protocol.DeleteWorkdirDirResponsePayload, error) {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonDeleteDirRequest, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.DeleteWorkdirDirResponsePayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // RequestSeedAgentContext pushes Wendy-created initial notes/memory to the
 // daemon that owns req.RuntimeID. ErrRuntimeOffline if no daemon is connected.
 func (h *Hub) RequestSeedAgentContext(ctx context.Context, req protocol.SeedAgentContextRequestPayload) (*protocol.SeedAgentContextResponsePayload, error) {
@@ -614,7 +628,11 @@ func (c *client) handleFrame(raw []byte) {
 	switch msg.Type {
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
-	case protocol.EventDaemonListFilesResponse, protocol.EventDaemonReadFileResponse:
+	case protocol.EventDaemonListFilesResponse,
+		protocol.EventDaemonReadFileResponse,
+		protocol.EventDaemonWriteFileResponse,
+		protocol.EventDaemonDeleteDirResponse,
+		protocol.EventDaemonSeedAgentContextResponse:
 		var idOnly struct {
 			RequestID string `json:"request_id"`
 		}

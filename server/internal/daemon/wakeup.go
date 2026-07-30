@@ -608,6 +608,13 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleWriteFileRequest(req, writes)
+		case protocol.EventDaemonDeleteDirRequest:
+			var req protocol.DeleteWorkdirDirRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("delete dir request invalid payload", "error", err)
+				continue
+			}
+			d.handleDeleteDirRequest(req, writes)
 		case protocol.EventDaemonSeedAgentContextRequest:
 			var req protocol.SeedAgentContextRequestPayload
 			if err := json.Unmarshal(msg.Payload, &req); err != nil {

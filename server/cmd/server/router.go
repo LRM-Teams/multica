@@ -1137,6 +1137,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/usage/by-agent", h.GetRuntimeUsageByAgent)
 					r.Get("/usage/by-hour", h.GetRuntimeUsageByHour)
 					r.Get("/activity", h.GetRuntimeTaskActivity)
+					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
+					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
 					r.Post("/update", h.InitiateUpdate)
 					r.Get("/update/{updateId}", h.GetUpdate)
 					r.Post("/models", h.InitiateListModels)

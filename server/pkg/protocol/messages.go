@@ -208,6 +208,24 @@ type WriteWorkdirFileResponsePayload struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// DeleteWorkdirDirRequestPayload asks the daemon to remove one directory under
+// WorkspacesRoot. RelPath is relative to the daemon workspaces root (never an
+// absolute host path). The daemon rejects paths that escape the root.
+type DeleteWorkdirDirRequestPayload struct {
+	RequestID string `json:"request_id"`
+	RuntimeID string `json:"runtime_id"`
+	RelPath   string `json:"rel_path"`
+}
+
+// DeleteWorkdirDirResponsePayload is the daemon→server reply for a directory
+// delete. Missing is true when the path does not exist (idempotent success for
+// callers that only care that the dir is gone).
+type DeleteWorkdirDirResponsePayload struct {
+	RequestID string `json:"request_id"`
+	Missing   bool   `json:"missing,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 // SeedAgentContextRequestPayload asks the daemon that owns RuntimeID to create
 // the target Multica agent root (if missing) and append Wendy-provided initial
 // notes/memory into whitelisted markdown files under RelPath.

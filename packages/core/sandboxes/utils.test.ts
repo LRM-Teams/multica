@@ -221,6 +221,28 @@ describe("sandboxRuntimeForm / buildSandboxRuntimePayload", () => {
     expect(payload?.api_key).toBe("b");
   });
 
+  it("fills the provider default model when credentials are present", () => {
+    const form = emptySandboxRuntimeForm();
+    const entry = form.entries[0];
+    expect(entry).toBeDefined();
+    entry!.apiKey = "sk-1";
+    entry!.baseUrl = "https://example.com/v1";
+
+    expect(buildSandboxRuntimePayload(form)).toMatchObject({
+      providers: [
+        {
+          provider: "openai",
+          api_key: "sk-1",
+          base_url: "https://example.com/v1",
+          model: "gpt-5.5",
+        },
+      ],
+      default_provider: "openai",
+      default_model: "gpt-5.5",
+      model: "gpt-5.5",
+    });
+  });
+
   it("omits empty entries from payload", () => {
     const empty = emptySandboxRuntimeForm();
     empty.entries.push(createEmptyRuntimeProviderEntry("anthropic"));

@@ -124,6 +124,21 @@ func TestMergeRuntimeEnvMultiProvider(t *testing.T) {
 	}
 }
 
+func TestMergeRuntimeEnvDefaultsOpenAIModel(t *testing.T) {
+	runtime := json.RawMessage(`{"providers":[{"provider":"openai","api_key":"sk","base_url":"https://x/v1"}],"default_provider":"openai"}`)
+	out := mergeRuntimeEnv(nil, runtime)
+	if out["TEAM_MODEL"] != "gpt-5.5" {
+		t.Fatalf("TEAM_MODEL = %q", out["TEAM_MODEL"])
+	}
+	var cfg teamPiConfig
+	if err := json.Unmarshal([]byte(out["TEAM_PI_CONFIG"]), &cfg); err != nil {
+		t.Fatalf("TEAM_PI_CONFIG: %v", err)
+	}
+	if cfg.DefaultModel != "gpt-5.5" || cfg.Providers[0].Model != "gpt-5.5" {
+		t.Fatalf("cfg = %#v", cfg)
+	}
+}
+
 func TestMergeRuntimeEnvLegacyFlat(t *testing.T) {
 	runtime := json.RawMessage(`{"api_key":"sk","base_url":"https://x/v1","model":"gpt-5.5"}`)
 	out := mergeRuntimeEnv(nil, runtime)

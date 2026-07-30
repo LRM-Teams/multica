@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -51,9 +52,13 @@ type sandboxdClient struct {
 	http       *http.Client
 	logger     *slog.Logger
 
-	templatesMu        sync.Mutex
-	cachedTemplates    []cubeTemplateSummary
-	templatesFetchedAt time.Time
+	templatesMu           sync.Mutex
+	cachedTemplates       []cubeTemplateSummary
+	templatesFetchedAt    time.Time
+	dockerImagesMu        sync.Mutex
+	cachedDockerImages    []dockerImageSummary
+	dockerImagesFetchedAt time.Time
+	dockerImagesError     string
 }
 
 type cubeTemplateSummary struct {
@@ -65,6 +70,17 @@ type cubeTemplateSummary struct {
 	LastError    string `json:"lastError,omitempty"`
 	Version      string `json:"version,omitempty"`
 	JobID        string `json:"jobID,omitempty"`
+}
+
+type dockerImageSummary struct {
+	ImageRef     string `json:"image_ref"`
+	Repository   string `json:"repository"`
+	Tag          string `json:"tag"`
+	ID           string `json:"id"`
+	Digest       string `json:"digest,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	CreatedSince string `json:"created_since,omitempty"`
+	Size         string `json:"size,omitempty"`
 }
 
 type sandboxClaimResponse struct {
@@ -91,6 +107,8 @@ type sandboxJobPayload struct {
 	RuntimeEnv       map[string]string `json:"runtime_env"`
 	InstanceID       string            `json:"instance_id"`
 	LocalRef         string            `json:"local_ref"`
+	DockerImage      string            `json:"docker_image"`
+	EndpointInfo     json.RawMessage   `json:"endpoint_info"`
 	SourceExternalID string            `json:"source_external_id"`
 	CreatePayload    json.RawMessage   `json:"create_payload"`
 }
@@ -177,10 +195,9 @@ func runSandboxd(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	go c.wsLoop(ctx)
-	// Template listing hits the local Cube API and can be slow. Keep it off the
-	// claim/heartbeat path so a sluggish /templates call cannot starve liveness
-	// updates (frontend/server treat >60s without last_seen as offline).
-	go c.templateRefreshLoop(ctx)
+	// Resource listing can be slow. Keep it off the claim/heartbeat path so a
+	// sluggish Cube or Docker call cannot starve liveness updates.
+	go c.resourceRefreshLoop(ctx)
 	// Heartbeat must not share a loop with claim: a hung claim (shared HTTP
 	// client timeout is 120s for Cube jobs) previously delayed last_seen and
 	// made healthy nodes flap offline in the UI.
@@ -192,13 +209,14 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 	// Best-effort: don't block node registration on a slow Cube /templates.
 	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	_ = c.refreshTemplates(refreshCtx, true)
+	_ = c.refreshDockerImages(refreshCtx, true)
 	cancel()
 	return c.postJSON(ctx, "/api/sandbox/node/register", c.cfg.NodeToken, map[string]any{
 		"node_key":        c.cfg.NodeKey,
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure", "clone", "create_template", "delete_template"},
+		"capabilities":    []string{"create", "docker_create", "stop", "resume", "delete", "reconfigure", "clone", "create_template", "delete_template"},
 		"metadata":        c.nodeMetadata(),
 	}, nil)
 }
@@ -301,8 +319,9 @@ func (c *sandboxdClient) persistCubeTemplateID(templateID string) error {
 	return nil
 }
 
-func (c *sandboxdClient) templateRefreshLoop(ctx context.Context) {
+func (c *sandboxdClient) resourceRefreshLoop(ctx context.Context) {
 	_ = c.refreshTemplates(ctx, true)
+	_ = c.refreshDockerImages(ctx, true)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -311,6 +330,7 @@ func (c *sandboxdClient) templateRefreshLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			_ = c.refreshTemplates(ctx, true)
+			_ = c.refreshDockerImages(ctx, true)
 		}
 	}
 }
@@ -318,8 +338,14 @@ func (c *sandboxdClient) templateRefreshLoop(ctx context.Context) {
 func (c *sandboxdClient) nodeMetadata() map[string]any {
 	c.templatesMu.Lock()
 	templates := append([]cubeTemplateSummary(nil), c.cachedTemplates...)
-	syncedAt := c.templatesFetchedAt
+	templatesSyncedAt := c.templatesFetchedAt
 	c.templatesMu.Unlock()
+
+	c.dockerImagesMu.Lock()
+	dockerImages := append([]dockerImageSummary(nil), c.cachedDockerImages...)
+	dockerImagesSyncedAt := c.dockerImagesFetchedAt
+	dockerImagesError := c.dockerImagesError
+	c.dockerImagesMu.Unlock()
 
 	meta := map[string]any{
 		"cube_api_url":     c.cfg.SandboxServer,
@@ -327,9 +353,16 @@ func (c *sandboxdClient) nodeMetadata() map[string]any {
 		"cube_domain":      c.cfg.CubeDomain,
 		"cube_template_id": c.cfg.TemplateID,
 		"templates":        templates,
+		"docker_images":    dockerImages,
 	}
-	if !syncedAt.IsZero() {
-		meta["templates_synced_at"] = syncedAt.UTC().Format(time.RFC3339)
+	if !templatesSyncedAt.IsZero() {
+		meta["templates_synced_at"] = templatesSyncedAt.UTC().Format(time.RFC3339)
+	}
+	if !dockerImagesSyncedAt.IsZero() {
+		meta["docker_images_synced_at"] = dockerImagesSyncedAt.UTC().Format(time.RFC3339)
+	}
+	if dockerImagesError != "" {
+		meta["docker_images_error"] = dockerImagesError
 	}
 	return meta
 }
@@ -388,6 +421,82 @@ func (c *sandboxdClient) listCubeTemplates(ctx context.Context) ([]cubeTemplateS
 		})
 	}
 	return out, nil
+}
+
+func (c *sandboxdClient) refreshDockerImages(ctx context.Context, force bool) error {
+	const refreshInterval = 30 * time.Second
+	c.dockerImagesMu.Lock()
+	if !force && !c.dockerImagesFetchedAt.IsZero() && time.Since(c.dockerImagesFetchedAt) < refreshInterval {
+		c.dockerImagesMu.Unlock()
+		return nil
+	}
+	c.dockerImagesMu.Unlock()
+
+	listCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	images, err := c.listDockerImages(listCtx)
+	c.dockerImagesMu.Lock()
+	defer c.dockerImagesMu.Unlock()
+	if err != nil {
+		c.dockerImagesError = err.Error()
+		c.logger.Warn("list docker images failed", "error", err)
+		return err
+	}
+	c.cachedDockerImages = images
+	c.dockerImagesFetchedAt = time.Now()
+	c.dockerImagesError = ""
+	return nil
+}
+
+func dockerCommand(ctx context.Context, args ...string) *exec.Cmd {
+	if path, err := exec.LookPath("docker"); err == nil {
+		return exec.CommandContext(ctx, path, args...)
+	}
+	for _, path := range []string{"/usr/bin/docker", "/usr/local/bin/docker"} {
+		if _, err := os.Stat(path); err == nil {
+			return exec.CommandContext(ctx, path, args...)
+		}
+	}
+	return exec.CommandContext(ctx, "docker", args...)
+}
+
+func (c *sandboxdClient) listDockerImages(ctx context.Context) ([]dockerImageSummary, error) {
+	cmd := dockerCommand(ctx, "image", "ls", "--format", "{{json .}}")
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("docker image ls: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	images := make([]dockerImageSummary, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
+		repo := strings.TrimSpace(stringFromMap(raw, "Repository"))
+		tag := strings.TrimSpace(stringFromMap(raw, "Tag"))
+		if repo == "" || repo == "<none>" || tag == "" || tag == "<none>" {
+			continue
+		}
+		images = append(images, dockerImageSummary{
+			ImageRef:     repo + ":" + tag,
+			Repository:   repo,
+			Tag:          tag,
+			ID:           stringFromMap(raw, "ID"),
+			Digest:       stringFromMap(raw, "Digest"),
+			CreatedAt:    stringFromMap(raw, "CreatedAt"),
+			CreatedSince: stringFromMap(raw, "CreatedSince"),
+			Size:         stringFromMap(raw, "Size"),
+		})
+	}
+	return images, nil
 }
 
 func stringFromMap(obj map[string]any, key string) string {
@@ -487,18 +596,34 @@ func (c *sandboxdClient) handleJob(ctx context.Context, job sandboxJob) {
 func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[string]any, error) {
 	payload := parseSandboxJobPayload(job.Payload)
 	sandboxID := firstNonEmpty(payload.LocalRef, stringFromRawObject(payload.Metadata, "local_ref"), stringFromRawObject(job.Payload, "local_ref"))
+	dockerMode := payload.DockerImage != "" || endpointKind(payload.EndpointInfo) == "docker"
 	switch job.Type {
 	case "create":
+		if dockerMode {
+			return c.createDockerContainer(ctx, job, payload)
+		}
 		return c.createCubeSandbox(ctx, job, payload)
 	case "clone":
 		return c.cloneCubeSandbox(ctx, job, payload)
 	case "stop":
+		if dockerMode {
+			return c.dockerLifecycle(ctx, sandboxID, "stop")
+		}
 		return c.cubeLifecycle(ctx, sandboxID, "/pause", true)
 	case "resume":
+		if dockerMode {
+			return c.resumeDockerContainer(ctx, sandboxID, payload)
+		}
 		return c.resumeCubeSandbox(ctx, sandboxID, payload)
 	case "reconfigure":
+		if dockerMode {
+			return c.reconfigureDockerContainer(ctx, job, sandboxID, payload)
+		}
 		return c.reconfigureCubeSandbox(ctx, sandboxID, payload)
 	case "delete":
+		if dockerMode {
+			return c.deleteDockerContainer(ctx, sandboxID)
+		}
 		return c.deleteCubeSandbox(ctx, sandboxID)
 	case "create_template":
 		return c.createCubeSnapshotTemplate(ctx, sandboxID, payload)
@@ -507,6 +632,161 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 	default:
 		return nil, fmt.Errorf("unsupported sandbox job type %q", job.Type)
 	}
+}
+
+func endpointKind(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	return strings.TrimSpace(stringFromAny(obj["kind"]))
+}
+
+func dockerContainerName(instanceID string) string {
+	clean := strings.NewReplacer("-", "").Replace(strings.TrimSpace(instanceID))
+	if clean == "" {
+		clean = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return "multica-" + clean
+}
+
+func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
+	image := strings.TrimSpace(payload.DockerImage)
+	if image == "" {
+		return nil, fmt.Errorf("docker image is required")
+	}
+	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
+	if len(runtimeEnv) == 0 || runtimeEnvToken(runtimeEnv) == "" {
+		return nil, fmt.Errorf("runtime_env missing MULTICA_TOKEN")
+	}
+	runtimeEnv["PATH"] = firstNonEmpty(runtimeEnv["PATH"], "/home/user/.npm-global/bin:/home/user/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin")
+	name := dockerContainerName(job.InstanceID)
+	if existing, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
+		endpoint := dockerEndpointInfo(existing, name, image)
+		return map[string]any{"local_ref": existing, "endpoint_info": endpoint, "result": map[string]any{"container_id": existing, "container_name": name, "image": image, "reused": true}}, nil
+	}
+	args := []string{"run", "-d", "--name", name, "--restart", "unless-stopped", "--label", "multica.sandbox_instance_id=" + job.InstanceID, "--label", "multica.workspace_id=" + job.WorkspaceID, "--entrypoint", "/bin/sh"}
+	for k, v := range runtimeEnv {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		args = append(args, "--env", k+"="+v)
+	}
+	args = append(args, image, "-lc", dockerRuntimeEntrypointScript())
+	cmd := dockerCommand(ctx, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("docker run: %s", strings.TrimSpace(string(out)))
+	}
+	containerID := strings.TrimSpace(string(out))
+	if containerID == "" {
+		return nil, fmt.Errorf("docker run returned empty container id")
+	}
+	endpoint := dockerEndpointInfo(containerID, name, image)
+	return map[string]any{
+		"local_ref":     containerID,
+		"endpoint_info": endpoint,
+		"result": map[string]any{
+			"container_id":   containerID,
+			"container_name": name,
+			"image":          image,
+			"runtime_env":    redactedRuntimeEnv(runtimeEnv),
+			"instance_id":    job.InstanceID,
+			"workspace_id":   job.WorkspaceID,
+			"endpoint_info":  endpoint,
+		},
+	}, nil
+}
+
+func dockerRuntimeEntrypointScript() string {
+	return `/usr/local/bin/start-multica-runtime.sh
+while pgrep -f 'multica .*daemon start' >/dev/null; do
+  sleep 5
+done
+echo 'multica daemon exited'
+exit 1`
+}
+
+func dockerEndpointInfo(containerID, name, image string) map[string]any {
+	return map[string]any{
+		"kind":           "docker",
+		"container_id":   containerID,
+		"container_name": name,
+		"image":          image,
+	}
+}
+
+func (c *sandboxdClient) findDockerContainerByInstance(ctx context.Context, instanceID string) (string, bool) {
+	if strings.TrimSpace(instanceID) == "" {
+		return "", false
+	}
+	cmd := dockerCommand(ctx, "ps", "-aq", "--filter", "label=multica.sandbox_instance_id="+instanceID)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return "", false
+	}
+	return ids[0], true
+}
+
+func (c *sandboxdClient) dockerLifecycle(ctx context.Context, containerID, action string) (map[string]any, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return nil, fmt.Errorf("docker container id is required")
+	}
+	cmd := dockerCommand(ctx, action, containerID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("docker %s: %s", action, strings.TrimSpace(string(out)))
+	}
+	return map[string]any{"local_ref": containerID, "result": map[string]any{"action": action, "container_id": containerID}, "endpoint_info": nil}, nil
+}
+
+func (c *sandboxdClient) resumeDockerContainer(ctx context.Context, containerID string, _ sandboxJobPayload) (map[string]any, error) {
+	return c.dockerLifecycle(ctx, containerID, "start")
+}
+
+func (c *sandboxdClient) reconfigureDockerContainer(ctx context.Context, job sandboxJob, containerID string, payload sandboxJobPayload) (map[string]any, error) {
+	oldID := strings.TrimSpace(containerID)
+	if oldID == "" {
+		if found, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
+			oldID = found
+		}
+	}
+	if oldID != "" {
+		if _, err := c.deleteDockerContainer(ctx, oldID); err != nil {
+			return nil, err
+		}
+	}
+	result, err := c.createDockerContainer(ctx, job, payload)
+	if err != nil {
+		return nil, err
+	}
+	if inner, ok := result["result"].(map[string]any); ok {
+		inner["reconfigured"] = true
+	}
+	return result, nil
+}
+
+func (c *sandboxdClient) deleteDockerContainer(ctx context.Context, containerID string) (map[string]any, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return map[string]any{"result": map[string]any{"deleted": true, "idempotent": true}}, nil
+	}
+	cmd := dockerCommand(ctx, "rm", "-f", containerID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(strings.ToLower(msg), "no such container") {
+			return map[string]any{"local_ref": containerID, "result": map[string]any{"deleted": true, "idempotent": true}}, nil
+		}
+		return nil, fmt.Errorf("docker rm: %s", msg)
+	}
+	return map[string]any{"local_ref": containerID, "result": map[string]any{"deleted": true, "container_id": containerID}}, nil
 }
 
 func (c *sandboxdClient) cloneCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
@@ -719,6 +999,19 @@ func stringFromAny(v any) string {
 	return strings.TrimSpace(s)
 }
 
+func defaultPiModel(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return "gpt-5.5"
+	case "anthropic":
+		return "claude-sonnet-4.6"
+	case "google":
+		return "gemini-3.1-pro"
+	default:
+		return ""
+	}
+}
+
 func parseTeamPiConfig(runtime json.RawMessage) (teamPiConfig, bool) {
 	var cfg teamPiConfig
 	if len(runtime) == 0 || string(runtime) == "null" {
@@ -792,6 +1085,17 @@ func parseTeamPiConfig(runtime json.RawMessage) (teamPiConfig, bool) {
 	}
 	if cfg.DefaultModel == "" {
 		cfg.DefaultModel = cfg.Providers[0].Model
+	}
+	if cfg.DefaultModel == "" {
+		cfg.DefaultModel = defaultPiModel(cfg.DefaultProvider)
+	}
+	if cfg.DefaultModel != "" {
+		for i := range cfg.Providers {
+			if cfg.Providers[i].Name == cfg.DefaultProvider && cfg.Providers[i].Model == "" {
+				cfg.Providers[i].Model = cfg.DefaultModel
+				break
+			}
+		}
 	}
 	return cfg, true
 }

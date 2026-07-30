@@ -51,6 +51,24 @@ export interface SandboxNodeTemplatesResponse {
   node_online?: boolean;
 }
 
+export interface DockerImage {
+  image_ref: string;
+  repository: string;
+  tag: string;
+  id: string;
+  digest?: string;
+  created_at?: string;
+  created_since?: string;
+  size?: string;
+}
+
+export interface SandboxNodeDockerImagesResponse {
+  images: DockerImage[];
+  synced_at?: string;
+  node_online?: boolean;
+  error?: string;
+}
+
 export interface SandboxBinding {
   id: string;
   workspace_id: string;
@@ -163,6 +181,7 @@ export interface SandboxRuntimeConfig {
 export interface CreateSandboxRequest {
   node_id?: string;
   template?: string;
+  docker_image?: string;
   name?: string;
   limits?: Record<string, unknown>;
   metadata?: Record<string, unknown>;

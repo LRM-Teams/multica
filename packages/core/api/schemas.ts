@@ -38,6 +38,7 @@ import type {
   User,
   UpdateAgentFileContentResponse,
   WebhookDelivery,
+  SandboxNodeDockerImagesResponse,
   SandboxNodeTemplatesResponse,
   SandboxSnapshot,
   WebPushPublicKeyResponse,
@@ -2184,6 +2185,31 @@ export const EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE: SandboxNodeTemplatesResponse
   default_template_id: "",
   synced_at: "",
   node_online: false,
+};
+
+export const DockerImageSchema = z.object({
+  image_ref: z.string(),
+  repository: z.string().default(""),
+  tag: z.string().default(""),
+  id: z.string().default(""),
+  digest: z.string().optional(),
+  created_at: z.string().optional(),
+  created_since: z.string().optional(),
+  size: z.string().optional(),
+}).loose();
+
+export const SandboxNodeDockerImagesResponseSchema = z.object({
+  images: z.array(DockerImageSchema).default([]),
+  synced_at: z.string().optional(),
+  node_online: z.boolean().optional(),
+  error: z.string().optional(),
+}).loose();
+
+export const EMPTY_SANDBOX_NODE_DOCKER_IMAGES_RESPONSE: SandboxNodeDockerImagesResponse = {
+  images: [],
+  synced_at: "",
+  node_online: false,
+  error: "",
 };
 
 export const SandboxSnapshotSchema = z.object({

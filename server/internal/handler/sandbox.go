@@ -313,6 +313,24 @@ type SandboxNodeTemplatesResponse struct {
 	NodeOnline        bool                      `json:"node_online"`
 }
 
+type DockerImageResponse struct {
+	ImageRef     string `json:"image_ref"`
+	Repository   string `json:"repository"`
+	Tag          string `json:"tag"`
+	ID           string `json:"id"`
+	Digest       string `json:"digest,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	CreatedSince string `json:"created_since,omitempty"`
+	Size         string `json:"size,omitempty"`
+}
+
+type SandboxNodeDockerImagesResponse struct {
+	Images     []DockerImageResponse `json:"images"`
+	SyncedAt   string                `json:"synced_at,omitempty"`
+	NodeOnline bool                  `json:"node_online"`
+	Error      string                `json:"error,omitempty"`
+}
+
 // ListSandboxNodeTemplates returns Cube templates last reported by sandboxd
 // for a node the caller owns. Templates are cached in node metadata (not a
 // live proxy) so the list is available even briefly after the node goes offline.
@@ -377,6 +395,73 @@ func sandboxNodeTemplatesFromMetadata(raw []byte, nodeOnline bool) SandboxNodeTe
 			Version:      stringFromAny(obj["version"]),
 			JobID:        firstNonEmptyTrimmed(stringFromAny(obj["jobID"]), stringFromAny(obj["job_id"])),
 			IsDefault:    resp.DefaultTemplateID != "" && id == resp.DefaultTemplateID,
+		})
+	}
+	return resp
+}
+
+func (h *Handler) ListSandboxNodeDockerImages(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
+	if !ok {
+		return
+	}
+	node, err := h.Queries.GetSandboxNodeForOwner(r.Context(), db.GetSandboxNodeForOwnerParams{
+		ID:          nodeID,
+		OwnerUserID: parseUUID(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxNodeDockerImagesFromMetadata(node.Metadata, effectiveSandboxNodeStatus(node.Status, node.LastSeenAt) == "online"))
+}
+
+func sandboxNodeDockerImagesFromMetadata(raw []byte, nodeOnline bool) SandboxNodeDockerImagesResponse {
+	resp := SandboxNodeDockerImagesResponse{
+		Images:     []DockerImageResponse{},
+		NodeOnline: nodeOnline,
+	}
+	var meta map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
+		return resp
+	}
+	resp.SyncedAt = strings.TrimSpace(stringFromAny(meta["docker_images_synced_at"]))
+	resp.Error = strings.TrimSpace(stringFromAny(meta["docker_images_error"]))
+	items, _ := meta["docker_images"].([]any)
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		imageRef := firstNonEmptyTrimmed(
+			stringFromAny(obj["image_ref"]),
+			stringFromAny(obj["imageRef"]),
+		)
+		repo := strings.TrimSpace(stringFromAny(obj["repository"]))
+		tag := strings.TrimSpace(stringFromAny(obj["tag"]))
+		if imageRef == "" && repo != "" && tag != "" {
+			imageRef = repo + ":" + tag
+		}
+		if imageRef == "" {
+			continue
+		}
+		resp.Images = append(resp.Images, DockerImageResponse{
+			ImageRef:     imageRef,
+			Repository:   repo,
+			Tag:          tag,
+			ID:           firstNonEmptyTrimmed(stringFromAny(obj["id"]), stringFromAny(obj["ID"])),
+			Digest:       strings.TrimSpace(stringFromAny(obj["digest"])),
+			CreatedAt:    firstNonEmptyTrimmed(stringFromAny(obj["created_at"]), stringFromAny(obj["createdAt"])),
+			CreatedSince: firstNonEmptyTrimmed(stringFromAny(obj["created_since"]), stringFromAny(obj["createdSince"])),
+			Size:         strings.TrimSpace(stringFromAny(obj["size"])),
 		})
 	}
 	return resp
@@ -632,12 +717,13 @@ func (h *Handler) ListWorkspaceSandboxBindings(w http.ResponseWriter, r *http.Re
 }
 
 type CreateSandboxRequest struct {
-	NodeID   string          `json:"node_id"`
-	Template string          `json:"template"`
-	Name     string          `json:"name"`
-	Limits   json.RawMessage `json:"limits"`
-	Metadata json.RawMessage `json:"metadata"`
-	Runtime  json.RawMessage `json:"runtime"`
+	NodeID      string          `json:"node_id"`
+	Template    string          `json:"template"`
+	DockerImage string          `json:"docker_image"`
+	Name        string          `json:"name"`
+	Limits      json.RawMessage `json:"limits"`
+	Metadata    json.RawMessage `json:"metadata"`
+	Runtime     json.RawMessage `json:"runtime"`
 }
 
 type UpdateSandboxRequest struct {
@@ -694,6 +780,27 @@ func runtimeEnvFromMetadata(raw []byte) map[string]string {
 		return nil
 	}
 	return out
+}
+
+func sandboxNodeHasDockerImage(raw []byte, image string) bool {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return false
+	}
+	for _, item := range sandboxNodeDockerImagesFromMetadata(raw, true).Images {
+		if item.ImageRef == image {
+			return true
+		}
+	}
+	return false
+}
+
+func dockerImageFromMetadata(raw []byte) string {
+	meta := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &meta)
+	}
+	return strings.TrimSpace(stringFromAny(meta["docker_image"]))
 }
 
 func runtimeFromMetadata(raw []byte) json.RawMessage {
@@ -766,7 +873,10 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	req.Template = strings.TrimSpace(req.Template)
-	if req.Template == "" {
+	req.DockerImage = strings.TrimSpace(req.DockerImage)
+	if req.DockerImage != "" {
+		req.Template = "docker:" + req.DockerImage
+	} else if req.Template == "" {
 		req.Template = "default"
 	}
 	var node db.SandboxNode
@@ -788,8 +898,22 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to select sandbox node")
 		return
 	}
+	if req.DockerImage != "" && !sandboxNodeHasDockerImage(node.Metadata, req.DockerImage) {
+		writeError(w, http.StatusBadRequest, "docker image is not available on this sandbox node")
+		return
+	}
 	userUUID := parseUUID(userID)
 	metadata := buildSandboxMetadata(req.Metadata, req.Name, req.Runtime)
+	if req.DockerImage != "" {
+		var meta map[string]any
+		_ = json.Unmarshal(metadata, &meta)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["creation_mode"] = "docker_container"
+		meta["docker_image"] = req.DockerImage
+		metadata, _ = json.Marshal(meta)
+	}
 	inst, err := h.Queries.CreateSandboxInstance(r.Context(), db.CreateSandboxInstanceParams{
 		WorkspaceID:   wsUUID,
 		CreatorUserID: userUUID,
@@ -816,14 +940,18 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to persist sandbox runtime env")
 		return
 	}
-	payload, _ := json.Marshal(map[string]any{
+	payloadMap := map[string]any{
 		"template":    req.Template,
 		"limits":      json.RawMessage(jsonBytesOrDefault(req.Limits, "{}")),
 		"metadata":    json.RawMessage(jsonBytesOrDefault(metadata, "{}")),
 		"runtime":     json.RawMessage(jsonBytesOrDefault(req.Runtime, "{}")),
 		"runtime_env": runtimeEnv,
 		"instance_id": uuidToString(inst.ID),
-	})
+	}
+	if req.DockerImage != "" {
+		payloadMap["docker_image"] = req.DockerImage
+	}
+	payload, _ := json.Marshal(payloadMap)
 	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
 		WorkspaceID:     wsUUID,
 		InitiatorUserID: userUUID,
@@ -1086,13 +1214,23 @@ func (h *Handler) enqueueSandboxReconfigureJob(r *http.Request, wsUUID, userUUID
 		Status: "reconfiguring",
 		Error:  pgtype.Text{},
 	})
-	payload, _ := json.Marshal(map[string]any{
+	payloadMap := map[string]any{
 		"instance_id": uuidToString(row.ID),
 		"local_ref":   textValue(row.LocalRef),
+		"template":    row.Template,
 		"metadata":    json.RawMessage(jsonBytesOrDefault(metadata, "{}")),
 		"runtime":     json.RawMessage(jsonBytesOrDefault(runtimeFromMetadata(metadata), "{}")),
 		"runtime_env": runtimeEnv,
-	})
+	}
+	if len(row.EndpointInfo) > 0 && string(row.EndpointInfo) != "null" {
+		payloadMap["endpoint_info"] = json.RawMessage(row.EndpointInfo)
+	}
+	if image := dockerImageFromMetadata(metadata); image != "" {
+		payloadMap["docker_image"] = image
+	} else if strings.HasPrefix(row.Template, "docker:") {
+		payloadMap["docker_image"] = strings.TrimPrefix(row.Template, "docker:")
+	}
+	payload, _ := json.Marshal(payloadMap)
 	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
 		WorkspaceID:     wsUUID,
 		InitiatorUserID: userUUID,
@@ -1146,6 +1284,13 @@ func (h *Handler) enqueueSandboxInstanceJob(w http.ResponseWriter, r *http.Reque
 	payload := map[string]any{
 		"instance_id": uuidToString(instanceID),
 		"local_ref":   textValue(inst.LocalRef),
+		"template":    inst.Template,
+	}
+	if len(inst.EndpointInfo) > 0 && string(inst.EndpointInfo) != "null" {
+		payload["endpoint_info"] = json.RawMessage(inst.EndpointInfo)
+	}
+	if image := dockerImageFromMetadata(inst.Metadata); image != "" {
+		payload["docker_image"] = image
 	}
 	if jobType == "resume" {
 		if rt := runtimeFromMetadata(inst.Metadata); len(rt) > 0 {
@@ -1581,6 +1726,9 @@ func mergeSandboxNodeHeartbeatMetadata(existing, incoming json.RawMessage) json.
 		"cube_domain",
 		"templates",
 		"templates_synced_at",
+		"docker_images",
+		"docker_images_synced_at",
+		"docker_images_error",
 	} {
 		if v, ok := in[key]; ok {
 			base[key] = v
@@ -1698,8 +1846,14 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 		inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
 	case "stop":
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)
-	case "resume", "reconfigure":
+	case "resume":
 		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
+	case "reconfigure":
+		if strings.TrimSpace(req.LocalRef) != "" && len(req.EndpointInfo) > 0 && string(req.EndpointInfo) != "null" {
+			inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
+		} else {
+			inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
+		}
 	case "create_template":
 		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
 		if err == nil {

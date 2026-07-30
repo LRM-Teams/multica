@@ -28,6 +28,7 @@ import {
   sandboxBindingListOptions,
   sandboxKeys,
   sandboxListOptions,
+  sandboxNodeDockerImagesOptions,
   sandboxNodeTemplatesOptions,
 } from "@multica/core/sandboxes/queries";
 import {
@@ -39,7 +40,7 @@ import {
   sandboxDisplayName,
   type SandboxRuntimeFormState,
 } from "@multica/core/sandboxes/utils";
-import type { SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
+import type { DockerImage, SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -85,7 +86,14 @@ import { SandboxRuntimeForm } from "./sandbox-runtime-form";
 import { NodeTemplatesPanel } from "./node-templates-panel";
 import { NodeSnapshotsPanel } from "./node-snapshots-panel";
 
-type NodeDetailTab = "sandboxes" | "templates" | "snapshots";
+type NodeDetailTab = "sandboxes" | "docker" | "templates" | "snapshots";
+
+type DockerContainerCreateRequest = {
+  name: string;
+  nodeId: string;
+  image: string;
+  runtime: SandboxRuntimeFormState;
+};
 
 type CreateFormState = {
   name: string;
@@ -371,6 +379,30 @@ export function SandboxesPage() {
     }
   };
 
+  const handleCreateDockerContainer = async ({
+    name,
+    nodeId,
+    image,
+    runtime,
+  }: DockerContainerCreateRequest) => {
+    try {
+      const runtimePayload = buildSandboxRuntimePayload(runtime);
+      await create.mutateAsync({
+        name: name.trim(),
+        node_id: nodeId,
+        docker_image: image,
+        ...(runtimePayload ? { runtime: runtimePayload } : {}),
+      });
+      dispatch({ type: "set_selected_node", value: nodeId });
+      toast.success(t(($) => $.sandboxes_page.docker_create_success));
+    } catch (e) {
+      showErrorToast(
+        e instanceof Error ? e.message : t(($) => $.sandboxes_page.docker_create_failed),
+      );
+      throw e;
+    }
+  };
+
   if (isLoading || bindingsLoading) {
     return <SandboxesPageSkeleton />;
   }
@@ -413,6 +445,8 @@ export function SandboxesPage() {
             binding={selectedBinding}
             instances={selectedInstances}
             onCreate={openCreateDialog}
+            onCreateDockerContainer={handleCreateDockerContainer}
+            creatingDockerContainer={create.isPending}
             onCreateFromSnapshot={openCreateFromSnapshot}
             onViewSetup={() => {
               if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
@@ -461,6 +495,8 @@ export function SandboxesPage() {
                 binding={selectedBinding}
                 instances={selectedInstances}
                 onCreate={openCreateDialog}
+                onCreateDockerContainer={handleCreateDockerContainer}
+                creatingDockerContainer={create.isPending}
                 onCreateFromSnapshot={openCreateFromSnapshot}
                 onViewSetup={() => {
                   if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
@@ -805,6 +841,8 @@ function NodeDetail(props: {
   binding: SandboxBinding | null;
   instances: SandboxInstance[];
   onCreate: () => void;
+  onCreateDockerContainer: (request: DockerContainerCreateRequest) => Promise<void>;
+  creatingDockerContainer: boolean;
   onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
@@ -830,10 +868,86 @@ function NodeDetail(props: {
   return <NodeDetailContent key={props.binding.node_id} {...props} binding={props.binding} />;
 }
 
+function isDockerContainerInstance(instance: SandboxInstance): boolean {
+  const endpointKind = typeof instance.endpoint_info.kind === "string" ? instance.endpoint_info.kind : "";
+  const creationMode =
+    typeof instance.metadata.creation_mode === "string" ? instance.metadata.creation_mode : "";
+  return endpointKind === "docker" || creationMode === "docker_container" || instance.template.startsWith("docker:");
+}
+
+function dockerContainerImage(instance: SandboxInstance): string {
+  if (typeof instance.metadata.docker_image === "string" && instance.metadata.docker_image.trim()) {
+    return instance.metadata.docker_image.trim();
+  }
+  return instance.template.startsWith("docker:") ? instance.template.slice("docker:".length) : "";
+}
+
+function DockerContainerRow({
+  instance,
+  stopping,
+  resuming,
+  deleting,
+  onOpen,
+  onStop,
+  onResume,
+  onDelete,
+}: {
+  instance: SandboxInstance;
+  stopping: boolean;
+  resuming: boolean;
+  deleting: boolean;
+  onOpen: () => void;
+  onStop: () => void;
+  onResume: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useT("layout");
+  const canStop = instance.status === "running";
+  const canResume = instance.status === "stopped";
+  const canDelete =
+    instance.status !== "reconfiguring" &&
+    instance.status !== "resuming" &&
+    instance.status !== "snapshotting";
+  const image = dockerContainerImage(instance);
+
+  return (
+    <div className="flex items-center justify-between gap-4 px-5 py-3.5">
+      <button type="button" className="min-w-0 flex-1 text-left" onClick={onOpen}>
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium">{sandboxDisplayName(instance)}</span>
+          <StatusBadge status={instance.status} />
+        </div>
+        <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+          {image || instance.local_ref || t(($) => $.sandboxes_page.waiting_local)}
+        </div>
+        {instance.error && <div className="mt-1 text-xs text-destructive">{instance.error}</div>}
+      </button>
+      <div className="flex shrink-0 items-center gap-2">
+        {canResume ? (
+          <Button size="sm" variant="outline" disabled={resuming} onClick={onResume}>
+            {resuming ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <RotateCcw className="mr-2 size-3.5" />}
+            {t(($) => $.sandboxes_page.resume_action)}
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" disabled={!canStop || stopping} onClick={onStop}>
+            {stopping ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <Square className="mr-2 size-3.5" />}
+            {t(($) => $.sandboxes_page.stop_action)}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" disabled={!canDelete || deleting} onClick={onDelete}>
+          <Trash2 className="mr-2 size-3.5" /> {t(($) => $.sandboxes_page.delete_action)}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function NodeDetailContent({
   binding,
   instances,
   onCreate,
+  onCreateDockerContainer,
+  creatingDockerContainer,
   onCreateFromSnapshot,
   onViewSetup,
   stoppingId,
@@ -849,6 +963,8 @@ function NodeDetailContent({
   binding: SandboxBinding;
   instances: SandboxInstance[];
   onCreate: () => void;
+  onCreateDockerContainer: (request: DockerContainerCreateRequest) => Promise<void>;
+  creatingDockerContainer: boolean;
   onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
@@ -865,9 +981,12 @@ function NodeDetailContent({
   const [activeTab, setActiveTab] = useState<NodeDetailTab>("sandboxes");
 
   const online = binding.node_status === "online";
+  const dockerInstances = instances.filter(isDockerContainerInstance);
+  const sandboxInstances = instances.filter((instance) => !isDockerContainerInstance(instance));
   const runningCount = instances.filter((instance) => instance.status === "running").length;
   const tabs: { id: NodeDetailTab; icon: typeof Box; label: string }[] = [
     { id: "sandboxes", icon: Box, label: t(($) => $.sandboxes_page.sandboxes_tab) },
+    { id: "docker", icon: Server, label: t(($) => $.sandboxes_page.docker_tab) },
     { id: "templates", icon: Layers, label: t(($) => $.sandboxes_page.templates_tab) },
     { id: "snapshots", icon: Camera, label: t(($) => $.sandboxes_page.snapshots_tab) },
   ];
@@ -938,14 +1057,29 @@ function NodeDetailContent({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {activeTab === "templates" ? (
+        {activeTab === "docker" ? (
+          <DockerContainersPanel
+            nodeId={binding.node_id}
+            nodeOnline={online}
+            instances={dockerInstances}
+            creating={creatingDockerContainer}
+            stoppingId={stoppingId}
+            resumingId={resumingId}
+            deletingId={deletingId}
+            onCreate={onCreateDockerContainer}
+            onOpen={onOpen}
+            onStop={onStop}
+            onResume={onResume}
+            onDelete={onDelete}
+          />
+        ) : activeTab === "templates" ? (
           <NodeTemplatesPanel nodeId={binding.node_id} nodeOnline={online} />
         ) : activeTab === "snapshots" ? (
           <NodeSnapshotsPanel
             nodeId={binding.node_id}
             onCreateSandbox={onCreateFromSnapshot}
           />
-        ) : instances.length === 0 ? (
+        ) : sandboxInstances.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
             <Box className="mb-3 size-8 text-muted-foreground/50" />
             <div className="font-medium">{t(($) => $.sandboxes_page.empty_title)}</div>
@@ -959,7 +1093,7 @@ function NodeDetailContent({
           </div>
         ) : (
           <div className="divide-y">
-            {instances.map((instance) => (
+            {sandboxInstances.map((instance) => (
               <SandboxRow
                 key={instance.id}
                 instance={instance}
@@ -978,6 +1112,218 @@ function NodeDetailContent({
         )}
       </div>
     </main>
+  );
+}
+
+function dockerImageLabel(image: DockerImage): string {
+  return image.image_ref || [image.repository, image.tag].filter(Boolean).join(":");
+}
+
+function defaultDockerContainerName(): string {
+  return `docker-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function DockerContainersPanel({
+  nodeId,
+  nodeOnline,
+  instances,
+  creating,
+  stoppingId,
+  resumingId,
+  deletingId,
+  onCreate,
+  onOpen,
+  onStop,
+  onResume,
+  onDelete,
+}: {
+  nodeId: string;
+  nodeOnline: boolean;
+  instances: SandboxInstance[];
+  creating: boolean;
+  stoppingId?: string;
+  resumingId?: string;
+  deletingId?: string;
+  onCreate: (request: DockerContainerCreateRequest) => Promise<void>;
+  onOpen: (instanceId: string) => void;
+  onStop: (instanceId: string) => void;
+  onResume: (instanceId: string) => void;
+  onDelete: (instance: SandboxInstance) => void;
+}) {
+  const { t } = useT("layout");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [name, setName] = useState(defaultDockerContainerName);
+  const [selectedImageRef, setSelectedImageRef] = useState("");
+  const [runtime, setRuntime] = useState(emptySandboxRuntimeForm);
+  const { data, isLoading, error, refetch } = useQuery({
+    ...sandboxNodeDockerImagesOptions(nodeId),
+    enabled: dialogOpen && !!nodeId,
+  });
+
+  const images = useMemo(
+    () => (data?.images ?? []).filter((image) => dockerImageLabel(image).trim().length > 0),
+    [data?.images],
+  );
+  const selectedImage =
+    images.find((image) => dockerImageLabel(image) === selectedImageRef) ?? images[0] ?? null;
+  const image = selectedImage ? dockerImageLabel(selectedImage) : "";
+  const dockerImagesError = data?.error?.trim() ?? "";
+  const canCreate = nodeOnline && !creating && !!selectedImage && name.trim().length > 0;
+
+  const openDialog = () => {
+    setName(defaultDockerContainerName());
+    setSelectedImageRef("");
+    setRuntime(emptySandboxRuntimeForm());
+    setDialogOpen(true);
+  };
+
+  const submit = async () => {
+    if (!canCreate || !selectedImage) return;
+    try {
+      await onCreate({ name, nodeId, image, runtime });
+      setDialogOpen(false);
+    } catch {
+      // The caller owns toast/error presentation; keep the dialog open for retry.
+    }
+  };
+
+  return (
+    <div className="flex min-h-full flex-col">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b px-5 py-4">
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold">{t(($) => $.sandboxes_page.docker_title)}</h3>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            {t(($) => $.sandboxes_page.docker_description)}
+          </p>
+        </div>
+        <Button type="button" size="sm" onClick={openDialog} disabled={!nodeOnline}>
+          <Plus className="h-3 w-3" />
+          {t(($) => $.sandboxes_page.docker_create_action)}
+        </Button>
+      </div>
+
+      {!nodeOnline ? (
+        <div className="mx-5 mt-4 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          {t(($) => $.sandboxes_page.docker_node_offline_hint)}
+        </div>
+      ) : null}
+
+      {instances.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
+          <Server className="mb-3 size-8 text-muted-foreground/50" />
+          <div className="font-medium">{t(($) => $.sandboxes_page.docker_empty_title)}</div>
+          <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+            {t(($) => $.sandboxes_page.docker_empty_description)}
+          </p>
+          <Button type="button" size="sm" className="mt-4" onClick={openDialog} disabled={!nodeOnline}>
+            <Plus className="h-3 w-3" />
+            {t(($) => $.sandboxes_page.docker_create_action)}
+          </Button>
+        </div>
+      ) : (
+        <div className="divide-y">
+          {instances.map((instance) => (
+            <DockerContainerRow
+              key={instance.id}
+              instance={instance}
+              stopping={stoppingId === instance.id}
+              resuming={resumingId === instance.id}
+              deleting={deletingId === instance.id}
+              onOpen={() => onOpen(instance.id)}
+              onStop={() => onStop(instance.id)}
+              onResume={() => onResume(instance.id)}
+              onDelete={() => onDelete(instance)}
+            />
+          ))}
+        </div>
+      )}
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.sandboxes_page.docker_create_dialog_title)}</DialogTitle>
+            <DialogDescription>
+              {t(($) => $.sandboxes_page.docker_create_dialog_description)}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="docker-container-name">
+                {t(($) => $.sandboxes_page.docker_name_label)}
+              </Label>
+              <Input
+                id="docker-container-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder={t(($) => $.sandboxes_page.docker_name_placeholder)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>{t(($) => $.sandboxes_page.docker_image_label)}</Label>
+              {isLoading ? (
+                <Skeleton className="h-9 w-full" />
+              ) : error || dockerImagesError ? (
+                <div className="flex flex-col items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                  <div className="text-sm font-medium text-destructive">
+                    {t(($) => $.sandboxes_page.docker_images_load_failed)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {error instanceof Error
+                      ? error.message
+                      : dockerImagesError || t(($) => $.sandboxes_page.templates_load_failed)}
+                  </p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+                    {t(($) => $.sandboxes_page.templates_retry)}
+                  </Button>
+                </div>
+              ) : images.length === 0 ? (
+                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                  {t(($) => $.sandboxes_page.docker_images_empty_description)}
+                </div>
+              ) : (
+                <Select
+                  value={selectedImage ? dockerImageLabel(selectedImage) : ""}
+                  onValueChange={(value) => {
+                    if (typeof value === "string") setSelectedImageRef(value);
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue placeholder={t(($) => $.sandboxes_page.docker_image_placeholder)} />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
+                    {images.map((item) => {
+                      const ref = dockerImageLabel(item);
+                      return (
+                        <SelectItem key={ref} value={ref}>
+                          <span className="truncate">{ref}</span>
+                          {item.size ? <span className="ml-2 text-muted-foreground">{item.size}</span> : null}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.sandboxes_page.docker_image_hint)}
+              </p>
+            </div>
+
+            <SandboxRuntimeForm value={runtime} onChange={setRuntime} />
+
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              {t(($) => $.sandboxes_page.cancel_action)}
+            </Button>
+            <Button onClick={() => void submit()} disabled={!canCreate}>
+              {creating ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+              {t(($) => $.sandboxes_page.docker_create_action)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 

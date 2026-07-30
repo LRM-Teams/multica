@@ -193,6 +193,7 @@ import type {
   SandboxBinding,
   SandboxInstance,
   SandboxJob,
+  SandboxNodeDockerImagesResponse,
   SandboxNodeTemplatesResponse,
   SandboxSnapshot,
   CreateSandboxSnapshotRequest,
@@ -336,6 +337,8 @@ import {
   TeamKnowledgeListItemSchema,
   TeamKnowledgeListResponseSchema,
   EMPTY_TEAM_KNOWLEDGE_LIST,
+  EMPTY_SANDBOX_NODE_DOCKER_IMAGES_RESPONSE,
+  SandboxNodeDockerImagesResponseSchema,
   SandboxNodeTemplatesResponseSchema,
   SandboxSnapshotSchema,
   SandboxSnapshotListSchema,
@@ -1963,6 +1966,16 @@ export class ApiClient {
       SandboxNodeTemplatesResponseSchema,
       EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
       { endpoint: `GET /api/sandbox/nodes/${nodeId}/templates` },
+    );
+  }
+
+  async listSandboxNodeDockerImages(nodeId: string): Promise<SandboxNodeDockerImagesResponse> {
+    const raw = await this.fetch(`/api/sandbox/nodes/${nodeId}/docker-images`);
+    return parseWithFallback(
+      raw,
+      SandboxNodeDockerImagesResponseSchema,
+      EMPTY_SANDBOX_NODE_DOCKER_IMAGES_RESPONSE,
+      { endpoint: `GET /api/sandbox/nodes/${nodeId}/docker-images` },
     );
   }
 

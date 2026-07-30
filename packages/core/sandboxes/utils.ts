@@ -38,6 +38,16 @@ export function sandboxDisplayName(instance: SandboxInstance): string {
 /** Common Pi provider names offered in the sandbox runtime form. */
 export const SANDBOX_RUNTIME_PROVIDER_PRESETS = ["openai", "anthropic", "google"] as const;
 
+const SANDBOX_RUNTIME_DEFAULT_MODELS: Record<string, string> = {
+  openai: "gpt-5.5",
+  anthropic: "claude-sonnet-4.6",
+  google: "gemini-3.1-pro",
+};
+
+function defaultSandboxRuntimeModel(provider: string): string {
+  return SANDBOX_RUNTIME_DEFAULT_MODELS[provider.trim().toLowerCase()] ?? "";
+}
+
 export type SandboxRuntimeProviderFormEntry = {
   /** Stable React key; not persisted. */
   key: string;
@@ -160,10 +170,11 @@ export function buildSandboxRuntimePayload(
     const provider = entry.provider.trim() || "openai";
     const apiKey = entry.apiKey.trim();
     const baseUrl = entry.baseUrl.trim();
-    const model = entry.model.trim();
+    const explicitModel = entry.model.trim();
     // Require at least one concrete config field so an empty create form
     // does not enqueue a no-op reconfigure.
-    if (!apiKey && !baseUrl && !model) continue;
+    if (!apiKey && !baseUrl && !explicitModel) continue;
+    const model = explicitModel || defaultSandboxRuntimeModel(provider);
     const item: SandboxRuntimeProviderConfig = { provider };
     if (apiKey) item.api_key = apiKey;
     if (baseUrl) item.base_url = baseUrl;

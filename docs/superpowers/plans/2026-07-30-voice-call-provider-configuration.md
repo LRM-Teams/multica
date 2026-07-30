@@ -202,3 +202,40 @@ Beckham's configured welcome message after the caller joins.
 - [x] No business-code change was made: the failure was an account permission
   prerequisite, and adding another client/server fallback would have hidden
   that configuration error without granting RTC access to ASR, TTS, or LLM.
+
+## Provider-answer detection repair
+
+- [x] Rechecked the production failure after cross-service authorization:
+  the bot joins the RTC room and publishes the welcome-message audio, but the
+  application remains `connecting` and stops the task after 30 seconds.
+- [x] Opened the RTC application's `功能配置 -> 回调设置` page and confirmed
+  that no server-level event subscription exists. Per-task
+  `ServerMessageURLForRTS` configuration does not subscribe the application to
+  the server-level `VoiceChat` event.
+- [x] Attempted to add a `VoiceChat` subscription for
+  `https://leagent.me/api/voice-calls/callback`. The RTC console rejected the
+  address as invalid during its connectivity check.
+- [x] Reproduced the network-dependent ingress behavior: a Chromium request to
+  `https://leagent.me/healthz` returns 200, while a non-browser TLS client is
+  reset and plain HTTP receives Alibaba `Non-compliance ICP Filing` 403 before
+  reaching Caddy. This corrects the earlier Check-Host-only conclusion that
+  the callback endpoint was generally reachable.
+- [x] Added a failing media-session test for the SDK's
+  `onRemoteAudioFirstFrame` signal and a controller test proving that a call
+  must not time out after the remote agent's audio is decoded.
+- [x] Wired `onRemoteAudioFirstFrame` through the media driver and session.
+  This event is direct evidence that the remote bot joined, published, and
+  delivered playable audio to the caller.
+- [x] Stopped ringback, cleared the unanswered-call deadline, and moved the UI
+  to the connected state when that signal arrives, including the race where
+  audio arrives before the provider-start HTTP response returns.
+- [x] Preserved the 30-second failure and cleanup path when no remote agent
+  audio arrives. A local RTC room join alone still does not count as an
+  answered call.
+- [x] Verified 31 focused media-session and controller tests.
+- [x] Verified the complete views suite: 306 files, 2,992 passed and 5 skipped.
+- [x] Verified the views TypeScript project with `tsc --noEmit`.
+- [x] Verified the views lint task has no errors; its five warnings are in
+  pre-existing files outside this change.
+- [x] Verified React Doctor reports zero issues in the changed source.
+- [x] Verified `git diff --check`.

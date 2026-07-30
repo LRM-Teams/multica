@@ -38,6 +38,7 @@ export class VoiceCallMediaError extends Error {
 
 export interface VoiceCallMediaEvents {
   onStateChange?: (state: VoiceCallMediaState) => void;
+  onRemoteAudioStarted?: (remoteUserId: string) => void;
   onAutoplayBlocked?: (remoteUserId: string) => void;
   onError?: (error: VoiceCallMediaError) => void;
 }
@@ -61,6 +62,7 @@ export interface VoiceCallRTCDriver {
     appId: string,
     callbacks: {
       onConnectionState: (state: DriverConnectionState) => void;
+      onRemoteAudioStarted: (remoteUserId: string) => void;
       onAutoplayBlocked: (remoteUserId: string) => void;
       onFatalError: (providerCode: string) => void;
     },
@@ -95,6 +97,11 @@ async function loadVolcengineRTCDriver(): Promise<VoiceCallRTCDriver> {
       engine.on(rtc.default.events.onAutoplayFailed, (event) => {
         if (event.kind === "audio" && event.userId) {
           callbacks.onAutoplayBlocked(event.userId);
+        }
+      });
+      engine.on(rtc.default.events.onRemoteAudioFirstFrame, (event) => {
+        if (event.userId) {
+          callbacks.onRemoteAudioStarted(event.userId);
         }
       });
       engine.on(rtc.default.events.onError, (event) => {
@@ -269,6 +276,10 @@ export class VolcengineVoiceMediaSession {
           },
           onAutoplayBlocked: (remoteUserId) => {
             this.events.onAutoplayBlocked?.(remoteUserId);
+          },
+          onRemoteAudioStarted: (remoteUserId) => {
+            if (this.state === "closed" || this.state === "failed") return;
+            this.events.onRemoteAudioStarted?.(remoteUserId);
           },
           onFatalError: (providerCode) => {
             if (this.state === "closed" || this.state === "failed") return;

@@ -274,6 +274,107 @@ describe("useVoiceCallController", () => {
     }
   });
 
+  it("accepts remote agent audio as the answer when server callbacks are unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const media = createFakeMediaSession();
+      const ringback = createFakeRingback();
+      const { result } = renderHook(
+        () => useVoiceCallController("workspace-1", {
+          mediaSessionFactory: media.factory,
+          ringbackFactory: ringback.factory,
+          activationTimeoutMs: 1_000,
+        }),
+        { wrapper: wrapper(queryClient) },
+      );
+
+      await act(async () => {
+        await result.current.start({
+          channel_id: "channel-1",
+          agent_id: "agent-1",
+        });
+      });
+      expect(result.current.phase).toBe("joining");
+
+      act(() => {
+        media.events().onRemoteAudioStarted?.("voice-agent-1");
+      });
+
+      expect(result.current.phase).toBe("connected");
+      expect(ringback.ringback.stop).toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(result.current.error).toBeNull();
+      expect(media.session.disconnect).not.toHaveBeenCalled();
+      expect(stopVoiceCall).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an early remote answer that arrives before the provider response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveProviderStart:
+        | ((response: GetVoiceCallResponse) => void)
+        | undefined;
+      connectVoiceCall.mockReturnValue(new Promise<GetVoiceCallResponse>(
+        (resolve) => {
+          resolveProviderStart = resolve;
+        },
+      ));
+      const media = createFakeMediaSession();
+      const ringback = createFakeRingback();
+      const { result } = renderHook(
+        () => useVoiceCallController("workspace-1", {
+          mediaSessionFactory: media.factory,
+          ringbackFactory: ringback.factory,
+          activationTimeoutMs: 1_000,
+        }),
+        { wrapper: wrapper(queryClient) },
+      );
+
+      let startPromise: Promise<string>;
+      act(() => {
+        startPromise = result.current.start({
+          channel_id: "channel-1",
+          agent_id: "agent-1",
+        });
+      });
+      await vi.waitFor(() => {
+        expect(connectVoiceCall).toHaveBeenCalledOnce();
+      });
+
+      act(() => {
+        media.events().onRemoteAudioStarted?.("voice-agent-1");
+      });
+      expect(result.current.phase).toBe("connected");
+      await act(async () => {
+        await result.current.setMuted(true);
+      });
+      expect(result.current.phase).toBe("muted");
+
+      resolveProviderStart?.({
+        call: { ...createdCall.call, status: "connecting" },
+      });
+      await act(async () => {
+        await startPromise;
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(result.current.phase).toBe("muted");
+      expect(result.current.error).toBeNull();
+      expect(media.session.disconnect).not.toHaveBeenCalled();
+      expect(stopVoiceCall).not.toHaveBeenCalled();
+      expect(ringback.ringback.stop).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts the provider with its welcome message only after the caller joins the RTC room", async () => {
     let resolveMedia: (() => void) | undefined;
     const media = createFakeMediaSession(() =>

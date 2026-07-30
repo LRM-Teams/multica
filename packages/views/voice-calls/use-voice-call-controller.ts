@@ -142,7 +142,12 @@ function phaseFromServer(
   switch (status) {
     case "starting":
     case "connecting":
-      return localPhase === "ending" ? "ending" : "joining";
+      return localPhase === "connected" ||
+          localPhase === "muted" ||
+          localPhase === "reconnecting" ||
+          localPhase === "ending"
+        ? localPhase
+        : "joining";
     case "active":
       return localPhase === "muted" ||
           localPhase === "reconnecting" ||
@@ -194,6 +199,7 @@ export function useVoiceCallController(
   const endingRef = useRef(false);
   const mediaFailureRef = useRef<unknown>(null);
   const providerStartedRef = useRef(false);
+  const providerAnsweredRef = useRef(false);
   const activationTimeoutRef =
     useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const stoppedCallIdsRef = useRef(new Set<string>());
@@ -253,6 +259,7 @@ export function useVoiceCallController(
 
   const scheduleActivationTimeout = useCallback((targetCallId: string) => {
     clearActivationTimeout();
+    if (providerAnsweredRef.current) return;
     activationTimeoutRef.current = globalThis.setTimeout(() => {
       activationTimeoutRef.current = null;
       void (async () => {
@@ -260,7 +267,8 @@ export function useVoiceCallController(
           activeCallIdRef.current !== targetCallId ||
           endingRef.current ||
           cancelRequestedRef.current ||
-          !providerStartedRef.current
+          !providerStartedRef.current ||
+          providerAnsweredRef.current
         ) {
           return;
         }
@@ -315,7 +323,8 @@ export function useVoiceCallController(
         if (
           activeCallIdRef.current !== targetCallId ||
           endingRef.current ||
-          cancelRequestedRef.current
+          cancelRequestedRef.current ||
+          providerAnsweredRef.current
         ) {
           return;
         }
@@ -419,6 +428,7 @@ export function useVoiceCallController(
     endingRef.current = false;
     mediaFailureRef.current = null;
     providerStartedRef.current = false;
+    providerAnsweredRef.current = false;
     clearActivationTimeout();
     setCallId("");
     setAutoplayBlockedUserId(null);
@@ -466,6 +476,7 @@ export function useVoiceCallController(
           onStateChange: (state) => {
             if (
               !providerStartedRef.current &&
+              !providerAnsweredRef.current &&
               (state === "connected" || state === "muted")
             ) {
               return;
@@ -486,6 +497,17 @@ export function useVoiceCallController(
           onAutoplayBlocked: (remoteUserId) => {
             if (mountedRef.current) {
               setAutoplayBlockedUserId(remoteUserId);
+            }
+          },
+          onRemoteAudioStarted: () => {
+            if (endingRef.current || cancelRequestedRef.current) return;
+            providerAnsweredRef.current = true;
+            clearActivationTimeout();
+            stopRingback();
+            if (mountedRef.current) {
+              setLocalPhase((current) =>
+                current === "muted" ? "muted" : "connected"
+              );
             }
           },
           onError: setMediaFailure,
@@ -523,7 +545,16 @@ export function useVoiceCallController(
         failureSource = "server";
         await connectCallMutation.mutateAsync(createdCallId);
         providerStartedRef.current = true;
-        scheduleActivationTimeout(createdCallId);
+        if (providerAnsweredRef.current) {
+          stopRingback();
+          if (mountedRef.current) {
+            setLocalPhase((current) =>
+              current === "muted" ? "muted" : "connected"
+            );
+          }
+        } else {
+          scheduleActivationTimeout(createdCallId);
+        }
         return createdCallId;
       } catch (error) {
         clearActivationTimeout();

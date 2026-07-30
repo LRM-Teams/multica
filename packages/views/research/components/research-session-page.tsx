@@ -8,9 +8,9 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import {
   dedupeResearchFleetMembers,
   researchKeys,
+  researchPresenceOptions,
   researchSessionSnapshotOptions,
   useResearchUiStore,
-  type ResearchPresenceMap,
 } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -72,12 +72,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   const { data, isLoading } = useQuery(researchSessionSnapshotOptions(wsId, sessionId));
-  const { data: presence = {} } = useQuery<ResearchPresenceMap>({
-    queryKey: researchKeys.presence(wsId, sessionId),
-    queryFn: () => ({}),
-    enabled: !!wsId && !!sessionId,
-    staleTime: Infinity,
-  });
+  const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
 
   const send = useMutation({

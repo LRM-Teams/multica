@@ -33,8 +33,7 @@ func TestDiagnoseEnvDispatchProject_WithoutEnablementFlags(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := withURLParam(newRequest(http.MethodPost, "/api/v1/env-dispatch/"+projectID+"/diagnosis", nil), "projectID", projectID)
-	// Direct handler calls skip RequireWorkspaceMember middleware; attach the
-	// workspace the same way production requests get it via context.
+	// Direct handler call bypasses workspace middleware; mirror other env_dispatch tests.
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), testWorkspaceID, db.Member{}))
 	testHandler.DiagnoseEnvDispatchProject(w, r)
 

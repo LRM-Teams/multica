@@ -1,0 +1,24 @@
+# Aliyun OSS overlay for Multica backend (LRM-766 / LRM-746).
+#
+# Always include on the Aliyun deploy host so backend rebuilds keep RAM AK/SK
+# and OSS SDK workarounds. Never pin image/tag here — deploy sets MULTICA_*
+# image refs via selfhost + workflow env.
+#
+#   docker compose \
+#     -f docker-compose.selfhost.yml \
+#     -f docker-compose.aliyun.yml \
+#     -f docker-compose.oss.yml \
+#     up -d backend
+#
+# Secrets stay ambient (GitHub Environment aliyun-dev) or in host .env —
+# never bake AK/SK into this file.
+services:
+  backend:
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+      # Aliyun OSS rejects AWS SDK v2 default multi-chunk trailer checksums.
+      AWS_REQUEST_CHECKSUM_CALCULATION: ${AWS_REQUEST_CHECKSUM_CALCULATION:-when_required}
+      AWS_RESPONSE_CHECKSUM_VALIDATION: ${AWS_RESPONSE_CHECKSUM_VALIDATION:-when_required}

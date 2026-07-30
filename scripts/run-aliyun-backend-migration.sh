@@ -33,6 +33,7 @@ env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
   --env-file "${deploy_dir}/.env" \
   -f "${bundle_dir}/docker-compose.selfhost.yml" \
   -f "${bundle_dir}/docker-compose.aliyun.yml" \
+  -f "${bundle_dir}/docker-compose.oss.yml" \
   run --rm --no-deps --pull always --entrypoint ./migrate backend up ||
   migration_status=$?
 

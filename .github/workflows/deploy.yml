@@ -68,6 +68,7 @@ jobs:
           install -d "${bundle}/deploy/aliyun" "${bundle}/scripts"
           install -m 0644 docker-compose.selfhost.yml "${bundle}/docker-compose.selfhost.yml"
           install -m 0644 docker-compose.aliyun.yml "${bundle}/docker-compose.aliyun.yml"
+          install -m 0644 docker-compose.oss.yml "${bundle}/docker-compose.oss.yml"
           install -m 0644 deploy/aliyun/Caddyfile "${bundle}/deploy/aliyun/Caddyfile"
           install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
           install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
@@ -86,6 +87,7 @@ jobs:
             --env-file .env.example \
             -f "${bundle}/docker-compose.selfhost.yml" \
             -f "${bundle}/docker-compose.aliyun.yml" \
+            -f "${bundle}/docker-compose.oss.yml" \
             config -q
           docker run --rm \
             -v "${bundle}/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
@@ -337,7 +339,8 @@ jobs:
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
           }
           bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/validate-rtc-environment.sh"
           compose_environment="$(compose config --environment)"
@@ -352,6 +355,11 @@ jobs:
           db_name="$(compose_env_value POSTGRES_DB multica)"
           db_password="$(compose_env_value POSTGRES_PASSWORD)"
           voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"
+          # Fail closed before any runtime mutation when OSS lacks AWS keys (LRM-766).
+          # Must run while compose_environment is still set (or re-render via compose).
+          printf '%s\n' "$compose_environment" |
+            bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
+          unset compose_environment
           if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
             echo "::error::POSTGRES_USER, POSTGRES_DB, and POSTGRES_PASSWORD must all be non-empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
             exit 1
@@ -360,10 +368,6 @@ jobs:
             echo "::error::DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment. Aborting before runtime changes."
             exit 1
           fi
-          # Fail closed before any runtime mutation when OSS lacks AWS keys (LRM-766).
-          printf '%s\n' "$compose_environment" |
-            bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
-          unset compose_environment
           postgres_id="$(compose ps -q postgres)"
           if [ -z "$postgres_id" ]; then
             echo "::error::PostgreSQL container is not running. Aborting before runtime changes."
@@ -430,7 +434,8 @@ jobs:
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
           }
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           # The runtime path is stable; the Actions artifact is ephemeral.
@@ -497,6 +502,7 @@ jobs:
             "${DEPLOY_DIR}" \
             "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
             "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" \
             "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
             "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
 
@@ -511,7 +517,8 @@ jobs:
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
           }
 
           # Caddy reaches both app services only through their Docker service
@@ -609,6 +616,7 @@ jobs:
             "${DEPLOY_DIR}" \
             "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
             "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" \
             "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
             "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
 

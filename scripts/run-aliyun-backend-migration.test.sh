@@ -15,6 +15,7 @@ mkdir -p "$tmp_dir/bin" "$tmp_dir/deploy" "$tmp_dir/bundle"
 touch "$tmp_dir/deploy/.env"
 touch "$tmp_dir/bundle/docker-compose.selfhost.yml"
 touch "$tmp_dir/bundle/docker-compose.aliyun.yml"
+touch "$tmp_dir/bundle/docker-compose.oss.yml"
 
 cat >"$tmp_dir/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
@@ -41,7 +42,7 @@ set -e
   fail "migration helper must preserve the compose failure status; got $failure_status"
 grep -Fq -- '::error title=Database migration failed::image=ghcr.io/lrm-teams/multica-backend:sha-deadbee exit_status=42' "$tmp_dir/failure.out" ||
   fail "migration failure must be named directly in the Actions error"
-grep -Fxq -- 'compose --project-name multica --project-directory '"$tmp_dir/deploy"' --env-file '"$tmp_dir/deploy"'/.env -f '"$tmp_dir/bundle"'/docker-compose.selfhost.yml -f '"$tmp_dir/bundle"'/docker-compose.aliyun.yml run --rm --no-deps --pull always --entrypoint ./migrate backend up' "$FAKE_DOCKER_LOG" ||
+grep -Fxq -- 'compose --project-name multica --project-directory '"$tmp_dir/deploy"' --env-file '"$tmp_dir/deploy"'/.env -f '"$tmp_dir/bundle"'/docker-compose.selfhost.yml -f '"$tmp_dir/bundle"'/docker-compose.aliyun.yml -f '"$tmp_dir/bundle"'/docker-compose.oss.yml run --rm --no-deps --pull always --entrypoint ./migrate backend up' "$FAKE_DOCKER_LOG" ||
   fail "migration helper did not invoke the exact one-off compose contract"
 if grep -Eq 'up -d|force-recreate|(^| )rm -f( |$)' "$FAKE_DOCKER_LOG"; then
   fail "migration failure path must not mutate any runtime service"

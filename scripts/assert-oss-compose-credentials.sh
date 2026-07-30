@@ -33,6 +33,6 @@ fi
 
 if [[ -z "$access_key" || -z "$secret_key" ]]; then
   echo "S3_BUCKET is set (${bucket}) but AWS_ACCESS_KEY_ID and/or AWS_SECRET_ACCESS_KEY are empty in the rendered Compose environment." >&2
-  echo "For Aliyun/dev, inject them as ambient deploy secrets (see deploy.yml + docker-compose.selfhost.yml). Do not recreate backend without those keys." >&2
+  echo "For Aliyun/dev, inject them as ambient deploy secrets (deploy.yml + docker-compose.selfhost.yml + docker-compose.oss.yml). Do not recreate backend without those keys." >&2
   exit 1
 fi

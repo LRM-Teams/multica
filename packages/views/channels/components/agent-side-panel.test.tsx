@@ -16,7 +16,7 @@ const openDMMocks = vi.hoisted(() => ({
 // Per-test permission decisions. Both come from `useAgentPermissions`, which is
 // stubbed here: these tests assert that the panel *wires* a decision to the
 // right surface. Whether the decision itself is correct — owner, workspace
-// admin, visibility — is covered by `canViewAgentActivity` /  `canEditAgent`
+// admin — is covered by `canViewAgentSensitiveTabs` / `canEditAgent`
 // in packages/core/permissions/rules.test.ts, against the same context the
 // backend gates on. Defaulting both to denied keeps the read-only paths honest.
 const { permission, activityPermission, usageRows, mockRuntimes } = vi.hoisted(() => ({
@@ -143,7 +143,10 @@ vi.mock("../../common/use-open-dm", () => ({
   useOpenDM: () => openDMMocks,
 }));
 vi.mock("@multica/core/permissions", () => ({
-  useAgentPermissions: () => ({ canEdit: permission, canViewActivity: activityPermission }),
+  useAgentPermissions: () => ({
+    canEdit: permission,
+    canViewSensitiveTabs: activityPermission,
+  }),
 }));
 vi.mock("../../runtimes/components/shared", () => ({
   useRuntimeHealthStateLabel: () => (state: string) => state,
@@ -384,6 +387,9 @@ describe("AgentSidePanel", () => {
   });
 
   it("shows Usage as its own tab — not stacked in Profile (LRM-448)", () => {
+    // Usage now shares Activity's gate (Frank: "其余几个 tab 同理"), so an
+    // allowed decision is a precondition of this test, not its subject.
+    activityPermission.allowed = true;
     renderPanel("user-owner");
     expect(screen.getByRole("button", { name: "Usage" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Usage" })).not.toBeInTheDocument();
@@ -394,7 +400,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("No reported usage yet")).toBeInTheDocument();
   });
 
-  it("exposes Activity, but not Files, when the activity decision allows", () => {
+  it("exposes Activity AND Files under one decision (Frank: 其余几个 tab 同理)", () => {
     activityPermission.allowed = true;
     const workspaceMember: MemberWithUser = {
       ...ownerMember,
@@ -416,7 +422,9 @@ describe("AgentSidePanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
     expect(screen.getByText("Activity content")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    // Files used to require a separate, stricter condition. One gate now covers
+    // Activity / Reminders / Files / Usage — a split here would be the bug.
+    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
   });
 
   it("does not advertise Activity when the activity decision denies", () => {
@@ -506,6 +514,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("shows a standalone reported-usage card on the Usage tab instead of a fake session-token baseline", () => {
+    activityPermission.allowed = true;
     renderPanel("user-owner");
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     expect(screen.getByRole("region", { name: "Usage" })).toBeInTheDocument();
@@ -525,6 +534,7 @@ describe("AgentSidePanel", () => {
       task_count: 1,
     });
 
+    activityPermission.allowed = true;
     renderPanel("user-owner");
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
 
@@ -535,6 +545,7 @@ describe("AgentSidePanel", () => {
   });
 
   it("does not invent a cost when a reported model has no pricing", () => {
+    activityPermission.allowed = true;
     usageRows.push({
       agent_id: "agent-1",
       model: "unpriced-model",
@@ -550,20 +561,6 @@ describe("AgentSidePanel", () => {
 
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.getByText("1K")).toBeInTheDocument();
-  });
-
-  it("shows Activity and read-only Files tabs for non-owners in dev access mode", () => {
-    configStore.setState({ agentProfileDevAccessEnabled: true });
-    renderPanel("user-other");
-
-    expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Files" }));
-
-    expect(screen.getByText("Files content")).toBeInTheDocument();
-    expect(filesPanelProps).toHaveBeenCalledWith(expect.objectContaining({
-      canReadFiles: true,
-      canEditFiles: false,
-    }));
   });
 
   it("keeps visited page tabs mounted in equal-width 44px mobile targets", () => {
@@ -628,12 +625,12 @@ describe("AgentSidePanel", () => {
     expect(screen.getByTestId("agent-profile-runtime-config")).toBeInTheDocument();
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
-    expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
     expect(screen.getByText("Changes take effect on the next run")).toBeInTheDocument();
   });
 
   it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {
+    activityPermission.allowed = true;
     renderPanel("user-owner");
     expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
     expect(screen.getByText("Display name")).toBeInTheDocument();
@@ -646,20 +643,20 @@ describe("AgentSidePanel", () => {
     expect(usage.querySelector("h3")?.className).toMatch(/text-muted-foreground/);
   });
 
-  it("renders exactly the 4 runtime pickers, no Concurrency (#565 fix-forward)", () => {
+  it("renders exactly the 3 runtime pickers, no Concurrency (#565 fix-forward)", () => {
+    activityPermission.allowed = true;
     renderPanel("user-owner");
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
       expect(screen.getByTestId(id)).toBeInTheDocument();
     }
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
   it("renders EDITABLE runtime pickers when canEdit allows", () => {
-    // Visibility stays editable too (LRM-387: Frank — must support modify).
     permission.allowed = true;
     renderPanel("user-other");
 
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");
     }
   });
@@ -668,7 +665,7 @@ describe("AgentSidePanel", () => {
     permission.allowed = false;
     renderPanel("user-other");
 
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
     }
   });

@@ -375,14 +375,24 @@ describe("createMentionSuggestion", () => {
     ).toBe(true);
   });
 
-  it("hides personal agents owned by someone else from a regular member", () => {
+  // Retiring agent visibility removes the client-side owner/role discrimination
+  // here. That is safe *today* because it was never the effective boundary:
+  // `ListAgents` (server/internal/handler/agent.go:800) drops another member's
+  // private agent before it reaches the client, so these fixtures describe a
+  // response production does not produce for a regular member.
+  //
+  // ⚠️ When #908 removes that server filter, this stops being a no-op and
+  // becomes a real product change — every workspace agent becomes mentionable
+  // by every member. Flagged to Parker; reversing it is one rule function.
+  it("offers every agent the server returned, whoever owns it", () => {
     const qc = fakeQc({
       members: [
         { user_id: "u1", name: "Alice", role: "member" },
         { user_id: "u2", name: "Bob", role: "member" },
       ],
       agents: [
-        // Bob's personal agent — Alice (current user) should not see it.
+        // Bob's personal agent. The server would not send this to Alice; if it
+        // does arrive, the client no longer second-guesses it.
         {
           id: "a-personal-bob",
           name: "Atlas",
@@ -416,13 +426,13 @@ describe("createMentionSuggestion", () => {
 
     expect(items.some((i) => i.type === "agent" && i.label === "Athena")).toBe(true);
     expect(items.some((i) => i.type === "agent" && i.label === "Aether")).toBe(true);
-    expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(false);
+    expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(true);
   });
 
+  // Kept as a regression guard on the admin path specifically: it passed before
+  // and after, so it pins that widening the member case did not accidentally
+  // narrow the admin one.
   it("shows everyone's personal agents to a workspace admin", () => {
-    // Role lives in the member fixture, not in authState — promoting Alice
-    // to admin here is enough to flip the gate. Backend gate allows admins
-    // to assign anyone's personal agent, so the @mention list mirrors that.
     const qc = fakeQc({
       members: [
         { user_id: "u1", name: "Alice", role: "admin" },

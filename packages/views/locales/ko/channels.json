@@ -652,5 +652,17 @@
     "dm_chat": "채팅",
     "tasks": "이슈",
     "files": "파일"
+  },
+  "notify_prefs": {
+    "title": "알림 설정",
+    "opt_default": "기본값(전역 설정 따름)",
+    "opt_default_hint": "개별 설정 없이 전역 알림 설정을 따릅니다",
+    "opt_all": "모든 새 메시지",
+    "opt_all_hint": "모든 메시지 알림",
+    "opt_mentions": "@멘션만",
+    "opt_mentions_hint": "@본인 또는 @all일 때만 알림",
+    "opt_muted": "음소거",
+    "opt_muted_hint": "알림 없음, 목록에서 흐리게 표시",
+    "global_settings": "전역 알림 설정 →"
   }
 }

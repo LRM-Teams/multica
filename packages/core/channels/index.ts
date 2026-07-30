@@ -54,6 +54,7 @@ export {
   useSetChannelPin,
   useMuteChannel,
   useSetChannelMuted,
+  useSetChannelNotifyPreference,
   useSendChannelMessage,
   useSendChannelThreadMessage,
   useEditChannelMessage,

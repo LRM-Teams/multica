@@ -1,6 +1,10 @@
 import type { RuntimeTokenStats } from "./chat";
 import type { MessagePart } from "./message-part";
 
+/** LRM-748 / LRM-769 — four-level per-channel notify preference.
+ *  `"default"` follows the workspace-global notification settings. */
+export type ChannelNotifyLevel = "default" | "all" | "mentions" | "muted";
+
 export interface ChannelLastMessage {
   type: "user" | "agent" | "lark" | "system";
   author_name: string;
@@ -48,6 +52,11 @@ export interface Channel {
   pinned_at?: string | null;
   muted_at?: string | null;
   muted?: boolean;
+  /** LRM-748 / LRM-769 — viewer's per-channel notify level. Contract: the API
+   *  always returns one of the four literals (`NULL` in DB → `"default"`).
+   *  Optional only until LRM-769 ships; before that, callers derive the
+   *  backfill mapping (`muted_at` set → `"mentions"`, else `"default"`). */
+  notify_level?: ChannelNotifyLevel;
   last_message?: ChannelLastMessage | null;
   /** Bounded avatar stack for list rows; full roster loads via the channel-members query. */
   members?: ChannelMemberBrief[];

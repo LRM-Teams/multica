@@ -15,7 +15,7 @@ import {
   Trash2,
   VolumeX,
 } from "lucide-react";
-import type { Channel, ChannelMemberBrief } from "@multica/core/types";
+import type { Channel, ChannelMemberBrief, ChannelNotifyLevel } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -33,6 +33,7 @@ import { MotionContent } from "../../common/motion-content";
 import { ChannelDetailsSectionCard } from "./channel-details-section-card";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { isConversationMuted } from "./conversation-muted";
+import { ChannelNotifyPrefsOptions } from "./channel-notify-prefs";
 
 /**
  * LRM-494 — Slack-style channel details surface.
@@ -43,7 +44,7 @@ import { isConversationMuted } from "./conversation-muted";
  * the single Files entry (no dual-track entry, LRM-238).
  */
 export type ChannelDetailsTab = "about" | "members" | "settings";
-type DetailsView = "home" | ChannelDetailsTab | "about-edit" | "avatar";
+type DetailsView = "home" | ChannelDetailsTab | "about-edit" | "avatar" | "notify-prefs";
 
 /** Caps capability / pending flags so the panel avoids many boolean props (react-doctor). */
 export type ChannelDetailsAccess = {
@@ -96,6 +97,10 @@ export function ChannelDetailsPanel({
   stopAllDisabledReason,
   notifyPrefLabel,
   onOpenNotificationPrefs,
+  notifyLevel,
+  onSelectNotifyLevel,
+  notifyLevelPending,
+  onOpenGlobalNotifySettings,
   groupLeave,
 }: {
   channel: Channel;
@@ -135,7 +140,15 @@ export function ChannelDetailsPanel({
   stopAllDisabledReason?: string;
   /** LRM-494 — live preference label from workspace notify settings (LRM-414). */
   notifyPrefLabel: string;
+  /** Desktop (variant="panel"): close the panel and open the notify-prefs
+   *  dialog hosted by the surface. Mobile (variant="page") drills into the
+   *  internal "notify-prefs" sub-view instead (LRM-748 frozen v2). */
   onOpenNotificationPrefs?: () => void;
+  /** LRM-748 — four-level per-channel notify preference (frozen v2). */
+  notifyLevel?: ChannelNotifyLevel;
+  onSelectNotifyLevel?: (level: ChannelNotifyLevel) => void;
+  notifyLevelPending?: boolean;
+  onOpenGlobalNotifySettings?: () => void;
   /**
    * Group leave affordance (group management), rendered in the danger zone.
    * `onLeave` present → destructive + clickable. Only `disabledReason` → shown
@@ -217,7 +230,9 @@ export function ChannelDetailsPanel({
             ? t(($) => $.details.row_name_description)
             : view === "avatar"
               ? t(($) => $.details.row_avatar)
-              : t(($) => $.details.title);
+              : view === "notify-prefs"
+                ? t(($) => $.notify_prefs.title)
+                : t(($) => $.details.title);
 
   const leading =
     view === "home" ? (
@@ -331,12 +346,14 @@ export function ChannelDetailsPanel({
               label={t(($) => $.details.row_notify_pref)}
               value={notifyPrefLabel}
               onClick={
-                onOpenNotificationPrefs
-                  ? () => {
-                      onClose();
-                      onOpenNotificationPrefs();
-                    }
-                  : undefined
+                variant === "page" && onSelectNotifyLevel
+                  ? () => setView("notify-prefs")
+                  : onOpenNotificationPrefs
+                    ? () => {
+                        onClose();
+                        onOpenNotificationPrefs();
+                      }
+                    : undefined
               }
               testId="channel-details-notify-pref"
             />
@@ -541,6 +558,20 @@ export function ChannelDetailsPanel({
           {!settingsEditable && manageDisabledReason ? (
             <p className="text-xs text-muted-foreground">{manageDisabledReason}</p>
           ) : null}
+        </div>
+      ) : null}
+      {view === "notify-prefs" && notifyLevel && onSelectNotifyLevel ? (
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          data-testid="channel-details-notify-prefs-view"
+        >
+          <ChannelNotifyPrefsOptions
+            level={notifyLevel}
+            pending={notifyLevelPending}
+            onSelect={onSelectNotifyLevel}
+            onOpenGlobalSettings={onOpenGlobalNotifySettings ?? (() => undefined)}
+            density="roomy"
+          />
         </div>
       ) : null}
 

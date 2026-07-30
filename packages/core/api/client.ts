@@ -120,6 +120,7 @@ import type {
   SendChatMessageResponse,
   StickerCatalogResponse,
   Channel,
+  ChannelNotifyLevel,
   ChannelActiveTask,
   ChannelMember,
   ChannelInviteCandidatesResponse,
@@ -2841,6 +2842,18 @@ export class ApiClient {
 
   async unmuteChannel(channelId: string): Promise<{ ok: boolean }> {
     return this.fetch(`/api/channels/${channelId}/mute`, { method: "DELETE" });
+  }
+
+  /** LRM-748 / LRM-769 — set the viewer's per-channel notify level (four
+   *  levels; BE dual-writes `muted_at` for legacy clients). */
+  async setChannelNotifyPreference(
+    channelId: string,
+    level: ChannelNotifyLevel,
+  ): Promise<{ ok: boolean; notify_level: ChannelNotifyLevel }> {
+    return this.fetch(`/api/channels/${channelId}/notify-preference`, {
+      method: "PUT",
+      body: JSON.stringify({ level }),
+    });
   }
 
   async markChannelUnread(channelId: string): Promise<{ ok: boolean }> {

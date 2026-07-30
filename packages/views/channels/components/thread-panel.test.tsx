@@ -187,6 +187,14 @@ describe("ThreadPanel", () => {
     expect(messageListProps.mock.calls.at(-1)?.[0].onOpenAgent).toBe(onOpenAgent);
   });
 
+  it("forwards onOpenMember to the reply list so human avatars open the member dock (LRM-619 parity)", () => {
+    messageListProps.mockClear();
+    const onOpenMember = vi.fn();
+    render(<ThreadPanel {...baseProps()} onOpenMember={onOpenMember} />);
+
+    expect(messageListProps.mock.calls.at(-1)?.[0].onOpenMember).toBe(onOpenMember);
+  });
+
   it("gives an explicit back-to-conversation control on mobile", () => {
     const onBack = vi.fn();
     render(<ThreadPanel {...baseProps()} isMobile onBack={onBack} />);

@@ -59,6 +59,9 @@ export interface ThreadPanelProps {
    *  thread avatars only show the hover card, never open the panel (#488).
    *  LRM-292: id + optional identity snapshot from the message row. */
   onOpenAgent?: OpenAgentPanelFn;
+  /** Click a human author's avatar/name → open the LRM-619 member Profile
+   *  dock (same parity; without it member avatar clicks are dead). */
+  onOpenMember?: (userId: string) => void;
   quoteTarget?: QuoteTarget | null;
   onClearQuote?: () => void;
   /** #772 inline send-failure bar for the thread composer (surface-owned). */
@@ -126,6 +129,7 @@ export function ThreadPanel({
   onInsertSelectionQuote,
   onRetrySend,
   onOpenAgent,
+  onOpenMember,
   quoteTarget,
   onClearQuote,
   sendError,
@@ -278,6 +282,7 @@ export function ThreadPanel({
             ownName={currentUserName}
             onViewParent={onViewParent}
             onOpenAgent={onOpenAgent}
+            onOpenMember={onOpenMember}
           />
         }
         loading={loading}
@@ -287,6 +292,7 @@ export function ThreadPanel({
         onQuoteMessage={onQuoteMessage}
         onRetrySend={onRetrySend}
         onOpenAgent={onOpenAgent}
+        onOpenMember={onOpenMember}
       />
       </div>
       {threadSelectionMenu.menu}

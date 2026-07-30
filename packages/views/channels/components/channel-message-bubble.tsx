@@ -248,6 +248,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   onQuote,
   onEdit,
   onOpenAgent,
+  onOpenMember,
   onRetrySend,
   searchHighlighted = false,
   searchQuery,
@@ -281,6 +282,10 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   /** Opens the side agent file/public-info panel for agent-authored messages
    *  (LRM-292: agentId + optional row identity snapshot). */
   onOpenAgent?: OpenAgentPanelFn;
+  /** Opens the LRM-619 member Profile dock for human-authored messages —
+   *  click parity with agent avatars; without it a member avatar only shows
+   *  the hover card and click is dead. */
+  onOpenMember?: (userId: string) => void;
   /** One-click retry for a failed optimistic send (reuses `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
   /** Search hit: marks matching visible text while search is open. */
@@ -595,6 +600,14 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     }
   };
   const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;
+  const handleOpenMember = () => {
+    if (message.type === "user" && message.author_id) {
+      onOpenMember?.(message.author_id);
+    }
+  };
+  const handleOpenMemberCapture =
+    message.type === "user" && onOpenMember ? handleOpenMember : undefined;
+  const handleOpenProfileCapture = handleOpenAgentCapture ?? handleOpenMemberCapture;
   const clearLongPressTimer = () => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -780,7 +793,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           memberId={profileActorId}
           side="top"
           sideOffset={8}
-          onClickCapture={handleOpenAgentCapture}
+          onClickCapture={handleOpenProfileCapture}
         >
           {avatar}
         </ActorProfileTrigger>
@@ -799,7 +812,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 memberId={profileActorId}
                 side="top"
                 sideOffset={8}
-                onClickCapture={handleOpenAgentCapture}
+                onClickCapture={handleOpenProfileCapture}
               >
                 {nameLabel}
               </ActorProfileTrigger>

@@ -33,12 +33,14 @@ export function ThreadRootPreview({
   ownName,
   onViewParent,
   onOpenAgent,
+  onOpenMember,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
   ownName?: string;
   onViewParent?: () => void;
   onOpenAgent?: OpenAgentPanelFn;
+  onOpenMember?: (userId: string) => void;
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
@@ -62,7 +64,8 @@ export function ThreadRootPreview({
         : null;
   const profileActorId = message.author_id ?? null;
   // Agent author → clicking the avatar/name opens the agent side panel, same as
-  // the main channel bubble. Members keep the hover card only. (#488 / LRM-292)
+  // the main channel bubble. Human author → the LRM-619 member Profile dock.
+  // (#488 / LRM-292)
   const handleOpenAgentCapture =
     isAgent && onOpenAgent && profileActorId
       ? () =>
@@ -71,6 +74,11 @@ export function ThreadRootPreview({
             avatar_url: message.author_avatar_url ?? null,
           })
       : undefined;
+  const handleOpenMemberCapture =
+    !isAgent && onOpenMember && profileActorId
+      ? () => onOpenMember(profileActorId)
+      : undefined;
+  const handleOpenProfileCapture = handleOpenAgentCapture ?? handleOpenMemberCapture;
   const avatarActorType = isAgent ? "agent" : "member";
   const avatar = profileActorId ? (
     <ActorAvatar
@@ -96,7 +104,7 @@ export function ThreadRootPreview({
         memberId={profileActorId}
         side="top"
         sideOffset={8}
-        onClickCapture={handleOpenAgentCapture}
+        onClickCapture={handleOpenProfileCapture}
       >
         {avatar}
       </ActorProfileTrigger>
@@ -150,7 +158,7 @@ export function ThreadRootPreview({
                 memberId={profileActorId}
                 side="top"
                 sideOffset={8}
-                onClickCapture={handleOpenAgentCapture}
+                onClickCapture={handleOpenProfileCapture}
               >
                 {nameNode}
               </ActorProfileTrigger>

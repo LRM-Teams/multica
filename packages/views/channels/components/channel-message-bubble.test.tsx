@@ -629,6 +629,37 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
   });
 
+  it("opens the agent side panel when an agent author's avatar/name is clicked (#488)", () => {
+    const onOpenAgent = vi.fn();
+    renderWithStickerCatalog(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onOpenAgent={onOpenAgent}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByText("Research Agent")[0]!);
+    expect(onOpenAgent).toHaveBeenCalledWith("agent-1", {
+      display_name: "Research Agent",
+      avatar_url: null,
+    });
+  });
+
+  it("opens the member Profile dock when a human author's avatar/name is clicked (LRM-619 parity)", () => {
+    const onOpenMember = vi.fn();
+    renderWithStickerCatalog(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-9", author_name: "andong3" })}
+        currentUserId="user-1"
+        onOpenMember={onOpenMember}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByText("andong3")[0]!);
+    expect(onOpenMember).toHaveBeenCalledWith("user-9");
+  });
+
   it("renders the author avatar straight from the message payload (#453), not a viewer-scoped lookup", () => {
     render(
       <ChannelMessageBubble

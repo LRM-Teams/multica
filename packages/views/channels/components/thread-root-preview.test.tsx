@@ -211,7 +211,22 @@ describe("ThreadRootPreview", () => {
     });
   });
 
-  it("does NOT open a panel for a human (member) root author — hover card only (#488)", () => {
+  it("opens the member Profile dock when the root human author's avatar/name is clicked (LRM-619 parity)", () => {
+    const onOpenMember = vi.fn();
+    render(
+      <ThreadRootPreview
+        message={makeMessage({ type: "user", author_id: "user-9", author_name: "andong3" })}
+        currentUserId="user-2"
+        onOpenMember={onOpenMember}
+      />,
+    );
+
+    const [firstTrigger] = screen.getAllByTestId("actor-profile-trigger");
+    fireEvent.click(firstTrigger!);
+    expect(onOpenMember).toHaveBeenCalledWith("user-9");
+  });
+
+  it("member avatar click stays a no-op when no onOpenMember is wired (hover card only)", () => {
     const onOpenAgent = vi.fn();
     render(
       <ThreadRootPreview

@@ -1181,6 +1181,8 @@ function DmChannelConversation({
               currentUserId={currentUserId}
               ownName={currentUserName ?? undefined}
               onViewParent={handleThreadViewParent}
+              onOpenAgent={handleOpenAgentPanel}
+              onOpenMember={handleOpenMemberPanel}
             />
           }
           loading={threadLoading}
@@ -1193,6 +1195,8 @@ function DmChannelConversation({
           onQuoteMessage={supervisedReadOnly ? undefined : setThreadQuoteTarget}
           onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
           onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
+          onOpenAgent={handleOpenAgentPanel}
+          onOpenMember={handleOpenMemberPanel}
         />
         <Composer
           surface="thread"
@@ -1438,6 +1442,7 @@ function DmChannelConversation({
         // nowhere). Dropping the handler removes the bubble's thread-reply control.
         onOpenThread={supervisedReadOnly ? undefined : handleOpenThread}
         onOpenAgent={handleOpenAgentPanel}
+        onOpenMember={handleOpenMemberPanel}
         // #692 finding 1: read-only supervisor gets no message-mutation
         // affordances — dropping these handlers removes the bubble's
         // reaction / quote / edit / delete / retry controls.

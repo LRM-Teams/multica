@@ -409,6 +409,22 @@ func handlerTestRuntimeID(t *testing.T) string {
 	return runtimeID
 }
 
+// resetTestWorkspaceOnboardingAgent clears the shared testWorkspaceID's
+// onboarding_agent_id binding before and after a test, so ensureWindyAgent
+// tests that share this workspace fixture don't observe a binding left over
+// from another test (workspace.onboarding_agent_id is now a single,
+// workspace-wide value — see #902).
+func resetTestWorkspaceOnboardingAgent(t *testing.T, ctx context.Context) {
+	t.Helper()
+	clear := func() {
+		if _, err := testPool.Exec(ctx, `UPDATE workspace SET onboarding_agent_id = NULL WHERE id = $1`, testWorkspaceID); err != nil {
+			t.Fatalf("reset test workspace onboarding agent: %v", err)
+		}
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
 func claimInboxEventForRuntimeForTest(ctx context.Context, runtimeID string) (*db.AgentInboxEvent, error) {
 	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
 	if err != nil {

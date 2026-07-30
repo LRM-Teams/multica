@@ -58,3 +58,29 @@ UPDATE workspace
        updated_at = now()
  WHERE id = $1
    AND default_self_play_env_id IS NULL;
+
+-- name: GetWorkspaceOnboardingAgentID :one
+SELECT onboarding_agent_id
+  FROM workspace
+ WHERE id = $1;
+
+-- name: SetWorkspaceOnboardingAgentID :exec
+-- Conditionally binds the per-workspace onboarding agent only when unset, so
+-- the first of N concurrent ensure() callers wins and the rest are no-ops
+-- (the caller re-reads GetWorkspaceOnboardingAgentID to pick up the canonical
+-- winner and archives its own losing agent). Mirrors SetDefaultSelfPlayEnv.
+UPDATE workspace
+   SET onboarding_agent_id = $2,
+       updated_at = now()
+ WHERE id = $1
+   AND onboarding_agent_id IS NULL;
+
+-- name: GetFirstWorkspaceOwnerUserID :one
+-- "First" by member.created_at is a pragmatic, stable tie-break for the rare
+-- multi-owner case; it is not a claim that workspaces have a canonical owner
+-- column (see docs/engineering-principles.md on that open question).
+SELECT user_id
+  FROM member
+ WHERE workspace_id = $1 AND role = 'owner'
+ ORDER BY created_at ASC
+ LIMIT 1;

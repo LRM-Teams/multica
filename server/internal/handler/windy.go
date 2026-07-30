@@ -196,7 +196,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, created, err := h.ensureWindyAgent(r, wsUUID, parseUUID(userID), runtime)
+	agent, created, err := h.ensureWindyAgent(r, wsUUID, runtime)
 	if err != nil {
 		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create Wendy")
@@ -448,41 +448,130 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 	return runtimes[0], true
 }
 
-func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.UUID, runtime db.AgentRuntime) (db.Agent, bool, error) {
-	agents, err := h.Queries.ListAllAgents(r.Context(), workspaceID)
+// ensureWindyAgent resolves the workspace's single onboarding agent via
+// workspace.onboarding_agent_id, the persisted, name-independent binding
+// (task #902 — authorization/lookup must never key off display name again).
+//
+// binding set   -> reuse the bound agent (restore/refresh as needed).
+// binding unset -> look for the workspace owner's existing legacy-named
+//                  agent (Wendy/Windy/Joe) and adopt it; otherwise create a
+//                  fresh one. Either way, bind it with a conditional UPDATE
+//                  (SetWorkspaceOnboardingAgentID mirrors the
+//                  SetDefaultSelfPlayEnv "first writer wins" pattern): if a
+//                  concurrent ensure() already bound a different agent, that
+//                  binding wins, and an agent this call created (but did not
+//                  adopt) is archived so no orphan/duplicate is left behind.
+//
+// This intentionally does not touch or backfill any other workspace: an old
+// workspace's pre-existing Wendy/Windy/Joe rows are left exactly as they are
+// until (and unless) someone triggers ensure() there.
+func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID pgtype.UUID, runtime db.AgentRuntime) (db.Agent, bool, error) {
+	ctx := r.Context()
+
+	if boundID, err := h.Queries.GetWorkspaceOnboardingAgentID(ctx, workspaceID); err != nil {
+		return db.Agent{}, false, err
+	} else if boundID.Valid {
+		agent, err := h.Queries.GetAgent(ctx, boundID)
+		if err == nil {
+			updated, err := h.restoreAndNormalizeWindyAgent(r, agent)
+			if err != nil {
+				return db.Agent{}, false, err
+			}
+			return updated, false, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return db.Agent{}, false, err
+		}
+		// The bound agent row is gone (should only happen via a direct DB
+		// delete bypassing ON DELETE SET NULL timing); fall through and
+		// re-bind below.
+	}
+
+	ownerID, err := h.Queries.GetFirstWorkspaceOwnerUserID(ctx, workspaceID)
 	if err != nil {
 		return db.Agent{}, false, err
 	}
-	if existing, ok := selectOwnedWindyAgent(agents, userID); ok {
-		updated, err := h.restoreAndNormalizeWindyAgent(r, existing)
+
+	// isWindyAgentName/selectOwnedWindyAgent judge by display name — this is
+	// otherwise a banned pattern (never infer identity/role from a display
+	// name; task #902 exists because a permission check did exactly that).
+	// The one-time adoption below is the sole legitimate exception: with no
+	// binding yet, there is no other signal to find a pre-existing Wendy the
+	// owner already has. The moment a binding exists (the `if boundID.Valid`
+	// branch above), lookups are by workspace.onboarding_agent_id only, and
+	// name is never consulted again. Do not use this as a precedent for a
+	// new name-based check elsewhere.
+	agents, err := h.Queries.ListAllAgents(ctx, workspaceID)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	candidate, adopted := selectOwnedWindyAgent(agents, ownerID)
+
+	mine := candidate
+	if !adopted {
+		created, err := h.createAgentWithIdentity(ctx, h.Queries, db.CreateAgentParams{
+			WorkspaceID:        workspaceID,
+			Description:        windyDescription,
+			Instructions:       windyInstructions,
+			AvatarUrl:          pgtype.Text{String: windyAvatarURL, Valid: true},
+			AvatarSource:       agentAvatarSourceAssigned,
+			RuntimeMode:        runtime.RuntimeMode,
+			RuntimeConfig:      []byte("{}"),
+			RuntimeID:          runtime.ID,
+			Visibility:         "private",
+			MaxConcurrentTasks: 6,
+			OwnerID:            ownerID,
+			CustomEnv:          []byte("{}"),
+			CustomArgs:         []byte("[]"),
+			McpConfig:          nil,
+			Model:              pgtype.Text{},
+			ThinkingLevel:      pgtype.Text{},
+		}, windyAgentName, windyAgentName)
+		if err != nil {
+			return db.Agent{}, false, err
+		}
+		mine = created
+	}
+
+	if err := h.Queries.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{
+		ID:                workspaceID,
+		OnboardingAgentID: mine.ID,
+	}); err != nil {
+		return db.Agent{}, false, err
+	}
+	winnerID, err := h.Queries.GetWorkspaceOnboardingAgentID(ctx, workspaceID)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	if !winnerID.Valid || uuidToString(winnerID) != uuidToString(mine.ID) {
+		// Lost the race to a concurrent ensure() call. If we created a fresh
+		// agent for this attempt, archive it rather than leaving an orphan
+		// duplicate (the bug #902 exists to fix). An adopted candidate is a
+		// pre-existing agent and is left untouched either way.
+		if !adopted {
+			if _, archiveErr := h.Queries.ArchiveAgent(ctx, db.ArchiveAgentParams{ID: mine.ID, ArchivedBy: ownerID}); archiveErr != nil {
+				slog.Warn("archive losing onboarding agent failed", append(logger.RequestAttrs(r), "error", archiveErr, "workspace_id", uuidToString(workspaceID), "agent_id", uuidToString(mine.ID))...)
+			}
+		}
+		winner, err := h.Queries.GetAgent(ctx, winnerID)
+		if err != nil {
+			return db.Agent{}, false, err
+		}
+		updated, err := h.restoreAndNormalizeWindyAgent(r, winner)
 		if err != nil {
 			return db.Agent{}, false, err
 		}
 		return updated, false, nil
 	}
 
-	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
-		WorkspaceID:        workspaceID,
-		Description:        windyDescription,
-		Instructions:       windyInstructions,
-		AvatarUrl:          pgtype.Text{String: windyAvatarURL, Valid: true},
-		AvatarSource:       agentAvatarSourceAssigned,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          runtime.ID,
-		Visibility:         "private",
-		MaxConcurrentTasks: 6,
-		OwnerID:            userID,
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		McpConfig:          nil,
-		Model:              pgtype.Text{},
-		ThinkingLevel:      pgtype.Text{},
-	}, windyAgentName, windyAgentName)
-	if err != nil {
-		return db.Agent{}, false, err
+	if adopted {
+		updated, err := h.restoreAndNormalizeWindyAgent(r, mine)
+		if err != nil {
+			return db.Agent{}, false, err
+		}
+		return updated, false, nil
 	}
-	return created, true, nil
+	return mine, true, nil
 }
 
 func selectOwnedWindyAgent(agents []db.Agent, userID pgtype.UUID) (db.Agent, bool) {

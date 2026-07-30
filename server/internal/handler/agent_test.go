@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1996,22 +1997,12 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 	`, workspace.ID, "stable-daemon-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
-	createWendy := func(index int) db.Agent {
-		t.Helper()
-		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
-			WorkspaceID: workspace.ID, Name: fmt.Sprintf("stable-wendy-%d-%s", index, suffix), DisplayName: "Wendy",
-			Description: "workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-			RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerIDs[index],
-			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-		})
-		if err != nil {
-			t.Fatalf("create Wendy %d: %v", index, err)
-		}
-		return agent
-	}
-	first := createWendy(0)
-	second := createWendy(1)
-	ensureForOwner := func(ownerID pgtype.UUID) {
+	// #902: a workspace has a single onboarding agent (workspace.onboarding_agent_id),
+	// not one per owner. EnsureWindy from either owner must resolve to the same
+	// bound agent, owned by the first workspace owner (ownerIDs[0], inserted
+	// first above) — a second owner calling ensure must not create a second
+	// agent, and must not disturb an already-scheduled Radar supervisor.
+	ensureForOwner := func(ownerID pgtype.UUID) db.Agent {
 		t.Helper()
 		req := newRequestAs(uuidToString(ownerID), http.MethodPost, "/api/agents/windy?runtime_id="+uuidToString(runtimeID), nil)
 		req.Header.Set("X-Workspace-ID", uuidToString(workspace.ID))
@@ -2020,8 +2011,25 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 		if response.Code != http.StatusOK {
 			t.Fatalf("EnsureWindy owner %s status = %d: %s", uuidToString(ownerID), response.Code, response.Body.String())
 		}
+		var body struct {
+			Agent struct {
+				ID string `json:"id"`
+			} `json:"agent"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode EnsureWindy response: %v", err)
+		}
+		agent, err := q.GetAgent(ctx, parseUUID(body.Agent.ID))
+		if err != nil {
+			t.Fatalf("load ensured agent: %v", err)
+		}
+		return agent
 	}
-	ensureForOwner(ownerIDs[0])
+
+	first := ensureForOwner(ownerIDs[0])
+	if !first.OwnerID.Valid || uuidToString(first.OwnerID) != uuidToString(ownerIDs[0]) {
+		t.Fatalf("onboarding agent owner_id = %s, want first workspace owner %s", uuidToString(first.OwnerID), uuidToString(ownerIDs[0]))
+	}
 	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
 		WorkspaceID: workspace.ID, AgentID: first.ID, TriggerKind: "scheduled",
 		TriggerRef: "stable-binding", CooldownKey: "workspace_supervisor_radar",
@@ -2042,13 +2050,16 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 		t.Fatalf("seed current supervisor state: %v", err)
 	}
 
-	ensureForOwner(ownerIDs[1])
-	refreshedSecond, err := q.GetAgent(ctx, second.ID)
-	if err != nil {
-		t.Fatalf("load second owner Wendy: %v", err)
+	second := ensureForOwner(ownerIDs[1])
+	if uuidToString(second.ID) != uuidToString(first.ID) {
+		t.Fatalf("second owner's EnsureWindy resolved to a different agent %s, want the single bound onboarding agent %s", uuidToString(second.ID), uuidToString(first.ID))
 	}
-	if refreshedSecond.Description != windyDescription || !strings.Contains(refreshedSecond.Instructions, windyInstructionsCapabilityMarker) {
-		t.Fatalf("second owner Wendy was not refreshed: description=%q instructions=%q", refreshedSecond.Description, refreshedSecond.Instructions)
+	var agentCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE workspace_id = $1`, workspace.ID).Scan(&agentCount); err != nil {
+		t.Fatalf("count workspace agents: %v", err)
+	}
+	if agentCount != 1 {
+		t.Fatalf("workspace agent count = %d, want 1 (no duplicate onboarding agent from the second owner)", agentCount)
 	}
 	var boundAgentID pgtype.UUID
 	var storedNextDue, storedWatermark time.Time
@@ -2060,7 +2071,7 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 		t.Fatalf("load preserved supervisor state: %v", err)
 	}
 	if uuidToString(boundAgentID) != uuidToString(first.ID) {
-		t.Fatalf("bound supervisor = %s, want first owner Wendy %s", uuidToString(boundAgentID), uuidToString(first.ID))
+		t.Fatalf("bound supervisor = %s, want %s", uuidToString(boundAgentID), uuidToString(first.ID))
 	}
 	if storedNextDue.Sub(nextDue) > time.Second || nextDue.Sub(storedNextDue) > time.Second ||
 		storedWatermark.Sub(watermark) > time.Second || watermark.Sub(storedWatermark) > time.Second || failures != 3 {
@@ -2095,9 +2106,10 @@ func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T
 		t.Fatalf("seed archived Wendy agent: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+	resetTestWorkspaceOnboardingAgent(t, ctx)
 
 	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
-	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), parseUUID(testUserID), db.AgentRuntime{})
+	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
 	if err != nil {
 		t.Fatalf("ensureWindyAgent: %v", err)
 	}
@@ -2157,9 +2169,10 @@ func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 		t.Fatalf("seed archived Wendy: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id IN ($1, $2)`, activeID, archivedID) })
+	resetTestWorkspaceOnboardingAgent(t, ctx)
 
 	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
-	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), parseUUID(testUserID), db.AgentRuntime{})
+	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
 	if err != nil {
 		t.Fatalf("ensureWindyAgent: %v", err)
 	}
@@ -2212,9 +2225,10 @@ func TestEnsureWindyRenamesLegacyWindyAgent(t *testing.T) {
 		t.Fatalf("seed legacy Windy agent: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+	resetTestWorkspaceOnboardingAgent(t, ctx)
 
 	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
-	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), parseUUID(testUserID), db.AgentRuntime{})
+	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
 	if err != nil {
 		t.Fatalf("ensureWindyAgent: %v", err)
 	}
@@ -2239,5 +2253,104 @@ func TestEnsureWindyRenamesLegacyWindyAgent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("Windy/Wendy private agent count = %d, want 1", count)
+	}
+}
+
+// TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent guards the bug
+// #902 exists to fix: two concurrent ensure() calls on a workspace with no
+// existing candidate must not each create their own agent and bind it. The
+// production symptom (workspace a0c3132c…, two active Wendys under the same
+// owner from a find-then-create race) had no test coverage before this.
+func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	q := db.New(testPool)
+	suffix := uuid.NewString()
+	workspace, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "onboarding-race-" + suffix, Slug: "onboarding-race-" + suffix, IssuePrefix: "ORC",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	var ownerID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+	`, "race-owner-"+suffix, "race-owner-"+suffix+"@example.test").Scan(&ownerID); err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
+	`, workspace.ID, ownerID); err != nil {
+		t.Fatalf("create owner membership: %v", err)
+	}
+	var runtimeID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, 'race-runtime', 'cloud', 'daytona', 'online',
+		  '', '{}'::jsonb, 'private', now())
+		RETURNING id
+	`, workspace.ID, "race-daemon-"+suffix).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspace.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, runtimeID)
+	if err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+
+	const concurrency = 8
+	results := make([]db.Agent, concurrency)
+	errs := make([]error, concurrency)
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func(i int) {
+			defer wg.Done()
+			req := newRequest(http.MethodPost, "/api/agents/windy", nil)
+			results[i], _, errs[i] = testHandler.ensureWindyAgent(req, workspace.ID, runtime)
+		}(i)
+	}
+	wg.Wait()
+
+	seen := map[string]bool{}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("ensureWindyAgent[%d]: %v", i, err)
+		}
+		seen[uuidToString(results[i].ID)] = true
+	}
+	if len(seen) != 1 {
+		t.Fatalf("concurrent ensureWindyAgent calls resolved to %d distinct agents, want 1: %v", len(seen), seen)
+	}
+
+	var totalAgents, activeAgents int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE workspace_id = $1`, workspace.ID).Scan(&totalAgents); err != nil {
+		t.Fatalf("count total agents: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE workspace_id = $1 AND archived_at IS NULL`, workspace.ID).Scan(&activeAgents); err != nil {
+		t.Fatalf("count active agents: %v", err)
+	}
+	if activeAgents != 1 {
+		t.Fatalf("active agent count = %d, want 1 (losing creates must be archived, not left as duplicates)", activeAgents)
+	}
+
+	boundID, err := testHandler.Queries.GetWorkspaceOnboardingAgentID(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("load onboarding binding: %v", err)
+	}
+	var winnerID string
+	for id := range seen {
+		winnerID = id
+	}
+	if !boundID.Valid || uuidToString(boundID) != winnerID {
+		t.Fatalf("workspace.onboarding_agent_id = %v, want %s", boundID, winnerID)
 	}
 }

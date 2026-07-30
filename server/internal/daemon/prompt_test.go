@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -66,6 +67,45 @@ func TestBuildPromptChannelRoleChangedUsesBoundedSignal(t *testing.T) {
 	}
 	if strings.Contains(out, "Per channel, close open loops") {
 		t.Fatalf("role-change wake duplicated runtime responsibilities: %q", out)
+	}
+}
+
+func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.T) {
+	resumed := Task{
+		ChatSessionID:  "chat-1",
+		ChatMessage:    "hello",
+		PriorSessionID: "resident-before-role-change",
+		Agent: &AgentData{ManagerChannels: []execenv.ManagerChannelContextForEnv{{
+			ID:   "channel-lrm2",
+			Name: "LRM2.0开发群",
+		}}},
+	}
+	promoted := BuildPrompt(resumed, "cursor", "")
+	for _, want := range []string{
+		"Current role authority for THIS wake (server-claimed and authoritative):",
+		`id="channel-lrm2" name="LRM2.0开发群"`,
+		"Ensure each listed channel has its own anchored patrol reminder",
+		"Do not treat any older provider session, AGENTS startup brief, or prior turn as authority",
+		"User message:\nhello",
+	} {
+		if !strings.Contains(promoted, want) {
+			t.Errorf("promoted resumed prompt missing %q\n--- output ---\n%s", want, promoted)
+		}
+	}
+
+	resumed.Agent.ManagerChannels = nil
+	demoted := BuildPrompt(resumed, "cursor", "")
+	for _, want := range []string{
+		"You are not a group manager for any channel on this wake.",
+		"cancel any such reminders that no longer match your current channels",
+		"User message:\nhello",
+	} {
+		if !strings.Contains(demoted, want) {
+			t.Errorf("demoted resumed prompt missing %q\n--- output ---\n%s", want, demoted)
+		}
+	}
+	if strings.Contains(demoted, `name="LRM2.0开发群"`) {
+		t.Fatalf("demoted resumed prompt retained old manager channel\n--- output ---\n%s", demoted)
 	}
 }
 

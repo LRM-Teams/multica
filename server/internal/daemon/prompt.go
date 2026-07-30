@@ -24,50 +24,84 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 			return buildProtocolTurnPrompt(task)
 		}
 	}
+	withCurrentRoleAuthority := func(prompt string) string {
+		return currentRoleAuthorityOverlay(task) + prompt
+	}
 	if task.InboxEvent != nil && task.InboxEvent.Reason == protocol.ChannelRoleChangedReason {
-		return fmt.Sprintf(
+		return withCurrentRoleAuthority(fmt.Sprintf(
 			"Your channel manager role changed for channel %s. Handle the transition from the current channel state. If you are now a manager, follow the responsibilities in your runtime brief and patrol only this channel.",
 			task.ChannelID,
-		)
+		))
 	}
 	// Transport/session identity does not select the work semantics. A
 	// chat-backed task that carries an issue must receive the issue prompt while
 	// retaining ChatSessionID for the resident backend and delivery transport.
 	if task.IssueID != "" {
 		if task.TriggerCommentID != "" {
-			return buildCommentPrompt(task, provider)
+			return withCurrentRoleAuthority(buildCommentPrompt(task, provider))
 		}
 		if task.AssignmentSnapshot != nil {
-			return buildAssignmentPrompt(task)
+			return withCurrentRoleAuthority(buildAssignmentPrompt(task))
 		}
 	} else if task.ChatSessionID != "" {
 		if provider == "pi" {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
+				// Native slash commands are handled by Pi's command router rather
+				// than a provider conversation turn. Prefixing them would make the
+				// command unparseable, and they do not consume a resumed session.
 				return command
 			}
 		}
-		return buildChatPrompt(task, agentRoot)
+		return withCurrentRoleAuthority(buildChatPrompt(task, agentRoot))
 	}
 	if task.TriggerCommentID != "" {
-		return buildCommentPrompt(task, provider)
+		return withCurrentRoleAuthority(buildCommentPrompt(task, provider))
 	}
 	if task.AutopilotRunID != "" {
-		return buildAutopilotPrompt(task)
+		return withCurrentRoleAuthority(buildAutopilotPrompt(task))
 	}
 	if task.QuickCreatePrompt != "" {
-		return buildQuickCreatePrompt(task)
+		return withCurrentRoleAuthority(buildQuickCreatePrompt(task))
 	}
 	if task.AgentRadarPrompt != "" {
-		return task.AgentRadarPrompt
+		return withCurrentRoleAuthority(task.AgentRadarPrompt)
 	}
 	if task.AssignmentSnapshot != nil {
-		return buildAssignmentPrompt(task)
+		return withCurrentRoleAuthority(buildAssignmentPrompt(task))
 	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
+	return withCurrentRoleAuthority(b.String())
+}
+
+// currentRoleAuthorityOverlay is the server-claimed role truth for this wake.
+// It deliberately lives in the per-turn prompt rather than the startup AGENTS
+// materialization: provider sessions may resume after a promotion or demotion.
+// A missing Agent means an old server did not supply an authority snapshot, so
+// we preserve its existing behavior rather than inventing a negative role.
+func currentRoleAuthorityOverlay(task Task) string {
+	if task.Agent == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("Current role authority for THIS wake (server-claimed and authoritative):\n")
+	if len(task.Agent.ManagerChannels) == 0 {
+		b.WriteString("- You are not a group manager for any channel on this wake. Do not perform group-manager duties or keep group-manager reminders based on an older session or startup brief; cancel any such reminders that no longer match your current channels.\n\n")
+		return b.String()
+	}
+
+	b.WriteString("- You are a group manager only for these channels:\n")
+	for _, channel := range task.Agent.ManagerChannels {
+		// %q keeps user-controlled channel names as data, not instructions.
+		fmt.Fprintf(&b, "  - id=%q name=%q\n", channel.ID, channel.Name)
+	}
+	b.WriteString("- For each listed channel, close open loops: unanswered questions, unclaimed todo work, stale in-progress/in-review work, and people blocked on one owner. Nudge in that channel, not DM.\n")
+	b.WriteString("- Ensure each listed channel has its own anchored patrol reminder when ongoing patrol is needed; do not combine channels and do not create duplicate reminders.\n")
+	b.WriteString("- Do not treat any older provider session, AGENTS startup brief, or prior turn as authority for roles not listed above.\n\n")
 	return b.String()
 }
 

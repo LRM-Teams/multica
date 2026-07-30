@@ -175,11 +175,14 @@ func TestGetAgent_PrivateAgentForbidsPlainMember(t *testing.T) {
 	}
 }
 
-// TestListAgents_FiltersPrivateForPlainMember verifies that the workspace
-// agents listing hides private agents from members who lack access. This is
-// what makes the @-mention autocomplete picker (which feeds off this list)
-// drop unreachable private agents without any client-side logic.
-func TestListAgents_FiltersPrivateForPlainMember(t *testing.T) {
+// TestListAgents_IncludesPrivateAgentsForAllMembers verifies that the
+// workspace agents listing no longer hides private agents from plain members
+// (task #908: every agent in a workspace is listable/mentionable by every
+// member — "agent = colleague", Frank 2026-07-30 10:56 "所有的代码全部删掉，
+// 默认public的"). Existence/listing is unconditional now; the four sensitive
+// tabs (Activity/Files/Reminders/Usage) keep their own admin-or-owner gate
+// separately and are not affected by this endpoint.
+func TestListAgents_IncludesPrivateAgentsForAllMembers(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -196,14 +199,14 @@ func TestListAgents_FiltersPrivateForPlainMember(t *testing.T) {
 		t.Fatalf("ListAgents as owner did not include private agent %s", agentID)
 	}
 
-	// Plain member does NOT see the agent.
+	// Plain member also sees the agent now.
 	w = httptest.NewRecorder()
 	testHandler.ListAgents(w, newRequestAs(memberID, "GET", "/api/agents", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("ListAgents as plain member: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if listContainsAgent(t, w.Body.Bytes(), agentID) {
-		t.Fatalf("ListAgents as plain member leaked private agent %s", agentID)
+	if !listContainsAgent(t, w.Body.Bytes(), agentID) {
+		t.Fatalf("ListAgents as plain member did not include private agent %s (existence should be unconditional post-#908)", agentID)
 	}
 }
 
@@ -253,7 +256,13 @@ func TestPublishAgentVisibilityEventBroadcastsNormalAgent(t *testing.T) {
 	}
 }
 
-func TestWendyPrivateAgentIsOwnerOnly(t *testing.T) {
+// TestWendyListedForEveryoneButDetailStaysOwnerOnly verifies the split that
+// task #908 introduces: existence/listing is unconditional for every agent
+// including Wendy (task #870/#902's personal onboarding agent), but the
+// detail/sensitive-tab gate (still driven by canAccessPrivateAgent, which
+// keeps its own owner-only carve-out for Wendy — batch 2 of #908) is
+// untouched by this batch.
+func TestWendyListedForEveryoneButDetailStaysOwnerOnly(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -268,8 +277,8 @@ func TestWendyPrivateAgentIsOwnerOnly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("ListAgents as workspace owner: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if listContainsAgent(t, w.Body.Bytes(), agentID) {
-		t.Fatalf("ListAgents as workspace owner leaked another user's Wendy %s", agentID)
+	if !listContainsAgent(t, w.Body.Bytes(), agentID) {
+		t.Fatalf("ListAgents as workspace owner did not include another user's Wendy %s (existence should be unconditional post-#908)", agentID)
 	}
 
 	w = httptest.NewRecorder()
@@ -281,11 +290,82 @@ func TestWendyPrivateAgentIsOwnerOnly(t *testing.T) {
 		t.Fatalf("ListAgents as Wendy owner did not include Wendy %s", agentID)
 	}
 
+	// Detail access is untouched by this batch: canAccessPrivateAgent still
+	// gates GetAgent and still carves Wendy out as owner-only.
 	w = httptest.NewRecorder()
 	testHandler.GetAgent(w, withURLParam(newRequest("GET", "/api/agents/"+agentID, nil), "id", agentID))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("GetAgent as workspace owner for another user's Wendy: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+// TestPublishAgentReminderChangedScopesByOnboardingBinding verifies the
+// task #908 fix to publishAgentReminderChanged: recipient scoping for the
+// workspace's onboarding agent must come from workspace.onboarding_agent_id
+// (task #902's binding), never from display name. Before this fix, an
+// ordinary private agent that a user happened to rename "Wendy" (or any
+// isWindyAgentName match) would incorrectly get the owner-only treatment
+// meant only for the actual bound onboarding agent.
+func TestPublishAgentReminderChangedScopesByOnboardingBinding(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID, ownerID, _ := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename private agent to Wendy: %v", err)
+	}
+	wsUUID := util.MustParseUUID(testWorkspaceID)
+	agentUUID := util.MustParseUUID(agentID)
+
+	// Not bound as the onboarding agent yet: a Wendy-named agent that isn't
+	// the canonical binding must scope like any other private agent (owner +
+	// workspace owner/admin), not owner-only.
+	events1 := captureReminderChangedEvents(t, testHandler, agentID)
+	testHandler.publishAgentReminderChanged(ctx, wsUUID, agentUUID)
+	if len(*events1) != 1 {
+		t.Fatalf("unbound Wendy-named agent: got %d events, want 1", len(*events1))
+	}
+	if !recipientsInclude(t, (*events1)[0], ownerID) {
+		t.Fatalf("unbound Wendy-named agent: recipients must include owner")
+	}
+	if !recipientsInclude(t, (*events1)[0], testUserID) {
+		t.Fatalf("unbound Wendy-named agent: recipients must include workspace owner/admin (not owner-only) since it is not the bound onboarding agent")
+	}
+
+	// Bind it as the workspace's onboarding agent — now it must scope
+	// owner-only, driven by the binding, not the name.
+	if err := testHandler.Queries.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{
+		ID: wsUUID, OnboardingAgentID: agentUUID,
+	}); err != nil {
+		t.Fatalf("bind onboarding agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE workspace SET onboarding_agent_id = NULL WHERE id = $1`, testWorkspaceID)
+	})
+
+	events2 := captureReminderChangedEvents(t, testHandler, agentID)
+	testHandler.publishAgentReminderChanged(ctx, wsUUID, agentUUID)
+	if len(*events2) != 1 {
+		t.Fatalf("bound onboarding agent: got %d events, want 1", len(*events2))
+	}
+	if !recipientsInclude(t, (*events2)[0], ownerID) {
+		t.Fatalf("bound onboarding agent: recipients must include owner")
+	}
+	if recipientsInclude(t, (*events2)[0], testUserID) {
+		t.Fatalf("bound onboarding agent: recipients must be owner-only, got workspace owner/admin included")
+	}
+}
+
+func recipientsInclude(t *testing.T, e events.Event, userID string) bool {
+	t.Helper()
+	for _, id := range e.RecipientUserIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func listContainsAgent(t *testing.T, body []byte, agentID string) bool {

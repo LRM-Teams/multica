@@ -739,10 +739,10 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	alwaysRedact := workspaceAlwaysRedactSecrets(ws.Settings)
 
-	// Resolve the request actor once. Agents bypass the private-agent gate
-	// to preserve A2A collaboration; members must be in allowed_principals
-	// (agent owner or workspace owner/admin) to see private agents.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// Resolve the request actor once — used below to redact secrets from
+	// non-agent viewers. Every agent in the workspace is listable by every
+	// member (task #908: agent existence/listing is no longer visibility-gated).
+	actorType, _ := h.resolveActor(r, userID, workspaceID)
 	// Research Fleet agents are infrastructure and stay out of the workspace
 	// agent directory / issue assignee picker.
 	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
@@ -764,11 +764,6 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		homeID := homeByAgent[uuidToString(a.ID)]
 		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
 			continue
-		}
-		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
-			if !memberAllowedForPrivateAgent(a, actorID, member.Role) {
-				continue
-			}
 		}
 		resp := agentToResponse(a)
 		if homeID != "" {

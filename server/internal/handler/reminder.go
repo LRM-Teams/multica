@@ -1077,21 +1077,25 @@ func (h *Handler) publishAgentReminderChanged(ctx context.Context, workspaceID, 
 	payload := agentReminderChangedPayload{AgentID: uuidToString(agentID)}
 	var visibility string
 	var ownerID pgtype.UUID
-	var displayName string
 	if err := h.DB.QueryRow(ctx, `
-		SELECT visibility, owner_id, display_name
+		SELECT visibility, owner_id
 		FROM agent
-		WHERE id = $1 AND workspace_id = $2`, agentID, workspaceID).Scan(&visibility, &ownerID, &displayName); err != nil {
+		WHERE id = $1 AND workspace_id = $2`, agentID, workspaceID).Scan(&visibility, &ownerID); err != nil {
 		return
 	}
+	// The onboarding agent's identity comes only from workspace.onboarding_agent_id
+	// (task #902) — never from display name, which an owner can rename freely.
+	onboardingAgentID, err := h.Queries.GetWorkspaceOnboardingAgentID(ctx, workspaceID)
+	isOnboardingAgent := err == nil && onboardingAgentID.Valid && uuidToString(onboardingAgentID) == uuidToString(agentID)
+
 	workspace := uuidToString(workspaceID)
-	if visibility != "private" && !isWindyAgentName(displayName) {
+	if visibility != "private" && !isOnboardingAgent {
 		h.publish(protocol.EventAgentReminderChanged, workspace, "system", "", payload)
 		return
 	}
 
 	recipients := map[string]bool{uuidToString(ownerID): ownerID.Valid}
-	if !isWindyAgentName(displayName) {
+	if !isOnboardingAgent {
 		rows, err := h.DB.Query(ctx, `
 			SELECT user_id
 			FROM member

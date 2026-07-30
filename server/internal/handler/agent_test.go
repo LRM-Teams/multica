@@ -360,12 +360,15 @@ func TestListWorkspaceAgentTaskSnapshotIncludesActorIdentity(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&memberTasks); err != nil {
 		t.Fatalf("decode member tasks: %v", err)
 	}
+	// task #908: agent identity is no longer visibility-gated — a plain
+	// member sees the real actor snapshot for a private agent's task too,
+	// same as the owner does above.
 	privateTask, ok := findAgentTaskResponse(memberTasks, privateTaskID)
 	if !ok {
 		t.Fatalf("private task %s missing", privateTaskID)
 	}
-	if privateTask.ActorID != privateAgentID || privateTask.ActorType != "agent" || privateTask.DisplayName != "Hidden agent" || privateTask.ActorStatus != "hidden" || privateTask.Actor == nil || privateTask.Actor.Status != "hidden" {
-		t.Fatalf("private task identity = %+v, want hidden actor snapshot", privateTask)
+	if privateTask.ActorID != privateAgentID || privateTask.ActorType != "agent" || privateTask.DisplayName != "Snapshot Private Agent" || privateTask.ActorStatus != "visible" || privateTask.Actor == nil || privateTask.Actor.Status != "visible" {
+		t.Fatalf("private task identity = %+v, want visible actor snapshot (existence should be unconditional post-#908)", privateTask)
 	}
 }
 

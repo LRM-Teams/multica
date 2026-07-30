@@ -102,14 +102,16 @@ func TestTimelineIncludesStableActorIdentitySnapshots(t *testing.T) {
 		t.Fatalf("missing identity = %+v, want deleted safe placeholder", missing)
 	}
 
+	// task #908: agent identity is no longer visibility-gated — a plain
+	// member sees the real actor snapshot for a private agent's activity too.
 	memberEntries, code := fetchTimelineAs(t, plainMemberID, issueID)
 	if code != http.StatusOK {
 		t.Fatalf("member timeline status = %d", code)
 	}
 	for _, entry := range memberEntries {
 		if entry.Action != nil && *entry.Action == "private_actor" {
-			if entry.DisplayName != "Hidden agent" || entry.ActorStatus != "hidden" || entry.Actor == nil || entry.Actor.Status != "hidden" {
-				t.Fatalf("private identity for plain member = %+v, want hidden safe placeholder", entry)
+			if entry.DisplayName != "Private Activity Agent" || entry.ActorStatus != "visible" || entry.Actor == nil || entry.Actor.Status != "visible" {
+				t.Fatalf("private identity for plain member = %+v, want visible snapshot (existence should be unconditional post-#908)", entry)
 			}
 			return
 		}

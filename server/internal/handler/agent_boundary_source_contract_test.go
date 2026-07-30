@@ -99,9 +99,15 @@ func TestBoundary_LabelAttach_AuditActorIsAgent(t *testing.T) {
 	}
 }
 
-// TestBoundary_Directory_PrivateAgentHiddenFromPeer asserts other private
-// agents are not listed (no owner-borrow directory expansion).
-func TestBoundary_Directory_PrivateAgentHiddenFromPeer(t *testing.T) {
+// TestBoundary_Directory_PrivateAgentListedForPeer supersedes the old
+// "hidden from peer" contract (task #908: agent existence/listing is no
+// longer visibility-gated — every agent in the workspace is a listable
+// colleague, Frank 2026-07-30 10:56 "所有的代码全部删掉，默认public的").
+// The sensitive-tab data (Activity/Files/Reminders/Usage) is what stays
+// gated, separately, and this directory endpoint never exposed that data —
+// see TestBoundary_Directory_NoSecretInstructionValue below for the boundary
+// that does still apply.
+func TestBoundary_Directory_PrivateAgentListedForPeer(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -124,10 +130,14 @@ func TestBoundary_Directory_PrivateAgentHiddenFromPeer(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	found := false
 	for _, it := range items {
 		if id, _ := it["id"].(string); id == privateID {
-			t.Fatalf("private peer agent %s visible in directory — owner-borrow / over-share", privateID)
+			found = true
 		}
+	}
+	if !found {
+		t.Fatalf("private peer agent %s missing from directory (existence should be unconditional post-#908)", privateID)
 	}
 }
 

@@ -42,29 +42,31 @@ export function canEditAgent(agent: Agent, ctx: PermissionContext): Decision {
 }
 
 /**
- * Read an agent's Activity / Reminders. Mirrors the backend's
- * `canAccessPrivateAgent` (`server/internal/handler/agent_access.go:26-51`):
- * non-private agents are readable by any workspace member, private ones by
- * their owner plus workspace admins/owners.
+ * Read an agent's sensitive tabs — Activity, Reminders, Files, Usage.
  *
- * Until 2026-07-29 the view layer gated this on `agent.managed_role ===
- * "group_manager"` instead, which was both the wrong subject (the agent's
- * marker, not the viewer's authority) and stricter than the backend — admins
- * could fetch the data over the API but never saw the tab. That marker is
- * being retired with the group-manager cutover (#871).
+ * One rule for all of them, deliberately: three copies of the same rule is
+ * three chances to miss one on the next change. Frank, 2026-07-30: "Activity
+ * 还是要根据 workspace 的 role 来的，admin 可以看到，普通成员，只能看到自己
+ * agent 的 activity" and then "其余几个 tab 同理，我只是说了 activity".
  *
- * Not mirrored: the backend's `privateAgentOwnerOnly` branch, which keys on
- * the agent's *display name* (`windy.go:511`) and has no client-side
- * equivalent. Such an agent shows the tab to an admin and the request 403s.
- * Narrow enough to accept for now — see the note on #871.
+ * Note there is deliberately no visibility term. Agent visibility was retired
+ * (same day) and it never belonged here anyway: whether other people may read
+ * an agent's activity is a property of the *viewer's* authority, not of how
+ * discoverable the agent is.
+ *
+ * This gate decides **whether a tab is shown**, not whether data may be read.
+ * The server re-checks admin-or-owner on every request, so getting this wrong
+ * shows a tab that 403s — it cannot leak anything.
  */
-export function canViewAgentActivity(agent: Agent, ctx: PermissionContext): Decision {
+export function canViewAgentSensitiveTabs(
+  agent: Agent,
+  ctx: PermissionContext,
+): Decision {
   if (ctx.userId === null) {
     return deny("not_authenticated", "Sign in to view this agent's activity.");
   }
   if (agent.owner_id !== null && agent.owner_id === ctx.userId) return ALLOW;
   if (isAdminLike(ctx.role)) return ALLOW;
-  if (ctx.role !== null && agent.visibility === "workspace") return ALLOW;
   return deny(
     "not_resource_owner",
     "Only the agent owner and workspace admins can view this agent's activity.",
@@ -72,33 +74,32 @@ export function canViewAgentActivity(agent: Agent, ctx: PermissionContext): Deci
 }
 
 /**
- * Assign an agent to an issue. Workspace-visibility agents are assignable by
- * any workspace member; private agents are restricted to their owner plus
- * workspace admins/owners. Mirrors `issue.go:1471-1490`.
+ * Assign an agent to an issue. Any workspace member may assign any agent.
+ *
+ * ⚠️ This is a widening, and it is not covered by Frank's 2026-07-30
+ * statements — those retire *visibility*. Raised explicitly rather than let it
+ * happen incidentally; see the note in the PR description.
+ *
+ * Why this and not admin-or-owner: retiring visibility collapses the two former
+ * branches (workspace/channel → any member, private → owner+admin) into one,
+ * and there is no "leave it as it was" option because the old split *was* the
+ * visibility split. Of the two, "every member can see the agent but may not give
+ * it work" is the stranger outcome. Choosing admin-or-owner would instead be a
+ * *tightening* — members can currently assign workspace-visibility agents.
+ *
+ * Membership is still required: a non-member has no business assigning work.
  */
 export function canAssignAgentToIssue(
-  agent: Agent,
+  _agent: Agent,
   ctx: PermissionContext,
 ): Decision {
   if (ctx.userId === null) {
     return deny("not_authenticated", "Sign in to assign agents.");
   }
-  if (agent.visibility === "workspace" || agent.visibility === "channel") {
-    // `channel` discoverability is filtered by home_channel on ListAgents /
-    // invite / @ (LRM-240). When the agent is already in this client's list,
-    // treat assignability like workspace — do not silently remap to private.
-    if (ctx.role === null) {
-      return deny("not_member", "Join this workspace to assign agents.");
-    }
-    return ALLOW;
+  if (ctx.role === null) {
+    return deny("not_member", "Join this workspace to assign agents.");
   }
-  // visibility === "private"
-  if (isAdminLike(ctx.role)) return ALLOW;
-  if (agent.owner_id !== null && agent.owner_id === ctx.userId) return ALLOW;
-  return deny(
-    "private_visibility",
-    "Personal agent — only the owner and workspace admins can assign work.",
-  );
+  return ALLOW;
 }
 
 // ---- Skills ----------------------------------------------------------------

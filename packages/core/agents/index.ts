@@ -9,7 +9,5 @@ export * from "./use-agent-lifecycle";
 export * from "./use-agent-activity";
 export * from "./use-workspace-presence-prefetch";
 export * from "./constants";
-export * from "./visibility-label";
-export * from "./channel-discoverability";
 export * from "./use-workspace-agent-availability";
 export * from "./mcp-support";

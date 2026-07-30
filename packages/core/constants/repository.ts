@@ -2,12 +2,16 @@ export const MULTICA_REPOSITORY = "LRM-Teams/multica";
 export const MULTICA_GITHUB_URL = `https://github.com/${MULTICA_REPOSITORY}`;
 export const MULTICA_ISSUES_URL = `${MULTICA_GITHUB_URL}/issues`;
 export const MULTICA_RELEASES_URL = `${MULTICA_GITHUB_URL}/releases`;
+// Served from our own CDN, not the private GitHub repo (task #11, #1475):
+// raw.githubusercontent.com 404s unauthenticated on a private repo, so a
+// brand-new user's first command failed. No relation to MULTICA_REPOSITORY.
+const MULTICA_RELEASE_CDN_BASE_URL = "https://cdn.leagent.me/computer";
 export const MULTICA_INSTALL_SCRIPT_URL =
-  `https://raw.githubusercontent.com/${MULTICA_REPOSITORY}/main/scripts/install.sh`;
+  `${MULTICA_RELEASE_CDN_BASE_URL}/install.sh`;
 export const MULTICA_INSTALL_COMMAND =
   `curl -fsSL ${MULTICA_INSTALL_SCRIPT_URL} | bash`;
 export const MULTICA_POWERSHELL_INSTALL_SCRIPT_URL =
-  `https://raw.githubusercontent.com/${MULTICA_REPOSITORY}/main/scripts/install.ps1`;
+  `${MULTICA_RELEASE_CDN_BASE_URL}/install.ps1`;
 export const MULTICA_POWERSHELL_INSTALL_COMMAND =
   `irm ${MULTICA_POWERSHELL_INSTALL_SCRIPT_URL} | iex`;
 

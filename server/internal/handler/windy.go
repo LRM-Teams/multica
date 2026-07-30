@@ -612,9 +612,6 @@ func preferWindyAgent(candidate, current db.Agent) bool {
 	if candidate.RuntimeID.Valid != current.RuntimeID.Valid {
 		return candidate.RuntimeID.Valid
 	}
-	if (candidate.Visibility == "private") != (current.Visibility == "private") {
-		return candidate.Visibility == "private"
-	}
 	candidateIsWendy := agentDisplayName(candidate) == windyAgentName
 	currentIsWendy := agentDisplayName(current) == windyAgentName
 	if candidateIsWendy != currentIsWendy {
@@ -640,7 +637,7 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 		}
 		restored = true
 	}
-	if agentDisplayName(updated) != windyAgentName || updated.Visibility != "private" {
+	if agentDisplayName(updated) != windyAgentName {
 		normalized, err := h.normalizeWindyAgent(r, updated)
 		if err != nil {
 			return db.Agent{}, err
@@ -684,7 +681,6 @@ func (h *Handler) normalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent
 	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
 		ID:          agent.ID,
 		DisplayName: pgtype.Text{String: windyAgentName, Valid: true},
-		Visibility:  pgtype.Text{String: "private", Valid: true},
 	})
 	if err != nil {
 		return db.Agent{}, err

@@ -207,7 +207,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 	var assistant db.Agent
 	assistantCreated := false
 	for _, existing := range agents {
-		if agentDisplayName(existing) == onboardingAssistantName && existing.Visibility == "workspace" {
+		if agentDisplayName(existing) == onboardingAssistantName {
 			assistant = existing
 			break
 		}

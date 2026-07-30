@@ -2255,6 +2255,44 @@ func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T
 	}
 }
 
+// TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate proves task #908's
+// fix (Parker, #multica thread f83df812, 2026-07-30 18:05, "直接删掉这个强制
+// 转换：它跟 Frank『默认public』直接冲突"): restoring an archived Wendy agent
+// must not silently coerce it back to visibility=private.
+func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, instructions, avatar_url,
+			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			archived_at, archived_by
+		)
+		VALUES ($1, $2, 'Wendy', 'archived workspace-visible Wendy', 'instructions', '/legacy.png',
+			'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, now(), $4)
+		RETURNING id
+	`, testWorkspaceID, "archived_workspace_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("seed archived workspace-visible Wendy agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+	resetTestWorkspaceOnboardingAgent(t, ctx)
+
+	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
+	updated, _, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
+	if err != nil {
+		t.Fatalf("ensureWindyAgent: %v", err)
+	}
+	if uuidToString(updated.ID) != agentID {
+		t.Fatalf("ensureWindyAgent reused agent %q, want restored %q", uuidToString(updated.ID), agentID)
+	}
+	if updated.Visibility != "workspace" {
+		t.Fatalf("restored Wendy visibility = %q, want workspace (must not be silently coerced to private)", updated.Visibility)
+	}
+}
+
 func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("handler test fixture unavailable")

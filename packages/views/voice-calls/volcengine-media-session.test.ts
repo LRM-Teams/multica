@@ -236,6 +236,20 @@ describe("VolcengineVoiceMediaSession", () => {
     );
   });
 
+  it("reports the first decoded remote audio frame as an answered call", async () => {
+    const harness = createHarness();
+    const onRemoteAudioStarted = vi.fn();
+    const session = new VolcengineVoiceMediaSession(
+      { onRemoteAudioStarted },
+      async () => harness.driver,
+    );
+    await session.connect(media);
+
+    harness.getCallbacks()?.onRemoteAudioStarted("voice-agent-call-1");
+
+    expect(onRemoteAudioStarted).toHaveBeenCalledWith("voice-agent-call-1");
+  });
+
   it("releases every acquired resource once on disconnect", async () => {
     const harness = createHarness();
     const session = new VolcengineVoiceMediaSession(

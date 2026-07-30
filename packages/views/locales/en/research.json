@@ -3,6 +3,14 @@
   "new": "New research",
   "empty_title": "No research yet",
   "empty_desc": "Describe what you want to understand. The research fleet runs a multi-source methodology for you.",
+  "empty_examples_label": "Not sure where to start? Pick an example:",
+  "empty_examples": {
+    "q1": "Map the leading AI coding assistants of 2026 and how they differ",
+    "q2": "Compare production cost and performance of mainstream vector databases",
+    "q3": "Research Notion's pricing strategy and user sentiment",
+    "q4": "Summarize this year's key breakthroughs in embodied AI"
+  },
+  "empty_cta": "Start your first research",
   "goal_placeholder": "What do you want researched? (goal only — no need to name sites)",
   "start": "Start research",
   "status": {

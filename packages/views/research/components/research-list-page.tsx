@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -17,6 +17,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { AppLink } from "../../navigation/app-link";
+import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchSessionRowActions } from "./research-session-row-actions";
 
 export function ResearchListPage() {
@@ -26,6 +27,19 @@ export function ResearchListPage() {
   const nav = useNavigation();
   const qc = useQueryClient();
   const [goal, setGoal] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  const focusComposer = () => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.focus();
+    el.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  };
+
+  const fillComposer = (text: string) => {
+    setGoal(text);
+    focusComposer();
+  };
 
   useQuery(researchFleetOptions(wsId));
   const { data, isLoading } = useQuery(researchSessionListOptions(wsId));
@@ -60,6 +74,7 @@ export function ResearchListPage() {
 
       <div className="max-w-2xl space-y-3 rounded-lg border p-4">
         <Textarea
+          ref={composerRef}
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           placeholder={t(($) => $.goal_placeholder)}
@@ -77,10 +92,10 @@ export function ResearchListPage() {
         {isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : sessions.length === 0 ? (
-          <div className="text-sm text-muted-foreground">
-            <div className="font-medium text-foreground">{t(($) => $.empty_title)}</div>
-            <p>{t(($) => $.empty_desc)}</p>
-          </div>
+          <ResearchEmptyState
+            onSelectExample={fillComposer}
+            onStart={focusComposer}
+          />
         ) : (
           sessions.map((s) => (
             <div

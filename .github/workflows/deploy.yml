@@ -74,6 +74,7 @@ jobs:
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
           install -m 0755 scripts/run-aliyun-backend-migration.sh "${bundle}/scripts/run-aliyun-backend-migration.sh"
           install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
+          install -m 0755 scripts/assert-oss-compose-credentials.sh "${bundle}/scripts/assert-oss-compose-credentials.sh"
 
       - name: Validate deploy bundle
         run: |
@@ -359,6 +360,9 @@ jobs:
             echo "::error::DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment. Aborting before runtime changes."
             exit 1
           fi
+          # Fail closed before any runtime mutation when OSS lacks AWS keys (LRM-766).
+          printf '%s\n' "$compose_environment" |
+            bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
           postgres_id="$(compose ps -q postgres)"
           if [ -z "$postgres_id" ]; then
             echo "::error::PostgreSQL container is not running. Aborting before runtime changes."
@@ -436,6 +440,9 @@ jobs:
           # Here it is a safe version-ledger no-op because the independent
           # migration step above already advanced the database.
           compose pull frontend backend
+          # Defense in depth: same OSS credential gate as preflight (LRM-766).
+          compose config --environment |
+            bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
           # Start frontend before backend so Caddy can resolve the frontend DNS name
           # before the backend health check begins — avoids the container-restart
           # DNS race that caused intermittent 'no such host' errors (#324).

@@ -3,6 +3,21 @@
 Status: draft, implementing today. Owner: Nash. Related: #815, PR #1526
 (env var layer, merged), the 2026-07-30 ICP-block incident that motivated this.
 
+## ⚠️ Scope limit — read before assuming this fixes manual installs
+
+**This only covers the daemon's own unattended auto-update loop.** It does
+**not** cover a human running `install.sh` or `multica update` by hand —
+`multica update` is a fresh one-shot process with no daemon connection, so it
+has no way to receive the server-dispatched value (see §4). Those manual
+paths still only see the `MULTICA_RELEASE_MANIFEST_BASE_URL` env var / the
+compile-time default, exactly as before this change. Concretely: after this
+ships, "the domain is blocked, did we fix it for everyone" is **not** a yes —
+it's "unattended already-running daemons self-heal automatically; anyone
+installing or manually upgrading still needs the env var set by hand." Do not
+conflate the two when answering that question (Parker, 2026-07-30 18:38,
+`#prj-daemon`, after today's install.sh/ICP incident was specifically the
+manual path).
+
 ## Problem
 
 The daemon's release-manifest base URL (where it downloads CLI update

@@ -235,11 +235,21 @@ describe("canAssignAgentToIssue", () => {
       canAssignAgentToIssue(a, { userId: BOB, role: "admin" }).allowed,
     ).toBe(true);
   });
-  it("denies a plain member from assigning someone else's private agent", () => {
+  // Inverted with the visibility retirement: the private/workspace split *was*
+  // the visibility split, so there is no "leave it as it was" option here. The
+  // server remains the boundary — ListAgents (agent.go:800) does not hand a
+  // member another member's private agent in the first place.
+  it("allows a plain member to assign any agent it was given", () => {
     const a = makeAgent({ visibility: "private", owner_id: ALICE });
     const d = canAssignAgentToIssue(a, { userId: BOB, role: "member" });
+    expect(d.allowed).toBe(true);
+  });
+
+  it("still requires membership — a non-member cannot assign", () => {
+    const a = makeAgent({ visibility: "workspace" });
+    const d = canAssignAgentToIssue(a, { userId: BOB, role: null });
     expect(d.allowed).toBe(false);
-    expect(d.reason).toBe("private_visibility");
+    expect(d.reason).toBe("not_member");
   });
   it("denies logged-out users", () => {
     const a = makeAgent({ visibility: "workspace" });

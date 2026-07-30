@@ -35,63 +35,60 @@ jobs:
         if: inputs.action == 'research_fleet_runtime_match_wendy'
         run: |
           set -euo pipefail
-          cd /data/multica
+          DEPLOY_DIR=/data/multica
+          cd "$DEPLOY_DIR"
 
-          # Parse host dotenv without sourcing (passwords may contain shell metacharacters).
-          db_url="$(python3 - <<'PY'
+          # Same compose entrypoint the Deploy workflow uses on this host.
+          compose() {
+            docker compose \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${DEPLOY_DIR}/docker-compose.yml" \
+              -f "${DEPLOY_DIR}/docker-compose.selfhost.yml" \
+              -f "${DEPLOY_DIR}/docker-compose.aliyun.yml" \
+              "$@"
+          }
+
+          dotenv_value() {
+            local key="$1" default="${2:-}"
+            python3 - "$key" "$default" <<'PY'
+          import sys
           from pathlib import Path
+          key, default = sys.argv[1], sys.argv[2]
           for line in Path("/data/multica/.env").read_text().splitlines():
-              if line.startswith("DATABASE_URL="):
+              if line.startswith(key + "="):
                   print(line.split("=", 1)[1].strip().strip('"').strip("'"))
-                  break
-          else:
-              raise SystemExit("DATABASE_URL missing")
+                  raise SystemExit(0)
+          print(default)
           PY
-          )"
+          }
 
-          # Aliyun keeps Postgres on the host (often published as 127.0.0.1:5432).
-          # Compose-internal hostnames like `postgres` only work inside the network.
-          host_db_url="$(python3 - <<'PY'
-          from pathlib import Path
-          from urllib.parse import urlparse, urlunparse
-          raw = None
-          for line in Path("/data/multica/.env").read_text().splitlines():
-              if line.startswith("DATABASE_URL="):
-                  raw = line.split("=", 1)[1].strip().strip('"').strip("'")
-                  break
-          if not raw:
-              raise SystemExit("DATABASE_URL missing")
-          u = urlparse(raw)
-          host = u.hostname or ""
-          if host in ("postgres", "db", "postgresql"):
-              # Rewrite to loopback; keep user/pass/db/port/query.
-              port = u.port or 5432
-              netloc = u.netloc.replace(f"@{host}", "@127.0.0.1").replace(f"@{host}:", "@127.0.0.1:")
-              if "@127.0.0.1" not in netloc and host in netloc:
-                  netloc = netloc.replace(host, "127.0.0.1", 1)
-              raw = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
-          print(raw)
-          PY
-          )"
+          db_user="$(dotenv_value POSTGRES_USER multica)"
+          db_name="$(dotenv_value POSTGRES_DB multica)"
+          db_password="$(dotenv_value POSTGRES_PASSWORD)"
+          if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
+            echo "::error::POSTGRES_USER/DB/PASSWORD missing in ${DEPLOY_DIR}/.env"
+            exit 1
+          fi
+
+          postgres_id="$(compose ps -q postgres)"
+          if [ -z "$postgres_id" ]; then
+            # Fallback: any running container with postgres in the name.
+            postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '/postgres/ {print $2; exit}')"
+          fi
+          if [ -z "$postgres_id" ]; then
+            echo "::error::PostgreSQL container is not running"
+            docker ps --format 'table {{.Names}}\t{{.Status}}' || true
+            exit 1
+          fi
+          echo "postgres container=${postgres_id}"
 
           run_sql() {
             local sql="$1"
-            if command -v psql >/dev/null 2>&1; then
-              psql "$host_db_url" -v ON_ERROR_STOP=1 -c "$sql"
-              return
-            fi
-            # Fallback: exec via a running backend container that can resolve `postgres`.
-            local cid
-            cid="$(docker ps --filter name=multica-backend --format '{{.ID}}' | head -1)"
-            if [ -z "$cid" ]; then
-              cid="$(docker ps --format '{{.Names}} {{.ID}}' | awk '/backend/ {print $2; exit}')"
-            fi
-            if [ -n "$cid" ]; then
-              docker exec -i "$cid" sh -c 'command -v psql >/dev/null && psql "$DATABASE_URL" -v ON_ERROR_STOP=1' <<<"$sql"
-              return
-            fi
-            echo "::error::no psql on host and no backend container"
-            exit 1
+            # Exec inside the postgres container (matches Deploy preflight).
+            printf '%s\n' "$sql" | docker exec -i \
+              -e PGPASSWORD="$db_password" \
+              "$postgres_id" \
+              psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1
           }
 
           echo "=== BEFORE: Wendy + research fleet agents ==="

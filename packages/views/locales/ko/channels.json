@@ -608,6 +608,7 @@
     "media_failed": "음성 연결에 실패했습니다. 마이크 권한과 네트워크를 확인하세요.",
     "rtc_diagnostic_code": "RTC 진단 코드: {{code}}",
     "create_failed": "통화를 시작할 수 없습니다. 다시 시도해 주세요.",
+    "activation_timeout": "에이전트가 제시간에 응답하지 않았습니다. 다시 시도해 주세요.",
     "server_failed": "음성 서비스 오류로 통화가 종료되었습니다.",
     "close": "닫기"
   },

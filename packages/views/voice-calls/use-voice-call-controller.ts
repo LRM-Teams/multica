@@ -9,7 +9,7 @@ import type {
   VoiceCall,
   VoiceCallMedia,
 } from "@multica/core/types";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCallback,
   useEffect,
@@ -66,6 +66,7 @@ export type VoiceCallMediaSessionFactory = (
 export interface UseVoiceCallControllerOptions {
   mediaSessionFactory?: VoiceCallMediaSessionFactory;
   ringbackFactory?: VoiceCallRingbackFactory;
+  activationTimeoutMs?: number;
 }
 
 export interface VoiceCallController {
@@ -84,6 +85,7 @@ export interface VoiceCallController {
 }
 
 const TERMINAL_STATUSES = new Set(["ended", "failed"]);
+const DEFAULT_ACTIVATION_TIMEOUT_MS = 30_000;
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim()
@@ -168,6 +170,9 @@ export function useVoiceCallController(
     options.mediaSessionFactory ?? createVolcengineVoiceMediaSession;
   const ringbackFactory =
     options.ringbackFactory ?? createVoiceCallRingback;
+  const activationTimeoutMs =
+    options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS;
+  const queryClient = useQueryClient();
   const createCallMutation = useCreateVoiceCall(workspaceId);
   const connectCallMutation = useConnectVoiceCall(workspaceId);
   const stopCallMutation = useStopVoiceCall(workspaceId);
@@ -189,6 +194,8 @@ export function useVoiceCallController(
   const endingRef = useRef(false);
   const mediaFailureRef = useRef<unknown>(null);
   const providerStartedRef = useRef(false);
+  const activationTimeoutRef =
+    useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const stoppedCallIdsRef = useRef(new Set<string>());
   const stopInFlightRef = useRef<{
     callId: string;
@@ -238,8 +245,135 @@ export function useVoiceCallController(
     }
   }, [ringbackFactory, stopRingback]);
 
+  const clearActivationTimeout = useCallback(() => {
+    if (activationTimeoutRef.current === null) return;
+    globalThis.clearTimeout(activationTimeoutRef.current);
+    activationTimeoutRef.current = null;
+  }, []);
+
+  const scheduleActivationTimeout = useCallback((targetCallId: string) => {
+    clearActivationTimeout();
+    activationTimeoutRef.current = globalThis.setTimeout(() => {
+      activationTimeoutRef.current = null;
+      void (async () => {
+        if (
+          activeCallIdRef.current !== targetCallId ||
+          endingRef.current ||
+          cancelRequestedRef.current ||
+          !providerStartedRef.current
+        ) {
+          return;
+        }
+
+        let latestStatus = "";
+        try {
+          const latest = await queryClient.fetchQuery({
+            ...voiceCallOptions(workspaceId, targetCallId),
+            staleTime: 0,
+          });
+          latestStatus = latest.call.status;
+        } catch (error) {
+          if (
+            activeCallIdRef.current !== targetCallId ||
+            endingRef.current ||
+            cancelRequestedRef.current
+          ) {
+            return;
+          }
+          stopRingback();
+          providerStartedRef.current = false;
+          if (mountedRef.current) {
+            setLocalError(controllerError(
+              "server",
+              "provider_status_check_failed",
+              error,
+              "Could not confirm whether the voice call agent answered",
+            ));
+            setLocalPhase("failed");
+          }
+          const session = mediaSessionRef.current;
+          mediaSessionRef.current = null;
+          const [, stopResult] = await Promise.allSettled([
+            session?.disconnect() ?? Promise.resolve(),
+            requestServerStopRef.current(targetCallId),
+          ]);
+          if (stopResult.status === "fulfilled") {
+            if (activeCallIdRef.current === targetCallId) {
+              activeCallIdRef.current = "";
+            }
+          } else if (mountedRef.current) {
+            setLocalError(controllerError(
+              "stop",
+              "stop_failed",
+              stopResult.reason,
+              "The unconfirmed voice call could not be stopped on the server",
+            ));
+          }
+          return;
+        }
+
+        if (
+          activeCallIdRef.current !== targetCallId ||
+          endingRef.current ||
+          cancelRequestedRef.current
+        ) {
+          return;
+        }
+        if (latestStatus === "active") {
+          stopRingback();
+          if (mountedRef.current) {
+            setLocalPhase("connected");
+          }
+          return;
+        }
+        if (TERMINAL_STATUSES.has(latestStatus)) {
+          stopRingback();
+          return;
+        }
+
+        stopRingback();
+        providerStartedRef.current = false;
+        if (mountedRef.current) {
+          setLocalError({
+            source: "server",
+            code: "provider_activation_timeout",
+            message: "The voice call agent did not answer in time",
+          });
+          setLocalPhase("failed");
+        }
+        const session = mediaSessionRef.current;
+        mediaSessionRef.current = null;
+        const [, stopResult] = await Promise.allSettled([
+          session?.disconnect() ?? Promise.resolve(),
+          requestServerStopRef.current(targetCallId),
+        ]);
+        if (stopResult.status === "fulfilled") {
+          if (activeCallIdRef.current === targetCallId) {
+            activeCallIdRef.current = "";
+          }
+          return;
+        }
+        if (mountedRef.current) {
+          setLocalError(controllerError(
+            "stop",
+            "stop_failed",
+            stopResult.reason,
+            "The unanswered voice call could not be stopped on the server",
+          ));
+        }
+      })();
+    }, activationTimeoutMs);
+  }, [
+    activationTimeoutMs,
+    clearActivationTimeout,
+    queryClient,
+    stopRingback,
+    workspaceId,
+  ]);
+
   const setMediaFailure = useCallback((error: unknown) => {
     if (endingRef.current || cancelRequestedRef.current) return;
+    clearActivationTimeout();
     stopRingback();
     mediaFailureRef.current = error;
     if (mountedRef.current) {
@@ -266,7 +400,7 @@ export function useVoiceCallController(
         },
       );
     }
-  }, [stopRingback]);
+  }, [clearActivationTimeout, stopRingback]);
 
   const start = useCallback((
     input: CreateVoiceCallRequest,
@@ -285,6 +419,7 @@ export function useVoiceCallController(
     endingRef.current = false;
     mediaFailureRef.current = null;
     providerStartedRef.current = false;
+    clearActivationTimeout();
     setCallId("");
     setAutoplayBlockedUserId(null);
     setLocalError(null);
@@ -388,8 +523,10 @@ export function useVoiceCallController(
         failureSource = "server";
         await connectCallMutation.mutateAsync(createdCallId);
         providerStartedRef.current = true;
+        scheduleActivationTimeout(createdCallId);
         return createdCallId;
       } catch (error) {
+        clearActivationTimeout();
         stopRingback();
         const cancelled =
           error instanceof VoiceCallMediaError && error.code === "cancelled";
@@ -453,13 +590,16 @@ export function useVoiceCallController(
   }, [
     createCallMutation,
     connectCallMutation,
+    clearActivationTimeout,
     mediaSessionFactory,
+    scheduleActivationTimeout,
     setMediaFailure,
     startRingback,
     stopRingback,
   ]);
 
   const hangUp = useCallback(async (): Promise<void> => {
+    clearActivationTimeout();
     stopRingback();
     cancelRequestedRef.current = true;
     endingRef.current = true;
@@ -514,7 +654,7 @@ export function useVoiceCallController(
       }
       setLocalPhase("ended");
     }
-  }, [stopRingback]);
+  }, [clearActivationTimeout, stopRingback]);
 
   const setMuted = useCallback(async (muted: boolean): Promise<void> => {
     const session = mediaSessionRef.current;
@@ -572,10 +712,12 @@ export function useVoiceCallController(
   useEffect(() => {
     if (!callId) return;
     if (serverStatus === "active") {
+      clearActivationTimeout();
       stopRingback();
       return;
     }
     if (!TERMINAL_STATUSES.has(serverStatus ?? "")) return;
+    clearActivationTimeout();
     stopRingback();
     if (activeCallIdRef.current === callId) {
       activeCallIdRef.current = "";
@@ -583,7 +725,7 @@ export function useVoiceCallController(
     const session = mediaSessionRef.current;
     mediaSessionRef.current = null;
     void session?.disconnect().catch(() => undefined);
-  }, [callId, serverStatus, stopRingback]);
+  }, [callId, clearActivationTimeout, serverStatus, stopRingback]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -591,6 +733,7 @@ export function useVoiceCallController(
       mountedRef.current = false;
       cancelRequestedRef.current = true;
       endingRef.current = true;
+      clearActivationTimeout();
       stopRingback();
       const targetCallId = activeCallIdRef.current;
       activeCallIdRef.current = "";
@@ -600,7 +743,7 @@ export function useVoiceCallController(
         void requestServerStopRef.current(targetCallId).catch(() => undefined);
       }
     };
-  }, [stopRingback]);
+  }, [clearActivationTimeout, stopRingback]);
 
   const serverFailure = serverStatus === "failed" && serverCall
     ? {

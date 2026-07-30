@@ -101,7 +101,9 @@ export function VoiceCallPanel({
         case "stop":
           return $.voice_call.stop_failed;
         case "server":
-          return $.voice_call.server_failed;
+          return error.code === "provider_activation_timeout"
+            ? $.voice_call.activation_timeout
+            : $.voice_call.server_failed;
       }
     })
     : null;

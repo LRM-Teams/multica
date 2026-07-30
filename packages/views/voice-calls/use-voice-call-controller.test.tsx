@@ -119,6 +119,7 @@ describe("useVoiceCallController", () => {
   let createVoiceCall: ReturnType<typeof vi.fn>;
   let connectVoiceCall: ReturnType<typeof vi.fn>;
   let stopVoiceCall: ReturnType<typeof vi.fn>;
+  let getVoiceCall: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -132,11 +133,12 @@ describe("useVoiceCallController", () => {
       call: { ...createdCall.call, status: "connecting" },
     });
     stopVoiceCall = vi.fn().mockResolvedValue(endedCall);
+    getVoiceCall = vi.fn().mockResolvedValue({ call: createdCall.call });
     setApiInstance({
       createVoiceCall,
       connectVoiceCall,
       stopVoiceCall,
-      getVoiceCall: vi.fn().mockResolvedValue({ call: createdCall.call }),
+      getVoiceCall,
     } as unknown as ApiClient);
   });
 
@@ -195,6 +197,81 @@ describe("useVoiceCallController", () => {
       expect(result.current.phase).toBe("connected");
     });
     expect(ringback.ringback.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails and cleans up when the provider never becomes active", async () => {
+    vi.useFakeTimers();
+    try {
+      const media = createFakeMediaSession();
+      const ringback = createFakeRingback();
+      const { result } = renderHook(
+        () => useVoiceCallController("workspace-1", {
+          mediaSessionFactory: media.factory,
+          ringbackFactory: ringback.factory,
+          activationTimeoutMs: 1_000,
+        }),
+        { wrapper: wrapper(queryClient) },
+      );
+
+      await act(async () => {
+        await result.current.start({
+          channel_id: "channel-1",
+          agent_id: "agent-1",
+        });
+      });
+      expect(result.current.phase).toBe("joining");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(ringback.ringback.stop).toHaveBeenCalled();
+      expect(media.session.disconnect).toHaveBeenCalledTimes(1);
+      expect(stopVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
+      expect(result.current.phase).toBe("failed");
+      expect(result.current.error).toMatchObject({
+        source: "server",
+        code: "provider_activation_timeout",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out when a final server refresh finds the provider active", async () => {
+    vi.useFakeTimers();
+    try {
+      const media = createFakeMediaSession();
+      const ringback = createFakeRingback();
+      const { result } = renderHook(
+        () => useVoiceCallController("workspace-1", {
+          mediaSessionFactory: media.factory,
+          ringbackFactory: ringback.factory,
+          activationTimeoutMs: 1_000,
+        }),
+        { wrapper: wrapper(queryClient) },
+      );
+
+      await act(async () => {
+        await result.current.start({
+          channel_id: "channel-1",
+          agent_id: "agent-1",
+        });
+      });
+      getVoiceCall.mockResolvedValue(activeCall);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(result.current.phase).toBe("connected");
+      expect(result.current.error).toBeNull();
+      expect(media.session.disconnect).not.toHaveBeenCalled();
+      expect(stopVoiceCall).not.toHaveBeenCalled();
+      expect(ringback.ringback.stop).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("starts the provider with its welcome message only after the caller joins the RTC room", async () => {

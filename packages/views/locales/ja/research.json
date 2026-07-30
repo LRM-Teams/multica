@@ -13,6 +13,16 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "groups": {
+    "in_progress": "進行中",
+    "completed": "完了"
+  },
+  "list": {
+    "loading": "リサーチを読み込んでいます",
+    "load_failed": "リサーチの読み込みに失敗しました",
+    "retry": "再試行",
+    "empty_cta": "最初のリサーチを始める"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",

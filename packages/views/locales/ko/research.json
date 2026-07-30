@@ -35,6 +35,9 @@
     "send": "Send",
     "fleet": "Research fleet",
     "confirm": "Confirm research complete",
+    "confirm_continue": "확인 후 계속",
+    "handoff_title": "결과 인계",
+    "view_delivery": "결과 보기",
     "handoff_project": "Create development project",
     "handoff_channel": "Create development channel",
     "handoff": "Handoff",
@@ -53,6 +56,12 @@
     "system": "System",
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
+  },
+  "stage": {
+    "s1_plan": "S1 · 정의",
+    "s2_sources": "S2 · 탐색",
+    "s3_validation": "S3 · 검증",
+    "s4_delivery": "S4 · 전달"
   },
   "node": {
     "goal": "Goal",

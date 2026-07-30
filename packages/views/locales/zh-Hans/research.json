@@ -35,6 +35,9 @@
     "send": "发送",
     "fleet": "调研团",
     "confirm": "确认调研完成",
+    "confirm_continue": "确认并继续",
+    "handoff_title": "交付移交",
+    "view_delivery": "查看交付",
     "handoff_project": "建立开发项目",
     "handoff_channel": "建立开发群",
     "handoff": "交接并创建",
@@ -53,6 +56,12 @@
     "system": "系统",
     "process_tag": "过程事件",
     "empty": "画布推进时，舰队对话与过程事件会出现在这里。"
+  },
+  "stage": {
+    "s1_plan": "S1 · 定义",
+    "s2_sources": "S2 · 探索",
+    "s3_validation": "S3 · 验证",
+    "s4_delivery": "S4 · 交付"
   },
   "node": {
     "goal": "目标",

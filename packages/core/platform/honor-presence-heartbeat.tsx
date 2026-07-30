@@ -8,11 +8,11 @@ const PRESENCE_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Awards honor presence XP while the user is authenticated and the tab is visible. */
 export function HonorPresenceHeartbeat() {
-  const user = useAuthStore((s) => s.user);
+  const userId = useAuthStore((s) => s.user?.id);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!user) return;
+    if (!userId) return;
 
     const api = getApi();
     let cancelled = false;
@@ -37,7 +37,7 @@ export function HonorPresenceHeartbeat() {
       if (timerRef.current) clearInterval(timerRef.current);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [user?.id]);
+  }, [userId]);
 
   return null;
 }

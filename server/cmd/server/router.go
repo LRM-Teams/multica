@@ -1034,6 +1034,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Agents
 			r.Route("/api/agents", func(r chi.Router) {
 				r.Get("/", h.ListAgents)
+				r.Get("/fleet-rankings", h.GetAgentFleetRankings)
+				r.Get("/fleet-rank/rules", h.GetAgentFleetRankRules)
 				r.Post("/", h.CreateAgent)
 				r.Post("/windy", h.EnsureWindy)
 				r.Post("/drafts", h.CreateAgentDraft)
@@ -1045,6 +1047,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/from-template", h.CreateAgentFromTemplate)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetAgent)
+					r.Get("/fleet-rank", h.GetAgentFleetRank)
 					r.Put("/", h.UpdateAgent)
 					r.Post("/archive", h.ArchiveAgent)
 					r.Post("/restore", h.RestoreAgent)

@@ -63,6 +63,8 @@ import type {
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
+  AgentFleetRank,
+  AgentFleetRulesDocument,
   AgentRuntime,
   InboxItem,
   UserActivityListResponse,
@@ -223,6 +225,12 @@ import { type Logger, noopLogger } from "../logger";
 import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
+import {
+  EMPTY_AGENT_FLEET_RANK_LIST,
+  agentFleetRankListSchema,
+  agentFleetRankSchema,
+  agentFleetRulesSchema,
+} from "./agent-fleet-schemas";
 import {
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
@@ -1741,6 +1749,46 @@ export class ApiClient {
   // Per-agent 30-day total run count for the Agents-list RUNS column.
   async getWorkspaceAgentRunCounts(): Promise<AgentRunCount[]> {
     return this.fetch(`/api/agent-run-counts`);
+  }
+
+  async getAgentFleetRankings(): Promise<AgentFleetRank[]> {
+    const raw = await this.fetch<unknown>(`/api/agents/fleet-rankings`);
+    return parseWithFallback(raw, agentFleetRankListSchema, EMPTY_AGENT_FLEET_RANK_LIST, {
+      endpoint: "GET /api/agents/fleet-rankings",
+    });
+  }
+
+  async getAgentFleetRank(agentId: string): Promise<AgentFleetRank> {
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/fleet-rank`);
+    return parseWithFallback(
+      raw,
+      agentFleetRankSchema,
+      {
+        agent_id: agentId,
+        fleet_score: 0,
+        class_id: "reserve",
+        class_label: "Reserve",
+        fleet_rank: 0,
+        fleet_size: 0,
+        sample_tasks: 0,
+        sample_sufficient: false,
+        frozen: false,
+        pillars: { delivery: 0, evolution: 0, growth: 0, efficiency: 0 },
+      },
+      { endpoint: `GET /api/agents/${agentId}/fleet-rank` },
+    );
+  }
+
+  async getAgentFleetRankRules(): Promise<AgentFleetRulesDocument> {
+    const raw = await this.fetch<unknown>(`/api/agents/fleet-rank/rules`);
+    return parseWithFallback(raw, agentFleetRulesSchema, {
+      version: "",
+      window_days: 30,
+      min_sample_tasks: 5,
+      pillar_weights: {},
+      class_thresholds: [],
+      changelog: [],
+    }, { endpoint: "GET /api/agents/fleet-rank/rules" });
   }
 
   async getActiveTasksForIssue(issueId: string): Promise<{ tasks: AgentTask[] }> {

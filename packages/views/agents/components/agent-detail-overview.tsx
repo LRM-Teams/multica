@@ -12,7 +12,8 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import type { Agent, AgentRuntime, AgentTask } from "@multica/core/types";
+import type { Agent, AgentRuntime, AgentTask, AgentFleetRank } from "@multica/core/types";
+import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { agentTasksOptions } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
@@ -151,6 +152,7 @@ export function AgentDetailOverview({
   agent,
   runtime,
   metric,
+  fleet,
   canManage,
   onEdit,
   onDelete,
@@ -158,6 +160,7 @@ export function AgentDetailOverview({
   agent: Agent;
   runtime: AgentRuntime | null;
   metric: AgentMetric;
+  fleet?: AgentFleetRank;
   canManage: boolean;
   onEdit: () => void;
   onDelete: () => void;
@@ -224,8 +227,54 @@ export function AgentDetailOverview({
           <StatCard label={t(($) => $.dashboard.metric_tasks)} value={String(metric.runCount)} sub={t(($) => $.dashboard.last_30d)} />
           <StatCard label={t(($) => $.dashboard.metric_success)} value={successText} sub={t(($) => $.dashboard.last_30d)} />
           <StatCard label={t(($) => $.dashboard.metric_cost)} value={costText} sub={t(($) => $.dashboard.last_30d)} />
-          <StatCard label={t(($) => $.dashboard.metric_version)} value="—" sub={t(($) => $.dashboard.coming_soon)} />
+          <StatCard
+            label={t(($) => $.fleet.score_label)}
+            value={fleet ? Math.round(fleet.fleet_score).toString() : "—"}
+            sub={
+              fleet
+                ? fleet.frozen || isArchived
+                  ? t(($) => $.fleet.frozen_hint)
+                  : t(($) => $.fleet.rank_of, { rank: fleet.fleet_rank, size: fleet.fleet_size })
+                : t(($) => $.dashboard.last_30d)
+            }
+          />
         </div>
+
+        {fleet ? (
+          <SectionCard title={t(($) => $.fleet.title)}>
+            <div className="flex flex-wrap items-center gap-3">
+              <FleetRankBadge
+                classId={fleet.class_id}
+                classLabel={fleet.class_label}
+                fleetRank={fleet.fleet_rank}
+                frozen={fleet.frozen || isArchived}
+              />
+              {!fleet.sample_sufficient ? (
+                <span className="text-xs text-muted-foreground">
+                  {t(($) => $.fleet.warming_up, {
+                    current: fleet.sample_tasks,
+                    required: 5,
+                  })}
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {(
+                [
+                  ["delivery", fleet.pillars.delivery],
+                  ["evolution", fleet.pillars.evolution],
+                  ["growth", fleet.pillars.growth],
+                  ["efficiency", fleet.pillars.efficiency],
+                ] as const
+              ).map(([key, value]) => (
+                <div key={key} className="rounded-lg border border-border/60 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">{t(($) => $.fleet.pillars[key])}</div>
+                  <div className="text-sm font-semibold tabular-nums">{Math.round(value * 100)}</div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        ) : null}
 
         {/* Role & capabilities + Prompt strategy */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

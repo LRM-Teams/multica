@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentRuntime, CreateAgentRequest, AgentCreationDraft } from "@multica/core/types";
 import {
   agentRunCounts30dOptions,
+  agentFleetRankingsOptions,
   summarizeActivityWindow,
   useWorkspaceActivityMap,
   useWorkspacePresenceMap,
@@ -66,6 +67,7 @@ import { useOpenDM } from "../../common/use-open-dm";
 import { WindySetupModal } from "../../workspace/windy-setup-modal";
 import { useWindyEntryAction } from "../../workspace/use-wendy-entry-action";
 import { estimateCost } from "../../runtimes/utils";
+import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -90,10 +92,11 @@ type View = "active" | "archived";
 type Scope = "all" | "mine";
 type AvailabilityFilter = "all" | LiveAvailability;
 
-type SortKey = "recent" | "name" | "runs" | "created";
-const SORT_KEYS: SortKey[] = ["recent", "name", "runs", "created"];
-const SORT_LABEL_KEY: Record<SortKey, "label_recent" | "label_name" | "label_runs" | "label_created"> = {
+type SortKey = "recent" | "name" | "runs" | "created" | "fleet";
+const SORT_KEYS: SortKey[] = ["recent", "fleet", "name", "runs", "created"];
+const SORT_LABEL_KEY: Record<SortKey, "label_recent" | "label_fleet" | "label_name" | "label_runs" | "label_created"> = {
   recent: "label_recent",
+  fleet: "label_fleet",
   name: "label_name",
   runs: "label_runs",
   created: "label_created",
@@ -149,6 +152,7 @@ export function AgentsPage({
   );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runCountsRaw = [] } = useQuery(agentRunCounts30dOptions(wsId));
+  const { data: fleetRankings = [] } = useQuery(agentFleetRankingsOptions(wsId));
 
   // Single source of truth for derived agent state. The hook owns the
   // 30s tick + the runtime/null/task orchestration; the page only reads
@@ -230,6 +234,12 @@ export function AgentsPage({
     for (const r of runCountsRaw) m.set(r.agent_id, r.run_count);
     return m;
   }, [runCountsRaw]);
+
+  const fleetByAgentId = useMemo(() => {
+    const m = new Map<string, (typeof fleetRankings)[number]>();
+    for (const row of fleetRankings) m.set(row.agent_id, row);
+    return m;
+  }, [fleetRankings]);
 
   // Per-agent dashboard metrics (last 30d), sliced in the viewer's tz so the
   // day boundary matches the rest of the dashboard. Cost is summed across the
@@ -481,6 +491,16 @@ export function AgentsPage({
             (runCountsById.get(b.id) ?? 0) - (runCountsById.get(a.id) ?? 0),
         );
         break;
+      case "fleet":
+        xs.sort((a, b) => {
+          const af = fleetByAgentId.get(a.id);
+          const bf = fleetByAgentId.get(b.id);
+          const as = af?.fleet_score ?? -1;
+          const bs = bf?.fleet_score ?? -1;
+          if (as !== bs) return bs - as;
+          return (af?.fleet_rank ?? 999) - (bf?.fleet_rank ?? 999);
+        });
+        break;
       case "created":
         xs.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
         break;
@@ -508,7 +528,7 @@ export function AgentsPage({
         break;
     }
     return xs;
-  }, [filteredAgents, sort, runCountsById, activityMap]);
+  }, [filteredAgents, sort, runCountsById, activityMap, fleetByAgentId]);
 
   // Master-detail selection. Falls back to the first visible agent whenever
   // the chosen one drops out of the filtered list (filter/search change), so
@@ -749,6 +769,7 @@ export function AgentsPage({
                   <AgentRailRow
                     key={agent.id}
                     agent={agent}
+                    fleet={fleetByAgentId.get(agent.id)}
                     selected={selectedAgent?.id === agent.id}
                     onClick={() => setSelectedId(agent.id)}
                   />
@@ -764,6 +785,7 @@ export function AgentsPage({
               agent={selectedAgent}
               runtime={runtimesById.get(selectedAgent.runtime_id) ?? null}
               metric={selectedMetric}
+              fleet={fleetByAgentId.get(selectedAgent.id)}
               canManage={selectedCanManage}
               onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}
               onDelete={handleArchiveSelected}
@@ -1055,10 +1077,12 @@ function AvailabilityChip({
 
 function AgentRailRow({
   agent,
+  fleet,
   selected,
   onClick,
 }: {
   agent: Agent;
+  fleet?: import("@multica/core/types/agent-fleet").AgentFleetRank;
   selected: boolean;
   onClick: () => void;
 }) {
@@ -1091,8 +1115,7 @@ function AgentRailRow({
           actorType="agent"
           actorId={agent.id}
           size={32}
-          // LRM-248: list rows — avatar badge only; no name-row status word.
-          // Archived: gray avatar, no live badge (AgentStatusDot returns null).
+          fleetRank={fleet && !isArchived ? fleet.fleet_rank : undefined}
           showStatusDot={!isArchived}
           profileLink={false}
           className={isArchived ? "opacity-50 grayscale" : undefined}
@@ -1104,14 +1127,25 @@ function AgentRailRow({
         className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1.5 pr-3 text-left"
       >
         <div className="min-w-0 flex-1">
-          <p
-            className={cn(
-              "truncate text-sm font-medium",
-              isArchived ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {displayName}
-          </p>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <p
+              className={cn(
+                "truncate text-sm font-medium",
+                isArchived ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {displayName}
+            </p>
+            {fleet ? (
+              <FleetRankBadge
+                classId={fleet.class_id}
+                classLabel={fleet.class_label}
+                fleetRank={fleet.fleet_rank}
+                frozen={fleet.frozen || isArchived}
+                compact
+              />
+            ) : null}
+          </div>
           <p className="truncate text-xs text-muted-foreground">
             {agent.description?.trim() || "—"}
           </p>

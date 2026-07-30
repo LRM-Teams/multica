@@ -10,4 +10,5 @@ export * from "./use-agent-activity";
 export * from "./use-workspace-presence-prefetch";
 export * from "./constants";
 export * from "./use-workspace-agent-availability";
+export * from "./fleet-queries";
 export * from "./mcp-support";

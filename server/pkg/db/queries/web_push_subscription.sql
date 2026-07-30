@@ -40,7 +40,13 @@ SET last_error = $3, revoked_at = now(), updated_at = now()
 WHERE user_id = $1 AND endpoint = ANY($2::text[]) AND revoked_at IS NULL;
 
 -- name: GetWebPushChannelRecipientInfo :one
-SELECT ch.name, ch.kind, COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL AS muted
+-- notify_level: NULL → default; legacy rows with muted_at but no level → mentions.
+SELECT ch.name, ch.kind,
+  CASE
+    WHEN cm.notify_level IS NOT NULL THEN cm.notify_level
+    WHEN COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL THEN 'mentions'
+    ELSE 'default'
+  END::text AS notify_level
 FROM channel ch
 JOIN channel_member cm
   ON cm.channel_id = ch.id

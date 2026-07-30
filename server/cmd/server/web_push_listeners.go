@@ -32,9 +32,9 @@ type webPushInboxPayload struct {
 }
 
 type webPushChannelInfo struct {
-	Name  string
-	Kind  string
-	Muted bool
+	Name        string
+	Kind        string
+	NotifyLevel string
 }
 
 func registerWebPushListeners(bus *events.Bus, queries *db.Queries, cfg handler.Config) {
@@ -48,9 +48,8 @@ func registerWebPushListeners(bus *events.Bus, queries *db.Queries, cfg handler.
 		return
 	}
 
-	// LRM-411 channel path: unmuted = all messages, muted = @ only, DM always.
-	// inbox:new intentionally not registered for desktop Web Push (V0: issue
-	// assign etc. stay out until product expands).
+	// LRM-769 channel path: default≈all, all=全量, mentions=@/@all only, muted=true silence.
+	// DM always. inbox:new intentionally not registered for desktop Web Push.
 
 	bus.Subscribe(protocol.EventChannelMessage, func(e events.Event) {
 		msg, ok := extractChannelMessage(e.Payload)
@@ -79,7 +78,7 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 		slog.Warn("web push: channel recipient lookup failed", "workspace_id", msg.WorkspaceID, "channel_id", msg.ChannelID, "recipient_id", recipientID, "error", err)
 		return
 	}
-	if !shouldDeliverChannelMessageWebPush(msg, event.ActorType, event.ActorID, recipientID, info.Kind, info.Muted) {
+	if !shouldDeliverChannelMessageWebPush(msg, event.ActorType, event.ActorID, recipientID, info.Kind, info.NotifyLevel) {
 		return
 	}
 	subs, err := queries.ListActiveWebPushSubscriptions(ctx, parseUUID(recipientID))
@@ -95,11 +94,12 @@ func deliverWebPushChannelMessage(queries *db.Queries, sender *webpush.Sender, c
 	deliverWebPushToSubscriptions(ctx, queries, sender, parseUUID(recipientID), subs, payload)
 }
 
-// shouldDeliverChannelMessageWebPush implements LRM-411:
+// shouldDeliverChannelMessageWebPush implements LRM-769 delivery:
 // - DM: always (except self / system / edit / delete)
-// - unmuted group: all member messages
-// - muted group: @ / @all only
-func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, actorType, actorID, recipientID, channelKind string, muted bool) bool {
+// - default / all: all member messages
+// - mentions: @ / @all only
+// - muted: true silence (including @)
+func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, actorType, actorID, recipientID, channelKind, notifyLevel string) bool {
 	if msg.Type == "system" || msg.DeletedAt != nil || msg.EditedAt != nil {
 		return false
 	}
@@ -112,10 +112,14 @@ func shouldDeliverChannelMessageWebPush(msg handler.ChannelMessageResponse, acto
 	if strings.EqualFold(strings.TrimSpace(channelKind), "dm") {
 		return true
 	}
-	if !muted {
+	switch strings.TrimSpace(notifyLevel) {
+	case "muted":
+		return false
+	case "mentions":
+		return channelMessageMentionsRecipient(msg, recipientID)
+	default: // default, all, empty
 		return true
 	}
-	return channelMessageMentionsRecipient(msg, recipientID)
 }
 
 func isSystemNotificationMuted(ctx context.Context, queries *db.Queries, workspaceID, userID string) bool {
@@ -225,7 +229,7 @@ func webPushChannelInfoForRecipient(ctx context.Context, queries *db.Queries, wo
 	if err != nil {
 		return webPushChannelInfo{}, err
 	}
-	return webPushChannelInfo{Name: row.Name, Kind: row.Kind, Muted: row.Muted}, nil
+	return webPushChannelInfo{Name: row.Name, Kind: row.Kind, NotifyLevel: row.NotifyLevel}, nil
 }
 
 func channelHumanMemberIDsForWebPush(ctx context.Context, queries *db.Queries, workspaceID, channelID string) []string {

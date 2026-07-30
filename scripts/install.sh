@@ -2,10 +2,10 @@
 # Multica installer — installs the CLI and optionally provisions a self-host server.
 #
 # Install / upgrade CLI only:
-#   curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash
+#   curl -fsSL https://leagent.me/downloads/multica/install.sh | bash
 #
 # Install CLI + provision self-host server:
-#   curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash -s -- --with-server
+#   curl -fsSL https://leagent.me/downloads/multica/install.sh | bash -s -- --with-server
 #
 # After installation, run `multica setup` to configure your environment.
 #
@@ -16,9 +16,13 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 REPO_URL="https://github.com/LRM-Teams/multica.git"
 REPO_WEB_URL="https://github.com/LRM-Teams/multica"
-RELEASE_REPO_WEB_URL="${MULTICA_RELEASE_REPO_WEB_URL:-$REPO_WEB_URL}"
-INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh"
-POWERSHELL_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
+# CLI binary releases are served from our own domain, not GitHub: an
+# unauthenticated request to the private LRM-Teams/multica repo's GitHub
+# API/asset host always 404s, so a bare install here would fail on the first
+# release lookup. See server/internal/cli/update.go ReleaseManifestBaseURL.
+MANIFEST_BASE_URL="${MULTICA_RELEASE_MANIFEST_BASE_URL:-https://leagent.me/downloads/multica}"
+INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.sh"
+POWERSHELL_INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.ps1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
 CLI_BIN_DIR="$HOME/.local/bin"
 CLI_PATH="$CLI_BIN_DIR/multica"
@@ -85,6 +89,61 @@ selfhost_frontend_port() {
   env_file_value "${1:-.env}" "FRONTEND_PORT" "3000"
 }
 
+# ---------------------------------------------------------------------------
+# Release manifest (JSON) parsing
+# ---------------------------------------------------------------------------
+# Tries jq first (common on Linux servers, and already used by this repo's CI
+# scripts), then python3 (near-ubiquitous on macOS/Linux dev machines), so we
+# avoid hand-rolling a JSON parser in POSIX shell for a nested structure.
+json_tool() {
+  if command_exists jq; then
+    printf 'jq'
+  elif command_exists python3; then
+    printf 'python3'
+  else
+    printf ''
+  fi
+}
+
+manifest_tag() {
+  local file="$1" tool
+  tool="$(json_tool)"
+  case "$tool" in
+    jq) jq -r '.tag // empty' "$file" ;;
+    python3) python3 -c 'import json,sys
+data = json.load(open(sys.argv[1]))
+print(data.get("tag") or "")' "$file" ;;
+    *) fail "Parsing the release manifest requires jq or python3 to be installed." ;;
+  esac
+}
+
+manifest_platform_field() {
+  local file="$1" platform="$2" field="$3" tool
+  tool="$(json_tool)"
+  case "$tool" in
+    jq) jq -r --arg p "$platform" --arg f "$field" '.platforms[$p][$f] // empty' "$file" ;;
+    python3) python3 -c 'import json,sys
+data = json.load(open(sys.argv[1]))
+print(data.get("platforms", {}).get(sys.argv[2], {}).get(sys.argv[3]) or "")' "$file" "$platform" "$field" ;;
+    *) fail "Parsing the release manifest requires jq or python3 to be installed." ;;
+  esac
+}
+
+verify_sha256() {
+  local file="$1" expected="$2" actual
+  if command_exists sha256sum; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command_exists shasum; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    warn "No sha256sum or shasum found; skipping checksum verification of the downloaded archive."
+    return 0
+  fi
+  actual="$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')"
+  expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
+  [ -n "$expected" ] && [ "$actual" = "$expected" ]
+}
+
 detect_os() {
   case "$(uname -s)" in
     Darwin) OS="darwin" ;;
@@ -108,17 +167,29 @@ detect_os() {
 # CLI Installation
 # ---------------------------------------------------------------------------
 install_cli_binary() {
-  info "Installing Multica CLI from GitHub Releases..."
+  info "Installing Multica CLI from the release feed..."
 
-  # Get latest release tag
-  local latest
-  latest=$(curl -sI "$RELEASE_REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true)
-  if [ -z "$latest" ]; then
-    fail "Could not determine latest release. Check your network connection."
+  local manifest_file
+  manifest_file=$(mktemp)
+  if ! curl -fsSL "$MANIFEST_BASE_URL/latest.json" -o "$manifest_file"; then
+    rm -f "$manifest_file"
+    fail "Could not fetch the release manifest from ${MANIFEST_BASE_URL}/latest.json. Check your network connection."
   fi
 
-  local version="${latest#v}"
-  local url="${RELEASE_REPO_WEB_URL}/releases/download/${latest}/multica-cli-${version}-${OS}-${ARCH}.tar.gz"
+  local latest platform url sha256
+  latest="$(manifest_tag "$manifest_file")"
+  if [ -z "$latest" ]; then
+    rm -f "$manifest_file"
+    fail "Could not determine latest release from the manifest at ${MANIFEST_BASE_URL}/latest.json."
+  fi
+  platform="${OS}-${ARCH}"
+  url="$(manifest_platform_field "$manifest_file" "$platform" "url")"
+  sha256="$(manifest_platform_field "$manifest_file" "$platform" "sha256")"
+  rm -f "$manifest_file"
+  if [ -z "$url" ] || [ -z "$sha256" ]; then
+    fail "No published release asset for platform ${platform} in ${latest}."
+  fi
+
   local tmp_dir
   tmp_dir=$(mktemp -d)
 
@@ -126,6 +197,11 @@ install_cli_binary() {
   if ! curl -fsSL "$url" -o "$tmp_dir/multica.tar.gz"; then
     rm -rf "$tmp_dir"
     fail "Failed to download CLI binary."
+  fi
+
+  if ! verify_sha256 "$tmp_dir/multica.tar.gz" "$sha256"; then
+    rm -rf "$tmp_dir"
+    fail "Checksum verification failed for the downloaded archive; refusing to install a corrupted or tampered binary."
   fi
 
   tar -xzf "$tmp_dir/multica.tar.gz" -C "$tmp_dir" multica
@@ -244,8 +320,15 @@ print_daemon_adoption_guidance() {
 }
 
 get_latest_version() {
-  # grep exits 1 when no match; use `|| true` to avoid triggering pipefail
-  curl -sI "$RELEASE_REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true
+  local manifest_file tag
+  manifest_file=$(mktemp)
+  if ! curl -fsSL "$MANIFEST_BASE_URL/latest.json" -o "$manifest_file" 2>/dev/null; then
+    rm -f "$manifest_file"
+    return
+  fi
+  tag="$(manifest_tag "$manifest_file" 2>/dev/null || true)"
+  rm -f "$manifest_file"
+  printf '%s' "$tag"
 }
 
 get_selfhost_ref() {
@@ -307,7 +390,7 @@ install_cli() {
     local latest_ver
     latest_ver=$(get_latest_version)
     if [ -z "$latest_ver" ]; then
-      fail "Could not determine latest release from ${RELEASE_REPO_WEB_URL}/releases/latest. Refusing to assume the installed CLI is current."
+      fail "Could not determine latest release from ${MANIFEST_BASE_URL}/latest.json. Refusing to assume the installed CLI is current."
     fi
 
     # Normalize: strip leading 'v' for comparison
@@ -564,9 +647,9 @@ main() {
         echo "                        (default: \$HOME/.multica/server)"
         echo "  MULTICA_SELFHOST_REF  Git ref to check out for self-host assets"
         echo "                        (default: latest release tag, falling back to main)"
-        echo "  MULTICA_RELEASE_REPO_WEB_URL"
-        echo "                        GitHub repo used for CLI release assets"
-        echo "                        (default: $REPO_WEB_URL)"
+        echo "  MULTICA_RELEASE_MANIFEST_BASE_URL"
+        echo "                        Base URL of the CLI release manifest/archives"
+        echo "                        (default: https://leagent.me/downloads/multica)"
         echo ""
         echo "After installation, run 'multica setup' to configure your environment."
         exit 0

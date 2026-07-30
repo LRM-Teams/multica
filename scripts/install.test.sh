@@ -3,6 +3,23 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Mirrors install.sh's detect_os() so the fixture manifest advertises the
+# same platform key the installer under test will look up.
+_test_platform_key() {
+  local os arch
+  case "$(uname -s)" in
+    Darwin) os="darwin" ;;
+    Linux) os="linux" ;;
+    *) os="linux" ;;
+  esac
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+  esac
+  printf '%s-%s' "$os" "$arch"
+}
+
 _setup_sandbox() {
   local tmp="$1"
   local stub_bin="$tmp/stub-bin"
@@ -16,6 +33,32 @@ STUB
   chmod +x "$payload_dir/multica"
   tar -czf "$tmp/multica.tar.gz" -C "$payload_dir" multica
 
+  local sha256
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256="$(sha256sum "$tmp/multica.tar.gz" | awk '{print $1}')"
+  else
+    sha256="$(shasum -a 256 "$tmp/multica.tar.gz" | awk '{print $1}')"
+  fi
+
+  local platform
+  platform="$(_test_platform_key)"
+  cat >"$tmp/latest.json" <<JSON
+{"tag":"v0.3.2","version":"0.3.2","platforms":{"${platform}":{"url":"https://leagent.me/downloads/multica/v0.3.2/multica-cli-0.3.2-${platform}.tar.gz","sha256":"${sha256}"}}}
+JSON
+
+  # install.sh's manifest parsing needs jq or python3 on PATH. Stage the
+  # host's real one into stub-bin so the sandboxed PATH below finds it
+  # regardless of where the host puts it (e.g. Homebrew's /opt/homebrew/bin
+  # is not on this deliberately tight PATH).
+  if command -v jq >/dev/null 2>&1; then
+    ln -s "$(command -v jq)" "$stub_bin/jq"
+  elif command -v python3 >/dev/null 2>&1; then
+    ln -s "$(command -v python3)" "$stub_bin/python3"
+  else
+    echo "no jq or python3 available on this host to run install.sh tests" >&2
+    exit 1
+  fi
+
   cat >"$stub_bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$MULTICA_TEST_CURL_LOG"
@@ -23,9 +66,14 @@ if [[ "$*" == *"/multica-ai/"* ]]; then
   echo "stub curl saw old upstream URL: $*" >&2
   exit 31
 fi
-if [[ "$*" == *"-sI"* ]]; then
-  printf 'HTTP/2 302\r\nlocation: https://github.com/LRM-Teams/multica/releases/tag/v0.3.2\r\n'
-  exit 0
+if [[ "$*" == *"github.com"* ]]; then
+  echo "stub curl saw a github.com URL, which 404s unauthenticated on this private repo: $*" >&2
+  exit 32
+fi
+
+is_manifest_request=0
+if [[ "$*" == *"latest.json"* ]]; then
+  is_manifest_request=1
 fi
 
 out=""
@@ -45,7 +93,11 @@ if [[ -z "$out" ]]; then
   echo "stub curl expected -o" >&2
   exit 2
 fi
-cp "$MULTICA_TEST_ARCHIVE" "$out"
+if [[ "$is_manifest_request" -eq 1 ]]; then
+  cp "$MULTICA_TEST_MANIFEST" "$out"
+else
+  cp "$MULTICA_TEST_ARCHIVE" "$out"
+fi
 STUB
   chmod +x "$stub_bin/curl"
 
@@ -73,6 +125,7 @@ _run_installer() {
     PATH="$path" \
     MULTICA_BIN_DIR="$tmp/must-not-be-used" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
+    MULTICA_TEST_MANIFEST="$tmp/latest.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
     bash "$ROOT_DIR/scripts/install.sh" >"$out" 2>"$err"; then
     echo "install.sh exited non-zero" >&2
@@ -91,8 +144,13 @@ _run_installer() {
     echo "MULTICA_BIN_DIR must not create a second install root" >&2
     return 1
   fi
-  if ! grep -q "https://github.com/LRM-Teams/multica/releases/download/v0.3.2/multica-cli-0.3.2-" "$tmp/curl.log"; then
-    echo "expected download from LRM-Teams release URL" >&2
+  if ! grep -q "https://leagent.me/downloads/multica/v0.3.2/multica-cli-0.3.2-" "$tmp/curl.log"; then
+    echo "expected download from the leagent.me release feed, not GitHub" >&2
+    cat "$tmp/curl.log" >&2 || true
+    return 1
+  fi
+  if grep -q "github.com" "$tmp/curl.log"; then
+    echo "installer must never hit github.com — it 404s unauthenticated on this private repo" >&2
     cat "$tmp/curl.log" >&2 || true
     return 1
   fi
@@ -281,6 +339,43 @@ test_managed_path_update_preserves_dotfile_symlink() {
   fi
 }
 
+test_checksum_mismatch_refuses_install() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  # Corrupt the manifest's advertised checksum so it no longer matches the
+  # archive the stub curl serves — this must fail closed, not install an
+  # unverified binary.
+  sed -i.bak 's/"sha256":"[^"]*"/"sha256":"0000000000000000000000000000000000000000000000000000000000000000"/' "$tmp/latest.json"
+
+  set +e
+  HOME="$tmp/home" \
+    SHELL=/bin/bash \
+    PATH="$tmp/stub-bin:/usr/bin:/bin" \
+    MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
+    MULTICA_TEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
+    bash "$ROOT_DIR/scripts/install.sh" >"$tmp/install.out" 2>"$tmp/install.err"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]]; then
+    echo "installer must fail when the archive checksum does not match the manifest" >&2
+    return 1
+  fi
+  if [[ -e "$tmp/home/.local/bin/multica" ]]; then
+    echo "installer must not place a binary on checksum mismatch" >&2
+    return 1
+  fi
+  if ! grep -qi "checksum" "$tmp/install.err"; then
+    echo "expected an explicit checksum-verification failure message" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+}
+
 test_default_installs_only_to_user_local_without_sudo
 test_same_version_legacy_path_is_migrated_to_user_local
 test_fish_path_config_is_idempotent
@@ -288,4 +383,5 @@ test_bash_login_and_non_login_shells_resolve_canonical_path
 test_managed_block_moves_after_legacy_shadow_and_stays_idempotent
 test_unknown_shell_fallback_moves_canonical_path_last
 test_managed_path_update_preserves_dotfile_symlink
+test_checksum_mismatch_refuses_install
 echo "install.sh tests passed"

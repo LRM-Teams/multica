@@ -29,7 +29,7 @@ type CachedRuntimeReleaseSource struct {
 	mu     sync.Mutex
 	ttl    time.Duration
 	now    func() time.Time
-	fetch  func() (*cli.GitHubRelease, error)
+	fetch  func() (*cli.ReleaseManifest, error)
 	cached *RuntimeRelease
 	err    error
 	at     time.Time
@@ -64,7 +64,7 @@ func (s *CachedRuntimeReleaseSource) Latest(ctx context.Context) (*RuntimeReleas
 
 	release, err := s.fetch()
 	if err == nil {
-		s.cached, err = runtimeReleaseFromGitHub(release)
+		s.cached, err = runtimeReleaseFromManifest(release)
 	} else {
 		s.cached = nil
 	}
@@ -73,43 +73,19 @@ func (s *CachedRuntimeReleaseSource) Latest(ctx context.Context) (*RuntimeReleas
 	return s.cached, s.err
 }
 
-func runtimeReleaseFromGitHub(release *cli.GitHubRelease) (*RuntimeRelease, error) {
-	if release == nil {
-		return nil, fmt.Errorf("latest release response is empty")
+func runtimeReleaseFromManifest(manifest *cli.ReleaseManifest) (*RuntimeRelease, error) {
+	if manifest == nil {
+		return nil, fmt.Errorf("latest release manifest is empty")
 	}
-	tag := strings.TrimSpace(release.TagName)
+	tag := strings.TrimSpace(manifest.TagName)
 	if tag == "" {
 		return nil, fmt.Errorf("latest release tag is empty")
 	}
 	if !cli.IsReleaseVersion(tag) {
 		return nil, fmt.Errorf("latest release tag %q is not a stable CLI release", tag)
 	}
-	if !releaseHasAsset(release.Assets, cli.ChecksumManifestName) {
-		return nil, fmt.Errorf("latest release %s is missing %s", tag, cli.ChecksumManifestName)
-	}
-	if !releaseHasRuntimeArchive(release.Assets, tag) {
-		return nil, fmt.Errorf("latest release %s has no CLI archive assets", tag)
+	if len(manifest.Platforms) == 0 {
+		return nil, fmt.Errorf("latest release %s has no platform assets", tag)
 	}
 	return &RuntimeRelease{TagName: tag}, nil
-}
-
-func releaseHasAsset(assets []cli.GitHubReleaseAsset, name string) bool {
-	for _, asset := range assets {
-		if asset.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func releaseHasRuntimeArchive(assets []cli.GitHubReleaseAsset, tag string) bool {
-	version := strings.TrimPrefix(strings.TrimSpace(tag), "v")
-	versionedPrefix := "multica-cli-" + version + "-"
-	for _, asset := range assets {
-		name := strings.TrimSpace(asset.Name)
-		if strings.HasPrefix(name, versionedPrefix) || strings.HasPrefix(name, "multica_") {
-			return true
-		}
-	}
-	return false
 }

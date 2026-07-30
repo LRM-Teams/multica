@@ -1,10 +1,10 @@
 # Multica installer for Windows — one command to get started.
 #
 # Install CLI (default): connects to multica.ai
-#   irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex
+#   irm https://leagent.me/downloads/multica/install.ps1 | iex
 #
 # Self-host: starts a local Multica server + installs CLI + configures
-#   $env:MULTICA_MODE="local"; irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex
+#   $env:MULTICA_MODE="local"; irm https://leagent.me/downloads/multica/install.ps1 | iex
 #
 
 $ErrorActionPreference = "Stop"
@@ -14,8 +14,12 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 $RepoUrl       = "https://github.com/LRM-Teams/multica.git"
 $RepoWebUrl    = "https://github.com/LRM-Teams/multica"
-$ReleaseRepoWebUrl = if ($env:MULTICA_RELEASE_REPO_WEB_URL) { $env:MULTICA_RELEASE_REPO_WEB_URL } else { $RepoWebUrl }
-$InstallScriptUrl = "https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
+# CLI binary releases are served from our own domain, not GitHub: an
+# unauthenticated request to the private LRM-Teams/multica repo's GitHub
+# API/asset host always 404s. See server/internal/cli/update.go
+# ReleaseManifestBaseURL.
+$ReleaseManifestBaseUrl = if ($env:MULTICA_RELEASE_MANIFEST_BASE_URL) { $env:MULTICA_RELEASE_MANIFEST_BASE_URL } else { "https://leagent.me/downloads/multica" }
+$InstallScriptUrl = "$ReleaseManifestBaseUrl/install.ps1"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
 
@@ -85,14 +89,20 @@ function Get-SelfHostFrontendPort {
     return Get-EnvFileValue -Path (Join-Path $InstallDir ".env") -Name "FRONTEND_PORT" -Default "3000"
 }
 
-function Get-LatestVersion {
+function Get-ReleaseManifest {
     try {
-        $releasesApi = $ReleaseRepoWebUrl -replace "^https://github.com/", "https://api.github.com/repos/"
-        $release = Invoke-RestMethod -Uri "$releasesApi/releases/latest" -ErrorAction Stop
-        return $release.tag_name
+        return Invoke-RestMethod -Uri "$ReleaseManifestBaseUrl/latest.json" -ErrorAction Stop
     } catch {
         return $null
     }
+}
+
+function Get-LatestVersion {
+    $manifest = Get-ReleaseManifest
+    if ($manifest -and $manifest.tag) {
+        return $manifest.tag
+    }
+    return $null
 }
 
 function Test-SourceRepoTag {
@@ -246,7 +256,9 @@ function Get-InstalledCliVersion {
 # CLI Installation
 # ---------------------------------------------------------------------------
 function Install-CliBinary {
-    Write-Info "Installing Multica CLI from GitHub Releases..."
+    param([object]$Manifest)
+
+    Write-Info "Installing Multica CLI from the release feed..."
 
     if (-not [Environment]::Is64BitOperatingSystem) {
         Write-Fail "Multica requires a 64-bit Windows installation."
@@ -254,13 +266,18 @@ function Install-CliBinary {
 
     $arch = Get-WindowsCliArch
 
-    $latest = Get-LatestVersion
-    if (-not $latest) {
-        Write-Fail "Could not determine latest release. Check your network connection."
+    if (-not $Manifest -or -not $Manifest.tag) {
+        Write-Fail "Could not fetch the release manifest from $ReleaseManifestBaseUrl/latest.json. Check your network connection."
     }
+    $latest = $Manifest.tag
+    $platformKey = "windows-$arch"
+    $asset = if ($Manifest.platforms) { $Manifest.platforms.$platformKey } else { $null }
+    if (-not $asset -or -not $asset.url -or -not $asset.sha256) {
+        Write-Fail "No published release asset for platform $platformKey in $latest."
+    }
+    $url = $asset.url
+    $expectedHash = "$($asset.sha256)".ToLower()
 
-    $version = $latest.TrimStart('v')
-    $url = "$ReleaseRepoWebUrl/releases/download/$latest/multica-cli-$version-windows-$arch.zip"
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "multica-install"
 
     if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
@@ -274,38 +291,17 @@ function Install-CliBinary {
         Write-Fail "Failed to download CLI binary: $_"
     }
 
-    # Verify SHA256 checksum
-    $checksumUrl = "$ReleaseRepoWebUrl/releases/download/$latest/checksums.txt"
-    try {
-        $checksums = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop
-        $checksumContent = if ($checksums.Content -is [byte[]]) {
-            [System.Text.Encoding]::UTF8.GetString($checksums.Content)
-        } else {
-            [string]$checksums.Content
-        }
-        $zipFile = Join-Path $tmpDir "multica.zip"
-        $actualHash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash.ToLower()
-        $releaseAsset = "multica-cli-$version-windows-$arch.zip"
-        $legacyAsset = "multica_windows_$arch.zip"
-        $expectedLine = ($checksumContent -split "`r?`n") |
-            Where-Object {
-                $_ -match [regex]::Escape($releaseAsset) -or
-                $_ -match [regex]::Escape($legacyAsset)
-            } |
-            Select-Object -First 1
-        if ($expectedLine) {
-            $expectedHash = ($expectedLine -split "\s+")[0].ToLower()
-            if ($actualHash -ne $expectedHash) {
-                Remove-Item $tmpDir -Recurse -Force
-                Write-Fail "Checksum verification failed. Expected: $expectedHash, Got: $actualHash"
-            }
-            Write-Ok "Checksum verified"
-        } else {
-            Write-Warn "Could not find checksum entry for $releaseAsset — skipping verification."
-        }
-    } catch {
-        Write-Warn "Could not download checksums.txt — skipping verification."
+    # Verify SHA256 checksum — the manifest carries it inline (see
+    # server/internal/cli/update.go ReleaseAsset), so there is no separate
+    # checksums.txt fetch, and a missing/mismatched hash fails closed rather
+    # than silently skipping verification.
+    $zipFile = Join-Path $tmpDir "multica.zip"
+    $actualHash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash.ToLower()
+    if ($actualHash -ne $expectedHash) {
+        Remove-Item $tmpDir -Recurse -Force
+        Write-Fail "Checksum verification failed. Expected: $expectedHash, Got: $actualHash"
     }
+    Write-Ok "Checksum verified"
 
     Expand-Archive -Path (Join-Path $tmpDir "multica.zip") -DestinationPath $tmpDir -Force
 
@@ -346,12 +342,14 @@ function Add-ToUserPath {
 }
 
 function Install-Cli {
+    $manifest = Get-ReleaseManifest
+
     if (Test-CommandExists "multica") {
         $currentVer = Get-InstalledCliVersion
-        $latestVer = Get-LatestVersion
-        if (-not $latestVer) {
-            Write-Fail "Could not determine latest release from $ReleaseRepoWebUrl/releases/latest. Refusing to assume the installed CLI is current."
+        if (-not $manifest -or -not $manifest.tag) {
+            Write-Fail "Could not determine latest release from $ReleaseManifestBaseUrl/latest.json. Refusing to assume the installed CLI is current."
         }
+        $latestVer = $manifest.tag
 
         $currentCmp = if ($currentVer) { $currentVer -replace '^v','' } else { $null }
         $latestCmp = if ($latestVer) { $latestVer -replace '^v','' } else { $null }
@@ -368,14 +366,14 @@ function Install-Cli {
         }
 
         Write-Info "Multica CLI $currentVer installed, latest is $latestVer - upgrading..."
-        Install-CliBinary
+        Install-CliBinary -Manifest $manifest
 
         $newVer = Get-InstalledCliVersion
         Write-Ok "Multica CLI upgraded ($currentVer -> $newVer)"
         return
     }
 
-    Install-CliBinary
+    Install-CliBinary -Manifest $manifest
 
     if (-not (Test-CommandExists "multica")) {
         Write-Fail "CLI installed but 'multica' not found on PATH. Restart your terminal and try again."

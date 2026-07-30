@@ -8,7 +8,7 @@ description: Install the Multica CLI and start the agent daemon.
 ### 安装脚本 (macOS/Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash
+curl -fsSL https://leagent.me/downloads/multica/install.sh | bash
 ```
 
 ### Build from Source
@@ -22,10 +22,11 @@ cp server/bin/multica "$HOME/.local/bin/multica"
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### Download from GitHub Releases
+### Download directly from the release feed
 
 If the install script is not suitable for your environment, download the
-release binary directly:
+release binary directly. This reads the same manifest `install.sh` uses, not
+GitHub Releases. Requires `jq` or `python3` to parse the manifest.
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # "darwin" or "linux"
@@ -35,21 +36,27 @@ ARCH=$(uname -m)                                # "x86_64" or "arm64"
 if [ "$ARCH" = "x86_64" ]; then
   ARCH="amd64"
 fi
+PLATFORM="${OS}-${ARCH}"
 
-# Get the latest release tag from GitHub
-LATEST=$(curl -sI https://github.com/LRM-Teams/multica/releases/latest \
-  | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n')
+# Fetch the release manifest
+curl -fsSL https://leagent.me/downloads/multica/latest.json -o /tmp/latest.json
+LATEST=$(jq -r '.tag' /tmp/latest.json)
+URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
+SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
 
-# Download and extract
-VERSION="${LATEST#v}"
-curl -sL "https://github.com/LRM-Teams/multica/releases/download/${LATEST}/multica-cli-${VERSION}-${OS}-${ARCH}.tar.gz" \
-  -o /tmp/multica.tar.gz
+# Download, verify, and extract
+curl -sL "$URL" -o /tmp/multica.tar.gz
+ACTUAL_SHA256=$(shasum -a 256 /tmp/multica.tar.gz 2>/dev/null | awk '{print $1}' || sha256sum /tmp/multica.tar.gz | awk '{print $1}')
+if [ "$ACTUAL_SHA256" != "$SHA256" ]; then
+  echo "Checksum mismatch: expected $SHA256, got $ACTUAL_SHA256" >&2
+  exit 1
+fi
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
 mkdir -p "$HOME/.local/bin"
 mv /tmp/multica "$HOME/.local/bin/multica"
 chmod +x "$HOME/.local/bin/multica"
 export PATH="$HOME/.local/bin:$PATH"
-rm /tmp/multica.tar.gz
+rm /tmp/multica.tar.gz /tmp/latest.json
 ```
 
 `$HOME/.local/bin/multica` is the only supported macOS/Linux install target.

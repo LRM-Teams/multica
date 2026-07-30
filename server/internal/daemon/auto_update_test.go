@@ -39,17 +39,17 @@ func newAutoUpdateTestDaemon(t *testing.T, currentVersion string) (*Daemon, *ato
 	return d, &restartCalls
 }
 
-func withStubRelease(t *testing.T, release *cli.GitHubRelease, err error) {
+func withStubRelease(t *testing.T, release *cli.ReleaseManifest, err error) {
 	t.Helper()
 	prev := fetchLatestRelease
-	fetchLatestRelease = func() (*cli.GitHubRelease, error) { return release, err }
+	fetchLatestRelease = func() (*cli.ReleaseManifest, error) { return release, err }
 	t.Cleanup(func() { fetchLatestRelease = prev })
 }
 
 func TestTryAutoUpdate_SkipsWhenUpdating(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
 	d.updating.Store(true)
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 
 	d.tryAutoUpdate(context.Background())
 
@@ -85,7 +85,7 @@ func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
 	fetchStarted := make(chan struct{})
 	releaseFetch := make(chan struct{})
 	previousFetchLatestRelease := fetchLatestRelease
-	fetchLatestRelease = func() (*cli.GitHubRelease, error) {
+	fetchLatestRelease = func() (*cli.ReleaseManifest, error) {
 		close(fetchStarted)
 		<-releaseFetch
 		return nil, errors.New("network down")
@@ -138,7 +138,7 @@ func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
 func TestTryAutoUpdate_SkipsWhenTasksRunning(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
 	d.activeTasks.Store(1)
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 
 	d.tryAutoUpdate(context.Background())
 
@@ -158,7 +158,7 @@ func TestTryAutoUpdate_SkipsWhenTasksRunning(t *testing.T) {
 // the just-claimed task mid-run).
 func TestTryAutoUpdate_DefersWhenClaimInFlightAtBarrier(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 
 	d.claimsInFlight = 1 // poller is mid-ClaimTask while activeTasks is still 0
 
@@ -181,7 +181,7 @@ func TestTryAutoUpdate_DefersWhenClaimInFlightAtBarrier(t *testing.T) {
 // about to cancel.
 func TestTryAutoUpdate_HoldsBarrierAcrossRestart(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 	d.runUpdateFn = func(string) (string, error) { return "upgraded", nil }
 
 	d.tryAutoUpdate(context.Background())
@@ -199,7 +199,7 @@ func TestTryAutoUpdate_HoldsBarrierAcrossRestart(t *testing.T) {
 // retry the upgrade on the next tick.
 func TestTryAutoUpdate_ReleasesBarrierOnUpgradeFailure(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 	d.runUpdateFn = func(string) (string, error) {
 		return "brew network error", errors.New("brew upgrade failed")
 	}
@@ -216,7 +216,7 @@ func TestTryAutoUpdate_ReleasesBarrierOnUpgradeFailure(t *testing.T) {
 
 func TestTryAutoUpdate_ReleasesBarrierOnVerificationFailure(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 	d.runUpdateFn = func(string) (string, error) {
 		return "Warning: multica-ai/tap/multica 0.1.13 already installed", nil
 	}
@@ -277,7 +277,7 @@ func TestTryAutoUpdate_SkipsWhenFetchFails(t *testing.T) {
 
 func TestTryAutoUpdate_SkipsWhenNotNewer(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.13"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.13"}, nil)
 
 	d.tryAutoUpdate(context.Background())
 
@@ -288,7 +288,7 @@ func TestTryAutoUpdate_SkipsWhenNotNewer(t *testing.T) {
 
 func TestTryAutoUpdate_RunsUpgradeAndRestartsOnNewer(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 
 	var upgradedTo string
 	d.runUpdateFn = func(target string) (string, error) {
@@ -311,7 +311,7 @@ func TestTryAutoUpdate_RunsUpgradeAndRestartsOnNewer(t *testing.T) {
 
 func TestTryAutoUpdate_DoesNotRestartOnUpgradeFailure(t *testing.T) {
 	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
-	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 
 	d.runUpdateFn = func(string) (string, error) {
 		return "brew: network error", errors.New("brew upgrade failed")
@@ -352,7 +352,7 @@ func TestAutoUpdateLoop_EarlyExits(t *testing.T) {
 				t.Fatalf("runUpdateFn called from an early-exit code path")
 				return "", nil
 			}
-			withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+			withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
 
 			done := make(chan struct{})
 			go func() {

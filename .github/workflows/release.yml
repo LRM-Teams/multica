@@ -196,7 +196,7 @@ jobs:
           mv -f "${RELEASES_DIR}/latest.json.next" "${RELEASES_DIR}/latest.json"
           echo "Promoted ${TAG_NAME} to latest.json"
 
-  # Fallback publish target alongside cdn.leagent.go/computer (unchanged by
+  # Fallback publish target alongside cdn.leagent.me/computer (unchanged by
   # this job): the Aliyun host serving that domain sits behind a network path
   # that silently blocks curl-class HTTP clients for reasons still under
   # investigation (#prj-daemon, 2026-07-30) — real browsers are unaffected,

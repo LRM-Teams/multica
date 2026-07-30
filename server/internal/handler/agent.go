@@ -208,7 +208,11 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 
 	rows, err := h.DB.Query(ctx, `
 		SELECT id,
-		       COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END),
+		       COALESCE(
+		         NULLIF(display_name, ''),
+		         NULLIF(name, ''),
+		         CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END
+		       ),
 		       status,
 		       last_seen_at
 		FROM agent_runtime

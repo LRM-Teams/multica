@@ -134,7 +134,21 @@ function phaseFromServer(
   if (localPhase === "failed" && status !== "failed") {
     return "failed";
   }
+  if (localPhase === "ended" && status !== "failed") {
+    return "ended";
+  }
   switch (status) {
+    case "starting":
+    case "connecting":
+      return localPhase === "ending" ? "ending" : "joining";
+    case "active":
+      return localPhase === "muted" ||
+          localPhase === "reconnecting" ||
+          localPhase === "ending"
+        ? localPhase
+        : "connected";
+    case "reconnecting":
+      return localPhase === "ending" ? "ending" : "reconnecting";
     case "ending":
       return "ending";
     case "ended":
@@ -374,10 +388,6 @@ export function useVoiceCallController(
         failureSource = "server";
         await connectCallMutation.mutateAsync(createdCallId);
         providerStartedRef.current = true;
-        stopRingback();
-        if (mountedRef.current) {
-          setLocalPhase("connected");
-        }
         return createdCallId;
       } catch (error) {
         stopRingback();
@@ -560,7 +570,12 @@ export function useVoiceCallController(
   const serverStatus = serverCall?.status;
 
   useEffect(() => {
-    if (!callId || !TERMINAL_STATUSES.has(serverStatus ?? "")) return;
+    if (!callId) return;
+    if (serverStatus === "active") {
+      stopRingback();
+      return;
+    }
+    if (!TERMINAL_STATUSES.has(serverStatus ?? "")) return;
     stopRingback();
     if (activeCallIdRef.current === callId) {
       activeCallIdRef.current = "";

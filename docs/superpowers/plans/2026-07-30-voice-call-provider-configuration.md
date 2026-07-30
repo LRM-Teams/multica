@@ -60,3 +60,19 @@ Beckham's configured welcome message after the caller joins.
   pre-existing bug: `scripts/check.sh` reports success when PostgreSQL setup
   exits before the numbered checks. That script defect is outside this PR and
   will be fixed independently.
+
+## Client state repair
+
+- [x] Added a failing controller test proving that an accepted provider start
+  (`connecting`) must not be shown as an active call.
+- [x] Kept ringback and the connecting UI until the server reports `active`.
+- [x] Mapped server `starting`, `connecting`, `active`, and `reconnecting`
+  states explicitly while preserving local ending, ended, failed, muted, and
+  media-reconnection states.
+- [x] Stopped ringback only after the server confirms `active` or a terminal
+  state.
+- [x] Verified all 12 voice-call controller tests.
+- [x] Verified `pnpm --filter @multica/views typecheck`.
+- [x] Verified `pnpm react:doctor` reports zero issues in the changed source.
+- [x] Verified `pnpm test`: 104 core files / 968 tests, 307 views files /
+  2,975 passed and 5 skipped, and 14 web files / 69 tests.

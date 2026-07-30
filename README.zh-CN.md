@@ -69,7 +69,7 @@ Multica 管理完整的 Agent 生命周期：从任务分配到执行监控再�
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://leagent.me/downloads/multica/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 安装脚本会从当前 Multica 发布源安装 CLI。
@@ -77,7 +77,7 @@ curl -fsSL https://leagent.me/downloads/multica/install.sh | bash
 ### Windows (PowerShell)
 
 ```powershell
-irm https://leagent.me/downloads/multica/install.ps1 | iex
+irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
 安装完成后，一条命令完成配置、认证和启动：
@@ -89,7 +89,7 @@ multica setup          # 连接 Multica Cloud，登录，启动 daemon
 > **自部署？** 加上 `--with-server` 在本地部署完整的 Multica 服务：
 >
 > ```bash
-> curl -fsSL https://leagent.me/downloads/multica/install.sh | bash -s -- --with-server
+> curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 > multica setup self-host
 > ```
 >

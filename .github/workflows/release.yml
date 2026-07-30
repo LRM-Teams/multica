@@ -89,8 +89,9 @@ jobs:
   # asset host always 404s (no credential the CLI/daemon binary can carry).
   # This job re-publishes the same GoReleaser archives, plus a manifest CI
   # derives from checksums.txt, to a public read-only path on the Aliyun host
-  # that Caddy serves at /downloads/multica/* (deploy/aliyun/Caddyfile). It
-  # only reads from the just-created GitHub release with the CI token and
+  # that Caddy serves on its own subdomain, cdn.leagent.me/computer/*
+  # (deploy/aliyun/Caddyfile). It only reads from the just-created GitHub
+  # release with the CI token and
   # writes to /data/multica/releases — it never touches /data/multica broadly
   # (the app's .env, database, etc.) and never mutates a running container.
   publish-downloads-feed:
@@ -103,7 +104,7 @@ jobs:
     env:
       RUNNER_EXPECTED_USER: dev
       RELEASES_DIR: /data/multica/releases
-      MANIFEST_BASE_URL: https://leagent.me/downloads/multica
+      MANIFEST_BASE_URL: https://cdn.leagent.me/computer
       TAG_NAME: ${{ needs.verify.outputs.tag_name }}
       IS_STABLE: ${{ needs.verify.outputs.is_stable }}
     steps:

@@ -29,8 +29,8 @@ const DefaultUpdateDownloadTimeout = 120 * time.Second
 // unauthenticated GitHub Releases API/asset request from a bare install
 // always 404s. Caddy serves this path from an immutable per-version
 // directory tree that CI populates on tag; see deploy/aliyun/Caddyfile.
-const ReleaseManifestBaseURL = "https://leagent.me/downloads/multica"
-const ReleaseWebURL = "https://leagent.me/downloads/multica"
+const ReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
+const ReleaseWebURL = "https://cdn.leagent.me/computer"
 const LegacyBrewPackage = "multica-ai/tap/multica"
 
 // BrewPackage returns the optional Homebrew package name to upgrade. It is

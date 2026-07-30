@@ -2,10 +2,10 @@
 # Multica installer — installs the CLI and optionally provisions a self-host server.
 #
 # Install / upgrade CLI only:
-#   curl -fsSL https://leagent.me/downloads/multica/install.sh | bash
+#   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 #
 # Install CLI + provision self-host server:
-#   curl -fsSL https://leagent.me/downloads/multica/install.sh | bash -s -- --with-server
+#   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 #
 # After installation, run `multica setup` to configure your environment.
 #
@@ -20,7 +20,7 @@ REPO_WEB_URL="https://github.com/LRM-Teams/multica"
 # unauthenticated request to the private LRM-Teams/multica repo's GitHub
 # API/asset host always 404s, so a bare install here would fail on the first
 # release lookup. See server/internal/cli/update.go ReleaseManifestBaseURL.
-MANIFEST_BASE_URL="${MULTICA_RELEASE_MANIFEST_BASE_URL:-https://leagent.me/downloads/multica}"
+MANIFEST_BASE_URL="${MULTICA_RELEASE_MANIFEST_BASE_URL:-https://cdn.leagent.me/computer}"
 INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.sh"
 POWERSHELL_INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.ps1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
@@ -649,7 +649,7 @@ main() {
         echo "                        (default: latest release tag, falling back to main)"
         echo "  MULTICA_RELEASE_MANIFEST_BASE_URL"
         echo "                        Base URL of the CLI release manifest/archives"
-        echo "                        (default: https://leagent.me/downloads/multica)"
+        echo "                        (default: https://cdn.leagent.me/computer)"
         echo ""
         echo "After installation, run 'multica setup' to configure your environment."
         exit 0

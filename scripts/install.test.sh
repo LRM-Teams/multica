@@ -43,7 +43,7 @@ STUB
   local platform
   platform="$(_test_platform_key)"
   cat >"$tmp/latest.json" <<JSON
-{"tag":"v0.3.2","version":"0.3.2","platforms":{"${platform}":{"url":"https://leagent.me/downloads/multica/v0.3.2/multica-cli-0.3.2-${platform}.tar.gz","sha256":"${sha256}"}}}
+{"tag":"v0.3.2","version":"0.3.2","platforms":{"${platform}":{"url":"https://cdn.leagent.me/computer/v0.3.2/multica-cli-0.3.2-${platform}.tar.gz","sha256":"${sha256}"}}}
 JSON
 
   # install.sh's manifest parsing needs jq or python3 on PATH. Stage the
@@ -144,7 +144,7 @@ _run_installer() {
     echo "MULTICA_BIN_DIR must not create a second install root" >&2
     return 1
   fi
-  if ! grep -q "https://leagent.me/downloads/multica/v0.3.2/multica-cli-0.3.2-" "$tmp/curl.log"; then
+  if ! grep -q "https://cdn.leagent.me/computer/v0.3.2/multica-cli-0.3.2-" "$tmp/curl.log"; then
     echo "expected download from the leagent.me release feed, not GitHub" >&2
     cat "$tmp/curl.log" >&2 || true
     return 1

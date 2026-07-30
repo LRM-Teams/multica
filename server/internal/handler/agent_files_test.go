@@ -30,12 +30,12 @@ func createAgentFilesTestMember(t *testing.T, role string) string {
 	return userID
 }
 
-func TestListAgentFilesOwnerOnly(t *testing.T) {
+func TestListAgentFilesOwnerOrAdmin(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
-	agentID := createHandlerTestAgent(t, "agent-files-owner-only", nil)
+	agentID := createHandlerTestAgent(t, "agent-files-owner-or-admin", nil)
 
 	for _, tc := range []struct {
 		name   string
@@ -44,7 +44,7 @@ func TestListAgentFilesOwnerOnly(t *testing.T) {
 	}{
 		{name: "owner", userID: testUserID, want: http.StatusOK},
 		{name: "member", userID: createAgentFilesTestMember(t, "member"), want: http.StatusForbidden},
-		{name: "admin", userID: createAgentFilesTestMember(t, "admin"), want: http.StatusForbidden},
+		{name: "admin", userID: createAgentFilesTestMember(t, "admin"), want: http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := withURLParam(newRequestAs(tc.userID, http.MethodGet, "/api/agents/"+agentID+"/files", nil), "id", agentID)
@@ -118,6 +118,33 @@ func TestAgentFileContentOwnerOnly(t *testing.T) {
 	testHandler.UpdateAgentFileContent(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected non-owner write 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentFileContentAllowsWorkspaceAdmin(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
+	agentID := createHandlerTestAgent(t, "agent-files-content-admin", nil)
+	adminID := createAgentFilesTestMember(t, "admin")
+
+	req := withURLParam(newRequestAs(adminID, http.MethodGet, "/api/agents/"+agentID+"/files/content?path=memory/MEMORY.md", nil), "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.GetAgentFileContent(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("expected admin read to pass auth, got 403: %s", w.Body.String())
+	}
+
+	req = withURLParam(newRequestAs(adminID, http.MethodPut, "/api/agents/"+agentID+"/files/content", map[string]any{
+		"path":                  "memory/MEMORY.md",
+		"content":               "updated",
+		"expected_content_hash": "old",
+	}), "id", agentID)
+	w = httptest.NewRecorder()
+	testHandler.UpdateAgentFileContent(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("expected admin write to pass auth, got 403: %s", w.Body.String())
 	}
 }
 

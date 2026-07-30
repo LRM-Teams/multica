@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1113,40 +1114,86 @@ func TestHandleUpdateFailsSafelyWhenBusyAndServerDoesNotSupportReadyToApply(t *t
 	}
 }
 
-func TestNewTaskSlotSemaphoreReturnsStableSlotIndexes(t *testing.T) {
+func TestActiveAgentGateBoundsDistinctRuntimesNotTaskCount(t *testing.T) {
 	t.Parallel()
 
-	sem := newTaskSlotSemaphore(4)
-	seen := make(map[int]bool)
-	for i := 0; i < 4; i++ {
-		select {
-		case slot := <-sem:
-			if slot < 0 || slot > 3 {
-				t.Fatalf("slot out of range: %d", slot)
-			}
-			if seen[slot] {
-				t.Fatalf("duplicate slot: %d", slot)
-			}
-			seen[slot] = true
-		default:
-			t.Fatalf("expected slot %d to be available", i)
-		}
+	gate := newActiveAgentGate(2)
+
+	// Two distinct runtimes fill the cap.
+	if !gate.tryEnter("rt-a") {
+		t.Fatal("rt-a should enter: gate is empty")
+	}
+	if !gate.tryEnter("rt-b") {
+		t.Fatal("rt-b should enter: one free slot remains")
+	}
+	if got := gate.activeCount(); got != 2 {
+		t.Fatalf("activeCount = %d, want 2", got)
 	}
 
-	select {
-	case slot := <-sem:
-		t.Fatalf("expected semaphore to be empty, got slot %d", slot)
-	default:
+	// A third distinct runtime is refused: at capacity.
+	if gate.tryEnter("rt-c") {
+		t.Fatal("rt-c should be refused: gate is at its 2-runtime cap")
 	}
 
-	sem <- 2
-	select {
-	case slot := <-sem:
-		if slot != 2 {
-			t.Fatalf("expected released slot 2, got %d", slot)
+	// An already-active runtime may keep entering (more concurrent tasks
+	// for the same runtime) with no additional cap — this is the entire
+	// point: the gate bounds distinct agents, not task count.
+	for i := 0; i < 10; i++ {
+		if !gate.tryEnter("rt-a") {
+			t.Fatalf("rt-a re-entry %d should never be refused (already active)", i)
 		}
+	}
+	if got := gate.activeCount(); got != 2 {
+		t.Fatalf("activeCount after rt-a re-entries = %d, want 2 (still just rt-a and rt-b)", got)
+	}
+
+	// rt-a's 11 in-flight tasks (1 initial + 10 re-entries) must all exit
+	// before rt-a leaves the active set and frees a slot for rt-c.
+	for i := 0; i < 10; i++ {
+		gate.exit("rt-a")
+		if gate.tryEnter("rt-c") {
+			t.Fatalf("rt-c entered early after only %d of 11 rt-a exits", i+1)
+		}
+	}
+	gate.exit("rt-a") // the 11th and final exit
+	if got := gate.activeCount(); got != 1 {
+		t.Fatalf("activeCount after rt-a fully exits = %d, want 1 (only rt-b)", got)
+	}
+	if !gate.tryEnter("rt-c") {
+		t.Fatal("rt-c should now enter: rt-a's slot is free")
+	}
+
+	// exit() pings freed non-blockingly so a waiter can recheck promptly.
+	gate2 := newActiveAgentGate(1)
+	if !gate2.tryEnter("only") {
+		t.Fatal("only should enter an empty gate")
+	}
+	if gate2.tryEnter("blocked") {
+		t.Fatal("blocked should be refused: gate2 cap is 1")
+	}
+	gate2.exit("only")
+	select {
+	case <-gate2.freed:
 	default:
-		t.Fatal("expected released slot to be available")
+		t.Fatal("exit() should have pinged freed")
+	}
+	if !gate2.tryEnter("blocked") {
+		t.Fatal("blocked should now enter after only's exit")
+	}
+}
+
+func TestActiveAgentGateUnlimitedWhenMaxIsZero(t *testing.T) {
+	t.Parallel()
+
+	gate := newActiveAgentGate(0)
+	for i := 0; i < 50; i++ {
+		rid := fmt.Sprintf("rt-%d", i)
+		if !gate.tryEnter(rid) {
+			t.Fatalf("rt-%d should always enter when max<=0 (unlimited)", i)
+		}
+	}
+	if got := gate.activeCount(); got != 50 {
+		t.Fatalf("activeCount = %d, want 50", got)
 	}
 }
 

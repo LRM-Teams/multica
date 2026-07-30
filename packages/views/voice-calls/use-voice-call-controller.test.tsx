@@ -693,6 +693,15 @@ describe("useVoiceCallController", () => {
     act(() => {
       media.events().onAutoplayBlocked?.("voice-agent-1");
     });
+    expect(result.current.autoplayBlockedUserId).toBe("voice-agent-1");
+    act(() => {
+      media.events().onRemoteAudioStarted?.("voice-agent-1");
+    });
+    expect(result.current.autoplayBlockedUserId).toBeNull();
+
+    act(() => {
+      media.events().onAutoplayBlocked?.("voice-agent-1");
+    });
     await act(async () => {
       await result.current.resumeRemoteAudio();
     });

@@ -188,6 +188,13 @@ export class VolcengineVoiceMediaSession {
   private fatalError: VoiceCallMediaError | null = null;
   private connectPromise: Promise<void> | null = null;
   private cleanupPromise: Promise<void> | null = null;
+  private readonly remoteAudioFirstFrameUsers = new Set<string>();
+  private readonly remoteAudioPlaybackConfirmedUsers = new Set<string>();
+  private readonly remoteAudioAnswerReportedUsers = new Set<string>();
+  private readonly remoteAudioPlaybackAttempts = new Map<
+    string,
+    Promise<void>
+  >();
 
   constructor(
     private readonly events: VoiceCallMediaEvents = {},
@@ -279,7 +286,19 @@ export class VolcengineVoiceMediaSession {
           },
           onRemoteAudioStarted: (remoteUserId) => {
             if (this.state === "closed" || this.state === "failed") return;
-            this.events.onRemoteAudioStarted?.(remoteUserId);
+            const normalizedUserId = remoteUserId.trim();
+            if (!normalizedUserId) return;
+            this.remoteAudioFirstFrameUsers.add(normalizedUserId);
+            if (
+              this.remoteAudioPlaybackConfirmedUsers.has(normalizedUserId)
+            ) {
+              this.reportRemoteAudioStarted(normalizedUserId);
+              return;
+            }
+            void this.startRemoteAudioPlayback(normalizedUserId).catch(() => {
+              if (this.state === "closed" || this.state === "failed") return;
+              this.events.onAutoplayBlocked?.(normalizedUserId);
+            });
           },
           onFatalError: (providerCode) => {
             if (this.state === "closed" || this.state === "failed") return;
@@ -434,14 +453,15 @@ export class VolcengineVoiceMediaSession {
   }
 
   async resumeRemoteAudio(remoteUserId: string): Promise<void> {
-    if (!this.engine || !remoteUserId.trim()) {
+    const normalizedUserId = remoteUserId.trim();
+    if (!this.engine || !normalizedUserId) {
       throw new VoiceCallMediaError(
         "playback_failed",
         "Remote voice stream is not available",
       );
     }
     try {
-      await this.engine.playRemoteAudio(remoteUserId);
+      await this.startRemoteAudioPlayback(normalizedUserId);
     } catch (error) {
       throw mediaError(
         "playback_failed",
@@ -449,6 +469,56 @@ export class VolcengineVoiceMediaSession {
         error,
       );
     }
+  }
+
+  private startRemoteAudioPlayback(remoteUserId: string): Promise<void> {
+    if (this.remoteAudioPlaybackConfirmedUsers.has(remoteUserId)) {
+      this.reportRemoteAudioStarted(remoteUserId);
+      return Promise.resolve();
+    }
+    const currentAttempt = this.remoteAudioPlaybackAttempts.get(remoteUserId);
+    if (currentAttempt) return currentAttempt;
+
+    const engine = this.engine;
+    if (!engine) {
+      return Promise.reject(
+        new VoiceCallMediaError(
+          "playback_failed",
+          "Remote voice stream is not available",
+        ),
+      );
+    }
+
+    const attempt = engine.playRemoteAudio(remoteUserId)
+      .then(() => {
+        if (
+          this.engine !== engine ||
+          this.state === "closed" ||
+          this.state === "failed"
+        ) {
+          return;
+        }
+        this.remoteAudioPlaybackConfirmedUsers.add(remoteUserId);
+        this.reportRemoteAudioStarted(remoteUserId);
+      })
+      .finally(() => {
+        if (this.remoteAudioPlaybackAttempts.get(remoteUserId) === attempt) {
+          this.remoteAudioPlaybackAttempts.delete(remoteUserId);
+        }
+      });
+    this.remoteAudioPlaybackAttempts.set(remoteUserId, attempt);
+    return attempt;
+  }
+
+  private reportRemoteAudioStarted(remoteUserId: string): void {
+    if (
+      !this.remoteAudioFirstFrameUsers.has(remoteUserId) ||
+      this.remoteAudioAnswerReportedUsers.has(remoteUserId)
+    ) {
+      return;
+    }
+    this.remoteAudioAnswerReportedUsers.add(remoteUserId);
+    this.events.onRemoteAudioStarted?.(remoteUserId);
   }
 
   async disconnect(): Promise<void> {
@@ -515,6 +585,10 @@ export class VolcengineVoiceMediaSession {
     }
     this.engine = null;
     this.ready = false;
+    this.remoteAudioFirstFrameUsers.clear();
+    this.remoteAudioPlaybackConfirmedUsers.clear();
+    this.remoteAudioAnswerReportedUsers.clear();
+    this.remoteAudioPlaybackAttempts.clear();
     if (firstError) throw firstError;
   }
 

@@ -247,3 +247,35 @@ Beckham's configured welcome message after the caller joins.
 - [ ] Complete one authenticated caller microphone test on the deployed web
   client and confirm ringback stops on the welcome-message audio instead of
   the unreachable server callback.
+
+## Audible remote playback repair
+
+- [x] Captured the reported production call
+  `796ef84e-5fdf-483d-b9cd-723897903729` instead of inferring from an older
+  session.
+- [x] Confirmed `StartVoiceChat` returned HTTP 200 in 200 ms and the provider
+  bot remained in the RTC room until the caller hung up.
+- [x] Queried Volcengine `ListCallDetail` after its documented data-delay
+  window. The agent sent 32 Kbps audio, the caller received 20–40 Kbps from
+  that agent, playback volume was 90.31, packet loss was 0–1.01%, and audio
+  stall duration was 0 ms.
+- [x] Ruled out an empty welcome message, failed TTS generation, a missing
+  remote stream, and transport loss for this call. The remaining defect was
+  between the decoded first frame and browser playback.
+- [x] Added failing media-session tests proving that a decoded frame must not
+  count as an answered call until the SDK's explicit remote `play()` promise
+  succeeds.
+- [x] Added a failing regression test for browsers that reject playback:
+  the UI must request a user gesture and must not report an audible answer.
+- [x] Explicitly start remote audio playback on the first decoded agent frame,
+  deduplicate concurrent attempts, and report the answer only after playback
+  succeeds.
+- [x] Reuse the same playback confirmation path when the member clicks the
+  resume-audio control after an autoplay rejection.
+- [x] Clear a stale autoplay warning when playback is subsequently confirmed.
+- [x] Verified 32 focused media-session and controller tests.
+- [x] Verified the complete views suite (306 files, 2,993 passing tests and 5
+  skips), TypeScript, lint (zero errors; five pre-existing warnings outside
+  the changed files), React Doctor (zero findings), and whitespace checks.
+- [ ] Merge the independent repair PR to `dev`, verify deployment, and repeat
+  the RTC quality query for the caller's acceptance call.

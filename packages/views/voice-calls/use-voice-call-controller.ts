@@ -505,6 +505,7 @@ export function useVoiceCallController(
             clearActivationTimeout();
             stopRingback();
             if (mountedRef.current) {
+              setAutoplayBlockedUserId(null);
               setLocalPhase((current) =>
                 current === "muted" ? "muted" : "connected"
               );

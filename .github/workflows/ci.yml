@@ -48,22 +48,26 @@ jobs:
         with:
           path: .turbo/cache
           key: ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-${{ github.sha }}
-          # No per-ref restore-key. `restore-keys` are tried in order and the
-          # first matching prefix wins, so a ref-scoped prefix meant that once a
-          # PR had saved anything it always restored its own older entry and
-          # never reached the dev-scoped one — even when dev's was newer. That
-          # entry is from the PR's previous head, so its hashes miss: measured
-          # on #1436, run 30449547434 restored the dev key and reported
-          # `Cached: 2 of 9`, while run 30451875170 restored
-          # `…-1436/merge-…` and reported `0 of 9`. A cache saved by a
-          # cancelled run could be pinned the same way.
+          # ⚠️ PROBE COMMIT — NOT FOR MERGE (see PR #1448).
           #
-          # The exact `key` above still contains github.sha, so a genuine re-run
-          # of the same commit hits it directly and loses nothing.
+          # Only the dev prefix, deliberately. Testing whether restore-key
+          # matching is scope-outer / key-inner: if a PR's own scope is searched
+          # across all restore-keys first, then leaving no key that can match a
+          # `<n>/merge-` entry should make it fall through to the dev scope and
+          # hit `…-turbo-CI-dev-…`. If it still misses, that model is wrong.
+          #
+          # Why this is being probed: removing the per-ref prefix (the original
+          # intent of this PR) did NOT work — run 3 still restored
+          # `…-1448/merge-…` because `…-turbo-CI-dev-` matched nothing, even
+          # though a 119 MB `ref=refs/heads/dev` entry existed. And the premise
+          # was wrong anyway: a PR's own entry gave `Cached: 8 of 9` between
+          # consecutive commits, versus `0 of 9` on #1436 where the heads were
+          # large rewrites. Whether self-cache helps depends on the distance
+          # between that PR's own heads, not on it being "self".
+          #
+          # The exact `key` above is unchanged, so same-commit re-runs still hit.
           restore-keys: |
             ${{ runner.os }}-turbo-${{ github.workflow }}-dev-
-            ${{ runner.os }}-turbo-${{ github.workflow }}-
-            ${{ runner.os }}-turbo-
 
       - name: Restore Next.js cache
         uses: actions/cache@v4

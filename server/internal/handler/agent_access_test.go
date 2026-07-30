@@ -159,8 +159,12 @@ func TestGetAgent_UnconditionalButInternalsGated(t *testing.T) {
 
 	agentID, ownerID, memberID := privateAgentTestFixture(t)
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent SET instructions = 'secret system prompt' WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("seed instructions: %v", err)
+		UPDATE agent
+		   SET instructions = 'secret system prompt',
+		       custom_args = '["--secret-flag"]'::jsonb,
+		       runtime_config = '{"secret_key":"secret_value"}'::jsonb
+		 WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("seed internals: %v", err)
 	}
 
 	// Workspace owner: 200, sees internals.
@@ -175,6 +179,12 @@ func TestGetAgent_UnconditionalButInternalsGated(t *testing.T) {
 	}
 	if ownerResp.Instructions != "secret system prompt" {
 		t.Fatalf("GetAgent as workspace owner: instructions = %q, want populated", ownerResp.Instructions)
+	}
+	if len(ownerResp.CustomArgs) != 1 || ownerResp.CustomArgs[0] != "--secret-flag" {
+		t.Fatalf("GetAgent as workspace owner: custom_args = %#v, want populated", ownerResp.CustomArgs)
+	}
+	if rc, ok := ownerResp.RuntimeConfig.(map[string]any); !ok || rc["secret_key"] != "secret_value" {
+		t.Fatalf("GetAgent as workspace owner: runtime_config = %#v, want populated", ownerResp.RuntimeConfig)
 	}
 
 	// Agent owner: 200, sees internals.
@@ -203,6 +213,15 @@ func TestGetAgent_UnconditionalButInternalsGated(t *testing.T) {
 	}
 	if memberResp.Instructions != "" {
 		t.Fatalf("GetAgent as plain member: instructions = %q, want redacted (empty)", memberResp.Instructions)
+	}
+	if len(memberResp.CustomArgs) != 0 {
+		t.Fatalf("GetAgent as plain member: custom_args = %#v, want redacted (empty)", memberResp.CustomArgs)
+	}
+	if memberResp.RuntimeConfig != nil {
+		t.Fatalf("GetAgent as plain member: runtime_config = %#v, want redacted (nil)", memberResp.RuntimeConfig)
+	}
+	if memberResp.MemoryGrowth != nil {
+		t.Fatalf("GetAgent as plain member: memory_growth = %#v, want redacted (nil)", memberResp.MemoryGrowth)
 	}
 	if memberResp.ID != agentID || memberResp.DisplayName == "" {
 		t.Fatalf("GetAgent as plain member: identity fields must still be populated, got %+v", memberResp)

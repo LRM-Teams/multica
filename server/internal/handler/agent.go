@@ -1282,6 +1282,11 @@ func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 // description, model, thinking_level, being chatted with or assigned work)
 // is unconditional for every workspace member; how the agent is built stays
 // admin|owner. See canAccessAgentInternals.
+//
+// MaxConcurrentTasks is deliberately NOT in this bucket (nor treated as
+// unconditional usage info) — Frank flagged 2026-07-30 16:43 that it may be
+// entirely dead now that execution is single-session; pending confirmation
+// (batch 3), it's left exactly as-is rather than guessed into either side.
 func redactAgentInternals(resp *AgentResponse) {
 	resp.Instructions = ""
 	resp.RuntimeConfig = nil

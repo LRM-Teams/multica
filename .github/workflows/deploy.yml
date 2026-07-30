@@ -234,6 +234,9 @@ jobs:
       # Secret values are never copied into the host dotenv. Compose propagates
       # this ambient value into the backend container.
       DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
+      # Aliyun OSS (S3-compatible). Ambient only — never write into host .env.
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       VOLCENGINE_RTC_APP_ID: ${{ secrets.VOLCENGINE_RTC_APP_ID }}
       VOLCENGINE_RTC_APP_KEY: ${{ secrets.VOLCENGINE_RTC_APP_KEY }}
       VOLCENGINE_RTC_ACCESS_KEY_ID: ${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}

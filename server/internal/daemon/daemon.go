@@ -2683,15 +2683,25 @@ func capacityBackoff(pollInterval time.Duration) time.Duration {
 	return pollInterval
 }
 
-// activeAgentGate bounds how many distinct runtimes (agents) may have any
-// in-flight task at once — it does not bound the number of tasks. Per-agent
-// execution is already serialized to one in-flight task via
-// acquireAgentWakeSlot, so once a runtime is in the active set it may
-// dispatch as many concurrent tasks as its own work requires with no
-// further gating here: the real machine resource this protects is "one
-// more live agent process", not "one more task". A runtime leaves the
-// active set only when its last in-flight task completes, freeing the slot
-// for a different runtime.
+// activeAgentGate bounds how many distinct runtimes may have any in-flight
+// task at once — it does not bound the number of tasks. Per-agent execution
+// is already serialized to one in-flight task via acquireAgentWakeSlot, so
+// once a runtime is in the active set it may dispatch as many concurrent
+// tasks as its own work requires with no further gating here: the real
+// machine resource this protects is "one more live agent process", not "one
+// more task". A runtime leaves the active set only when its last in-flight
+// task completes, freeing the slot for a different runtime.
+//
+// This is keyed on runtime_id as a proxy for "distinct live agent
+// processes", not an exact count of them: capacity has to be checked before
+// ClaimTask (slot-before-claim — see runRuntimePoller), and at that point
+// the daemon knows which runtime it's polling but not yet which agent_id
+// the claimed task will carry. The schema doesn't enforce one agent per
+// runtime, so a runtime already in the active set could in principle be
+// running tasks for more than one agent process without that costing an
+// extra gate slot. Not a new gap — the prior task-count semaphore had no
+// agent- or runtime-awareness at all — but treat MaxConcurrentAgents as a
+// close proxy, not a literal process count.
 //
 // Neither Raft's own daemon nor Multica's per-task message queue has an
 // equivalent "N tasks total, machine-wide" limiter — Raft bounds live agent
@@ -2751,7 +2761,8 @@ func (g *activeAgentGate) exit(rid string) {
 }
 
 // activeCount reports the number of distinct runtimes currently counted as
-// active (test/observability use).
+// active — see the activeAgentGate doc comment for why this is a proxy for
+// concurrent agent processes, not an exact count (test/observability use).
 func (g *activeAgentGate) activeCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()

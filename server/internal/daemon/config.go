@@ -51,13 +51,26 @@ const (
 	DefaultRuntimeName           = "Local Agent"
 	DefaultWorkspaceSyncInterval = 30 * time.Second
 	DefaultHealthPort            = 19514
-	// DefaultMaxConcurrentAgents caps how many distinct runtimes (agents) may
-	// have any in-flight task at once on this one daemon — it does NOT cap
-	// the number of tasks. Each agent already self-serializes to at most one
-	// in-flight task via acquireAgentWakeSlot, so the real machine resource
-	// to protect is "one more live agent process" (memory/CPU), not "one
-	// more task"; once a runtime is active it may dispatch as many
-	// concurrent tasks as it needs with no further gating (activeAgentGate).
+	// DefaultMaxConcurrentAgents caps how many distinct runtimes may have any
+	// in-flight task at once on this one daemon — it does NOT cap the number
+	// of tasks. Each agent already self-serializes to at most one in-flight
+	// task via acquireAgentWakeSlot, so the real machine resource to protect
+	// is "one more live agent process" (memory/CPU), not "one more task";
+	// once a runtime is active it may dispatch as many concurrent tasks as
+	// it needs with no further gating (activeAgentGate).
+	//
+	// Gating is keyed on runtime_id, not agent_id: capacity must be checked
+	// before ClaimTask (slot-before-claim, see runRuntimePoller), and at that
+	// point the daemon only knows which runtime it's polling — not which
+	// agent the claimed task will belong to. The DB schema does not enforce
+	// one agent per runtime, so this is a proxy for "distinct live agent
+	// processes," not an exact count: if multiple agents ever shared one
+	// runtime, tasks for a second agent on an already-active runtime would
+	// ride in for free without consuming another gate slot. This is not a
+	// regression — the prior task-count semaphore had no agent- or
+	// runtime-awareness at all — but it's the reason this gate counts
+	// runtimes, and callers should not treat MaxConcurrentAgents as an exact
+	// agent-process count.
 	//
 	// This replaces a prior daemon-wide task-count semaphore (default 20,
 	// picked with no documented rationale when concurrent execution was
@@ -112,7 +125,7 @@ type Config struct {
 	WorkspacesRoot                string                // base path for execution envs (default: ~/multica_workspaces)
 	KeepEnvAfterTask              bool                  // preserve env after task for debugging
 	HealthPort                    int                   // local HTTP port for health checks (default: 19514)
-	MaxConcurrentAgents           int                   // max distinct runtimes/agents with any in-flight task at once; tasks themselves are unlimited (default: 20)
+	MaxConcurrentAgents           int                   // max distinct runtimes with any in-flight task at once (proxy for concurrent agent processes — see DefaultMaxConcurrentAgents); tasks themselves are unlimited (default: 20)
 	GCEnabled                     bool                  // enable periodic workspace garbage collection (default: true)
 	GCInterval                    time.Duration         // how often the GC loop runs (default: 1h)
 	GCTTL                         time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
@@ -405,7 +418,12 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// Renamed from MULTICA_DAEMON_MAX_CONCURRENT_TASKS: the old name is no
 	// longer read. It capped task count; this caps distinct active agents
 	// instead (see DefaultMaxConcurrentAgents) — keeping the old name would
-	// silently change what a previously-set value means.
+	// silently change what a previously-set value means. No logger exists
+	// yet at config-load time, so warn straight to stderr rather than drop
+	// this silently.
+	if _, wasSet := os.LookupEnv("MULTICA_DAEMON_MAX_CONCURRENT_TASKS"); wasSet {
+		fmt.Fprintln(os.Stderr, "warning: MULTICA_DAEMON_MAX_CONCURRENT_TASKS is deprecated and no longer read; it has no effect. Use MULTICA_DAEMON_MAX_CONCURRENT_AGENTS instead (see DefaultMaxConcurrentAgents).")
+	}
 	maxConcurrentAgents, err := intFromEnv("MULTICA_DAEMON_MAX_CONCURRENT_AGENTS", DefaultMaxConcurrentAgents)
 	if err != nil {
 		return Config{}, err

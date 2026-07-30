@@ -81,7 +81,7 @@ func init() {
 	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	f.Int("max-concurrent-agents", 0, "Max distinct agents/runtimes with an in-flight task at once; tasks themselves are unlimited (env: MULTICA_DAEMON_MAX_CONCURRENT_AGENTS)")
+	f.Int("max-concurrent-agents", 0, "Max distinct runtimes with an in-flight task at once (proxy for concurrent agent processes); tasks themselves are unlimited (env: MULTICA_DAEMON_MAX_CONCURRENT_AGENTS)")
 	f.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
 	f.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
 
@@ -100,7 +100,7 @@ func init() {
 	rf.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	rf.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	rf.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	rf.Int("max-concurrent-agents", 0, "Max distinct agents/runtimes with an in-flight task at once; tasks themselves are unlimited (env: MULTICA_DAEMON_MAX_CONCURRENT_AGENTS)")
+	rf.Int("max-concurrent-agents", 0, "Max distinct runtimes with an in-flight task at once (proxy for concurrent agent processes); tasks themselves are unlimited (env: MULTICA_DAEMON_MAX_CONCURRENT_AGENTS)")
 	rf.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
 	rf.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
 

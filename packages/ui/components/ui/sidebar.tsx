@@ -82,12 +82,12 @@ function SidebarProvider({
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
 
-  const [width, _setWidth] = React.useState(SIDEBAR_WIDTH_DEFAULT)
-  const [isResizing, setIsResizing] = React.useState(false)
-  React.useEffect(() => {
+  const [width, _setWidth] = React.useState(() => {
+    if (typeof window === "undefined") return SIDEBAR_WIDTH_DEFAULT
     const stored = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
-    if (stored) _setWidth(Number(stored))
-  }, [])
+    return stored ? Number(stored) : SIDEBAR_WIDTH_DEFAULT
+  })
+  const [isResizing, setIsResizing] = React.useState(false)
   const setWidth = React.useCallback((w: number) => {
     const clamped = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, w))
     _setWidth(clamped)
@@ -96,16 +96,15 @@ function SidebarProvider({
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
-  const open = openProp ?? _open
-  // Restore the persisted collapsed preference (uncontrolled usage only, so a
-  // controlled parent never gets its prop overridden after mount).
-  React.useEffect(() => {
-    if (openProp !== undefined) return
+  // The persisted collapsed preference is restored lazily on first render
+  // (uncontrolled usage only, so a controlled parent never gets its prop
+  // overridden). Client-only consumers: web SPA + desktop renderer.
+  const [_open, _setOpen] = React.useState(() => {
+    if (openProp !== undefined || typeof window === "undefined") return defaultOpen
     const stored = localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY)
-    if (stored !== null) _setOpen(stored === "true")
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    return stored !== null ? stored === "true" : defaultOpen
+  })
+  const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value

@@ -53,8 +53,12 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
-vi.mock("./research-session-row-actions", () => ({
-  ResearchSessionRowActions: () => null,
+// Row internals are covered by research-session-row.test.tsx; the page tests
+// only care that each session lands in the right group.
+vi.mock("./research-session-row", () => ({
+  ResearchSessionRow: ({ session }: { session: { title: string; goal: string } }) => (
+    <div>{session.title || session.goal}</div>
+  ),
 }));
 
 vi.mock("../../i18n/use-t", () => ({

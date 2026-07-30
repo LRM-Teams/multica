@@ -3894,7 +3894,10 @@ export class ApiClient {
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
     const raw = (await this.fetch(`/api/research/sessions/${id}/presence`)) as {
       session_id?: string;
-      presence?: Record<string, { activity?: string; updated_at?: number; updatedAt?: number }>;
+      presence?: Record<
+        string,
+        { activity?: string; updated_at?: number; updatedAt?: number }
+      >;
     };
     return {
       session_id: typeof raw?.session_id === "string" ? raw.session_id : id,

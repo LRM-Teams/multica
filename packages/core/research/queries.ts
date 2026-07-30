@@ -6,9 +6,13 @@ export type ResearchPresenceMap = Record<
   { activity: string; updatedAt: number }
 >;
 
+/** Wire shape from GET /presence before normalizeResearchPresenceMap. */
 export type ResearchPresenceResponse = {
   session_id: string;
-  presence: ResearchPresenceMap;
+  presence: Record<
+    string,
+    { activity?: string; updated_at?: number; updatedAt?: number }
+  >;
 };
 
 export const researchKeys = {

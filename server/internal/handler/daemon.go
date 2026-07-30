@@ -488,6 +488,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:      row.UpdatedAt,
 			OwnerID:        row.OwnerID,
 			LegacyDaemonID: row.LegacyDaemonID,
+			Visibility:     row.Visibility,
+			DisplayName:    row.DisplayName,
 		}
 
 		// Seamless migration from the previous hostname-derived identity. The

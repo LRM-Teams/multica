@@ -49,6 +49,11 @@ WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
 -- (xmax = 0) AS inserted distinguishes a fresh insert (true) from an upsert
 -- that updated an existing row (false). Analytics reads this to fire
 -- runtime_registered/runtime_ready only on first-time registration.
+--
+-- display_name is intentionally omitted from DO UPDATE: daemon register /
+-- reconnect must keep refreshing `name` (hostname / reported label) but
+-- must never clobber a user-set display_name. New inserts default to ''
+-- via the column default.
 INSERT INTO agent_runtime (
     workspace_id,
     daemon_id,
@@ -103,6 +108,15 @@ RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, dev
 -- admin only.
 UPDATE agent_runtime
 SET visibility = @visibility, updated_at = now()
+WHERE id = @id
+RETURNING *;
+
+-- name: UpdateAgentRuntimeDisplayName :one
+-- Sets the user-editable machine label. Empty string clears the override so
+-- clients fall back to daemon-reported `name`. Gated at the handler by
+-- canEditRuntime (owner / workspace admin).
+UPDATE agent_runtime
+SET display_name = @display_name, updated_at = now()
 WHERE id = @id
 RETURNING *;
 

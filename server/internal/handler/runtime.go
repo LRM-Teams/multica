@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -23,6 +25,10 @@ type AgentRuntimeResponse struct {
 	WorkspaceID    string                      `json:"workspace_id"`
 	DaemonID       *string                     `json:"daemon_id"`
 	Name           string                      `json:"name"`
+	// DisplayName is the user-editable machine label. Empty means unset —
+	// clients should fall back to Name (daemon hostname / reported label).
+	// Daemon register/upsert never overwrites a non-empty value.
+	DisplayName    string                      `json:"display_name"`
 	RuntimeMode    string                      `json:"runtime_mode"`
 	Provider       string                      `json:"provider"`
 	LaunchHeader   string                      `json:"launch_header"`
@@ -194,6 +200,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		WorkspaceID:    uuidToString(rt.WorkspaceID),
 		DaemonID:       textToPtr(rt.DaemonID),
 		Name:           rt.Name,
+		DisplayName:    rt.DisplayName,
 		RuntimeMode:    rt.RuntimeMode,
 		Provider:       rt.Provider,
 		LaunchHeader:   agent.LaunchHeader(rt.Provider),
@@ -763,6 +770,8 @@ func (h *Handler) resolveViewingTZ(r *http.Request) string {
 	return "UTC"
 }
 
+const maxRuntimeDisplayNameLength = 128
+
 // UpdateAgentRuntimeRequest is the JSON body accepted by PATCH /api/runtimes/:id.
 // Only fields users may legitimately edit are listed; other runtime metadata
 // (provider, daemon_id, status…) flows in from the daemon and is read-only here.
@@ -771,11 +780,15 @@ type UpdateAgentRuntimeRequest struct {
 	// or workspace admins can bind agents) and "public" (any workspace
 	// member can). Owner / workspace admin only, gated by canEditRuntime.
 	Visibility *string `json:"visibility,omitempty"`
+	// DisplayName sets the user-editable machine label. Empty string clears
+	// the override so clients fall back to daemon-reported name. Whitespace
+	// is trimmed. Owner / workspace admin only, gated by canEditRuntime.
+	DisplayName *string `json:"display_name,omitempty"`
 }
 
-// UpdateAgentRuntime handles PATCH /api/runtimes/:id. Currently visibility
-// is editable; the request shape is open-ended so future fields (display
-// name, description) can be added without a route change.
+// UpdateAgentRuntime handles PATCH /api/runtimes/:id. Visibility and
+// display_name are editable; the request shape is open-ended so future
+// fields can be added without a route change.
 // Workspace-membership-checked; write access is gated by canEditRuntime.
 func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
@@ -808,6 +821,9 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	var (
 		newVisibility  string
 		needVisibility bool
+		newDisplayName string
+		needDisplayName bool
+		changed        bool
 	)
 	if req.Visibility != nil {
 		v := *req.Visibility
@@ -818,6 +834,17 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		if v != rt.Visibility {
 			newVisibility = v
 			needVisibility = true
+		}
+	}
+	if req.DisplayName != nil {
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		if utf8.RuneCountInString(trimmed) > maxRuntimeDisplayNameLength {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("display_name must be %d characters or fewer", maxRuntimeDisplayNameLength))
+			return
+		}
+		if trimmed != rt.DisplayName {
+			newDisplayName = trimmed
+			needDisplayName = true
 		}
 	}
 
@@ -832,6 +859,23 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rt = updated
+		changed = true
+	}
+	if needDisplayName {
+		updated, err := h.Queries.UpdateAgentRuntimeDisplayName(r.Context(), db.UpdateAgentRuntimeDisplayNameParams{
+			ID:          runtimeUUID,
+			DisplayName: newDisplayName,
+		})
+		if err != nil {
+			slog.Error("UpdateAgentRuntimeDisplayName failed", "error", err, "runtime_id", runtimeID)
+			writeError(w, http.StatusInternalServerError, "failed to update runtime")
+			return
+		}
+		rt = updated
+		changed = true
+	}
+
+	if changed {
 		// Notify connected clients that runtime metadata changed so the
 		// list/detail pages refresh — matches the pattern used by
 		// DeleteAgentRuntime.

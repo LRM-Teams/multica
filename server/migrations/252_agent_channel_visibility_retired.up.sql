@@ -8,11 +8,15 @@
 -- now-dead mechanism entirely.
 --
 -- Any legacy visibility='channel' rows (pre-#1436 data, never backfilled)
--- are converted to private with home_channel_id cleared before the column
--- and CHECK constraints that reference it are dropped.
+-- are converted to workspace, not private, with home_channel_id cleared
+-- before the column and CHECK constraints that reference it are dropped.
+-- Frank's #908 ruling is "default public" (#multica thread f83df812,
+-- 2026-07-30 10:55-11:01) — converting to private would silently apply the
+-- strictest visibility to rows nobody asked to lock down (Parker, same
+-- thread, 18:31).
 
 UPDATE agent
-SET visibility = 'private',
+SET visibility = 'workspace',
     home_channel_id = NULL,
     updated_at = now()
 WHERE visibility = 'channel';

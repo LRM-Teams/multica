@@ -48,8 +48,20 @@ jobs:
         with:
           path: .turbo/cache
           key: ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-${{ github.sha }}
+          # No per-ref restore-key. `restore-keys` are tried in order and the
+          # first matching prefix wins, so a ref-scoped prefix meant that once a
+          # PR had saved anything it always restored its own older entry and
+          # never reached the dev-scoped one — even when dev's was newer. That
+          # entry is from the PR's previous head, so its hashes miss: measured
+          # on #1436, run 30449547434 restored the dev key and reported
+          # `Cached: 2 of 9`, while run 30451875170 restored
+          # `…-1436/merge-…` and reported `0 of 9`. A cache saved by a
+          # cancelled run could be pinned the same way.
+          #
+          # The exact `key` above still contains github.sha, so a genuine re-run
+          # of the same commit hits it directly and loses nothing.
           restore-keys: |
-            ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-
+            ${{ runner.os }}-turbo-${{ github.workflow }}-dev-
             ${{ runner.os }}-turbo-${{ github.workflow }}-
             ${{ runner.os }}-turbo-
 

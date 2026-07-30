@@ -19,7 +19,8 @@ type StartConfigurationInput struct {
 	WelcomeMessage    string
 	SystemMessages    []string
 	ArkEndpointID     string
-	ArkModelName      string
+	ASRAppID          string
+	TTSAppID          string
 	TTSVoiceID        string
 	CallbackURL       string
 	CallbackSignature string
@@ -38,10 +39,15 @@ type startASRConfig struct {
 }
 
 type startASRProviderParams struct {
-	Mode            string `json:"Mode"`
-	StreamMode      int    `json:"StreamMode"`
-	APIResourceID   string `json:"ApiResourceId"`
-	EnableNonstream bool   `json:"enable_nonstream"`
+	Mode            string             `json:"Mode"`
+	Credential      startASRCredential `json:"Credential"`
+	StreamMode      int                `json:"StreamMode"`
+	EnableNonstream bool               `json:"enable_nonstream"`
+}
+
+type startASRCredential struct {
+	AppID         string `json:"AppId"`
+	APIResourceID string `json:"ApiResourceId"`
 }
 
 type startVADConfig struct {
@@ -51,8 +57,7 @@ type startVADConfig struct {
 
 type startLLMConfig struct {
 	Mode           string   `json:"Mode"`
-	EndpointID     string   `json:"EndPointId,omitempty"`
-	ModelName      string   `json:"ModelName,omitempty"`
+	EndpointID     string   `json:"EndPointId"`
 	SystemMessages []string `json:"SystemMessages"`
 	HistoryLength  int      `json:"HistoryLength"`
 	MaxTokens      int      `json:"MaxTokens"`
@@ -73,6 +78,7 @@ type startTTSProviderParams struct {
 }
 
 type startTTSCredential struct {
+	AppID      string `json:"AppId"`
 	ResourceID string `json:"ResourceId"`
 }
 
@@ -122,9 +128,8 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 	}
 
 	endpointID := strings.TrimSpace(input.ArkEndpointID)
-	modelName := strings.TrimSpace(input.ArkModelName)
-	if (endpointID == "") == (modelName == "") {
-		return StartConfiguration{}, errors.New("volcengine RTC requires exactly one Ark endpoint ID or model name")
+	if endpointID == "" {
+		return StartConfiguration{}, errors.New("volcengine RTC Ark endpoint ID is required")
 	}
 	if len(input.SystemMessages) == 0 {
 		return StartConfiguration{}, errors.New("volcengine RTC SystemMessages requires at least one message")
@@ -139,6 +144,14 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 	ttsVoiceID := strings.TrimSpace(input.TTSVoiceID)
 	if ttsVoiceID == "" {
 		return StartConfiguration{}, errors.New("volcengine RTC TTS voice is required")
+	}
+	asrAppID := strings.TrimSpace(input.ASRAppID)
+	if asrAppID == "" {
+		return StartConfiguration{}, errors.New("volcengine RTC ASR AppId is required")
+	}
+	ttsAppID := strings.TrimSpace(input.TTSAppID)
+	if ttsAppID == "" {
+		return StartConfiguration{}, errors.New("volcengine RTC TTS AppId is required")
 	}
 	callbackURL := strings.TrimSpace(input.CallbackURL)
 	if err := validatePublicHTTPSURL(callbackURL); err != nil {
@@ -159,9 +172,12 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 		ASRConfig: startASRConfig{
 			Provider: "volcano",
 			ProviderParams: startASRProviderParams{
-				Mode:            "bigmodel",
+				Mode: "bigmodel",
+				Credential: startASRCredential{
+					AppID:         asrAppID,
+					APIResourceID: volcengineASRResourceID,
+				},
 				StreamMode:      2,
-				APIResourceID:   volcengineASRResourceID,
 				EnableNonstream: true,
 			},
 			TurnDetectionMode: 0,
@@ -173,7 +189,6 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 		LLMConfig: startLLMConfig{
 			Mode:           "ArkV3",
 			EndpointID:     endpointID,
-			ModelName:      modelName,
 			SystemMessages: systemMessages,
 			HistoryLength:  10,
 			MaxTokens:      256,
@@ -185,6 +200,7 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 			Provider:   "volcano_bidirection",
 			ProviderParams: startTTSProviderParams{
 				Credential: startTTSCredential{
+					AppID:      ttsAppID,
 					ResourceID: volcengineTTSResourceID,
 				},
 				VolcanoTTSParameters: string(nativeTTS),

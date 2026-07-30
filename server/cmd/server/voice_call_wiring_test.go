@@ -66,11 +66,15 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 	if config.CallbackURL != "https://multica.example.com/api/voice-calls/callback" {
 		t.Fatalf("callback URL = %q", config.CallbackURL)
 	}
-	if config.ArkEndpointID != "ep-voice-call" || config.ArkModelName != "" {
+	if config.ArkEndpointID != "ep-voice-call" {
+		t.Fatalf("Ark endpoint = %q", config.ArkEndpointID)
+	}
+	if config.ASRAppID != "speech-asr-app" ||
+		config.TTSAppID != "speech-tts-app" {
 		t.Fatalf(
-			"Ark selection = endpoint %q model %q",
-			config.ArkEndpointID,
-			config.ArkModelName,
+			"speech AppIDs = ASR %q TTS %q",
+			config.ASRAppID,
+			config.TTSAppID,
 		)
 	}
 	if config.TTSVoiceID != "shared-tts-voice" {
@@ -121,25 +125,48 @@ func TestLoadVoiceCallRuntimeConfigRejectsInvalidDurationAndArkSelection(t *test
 		}
 	})
 
-	t.Run("missing Ark selection", func(t *testing.T) {
+	t.Run("missing Ark endpoint", func(t *testing.T) {
 		values := completeVoiceCallEnvironment()
 		delete(values, "VOLCENGINE_RTC_ARK_ENDPOINT_ID")
 		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
 			return values[name]
 		})
-		if err == nil || !strings.Contains(err.Error(), "exactly one") {
-			t.Fatalf("missing Ark selection error = %v", err)
+		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_ARK_ENDPOINT_ID") {
+			t.Fatalf("missing Ark endpoint error = %v", err)
 		}
 	})
 
-	t.Run("ambiguous Ark selection", func(t *testing.T) {
+	t.Run("Ark display model cannot replace endpoint", func(t *testing.T) {
 		values := completeVoiceCallEnvironment()
+		delete(values, "VOLCENGINE_RTC_ARK_ENDPOINT_ID")
 		values["VOLCENGINE_RTC_ARK_MODEL_NAME"] = "Doubao-Seed-1.6｜250615"
 		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
 			return values[name]
 		})
-		if err == nil || !strings.Contains(err.Error(), "exactly one") {
-			t.Fatalf("ambiguous Ark selection error = %v", err)
+		if err == nil || !strings.Contains(err.Error(), "not a callable endpoint") {
+			t.Fatalf("Ark display model error = %v", err)
+		}
+	})
+
+	t.Run("missing ASR AppID", func(t *testing.T) {
+		values := completeVoiceCallEnvironment()
+		delete(values, "VOLCENGINE_RTC_ASR_APP_ID")
+		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
+			return values[name]
+		})
+		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_ASR_APP_ID") {
+			t.Fatalf("missing ASR AppID error = %v", err)
+		}
+	})
+
+	t.Run("missing TTS AppID", func(t *testing.T) {
+		values := completeVoiceCallEnvironment()
+		delete(values, "VOLCENGINE_RTC_TTS_APP_ID")
+		_, _, err := loadVoiceCallRuntimeConfig(func(name string) string {
+			return values[name]
+		})
+		if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_TTS_APP_ID") {
+			t.Fatalf("missing TTS AppID error = %v", err)
 		}
 	})
 }
@@ -197,6 +224,8 @@ func completeVoiceCallEnvironment() map[string]string {
 		"VOLCENGINE_RTC_ACCESS_KEY_ID":        "access-key-id",
 		"VOLCENGINE_RTC_SECRET_ACCESS_KEY":    "secret-access-key",
 		"VOLCENGINE_RTC_ARK_ENDPOINT_ID":      "ep-voice-call",
+		"VOLCENGINE_RTC_ASR_APP_ID":           "speech-asr-app",
+		"VOLCENGINE_RTC_TTS_APP_ID":           "speech-tts-app",
 		"VOLCENGINE_RTC_TTS_VOICE_ID":         "voice-id",
 		"VOLCENGINE_RTC_CALLBACK_URL":         "https://multica.example.com/api/voice-calls/callback",
 		"VOLCENGINE_RTC_CALLBACK_SIGNATURE":   "callback-signature",

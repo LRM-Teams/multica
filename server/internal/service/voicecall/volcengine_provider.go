@@ -28,7 +28,8 @@ type VolcengineTokenSigner interface {
 
 type VolcengineProviderConfig struct {
 	ArkEndpointID       string
-	ArkModelName        string
+	ASRAppID            string
+	TTSAppID            string
 	TTSVoiceID          string
 	CallbackURL         string
 	CallbackSignature   string
@@ -38,7 +39,8 @@ type VolcengineProviderConfig struct {
 type VolcengineProvider struct {
 	appID               string
 	arkEndpointID       string
-	arkModelName        string
+	asrAppID            string
+	ttsAppID            string
 	ttsVoiceID          string
 	callbackURL         string
 	callbackSignature   string
@@ -67,7 +69,8 @@ func NewVolcengineProvider(
 	}
 
 	arkEndpointID := strings.TrimSpace(config.ArkEndpointID)
-	arkModelName := strings.TrimSpace(config.ArkModelName)
+	asrAppID := strings.TrimSpace(config.ASRAppID)
+	ttsAppID := strings.TrimSpace(config.TTSAppID)
 	ttsVoiceID := strings.TrimSpace(config.TTSVoiceID)
 	callbackURL := strings.TrimSpace(config.CallbackURL)
 	callbackSignature := strings.TrimSpace(config.CallbackSignature)
@@ -77,7 +80,8 @@ func NewVolcengineProvider(
 			AgentUserID:       "configuration-agent",
 			SystemMessages:    []string{"configuration validation"},
 			ArkEndpointID:     arkEndpointID,
-			ArkModelName:      arkModelName,
+			ASRAppID:          asrAppID,
+			TTSAppID:          ttsAppID,
 			TTSVoiceID:        ttsVoiceID,
 			CallbackURL:       callbackURL,
 			CallbackSignature: callbackSignature,
@@ -89,7 +93,8 @@ func NewVolcengineProvider(
 	return &VolcengineProvider{
 		appID:               appID,
 		arkEndpointID:       arkEndpointID,
-		arkModelName:        arkModelName,
+		asrAppID:            asrAppID,
+		ttsAppID:            ttsAppID,
 		ttsVoiceID:          ttsVoiceID,
 		callbackURL:         callbackURL,
 		callbackSignature:   callbackSignature,
@@ -125,7 +130,8 @@ func (provider *VolcengineProvider) Connect(
 			WelcomeMessage:    input.WelcomeMessage,
 			SystemMessages:    input.SystemMessages,
 			ArkEndpointID:     provider.arkEndpointID,
-			ArkModelName:      provider.arkModelName,
+			ASRAppID:          provider.asrAppID,
+			TTSAppID:          provider.ttsAppID,
 			TTSVoiceID:        provider.ttsVoiceID,
 			CallbackURL:       provider.callbackURL,
 			CallbackSignature: provider.callbackSignature,

@@ -218,6 +218,8 @@ func newTestVolcengineProvider(
 	t.Helper()
 	provider, err := NewVolcengineProvider(VolcengineProviderConfig{
 		ArkEndpointID:       "ep-20260723",
+		ASRAppID:            "speech-asr-app",
+		TTSAppID:            "speech-tts-app",
 		TTSVoiceID:          "zh_male_m191_uranus_bigtts",
 		CallbackURL:         "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature:   "callback-secret",

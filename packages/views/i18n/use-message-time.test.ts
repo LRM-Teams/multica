@@ -64,6 +64,13 @@ describe("formatListTime", () => {
     expect(formatListTime(Date.parse("2026-06-28T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("06/28");
   });
 
+  it("exactly 7 local days ago -> MM/DD, not weekday", () => {
+    // 2026-06-29 is a Monday — the same weekday as NOW. Labeling it "Monday"
+    // would collide with today's bucket, so the weekday ladder is 2..6 days
+    // only and day 7 falls through to the date (LRM-763 contract).
+    expect(formatListTime(Date.parse("2026-06-29T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("06/29");
+  });
+
   it("previous years -> YYYY/MM/DD", () => {
     expect(formatListTime(Date.parse("2025-12-30T09:36:00Z"), NOW, "UTC", "en", LABELS)).toBe("2025/12/30");
   });

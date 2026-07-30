@@ -47,15 +47,11 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
 
   const canStop = STOPPABLE.has(session.status);
 
-  const invalidate = () => {
-    void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
-    void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, session.id) });
-  };
-
   const stop = useMutation({
     mutationFn: () => api.stopResearchSession(session.id),
     onSuccess: () => {
-      invalidate();
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, session.id) });
       toast.success(t(($) => $.actions.stop_done));
     },
     onError: (err) => showErrorToast(err),
@@ -64,7 +60,8 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
   const del = useMutation({
     mutationFn: () => api.deleteResearchSession(session.id),
     onSuccess: () => {
-      invalidate();
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, session.id) });
       toast.success(t(($) => $.actions.delete_done));
       setConfirmDelete(false);
     },

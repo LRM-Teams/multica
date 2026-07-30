@@ -1091,14 +1091,14 @@ describe("ChannelMessageBubble", () => {
     const body = screen.getByTestId("message-body");
     Object.defineProperties(body, {
       scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 160 },
+      clientHeight: { configurable: true, value: 320 },
     });
     fireEvent(window, new Event("resize"));
 
     await waitFor(() => {
       expect(body).toHaveAttribute("data-collapsed", "true");
     });
-    expect(body).toHaveClass("max-h-[160px]");
+    expect(body).toHaveClass("max-h-[320px]");
     expect(body).toHaveTextContent("Line 19");
     expect(screen.getByTestId("message-collapse-fade")).toBeInTheDocument();
 
@@ -1139,7 +1139,7 @@ describe("ChannelMessageBubble", () => {
     const body = screen.getByTestId("message-body");
     Object.defineProperties(body, {
       scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 160 },
+      clientHeight: { configurable: true, value: 320 },
     });
     fireEvent(window, new Event("resize"));
 

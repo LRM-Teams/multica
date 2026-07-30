@@ -22,14 +22,14 @@ describe("CollapsibleMessageBody", () => {
     const body = screen.getByTestId("collapsible-message-body");
     Object.defineProperties(body, {
       scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 160 },
+      clientHeight: { configurable: true, value: 320 },
     });
     fireEvent(window, new Event("resize"));
 
     await waitFor(() => {
       expect(body).toHaveAttribute("data-collapsed", "true");
     });
-    expect(body).toHaveClass("max-h-[160px]");
+    expect(body).toHaveClass("max-h-[320px]");
     expect(screen.getByTestId("message-collapse-fade")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
     // Full DOM stays mounted for copy / expand.
@@ -64,7 +64,7 @@ describe("CollapsibleMessageBody", () => {
     const body = screen.getByTestId("collapsible-message-body");
     Object.defineProperties(body, {
       scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 160 },
+      clientHeight: { configurable: true, value: 320 },
     });
     fireEvent(window, new Event("resize"));
 
@@ -73,6 +73,35 @@ describe("CollapsibleMessageBody", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "See less" }));
     expect(onExpandedChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not collapse mid-length content under the widened threshold (LRM-750)", async () => {
+    render(
+      <CollapsibleMessageBody
+        contentKey="m4"
+        expandLabel="See more"
+        collapseLabel="See less"
+      >
+        <div>
+          {Array.from({ length: 10 }, (_, index) => (
+            <p key={index}>Line {index}</p>
+          ))}
+        </div>
+      </CollapsibleMessageBody>,
+    );
+
+    const body = screen.getByTestId("collapsible-message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 200 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(body).not.toHaveAttribute("data-collapsed");
+    });
+    expect(screen.queryByTestId("message-collapse-fade")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
   });
 
   it("does not collapse when enabled is false", async () => {
@@ -90,7 +119,7 @@ describe("CollapsibleMessageBody", () => {
     const body = screen.getByTestId("collapsible-message-body");
     Object.defineProperties(body, {
       scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 160 },
+      clientHeight: { configurable: true, value: 320 },
     });
     fireEvent(window, new Event("resize"));
 

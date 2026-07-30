@@ -90,11 +90,11 @@ const TOUCH_MOVE_CANCEL_PX = 8;
 const SWIPE_LEFT_OPEN_PX = 48;
 const SWIPE_VERTICAL_CANCEL_PX = 24;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
-/** LRM-268 / design-long-message-slack-vs-multica.html — Slack collapsed body height. */
-export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
+/** LRM-268, widened ~2x by LRM-750 — Slack collapsed body height. */
+export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 320;
 /** Fade overlay height — light bottom wash only (LRM-302); must not center-cover text. */
 export const MESSAGE_COLLAPSE_FADE_HEIGHT_PX = 40;
-const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
+const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[320px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
@@ -411,7 +411,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // #689: no per-row ResizeObserver here. It used to exist to catch content
   // growing the body past the collapse threshold after the useLayoutEffect
   // above (which only depends on message.attachments/parts — metadata, not
-  // asset bytes) already ran, and re-apply the 160px cap. Two real late-
+  // asset bytes) already ran, and re-apply the collapse cap. Two real late-
   // growth paths still exist (Wren's #1146 review, not eliminated, accepted
   // as a tradeoff): a markdown inline `![]()` image resolves through the
   // `kind: "url"` AttachmentInput (markdown.tsx renderImage →
@@ -426,7 +426,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // record-backed image/attachment paints at final size and never needed
   // this observer to begin with. The accepted cost of removing it is
   // cosmetic-only for the two paths above — a message may render slightly
-  // taller than 160px without the "see more" affordance until the next
+  // taller than the cap without the "see more" affordance until the next
   // window resize or content-prop change re-measures it — never a wrong
   // clipped height or a stuck state. Virtuoso's own per-item ResizeObserver
   // still re-settles the surrounding rows regardless of what this component

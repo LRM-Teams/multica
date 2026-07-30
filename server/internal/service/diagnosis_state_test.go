@@ -75,6 +75,17 @@ func (f *fakeDiagnosisStateQueries) GetResumableInteractionDAGDiagnosisRun(_ con
 	return db.InteractionDAGDiagnosisRun{}, pgx.ErrNoRows
 }
 
+func (f *fakeDiagnosisStateQueries) GetLatestCompletedInteractionDAGDiagnosisRun(_ context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.runs {
+		if row.ProjectID == arg.ProjectID && row.TaskID == arg.TaskID && row.Status == string(DiagnosisRunCompleted) {
+			return row, nil
+		}
+	}
+	return db.InteractionDAGDiagnosisRun{}, pgx.ErrNoRows
+}
+
 func (f *fakeDiagnosisStateQueries) FailInteractionDAGDiagnosisRun(_ context.Context, arg db.FailInteractionDAGDiagnosisRunParams) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -162,6 +173,7 @@ func (f *fakeDiagnosisStateQueries) StartInteractionDAGDiagnosisSegment(_ contex
 	row.Status = string(SegmentDiagnosisInProgress)
 	row.ExpectedMessageCount = arg.ExpectedMessageCount
 	row.ExpectedRewardCount = arg.ExpectedRewardCount
+	row.ExpectedRewardSeqs = arg.ExpectedRewardSeqs
 	f.segments[key] = row
 	return 1, nil
 }
@@ -394,6 +406,22 @@ func TestDiagnosisStateLoadResumableRun_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrDiagnosisRunNotFound)
 }
 
+func TestDiagnosisStateLoadCompletedRun_ReturnsPersistedReport(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+	_, err := store.StartSegment(context.Background(), "run-1", "seg-a", 0, 0)
+	require.NoError(t, err)
+	require.NoError(t, store.CompleteSegment(context.Background(), "run-1", "seg-a"))
+	require.NoError(t, store.CompleteRun(context.Background(), "run-1", "topo-hash-1"))
+
+	run, segments, err := store.LoadCompletedRun(context.Background(), "project-1", "task-1")
+	require.NoError(t, err)
+	assert.Equal(t, "run-1", run.RunID)
+	assert.Equal(t, DiagnosisRunCompleted, run.Status)
+	require.Len(t, segments, 1)
+	assert.Equal(t, SegmentDiagnosisCompleted, segments[0].Status)
+}
+
 func TestDiagnosisStateCompleteRun_RequiresAllSegmentsComplete(t *testing.T) {
 	store, _ := newTestDiagnosisStore(t)
 	createTestDiagnosisRun(t, store, "run-1", "seg-a", "seg-b")
@@ -417,6 +445,14 @@ func TestDiagnosisStateCompleteRun_RequiresAllSegmentsComplete(t *testing.T) {
 	run, err := store.GetRun(context.Background(), "run-1")
 	require.NoError(t, err)
 	assert.Equal(t, DiagnosisRunCompleted, run.Status)
+}
+
+func TestCompleteDiagnosisRun_PropagatesIncompleteCoverage(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+
+	err := completeDiagnosisRun(context.Background(), store, "run-1", "topo-hash-1")
+	require.ErrorIs(t, err, ErrDiagnosisInvalidTransition)
 }
 
 func TestDiagnosisStateFailRun_MarksFailedWithBoundedError(t *testing.T) {

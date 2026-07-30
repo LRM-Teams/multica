@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -66,6 +67,31 @@ func TestParseStepRewards_Valid(t *testing.T) {
 	if len(got) != 2 || got[0].SegmentID != "s1" || got[0].Seq != 1 || got[0].Score != 8 {
 		t.Fatalf("%+v", got)
 	}
+}
+
+func TestDiagnosisReport_UsesStableJSONKeys(t *testing.T) {
+	encoded, err := json.Marshal(DiagnosisReport{
+		RunID:             "run-1",
+		CompletedSegments: 2,
+		TotalSegments:     3,
+		Status:            DiagnosisRunCompleted,
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"run_id":"run-1","completed_segments":2,"total_segments":3,"status":"completed"}`, string(encoded))
+}
+
+func TestLoadExistingCompletedDiagnosis_ReturnsMatchingTopology(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+	_, err := store.StartSegment(context.Background(), "run-1", "seg-a", 0, 0)
+	require.NoError(t, err)
+	require.NoError(t, store.CompleteSegment(context.Background(), "run-1", "seg-a"))
+	require.NoError(t, store.CompleteRun(context.Background(), "run-1", "topo-hash-1"))
+
+	report, found, err := loadExistingCompletedDiagnosis(context.Background(), store, "project-1", "task-1", "topo-hash-1")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, DiagnosisReport{RunID: "run-1", CompletedSegments: 1, TotalSegments: 1, Status: DiagnosisRunCompleted}, report)
 }
 
 func TestParseStepRewards_ClampsAndSkips(t *testing.T) {
@@ -208,6 +234,42 @@ func TestDiagnose_PromptContainsDAGMessagesAndContext(t *testing.T) {
 	assert.Contains(t, fb.gotOpts.SystemPrompt, "between 0 and 10 inclusive")
 	assert.True(t, hasNoTools(fb.gotOpts), "expected --no-tools for pi provider, got %v", fb.gotOpts.CustomArgs)
 	stores.AssertExpectations(t)
+}
+
+func TestDiagnosisAgentRunner_FreezeSegmentTargets_UsesActualAssistantSequences(t *testing.T) {
+	projectID := util.MustParseUUID(diagProjectID)
+	workspaceID := util.MustParseUUID(diagWorkspaceID)
+	stores := newDiagnosisStores(t, projectID, workspaceID)
+	store, _ := newTestDiagnosisStore(t)
+	ckpt, err := store.CreateRun(context.Background(), DiagnosisRunCheckpoint{
+		RunID:             "run-freeze",
+		ProjectID:         projectID.String(),
+		TaskID:            diagAgentRunID,
+		TopologyHash:      "topo-freeze",
+		OrderedSegmentIDs: []string{diagSegmentID},
+	})
+	require.NoError(t, err)
+	runner, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{
+		Backend:      &fakeBackend{},
+		DAGStore:     stores,
+		MessageStore: stores,
+	})
+	require.NoError(t, err)
+
+	targets, err := runner.freezeDiagnosisSegmentTargets(
+		context.Background(), store, ckpt, []string{diagSegmentID},
+	)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, diagAgentRunID, targets[0].AgentRunID)
+	assert.Equal(t, int32(1), targets[0].StartSeq)
+	assert.Equal(t, int32(2), targets[0].EndSeq)
+	assert.Equal(t, []int32{1, 2}, targets[0].AssistantSeqs)
+
+	segment, err := store.GetSegment(context.Background(), ckpt.RunID, diagSegmentID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, segment.ExpectedMessageCount)
+	assert.Equal(t, []int32{1, 2}, segment.ExpectedRewardSeqs)
 }
 
 // TestDiagnose_PropagatesNonCompleted verifies a non-completed backend result

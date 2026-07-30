@@ -233,6 +233,14 @@ func TestLoadTrainingConfig_DiagnosisEnabled(t *testing.T) {
 	assert.Equal(t, 20, cfg.DiagnosisAgentScoreMax)
 }
 
+func TestLoadTrainingConfig_DiagnosisOnDemandEnabled(t *testing.T) {
+	clearTrainingEnv(t)
+	t.Setenv(diagnosisAgentOnDemandEnabledEnv, "true")
+
+	cfg := LoadTrainingConfig()
+	assert.True(t, cfg.DiagnosisAgentOnDemandEnabled)
+}
+
 func TestLoadTrainingConfig_DiagnosisInvalidTimeoutAndScoreMax(t *testing.T) {
 	clearTrainingEnv(t)
 

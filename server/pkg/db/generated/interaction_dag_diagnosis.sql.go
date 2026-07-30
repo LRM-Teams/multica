@@ -44,12 +44,20 @@ type InteractionDAGDiagnosisSegment struct {
 	ExpectedMessageCount int32              `json:"expected_message_count"`
 	FetchedMessageCount  int32              `json:"fetched_message_count"`
 	ExpectedRewardCount  int32              `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte             `json:"expected_reward_seqs"`
 	RewardCount          int32              `json:"reward_count"`
 	NextCursor           string             `json:"next_cursor"`
 	Status               string             `json:"status"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+}
+
+// InteractionDAGDiagnosisTarget is the immutable assistant-turn set frozen
+// for one segment in the latest completed diagnosis run.
+type InteractionDAGDiagnosisTarget struct {
+	SegmentID          string `json:"segment_id"`
+	ExpectedRewardSeqs []byte `json:"expected_reward_seqs"`
 }
 
 const createInteractionDAGDiagnosisRun = `-- name: CreateInteractionDAGDiagnosisRun :exec
@@ -135,6 +143,38 @@ func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, ar
 	return i, err
 }
 
+const getLatestCompletedInteractionDAGDiagnosisRun = `-- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_run
+WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
+ORDER BY completed_at DESC, updated_at DESC
+LIMIT 1
+`
+
+type GetLatestCompletedInteractionDAGDiagnosisRunParams struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}
+
+func (q *Queries) GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg GetLatestCompletedInteractionDAGDiagnosisRunParams) (InteractionDAGDiagnosisRun, error) {
+	row := q.db.QueryRow(ctx, getLatestCompletedInteractionDAGDiagnosisRun, arg.ProjectID, arg.TaskID)
+	var item InteractionDAGDiagnosisRun
+	err := row.Scan(
+		&item.RunID,
+		&item.ProjectID,
+		&item.TaskID,
+		&item.TopologyHash,
+		&item.OrderedSegmentIds,
+		&item.Status,
+		&item.CurrentSegmentOrdinal,
+		&item.PiSessionID,
+		&item.LastError,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&item.CompletedAt,
+	)
+	return item, err
+}
+
 const failInteractionDAGDiagnosisRun = `-- name: FailInteractionDAGDiagnosisRun :execrows
 UPDATE interaction_dag_diagnosis_run
 SET status = 'failed', last_error = $2, updated_at = now()
@@ -190,7 +230,7 @@ func (q *Queries) CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg 
 }
 
 const getInteractionDAGDiagnosisSegment = `-- name: GetInteractionDAGDiagnosisSegment :one
-SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1 AND segment_id = $2
 `
 
@@ -209,6 +249,7 @@ func (q *Queries) GetInteractionDAGDiagnosisSegment(ctx context.Context, arg Get
 		&i.ExpectedMessageCount,
 		&i.FetchedMessageCount,
 		&i.ExpectedRewardCount,
+		&i.ExpectedRewardSeqs,
 		&i.RewardCount,
 		&i.NextCursor,
 		&i.Status,
@@ -220,7 +261,7 @@ func (q *Queries) GetInteractionDAGDiagnosisSegment(ctx context.Context, arg Get
 }
 
 const listInteractionDAGDiagnosisSegments = `-- name: ListInteractionDAGDiagnosisSegments :many
-SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at FROM interaction_dag_diagnosis_segment
 WHERE run_id = $1
 ORDER BY ordinal
 `
@@ -241,6 +282,7 @@ func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID
 			&i.ExpectedMessageCount,
 			&i.FetchedMessageCount,
 			&i.ExpectedRewardCount,
+			&i.ExpectedRewardSeqs,
 			&i.RewardCount,
 			&i.NextCursor,
 			&i.Status,
@@ -258,9 +300,46 @@ func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID
 	return items, nil
 }
 
+const listLatestCompletedInteractionDAGDiagnosisTargetsForProject = `-- name: ListLatestCompletedInteractionDAGDiagnosisTargetsForProject :many
+WITH latest_run AS (
+  SELECT run_id
+  FROM interaction_dag_diagnosis_run
+  WHERE project_id = $1 AND status = 'completed'
+  ORDER BY completed_at DESC, updated_at DESC
+  LIMIT 1
+)
+SELECT segment_id, expected_reward_seqs
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = (SELECT run_id FROM latest_run)
+ORDER BY ordinal
+`
+
+// ListLatestCompletedInteractionDAGDiagnosisTargetsForProject returns the
+// frozen assistant target sequences from the newest completed diagnosis run.
+func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]InteractionDAGDiagnosisTarget, error) {
+	rows, err := q.db.Query(ctx, listLatestCompletedInteractionDAGDiagnosisTargetsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGDiagnosisTarget{}
+	for rows.Next() {
+		var item InteractionDAGDiagnosisTarget
+		if err := rows.Scan(&item.SegmentID, &item.ExpectedRewardSeqs); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const startInteractionDAGDiagnosisSegment = `-- name: StartInteractionDAGDiagnosisSegment :execrows
 UPDATE interaction_dag_diagnosis_segment
-SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4, updated_at = now()
+SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4,
+    expected_reward_seqs = $5, updated_at = now()
 WHERE run_id = $1 AND segment_id = $2 AND status = 'pending'
 `
 
@@ -269,6 +348,7 @@ type StartInteractionDAGDiagnosisSegmentParams struct {
 	SegmentID            string `json:"segment_id"`
 	ExpectedMessageCount int32  `json:"expected_message_count"`
 	ExpectedRewardCount  int32  `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte `json:"expected_reward_seqs"`
 }
 
 func (q *Queries) StartInteractionDAGDiagnosisSegment(ctx context.Context, arg StartInteractionDAGDiagnosisSegmentParams) (int64, error) {
@@ -277,6 +357,7 @@ func (q *Queries) StartInteractionDAGDiagnosisSegment(ctx context.Context, arg S
 		arg.SegmentID,
 		arg.ExpectedMessageCount,
 		arg.ExpectedRewardCount,
+		arg.ExpectedRewardSeqs,
 	)
 	if err != nil {
 		return 0, err

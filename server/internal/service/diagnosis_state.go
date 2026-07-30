@@ -69,6 +69,7 @@ type SegmentDiagnosisCheckpoint struct {
 	ExpectedMessageCount int
 	FetchedMessageCount  int
 	ExpectedRewardCount  int
+	ExpectedRewardSeqs   []int32
 	RewardCount          int
 	NextCursor           string
 	Status               SegmentDiagnosisStatus
@@ -81,6 +82,7 @@ type diagnosisStateQueries interface {
 	CreateInteractionDAGDiagnosisRun(ctx context.Context, arg db.CreateInteractionDAGDiagnosisRunParams) error
 	GetInteractionDAGDiagnosisRun(ctx context.Context, runID string) (db.InteractionDAGDiagnosisRun, error)
 	GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error)
+	GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error)
 	FailInteractionDAGDiagnosisRun(ctx context.Context, arg db.FailInteractionDAGDiagnosisRunParams) (int64, error)
 	CompleteInteractionDAGDiagnosisRun(ctx context.Context, runID string) (int64, error)
 	CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg db.CreateInteractionDAGDiagnosisSegmentParams) error
@@ -129,6 +131,10 @@ func diagnosisRunFromRow(row db.InteractionDAGDiagnosisRun) (DiagnosisRunCheckpo
 }
 
 func diagnosisSegmentFromRow(row db.InteractionDAGDiagnosisSegment) SegmentDiagnosisCheckpoint {
+	var expectedRewardSeqs []int32
+	if len(row.ExpectedRewardSeqs) > 0 {
+		_ = json.Unmarshal(row.ExpectedRewardSeqs, &expectedRewardSeqs)
+	}
 	return SegmentDiagnosisCheckpoint{
 		RunID:                row.RunID,
 		SegmentID:            row.SegmentID,
@@ -136,6 +142,7 @@ func diagnosisSegmentFromRow(row db.InteractionDAGDiagnosisSegment) SegmentDiagn
 		ExpectedMessageCount: int(row.ExpectedMessageCount),
 		FetchedMessageCount:  int(row.FetchedMessageCount),
 		ExpectedRewardCount:  int(row.ExpectedRewardCount),
+		ExpectedRewardSeqs:   expectedRewardSeqs,
 		RewardCount:          int(row.RewardCount),
 		NextCursor:           row.NextCursor,
 		Status:               SegmentDiagnosisStatus(row.Status),
@@ -239,14 +246,44 @@ func (s *DiagnosisStateStore) ListSegments(ctx context.Context, runID string) ([
 // expectations returns the current checkpoint; replaying different ones is an
 // invalid transition.
 func (s *DiagnosisStateStore) StartSegment(ctx context.Context, runID, segmentID string, expectedMessages, expectedRewards int) (SegmentDiagnosisCheckpoint, error) {
-	if expectedMessages < 0 || expectedRewards < 0 {
+	if expectedRewards < 0 {
 		return SegmentDiagnosisCheckpoint{}, fmt.Errorf("%w: expected counts must be non-negative", ErrDiagnosisInvalidTransition)
+	}
+	seqs := make([]int32, expectedRewards)
+	for i := range seqs {
+		seqs[i] = int32(i + 1)
+	}
+	return s.StartSegmentWithTargets(ctx, runID, segmentID, expectedMessages, seqs)
+}
+
+// StartSegmentWithTargets freezes the exact assistant-message sequence numbers
+// whose rewards are required. This is the production entry point: assistant
+// message sequences may be sparse and cannot safely be inferred from a count.
+func (s *DiagnosisStateStore) StartSegmentWithTargets(ctx context.Context, runID, segmentID string, expectedMessages int, assistantSeqs []int32) (SegmentDiagnosisCheckpoint, error) {
+	if expectedMessages < 0 {
+		return SegmentDiagnosisCheckpoint{}, fmt.Errorf("%w: expected message count must be non-negative", ErrDiagnosisInvalidTransition)
+	}
+	seqs := append([]int32(nil), assistantSeqs...)
+	seen := make(map[int32]struct{}, len(seqs))
+	for _, seq := range seqs {
+		if seq < 1 {
+			return SegmentDiagnosisCheckpoint{}, fmt.Errorf("%w: assistant sequence must be positive", ErrDiagnosisInvalidTransition)
+		}
+		if _, duplicate := seen[seq]; duplicate {
+			return SegmentDiagnosisCheckpoint{}, fmt.Errorf("%w: duplicate assistant sequence %d", ErrDiagnosisInvalidTransition, seq)
+		}
+		seen[seq] = struct{}{}
+	}
+	encodedSeqs, err := json.Marshal(seqs)
+	if err != nil {
+		return SegmentDiagnosisCheckpoint{}, fmt.Errorf("encode expected reward sequences: %w", err)
 	}
 	applied, err := s.q.StartInteractionDAGDiagnosisSegment(ctx, db.StartInteractionDAGDiagnosisSegmentParams{
 		RunID:                runID,
 		SegmentID:            segmentID,
 		ExpectedMessageCount: int32(expectedMessages),
-		ExpectedRewardCount:  int32(expectedRewards),
+		ExpectedRewardCount:  int32(len(seqs)),
+		ExpectedRewardSeqs:   encodedSeqs,
 	})
 	if err != nil {
 		return SegmentDiagnosisCheckpoint{}, err
@@ -259,10 +296,22 @@ func (s *DiagnosisStateStore) StartSegment(ctx context.Context, runID, segmentID
 		return current, nil
 	}
 	// Already started: identical expectations are an idempotent replay.
-	if current.ExpectedMessageCount == expectedMessages && current.ExpectedRewardCount == expectedRewards {
+	if current.ExpectedMessageCount == expectedMessages && sameInt32s(current.ExpectedRewardSeqs, seqs) {
 		return current, nil
 	}
 	return SegmentDiagnosisCheckpoint{}, fmt.Errorf("%w: segment %s already started with different expectations", ErrDiagnosisInvalidTransition, segmentID)
+}
+
+func sameInt32s(left, right []int32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // RecordSegmentPage persists the server-issued next cursor and the cumulative
@@ -361,6 +410,30 @@ func (s *DiagnosisStateStore) LoadResumableRun(ctx context.Context, projectID, t
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return DiagnosisRunCheckpoint{}, nil, fmt.Errorf("%w: project %s task %s", ErrDiagnosisRunNotFound, projectID, taskID)
+		}
+		return DiagnosisRunCheckpoint{}, nil, err
+	}
+	run, err := diagnosisRunFromRow(row)
+	if err != nil {
+		return DiagnosisRunCheckpoint{}, nil, err
+	}
+	segments, err := s.ListSegments(ctx, run.RunID)
+	if err != nil {
+		return DiagnosisRunCheckpoint{}, nil, err
+	}
+	return run, segments, nil
+}
+
+// LoadCompletedRun returns the newest completed run for a project/task. It is
+// used by an idempotent on-demand request after no active run exists.
+func (s *DiagnosisStateStore) LoadCompletedRun(ctx context.Context, projectID, taskID string) (DiagnosisRunCheckpoint, []SegmentDiagnosisCheckpoint, error) {
+	row, err := s.q.GetLatestCompletedInteractionDAGDiagnosisRun(ctx, db.GetLatestCompletedInteractionDAGDiagnosisRunParams{
+		ProjectID: projectID,
+		TaskID:    taskID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DiagnosisRunCheckpoint{}, nil, fmt.Errorf("%w: completed project %s task %s", ErrDiagnosisRunNotFound, projectID, taskID)
 		}
 		return DiagnosisRunCheckpoint{}, nil, err
 	}

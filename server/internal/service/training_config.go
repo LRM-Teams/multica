@@ -135,7 +135,14 @@ func LoadTrainingConfig() TrainingConfig {
 			cfg.DiagnosisAgentEnabled = v
 		}
 	}
-
+	if raw := os.Getenv(diagnosisAgentOnDemandEnabledEnv); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			slog.Warn("invalid env var, using default", "name", diagnosisAgentOnDemandEnabledEnv, "value", raw, "default", false, "error", err)
+		} else {
+			cfg.DiagnosisAgentOnDemandEnabled = v
+		}
+	}
 	return cfg
 }
 

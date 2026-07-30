@@ -311,10 +311,10 @@ func (r *DiagnosisAgentRunner) resolveTaskContext(ctx context.Context, segments 
 // DiagnosisReport is the result of an on-demand diagnosis run. Rewards are
 // already persisted in the DAG store; the report carries status only.
 type DiagnosisReport struct {
-	RunID             string
-	CompletedSegments int
-	TotalSegments     int
-	Status            DiagnosisRunStatus
+	RunID             string             `json:"run_id"`
+	CompletedSegments int                `json:"completed_segments"`
+	TotalSegments     int                `json:"total_segments"`
+	Status            DiagnosisRunStatus `json:"status"`
 }
 
 // DiagnosisOnDemandConfig holds the dependencies for the on-demand diagnosis
@@ -326,6 +326,112 @@ type DiagnosisOnDemandConfig struct {
 	MessagePager  DiagnosisMessagePager
 	PiRPC         agentpkg.PiRPCBackend
 	ExtensionRoot string
+}
+
+func completeDiagnosisRun(ctx context.Context, state *DiagnosisStateStore, runID, topologyHash string) error {
+	return state.CompleteRun(ctx, runID, topologyHash)
+}
+
+func loadExistingCompletedDiagnosis(
+	ctx context.Context,
+	state *DiagnosisStateStore,
+	projectID, taskID, topologyHash string,
+) (DiagnosisReport, bool, error) {
+	run, segments, err := state.LoadCompletedRun(ctx, projectID, taskID)
+	if errors.Is(err, ErrDiagnosisRunNotFound) {
+		return DiagnosisReport{}, false, nil
+	}
+	if err != nil {
+		return DiagnosisReport{}, false, err
+	}
+	if run.TopologyHash != topologyHash {
+		return DiagnosisReport{}, false, nil
+	}
+	completed := 0
+	for _, segment := range segments {
+		if segment.Status == SegmentDiagnosisCompleted {
+			completed++
+		}
+	}
+	if completed != len(segments) {
+		return DiagnosisReport{}, false, fmt.Errorf("diagnosis on-demand: completed run %s has incomplete segments", run.RunID)
+	}
+	return DiagnosisReport{
+		RunID:             run.RunID,
+		CompletedSegments: completed,
+		TotalSegments:     len(segments),
+		Status:            DiagnosisRunCompleted,
+	}, true, nil
+}
+
+// DiagnosisSegmentTarget is the immutable message-range snapshot used by one
+// on-demand run. AssistantSeqs is the authoritative set the tool server must
+// score; it is deliberately not reconstructed from a count or numeric range.
+type DiagnosisSegmentTarget struct {
+	SegmentID     string
+	AgentRunID    string
+	StartSeq      int32
+	EndSeq        int32
+	AssistantSeqs []int32
+}
+
+// freezeDiagnosisSegmentTargets snapshots the actual messages behind each
+// segment before Pi starts. A resumed run must see the same target set; a
+// changed message range is rejected rather than silently scoring another turn.
+func (r *DiagnosisAgentRunner) freezeDiagnosisSegmentTargets(
+	ctx context.Context,
+	state *DiagnosisStateStore,
+	run DiagnosisRunCheckpoint,
+	segmentIDs []string,
+) ([]DiagnosisSegmentTarget, error) {
+	if r.dagStore == nil || r.messageStore == nil {
+		return nil, fmt.Errorf("diagnosis on-demand: stores not configured")
+	}
+	targets := make([]DiagnosisSegmentTarget, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segment, err := r.dagStore.GetInteractionDAGSegmentByID(ctx, segmentID)
+		if err != nil {
+			return nil, fmt.Errorf("diagnosis on-demand: get segment %s: %w", segmentID, err)
+		}
+		if segment.ProjectID != run.ProjectID {
+			return nil, fmt.Errorf("diagnosis on-demand: segment %s is outside project", segmentID)
+		}
+		messages, err := r.messageStore.MessagesForTaskInRange(
+			ctx, segment.AgentRunID, segment.StartSeq, segment.EndSeq,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("diagnosis on-demand: messages for segment %s: %w", segmentID, err)
+		}
+		assistantSeqs := make([]int32, 0, len(messages))
+		for _, message := range messages {
+			if message.Type == "assistant" {
+				assistantSeqs = append(assistantSeqs, message.Seq)
+			}
+		}
+
+		checkpoint, err := state.GetSegment(ctx, run.RunID, segmentID)
+		if err != nil {
+			return nil, fmt.Errorf("diagnosis on-demand: load segment checkpoint %s: %w", segmentID, err)
+		}
+		if checkpoint.Status == SegmentDiagnosisPending {
+			if _, err := state.StartSegmentWithTargets(
+				ctx, run.RunID, segmentID, len(messages), assistantSeqs,
+			); err != nil {
+				return nil, fmt.Errorf("diagnosis on-demand: freeze targets for segment %s: %w", segmentID, err)
+			}
+		} else if checkpoint.ExpectedMessageCount != len(messages) || !sameInt32s(checkpoint.ExpectedRewardSeqs, assistantSeqs) {
+			return nil, fmt.Errorf("diagnosis on-demand: target set changed for segment %s", segmentID)
+		}
+
+		targets = append(targets, DiagnosisSegmentTarget{
+			SegmentID:     segmentID,
+			AgentRunID:    segment.AgentRunID,
+			StartSeq:      segment.StartSeq,
+			EndSeq:        segment.EndSeq,
+			AssistantSeqs: assistantSeqs,
+		})
+	}
+	return targets, nil
 }
 
 // DiagnoseOnDemand runs the persistent per-segment diagnosis flow. It creates or
@@ -341,6 +447,13 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: load run: %w", err)
 	}
 	if errors.Is(err, ErrDiagnosisRunNotFound) {
+		report, found, completedErr := loadExistingCompletedDiagnosis(ctx, cfg.StateStore, projectID, taskID, topoHash)
+		if completedErr != nil {
+			return DiagnosisReport{}, completedErr
+		}
+		if found {
+			return report, nil
+		}
 		// New run.
 		runID := fmt.Sprintf("diag-%s-%d", taskID[:min(8, len(taskID))], time.Now().UnixMilli())
 		runCkpt, err = cfg.StateStore.CreateRun(ctx, DiagnosisRunCheckpoint{
@@ -355,11 +468,22 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 		}
 		segments, _ = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
 	}
+	targets, err := r.freezeDiagnosisSegmentTargets(ctx, cfg.StateStore, runCkpt, orderedSegmentIDs)
+	if err != nil {
+		return DiagnosisReport{}, err
+	}
+	segments, err = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
+	if err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: list frozen segments: %w", err)
+	}
 
 	// Start the loopback tool server.
 	server, err := NewDiagnosisToolServer(runCkpt, cfg.StateStore, cfg.MessagePager, cfg.DAGWriter)
 	if err != nil {
 		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: tool server: %w", err)
+	}
+	if err := server.SetSegmentTargets(targets); err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: configure segment targets: %w", err)
 	}
 	baseURL, err := server.ListenAndServe()
 	if err != nil {
@@ -401,7 +525,9 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 	}
 
 	if len(segInfos) == 0 {
-		_ = cfg.StateStore.CompleteRun(ctx, runCkpt.RunID, topoHash)
+		if err := completeDiagnosisRun(ctx, cfg.StateStore, runCkpt.RunID, topoHash); err != nil {
+			return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: complete run: %w", err)
+		}
 		return DiagnosisReport{
 			RunID:             runCkpt.RunID,
 			CompletedSegments: completedCount,
@@ -446,7 +572,9 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 		}
 	}
 
-	_ = cfg.StateStore.CompleteRun(ctx, runCkpt.RunID, topoHash)
+	if err := completeDiagnosisRun(ctx, cfg.StateStore, runCkpt.RunID, topoHash); err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: complete run: %w", err)
+	}
 
 	return DiagnosisReport{
 		RunID:             runCkpt.RunID,

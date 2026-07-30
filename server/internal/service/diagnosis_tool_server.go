@@ -31,10 +31,11 @@ type DiagnosisToolServer struct {
 	bearerToken string
 	cursorKey   []byte
 
-	runCheckpoint DiagnosisRunCheckpoint
-	stateStore    *DiagnosisStateStore
-	pager         DiagnosisMessagePager
-	dagWriter     DiagnosisDAGWriter
+	runCheckpoint  DiagnosisRunCheckpoint
+	stateStore     *DiagnosisStateStore
+	pager          DiagnosisMessagePager
+	dagWriter      DiagnosisDAGWriter
+	segmentTargets map[string]DiagnosisSegmentTarget
 }
 
 // DiagnosisDAGWriter is the narrow write surface for incremental step-reward
@@ -122,12 +123,13 @@ func NewDiagnosisToolServer(
 	bearerToken := fmt.Sprintf("%x", token)
 
 	s := &DiagnosisToolServer{
-		runCheckpoint: ckpt,
-		stateStore:    state,
-		pager:         pager,
-		dagWriter:     dagWriter,
-		cursorKey:     cursorKey,
-		bearerToken:   bearerToken,
+		runCheckpoint:  ckpt,
+		stateStore:     state,
+		pager:          pager,
+		dagWriter:      dagWriter,
+		segmentTargets: make(map[string]DiagnosisSegmentTarget),
+		cursorKey:      cursorKey,
+		bearerToken:    bearerToken,
 	}
 
 	mux := http.NewServeMux()
@@ -145,6 +147,30 @@ func NewDiagnosisToolServer(
 	}
 
 	return s, nil
+}
+
+// SetSegmentTargets installs the immutable segment/message ranges frozen by
+// the runner before Pi starts. The tool server uses these values for paging so
+// an agent can never read or score turns outside the diagnosis snapshot.
+func (s *DiagnosisToolServer) SetSegmentTargets(targets []DiagnosisSegmentTarget) error {
+	configured := make(map[string]DiagnosisSegmentTarget, len(targets))
+	for _, target := range targets {
+		if !s.segmentInRun(target.SegmentID) {
+			return fmt.Errorf("diagnosis tool server: target %s is not in run", target.SegmentID)
+		}
+		if target.AgentRunID == "" || target.StartSeq < 1 || target.EndSeq < target.StartSeq {
+			return fmt.Errorf("diagnosis tool server: invalid target range for %s", target.SegmentID)
+		}
+		if _, duplicate := configured[target.SegmentID]; duplicate {
+			return fmt.Errorf("diagnosis tool server: duplicate target %s", target.SegmentID)
+		}
+		configured[target.SegmentID] = target
+	}
+	if len(configured) != len(s.runCheckpoint.OrderedSegmentIDs) {
+		return fmt.Errorf("diagnosis tool server: targets do not cover the run")
+	}
+	s.segmentTargets = configured
+	return nil
 }
 
 // ListenAndServe binds to 127.0.0.1:0 and starts serving. Returns the allocated
@@ -235,16 +261,24 @@ func (s *DiagnosisToolServer) handleGetSegmentMessages(w http.ResponseWriter, r 
 		writeError(w, http.StatusForbidden, "SEGMENT_NOT_IN_RUN", "segment not in current diagnosis run")
 		return
 	}
-	segCkpt, err := s.stateStore.GetSegment(r.Context(), s.runCheckpoint.RunID, req.SegmentID)
-	if err != nil {
+	if _, err := s.stateStore.GetSegment(r.Context(), s.runCheckpoint.RunID, req.SegmentID); err != nil {
 		writeError(w, http.StatusNotFound, "SEGMENT_NOT_FOUND", "segment not found")
 		return
 	}
-	// taskID is the agent_run_id for the segment. For now, we use the run's
-	// TaskID as the task context; the paging layer resolves the actual task.
-	page, err := GetSegmentMessagePage(r.Context(), s.pager, s.runCheckpoint.TaskID, req.SegmentID, 1, int32(segCkpt.ExpectedMessageCount), req.Cursor)
+	target, ok := s.segmentTargets[req.SegmentID]
+	if !ok {
+		writeError(w, http.StatusConflict, "SEGMENT_NOT_FROZEN", "segment targets are not frozen")
+		return
+	}
+	page, err := GetSegmentMessagePage(r.Context(), s.pager, target.AgentRunID, req.SegmentID, target.StartSeq, target.EndSeq, req.Cursor)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "PAGE_ERROR", "failed to page messages")
+		return
+	}
+	if err := s.stateStore.RecordSegmentPage(
+		r.Context(), s.runCheckpoint.RunID, req.SegmentID, req.Cursor, page.NextCursor, page.FetchedCount,
+	); err != nil {
+		writeError(w, http.StatusConflict, "STALE_CURSOR", "segment cursor is stale")
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
@@ -322,9 +356,8 @@ func (s *DiagnosisToolServer) handleRecordStepRewards(w http.ResponseWriter, r *
 		if score < 0 {
 			score = 0
 		}
-		// Validate seq is in expected range.
-		if entry.Seq > segCkpt.ExpectedRewardCount {
-			rejected = append(rejected, rejectedReward{Seq: entry.Seq, Reason: "seq out of range"})
+		if !containsDiagnosisSeq(segCkpt.ExpectedRewardSeqs, int32(entry.Seq)) {
+			rejected = append(rejected, rejectedReward{Seq: entry.Seq, Reason: "seq is not an assistant target"})
 			continue
 		}
 		// Check for conflicting rewrite.
@@ -361,6 +394,15 @@ func (s *DiagnosisToolServer) handleRecordStepRewards(w http.ResponseWriter, r *
 		MissingSeqs:   missing,
 		Rejected:      rejected,
 	})
+}
+
+func containsDiagnosisSeq(seqs []int32, needle int32) bool {
+	for _, seq := range seqs {
+		if seq == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // ── GET /v1/diagnosis-progress ──

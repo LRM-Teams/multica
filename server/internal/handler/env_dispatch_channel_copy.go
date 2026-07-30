@@ -16,15 +16,15 @@ type channelCopyMap struct {
 	MessageIDs map[string]string
 }
 
-func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourceProjectID, destinationProjectID, destinationEnvID string) (channelCopyMap, error) {
+func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID string) (channelCopyMap, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return channelCopyMap{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	var sourceChannelID string
-	if err := tx.QueryRow(ctx, `SELECT id::text FROM channel WHERE project_id = $1 AND workspace_id = $2`, sourceProjectID, workspaceID).Scan(&sourceChannelID); err != nil {
+	var loadedSourceChannelID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM channel WHERE id = $1 AND workspace_id = $2`, sourceChannelID, workspaceID).Scan(&loadedSourceChannelID); err != nil {
 		return channelCopyMap{}, fmt.Errorf("load source env-dispatch channel: %w", err)
 	}
 	var destinationChannelID string

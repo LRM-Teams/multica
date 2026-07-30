@@ -51,8 +51,25 @@ func (h *Handler) routeEnvDispatchChannelAgent(ctx context.Context, qtx *db.Quer
 			if err != nil {
 				return db.ChatSession{}, binding, true, fmt.Errorf("load env-dispatch chat session: %w", err)
 			}
-			if binding.RuntimeID == nil || uuidToString(session.RuntimeID) != *binding.RuntimeID {
-				return db.ChatSession{}, binding, true, fmt.Errorf("env-dispatch channel session runtime does not match binding")
+			if binding.RuntimeID == nil {
+				return db.ChatSession{}, binding, true, fmt.Errorf("env-dispatch binding has no runtime")
+			}
+			if sessionRuntimeID := uuidToString(session.RuntimeID); sessionRuntimeID != *binding.RuntimeID {
+				// The legacy branch flow pre-creates a placeholder runtime for the
+				// sandbox clone, but the daemon registers its real online runtime
+				// on boot and inbox completion re-points the chat session to it
+				// (agent_inbox.go UpdateChatSessionSession). The session's runtime
+				// is the live one — the scratch flow records exactly that on the
+				// binding — so heal the binding instead of rejecting every later
+				// channel message with "session runtime does not match binding".
+				if _, err := exec.Exec(ctx, `
+					UPDATE environment_agent_sandbox
+					SET runtime_id = $1, updated_at = now()
+					WHERE env_id = $2 AND agent_id = $3`,
+					session.RuntimeID, binding.EnvID, agentID); err != nil {
+					return db.ChatSession{}, binding, true, fmt.Errorf("heal env-dispatch binding runtime: %w", err)
+				}
+				binding.RuntimeID = &sessionRuntimeID
 			}
 			return session, binding, true, nil
 		case "pending", "failed", "failed_retryable":

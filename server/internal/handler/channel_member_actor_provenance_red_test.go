@@ -748,7 +748,7 @@ func TestEnvDispatchChannelCopyPreservesJoinProvenanceWithoutOnboardingWake(t *t
 	copied, err := testHandler.copyEnvDispatchChannel(
 		ctx,
 		testWorkspaceID,
-		sourceProject,
+		sourceChannel,
 		destinationProject,
 		uuid.NewString(),
 	)

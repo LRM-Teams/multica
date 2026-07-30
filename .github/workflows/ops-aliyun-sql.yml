@@ -37,16 +37,9 @@ jobs:
           set -euo pipefail
           DEPLOY_DIR=/data/multica
           cd "$DEPLOY_DIR"
-
-          # Same compose entrypoint the Deploy workflow uses on this host.
-          compose() {
-            docker compose \
-              --env-file "${DEPLOY_DIR}/.env" \
-              -f "${DEPLOY_DIR}/docker-compose.yml" \
-              -f "${DEPLOY_DIR}/docker-compose.selfhost.yml" \
-              -f "${DEPLOY_DIR}/docker-compose.aliyun.yml" \
-              "$@"
-          }
+          echo "=== host layout ==="
+          ls -la "$DEPLOY_DIR" | head -40
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | head -40
 
           dotenv_value() {
             local key="$1" default="${2:-}"
@@ -70,21 +63,26 @@ jobs:
             exit 1
           fi
 
-          postgres_id="$(compose ps -q postgres)"
+          # Prefer compose project lookup when compose files exist; otherwise
+          # discover the live postgres container by name/image.
+          postgres_id=""
+          if [ -f "${DEPLOY_DIR}/docker-compose.yml" ]; then
+            compose_args=(--env-file "${DEPLOY_DIR}/.env" -f "${DEPLOY_DIR}/docker-compose.yml")
+            [ -f "${DEPLOY_DIR}/docker-compose.selfhost.yml" ] && compose_args+=(-f "${DEPLOY_DIR}/docker-compose.selfhost.yml")
+            [ -f "${DEPLOY_DIR}/docker-compose.aliyun.yml" ] && compose_args+=(-f "${DEPLOY_DIR}/docker-compose.aliyun.yml")
+            postgres_id="$(docker compose "${compose_args[@]}" ps -q postgres || true)"
+          fi
           if [ -z "$postgres_id" ]; then
-            # Fallback: any running container with postgres in the name.
-            postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '/postgres/ {print $2; exit}')"
+            postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk 'BEGIN{IGNORECASE=1} /postgres|pgvector|multica-db/ {print $2; exit}')"
           fi
           if [ -z "$postgres_id" ]; then
             echo "::error::PostgreSQL container is not running"
-            docker ps --format 'table {{.Names}}\t{{.Status}}' || true
             exit 1
           fi
-          echo "postgres container=${postgres_id}"
+          echo "postgres container=${postgres_id} name=$(docker inspect -f '{{.Name}}' "$postgres_id")"
 
           run_sql() {
             local sql="$1"
-            # Exec inside the postgres container (matches Deploy preflight).
             printf '%s\n' "$sql" | docker exec -i \
               -e PGPASSWORD="$db_password" \
               "$postgres_id" \

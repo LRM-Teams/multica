@@ -115,3 +115,10 @@ policy.
 - [ ] A PR into `dev` runs `CI / frontend` and `CI / backend` on a self-hosted runner (Aliyun and/or Tencent `ci`), not `ubuntu-latest`
 - [ ] Org Actions hosted-minute burn for `CI` drops after cutover
 - [ ] (Optional) Dedicated Tencent `ci` runner online for load relief
+
+## CI cache
+
+The Turbo cache is published on `dev` by the `push` trigger in `ci.yml`; pull
+requests restore it via the `-dev-` restore-key. There is deliberately no
+ref-scoped restore-key: it would shadow the dev entry with the PR's own older
+(or cancelled-run) cache. See PR #1448.

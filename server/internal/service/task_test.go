@@ -120,7 +120,6 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 		RuntimeMode:        "cloud",
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          rtID,
-		Visibility:         "workspace",
 		MaxConcurrentTasks: 1,
 		Instructions:       "",
 		CustomEnv:          []byte("{}"),
@@ -505,8 +504,10 @@ func TestMaybeCleanupEphemeralSandbox(t *testing.T) {
 	require.NoError(t, err)
 
 	var agentID pgtype.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		ws.ID, "eph-agent", "Eph Agent", "local", []byte("{}"), rtID, "workspace", 1,
+	err = tx.QueryRow(ctx, `INSERT INTO agent (
+			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		ws.ID, "eph-agent", "Eph Agent", "local", []byte("{}"), rtID, 1,
 	).Scan(&agentID)
 	require.NoError(t, err)
 
@@ -578,8 +579,10 @@ func TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker(t *testing.T) {
 	require.NoError(t, err)
 
 	var agentID pgtype.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		ws.ID, "nm-agent", "NM", "local", []byte("{}"), rtID, "workspace", 1,
+	err = tx.QueryRow(ctx, `INSERT INTO agent (
+			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		ws.ID, "nm-agent", "NM", "local", []byte("{}"), rtID, 1,
 	).Scan(&agentID)
 	require.NoError(t, err)
 
@@ -635,8 +638,10 @@ func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
 	require.NoError(t, err)
 
 	var agentID pgtype.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		ws.ID, "sib-agent", "SA", "local", []byte("{}"), rtID, "workspace", 1,
+	err = tx.QueryRow(ctx, `INSERT INTO agent (
+			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		ws.ID, "sib-agent", "SA", "local", []byte("{}"), rtID, 1,
 	).Scan(&agentID)
 	require.NoError(t, err)
 

@@ -1358,12 +1358,8 @@ ON CONFLICT DO NOTHING`, testWorkspaceID, id)
 		handle := "ord" + id[len(id)-8:] + uuid.NewString()[:4]
 		if _, err := testPool.Exec(ctx, `
 INSERT INTO agent (
-  id, workspace_id, name, display_name, description, runtime_mode, runtime_config,
-  runtime_id, visibility, max_concurrent_tasks, owner_id,
-  instructions, custom_env, custom_args, mcp_config
-) VALUES (
-  $1,$2,$3,$4,'','cloud','{}'::jsonb,$5,'private',1,$6,'','{}'::jsonb,'[]'::jsonb,'[]'::jsonb
-)
+			id, workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, $2, $3, $4, '', 'cloud', '{}'::jsonb, $5, 1, $6, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
 ON CONFLICT (id) DO NOTHING`,
 			id, testWorkspaceID, handle, label, handlerTestRuntimeID(t), testUserID); err != nil {
 			t.Fatalf("agent %s: %v", id, err)

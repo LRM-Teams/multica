@@ -200,10 +200,8 @@ func seedRollupFixture(t *testing.T, pool *pgxpool.Pool) (string, string, string
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1)
 		RETURNING id
 	`, wsID, "ag-"+suffix, runtimeID).Scan(&agentID); err != nil {
 		t.Fatalf("seed agent: %v", err)

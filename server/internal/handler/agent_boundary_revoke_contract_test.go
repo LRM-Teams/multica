@@ -486,11 +486,8 @@ func TestBoundary_DerivedAgent_OriginAllow_OtherDeny(t *testing.T) {
 	var derivedID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, display_name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config, source_agent_id
-		)
-		VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 'private', 1, $5, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, $6)
+			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config, source_agent_id
+		) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, $6)
 		RETURNING id
 	`, testWorkspaceID, "boundary-derived-"+uuid.NewString()[:8], "BoundaryDerived",
 		handlerTestRuntimeID(t), testUserID, sourceID).Scan(&derivedID); err != nil {
@@ -551,11 +548,8 @@ func TestBoundary_SourceAgentFallback_DoesNotGrantSurfaceRead(t *testing.T) {
 	var derivedID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, display_name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config, source_agent_id
-		)
-		VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 'private', 1, $5, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, $6)
+			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config, source_agent_id
+		) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, $6)
 		RETURNING id
 	`, testWorkspaceID, "boundary-derived-read-"+uuid.NewString()[:8], "BoundaryDerivedRead",
 		handlerTestRuntimeID(t), testUserID, sourceID).Scan(&derivedID); err != nil {

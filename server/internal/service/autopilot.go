@@ -297,11 +297,6 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 		return &errDispatchSkipped{reason: formatAdmissionReason(ap, reason)}
 	}
 
-	// Fail-closed private-leader gate for squad autopilots.
-	if ap.AssigneeType == "squad" && agent.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, agent) {
-		return &errDispatchSkipped{reason: formatAdmissionReason(ap, "creator cannot access private squad leader")}
-	}
-
 	task, err := s.Queries.CreateAutopilotTask(ctx, db.CreateAutopilotTaskParams{
 		AgentID:        agent.ID,
 		RuntimeID:      agent.RuntimeID,
@@ -627,32 +622,6 @@ func (s *AutopilotService) shouldSkipDispatch(ctx context.Context, ap db.Autopil
 	}
 	if !ready {
 		return formatAdmissionReason(ap, reason), true
-	}
-	// Private-agent gate at the autopilot layer. Caller identity = the
-	// autopilot's creator: if the creator no longer has access to the
-	// (now-private) target agent, the dispatch is recorded as `skipped`.
-	// Agent-created autopilots bypass the gate to preserve A2A
-	// collaboration. Errors loading the workspace member fail closed —
-	// without an authoritative role the gate cannot grant access.
-	//
-	// For squad autopilots the gate runs against the resolved leader.
-	// Leader visibility is the right thing to check — if the human creator
-	// can no longer reach the leader, the autopilot would silently fail
-	// even though the squad itself looks intact.
-	if agent.Visibility == "private" && ap.CreatedByType == "member" {
-		creatorID := util.UUIDToString(ap.CreatedByID)
-		if util.UUIDToString(agent.OwnerID) != creatorID {
-			member, err := s.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
-				UserID:      ap.CreatedByID,
-				WorkspaceID: ap.WorkspaceID,
-			})
-			if err != nil {
-				return "autopilot creator no longer in workspace", true
-			}
-			if member.Role != "owner" && member.Role != "admin" {
-				return "autopilot creator lacks access to private assignee agent", true
-			}
-		}
 	}
 	return "", false
 }
@@ -1132,24 +1101,3 @@ func (s *AutopilotService) getIssuePrefix(workspaceID pgtype.UUID) string {
 	return ws.IssuePrefix
 }
 
-// canCreatorAccessPrivateLeader checks whether the autopilot's creator still
-// has access to a private leader agent. Mirrors handler.canAccessPrivateAgent
-// logic: agent creators always pass; member creators must be the agent owner
-// or a workspace owner/admin. Returns false (fail-closed) on any lookup error.
-func (s *AutopilotService) canCreatorAccessPrivateLeader(ctx context.Context, ap db.Autopilot, leader db.Agent) bool {
-	if ap.CreatedByType == "agent" {
-		return true
-	}
-	creatorID := util.UUIDToString(ap.CreatedByID)
-	if util.UUIDToString(leader.OwnerID) == creatorID {
-		return true
-	}
-	member, err := s.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
-		UserID:      ap.CreatedByID,
-		WorkspaceID: ap.WorkspaceID,
-	})
-	if err != nil {
-		return false
-	}
-	return member.Role == "owner" || member.Role == "admin"
-}

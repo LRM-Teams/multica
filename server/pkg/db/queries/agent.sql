@@ -19,14 +19,14 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, display_name, description, avatar_url, avatar_source,
-    avatar_attachment_id, runtime_mode, runtime_config, runtime_id, visibility,
+    avatar_attachment_id, runtime_mode, runtime_config, runtime_id,
     max_concurrent_tasks, owner_id, instructions, custom_env, custom_args,
     mcp_config, model, thinking_level
 ) VALUES (
     $1, $2, $3, $4, sqlc.narg('avatar_url'),
     COALESCE(NULLIF(sqlc.arg('avatar_source')::text, ''), 'assigned'),
-    sqlc.narg('avatar_attachment_id'), $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16
+    sqlc.narg('avatar_attachment_id'), $5, $6, $7, $8, $9, $10, $11,
+    $12, $13, $14, $15
 )
 RETURNING *;
 
@@ -50,7 +50,6 @@ UPDATE agent SET
     runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),
     runtime_mode = COALESCE(sqlc.narg('runtime_mode'), runtime_mode),
     runtime_id = COALESCE(sqlc.narg('runtime_id'), runtime_id),
-    visibility = COALESCE(sqlc.narg('visibility'), visibility),
     status = COALESCE(sqlc.narg('status'), status),
     max_concurrent_tasks = COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks),
     instructions = COALESCE(sqlc.narg('instructions'), instructions),

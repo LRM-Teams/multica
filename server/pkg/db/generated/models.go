@@ -28,7 +28,6 @@ type Agent struct {
 	AvatarUrl          pgtype.Text        `json:"avatar_url"`
 	RuntimeMode        string             `json:"runtime_mode"`
 	RuntimeConfig      []byte             `json:"runtime_config"`
-	Visibility         string             `json:"visibility"`
 	Status             string             `json:"status"`
 	MaxConcurrentTasks int32              `json:"max_concurrent_tasks"`
 	OwnerID            pgtype.UUID        `json:"owner_id"`

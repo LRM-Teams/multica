@@ -63,13 +63,7 @@ type AgentResponse struct {
 	HasCustomEnv      bool   `json:"has_custom_env"`
 	CustomEnvKeyCount int    `json:"custom_env_key_count"`
 	McpConfigRedacted bool   `json:"mcp_config_redacted"`
-	Visibility string `json:"visibility"`
-	// HomeChannelID is always null (task #908 retired the channel-scoped-agent
-	// mechanism this field described). Left in the payload shape rather than
-	// removed pending the coordinated FE/BE cut that drops it along with the
-	// rest of the visibility field — see agent_channel_visibility.go.
-	HomeChannelID *string `json:"home_channel_id"`
-	Status        string  `json:"status"`
+	Status            string `json:"status"`
 	// ManagedRole is reserved for independent platform-managed agent classes
 	// such as research_fleet. Channel manager identity comes exclusively from
 	// channel_member.role.
@@ -151,7 +145,6 @@ func agentToResponse(a db.Agent) AgentResponse {
 		McpConfig:          mcpConfig,
 		HasCustomEnv:       envKeyCount > 0,
 		CustomEnvKeyCount:  envKeyCount,
-		Visibility:         a.Visibility,
 		Status:             a.Status,
 		WorkspaceRole:      a.WorkspaceRole,
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
@@ -849,11 +842,7 @@ type CreateAgentRequest struct {
 	RuntimeConfig   any                   `json:"runtime_config"`
 	CustomEnv       map[string]string     `json:"custom_env"`
 	CustomArgs      []string              `json:"custom_args"`
-	McpConfig       json.RawMessage       `json:"mcp_config"`
-	Visibility      string                `json:"visibility"`
-	// HomeChannelID is no longer supported (task #908 retired the
-	// channel-scoped-agent mechanism) — any non-empty value is rejected.
-	HomeChannelID      *string           `json:"home_channel_id"`
+	McpConfig          json.RawMessage   `json:"mcp_config"`
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
 	ThinkingLevel      string            `json:"thinking_level"`
@@ -924,15 +913,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
 	}
-	if req.Visibility == "" {
-		// Task #908 (#multica thread f83df812, Parker 2026-07-30 17:58): the
-		// unset default flips private→workspace so "no report of the field"
-		// no longer silently contradicts the "default public" product
-		// decision. This default is itself a transitional value — it goes
-		// away entirely once the visibility field is dropped from the
-		// payload/DB.
-		req.Visibility = "workspace"
-	}
 	if req.MaxConcurrentTasks == 0 {
 		req.MaxConcurrentTasks = 6
 	}
@@ -942,12 +922,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return
-	}
-
-	_, homeChannelProvided := rawFields["home_channel_id"]
-	binding, ok := h.resolveAgentVisibilityBinding(w, req.Visibility, req.HomeChannelID, homeChannelProvided)
 	if !ok {
 		return
 	}
@@ -1046,13 +1020,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createParams := db.CreateAgentParams{
-		WorkspaceID:   wsUUID,
-		Description:   req.Description,
-		Instructions:  req.Instructions,
-		RuntimeMode:   runtime.RuntimeMode,
-		RuntimeConfig: rc,
+		WorkspaceID:        wsUUID,
+		Description:        req.Description,
+		Instructions:       req.Instructions,
+		RuntimeMode:        runtime.RuntimeMode,
+		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
-		Visibility:         binding.Visibility,
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            parseUUID(ownerID),
 		CustomEnv:          ce,
@@ -1169,12 +1142,8 @@ type UpdateAgentRequest struct {
 	// actually unchanged, and so a client that round-tripped a
 	// previously-returned masked map cannot silently overwrite real
 	// secret values with literal `****`. See MUL-2600.
-	CustomArgs *[]string        `json:"custom_args"`
-	McpConfig  *json.RawMessage `json:"mcp_config"`
-	Visibility *string          `json:"visibility"`
-	// HomeChannelID is no longer supported (task #908 retired the
-	// channel-scoped-agent mechanism) — any non-empty value is rejected.
-	HomeChannelID      *string `json:"home_channel_id"`
+	CustomArgs         *[]string        `json:"custom_args"`
+	McpConfig          *json.RawMessage `json:"mcp_config"`
 	Status             *string `json:"status"`
 	MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
 	Model              *string `json:"model"`
@@ -1467,18 +1436,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
-	}
-	if req.Visibility != nil || rawFields["home_channel_id"] != nil {
-		targetVisibility := existing.Visibility
-		if req.Visibility != nil {
-			targetVisibility = *req.Visibility
-		}
-		_, homeProvided := rawFields["home_channel_id"]
-		binding, ok := h.resolveAgentVisibilityBinding(w, targetVisibility, req.HomeChannelID, homeProvided)
-		if !ok {
-			return
-		}
-		params.Visibility = pgtype.Text{String: binding.Visibility, Valid: true}
 	}
 	if req.Status != nil {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}

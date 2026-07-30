@@ -87,12 +87,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID); err != nil {
 		var agentID string
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO agent (
-			  workspace_id, name, display_name, description, runtime_mode,
-			  runtime_config, runtime_id, visibility, max_concurrent_tasks,
-			  owner_id, instructions, custom_env, custom_args, mcp_config
-			)
-			VALUES ($1, $2, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1,
-			        $4, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, $2, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
 			RETURNING id`, testWorkspaceID, name, runtimeID, testUserID).Scan(&agentID); err != nil {
 			t.Fatalf("create collaboration agent: %v", err)
 		}

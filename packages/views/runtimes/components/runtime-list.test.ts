@@ -16,7 +16,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility: "private",
     status: "idle",
     max_concurrent_tasks: 1,
     model: "gpt-5.4",

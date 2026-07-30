@@ -123,8 +123,6 @@ type CreateAgentFromTemplateRequest struct {
 	DisplayName        string  `json:"display_name"`
 	RuntimeID          string  `json:"runtime_id"`
 	Model              string  `json:"model,omitempty"`
-	Visibility         string  `json:"visibility,omitempty"`
-	HomeChannelID      *string `json:"home_channel_id,omitempty"`
 	MaxConcurrentTasks int32   `json:"max_concurrent_tasks,omitempty"`
 	// Optional overrides — let the picker UI customise the template before
 	// creation without forcing a second round-trip to the detail page.
@@ -178,9 +176,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
 	}
-	if req.Visibility == "" {
-		req.Visibility = "workspace"
-	}
 	if req.MaxConcurrentTasks == 0 {
 		req.MaxConcurrentTasks = 6
 	}
@@ -192,11 +187,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	}
 
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return
-	}
-	homeProvided := req.HomeChannelID != nil
-	binding, ok := h.resolveAgentVisibilityBinding(w, req.Visibility, req.HomeChannelID, homeProvided)
 	if !ok {
 		return
 	}
@@ -451,7 +441,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
-		Visibility:         binding.Visibility,
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            creatorUUID,
 		CustomEnv:          ce,

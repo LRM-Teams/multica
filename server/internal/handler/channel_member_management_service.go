@@ -688,43 +688,23 @@ func (h *Handler) validateMemberManagementTargetTx(
 		}
 		return nil
 	case PrincipalKindAgent:
-		var visibility string
-		var err error
-		if principal.Kind == PrincipalKindUser {
-			var ownerID pgtype.UUID
-			err = tx.QueryRow(ctx, `
-				SELECT visibility, owner_id
-				FROM agent
+		var exists bool
+		err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM agent
 				WHERE workspace_id = $1
 				  AND id = $2
 				  AND archived_at IS NULL
-				FOR SHARE`,
-				principal.WorkspaceID,
-				target.ID,
-			).Scan(&visibility, &ownerID)
-			if err == nil &&
-				visibility == agentVisibilityPrivate &&
-				!hasWorkspaceManagementAuthority(principal.WorkspaceRole) &&
-				ownerID.Bytes != principal.ID.Bytes {
-				return memberManagementError(http.StatusForbidden, "you do not have access to this agent")
-			}
-		} else {
-			err = tx.QueryRow(ctx, `
-				SELECT visibility
-				FROM agent
-				WHERE workspace_id = $1
-				  AND id = $2
-				  AND archived_at IS NULL
-				FOR SHARE`,
-				principal.WorkspaceID,
-				target.ID,
-			).Scan(&visibility)
-		}
+				FOR SHARE
+			)`,
+			principal.WorkspaceID,
+			target.ID,
+		).Scan(&exists)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return memberManagementError(http.StatusNotFound, "agent not found")
-			}
 			return err
+		}
+		if !exists {
+			return memberManagementError(http.StatusNotFound, "agent not found")
 		}
 		return nil
 	default:

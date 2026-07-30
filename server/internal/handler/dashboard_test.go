@@ -268,10 +268,8 @@ func TestDashboardUsageByAgentGatesDetailToOwnerOrAdmin(t *testing.T) {
 		var agentID string
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO agent (
-				workspace_id, name, display_name, description, runtime_mode, runtime_config,
-				runtime_id, visibility, max_concurrent_tasks, owner_id
-			)
-			VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 'private', 1, $5)
+			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5)
 			RETURNING id
 		`, testWorkspaceID, handle, displayName, runtimeID, ownerID).Scan(&agentID); err != nil {
 			t.Fatalf("seed agent %s: %v", displayName, err)
@@ -750,11 +748,8 @@ func TestRollupAgentUsageHourlyWorkspaceMismatch(t *testing.T) {
 	var foreignAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args, mcp_config
-		)
-		VALUES ($1, 'mismatch-agent-hourly', '', 'cloud', '{}'::jsonb, $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
+		) VALUES ($1, 'mismatch-agent-hourly', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
 		RETURNING id
 	`, foreignWorkspaceID, foreignRuntimeID, testUserID).Scan(&foreignAgentID); err != nil {
 		t.Fatalf("create foreign agent: %v", err)

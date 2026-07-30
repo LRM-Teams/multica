@@ -477,9 +477,6 @@ func TestChannelOnboardingSystemGeneralWaitsForDurablePublication(t *testing.T) 
 
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "Onboarding General "+uuid.NewString()[:8], nil)
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET visibility = 'workspace' WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("make agent workspace-visible: %v", err)
-	}
 
 	var onboardingID, channelID, generationID, sourceType, sourceActorID, publicationStatus string
 	if err := testPool.QueryRow(ctx, `
@@ -520,9 +517,6 @@ func TestChannelOnboardingPublicationFailureStaysRetryableAndBlocksLease(t *test
 
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "Onboarding Publish Failure "+uuid.NewString()[:8], nil)
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET visibility = 'workspace' WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("make agent workspace-visible: %v", err)
-	}
 
 	var onboardingID, generationID string
 	if err := testPool.QueryRow(ctx, `

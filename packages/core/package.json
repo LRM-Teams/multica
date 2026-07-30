@@ -77,7 +77,6 @@
     "./agents/reminder-view-model": "./agents/reminder-view-model.ts",
     "./agents/derive-presence": "./agents/derive-presence.ts",
     "./agents/use-agent-presence": "./agents/use-agent-presence.ts",
-    "./agents/visibility-label": "./agents/visibility-label.ts",
     "./agents/stores": "./agents/stores/index.ts",
     "./permissions": "./permissions/index.ts",
     "./projects": "./projects/index.ts",

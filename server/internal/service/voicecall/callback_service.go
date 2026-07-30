@@ -93,6 +93,75 @@ func (service *CallbackService) HandleConversationStatus(
 	}
 }
 
+func (service *CallbackService) HandleVoiceChatTaskEvent(
+	ctx context.Context,
+	event volcenginertc.VoiceChatTaskEvent,
+) (Session, bool, error) {
+	taskID := strings.TrimSpace(event.TaskID)
+	if taskID == "" {
+		return Session{}, false, errors.New(
+			"voice call task event task ID is required",
+		)
+	}
+	if event.EventType == volcenginertc.VoiceChatTaskStateChanged &&
+		isVoiceChatActiveRunStage(event.RunStage) {
+		session, err := service.store.ApplyProviderActive(
+			ctx,
+			service.providerName,
+			taskID,
+		)
+		if err != nil {
+			return Session{}, false, fmt.Errorf(
+				"apply voice call provider activity: %w",
+				err,
+			)
+		}
+		return session, true, nil
+	}
+	if event.EventType == volcenginertc.VoiceChatTaskError {
+		if event.ErrorInfo == nil || event.ErrorInfo.ErrorCode <= 0 {
+			return Session{}, false, errors.New(
+				"voice call task event provider error details are required",
+			)
+		}
+		errorCode := service.providerName + "_" +
+			strconv.FormatInt(event.ErrorInfo.ErrorCode, 10)
+		session, err := service.store.ApplyProviderFailure(
+			ctx,
+			service.providerName,
+			taskID,
+			errorCode,
+		)
+		if err != nil {
+			return Session{}, false, fmt.Errorf(
+				"apply voice call provider failure: %w",
+				err,
+			)
+		}
+		return session, true, nil
+	}
+	return Session{}, false, nil
+}
+
+func isVoiceChatActiveRunStage(stage volcenginertc.VoiceChatRunStage) bool {
+	switch stage {
+	case volcenginertc.VoiceChatRunStageTaskStart,
+		volcenginertc.VoiceChatRunStageBeginAsking,
+		volcenginertc.VoiceChatRunStageASRFinish,
+		volcenginertc.VoiceChatRunStageLLMOutput,
+		volcenginertc.VoiceChatRunStageAnswerStart,
+		volcenginertc.VoiceChatRunStageAnswerFinish,
+		volcenginertc.VoiceChatRunStageInterrupted,
+		volcenginertc.VoiceChatRunStageReasoningStart,
+		volcenginertc.VoiceChatRunStageASR,
+		volcenginertc.VoiceChatRunStageLLM,
+		volcenginertc.VoiceChatRunStageTTS:
+		return true
+	default:
+		return false
+	}
+}
+
 func (service *CallbackService) HandleConversationSubtitle(
 	ctx context.Context,
 	subtitle volcenginertc.ConversationSubtitle,

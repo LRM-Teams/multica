@@ -25,6 +25,10 @@ type VoiceCallCallbackProcessor interface {
 		ctx context.Context,
 		subtitle volcenginertc.ConversationSubtitle,
 	) error
+	HandleVoiceChatTaskEvent(
+		ctx context.Context,
+		event volcenginertc.VoiceChatTaskEvent,
+	) (voicecall.Session, bool, error)
 }
 
 type voiceCallCallbackEnvelope struct {
@@ -42,6 +46,10 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 		)
 		return
 	}
+	if r.Method == http.MethodGet {
+		writeVoiceCallCallbackOK(w)
+		return
+	}
 	if r.ContentLength > maxVoiceCallCallbackRequestBytes {
 		writeError(
 			w,
@@ -53,9 +61,8 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 	r.Body = http.MaxBytesReader(w, r.Body, maxVoiceCallCallbackRequestBytes)
 	defer r.Body.Close()
 
-	var envelope voiceCallCallbackEnvelope
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&envelope); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
 			writeError(
@@ -68,7 +75,20 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid voice call callback")
 		return
 	}
-	if err := requireVoiceCallCallbackEOF(decoder); err != nil {
+	var discriminator struct {
+		EventType string `json:"EventType"`
+	}
+	if err := json.Unmarshal(body, &discriminator); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid voice call callback")
+		return
+	}
+	if discriminator.EventType == "VoiceChat" {
+		h.handleVoiceChatTaskEvent(w, r, body)
+		return
+	}
+
+	var envelope voiceCallCallbackEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid voice call callback")
 		return
 	}
@@ -95,9 +115,45 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	writeVoiceCallCallbackOK(w)
+}
+
+func (h *Handler) handleVoiceChatTaskEvent(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+) {
+	var envelope volcenginertc.VoiceChatEventEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid voice call callback")
+		return
+	}
+	if !envelope.VerifySignature(h.VoiceCallCallbackSignature) {
+		writeError(w, http.StatusUnauthorized, "invalid voice call callback signature")
+		return
+	}
+	event, err := volcenginertc.DecodeVoiceChatTaskEvent(envelope)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid voice call task event")
+		return
+	}
+	session, changed, err := h.VoiceCallCallbackProcessor.HandleVoiceChatTaskEvent(
+		r.Context(),
+		event,
+	)
+	if err != nil {
+		slog.Error(
+			"process voice call task event",
+			"run_stage", event.RunStage,
+			"error", err,
+		)
+		writeError(w, http.StatusInternalServerError, "voice call callback processing failed")
+		return
+	}
+	if changed {
+		h.publishVoiceCallUpdated(session)
+	}
+	writeVoiceCallCallbackOK(w)
 }
 
 func (h *Handler) processVoiceCallServerCallback(
@@ -131,13 +187,8 @@ func (h *Handler) processVoiceCallServerCallback(
 	}
 }
 
-func requireVoiceCallCallbackEOF(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("voice call callback has trailing JSON")
-		}
-		return err
-	}
-	return nil
+func writeVoiceCallCallbackOK(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
 }

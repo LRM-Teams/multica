@@ -51,6 +51,116 @@ func TestCallbackServiceMapsConversationStagesToSessionState(t *testing.T) {
 	}
 }
 
+func TestCallbackServiceMapsVoiceChatTaskStartToActive(t *testing.T) {
+	wantSession := Session{ID: "call-1", Status: StatusActive}
+	store := &fakeCallbackStore{session: wantSession}
+	service, err := NewCallbackService("volcengine", store)
+	if err != nil {
+		t.Fatalf("new callback service: %v", err)
+	}
+
+	session, changed, err := service.HandleVoiceChatTaskEvent(
+		context.Background(),
+		volcenginertc.VoiceChatTaskEvent{
+			TaskID:    "voice-task-1",
+			EventType: volcenginertc.VoiceChatTaskStateChanged,
+			RunStage:  volcenginertc.VoiceChatRunStageTaskStart,
+		},
+	)
+	if err != nil {
+		t.Fatalf("handle task event: %v", err)
+	}
+	if !changed || session != wantSession {
+		t.Fatalf("session = %+v, changed = %t", session, changed)
+	}
+	if store.activeCalls != 1 ||
+		store.provider != "volcengine" ||
+		store.taskID != "voice-task-1" ||
+		store.failureCalls != 0 {
+		t.Fatalf("store = %+v", store)
+	}
+}
+
+func TestCallbackServiceMapsVoiceChatProgressStagesToActive(t *testing.T) {
+	stages := []volcenginertc.VoiceChatRunStage{
+		volcenginertc.VoiceChatRunStageBeginAsking,
+		volcenginertc.VoiceChatRunStageASRFinish,
+		volcenginertc.VoiceChatRunStageLLMOutput,
+		volcenginertc.VoiceChatRunStageAnswerStart,
+		volcenginertc.VoiceChatRunStageAnswerFinish,
+		volcenginertc.VoiceChatRunStageInterrupted,
+		volcenginertc.VoiceChatRunStageReasoningStart,
+		volcenginertc.VoiceChatRunStageASR,
+		volcenginertc.VoiceChatRunStageLLM,
+		volcenginertc.VoiceChatRunStageTTS,
+	}
+	for _, stage := range stages {
+		t.Run(string(stage), func(t *testing.T) {
+			store := &fakeCallbackStore{
+				session: Session{ID: "call-1", Status: StatusActive},
+			}
+			service, err := NewCallbackService("volcengine", store)
+			if err != nil {
+				t.Fatalf("new callback service: %v", err)
+			}
+
+			_, changed, err := service.HandleVoiceChatTaskEvent(
+				context.Background(),
+				volcenginertc.VoiceChatTaskEvent{
+					TaskID:    "voice-task-1",
+					EventType: volcenginertc.VoiceChatTaskStateChanged,
+					RunStage:  stage,
+				},
+			)
+			if err != nil {
+				t.Fatalf("handle task event: %v", err)
+			}
+			if !changed || store.activeCalls != 1 {
+				t.Fatalf(
+					"changed = %t, active calls = %d",
+					changed,
+					store.activeCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestCallbackServiceRecordsVoiceChatTaskError(t *testing.T) {
+	wantSession := Session{ID: "call-1", Status: StatusFailed}
+	store := &fakeCallbackStore{session: wantSession}
+	service, err := NewCallbackService("volcengine", store)
+	if err != nil {
+		t.Fatalf("new callback service: %v", err)
+	}
+
+	session, changed, err := service.HandleVoiceChatTaskEvent(
+		context.Background(),
+		volcenginertc.VoiceChatTaskEvent{
+			TaskID:    "voice-task-1",
+			EventType: volcenginertc.VoiceChatTaskError,
+			RunStage:  volcenginertc.VoiceChatRunStagePreParamCheck,
+			ErrorInfo: &volcenginertc.VoiceChatTaskErrorInfo{
+				ErrorCode: 1003006,
+				Reason:    "ASR connection failed",
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("handle task event: %v", err)
+	}
+	if !changed || session != wantSession {
+		t.Fatalf("session = %+v, changed = %t", session, changed)
+	}
+	if store.failureCalls != 1 ||
+		store.provider != "volcengine" ||
+		store.taskID != "voice-task-1" ||
+		store.errorCode != "volcengine_1003006" ||
+		store.activeCalls != 0 {
+		t.Fatalf("store = %+v", store)
+	}
+}
+
 func TestCallbackServiceRecordsProviderErrorCode(t *testing.T) {
 	wantSession := Session{ID: "call-1", Status: StatusFailed}
 	store := &fakeCallbackStore{session: wantSession}

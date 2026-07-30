@@ -122,10 +122,6 @@ func (h *Handler) diagnoseEnvDispatchProject(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	cfg := service.LoadTrainingConfig()
-	if !cfg.InteractionDAGEnabled || !cfg.DiagnosisAgentEnabled || !cfg.DiagnosisAgentOnDemandEnabled {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "diagnosis_unavailable"})
-		return
-	}
 	readiness, err := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency()).GetDagReadiness(r.Context(), projectID, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "lookup dispatch root: "+err.Error())

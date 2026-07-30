@@ -200,108 +200,30 @@ func TestLoadTrainingConfig_DAGEnabledDefaultAndDisable(t *testing.T) {
 	assert.True(t, cfg.InteractionDAGEnabled)
 }
 
-// DIAGNOSIS_AGENT_* configure the Pi diagnosis agent that scores each LLM
-// output at root-task terminal. Off by default; the trigger (training.go)
-// additionally gates on the interaction DAG being enabled + configured, so a
-// non-nil Diagnoser is only wired in the full bridge+DAG production path.
-
-func TestLoadTrainingConfig_DiagnosisDisabledByDefault(t *testing.T) {
+func TestLoadTrainingConfig_DiagnosisRuntimeSettings(t *testing.T) {
 	clearTrainingEnv(t)
 
-	cfg := LoadTrainingConfig()
-	assert.False(t, cfg.DiagnosisAgentEnabled, "diagnosis defaults off")
-	// Defaults are populated even when disabled, so flipping the flag on needs
-	// no other env to run.
-	assert.Equal(t, 60*time.Second, cfg.DiagnosisAgentTimeout)
-	assert.Equal(t, 10, cfg.DiagnosisAgentScoreMax)
-}
-
-func TestLoadTrainingConfig_DiagnosisEnabled(t *testing.T) {
-	clearTrainingEnv(t)
-
-	os.Setenv("DIAGNOSIS_AGENT_ENABLED", "true")
-	os.Setenv("DIAGNOSIS_AGENT_PATH", "/usr/local/bin/pi")
-	os.Setenv("DIAGNOSIS_AGENT_MODEL", "anthropic/claude-sonnet-5")
-	os.Setenv("DIAGNOSIS_AGENT_TIMEOUT_SECONDS", "120")
-	os.Setenv("DIAGNOSIS_AGENT_SCORE_MAX", "20")
+	t.Setenv("DIAGNOSIS_AGENT_PATH", "/usr/local/bin/pi")
+	t.Setenv("DIAGNOSIS_AGENT_MODEL", "anthropic/claude-sonnet-5")
+	t.Setenv("DIAGNOSIS_AGENT_TIMEOUT_SECONDS", "120")
+	t.Setenv("DIAGNOSIS_AGENT_SCORE_MAX", "20")
 
 	cfg := LoadTrainingConfig()
-	assert.True(t, cfg.DiagnosisAgentEnabled)
 	assert.Equal(t, "/usr/local/bin/pi", cfg.DiagnosisAgentPath)
 	assert.Equal(t, "anthropic/claude-sonnet-5", cfg.DiagnosisAgentModel)
 	assert.Equal(t, 120*time.Second, cfg.DiagnosisAgentTimeout)
 	assert.Equal(t, 20, cfg.DiagnosisAgentScoreMax)
 }
 
-func TestLoadTrainingConfig_DiagnosisOnDemandEnabled(t *testing.T) {
-	clearTrainingEnv(t)
-	t.Setenv(diagnosisAgentOnDemandEnabledEnv, "true")
-
-	cfg := LoadTrainingConfig()
-	assert.True(t, cfg.DiagnosisAgentOnDemandEnabled)
-}
-
 func TestLoadTrainingConfig_DiagnosisInvalidTimeoutAndScoreMax(t *testing.T) {
 	clearTrainingEnv(t)
 
-	os.Setenv("DIAGNOSIS_AGENT_ENABLED", "true")
 	os.Setenv("DIAGNOSIS_AGENT_TIMEOUT_SECONDS", "not-a-number")
 	os.Setenv("DIAGNOSIS_AGENT_SCORE_MAX", "oops")
 
 	cfg := LoadTrainingConfig()
-	assert.True(t, cfg.DiagnosisAgentEnabled)
 	assert.Equal(t, 60*time.Second, cfg.DiagnosisAgentTimeout, "invalid timeout falls back to 60s")
 	assert.Equal(t, 10, cfg.DiagnosisAgentScoreMax, "invalid score max falls back to 10")
-}
-
-// In the production path (q != nil) with bridge + DAG configured, enabling
-// diagnosis wires a non-nil Diagnoser; disabling leaves it nil. The trigger
-// (maybeDiagnoseProject, training.go) gates on deps.Diagnosis == nil, so a nil
-// diagnoser is a clean no-op.
-func TestNewTrainingSessionDeps_DiagnosisWiredWhenEnabled(t *testing.T) {
-	clearTrainingEnv(t)
-
-	q := db.New(nil)
-
-	// Enabled: Diagnosis is a non-nil Diagnoser (a *DiagnosisAgentRunner).
-	cfg := TrainingConfig{
-		BridgeStubURL:         "http://localhost:9100/v1",
-		AdminAPIKey:           "test-key-123",
-		InteractionDAGEnabled: true,
-		DiagnosisAgentEnabled: true,
-	}
-	deps := NewTrainingSessionDeps(cfg, q)
-	assert.NotNil(t, deps)
-	assert.NotNil(t, deps.DAG, "DAG must be wired so the diagnosis trigger can fire")
-	assert.NotNil(t, deps.Diagnosis, "Diagnosis must be wired when enabled in the production path")
-
-	// Disabled: Diagnosis is nil even with DAG wired.
-	cfg.DiagnosisAgentEnabled = false
-	deps = NewTrainingSessionDeps(cfg, q)
-	assert.NotNil(t, deps.DAG)
-	assert.Nil(t, deps.Diagnosis, "Diagnosis must be nil when disabled")
-}
-
-// Diagnosis requires the full bridge path: when bridge config is missing
-// (guard-deps path), deps is non-nil so the open-hook loud-error guard is
-// reachable. The local env-dispatch DAG remains wired, while Diagnosis stays
-// nil because it requires the full training bridge.
-func TestNewTrainingSessionDeps_DiagnosisNilWhenBridgeConfigMissing(t *testing.T) {
-	clearTrainingEnv(t)
-
-	q := db.New(nil)
-
-	// Diagnosis enabled but bridge config missing: guard-deps path returns
-	// non-nil deps with Lookup+Store and a local-only DAG.
-	cfg := TrainingConfig{
-		AdminAPIKey:           "test-key-123", // no BridgeStubURL
-		DiagnosisAgentEnabled: true,
-	}
-	deps := NewTrainingSessionDeps(cfg, q)
-	assert.NotNil(t, deps, "deps non-nil so the open-hook guard is reachable")
-	require.NotNil(t, deps.DAG, "local env-dispatch DAG remains available without bridge config")
-	assert.Nil(t, deps.DAG.client)
-	assert.Nil(t, deps.Diagnosis, "Diagnosis nil when bridge config missing - requires the full path")
 }
 
 func TestTaskService_WithTraining(t *testing.T) {
@@ -327,7 +249,6 @@ func clearTrainingEnv(t *testing.T) {
 		"TRAINING_DEFAULT_REWARD",
 		"AREAL_PROXY_URL",
 		"INTERACTION_DAG_ENABLED",
-		"DIAGNOSIS_AGENT_ENABLED",
 		"DIAGNOSIS_AGENT_PATH",
 		"DIAGNOSIS_AGENT_MODEL",
 		"DIAGNOSIS_AGENT_TIMEOUT_SECONDS",

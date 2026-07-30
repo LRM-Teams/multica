@@ -110,10 +110,11 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 
 function renderRows(runtimes: AgentRuntime[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const now = Date.now();
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
-        <RuntimeRows runtimes={runtimes} now={Date.now()} />
+        <RuntimeRows runtimes={runtimes} now={now} />
       </QueryClientProvider>
     </I18nProvider>,
   );

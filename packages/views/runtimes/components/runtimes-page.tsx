@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -107,19 +107,14 @@ export function RuntimesPage({
   const qc = useQueryClient();
   const [machineFilter, setMachineFilter] =
     useState<RuntimeMachineFilter>("all");
-  const [selectedMachineId, setSelectedMachineId] = useState<string | null>(
-    null,
-  );
+  // Only the user's explicit pick is held in state; the effective selection
+  // is derived during render (see below), so no sync effect is needed.
+  const [userPickId, setUserPickId] = useState<string | null>(null);
   // Mobile drill-in: list page until a row is tapped, then the detail page
   // until Back. Desktop ignores this flag (both panes stay visible).
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
-  // Tracks whether the user has explicitly picked a machine. Until then,
-  // auto-default keeps preferring the Local section (which on desktop may
-  // appear later than remotes — `localDaemonId` is fetched async).
-  const userSelectedRef = useRef(false);
   const handleSelectMachine = useCallback((id: string) => {
-    userSelectedRef.current = true;
-    setSelectedMachineId(id);
+    setUserPickId(id);
     setMobileDetailOpen(true);
   }, []);
   const handleMobileBack = useCallback(() => setMobileDetailOpen(false), []);
@@ -174,25 +169,21 @@ export function RuntimesPage({
     [machines, machineFilter],
   );
 
-  useEffect(() => {
-    // Mobile shows the list page until the user drills in — there is no
-    // default selection to compute.
-    if (isMobile) return;
-    if (filteredMachines.length === 0) {
-      if (selectedMachineId !== null) setSelectedMachineId(null);
-      return;
-    }
-    const stillValid =
-      !!selectedMachineId &&
-      filteredMachines.some((m) => m.id === selectedMachineId);
-    // Honor an explicit user pick. Otherwise re-evaluate the default so the
-    // Local machine wins as soon as it shows up, even if a remote was the
-    // first-paint default.
-    if (userSelectedRef.current && stillValid) return;
-    const local = filteredMachines.find((m) => m.section === "local");
-    const nextId = local?.id ?? filteredMachines[0]?.id ?? null;
-    if (nextId !== selectedMachineId) setSelectedMachineId(nextId);
-  }, [filteredMachines, selectedMachineId, isMobile]);
+  // Derived selection: an explicit user pick wins while its machine is still
+  // in the filtered list. Otherwise desktop defaults to the Local section as
+  // soon as it shows up (`localDaemonId` resolves async, so a remote may have
+  // been the first-paint default), falling back to the first machine. Mobile
+  // has no default — the list page shows until the user drills in.
+  const userPickValid =
+    userPickId !== null &&
+    filteredMachines.some((m) => m.id === userPickId);
+  const selectedMachineId = isMobile
+    ? userPickId
+    : userPickValid
+      ? userPickId
+      : (filteredMachines.find((m) => m.section === "local")?.id ??
+        filteredMachines[0]?.id ??
+        null);
 
   const selectedMachine =
     machines.find((machine) => machine.id === selectedMachineId) ?? null;
@@ -206,7 +197,7 @@ export function RuntimesPage({
   const showEmpty = totalCount === 0 && !bootstrapping && !hasLocalMachine;
 
   const handleComputerDeleted = () => {
-    setSelectedMachineId(null);
+    setUserPickId(null);
     setMobileDetailOpen(false);
   };
 

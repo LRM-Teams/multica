@@ -515,7 +515,6 @@ func (q *Queries) GetResearchFleetByWorkspace(ctx context.Context, workspaceID p
 const getResearchFleetMemberByAgent = `-- name: GetResearchFleetMemberByAgent :one
 SELECT id, workspace_id, fleet_id, agent_id, role, status, is_lead, created_at, updated_at FROM research_fleet_member
 WHERE workspace_id = $1 AND agent_id = $2
-  AND status <> 'archived'
 `
 
 type GetResearchFleetMemberByAgentParams struct {

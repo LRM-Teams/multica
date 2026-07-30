@@ -133,6 +133,7 @@ func (h *Handler) seedResearchSessionKickoff(
 		)
 		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, leadID, initiator, leadPrompt, "user"); err != nil {
 			slog.Warn("research kickoff lead wake failed", "error", err)
+			h.emitResearchProcessCard(ctx, workspaceID, wsUUID, session.ID, "user", userID, researchWakeFailureEvent(leadID, err))
 		}
 	}
 	for _, m := range uniqueMembers {
@@ -146,6 +147,7 @@ func (h *Handler) seedResearchSessionKickoff(
 		)
 		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, m.AgentID, initiator, standby, "system"); err != nil {
 			slog.Warn("research kickoff member wake failed", "agent_id", uuidToString(m.AgentID), "error", err)
+			h.emitResearchProcessCard(ctx, workspaceID, wsUUID, session.ID, "user", userID, researchWakeFailureEvent(m.AgentID, err))
 		}
 	}
 }

@@ -602,7 +602,7 @@ func TestCanonicalRuntimeResultHealthIsFailClosed(t *testing.T) {
 	}
 }
 
-func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiAndGrok(t *testing.T) {
+func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiGrokAndCursor(t *testing.T) {
 	for _, tc := range []struct {
 		provider string
 		profile  string
@@ -611,7 +611,7 @@ func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiAndGrok(t *testing.T) {
 	}{
 		{provider: "pi", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "grok", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeOneShot},
+		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "claude", profile: executionProfileFull, want: canonicalRuntimeOneShot},
 		{provider: "codex", profile: executionProfileFull, want: canonicalRuntimeOneShot},
 		{provider: "pi", profile: executionProfileProtocolTurn, wantErr: true},
@@ -634,59 +634,8 @@ func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiAndGrok(t *testing.T) {
 	}
 }
 
-func TestCanonicalCursorUsesOneShotAdapterAndResumesPerAgentSession(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
-	probe := &canonicalRuntimeFactoryProbe{}
-	identity := canonicalRuntimeIdentityForTest(t, "cursor-model", map[string]string{
-		"MULTICA_SERVER_URL":   "https://multica.example",
-		"MULTICA_WORKSPACE_ID": "workspace-a",
-		"MULTICA_AGENT_ID":     "agent-a",
-		"MULTICA_TASK_ID":      "turn-a",
-	})
-	identity.Provider = "cursor"
-	identity.Executable = "/usr/local/bin/cursor-agent"
-
-	mode, err := canonicalRuntimeModeFor(identity.Provider, executionProfileFull)
-	if err != nil {
-		t.Fatalf("canonicalRuntimeModeFor cursor: %v", err)
-	}
-	if mode != canonicalRuntimeOneShot {
-		t.Fatalf("cursor mode = %q, want %q", mode, canonicalRuntimeOneShot)
-	}
-
-	for turn, surfaceSessionID := range []string{"group-session", "dm-session"} {
-		lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-			Identity:           identity,
-			Mode:               mode,
-			CanonicalSessionID: "cursor-agent-session",
-			Factory:            probe.factory,
-		})
-		if err != nil {
-			t.Fatalf("turn %d acquire: %v", turn+1, err)
-		}
-		rawBackend := lease.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend)
-		if _, err := lease.backend.Execute(context.Background(), "turn", agent.ExecOptions{
-			ResumeSessionID: surfaceSessionID,
-		}); err != nil {
-			t.Fatalf("turn %d Execute: %v", turn+1, err)
-		}
-		if got := rawBackend.lastResumeSessionID(); got != "cursor-agent-session" {
-			t.Fatalf("turn %d resume session = %q, want canonical Cursor agent session", turn+1, got)
-		}
-		lease.releaseForResult("completed", nil)
-	}
-
-	if got := pool.slotCount(); got != 1 {
-		t.Fatalf("slot count = %d, want one agent×runtime slot", got)
-	}
-	created, closed := probe.counts()
-	if created != 2 || closed != 2 {
-		t.Fatalf("factory counts = created %d closed %d, want 2/2", created, closed)
-	}
-}
-
 func TestCanonicalRuntimeDefaultFactoriesMatchProviderMode(t *testing.T) {
-	for _, provider := range []string{"pi", "grok"} {
+	for _, provider := range []string{"pi", "grok", "cursor"} {
 		factory := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
 		backend, closeBackend, err := factory(agent.Config{ExecutablePath: "/nonexistent/" + provider})
 		if err != nil {

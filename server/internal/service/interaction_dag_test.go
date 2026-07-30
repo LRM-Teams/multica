@@ -1123,7 +1123,7 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 		"segment_id": true, "agent_run_id": true, "issue_id": true,
 		"trajectory_id": true, "tensor_ref": true, "closing_event": true,
 		"trajectory_source": true, "trainable": true, "trajectory": true,
-		"env_snapshot": true,
+		"env_snapshot": true, "assistant_turn_seqs": true,
 	}
 	assert.Equal(t, expectedSegKeys, keysOf(segKeys), "segment JSON keys must match SegmentSpec exactly")
 	for _, banned := range []string{"judge_scores", "start_turn_idx", "end_turn_idx", "text", "messages"} {

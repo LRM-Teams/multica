@@ -102,6 +102,17 @@ const FOCUSABLE_ANCESTOR_SELECTOR =
   'a[href], button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"])';
 const PROFILE_LINK_CONTROL_SELECTOR =
   'button, [role^="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="popover-trigger"]';
+/**
+ * LRM-809: an interactive ancestor may explicitly OPT IN to keeping the
+ * avatar's profile entry alive by carrying this attribute (e.g. the Activity
+ * feed row, where avatar click = profile and row click = open item). Without
+ * it, picker/menu rows keep the historical "outer control wins" behavior.
+ */
+const AVATAR_PROFILE_ENTRY_ATTR = "data-avatar-profile-entry";
+/** Control ancestors carrying the opt-in do not swallow avatar clicks. */
+function isProfileEntryAllowed(controlAncestor: Element | null | undefined): boolean {
+  return !!controlAncestor?.hasAttribute?.(AVATAR_PROFILE_ENTRY_ATTR);
+}
 
 export function ActorAvatar({
   actorType,
@@ -247,7 +258,7 @@ function ActorAvatarPanelTrigger({
     const controlAncestor = event.currentTarget.parentElement?.closest(
       PROFILE_LINK_CONTROL_SELECTOR,
     );
-    if (controlAncestor) return;
+    if (controlAncestor && !isProfileEntryAllowed(controlAncestor)) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -305,7 +316,7 @@ function ActorAvatarMemberPanelTrigger({
     const controlAncestor = event.currentTarget.parentElement?.closest(
       PROFILE_LINK_CONTROL_SELECTOR,
     );
-    if (controlAncestor) return;
+    if (controlAncestor && !isProfileEntryAllowed(controlAncestor)) return;
 
     event.preventDefault();
     event.stopPropagation();

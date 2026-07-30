@@ -46,6 +46,12 @@ type ActivityItemResponse struct {
 	MentionedMe         *bool   `json:"mentioned_me,omitempty"`
 	Participated        *bool   `json:"participated,omitempty"`
 
+	// LRM-809: the actor the row avatar represents. Threads: the DM peer for
+	// dm channels (agent for user↔agent DMs), else the root message author.
+	// Inbox rows: the inbox item actor. "system"/nil → no profile affordance.
+	ActorType *string `json:"actor_type,omitempty"`
+	ActorID   *string `json:"actor_id,omitempty"`
+
 	Inbox *InboxItemResponse `json:"inbox,omitempty"`
 }
 
@@ -69,6 +75,8 @@ type activityThreadRow struct {
 	mentionedMe      bool
 	unreadCount      int
 	hasChannelAccess bool
+	actorType        *string
+	actorID          *string
 }
 
 // ListUserActivity returns the merged Activity feed (threads + inbox) for the
@@ -259,7 +267,26 @@ func (h *Handler) loadActivityThreads(ctx context.Context, workspaceID, userID p
 		    WHERE cm.channel_id = root.channel_id
 		      AND cm.member_type = 'user'
 		      AND cm.member_id = $2
-		  ) AS has_channel_access
+		  ) AS has_channel_access,
+		  -- LRM-809: row avatar actor. dm → the peer member (agent preferred for
+		  -- user↔agent DMs; the other user for human DMs); otherwise the root
+		  -- message author. NULL when the dm has no peer (degenerate channel).
+		  CASE WHEN ch.kind = 'dm' THEN (
+		    SELECT cm2.member_type
+		    FROM channel_member cm2
+		    WHERE cm2.channel_id = root.channel_id
+		      AND NOT (cm2.member_type = 'user' AND cm2.member_id = $2)
+		    ORDER BY cm2.member_type, cm2.member_id
+		    LIMIT 1
+		  ) ELSE root.author_type END AS actor_type,
+		  CASE WHEN ch.kind = 'dm' THEN (
+		    SELECT cm2.member_id::text
+		    FROM channel_member cm2
+		    WHERE cm2.channel_id = root.channel_id
+		      AND NOT (cm2.member_type = 'user' AND cm2.member_id = $2)
+		    ORDER BY cm2.member_type, cm2.member_id
+		    LIMIT 1
+		  ) ELSE root.author_id::text END AS actor_id
 		FROM candidate_roots cr
 		JOIN channel_message root
 		  ON root.id = cr.root_message_id
@@ -301,6 +328,8 @@ func (h *Handler) loadActivityThreads(ctx context.Context, workspaceID, userID p
 			&row.mentionedMe,
 			&row.unreadCount,
 			&row.hasChannelAccess,
+			&row.actorType,
+			&row.actorID,
 		); err != nil {
 			return nil, err
 		}
@@ -343,6 +372,8 @@ func (h *Handler) mergeActivityFeed(workspaceID, tab string, threads []activityT
 			UnreadCount: unread,
 			PreviewText: activityPreviewText(textOrEmpty(resp.Body)),
 			Title:       resp.Title,
+			ActorType:   resp.ActorType,
+			ActorID:     resp.ActorID,
 			Inbox:       &resp,
 		})
 	}
@@ -385,6 +416,8 @@ func activityThreadToResponse(workspaceID string, row activityThreadRow) Activit
 		Followed:            &followed,
 		MentionedMe:         &mentioned,
 		Participated:        &participated,
+		ActorType:           row.actorType,
+		ActorID:             row.actorID,
 	}
 }
 

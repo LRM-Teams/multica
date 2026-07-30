@@ -22,6 +22,13 @@ export interface UserActivityItem {
   followed?: boolean | null;
   mentioned_me?: boolean | null;
   participated?: boolean | null;
+  /**
+   * LRM-809: actor the row avatar represents. Threads: dm peer (agent for
+   * user↔agent DMs) or root author; inbox rows: the inbox actor.
+   * "system"/null → no profile affordance.
+   */
+  actor_type?: string | null;
+  actor_id?: string | null;
   inbox?: InboxItem | null;
 }
 

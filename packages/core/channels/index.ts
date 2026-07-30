@@ -71,7 +71,7 @@ export {
   useUpdateChannelMemberRole,
   useTransferChannelOwnership,
 } from "./mutations";
-export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey } from "./stores";
+export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey, type ComposerDraftAttachment } from "./stores";
 export { isImmutableSystemChannel } from "./system-channel";
 export {
   channelMemberRole,

@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
+import type { ComposerDraftAttachment } from "@multica/core/channels";
 import {
   buildChatMessageParts,
   useComposerPendingAttachments,
@@ -312,5 +313,169 @@ describe("useComposerPendingAttachments", () => {
     rerender({ resetKey: "channel-b" });
     expect(result.current.pending).toEqual([]);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+  });
+
+  describe("LRM-801 draft persistence", () => {
+    it("saves ready attachments (id + remote preview) and restores them on remount", async () => {
+      let saved: ComposerDraftAttachment[] = [];
+      const persistence = {
+        load: () => saved,
+        save: (items: ComposerDraftAttachment[]) => {
+          saved = items;
+        },
+      };
+      let resolveUpload: (value: UploadResult | null) => void = () => {};
+      const upload = vi.fn(
+        () =>
+          new Promise<UploadResult | null>((resolve) => {
+            resolveUpload = resolve;
+          }),
+      );
+
+      const first = renderHook(() =>
+        useComposerPendingAttachments({ upload, resetKey: "channel-a", persistence }),
+      );
+      act(() => {
+        first.result.current.addFiles([makeFile("shot.png")]);
+      });
+      await act(async () => {
+        resolveUpload(makeUploadResult({ id: "att-1", filename: "shot.png" }));
+        await Promise.resolve();
+      });
+      expect(saved).toEqual([
+        expect.objectContaining({
+          attachmentId: "att-1",
+          filename: "shot.png",
+          previewUrl: "https://cdn.example/att-1",
+          unrestorable: undefined,
+        }),
+      ]);
+      first.unmount();
+
+      const second = renderHook(() =>
+        useComposerPendingAttachments({ upload, resetKey: "channel-a", persistence }),
+      );
+      expect(second.result.current.pending).toHaveLength(1);
+      expect(second.result.current.pending[0]?.status).toBe("ready");
+      expect(second.result.current.pending[0]?.attachmentId).toBe("att-1");
+      expect(second.result.current.pending[0]?.previewUrl).toBe("https://cdn.example/att-1");
+      expect(second.result.current.readyAttachmentParts).toEqual([
+        expect.objectContaining({ attachment_id: "att-1" }),
+      ]);
+    });
+
+    it("restores unfinished uploads as stale placeholders that never block send", async () => {
+      let saved: ComposerDraftAttachment[] = [];
+      const persistence = {
+        load: () => saved,
+        save: (items: ComposerDraftAttachment[]) => {
+          saved = items;
+        },
+      };
+      // Upload never resolves before the "leave".
+      const upload = vi.fn(() => new Promise<UploadResult | null>(() => {}));
+
+      const first = renderHook(() =>
+        useComposerPendingAttachments({ upload, resetKey: "channel-a", persistence }),
+      );
+      act(() => {
+        first.result.current.addFiles([makeFile("stuck.png")]);
+      });
+      expect(saved).toEqual([
+        expect.objectContaining({ unrestorable: true, attachmentId: undefined }),
+      ]);
+      first.unmount();
+
+      const second = renderHook(() =>
+        useComposerPendingAttachments({ upload, resetKey: "channel-a", persistence }),
+      );
+      expect(second.result.current.pending[0]?.status).toBe("stale");
+      expect(second.result.current.readyAttachmentParts).toEqual([]);
+      expect(second.result.current.hasUploading).toBe(false);
+
+      act(() => {
+        second.result.current.remove(second.result.current.pending[0]!.localId);
+      });
+      expect(second.result.current.pending).toEqual([]);
+      expect(saved).toEqual([]);
+    });
+
+    it("never persists blob: previews (they die with the tab)", async () => {
+      let saved: ComposerDraftAttachment[] = [];
+      const persistence = {
+        load: () => saved,
+        save: (items: ComposerDraftAttachment[]) => {
+          saved = items;
+        },
+      };
+      let resolveUpload: (value: UploadResult | null) => void = () => {};
+      const upload = vi.fn(
+        () =>
+          new Promise<UploadResult | null>((resolve) => {
+            resolveUpload = resolve;
+          }),
+      );
+
+      renderHook(() =>
+        useComposerPendingAttachments({ upload, resetKey: "channel-a", persistence }),
+      ).result.current.addFiles([makeFile("shot.png")]);
+      await act(async () => {
+        // No remote link → tray keeps the blob preview; draft must not.
+        resolveUpload(makeUploadResult({ id: "att-1", link: "" }));
+        await Promise.resolve();
+      });
+      expect(saved[0]?.attachmentId).toBe("att-1");
+      expect(saved[0]?.previewUrl).toBeUndefined();
+    });
+
+    it("switching conversations restores that draft and never leaks A's tray into B", async () => {
+      const drafts: Record<string, ComposerDraftAttachment[]> = {
+        "channel-a": [
+          {
+            attachmentId: "att-a",
+            filename: "a.png",
+            contentType: "image/png",
+            sizeBytes: 1,
+            previewUrl: "https://cdn.example/att-a",
+          },
+        ],
+        "channel-b": [
+          {
+            unrestorable: true,
+            filename: "b.png",
+            contentType: "image/png",
+            sizeBytes: 2,
+          },
+        ],
+      };
+      const upload = vi.fn(() => new Promise<UploadResult | null>(() => {}));
+
+      const { result, rerender } = renderHook(
+        ({ resetKey }: { resetKey: "channel-a" | "channel-b" }) =>
+          useComposerPendingAttachments({
+            upload,
+            resetKey,
+            persistence: {
+              load: () => drafts[resetKey],
+              save: (items) => {
+                drafts[resetKey] = items;
+              },
+            },
+          }),
+        { initialProps: { resetKey: "channel-a" as "channel-a" | "channel-b" } },
+      );
+
+      expect(result.current.pending[0]?.status).toBe("ready");
+      expect(result.current.pending[0]?.attachmentId).toBe("att-a");
+
+      rerender({ resetKey: "channel-b" });
+      expect(result.current.pending).toHaveLength(1);
+      expect(result.current.pending[0]?.status).toBe("stale");
+      expect(result.current.pending[0]?.filename).toBe("b.png");
+      // A's draft untouched by the switch.
+      expect(drafts["channel-a"]).toEqual([
+        expect.objectContaining({ attachmentId: "att-a" }),
+      ]);
+    });
   });
 });

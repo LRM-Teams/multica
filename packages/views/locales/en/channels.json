@@ -429,7 +429,8 @@
     "tray_upload_failed": "Upload failed",
     "voice_unsent": "Voice message not sent ({{duration}})",
     "voice_unsent_retry": "Retry send",
-    "voice_unsent_delete": "Delete"
+    "voice_unsent_delete": "Delete",
+    "tray_reselect": "Needs re-selection"
   },
   "message": {
     "add_reaction": "Add reaction",

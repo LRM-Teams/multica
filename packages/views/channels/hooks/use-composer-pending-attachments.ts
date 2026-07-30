@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createSafeId } from "@multica/core/utils";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
+import type { ComposerDraftAttachment } from "@multica/core/channels";
 import type { MessagePart } from "@multica/core/types";
 
-export type PendingAttachmentStatus = "uploading" | "ready" | "error";
+/** `stale` = restored draft placeholder whose file never finished uploading. */
+export type PendingAttachmentStatus = "uploading" | "ready" | "error" | "stale";
 
 export type PendingAttachment = {
   localId: string;
@@ -35,6 +37,16 @@ export type UseComposerPendingAttachmentsOptions = {
    * state is cleared so files never leak across conversations.
    */
   resetKey?: string | null;
+  /**
+   * LRM-801 — draft persistence for the tray, same lifecycle as the text
+   * draft. `load` is read on mount and at every `resetKey` change (must read
+   * fresh, e.g. via `store.getState()`); `save` receives the serialized tray
+   * on every change (`[]` clears the attachment half of the draft).
+   */
+  persistence?: {
+    load: () => ComposerDraftAttachment[] | undefined;
+    save: (items: ComposerDraftAttachment[]) => void;
+  };
 };
 
 export type UseComposerPendingAttachmentsResult = {
@@ -81,6 +93,39 @@ function toAttachmentPart(item: PendingAttachment): AttachmentMessagePart | null
   };
 }
 
+function serializeForDraft(items: PendingAttachment[]): ComposerDraftAttachment[] {
+  return items.map((item) => {
+    const restorable = item.status === "ready" && !!item.attachmentId;
+    return {
+      attachmentId: restorable ? item.attachmentId : undefined,
+      filename: item.filename,
+      contentType: item.contentType,
+      sizeBytes: item.sizeBytes,
+      previewUrl:
+        restorable && item.previewUrl && !item.previewUrl.startsWith("blob:")
+          ? item.previewUrl
+          : undefined,
+      unrestorable: restorable ? undefined : true,
+    };
+  });
+}
+
+function deserializeFromDraft(items: ComposerDraftAttachment[]): PendingAttachment[] {
+  return items.map((item) => {
+    const localId = createSafeId();
+    const restorable = !item.unrestorable && !!item.attachmentId;
+    return {
+      localId,
+      status: restorable ? ("ready" as const) : ("stale" as const),
+      attachmentId: restorable ? item.attachmentId : undefined,
+      filename: item.filename,
+      contentType: item.contentType,
+      sizeBytes: item.sizeBytes,
+      previewUrl: restorable ? item.previewUrl : undefined,
+    };
+  });
+}
+
 /**
  * Slack-style composer tray state: files upload into a pending list (not the
  * editor document). Send consumers take `readyAttachmentParts` in add order.
@@ -90,11 +135,20 @@ export function useComposerPendingAttachments(
 ): UseComposerPendingAttachmentsResult {
   const uploadRef = useRef(opts.upload);
   uploadRef.current = opts.upload;
+  const persistenceRef = useRef(opts.persistence);
+  persistenceRef.current = opts.persistence;
 
-  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [pending, setPending] = useState<PendingAttachment[]>(() =>
+    deserializeFromDraft(persistenceRef.current?.load() ?? []),
+  );
   // Track which localIds are still live so late upload results for removed
   // items are ignored (and their blob URLs already revoked on remove).
   const liveIdsRef = useRef(new Set<string>());
+  // LRM-801 — the tray starts out already hydrated for the initial resetKey
+  // (useState initializer); a later resetKey switch flips this back to
+  // "stale" until the rehydrate effect commits, so the save effect never
+  // writes conversation A's tray into conversation B's draft.
+  const hydratedKeyRef = useRef(opts.resetKey);
 
   const runUpload = useCallback(async (localId: string, file: File) => {
     try {
@@ -228,9 +282,33 @@ export function useComposerPendingAttachments(
 
   // Own the conversation-switch reset inside the hook so parents do not
   // bounce clear() through effects (react-doctor no-pass-data-to-parent).
+  // With persistence attached, a switch restores that conversation's draft
+  // tray instead of dropping it (LRM-801).
   useEffect(() => {
-    clear();
+    if (hydratedKeyRef.current === opts.resetKey && !persistenceRef.current) {
+      clear();
+      return;
+    }
+    if (hydratedKeyRef.current === opts.resetKey) return;
+    hydratedKeyRef.current = opts.resetKey;
+    setPending((prev) => {
+      for (const item of prev) {
+        liveIdsRef.current.delete(item.localId);
+        revokePreviewUrl(item.previewUrl);
+      }
+      const restored = deserializeFromDraft(persistenceRef.current?.load() ?? []);
+      for (const item of restored) liveIdsRef.current.add(item.localId);
+      return restored;
+    });
   }, [opts.resetKey, clear]);
+
+  // Persist every tray change into the draft (debounced at the storage layer).
+  useEffect(() => {
+    const persistence = persistenceRef.current;
+    if (!persistence) return;
+    if (hydratedKeyRef.current !== opts.resetKey) return;
+    persistence.save(serializeForDraft(pending));
+  }, [pending, opts.resetKey]);
 
   const hasUploading = useMemo(
     () => pending.some((item) => item.status === "uploading"),

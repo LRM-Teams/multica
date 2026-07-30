@@ -702,6 +702,8 @@ export function ChannelsPage({
   const composerDrafts = useComposerDraftStore((s) => s.drafts);
   const storeSetComposerDraft = useComposerDraftStore((s) => s.setDraft);
   const storeClearComposerDraft = useComposerDraftStore((s) => s.clearDraft);
+  const storeClearDraftContent = useComposerDraftStore((s) => s.clearDraftContent);
+  const storeSetDraftAttachments = useComposerDraftStore((s) => s.setDraftAttachments);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
@@ -999,11 +1001,13 @@ export function ChannelsPage({
   });
   const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
     if (!value.trim()) {
-      storeClearComposerDraft(key);
+      // LRM-801 — deleting only the text must not wipe the image half of the
+      // draft; full clears (send/manual) go through storeClearComposerDraft.
+      storeClearDraftContent(key);
       return;
     }
     storeSetComposerDraft(key, value);
-  }, [storeSetComposerDraft, storeClearComposerDraft]);
+  }, [storeSetComposerDraft, storeClearDraftContent]);
   // #340: freeze the entry read cursor + true unread count (sidebar-same source)
   // at entry — anchors the cold load on the unread divider and gives the divider
   // the real "N new" (not the count within the loaded window). See the hook.
@@ -1208,6 +1212,14 @@ export function ChannelsPage({
   const channelPending = useComposerPendingAttachments({
     upload: uploadForActiveChannel,
     resetKey: active?.id ?? null,
+    // LRM-801 — tray rides the same per-channel draft as the text.
+    persistence: activeDraftKey
+      ? {
+          load: () =>
+            useComposerDraftStore.getState().drafts[activeDraftKey]?.attachments,
+          save: (attachments) => storeSetDraftAttachments(activeDraftKey, attachments),
+        }
+      : undefined,
   });
   const threadPending = useComposerPendingAttachments({
     upload: uploadForActiveChannel,

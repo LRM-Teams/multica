@@ -73,18 +73,34 @@ def patch_create_agent_params(text: str) -> str:
 
 
 def patch_api_agent_maps(text: str) -> str:
-    """Add model to POST /api/agents JSON map bodies."""
+    """Add model to JSON map bodies used for CreateAgent when missing."""
     lines = text.splitlines(keepends=True)
     out: list[str] = []
     i = 0
     while i < len(lines):
         line = lines[i]
+        if '"runtime_id"' not in line:
+            out.append(line)
+            i += 1
+            continue
+        # Look ahead for CreateAgent within a short window.
+        ahead = "".join(lines[i : min(len(lines), i + 20)])
+        if "CreateAgent" not in ahead:
+            out.append(line)
+            i += 1
+            continue
+        # Walk back to the opening brace of this map literal.
+        start = i
+        while start > 0 and "map[string]any{" not in lines[start] and "map[string]any {" not in lines[start]:
+            start -= 1
+        block = "".join(lines[start : min(len(lines), i + 20)])
+        if '"model"' in block or "'model'" in block:
+            out.append(line)
+            i += 1
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
         out.append(line)
-        if '"runtime_id"' in line and "/api/agents" in "".join(lines[max(0, i - 8) : i + 1]):
-            window = "".join(lines[max(0, i - 8) : min(len(lines), i + 8)])
-            if "model" not in window and ("POST" in window or "MethodPost" in window):
-                indent = line[: len(line) - len(line.lstrip())]
-                out.append(f'{indent}"model":                "{MODEL}",\n')
+        out.append(f'{indent}"model":                "{MODEL}",\n')
         i += 1
     return "".join(out)
 
@@ -106,6 +122,8 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     changed = []
     for path in sorted(root.rglob("*_test.go")):
+        if "cmd/migrate" in path.parts:
+            continue
         original = path.read_text()
         updated = patch_file(original)
         if updated != original:

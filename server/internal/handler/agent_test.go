@@ -745,6 +745,7 @@ func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T
 		"display_name":         displayName,
 		"description":          "first description",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
@@ -801,6 +802,7 @@ func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
 	body := map[string]any{
 		"username":             handle,
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
@@ -891,12 +893,14 @@ func TestAgentRejectsLegacyNameField(t *testing.T) {
 	createBody := map[string]any{
 		"display_name":         "Legacy Rename Agent",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
 	legacyCreate := map[string]any{
 		"name":                 "Legacy Rename Agent",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}

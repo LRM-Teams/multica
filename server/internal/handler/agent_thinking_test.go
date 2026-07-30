@@ -37,6 +37,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-empty",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "",
@@ -52,6 +53,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-known",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "high",
@@ -75,6 +77,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-codex-only",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "none",
@@ -90,6 +93,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		body := map[string]any{
 			"display_name":         "thinking-test-garbage",
 			"runtime_id":           claudeRuntimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 			"thinking_level":       "supersonic",

@@ -109,7 +109,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 		INSERT INTO agent (
 			id, workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id
-		, model, model) VALUES (
+		, model) VALUES (
 			'70000000-0000-4000-8000-000000000004',
 			'70000000-0000-4000-8000-000000000002',
 			'cutover-agent',
@@ -303,7 +303,7 @@ func TestAgentWakeCleanCutoverMigrationPreservesLedgerAndReenqueuesActiveWork(t 
 			123,
 			45,
 			'issue'
-		, 'composer-1.5', 'composer-1.5');
+		, 'composer-1.5');
 	`); err != nil {
 		t.Fatalf("seed pre-223 data-bearing fixture: %v", err)
 	}

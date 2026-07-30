@@ -193,6 +193,7 @@ func TestAgentAvatar_CreateAndUpdateRejectRawURL(t *testing.T) {
 	body := map[string]any{
 		"display_name":         "avatar-raw-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 		"avatar_url":           "/uploads/unverified.png",
@@ -245,6 +246,7 @@ func TestAgentAvatar_UploadSelectionFailsClosed(t *testing.T) {
 			body := map[string]any{
 				"display_name":         "avatar-invalid-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 				"runtime_id":           testRuntimeID,
+				"model":                "composer-1.5",
 				"visibility":           "private",
 				"max_concurrent_tasks": 1,
 				"avatar_selection": map[string]any{
@@ -458,6 +460,7 @@ func createAvatarTestAgent(t *testing.T, displayName string, selection map[strin
 	body := map[string]any{
 		"display_name":         displayName,
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}

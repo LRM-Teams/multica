@@ -157,6 +157,7 @@ func TestCreateAgent_RejectsPrivateRuntimeForNonOwner(t *testing.T) {
 			"display_name":         name,
 			"description":          "",
 			"runtime_id":           runtimeID,
+			"model":                "composer-1.5",
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
 		}
@@ -216,6 +217,7 @@ func TestCreateAgent_AllowsPublicRuntimeForPlainMember(t *testing.T) {
 		"display_name":         "vis-test-public-runtime",
 		"description":          "",
 		"runtime_id":           runtimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}

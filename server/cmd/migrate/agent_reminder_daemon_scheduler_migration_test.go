@@ -99,7 +99,7 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 			('30000000-0000-0000-0000-000000000210', '20000000-0000-0000-0000-000000000210', '{"capabilities":["reminder_versioned_cache_v1"]}'),
 			('40000000-0000-0000-0000-000000000210', '20000000-0000-0000-0000-000000000210', '{"capabilities":["reminder_versioned_cache_v1"]}'),
 			('50000000-0000-0000-0000-000000000210', '20000000-0000-0000-0000-000000000210', '{}');
-		INSERT INTO agent (id, workspace_id, runtime_id, model, model)
+		INSERT INTO agent (id, workspace_id, runtime_id, model)
 		VALUES ('10000000-0000-0000-0000-000000000210', '20000000-0000-0000-0000-000000000210', '30000000-0000-0000-0000-000000000210');
 		INSERT INTO agent_reminder (id, workspace_id, agent_id, title, fire_at, status, fired_task_id, snooze_count, created_at, updated_at, cadence, cadence_next_at, current_occurrence_id)
 		VALUES
@@ -113,7 +113,7 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 			('60000000-0000-0000-0000-000000000211', '00000000-0000-0011-0000-000000000210', 'claimed', '70000000-0000-0000-0000-000000000210', '80000000-0000-0000-0000-000000000211'),
 			('60000000-0000-0000-0000-000000000212', '00000000-0000-0012-0000-000000000210', 'claimed', '70000000-0000-0000-0000-000000000212', '80000000-0000-0000-0000-000000000212'),
 			('60000000-0000-0000-0000-000000000213', '00000000-0000-0013-0000-000000000210', 'claimed', NULL, NULL),
-			('60000000-0000-0000-0000-000000000214', '00000000-0000-0014-0000-000000000210', 'claimed', NULL, '80000000-0000-0000-0000-000000000214', 'composer-1.5', 'composer-1.5');
+			('60000000-0000-0000-0000-000000000214', '00000000-0000-0014-0000-000000000210', 'claimed', NULL, '80000000-0000-0000-0000-000000000214', 'composer-1.5');
 	`); err != nil {
 		t.Fatal(err)
 	}

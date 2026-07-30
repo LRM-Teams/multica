@@ -964,6 +964,14 @@ func validateTrustedExtensionPaths(paths []string, root string, disableTools boo
 		return nil, fmt.Errorf("TrustedExtensionPaths is only accepted when DisableTools is true")
 	}
 	root = filepath.Clean(root)
+	// Resolve symlinks in root too, matching the resolution done on each path
+	// below. On macOS, t.TempDir() (and /tmp generally) returns a path under
+	// /var/folders, itself a symlink to /private/var/folders; comparing a
+	// resolved path against an unresolved root spuriously fails the
+	// trusted-root containment check.
+	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolvedRoot
+	}
 	seen := make(map[string]struct{}, len(paths))
 	cleaned := make([]string, 0, len(paths))
 	for _, p := range paths {

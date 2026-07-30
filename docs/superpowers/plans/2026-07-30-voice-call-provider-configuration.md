@@ -85,3 +85,11 @@ Beckham's configured welcome message after the caller joins.
 - [x] Set the shared check exit code before the EXIT trap runs.
 - [x] Verified `scripts/check-exit-status.test.sh`,
   `scripts/selfhost-config.test.sh`, and `git diff --check`.
+
+## Deployment-script defect found during rollout
+
+- [x] Reproduced the Aliyun deploy failure:
+  `compose_environment: unbound variable`.
+- [x] Added a static regression test proving the resolved Compose environment
+  remains available until the OSS credential preflight consumes it.
+- [x] Moved `unset compose_environment` after that preflight.

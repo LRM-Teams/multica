@@ -111,6 +111,18 @@ require_config "$deploy_workflow" '-U "$target_user"'
 require_config "$deploy_workflow" '-d "$target_db"'
 require_config "$deploy_workflow" 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD'
 require_config "$deploy_workflow" 'compose_environment="$(compose config --environment)"'
+compose_environment_unset_line="$(grep -nF -- 'unset compose_environment' .github/workflows/deploy.yml | cut -d: -f1)"
+oss_credential_assert_line="$(
+  grep -nF -- 'bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"' \
+    .github/workflows/deploy.yml |
+    head -n1 |
+    cut -d: -f1
+)"
+if [[ -z "$compose_environment_unset_line" || -z "$oss_credential_assert_line" ]] ||
+  ((compose_environment_unset_line <= oss_credential_assert_line)); then
+  echo "Aliyun deploy must retain compose_environment until the OSS credential assertion has consumed it."
+  exit 1
+fi
 if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 3 ]]; then
   echo "Every Aliyun deploy/verify Compose wrapper must clear ambient POSTGRES_* values."
   exit 1

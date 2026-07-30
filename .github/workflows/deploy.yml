@@ -352,7 +352,6 @@ jobs:
           db_name="$(compose_env_value POSTGRES_DB multica)"
           db_password="$(compose_env_value POSTGRES_PASSWORD)"
           voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"
-          unset compose_environment
           if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
             echo "::error::POSTGRES_USER, POSTGRES_DB, and POSTGRES_PASSWORD must all be non-empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
             exit 1
@@ -364,6 +363,7 @@ jobs:
           # Fail closed before any runtime mutation when OSS lacks AWS keys (LRM-766).
           printf '%s\n' "$compose_environment" |
             bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
+          unset compose_environment
           postgres_id="$(compose ps -q postgres)"
           if [ -z "$postgres_id" ]; then
             echo "::error::PostgreSQL container is not running. Aborting before runtime changes."

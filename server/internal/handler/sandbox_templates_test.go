@@ -35,6 +35,32 @@ func TestSandboxNodeTemplatesFromMetadata(t *testing.T) {
 	}
 }
 
+func TestSandboxNodeDockerImagesFromMetadata(t *testing.T) {
+	raw := json.RawMessage(`{
+		"docker_images_synced_at": "2026-07-29T08:00:00Z",
+		"docker_images": [
+			{"image_ref": "multica/runtime:dev", "repository": "multica/runtime", "tag": "dev", "id": "sha256:abc", "size": "1.2GB"},
+			{"repository": "ubuntu", "tag": "24.04", "ID": "sha256:def", "createdSince": "2 weeks ago"}
+		]
+	}`)
+	resp := sandboxNodeDockerImagesFromMetadata(raw, true)
+	if !resp.NodeOnline {
+		t.Fatalf("expected node online")
+	}
+	if resp.SyncedAt != "2026-07-29T08:00:00Z" {
+		t.Fatalf("synced_at = %q", resp.SyncedAt)
+	}
+	if len(resp.Images) != 2 {
+		t.Fatalf("len(images) = %d", len(resp.Images))
+	}
+	if resp.Images[0].ImageRef != "multica/runtime:dev" || resp.Images[0].Size != "1.2GB" {
+		t.Fatalf("first image = %+v", resp.Images[0])
+	}
+	if resp.Images[1].ImageRef != "ubuntu:24.04" || resp.Images[1].ID != "sha256:def" || resp.Images[1].CreatedSince != "2 weeks ago" {
+		t.Fatalf("second image = %+v", resp.Images[1])
+	}
+}
+
 func TestSandboxNodeTemplatesFromMetadataEmpty(t *testing.T) {
 	resp := sandboxNodeTemplatesFromMetadata(nil, false)
 	if resp.NodeOnline {
@@ -51,7 +77,9 @@ func TestMergeSandboxNodeHeartbeatMetadataPreservesDefaultTemplate(t *testing.T)
 		"cube_template_id":"tpl-from-sandboxd",
 		"cube_domain":"cube.app",
 		"templates":[{"templateID":"tpl-a","status":"READY"}],
-		"templates_synced_at":"2026-07-16T09:00:00Z"
+		"templates_synced_at":"2026-07-16T09:00:00Z",
+		"docker_images":[{"image_ref":"multica/runtime:dev"}],
+		"docker_images_synced_at":"2026-07-29T08:00:00Z"
 	}`)
 	merged := mergeSandboxNodeHeartbeatMetadata(existing, incoming)
 	var meta map[string]any
@@ -66,5 +94,11 @@ func TestMergeSandboxNodeHeartbeatMetadataPreservesDefaultTemplate(t *testing.T)
 	}
 	if meta["templates_synced_at"] != "2026-07-16T09:00:00Z" {
 		t.Fatalf("templates_synced_at = %v", meta["templates_synced_at"])
+	}
+	if meta["docker_images_synced_at"] != "2026-07-29T08:00:00Z" {
+		t.Fatalf("docker_images_synced_at = %v", meta["docker_images_synced_at"])
+	}
+	if images, _ := meta["docker_images"].([]any); len(images) != 1 {
+		t.Fatalf("docker_images = %#v", meta["docker_images"])
 	}
 }

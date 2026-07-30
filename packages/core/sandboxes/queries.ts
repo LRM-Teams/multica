@@ -8,6 +8,7 @@ export const sandboxKeys = {
   bindings: (wsId: string) => [...sandboxKeys.all(wsId), "bindings"] as const,
   nodes: () => ["sandboxes", "nodes"] as const,
   nodeTemplates: (nodeId: string) => ["sandboxes", "nodes", nodeId, "templates"] as const,
+  nodeDockerImages: (nodeId: string) => ["sandboxes", "nodes", nodeId, "docker-images"] as const,
   nodeSnapshots: (nodeId: string) => ["sandboxes", "nodes", nodeId, "snapshots"] as const,
 };
 
@@ -50,6 +51,15 @@ export function sandboxNodeTemplatesOptions(nodeId: string) {
   return queryOptions({
     queryKey: sandboxKeys.nodeTemplates(nodeId),
     queryFn: () => api.listSandboxNodeTemplates(nodeId),
+    enabled: !!nodeId,
+    refetchInterval: 10_000,
+  });
+}
+
+export function sandboxNodeDockerImagesOptions(nodeId: string) {
+  return queryOptions({
+    queryKey: sandboxKeys.nodeDockerImages(nodeId),
+    queryFn: () => api.listSandboxNodeDockerImages(nodeId),
     enabled: !!nodeId,
     refetchInterval: 10_000,
   });

@@ -266,6 +266,8 @@ export type {
   SandboxJobStatus,
   SandboxTemplate,
   SandboxNodeTemplatesResponse,
+  DockerImage,
+  SandboxNodeDockerImagesResponse,
   SandboxSnapshot,
   SandboxSnapshotStatus,
   CreateSandboxSnapshotRequest,

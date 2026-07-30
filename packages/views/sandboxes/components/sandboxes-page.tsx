@@ -88,6 +88,9 @@ import { NodeSnapshotsPanel } from "./node-snapshots-panel";
 
 type NodeDetailTab = "sandboxes" | "docker" | "templates" | "snapshots";
 
+const EMPTY_SANDBOX_INSTANCES: SandboxInstance[] = [];
+const EMPTY_SANDBOX_BINDINGS: SandboxBinding[] = [];
+
 type DockerContainerCreateRequest = {
   name: string;
   nodeId: string;
@@ -245,8 +248,10 @@ export function SandboxesPage() {
     ...sandboxBindingListOptions(wsId),
     refetchInterval: overlayOpen ? false : 5000,
   });
-  const instanceList = instances ?? [];
-  const bindingList = bindings ?? [];
+  // Stable empty fallbacks — `?? []` allocates a new array every render and
+  // would invalidate the useMemos below while data is still undefined.
+  const instanceList = instances ?? EMPTY_SANDBOX_INSTANCES;
+  const bindingList = bindings ?? EMPTY_SANDBOX_BINDINGS;
   const showInitialLoading =
     (instancesPending && instances === undefined) || (bindingsPending && bindings === undefined);
 

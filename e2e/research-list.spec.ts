@@ -44,7 +44,7 @@ async function authedFetch(path: string, init?: RequestInit) {
   return res;
 }
 
-async function seedSession(goal: string, status: string) {
+async function seedSession(goal: string, status: string, stage = "s1_plan", title?: string) {
   // Direct DB seed: POST /api/research/sessions requires a live agent runtime
   // to seed the fleet, which the local dev stack does not have.
   const fleet = await dbQuery("SELECT id FROM research_fleet WHERE workspace_id = $1", [workspaceId]);
@@ -53,9 +53,9 @@ async function seedSession(goal: string, status: string) {
     throw new Error("seed prerequisites missing: fleet or user row not found");
   }
   const res = await dbQuery(
-    `INSERT INTO research_session (workspace_id, fleet_id, created_by, title, goal, status)
-     VALUES ($1, $2, $3, $4, $4, $5) RETURNING id`,
-    [workspaceId, fleet.rows[0].id, user.rows[0].id, goal, status],
+    `INSERT INTO research_session (workspace_id, fleet_id, created_by, title, goal, status, current_stage)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [workspaceId, fleet.rows[0].id, user.rows[0].id, title ?? goal, goal, status, stage],
   );
   const id = res.rows[0].id as string;
   seededSessionIds.push(id);
@@ -196,5 +196,102 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
     const groupSections = page.locator("section").filter({ has: page.locator("h2") });
     await expect(groupSections.first()).toContainText("Alpha market map");
     await page.screenshot({ path: "e2e/artifacts/lrm789-grouped-narrow.png", fullPage: true });
+  });
+});
+
+test.describe.serial("research list rows — LRM-788 slice B", () => {
+  // Row composition: semantic status dot (running pulses) + truncated
+  // title/goal + stage chip + fleet avatar stack + relative time + hover
+  // chevron; the whole row is a link.
+
+  test.beforeAll(async () => {
+    // An online runtime lets the list handler seed the workspace fleet
+    // (罗纳尔多 et al.), so fleet_preview / the avatar stack have members.
+    await dbQuery(
+      `INSERT INTO agent_runtime (
+         workspace_id, daemon_id, name, runtime_mode, provider, status,
+         visibility, device_info, metadata, last_seen_at
+       )
+       VALUES ($1, NULL, $2, 'cloud', 'e2e_research_runtime', 'online',
+               'public', 'E2E research runtime', '{}'::jsonb, now())`,
+      [workspaceId, `e2e research runtime ${Date.now()}`],
+    );
+    await dbQuery("DELETE FROM research_session WHERE workspace_id = $1", [workspaceId]);
+    // First hit (re)seeds the fleet members before rows are asserted.
+    const res = await authedFetch("/api/research/sessions");
+    if (!res.ok) throw new Error(`fleet warm-up failed: ${res.status}`);
+  });
+
+  test("row shows status dot, stage chip, avatar stack, relative time (desktop)", async ({ page }) => {
+    await dbQuery("DELETE FROM research_session WHERE workspace_id = $1", [workspaceId]);
+    await seedSession("Map the alpha market", "running", "s2_sources", "Alpha market map");
+    await seedSession("Delta delivered report", "completed", "s4_delivery");
+
+    await page.goto("/login");
+    await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
+    await gotoResearch(page);
+
+    const runningRow = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    await expect(runningRow).toBeVisible({ timeout: 15000 });
+
+    // Semantic status dot: brand + pulse for running.
+    const dot = runningRow.locator("span.rounded-full.size-2").first();
+    await expect(dot).toHaveClass(/animate-pulse/);
+
+    // Stage chip (locale-safe pattern) and relative time.
+    await expect(runningRow).toContainText(/S2\s*·/);
+    await expect(runningRow).toContainText(/刚刚|just now|分钟前|minutes? ago/i);
+
+    // Fleet avatar stack renders at least one head.
+    await expect(runningRow.locator("span.rounded-full.ring-2").first()).toBeVisible();
+
+    const completedRow = page.locator("div.group", { hasText: "Delta delivered report" }).first();
+    const doneDot = completedRow.locator("span.rounded-full.size-2").first();
+    await expect(doneDot).not.toHaveClass(/animate-pulse/);
+    await expect(completedRow).toContainText(/S4\s*·/);
+
+    await page.screenshot({ path: "e2e/artifacts/lrm788-rows-desktop.png", fullPage: true });
+  });
+
+  test("hover reveals chevron; whole-row click navigates to the session", async ({ page }) => {
+    await page.goto("/login");
+    await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
+    await gotoResearch(page);
+
+    const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    await expect(row).toBeVisible({ timeout: 15000 });
+
+    const chevron = row.locator("svg.opacity-0").first();
+    await expect(chevron).toHaveCSS("opacity", "0");
+    await row.hover();
+    const chevronAfter = row.locator("svg").last();
+    await expect(chevronAfter).toHaveCSS("opacity", "1");
+
+    await row.locator("a").first().click();
+    await expect(page).toHaveURL(/\/research\/[0-9a-f-]{36}/, { timeout: 15000 });
+  });
+
+  test("rows on narrow viewport (390px)", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/login");
+    await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
+    await gotoResearch(page);
+
+    const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    await expect(row).toBeVisible({ timeout: 15000 });
+    await expect(row).toContainText(/S2\s*·/);
+    await page.screenshot({ path: "e2e/artifacts/lrm788-rows-narrow.png", fullPage: true });
+  });
+
+  test("rows in dark mode (semantic tokens)", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/login");
+    await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
+    await gotoResearch(page);
+
+    const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    await expect(row).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await page.screenshot({ path: "e2e/artifacts/lrm788-rows-dark.png", fullPage: true });
   });
 });

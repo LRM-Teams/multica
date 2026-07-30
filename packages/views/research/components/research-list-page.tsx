@@ -13,14 +13,12 @@ import {
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AlertCircle } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
-import { AppLink } from "../../navigation/app-link";
 import { ResearchEmptyState } from "./research-empty-state";
-import { ResearchSessionRowActions } from "./research-session-row-actions";
+import { ResearchSessionRow } from "./research-session-row";
 
 /** LRM-789: terminal sessions fall under the 已完成 group; everything else is 进行中. */
 const DONE_STATUSES = new Set(["completed", "archived"]);
@@ -77,24 +75,7 @@ export function ResearchListPage() {
   };
 
   const renderRow = (s: ResearchSession) => (
-    <div
-      key={s.id}
-      className="flex items-center gap-2 rounded-md border px-4 py-3 hover:bg-accent/40"
-    >
-      <AppLink
-        href={paths.researchDetail(s.id)}
-        className="flex min-w-0 flex-1 items-center justify-between gap-3"
-      >
-        <div className="min-w-0">
-          <div className="truncate font-medium">{s.title || s.goal}</div>
-          <div className="truncate text-xs text-muted-foreground">{s.goal}</div>
-        </div>
-        <Badge variant="secondary">
-          {t(($) => $.status[s.status as keyof typeof $.status] ?? s.status)}
-        </Badge>
-      </AppLink>
-      <ResearchSessionRowActions session={s} />
-    </div>
+    <ResearchSessionRow key={s.id} session={s} href={paths.researchDetail(s.id)} />
   );
 
   return (

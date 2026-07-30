@@ -21,6 +21,12 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "stage": {
+    "s1_plan": "S1 · 정의",
+    "s2_sources": "S2 · 탐색",
+    "s3_validation": "S3 · 검증",
+    "s4_delivery": "S4 · 전달"
+  },
   "groups": {
     "in_progress": "진행 중",
     "completed": "완료"

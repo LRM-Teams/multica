@@ -21,6 +21,12 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "stage": {
+    "s1_plan": "S1 · Plan",
+    "s2_sources": "S2 · Explore",
+    "s3_validation": "S3 · Validate",
+    "s4_delivery": "S4 · Deliver"
+  },
   "groups": {
     "in_progress": "In progress",
     "completed": "Completed"

@@ -4,6 +4,7 @@ export type {
   ActorIdentitySearchOptions,
 } from "./types";
 export {
+  computeDuplicatedHandleLabels,
   formatActorHandleLabel,
   normalizeActorHandle,
   resolveActorDisplayName,

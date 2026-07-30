@@ -59,3 +59,31 @@ export function resolveActorIdentityPresentation(
     showHandleLabel: handleLabel !== null && shouldShowActorHandleLabel(displayName, handle),
   };
 }
+
+/**
+ * LRM-749/LRM-710 — same-scope actors (e.g. workspace agents) whose resolved
+ * display name collides with at least one other actor get a weak `@handle`
+ * label back; non-colliding actors get no entry at all (zero-noise rule: a
+ * unique name must not grow a handle next to it).
+ *
+ * Comparison is trim + case-insensitive so「贝克汉姆」/「贝克汉姆 」and
+ * "Wendy"/"wendy" count as the same display name. Actors with no usable
+ * handle are skipped (a label that adds nothing would not disambiguate).
+ */
+export function computeDuplicatedHandleLabels(
+  actors: ReadonlyArray<{ id: string } & ActorIdentityFields>,
+): Map<string, string> {
+  const countByDisplay = new Map<string, number>();
+  const resolved = actors.map((actor) => {
+    const key = resolveActorDisplayName(actor, actor.name).trim().toLowerCase();
+    countByDisplay.set(key, (countByDisplay.get(key) ?? 0) + 1);
+    return { actor, key };
+  });
+  const labels = new Map<string, string>();
+  for (const { actor, key } of resolved) {
+    if ((countByDisplay.get(key) ?? 0) < 2) continue;
+    const label = formatActorHandleLabel(actor.name);
+    if (label) labels.set(actor.id, label);
+  }
+  return labels;
+}

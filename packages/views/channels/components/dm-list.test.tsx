@@ -613,3 +613,57 @@ describe("DmList loading skeleton (LRM-459)", () => {
     expect(screen.queryByText("No direct messages yet.")).not.toBeInTheDocument();
   });
 });
+
+describe("DmList duplicate agent display names (LRM-749)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.dmsPending = false;
+    mockQueryData.members = [];
+    mockQueryData.agents = [
+      { id: "agent-b1", name: "beckham-lrm2", display_name: "贝克汉姆", archived_at: null },
+      { id: "agent-b2", name: "beckham-ops", display_name: "贝克汉姆", archived_at: null },
+      { id: "agent-w", name: "wendy", display_name: "Wendy", archived_at: null },
+    ];
+    mockQueryData.dms = [
+      makeDm({ id: "dm-b1", peer: { type: "agent", id: "agent-b1", name: "贝克汉姆" } }),
+      makeDm({ id: "dm-b2", peer: { type: "agent", id: "agent-b2", name: "贝克汉姆" } }),
+      makeDm({ id: "dm-w", peer: { type: "agent", id: "agent-w", name: "Wendy" } }),
+    ];
+  });
+
+  it("shows a weak gray @handle beside colliding agent rows only", () => {
+    renderDmList();
+    expect(screen.getByText("@beckham-lrm2")).toBeInTheDocument();
+    expect(screen.getByText("@beckham-ops")).toBeInTheDocument();
+    expect(screen.queryByText("@wendy")).not.toBeInTheDocument();
+    const handle = screen.getByText("@beckham-lrm2");
+    expect(handle.className).toContain("text-muted-foreground");
+  });
+
+  it("drops the handle once the other same-name agent is archived", () => {
+    mockQueryData.agents = [
+      { id: "agent-b1", name: "beckham-lrm2", display_name: "贝克汉姆", archived_at: null },
+      {
+        id: "agent-b2",
+        name: "beckham-ops",
+        display_name: "贝克汉姆",
+        archived_at: "2026-07-01T00:00:00Z",
+      },
+    ];
+    mockQueryData.dms = [
+      makeDm({ id: "dm-b1", peer: { type: "agent", id: "agent-b1", name: "贝克汉姆" } }),
+    ];
+    renderDmList();
+    expect(screen.queryByText("@beckham-lrm2")).not.toBeInTheDocument();
+  });
+
+  it("never adds a handle to human peer rows", () => {
+    mockQueryData.dms = [
+      makeDm({ id: "dm-human", peer: { type: "user", id: "user-9", name: "贝克汉姆" } }),
+    ];
+    renderDmList();
+    expect(screen.queryByText("@beckham-lrm2")).not.toBeInTheDocument();
+    expect(screen.queryByText("@beckham-ops")).not.toBeInTheDocument();
+  });
+});

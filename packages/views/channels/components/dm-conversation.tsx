@@ -26,7 +26,8 @@ import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { computeDuplicatedHandleLabels } from "@multica/core/identity";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type {
   AgentPanelIdentitySnapshot,
@@ -328,13 +329,30 @@ function DmHeader({
   );
   const peerHonor = !agentPair && peerType === "user" ? getMemberHonor(peerId) : undefined;
   const peerFleet = !agentPair && peerType === "agent" ? getAgentFleetRank(peerId) : undefined;
+  // LRM-749/LRM-710: header mirrors the DM list row — weak gray @handle next
+  // to the peer name only while the display name collides in this workspace.
+  const wsId = useWorkspaceId();
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const dupHandleLabel = useMemo(() => {
+    if (dm.mode === "agent_pair" || !isAgentPeer) return null;
+    return (
+      computeDuplicatedHandleLabels(agents.filter((a) => !a.archived_at)).get(peerId) ?? null
+    );
+  }, [agents, dm.mode, isAgentPeer, peerId]);
   const peerTitle = (
-    <ActorStyledName
-      displayName={dm.peer.name}
-      honor={peerHonor}
-      fleet={peerFleet}
-      className="truncate text-sm font-semibold text-foreground"
-    />
+    <>
+      <ActorStyledName
+        displayName={dm.peer.name}
+        honor={peerHonor}
+        fleet={peerFleet}
+        className="truncate text-sm font-semibold text-foreground"
+      />
+      {dupHandleLabel && (
+        <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+          {dupHandleLabel}
+        </span>
+      )}
+    </>
   );
   const peerAvatar = (
     <ActorAvatar
@@ -412,7 +430,9 @@ function DmHeader({
         agentPair ? (
           <span className="block truncate">{`${agentPair.a.name} · ${agentPair.b.name}`}</span>
         ) : (
-          wrapPeerTrigger(<span className="block min-w-0 max-w-full truncate">{peerTitle}</span>)
+          wrapPeerTrigger(
+            <span className="flex min-w-0 max-w-full items-baseline gap-1">{peerTitle}</span>,
+          )
         )
       }
       meta={headerMeta}

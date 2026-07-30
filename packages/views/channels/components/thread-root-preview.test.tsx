@@ -70,6 +70,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
           : fallback,
     getMemberRole: (id: string) =>
       id === "user-owner" || id === "user-1" ? ("owner" as const) : null,
+    getMemberHonor: () => undefined,
+    getAgentFleetRank: () => undefined,
   }),
 }));
 

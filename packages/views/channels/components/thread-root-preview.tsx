@@ -12,6 +12,7 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
+import { Time } from "../../i18n/time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import { MessageBody } from "./message-body";
 import { VoiceMessageAudio } from "./voice-message-audio";
@@ -169,7 +170,7 @@ export function ThreadRootPreview({
               className="text-[11px] text-muted-foreground"
               title={messageTime.full(message.created_at)}
             >
-              {messageTime.format(message.created_at)}
+              <Time kind="message" value={message.created_at} title={false} />
             </span>
           </div>
           <div

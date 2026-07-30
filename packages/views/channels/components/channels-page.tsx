@@ -168,7 +168,6 @@ import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
-import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { PropRow } from "../../common/prop-row";
@@ -514,7 +513,6 @@ export function ChannelsPage({
   // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }: ChannelsPageProps = {}) {
   const { t } = useT("channels");
-  const timeAgo = useTimeAgo();
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
@@ -2984,7 +2982,6 @@ export function ChannelsPage({
                       dm={dm}
                       active={activeDmId === dm.id}
                       currentUserName={currentUserName}
-                      timeAgo={timeAgo}
                       resolveMentionPreview={resolveMentionPreview}
                       members={workspaceMembers}
                       agents={agents}

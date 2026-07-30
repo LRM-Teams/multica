@@ -5,7 +5,7 @@ import type { Agent, ChatSession } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { cn } from "@multica/ui/lib/utils";
-import { useT, useTimeAgo } from "../../i18n";
+import { useT, Time } from "../../i18n";
 
 interface Contact {
   agent: Agent;
@@ -36,7 +36,6 @@ export function ChatContactList({
   onSelect: (agentId: string, sessionId: string) => void;
 }) {
   const { t } = useT("chat");
-  const timeAgo = useTimeAgo();
 
   const contacts = useMemo<Contact[]>(() => {
     const byAgent = new Map<string, Contact>();
@@ -102,7 +101,7 @@ export function ChatContactList({
                     )}
                   />
                   <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    {timeAgo(updatedAt)}
+                    <Time kind="list" value={updatedAt} />
                     {hasUnread && (
                       <span
                         aria-label={t(($) => $.window.unread)}

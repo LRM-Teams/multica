@@ -55,7 +55,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
-import { useTimeAgo } from "../../i18n/use-time-ago";
+import { Time } from "../../i18n/time";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useAgentBubbleActivityByAgent } from "../../chat/lib/agent-bubble-unread";
 import {
@@ -108,7 +108,6 @@ export function DmList({
   onSelect: (dm: DMItem) => void;
 }) {
   const { t } = useT("channels");
-  const timeAgo = useTimeAgo();
   const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
   // LRM-459: gate on isPending so disabled / pre-fetch idle never paints empty
@@ -231,7 +230,6 @@ export function DmList({
           dm={dm}
           active={activeId === dm.id}
           currentUserName={currentUserName}
-          timeAgo={timeAgo}
           resolveMentionPreview={resolveMentionPreview}
           members={members}
           agents={agents}
@@ -450,7 +448,6 @@ export function DmConversationRow({
   dm,
   active,
   currentUserName,
-  timeAgo,
   resolveMentionPreview,
   members,
   agents,
@@ -464,7 +461,6 @@ export function DmConversationRow({
   dm: DMItem;
   active: boolean;
   currentUserName: string | null;
-  timeAgo: (dateStr: string) => string;
   resolveMentionPreview: MentionPreviewResolver;
   members: MemberWithUser[];
   agents: Agent[];
@@ -600,9 +596,11 @@ export function DmConversationRow({
               </span>
               {(last || hasBubbleReply) && (
                 <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {hasBubbleReply
-                    ? t(($) => $.dm.bubble_replied_time)
-                    : timeAgo(last!.created_at)}
+                  {hasBubbleReply ? (
+                    t(($) => $.dm.bubble_replied_time)
+                  ) : (
+                    <Time kind="list" value={last!.created_at} />
+                  )}
                 </span>
               )}
             </div>

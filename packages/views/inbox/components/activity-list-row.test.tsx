@@ -18,6 +18,7 @@ vi.mock("../../i18n", () => ({
       return key;
     },
   }),
+  Time: ({ value }: { kind: string; value: string }) => <span>{value}</span>,
 }));
 
 const baseThread: UserActivityItem = {
@@ -43,7 +44,6 @@ describe("ActivityListRow", () => {
         item={baseThread}
         isSelected={false}
         onClick={() => {}}
-        timeAgo={() => "5m"}
       />,
     );
 
@@ -59,7 +59,6 @@ describe("ActivityListRow", () => {
         item={{ ...baseThread, unread_count: 0 }}
         isSelected={false}
         onClick={() => {}}
-        timeAgo={() => "5m"}
       />,
     );
 

@@ -134,6 +134,7 @@ vi.mock("../../i18n", () => ({
       return selector(bundle);
     },
   }),
+  Time: ({ value }: { kind: string; value: string }) => <span>{value}</span>,
 }));
 
 function renderInbox(qc?: QueryClient) {

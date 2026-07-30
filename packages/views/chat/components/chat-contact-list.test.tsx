@@ -13,6 +13,12 @@ vi.mock("../../common/actor-avatar", () => ({
   ),
 }));
 
+// Time pulls the viewing timezone from the auth store — stub it so this test
+// stays focused on row selection/sorting, not timestamp formatting.
+vi.mock("../../i18n/time", () => ({
+  Time: ({ value }: { kind: string; value: string }) => <span>{value}</span>,
+}));
+
 import { ChatContactList } from "./chat-contact-list";
 
 const TEST_RESOURCES = { en: { chat: enChat } };

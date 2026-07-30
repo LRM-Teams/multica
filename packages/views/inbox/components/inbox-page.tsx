@@ -32,7 +32,7 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
-import { useTimeAgo } from "./inbox-list-item";
+import { useT, Time } from "../../i18n";
 import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
 import { AgentDMPausedInboxActions } from "./agent-dm-paused-inbox-actions";
@@ -45,7 +45,6 @@ import {
   activitySessionUrl,
   resolveActivitySessionSurface,
 } from "./activity-session";
-import { useT } from "../../i18n";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
 /** Static Suspense fallback — hoist so React Doctor does not rebuild each render (LRM-424). */
@@ -209,7 +208,6 @@ export function InboxPage() {
   const archiveMutation = useArchiveInbox();
   const markAllReadMutation = useMarkAllUserActivityRead();
   const markThreadReadMutation = useMarkChannelThreadRead();
-  const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
 
   const markReadMutate = markReadMutation.mutate;
@@ -357,7 +355,6 @@ export function InboxPage() {
             !!selectedKey && activityItemMatchesSelection(item, selectedKey)
           }
           onClick={() => handleSelect(item)}
-          timeAgo={timeAgo}
         />
       ))}
     </div>
@@ -452,7 +449,7 @@ export function InboxPage() {
     <div className="p-6">
       <h2 className="text-lg font-semibold">{getInboxDisplayTitle(selectedInbox)}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        {typeLabels[selectedInbox.type]} · {timeAgo(selectedInbox.created_at)}
+        {typeLabels[selectedInbox.type]} · <Time kind="relative" value={selectedInbox.created_at} />
       </p>
       {selectedInbox.body ? (
         <div className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">

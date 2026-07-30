@@ -19,7 +19,7 @@ function localDateKey(ms: number, tz: string): string {
 }
 
 // HH:MM, 24-hour (h23), in the given timezone. No AM/PM — aligns with raft.
-function localTime(ms: number, tz: string): string {
+export function localTime(ms: number, tz: string): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
     hour: "2-digit",
@@ -50,6 +50,43 @@ export function formatMessageTime(
   const [y, m, d] = msg.split("-");
   if (y === today.slice(0, 4)) return `${m}/${d} ${time}`;
   return `${y}/${m}/${d} ${time}`;
+}
+
+// How many local days before `nowMs`'s day `valueMs` falls (0 = today,
+// 1 = yesterday, …), counted by local-day keys rather than raw 24h math so
+// DST transitions can't skew the bucket.
+function localDaysAgo(valueMs: number, nowMs: number, tz: string): number {
+  const msg = localDateKey(valueMs, tz);
+  for (let n = 0; n <= 7; n += 1) {
+    if (localDateKey(nowMs - n * 86_400_000, tz) === msg) return n;
+  }
+  return 8;
+}
+
+// Sidebar conversation-list timestamp (LRM-763 contract):
+//   today           -> HH:MM
+//   yesterday       -> {yesterday}           (no clock — row stays compact)
+//   2..6 days ago   -> localized weekday     (zh 星期三 / en Wednesday)
+//   earlier this yr -> MM/DD
+//   previous years  -> YYYY/MM/DD
+// Same bucketing as the message timestamp but day-granular: a list row never
+// reads "42 分钟前" — recency lives in the row order, not the label.
+export function formatListTime(
+  valueMs: number,
+  nowMs: number,
+  tz: string,
+  locale: string,
+  labels: MessageDayLabels,
+): string {
+  const daysAgo = localDaysAgo(valueMs, nowMs, tz);
+  if (daysAgo === 0) return localTime(valueMs, tz);
+  if (daysAgo === 1) return labels.yesterday;
+  if (daysAgo <= 6) {
+    return new Intl.DateTimeFormat(locale, { timeZone: tz, weekday: "long" }).format(valueMs);
+  }
+  const [y, m, d] = localDateKey(valueMs, tz).split("-");
+  if (y === localDateKey(nowMs, tz).slice(0, 4)) return `${m}/${d}`;
+  return `${y}/${m}/${d}`;
 }
 
 // Full absolute timestamp for the hover tooltip (locale-aware, 24-hour).

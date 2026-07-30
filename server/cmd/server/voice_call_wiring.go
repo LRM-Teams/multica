@@ -57,6 +57,7 @@ type voiceCallRuntimeConfig struct {
 	ArkEndpointID       string
 	ASRAppID            string
 	TTSAppID            string
+	SpeechAccessToken   string
 	TTSVoiceID          string
 	CallbackURL         string
 	CallbackSignature   string
@@ -94,6 +95,7 @@ func loadVoiceCallRuntimeConfig(
 		ArkEndpointID:     strings.TrimSpace(getenv("VOLCENGINE_RTC_ARK_ENDPOINT_ID")),
 		ASRAppID:          strings.TrimSpace(getenv("VOLCENGINE_RTC_ASR_APP_ID")),
 		TTSAppID:          strings.TrimSpace(getenv("VOLCENGINE_RTC_TTS_APP_ID")),
+		SpeechAccessToken: strings.TrimSpace(getenv("DOUBAO_SPEECH_API_KEY")),
 		TTSVoiceID:        strings.TrimSpace(getenv("VOLCENGINE_RTC_TTS_VOICE_ID")),
 		CallbackURL:       strings.TrimSpace(getenv("VOLCENGINE_RTC_CALLBACK_URL")),
 		CallbackSignature: strings.TrimSpace(getenv("VOLCENGINE_RTC_CALLBACK_SIGNATURE")),
@@ -109,6 +111,7 @@ func loadVoiceCallRuntimeConfig(
 		{name: "AppKey", value: config.AppKey},
 		{name: "VOLCENGINE_RTC_ASR_APP_ID", value: config.ASRAppID},
 		{name: "VOLCENGINE_RTC_TTS_APP_ID", value: config.TTSAppID},
+		{name: "DOUBAO_SPEECH_API_KEY", value: config.SpeechAccessToken},
 	}
 	for _, field := range required {
 		if field.value == "" {
@@ -239,6 +242,7 @@ func configureVoiceCallService(
 			ArkEndpointID:       config.ArkEndpointID,
 			ASRAppID:            config.ASRAppID,
 			TTSAppID:            config.TTSAppID,
+			SpeechAccessToken:   config.SpeechAccessToken,
 			TTSVoiceID:          config.TTSVoiceID,
 			CallbackURL:         config.CallbackURL,
 			CallbackSignature:   config.CallbackSignature,

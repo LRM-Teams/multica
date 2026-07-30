@@ -69,7 +69,9 @@ func TestVolcengineProviderConnectStartsTaskWithWelcomeMessage(t *testing.T) {
 		t.Fatalf("start request identity = %+v", request)
 	}
 	if !strings.Contains(string(request.Config), `"ApiResourceId":"volc.seedasr.sauc.duration"`) ||
+		!strings.Contains(string(request.Config), `"AccessToken":"speech-access-token"`) ||
 		!strings.Contains(string(request.Config), `"ResourceId":"seed-tts-2.0"`) ||
+		!strings.Contains(string(request.Config), `"Token":"speech-access-token"`) ||
 		!strings.Contains(string(request.Config), `"SystemMessages":["You are Beckham."]`) ||
 		!strings.Contains(string(request.Config), `"Mode":"ArkV3"`) ||
 		!strings.Contains(string(request.Config), `"EndPointId":"ep-20260723"`) ||
@@ -220,6 +222,7 @@ func newTestVolcengineProvider(
 		ArkEndpointID:       "ep-20260723",
 		ASRAppID:            "speech-asr-app",
 		TTSAppID:            "speech-tts-app",
+		SpeechAccessToken:   "speech-access-token",
 		TTSVoiceID:          "zh_male_m191_uranus_bigtts",
 		CallbackURL:         "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature:   "callback-secret",

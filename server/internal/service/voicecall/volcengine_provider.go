@@ -30,6 +30,7 @@ type VolcengineProviderConfig struct {
 	ArkEndpointID       string
 	ASRAppID            string
 	TTSAppID            string
+	SpeechAccessToken   string
 	TTSVoiceID          string
 	CallbackURL         string
 	CallbackSignature   string
@@ -41,6 +42,7 @@ type VolcengineProvider struct {
 	arkEndpointID       string
 	asrAppID            string
 	ttsAppID            string
+	speechAccessToken   string
 	ttsVoiceID          string
 	callbackURL         string
 	callbackSignature   string
@@ -71,6 +73,7 @@ func NewVolcengineProvider(
 	arkEndpointID := strings.TrimSpace(config.ArkEndpointID)
 	asrAppID := strings.TrimSpace(config.ASRAppID)
 	ttsAppID := strings.TrimSpace(config.TTSAppID)
+	speechAccessToken := strings.TrimSpace(config.SpeechAccessToken)
 	ttsVoiceID := strings.TrimSpace(config.TTSVoiceID)
 	callbackURL := strings.TrimSpace(config.CallbackURL)
 	callbackSignature := strings.TrimSpace(config.CallbackSignature)
@@ -82,6 +85,7 @@ func NewVolcengineProvider(
 			ArkEndpointID:     arkEndpointID,
 			ASRAppID:          asrAppID,
 			TTSAppID:          ttsAppID,
+			SpeechAccessToken: speechAccessToken,
 			TTSVoiceID:        ttsVoiceID,
 			CallbackURL:       callbackURL,
 			CallbackSignature: callbackSignature,
@@ -95,6 +99,7 @@ func NewVolcengineProvider(
 		arkEndpointID:       arkEndpointID,
 		asrAppID:            asrAppID,
 		ttsAppID:            ttsAppID,
+		speechAccessToken:   speechAccessToken,
 		ttsVoiceID:          ttsVoiceID,
 		callbackURL:         callbackURL,
 		callbackSignature:   callbackSignature,
@@ -132,6 +137,7 @@ func (provider *VolcengineProvider) Connect(
 			ArkEndpointID:     provider.arkEndpointID,
 			ASRAppID:          provider.asrAppID,
 			TTSAppID:          provider.ttsAppID,
+			SpeechAccessToken: provider.speechAccessToken,
 			TTSVoiceID:        provider.ttsVoiceID,
 			CallbackURL:       provider.callbackURL,
 			CallbackSignature: provider.callbackSignature,

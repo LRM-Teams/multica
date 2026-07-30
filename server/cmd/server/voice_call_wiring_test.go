@@ -77,6 +77,9 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 			config.TTSAppID,
 		)
 	}
+	if config.SpeechAccessToken != "speech-access-token" {
+		t.Fatal("voice call runtime did not reuse the configured speech credential")
+	}
 	if config.TTSVoiceID != "shared-tts-voice" {
 		t.Fatalf("TTS voice = %q, want shared speech voice", config.TTSVoiceID)
 	}
@@ -227,6 +230,7 @@ func completeVoiceCallEnvironment() map[string]string {
 		"VOLCENGINE_RTC_ASR_APP_ID":           "speech-asr-app",
 		"VOLCENGINE_RTC_TTS_APP_ID":           "speech-tts-app",
 		"VOLCENGINE_RTC_TTS_VOICE_ID":         "voice-id",
+		"DOUBAO_SPEECH_API_KEY":               "speech-access-token",
 		"VOLCENGINE_RTC_CALLBACK_URL":         "https://multica.example.com/api/voice-calls/callback",
 		"VOLCENGINE_RTC_CALLBACK_SIGNATURE":   "callback-signature",
 		"VOLCENGINE_RTC_TOKEN_TTL":            "30m",

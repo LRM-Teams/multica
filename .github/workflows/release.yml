@@ -134,12 +134,16 @@ jobs:
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Read-only: read from the deploy-backend cache warmed by dev builds.
-          # Do not write here — a tag ref never rebuilds, so any cache-to on a
-          # release build is dead weight from the moment this job finishes; it
-          # was filling the repo's 10GB Actions cache quota and evicting the
-          # actively-reused dev/turbo caches (see task #18).
-          cache-from: type=gha,scope=deploy-backend
+          # No cache-from/cache-to here. A release build runs on a tag ref,
+          # which never rebuilds — any cache-to is dead weight from the moment
+          # this job finishes, and type=gha cache-from can't reach it either:
+          # GitHub Actions cache is only readable from the current ref, a PR's
+          # base ref, or the default branch (main here) — not an unrelated
+          # branch like dev, where deploy-backend/deploy-web are written. This
+          # dead cache-to was filling the repo's 10GB Actions cache quota and
+          # evicting the actively-reused dev/turbo caches (see task #18).
+          # Cold build is correct here; a real speedup needs a registry-based
+          # cache (type=registry) reachable across refs — separate follow-up.
           build-args: |
             VERSION=${{ needs.verify.outputs.tag_name }}
             COMMIT=${{ github.sha }}
@@ -255,12 +259,16 @@ jobs:
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Read-only: read from the deploy-web cache warmed by dev builds.
-          # Do not write here — a tag ref never rebuilds, so any cache-to on a
-          # release build is dead weight from the moment this job finishes; it
-          # was filling the repo's 10GB Actions cache quota and evicting the
-          # actively-reused dev/turbo caches (see task #18).
-          cache-from: type=gha,scope=deploy-web
+          # No cache-from/cache-to here. A release build runs on a tag ref,
+          # which never rebuilds — any cache-to is dead weight from the moment
+          # this job finishes, and type=gha cache-from can't reach it either:
+          # GitHub Actions cache is only readable from the current ref, a PR's
+          # base ref, or the default branch (main here) — not an unrelated
+          # branch like dev, where deploy-backend/deploy-web are written. This
+          # dead cache-to was filling the repo's 10GB Actions cache quota and
+          # evicting the actively-reused dev/turbo caches (see task #18).
+          # Cold build is correct here; a real speedup needs a registry-based
+          # cache (type=registry) reachable across refs — separate follow-up.
           build-args: |
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}

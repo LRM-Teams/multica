@@ -256,7 +256,8 @@ describe("useComposerPendingAttachments", () => {
   });
 
   it("clear empties the tray and revokes blob previews still held", async () => {
-    // Keep uploads pending so previewUrl stays a blob: URL (ready swaps to remote).
+    // Uploads stay pending here; previewUrl is the blob: URL either way
+    // (LRM-760 — ready no longer swaps to the remote link).
     const upload = vi.fn(() => new Promise<UploadResult | null>(() => {}));
     const { result } = renderHook(() =>
       useComposerPendingAttachments({ upload }),
@@ -278,7 +279,11 @@ describe("useComposerPendingAttachments", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
   });
 
-  it("revokes blob preview when upload succeeds with a remote image URL", async () => {
+  it("keeps the local blob preview after upload succeeds (LRM-760 — no remote swap)", async () => {
+    // The tray thumb must stay the local blob URL: it is exactly the picked
+    // file and needs no network/auth. The remote `link` (att.url) is
+    // short-lived-signed or site-relative on some deployments and rendered
+    // the broken-image placeholder reported in LRM-760.
     const upload = vi.fn().mockResolvedValue(
       makeUploadResult({ id: "x", link: "https://cdn.example/x" }),
     );
@@ -292,8 +297,10 @@ describe("useComposerPendingAttachments", () => {
       await Promise.resolve();
     });
 
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
-    expect(result.current.pending[0]?.previewUrl).toBe("https://cdn.example/x");
+    expect(result.current.pending[0]?.status).toBe("ready");
+    expect(result.current.pending[0]?.previewUrl).toBe("blob:preview");
+    // Blob stays live for the item's lifetime — revoked only on remove/clear.
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:preview");
   });
 
   it("clears the tray when resetKey changes (conversation switch)", async () => {

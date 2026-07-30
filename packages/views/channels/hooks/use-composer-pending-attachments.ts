@@ -122,12 +122,6 @@ export function useComposerPendingAttachments(
         prev.map((item) => {
           if (item.localId !== localId) return item;
           const nextContentType = result.content_type || item.contentType;
-          const preferRemote =
-            isImageContentType(nextContentType) && !!result.link;
-          const nextPreview = preferRemote ? result.link : item.previewUrl;
-          if (preferRemote && item.previewUrl && item.previewUrl !== nextPreview) {
-            revokePreviewUrl(item.previewUrl);
-          }
           return {
             ...item,
             status: "ready" as const,
@@ -135,8 +129,12 @@ export function useComposerPendingAttachments(
             filename: result.filename || item.filename,
             contentType: nextContentType,
             sizeBytes: result.size_bytes || item.sizeBytes,
-            // Prefer remote URL for ready images when available.
-            previewUrl: nextPreview,
+            // LRM-760 — keep the local blob preview for the tray: it is
+            // exactly the picked file and needs no network/auth round-trip.
+            // Swapping to the upload's remote `link` (att.url) broke the
+            // thumb on deployments where that URL is site-relative or
+            // short-lived-signed (broken-image placeholder + alt text).
+            previewUrl: item.previewUrl,
             errorMessage: undefined,
           };
         }),

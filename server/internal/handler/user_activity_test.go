@@ -285,10 +285,131 @@ func TestUserActivity_DMThreadIncluded(t *testing.T) {
 			if item.ChannelKind == nil || *item.ChannelKind != "dm" {
 				t.Fatalf("dm thread channel_kind=%v", item.ChannelKind)
 			}
+			// LRM-809: human dm → actor is the peer user (the other member).
+			if item.ActorType == nil || *item.ActorType != "user" {
+				t.Fatalf("dm thread actor_type=%v, want user", item.ActorType)
+			}
+			if item.ActorID == nil || *item.ActorID != testUserID {
+				t.Fatalf("dm thread actor_id=%v, want %s", item.ActorID, testUserID)
+			}
 			return
 		}
 	}
 	t.Fatalf("dm thread %s missing from activity feed", root.ID)
+}
+
+// LRM-809: the activity row avatar actor — group threads show the root
+// author; user↔agent dm threads show the agent peer.
+func TestUserActivity_ThreadActor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+
+	t.Run("group thread actor is the root author", func(t *testing.T) {
+		targetHandle := "activity-actor-g-" + uuid.NewString()[:8]
+		targetID := createWorkspaceMemberUser(t, targetHandle, targetHandle+"@multica.test")
+		channelID := seedChannelForTest(t, "activity-actor-g-"+uuid.NewString(), testUserID, targetID)
+		mention := protocol.MessagePart{
+			Type:       protocol.MessagePartTypeReference,
+			RefType:    "mention",
+			RefSubType: "member",
+			RefID:      targetID,
+			Label:      "@" + targetHandle,
+		}
+		rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+			"content": "group root " + uuid.NewString(),
+		})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("root status=%d", rec.Code)
+		}
+		var root ChannelMessageResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+			t.Fatalf("decode root: %v", err)
+		}
+		// Mentions surface the thread for the target user (FilterMatrix pattern:
+		// mention parts travel on replies).
+		rec = sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
+			"content": "@" + targetHandle + " please look",
+			"parts":   []protocol.MessagePart{mention},
+		})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("mention reply status=%d body=%s", rec.Code, rec.Body.String())
+		}
+
+		resp, status := fetchUserActivity(t, targetID, "all")
+		if status != http.StatusOK {
+			t.Fatalf("status=%d", status)
+		}
+		for _, item := range resp.Items {
+			if item.Kind == "thread" && item.ID == root.ID {
+				if item.ActorType == nil || *item.ActorType != "user" {
+					t.Fatalf("group actor_type=%v, want user", item.ActorType)
+				}
+				if item.ActorID == nil || *item.ActorID != testUserID {
+					t.Fatalf("group actor_id=%v, want %s", item.ActorID, testUserID)
+				}
+				return
+			}
+		}
+		t.Fatalf("group thread %s missing from activity feed", root.ID)
+	})
+
+	t.Run("agent dm thread actor is the agent peer", func(t *testing.T) {
+		targetID := createWorkspaceMemberUser(t, "activity-actor-a-"+uuid.NewString()[:8], uuid.NewString()+"@multica.test")
+		channelID := seedChannelForTest(t, "activity-actor-a-"+uuid.NewString(), testUserID, targetID)
+		if _, err := testPool.Exec(ctx, `UPDATE channel SET kind = 'dm' WHERE id = $1`, channelID); err != nil {
+			t.Fatalf("mark dm: %v", err)
+		}
+		var agentID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent (
+				workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, model
+			) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
+			RETURNING id
+		`, testWorkspaceID, "activity-actor-agent-"+uuid.NewString()[:8], handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+		t.Cleanup(func() {
+			testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		})
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("add agent member: %v", err)
+		}
+
+		rec := sendChannelMessageForTest(t, channelID, targetID, map[string]any{"content": "agent dm root " + uuid.NewString()})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("dm root status=%d", rec.Code)
+		}
+		var root ChannelMessageResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+			t.Fatalf("decode dm root: %v", err)
+		}
+		rec = sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "agent dm reply"})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("dm reply status=%d", rec.Code)
+		}
+
+		resp, status := fetchUserActivity(t, targetID, "all")
+		if status != http.StatusOK {
+			t.Fatalf("status=%d", status)
+		}
+		for _, item := range resp.Items {
+			if item.Kind == "thread" && item.ID == root.ID {
+				if item.ActorType == nil || *item.ActorType != "agent" {
+					t.Fatalf("agent dm actor_type=%v, want agent", item.ActorType)
+				}
+				if item.ActorID == nil || *item.ActorID != agentID {
+					t.Fatalf("agent dm actor_id=%v, want %s", item.ActorID, agentID)
+				}
+				return
+			}
+		}
+		t.Fatalf("agent dm thread %s missing from activity feed", root.ID)
+	})
 }
 
 func TestUserActivity_InvalidTab(t *testing.T) {

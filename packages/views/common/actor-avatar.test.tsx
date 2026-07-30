@@ -82,11 +82,21 @@ vi.mock("./use-resolved-actor-identity", () => ({
   ) => identity.displayName ?? actorId,
 }));
 
+const openMemberFromStoreMock = vi.fn<(id: string) => void>();
+const closePanelMock = vi.fn();
+
 vi.mock("@multica/core/agents/stores", () => ({
-  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
-    selector({ open: openFromStoreMock }),
+  useAgentPanelStore: (
+    selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
+  ) => selector({ open: openFromStoreMock, close: closePanelMock }),
   useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
     selector({ bursts: {} }),
+}));
+
+vi.mock("@multica/core/workspace", () => ({
+  useMemberPanelStore: (
+    selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
+  ) => selector({ open: openMemberFromStoreMock, close: closePanelMock }),
 }));
 
 vi.mock("./agent-panel-context", () => ({
@@ -426,5 +436,43 @@ describe("ActorAvatar agent panel click (#349 app-wide)", () => {
     fireEvent.click(avatarTrigger);
     expect(openFromStoreMock).not.toHaveBeenCalled();
     expect(openFromContextMock).not.toHaveBeenCalled();
+  });
+
+  // LRM-809: an interactive ancestor that explicitly opts in via
+  // data-avatar-profile-entry (Activity feed row) keeps the avatar's profile
+  // entry alive — avatar click opens the panel, row click stays on the row.
+  it("opens the panel inside a control ancestor carrying data-avatar-profile-entry", () => {
+    const rowClick = vi.fn();
+    render(
+      <button type="button" data-testid="row-button" data-avatar-profile-entry="true" onClick={rowClick}>
+        <ActorAvatar actorType="agent" actorId="agent-1" />
+      </button>,
+    );
+    const triggers = screen.getAllByRole("button");
+    const avatarTrigger = triggers.find(
+      (el) => el.getAttribute("data-testid") !== "row-button",
+    )!;
+    fireEvent.click(avatarTrigger);
+    expect(openFromStoreMock).toHaveBeenCalledWith("agent-1");
+    // The avatar consumed the event — the row's own action must not fire.
+    expect(rowClick).not.toHaveBeenCalled();
+  });
+
+  // LRM-809: human avatars get the same opt-in — member panel, not agent.
+  it("opens the member panel inside a control ancestor carrying data-avatar-profile-entry", () => {
+    openMemberFromStoreMock.mockClear();
+    const rowClick = vi.fn();
+    render(
+      <button type="button" data-testid="row-button" data-avatar-profile-entry="true" onClick={rowClick}>
+        <ActorAvatar actorType="member" actorId="user-1" />
+      </button>,
+    );
+    const triggers = screen.getAllByRole("button");
+    const avatarTrigger = triggers.find(
+      (el) => el.getAttribute("data-testid") !== "row-button",
+    )!;
+    fireEvent.click(avatarTrigger);
+    expect(openMemberFromStoreMock).toHaveBeenCalledWith("user-1");
+    expect(rowClick).not.toHaveBeenCalled();
   });
 });

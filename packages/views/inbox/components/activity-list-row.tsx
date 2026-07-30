@@ -3,7 +3,9 @@
 import { MessageSquare, CircleDot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import type { UserActivityItem } from "@multica/core/types";
+import { toDirectoryActorType } from "@multica/core/workspace/resolved-actor-name";
 import { useT, Time } from "../../i18n";
+import { ActorAvatar } from "../../common/actor-avatar";
 
 export function ActivityListRow({
   item,
@@ -24,14 +26,26 @@ export function ActivityListRow({
         ? `#${item.channel_name}`
         : null;
 
+  // LRM-809: row avatar — top-level actor fields first (thread dm peer / root
+  // author / inbox actor), falling back to the embedded inbox payload for
+  // older backends. Clicking the avatar opens the actor profile (same panel
+  // entries as chat); clicking the row still opens the activity item.
+  const rawActorType =
+    item.actor_type ?? item.inbox?.actor_type ?? item.inbox?.recipient_type ?? null;
+  const rawActorId =
+    item.actor_id ?? item.inbox?.actor_id ?? item.inbox?.recipient_id ?? null;
+  const directoryType = toDirectoryActorType(rawActorType ?? undefined);
+  const avatarType = directoryType ?? (rawActorType === "system" ? "system" : null);
+
   return (
     <button
       type="button"
       disabled={item.access_denied}
       onClick={onClick}
       data-testid={`activity-row-${item.kind}-${item.id}`}
+      {...(avatarType && rawActorId ? { "data-avatar-profile-entry": "true" } : {})}
       className={cn(
-        "grid w-full grid-cols-[2px_20px_1fr_auto] items-center gap-x-2.5 border-b border-border text-left min-h-[52px] pr-4 transition-colors",
+        "grid w-full grid-cols-[2px_28px_1fr_auto] items-center gap-x-2.5 border-b border-border text-left min-h-[52px] pr-4 transition-colors",
         isUnread && "bg-brand/5 dark:bg-brand/10",
         item.access_denied && "cursor-not-allowed opacity-60",
         isSelected ? "bg-accent" : !item.access_denied && "hover:bg-accent/50",
@@ -44,13 +58,22 @@ export function ActivityListRow({
         )}
         aria-hidden
       />
-      <span className="text-center text-muted-foreground">
-        {isThread ? (
-          <MessageSquare className="mx-auto h-4 w-4" aria-hidden />
-        ) : (
-          <CircleDot className="mx-auto h-4 w-4" aria-hidden />
-        )}
-      </span>
+      {avatarType && rawActorId ? (
+        <ActorAvatar
+          actorType={avatarType}
+          actorId={rawActorId}
+          size={28}
+          enableHoverCard
+        />
+      ) : (
+        <span className="text-center text-muted-foreground">
+          {isThread ? (
+            <MessageSquare className="mx-auto h-4 w-4" aria-hidden />
+          ) : (
+            <CircleDot className="mx-auto h-4 w-4" aria-hidden />
+          )}
+        </span>
+      )}
       <div className="min-w-0 py-2">
         {isThread && channelLabel && (
           <div

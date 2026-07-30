@@ -1061,9 +1061,9 @@ func assembleDAGTestService(t *testing.T) (*InteractionDAGService, *db.Queries, 
 // reads back recorded segment/edge/env_snapshot/session_run rows for a project
 // and projects them into AssembledDag with EXACTLY the SegmentSpec fields
 // (segment_id, agent_run_id, issue_id, trajectory_id, tensor_ref,
-// closing_event, trajectory_source, trainable, trajectory, env_snapshot) - no
-// judge scores, no turn indices, no message text cross this boundary. Real
-// Postgres, tx-rollback (hermetic).
+// closing_event, trajectory_source, trainable, trajectory, env_snapshot,
+// assistant_turn_seqs) - no judge scores, no turn indices, no message text
+// cross this boundary. Real Postgres, tx-rollback (hermetic).
 func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	svc, q, ctx, _ := assembleDAGTestService(t)
 
@@ -1123,9 +1123,10 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 		"segment_id": true, "agent_run_id": true, "issue_id": true,
 		"trajectory_id": true, "tensor_ref": true, "closing_event": true,
 		"trajectory_source": true, "trainable": true, "trajectory": true,
-		"env_snapshot": true,
+		"env_snapshot": true, "assistant_turn_seqs": true,
 	}
 	assert.Equal(t, expectedSegKeys, keysOf(segKeys), "segment JSON keys must match SegmentSpec exactly")
+	assert.JSONEq(t, `[]`, string(segKeys["assistant_turn_seqs"]), "no diagnosis targets seeded → empty assistant_turn_seqs")
 	for _, banned := range []string{"judge_scores", "start_turn_idx", "end_turn_idx", "text", "messages"} {
 		_, ok := segKeys[banned]
 		assert.False(t, ok, "segment must not carry banned key %q", banned)

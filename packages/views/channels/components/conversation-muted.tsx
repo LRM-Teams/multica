@@ -49,6 +49,7 @@ export function ConversationUnreadAffordance({
   mentionCount = 0,
   mentionLabel,
   mentionTooltip,
+  unreadLabel,
 }: {
   realUnread: number;
   isManualDot: boolean;
@@ -61,33 +62,17 @@ export function ConversationUnreadAffordance({
   mentionLabel?: string;
   /** Visible tooltip text, e.g. "共 N 未读 · M 条 @ 你". */
   mentionTooltip?: string;
+  /** Accessible label for the numeric unread badge, e.g. "7 unread messages". */
+  unreadLabel?: string;
 }) {
-  // Slack-style de-emphasis (#3): a plain (non-@) unread no longer paints a
-  // saturated count block — the unread signal is the BOLD channel name in the
-  // row (set by the list-row caller), and this slot shows only a subtle neutral
-  // dot. The saturated numeric block is reserved for the @-mention pill below.
-  // Muted rows stay the QUIETEST (Parker): a muted plain-unread shows only a
-  // dimmer dot and no count — a silenced row must never be more salient than an
-  // active one (that was the old asymmetry). A direct @-mention still pierces
-  // mute via the pill below.
-  const countBadge =
-    realUnread > 0 || isManualDot ? (
-      <span
-        className={cn(
-          "size-2 shrink-0 rounded-full",
-          isMuted ? "bg-muted-foreground/50" : "bg-muted-foreground",
-        )}
-      />
-    ) : null;
-
   // An @-mention outranks the plain count: the row shows a single `@N` pill
   // instead of stacking a mention marker on top of the unread badge (#556, Iris).
   // The literal `@` glyph is the primary cue so it stays distinguishable without
   // relying on color (A6 — colour-blind safe); the emphasis colour is secondary.
-  // @-mentions PIERCE mute (Parker): a muted row silences its ambient unread to
-  // a dim dot, but a direct @ still surfaces the `@N` pill at full salience —
-  // matching Slack (mute suppresses ambient noise, not direct mentions). The
-  // mention count is server-cursor driven (#557) and wired for muted rows too.
+  // @-mentions PIERCE mute (Parker): a muted row silences its ambient unread,
+  // but a direct @ still surfaces the `@N` pill at full salience — matching
+  // Slack (mute suppresses ambient noise, not direct mentions). The mention
+  // count is server-cursor driven (#557) and wired for muted rows too.
   if (mentionCount > 0) {
     const mentionText = `@${mentionCount > 99 ? "99+" : mentionCount}`;
     return (
@@ -108,5 +93,37 @@ export function ConversationUnreadAffordance({
       </Tooltip>
     );
   }
-  return countBadge;
+
+  // LRM-767 (design gate locked, Slack-aligned): a plain unread on an ACTIVE
+  // conversation shows the real message count in a neutral pill — it answers
+  // "how many did I miss", which the bold name alone can't. Supersedes the
+  // #3-era neutral dot for this slot. A MUTED conversation shows nothing here
+  // at all (bold name is its only unread signal) — a silenced row must never
+  // be as salient as an active one.
+  if (realUnread > 0) {
+    if (isMuted) return null;
+    return (
+      <span
+        aria-label={unreadLabel}
+        className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold text-foreground"
+      >
+        {realUnread > 99 ? "99+" : realUnread}
+      </span>
+    );
+  }
+
+  // Manual "mark as unread": the server bumps `unread` but `real_unread` stays
+  // 0, so there is no honest count — the marker stays a subtle neutral dot
+  // (never a fabricated "1"), dimmed further when the row is muted.
+  if (isManualDot) {
+    return (
+      <span
+        className={cn(
+          "size-2 shrink-0 rounded-full",
+          isMuted ? "bg-muted-foreground/50" : "bg-muted-foreground",
+        )}
+      />
+    );
+  }
+  return null;
 }

@@ -217,8 +217,8 @@ describe("ChannelsPage — channel sidebar preview (LRM-263)", () => {
     await screen.findByTestId("message-list");
 
     const row = screen.getByRole("button", { name: /engineering/i });
-    // Slack-style: unread is bold name + neutral dot (not a numeric badge).
+    // LRM-767 (Slack-aligned): unread is bold name + a neutral numeric badge.
     expect(row.querySelector(".font-semibold")).not.toBeNull();
-    expect(row.querySelector(".rounded-full.bg-muted-foreground")).not.toBeNull();
+    expect(row.querySelector(".rounded-full.bg-muted")).not.toBeNull();
   });
 });

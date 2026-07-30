@@ -324,7 +324,7 @@ describe("DmList unread affordance (read-model)", () => {
     openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
   });
 
-  it("marks a real unread with a bold name + subtle dot, not a saturated count (#3 Slack-style)", () => {
+  it("marks a real unread with a bold name + numeric badge with the real count (LRM-767)", () => {
     mockQueryData.dms = [
       makeDm({
         unread: 7,
@@ -335,29 +335,28 @@ describe("DmList unread affordance (read-model)", () => {
 
     const { container } = renderDmList();
 
-    // No saturated count block — the unread signal is a subtle neutral dot plus
-    // the bold channel name (the numeric block is reserved for @-mentions).
+    // LRM-767 (Slack-aligned): active unread shows the real count in a neutral
+    // pill — no brand/destructive accent (reserved for @-mentions).
     expect(container.querySelector("span.bg-primary")).toBeNull();
-    const dot = container.querySelector("span.size-2.rounded-full");
-    expect(dot).not.toBeNull();
-    expect(dot).toHaveClass("bg-muted-foreground");
+    const badge = container.querySelector("span.bg-muted");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("7");
     // The name reads bold on unread.
     const name = container.querySelector("span.font-semibold");
     expect(name).not.toBeNull();
     expect(name).toHaveTextContent("Unread Person");
   });
 
-  it("shows a DIMMER dot for a muted DM — silent, no count, never louder than active (Parker)", () => {
+  it("shows NO badge for a muted DM — the bold name is the only unread signal (LRM-767)", () => {
     mockQueryData.dms = [makeDm({ unread: 4, real_unread: 4, muted: true })];
 
     const { container } = renderDmList();
 
-    // Muted plain-unread is the quietest: a dimmer neutral dot, no numeric count.
-    const dot = container.querySelector("span.size-2.rounded-full");
-    expect(dot).not.toBeNull();
-    expect(dot).toHaveClass("bg-muted-foreground/50");
+    // Muted plain-unread shows nothing on the right; the name still reads bold.
     expect(container).not.toHaveTextContent("4");
     expect(container.querySelector("span.bg-primary")).toBeNull();
+    expect(container.querySelector("span.size-2.rounded-full")).toBeNull();
+    expect(container.querySelector("span.font-semibold")).not.toBeNull();
   });
 
   it("shows a manual-unread DOT, never the server's bumped '1' (Parker gate)", () => {

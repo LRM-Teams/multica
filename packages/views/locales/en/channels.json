@@ -32,7 +32,8 @@
     "archived_section": "Archived",
     "archived_restore": "Unarchive",
     "archive_permission": "Only the creator, owner, or admin can archive",
-    "restore_permission": "Only the creator, owner, or admin can unarchive"
+    "restore_permission": "Only the creator, owner, or admin can unarchive",
+    "unread_indicator": "{{count}} unread messages"
   },
   "archive_dialog": {
     "title": "Archive this channel?",

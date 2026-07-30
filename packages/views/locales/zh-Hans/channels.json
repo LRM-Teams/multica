@@ -32,7 +32,8 @@
     "archived_section": "已归档",
     "archived_restore": "取消归档",
     "archive_permission": "只有创建者、所有者或管理员可归档",
-    "restore_permission": "只有创建者、所有者或管理员可取消归档"
+    "restore_permission": "只有创建者、所有者或管理员可取消归档",
+    "unread_indicator": "{{count}} 条未读消息"
   },
   "archive_dialog": {
     "title": "归档此频道？",

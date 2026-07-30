@@ -1,5 +1,14 @@
 # Voice call direct Ark repair
 
+> **2026-07-30 correction:** the production evidence below only proved that
+> `StartVoiceChat` accepted the request. It did not prove that the provider
+> task became active. Production sessions stayed in `connecting`, had no
+> `connected_at`, no audio, no turns, and no provider callback. The request
+> omitted the ASR/TTS speech-service AppIDs and used an Ark display model name
+> where the 2024-12-01 API requires an `EndPointId`. The corrective work and
+> verification record are in
+> `2026-07-30-voice-call-provider-configuration.md`.
+
 ## Goal
 
 Restore low-latency RTC calls by keeping ASR, LLM, and TTS inside the
@@ -8,7 +17,8 @@ Cursor development queue.
 
 ## Evidence and execution log
 
-- [x] Production `StartVoiceChat` succeeds and persists provider task/room IDs.
+- [x] Production `StartVoiceChat` accepted the request and persisted provider
+  task/room IDs. This is not evidence that the provider task became active.
 - [x] Public `leagent.me` HTTP is intercepted by Alibaba's ICP compliance page;
   HTTPS closes before a ServerHello. Host-local Caddy TLS and application
   routes are healthy.

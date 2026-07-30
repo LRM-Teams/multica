@@ -31,6 +31,8 @@ var voiceCallOptInEnvironmentNames = []string{
 	"VOLCENGINE_RTC_REGION",
 	"VOLCENGINE_RTC_ARK_ENDPOINT_ID",
 	"VOLCENGINE_RTC_ARK_MODEL_NAME",
+	"VOLCENGINE_RTC_ASR_APP_ID",
+	"VOLCENGINE_RTC_TTS_APP_ID",
 	"VOLCENGINE_RTC_TTS_VOICE_ID",
 	"VOLCENGINE_RTC_CALLBACK_URL",
 	"VOLCENGINE_RTC_CALLBACK_SIGNATURE",
@@ -53,7 +55,8 @@ type voiceCallRuntimeConfig struct {
 	Region              string
 	APIVersion          string
 	ArkEndpointID       string
-	ArkModelName        string
+	ASRAppID            string
+	TTSAppID            string
 	TTSVoiceID          string
 	CallbackURL         string
 	CallbackSignature   string
@@ -89,7 +92,8 @@ func loadVoiceCallRuntimeConfig(
 		Region:            strings.TrimSpace(getenv("VOLCENGINE_RTC_REGION")),
 		APIVersion:        strings.TrimSpace(getenv("VOLCENGINE_RTC_API_VERSION")),
 		ArkEndpointID:     strings.TrimSpace(getenv("VOLCENGINE_RTC_ARK_ENDPOINT_ID")),
-		ArkModelName:      strings.TrimSpace(getenv("VOLCENGINE_RTC_ARK_MODEL_NAME")),
+		ASRAppID:          strings.TrimSpace(getenv("VOLCENGINE_RTC_ASR_APP_ID")),
+		TTSAppID:          strings.TrimSpace(getenv("VOLCENGINE_RTC_TTS_APP_ID")),
 		TTSVoiceID:        strings.TrimSpace(getenv("VOLCENGINE_RTC_TTS_VOICE_ID")),
 		CallbackURL:       strings.TrimSpace(getenv("VOLCENGINE_RTC_CALLBACK_URL")),
 		CallbackSignature: strings.TrimSpace(getenv("VOLCENGINE_RTC_CALLBACK_SIGNATURE")),
@@ -103,6 +107,8 @@ func loadVoiceCallRuntimeConfig(
 		{name: "secret access key", value: config.SecretAccessKey},
 		{name: "AppID", value: config.AppID},
 		{name: "AppKey", value: config.AppKey},
+		{name: "VOLCENGINE_RTC_ASR_APP_ID", value: config.ASRAppID},
+		{name: "VOLCENGINE_RTC_TTS_APP_ID", value: config.TTSAppID},
 	}
 	for _, field := range required {
 		if field.value == "" {
@@ -112,9 +118,14 @@ func loadVoiceCallRuntimeConfig(
 			)
 		}
 	}
-	if (config.ArkEndpointID == "") == (config.ArkModelName == "") {
+	if strings.TrimSpace(getenv("VOLCENGINE_RTC_ARK_MODEL_NAME")) != "" {
 		return voiceCallRuntimeConfig{}, true, errors.New(
-			"voice calling requires exactly one VOLCENGINE_RTC_ARK_ENDPOINT_ID or VOLCENGINE_RTC_ARK_MODEL_NAME",
+			"VOLCENGINE_RTC_ARK_MODEL_NAME is a display model name, not a callable endpoint; configure VOLCENGINE_RTC_ARK_ENDPOINT_ID",
+		)
+	}
+	if config.ArkEndpointID == "" {
+		return voiceCallRuntimeConfig{}, true, errors.New(
+			"voice calling requires VOLCENGINE_RTC_ARK_ENDPOINT_ID",
 		)
 	}
 	if config.TTSVoiceID == "" {
@@ -226,7 +237,8 @@ func configureVoiceCallService(
 	provider, err := voicecall.NewVolcengineProvider(
 		voicecall.VolcengineProviderConfig{
 			ArkEndpointID:       config.ArkEndpointID,
-			ArkModelName:        config.ArkModelName,
+			ASRAppID:            config.ASRAppID,
+			TTSAppID:            config.TTSAppID,
 			TTSVoiceID:          config.TTSVoiceID,
 			CallbackURL:         config.CallbackURL,
 			CallbackSignature:   config.CallbackSignature,

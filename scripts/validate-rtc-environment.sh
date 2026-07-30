@@ -6,6 +6,8 @@ required_names=(
   VOLCENGINE_RTC_APP_KEY
   VOLCENGINE_RTC_ACCESS_KEY_ID
   VOLCENGINE_RTC_SECRET_ACCESS_KEY
+  VOLCENGINE_RTC_ASR_APP_ID
+  VOLCENGINE_RTC_TTS_APP_ID
   VOLCENGINE_RTC_CALLBACK_SIGNATURE
 )
 opt_in_names=(
@@ -53,9 +55,12 @@ ark_endpoint_id="${VOLCENGINE_RTC_ARK_ENDPOINT_ID-}"
 ark_endpoint_id="${ark_endpoint_id//[[:space:]]/}"
 ark_model_name="${VOLCENGINE_RTC_ARK_MODEL_NAME-}"
 ark_model_name="${ark_model_name//[[:space:]]/}"
-if [[ -z "$ark_endpoint_id" && -z "$ark_model_name" ]] ||
-  [[ -n "$ark_endpoint_id" && -n "$ark_model_name" ]]; then
-  echo "Volcengine RTC requires exactly one VOLCENGINE_RTC_ARK_ENDPOINT_ID or VOLCENGINE_RTC_ARK_MODEL_NAME." >&2
+if [[ -n "$ark_model_name" ]]; then
+  echo "VOLCENGINE_RTC_ARK_MODEL_NAME is a display model name, not a callable endpoint; configure VOLCENGINE_RTC_ARK_ENDPOINT_ID." >&2
+  exit 1
+fi
+if [[ -z "$ark_endpoint_id" ]]; then
+  echo "Volcengine RTC requires VOLCENGINE_RTC_ARK_ENDPOINT_ID." >&2
   exit 1
 fi
 

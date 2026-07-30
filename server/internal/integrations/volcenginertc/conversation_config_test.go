@@ -12,6 +12,8 @@ func TestBuildStartConfigurationMatchesCurrentVolcengineContract(t *testing.T) {
 		WelcomeMessage:    "你好，我是贝克汉姆。",
 		SystemMessages:    []string{"You are Beckham.", "Keep spoken replies concise."},
 		ArkEndpointID:     "ep-20260723",
+		ASRAppID:          "speech-asr-app",
+		TTSAppID:          "speech-tts-app",
 		TTSVoiceID:        "zh_male_m191_uranus_bigtts",
 		CallbackURL:       "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature: "callback-secret",
@@ -20,7 +22,7 @@ func TestBuildStartConfigurationMatchesCurrentVolcengineContract(t *testing.T) {
 		t.Fatalf("build start configuration: %v", err)
 	}
 
-	const wantConfig = `{"ASRConfig":{"Provider":"volcano","ProviderParams":{"Mode":"bigmodel","StreamMode":2,"ApiResourceId":"volc.seedasr.sauc.duration","enable_nonstream":true},"TurnDetectionMode":0,"VADConfig":{"SilenceTime":600,"AIVAD":true}},"LLMConfig":{"Mode":"ArkV3","EndPointId":"ep-20260723","SystemMessages":["You are Beckham.","Keep spoken replies concise."],"HistoryLength":10,"MaxTokens":256,"ThinkingType":"disabled","Prefill":false},"TTSConfig":{"AutoActive":true,"Provider":"volcano_bidirection","ProviderParams":{"Credential":{"ResourceId":"seed-tts-2.0"},"VolcanoTTSParameters":"{\"req_params\":{\"speaker\":\"zh_male_m191_uranus_bigtts\"}}"},"Prefill":true},"SubtitleConfig":{"ServerMessageUrl":"https://multica.example.com/api/voice-calls/callback","ServerMessageSignature":"callback-secret","DisableRTSSubtitle":false,"SubtitleMode":0},"InterruptMode":0}`
+	const wantConfig = `{"ASRConfig":{"Provider":"volcano","ProviderParams":{"Mode":"bigmodel","Credential":{"AppId":"speech-asr-app","ApiResourceId":"volc.seedasr.sauc.duration"},"StreamMode":2,"enable_nonstream":true},"TurnDetectionMode":0,"VADConfig":{"SilenceTime":600,"AIVAD":true}},"LLMConfig":{"Mode":"ArkV3","EndPointId":"ep-20260723","SystemMessages":["You are Beckham.","Keep spoken replies concise."],"HistoryLength":10,"MaxTokens":256,"ThinkingType":"disabled","Prefill":false},"TTSConfig":{"AutoActive":true,"Provider":"volcano_bidirection","ProviderParams":{"Credential":{"AppId":"speech-tts-app","ResourceId":"seed-tts-2.0"},"VolcanoTTSParameters":"{\"req_params\":{\"speaker\":\"zh_male_m191_uranus_bigtts\"}}"},"Prefill":true},"SubtitleConfig":{"ServerMessageUrl":"https://multica.example.com/api/voice-calls/callback","ServerMessageSignature":"callback-secret","DisableRTSSubtitle":false,"SubtitleMode":0},"InterruptMode":0}`
 	if string(configuration.Config) != wantConfig {
 		t.Fatalf("Config = %s, want %s", configuration.Config, wantConfig)
 	}
@@ -30,20 +32,13 @@ func TestBuildStartConfigurationMatchesCurrentVolcengineContract(t *testing.T) {
 	}
 }
 
-func TestBuildStartConfigurationSupportsArkModelName(t *testing.T) {
+func TestBuildStartConfigurationRequiresArkEndpoint(t *testing.T) {
 	input := validStartConfigurationInput()
 	input.ArkEndpointID = ""
-	input.ArkModelName = "Doubao-Seed-1.6｜250615"
 
-	configuration, err := BuildStartConfiguration(input)
-	if err != nil {
-		t.Fatalf("build Ark model configuration: %v", err)
-	}
-	config := string(configuration.Config)
-	if !strings.Contains(config, `"Mode":"ArkV3"`) ||
-		!strings.Contains(config, `"ModelName":"Doubao-Seed-1.6｜250615"`) ||
-		strings.Contains(config, `"EndPointId"`) {
-		t.Fatalf("Config = %s", config)
+	_, err := BuildStartConfiguration(input)
+	if err == nil || !strings.Contains(err.Error(), "endpoint ID") {
+		t.Fatalf("error = %v, want missing Ark endpoint ID", err)
 	}
 }
 
@@ -71,16 +66,19 @@ func TestBuildStartConfigurationRejectsInvalidInput(t *testing.T) {
 			want: "must differ",
 		},
 		{
-			name:   "missing Ark model selection",
+			name:   "missing Ark endpoint",
 			mutate: func(input *StartConfigurationInput) { input.ArkEndpointID = "" },
-			want:   "exactly one Ark endpoint ID or model name",
+			want:   "endpoint ID",
 		},
 		{
-			name: "ambiguous Ark model selection",
-			mutate: func(input *StartConfigurationInput) {
-				input.ArkModelName = "Doubao-Seed-1.6｜250615"
-			},
-			want: "exactly one Ark endpoint ID or model name",
+			name:   "missing ASR AppId",
+			mutate: func(input *StartConfigurationInput) { input.ASRAppID = "" },
+			want:   "ASR AppId",
+		},
+		{
+			name:   "missing TTS AppId",
+			mutate: func(input *StartConfigurationInput) { input.TTSAppID = "" },
+			want:   "TTS AppId",
 		},
 		{
 			name:   "empty system messages",
@@ -130,6 +128,8 @@ func validStartConfigurationInput() StartConfigurationInput {
 		AgentUserID:       "beckham-call-1",
 		SystemMessages:    []string{"You are Beckham."},
 		ArkEndpointID:     "ep-20260723",
+		ASRAppID:          "speech-asr-app",
+		TTSAppID:          "speech-tts-app",
 		TTSVoiceID:        "zh_male_m191_uranus_bigtts",
 		CallbackURL:       "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature: "callback-secret",

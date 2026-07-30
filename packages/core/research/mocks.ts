@@ -176,38 +176,39 @@ const mockEdges: ResearchGraphEdge[] = [
   },
 ];
 
-const mockSources: ResearchSource[] = [
-  {
-    id: "src-00000000-0000-0000-0000-000000000001",
-    session_id: sessionBase.id,
-    url: "https://milvus.io/docs/benchmarks",
-    title: "Milvus benchmarks",
-    source_class: "primary",
-    credibility_weight: 0.9,
-    stance: "supports",
-    relevance: 0.85,
-    summary: "Official Milvus ANN benchmark numbers",
-    excerpt: "recall@10 0.94 at 10k QPS",
-    payload: {},
-    created_at: now(),
-    updated_at: now(),
-  },
-  {
-    id: "src-00000000-0000-0000-0000-000000000002",
-    session_id: sessionBase.id,
-    url: "https://supabase.com/docs/guides/ai/vector-indexes",
-    title: "pgvector HNSW tuning",
-    source_class: "secondary",
-    credibility_weight: 0.75,
-    stance: "neutral",
-    relevance: 0.7,
-    summary: "pgvector index parameters and trade-offs",
-    excerpt: "m=16, ef_construction=64",
-    payload: {},
-    created_at: now(),
-    updated_at: now(),
-  },
-];
+const sourceMilvus: ResearchSource = {
+  id: "src-00000000-0000-0000-0000-000000000001",
+  session_id: sessionBase.id,
+  url: "https://milvus.io/docs/benchmarks",
+  title: "Milvus benchmarks",
+  source_class: "primary",
+  credibility_weight: 0.9,
+  stance: "supports",
+  relevance: 0.85,
+  summary: "Official Milvus ANN benchmark numbers",
+  excerpt: "recall@10 0.94 at 10k QPS",
+  payload: {},
+  created_at: now(),
+  updated_at: now(),
+};
+
+const sourcePgvector: ResearchSource = {
+  id: "src-00000000-0000-0000-0000-000000000002",
+  session_id: sessionBase.id,
+  url: "https://supabase.com/docs/guides/ai/vector-indexes",
+  title: "pgvector HNSW tuning",
+  source_class: "secondary",
+  credibility_weight: 0.75,
+  stance: "neutral",
+  relevance: 0.7,
+  summary: "pgvector index parameters and trade-offs",
+  excerpt: "m=16, ef_construction=64",
+  payload: {},
+  created_at: now(),
+  updated_at: now(),
+};
+
+const mockSources: ResearchSource[] = [sourceMilvus, sourcePgvector];
 
 const mockReport: ResearchReport = {
   id: "rep-00000000-0000-0000-0000-000000000001",
@@ -242,18 +243,18 @@ const mockReport: ResearchReport = {
       {
         id: "c1",
         index: 1,
-        source_id: mockSources[0].id,
+        source_id: sourceMilvus.id,
         label: "[1]",
         quote: "recall@10 0.94",
       },
     ],
     sources: [
       {
-        source_id: mockSources[0].id,
-        title: mockSources[0].title,
-        url: mockSources[0].url,
-        credibility_weight: mockSources[0].credibility_weight,
-        source_class: mockSources[0].source_class,
+        source_id: sourceMilvus.id,
+        title: sourceMilvus.title,
+        url: sourceMilvus.url,
+        credibility_weight: sourceMilvus.credibility_weight,
+        source_class: sourceMilvus.source_class,
       },
     ],
     gaps: ["Pinecone burst quota data missing"],
@@ -286,44 +287,50 @@ const mockEvals: ResearchStageEval[] = [
   },
 ];
 
+const mockMessageUser: ResearchMessage = {
+  id: "msg-00000000-0000-0000-0000-000000000001",
+  session_id: sessionBase.id,
+  sender_type: "user",
+  sender_id: "user-mock",
+  target_agent_id: null,
+  body: "Start with pgvector vs. Milvus recall",
+  card_kind: "chat",
+  meta: {},
+  created_at: now(),
+};
+
+const mockMessageAgent: ResearchMessage = {
+  id: "msg-00000000-0000-0000-0000-000000000002",
+  session_id: sessionBase.id,
+  sender_type: "agent",
+  sender_id: "agent-mock-scout",
+  target_agent_id: null,
+  body: "Benchmarks pulled; Milvus recall@10 0.94.",
+  card_kind: "chat",
+  meta: {},
+  created_at: now(),
+};
+
+const mockMessageWakeFailed: ResearchMessage = {
+  id: "msg-00000000-0000-0000-0000-000000000003",
+  session_id: sessionBase.id,
+  sender_type: "system",
+  sender_id: null,
+  target_agent_id: null,
+  body: "Scout wake failed: runtime offline. Reassign to active member.",
+  card_kind: "process",
+  meta: {
+    op: "wake_failed",
+    reason: "runtime_offline",
+    recovery_hint: "reassign",
+  },
+  created_at: now(),
+};
+
 const mockMessages: ResearchMessage[] = [
-  {
-    id: "msg-00000000-0000-0000-0000-000000000001",
-    session_id: sessionBase.id,
-    sender_type: "user",
-    sender_id: "user-mock",
-    target_agent_id: null,
-    body: "Start with pgvector vs. Milvus recall",
-    card_kind: "chat",
-    meta: {},
-    created_at: now(),
-  },
-  {
-    id: "msg-00000000-0000-0000-0000-000000000002",
-    session_id: sessionBase.id,
-    sender_type: "agent",
-    sender_id: "agent-mock-scout",
-    target_agent_id: null,
-    body: "Benchmarks pulled; Milvus recall@10 0.94.",
-    card_kind: "chat",
-    meta: {},
-    created_at: now(),
-  },
-  {
-    id: "msg-00000000-0000-0000-0000-000000000003",
-    session_id: sessionBase.id,
-    sender_type: "system",
-    sender_id: null,
-    target_agent_id: null,
-    body: "Scout wake failed: runtime offline. Reassign to active member.",
-    card_kind: "process",
-    meta: {
-      op: "wake_failed",
-      reason: "runtime_offline",
-      recovery_hint: "reassign",
-    },
-    created_at: now(),
-  },
+  mockMessageUser,
+  mockMessageAgent,
+  mockMessageWakeFailed,
 ];
 
 const mockFleet = {
@@ -401,7 +408,7 @@ export const mockResearchSnapshotError: ResearchSessionSnapshot = {
   sources: mockSources,
   report: mockReport,
   evals: mockEvals,
-  messages: [mockMessages[2]],
+  messages: [mockMessageWakeFailed],
 };
 
 export const mockResearchSessionsList: ListResearchSessionsResponse = {
@@ -417,7 +424,7 @@ export const mockCreateResearchSessionResponse: CreateResearchSessionResponse = 
   fleet: mockFleet,
   nodes: mockNodes.slice(0, 3),
   edges: mockEdges.slice(0, 2),
-  messages: [mockMessages[0]],
+  messages: [mockMessageUser],
 };
 
 /**

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";

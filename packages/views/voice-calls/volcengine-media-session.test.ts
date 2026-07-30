@@ -1,3 +1,4 @@
+// @vitest-environment node
 import type { VoiceCallMedia } from "@multica/core/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

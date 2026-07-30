@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { Agent } from "@multica/core/types";
 import { accountHasConfiguredWindy, findWindyAgent } from "./windy-setup-detection";

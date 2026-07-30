@@ -97,6 +97,12 @@ export interface RuntimeDevice {
   workspace_id: string;
   daemon_id: string | null;
   name: string;
+  /**
+   * User-editable machine label. Empty means unset — clients should fall
+   * back to `name` (daemon hostname / reported label). Daemon register /
+   * heartbeat upsert never overwrites a non-empty value.
+   */
+  display_name?: string;
   runtime_mode: AgentRuntimeMode;
   provider: string;
   launch_header: string;

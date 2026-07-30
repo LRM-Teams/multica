@@ -135,7 +135,12 @@ func (q *Queries) MarkWebPushSubscriptionsFailed(ctx context.Context, arg MarkWe
 }
 
 const getWebPushChannelRecipientInfo = `-- name: GetWebPushChannelRecipientInfo :one
-SELECT ch.name, ch.kind, COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL AS muted
+SELECT ch.name, ch.kind,
+  CASE
+    WHEN cm.notify_level IS NOT NULL THEN cm.notify_level
+    WHEN COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL THEN 'mentions'
+    ELSE 'default'
+  END::text AS notify_level
 FROM channel ch
 JOIN channel_member cm
   ON cm.channel_id = ch.id
@@ -157,15 +162,16 @@ type GetWebPushChannelRecipientInfoParams struct {
 }
 
 type GetWebPushChannelRecipientInfoRow struct {
-	Name  string `json:"name"`
-	Kind  string `json:"kind"`
-	Muted bool   `json:"muted"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	NotifyLevel string `json:"notify_level"`
 }
 
+// notify_level: NULL → default; legacy rows with muted_at but no level → mentions.
 func (q *Queries) GetWebPushChannelRecipientInfo(ctx context.Context, arg GetWebPushChannelRecipientInfoParams) (GetWebPushChannelRecipientInfoRow, error) {
 	row := q.db.QueryRow(ctx, getWebPushChannelRecipientInfo, arg.WorkspaceID, arg.ChannelID, arg.MemberID)
 	var i GetWebPushChannelRecipientInfoRow
-	err := row.Scan(&i.Name, &i.Kind, &i.Muted)
+	err := row.Scan(&i.Name, &i.Kind, &i.NotifyLevel)
 	return i, err
 }
 

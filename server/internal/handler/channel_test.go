@@ -3738,6 +3738,148 @@ func TestChannelMutedMemberMentionPiercesMute(t *testing.T) {
 	if !listed.Muted || listed.MentionUnreadCount != 1 {
 		t.Fatalf("muted mention channel state = muted:%t count:%d, want muted:true count:1", listed.Muted, listed.MentionUnreadCount)
 	}
+	if listed.NotifyLevel != "mentions" {
+		t.Fatalf("legacy mute notify_level = %q, want mentions", listed.NotifyLevel)
+	}
+}
+
+func TestChannelNotifyPreferenceAPIAndDualWrite(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "notify-pref-"+uuid.NewString(), testUserID, memberID)
+	ctx := context.Background()
+
+	putLevel := func(level string) map[string]any {
+		t.Helper()
+		req := newRequestAs(memberID, http.MethodPut, "/api/channels/"+channelID+"/notify-preference", map[string]string{"level": level})
+		req = withChannelTestWorkspaceCtx(t, req, memberID)
+		req = withURLParam(req, "channelId", channelID)
+		rec := httptest.NewRecorder()
+		testHandler.SetChannelNotifyPreference(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("put notify-preference %q: status=%d body=%s", level, rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode notify-preference response: %v", err)
+		}
+		return resp
+	}
+
+	loadState := func() (notifyLevel *string, mutedAtSet bool) {
+		t.Helper()
+		var level pgtype.Text
+		var mutedAt pgtype.Timestamptz
+		if err := testPool.QueryRow(ctx, `
+			SELECT notify_level, muted_at
+			FROM channel_member
+			WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2`,
+			channelID, memberID).Scan(&level, &mutedAt); err != nil {
+			t.Fatalf("load channel_member notify state: %v", err)
+		}
+		if level.Valid {
+			s := level.String
+			notifyLevel = &s
+		}
+		return notifyLevel, mutedAt.Valid
+	}
+
+	// default list value before any write
+	listed := listedChannelForUser(t, channelID, memberID)
+	if listed == nil {
+		t.Fatal("channel missing from list")
+	}
+	if listed.NotifyLevel != "default" {
+		t.Fatalf("initial notify_level = %q, want default", listed.NotifyLevel)
+	}
+
+	resp := putLevel("mentions")
+	if resp["ok"] != true || resp["notify_level"] != "mentions" {
+		t.Fatalf("mentions response = %#v", resp)
+	}
+	level, muted := loadState()
+	if level == nil || *level != "mentions" || !muted {
+		t.Fatalf("mentions db state level=%v muted=%v", level, muted)
+	}
+	listed = listedChannelForUser(t, channelID, memberID)
+	if listed.NotifyLevel != "mentions" || !listed.Muted || listed.MutedAt == nil {
+		t.Fatalf("list after mentions: level=%q muted=%t muted_at=%v", listed.NotifyLevel, listed.Muted, listed.MutedAt)
+	}
+
+	resp = putLevel("muted")
+	if resp["notify_level"] != "muted" {
+		t.Fatalf("muted response = %#v", resp)
+	}
+	level, muted = loadState()
+	if level == nil || *level != "muted" || !muted {
+		t.Fatalf("muted db state level=%v muted=%v", level, muted)
+	}
+
+	resp = putLevel("all")
+	if resp["notify_level"] != "all" {
+		t.Fatalf("all response = %#v", resp)
+	}
+	level, muted = loadState()
+	if level == nil || *level != "all" || muted {
+		t.Fatalf("all db state level=%v muted=%v (want all, muted_at cleared)", level, muted)
+	}
+	listed = listedChannelForUser(t, channelID, memberID)
+	if listed.NotifyLevel != "all" || listed.Muted || listed.MutedAt != nil {
+		t.Fatalf("list after all: level=%q muted=%t muted_at=%v", listed.NotifyLevel, listed.Muted, listed.MutedAt)
+	}
+
+	resp = putLevel("default")
+	if resp["notify_level"] != "default" {
+		t.Fatalf("default response = %#v", resp)
+	}
+	level, muted = loadState()
+	if level != nil || muted {
+		t.Fatalf("default db state level=%v muted=%v (want NULL/cleared)", level, muted)
+	}
+	listed = listedChannelForUser(t, channelID, memberID)
+	if listed.NotifyLevel != "default" {
+		t.Fatalf("list after default: level=%q", listed.NotifyLevel)
+	}
+
+	// invalid level → 400
+	req := newRequestAs(memberID, http.MethodPut, "/api/channels/"+channelID+"/notify-preference", map[string]string{"level": "loud"})
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SetChannelNotifyPreference(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid level status=%d, want 400", rec.Code)
+	}
+
+	// legacy mute → mentions; unmute → default
+	req = newRequestAs(memberID, http.MethodPut, "/api/channels/"+channelID+"/mute", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.MuteChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy mute status=%d", rec.Code)
+	}
+	level, muted = loadState()
+	if level == nil || *level != "mentions" || !muted {
+		t.Fatalf("legacy mute dual-write level=%v muted=%v", level, muted)
+	}
+
+	req = newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/mute", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.UnmuteChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy unmute status=%d", rec.Code)
+	}
+	level, muted = loadState()
+	if level != nil || muted {
+		t.Fatalf("legacy unmute dual-write level=%v muted=%v", level, muted)
+	}
 }
 
 func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {

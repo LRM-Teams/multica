@@ -1321,6 +1321,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/pin", h.UnpinChannel)
 					r.Put("/mute", h.MuteChannel)
 					r.Delete("/mute", h.UnmuteChannel)
+					r.Put("/notify-preference", h.SetChannelNotifyPreference)
 					r.Put("/agent-mute", h.MuteChannelAgent)
 					r.Delete("/agent-mute", h.UnmuteChannelAgent)
 					r.Post("/unread", h.MarkChannelUnread)

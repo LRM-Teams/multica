@@ -90,6 +90,9 @@ type ChannelResponse struct {
 	PinnedAt           *string              `json:"pinned_at,omitempty"`
 	MutedAt            *string              `json:"muted_at,omitempty"`
 	Muted              bool                 `json:"muted,omitempty"`
+	// NotifyLevel is the viewer's channel notification preference (LRM-769).
+	// Always one of default|all|mentions|muted; DB NULL maps to "default".
+	NotifyLevel        string               `json:"notify_level"`
 	MentionUnreadCount int                  `json:"mention_unread_count,omitempty"`
 	LastReadSeq        *int64               `json:"last_read_seq,omitempty"`
 	LastMessage        *ChannelLastMessage  `json:"last_message,omitempty"`
@@ -421,6 +424,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.project_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind, ch.system_key,
 		       ch.archived_at, ch.archived_by, ch.avatar_url, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
+		       cm.notify_level,
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(vcm.main_unread_count, 0)::int,
 		       GREATEST(COALESCE(vcm.main_unread_count, 0)::int, CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
@@ -456,7 +460,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, wsID, projectID, createdBy, archivedBy pgtype.UUID
 		var name string
-		var desc, lark, systemKey, avatarURL, lastType, lastName, lastContent pgtype.Text
+		var desc, lark, systemKey, avatarURL, lastType, lastName, lastContent, notifyLevel pgtype.Text
 		var lastParts []byte
 		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, mutedAt, lastAt pgtype.Timestamptz
 		var realUnread, unread int
@@ -464,7 +468,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var kind string
 		var lastReadSeq *int64
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &projectID, &createdBy, &createdAt, &updatedAt, &kind, &systemKey,
-			&archivedAt, &archivedBy, &avatarURL, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &mentionUnreadCount, &lastReadSeq); err != nil {
+			&archivedAt, &archivedBy, &avatarURL, &pinnedAt, &manualUnreadAt, &mutedAt, &notifyLevel, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &mentionUnreadCount, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -474,7 +478,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
 			Kind: kind, SystemKey: textToPtr(systemKey), UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, MentionUnreadCount: mentionUnreadCount, LastReadSeq: lastReadSeq, Members: []ChannelMemberBrief{},
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid,
+			NotifyLevel: channelNotifyLevelAPI(notifyLevel), MentionUnreadCount: mentionUnreadCount, LastReadSeq: lastReadSeq, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
@@ -699,6 +704,100 @@ func (h *Handler) UnmuteChannel(w http.ResponseWriter, r *http.Request) {
 	h.setChannelMuted(w, r, false)
 }
 
+// Channel notify preference levels (LRM-769). "default" is API-only — DB stores NULL.
+const (
+	channelNotifyLevelDefault  = "default"
+	channelNotifyLevelAll      = "all"
+	channelNotifyLevelMentions = "mentions"
+	channelNotifyLevelMuted    = "muted"
+)
+
+var validChannelNotifyLevels = map[string]bool{
+	channelNotifyLevelDefault:  true,
+	channelNotifyLevelAll:      true,
+	channelNotifyLevelMentions: true,
+	channelNotifyLevelMuted:    true,
+}
+
+func channelNotifyLevelAPI(dbLevel pgtype.Text) string {
+	if !dbLevel.Valid || strings.TrimSpace(dbLevel.String) == "" {
+		return channelNotifyLevelDefault
+	}
+	switch dbLevel.String {
+	case channelNotifyLevelAll, channelNotifyLevelMentions, channelNotifyLevelMuted:
+		return dbLevel.String
+	default:
+		return channelNotifyLevelDefault
+	}
+}
+
+type setChannelNotifyPreferenceRequest struct {
+	Level string `json:"level"`
+}
+
+// SetChannelNotifyPreference — PUT /api/channels/{channelId}/notify-preference
+// Body: { "level": "default"|"all"|"mentions"|"muted" }
+// Dual-writes muted_at: mentions|muted → COALESCE(muted_at, now()); default|all → NULL.
+func (h *Handler) SetChannelNotifyPreference(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	var req setChannelNotifyPreferenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	level := strings.TrimSpace(req.Level)
+	if !validChannelNotifyLevels[level] {
+		writeError(w, http.StatusBadRequest, "invalid notify level")
+		return
+	}
+	userUUID := parseUUID(userID)
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, userUUID) {
+		return
+	}
+	storedLevel := any(nil)
+	if level != channelNotifyLevelDefault {
+		storedLevel = level
+	}
+	keepMutedAt := level == channelNotifyLevelMentions || level == channelNotifyLevelMuted
+	if _, err := h.DB.Exec(r.Context(), `
+		WITH updated_channel_member AS (
+		  UPDATE channel_member
+		  SET notify_level = $4::text,
+		      muted_at = CASE
+		        WHEN $5 THEN COALESCE(muted_at, now())
+		        ELSE NULL
+		      END
+		  WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3
+		  RETURNING channel_id, workspace_id, member_id, muted_at
+		),
+		conv AS (
+		  SELECT id
+		  FROM conversation
+		  WHERE channel_id = $1
+		)
+		UPDATE conversation_member cm
+		SET muted_at = updated_channel_member.muted_at,
+		    updated_at = now()
+		FROM updated_channel_member, conv
+		WHERE cm.conversation_id = conv.id
+		  AND cm.workspace_id = updated_channel_member.workspace_id
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = updated_channel_member.member_id`,
+		channelID, parseUUID(workspaceID), userUUID, storedLevel, keepMutedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update notify preference")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "notify_level": level})
+}
+
 func (h *Handler) setChannelPinned(w http.ResponseWriter, r *http.Request, pinned bool) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -745,10 +844,12 @@ func (h *Handler) setChannelMuted(w http.ResponseWriter, r *http.Request, muted 
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, userUUID) {
 		return
 	}
+	// Legacy mute ↔ mentions / unmute ↔ default (LRM-769 dual-write).
 	if _, err := h.DB.Exec(r.Context(), `
 		WITH updated_channel_member AS (
 		  UPDATE channel_member
-		  SET muted_at = CASE WHEN $4 THEN now() ELSE NULL END
+		  SET muted_at = CASE WHEN $4 THEN now() ELSE NULL END,
+		      notify_level = CASE WHEN $4 THEN 'mentions' ELSE NULL END
 		  WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3
 		  RETURNING channel_id, workspace_id, member_id, muted_at
 		),

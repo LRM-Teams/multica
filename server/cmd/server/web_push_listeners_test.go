@@ -26,7 +26,7 @@ func TestRegisterWebPushListenersDoesNotSubscribeInboxNew(t *testing.T) {
 	}
 }
 
-func TestShouldDeliverChannelMessageWebPushLRM411(t *testing.T) {
+func TestShouldDeliverChannelMessageWebPushLRM769(t *testing.T) {
 	authorID := "user-author"
 	recipientID := "user-recipient"
 	base := handler.ChannelMessageResponse{
@@ -40,26 +40,30 @@ func TestShouldDeliverChannelMessageWebPushLRM411(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		message   handler.ChannelMessageResponse
-		actorType string
-		actorID   string
-		kind      string
-		muted     bool
-		want      bool
+		name        string
+		message     handler.ChannelMessageResponse
+		actorType   string
+		actorID     string
+		kind        string
+		notifyLevel string
+		want        bool
 	}{
-		{name: "unmuted group ordinary message delivers", message: base, actorType: "member", actorID: authorID, kind: "channel", want: true},
-		{name: "muted group ordinary message suppressed", message: base, actorType: "member", actorID: authorID, kind: "channel", muted: true, want: false},
-		{name: "muted group mention still delivers", message: withMemberMention(base, recipientID), actorType: "member", actorID: authorID, kind: "channel", muted: true, want: true},
-		{name: "muted group all mention delivers", message: withContent(base, "[@all](mention://all/all) heads up"), actorType: "member", actorID: authorID, kind: "channel", muted: true, want: true},
-		{name: "dm ordinary message delivers even if muted flag set", message: base, actorType: "member", actorID: authorID, kind: "dm", muted: true, want: true},
-		{name: "self sent user message suppressed", message: withAuthor(base, recipientID), actorType: "member", actorID: recipientID, kind: "dm", want: false},
-		{name: "system message suppressed", message: withType(base, "system"), actorType: "system", actorID: "system", kind: "channel", want: false},
+		{name: "default group ordinary message delivers", message: base, actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "default", want: true},
+		{name: "all group ordinary message delivers", message: base, actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "all", want: true},
+		{name: "mentions group ordinary message suppressed", message: base, actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "mentions", want: false},
+		{name: "mentions group mention still delivers", message: withMemberMention(base, recipientID), actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "mentions", want: true},
+		{name: "mentions group all mention delivers", message: withContent(base, "[@all](mention://all/all) heads up"), actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "mentions", want: true},
+		{name: "muted group ordinary message suppressed", message: base, actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "muted", want: false},
+		{name: "muted group mention suppressed", message: withMemberMention(base, recipientID), actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "muted", want: false},
+		{name: "muted group all mention suppressed", message: withContent(base, "[@all](mention://all/all) heads up"), actorType: "member", actorID: authorID, kind: "channel", notifyLevel: "muted", want: false},
+		{name: "dm ordinary message delivers even if muted", message: base, actorType: "member", actorID: authorID, kind: "dm", notifyLevel: "muted", want: true},
+		{name: "self sent user message suppressed", message: withAuthor(base, recipientID), actorType: "member", actorID: recipientID, kind: "dm", notifyLevel: "all", want: false},
+		{name: "system message suppressed", message: withType(base, "system"), actorType: "system", actorID: "system", kind: "channel", notifyLevel: "all", want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldDeliverChannelMessageWebPush(tt.message, tt.actorType, tt.actorID, recipientID, tt.kind, tt.muted)
+			got := shouldDeliverChannelMessageWebPush(tt.message, tt.actorType, tt.actorID, recipientID, tt.kind, tt.notifyLevel)
 			if got != tt.want {
 				t.Fatalf("shouldDeliverChannelMessageWebPush() = %v, want %v", got, tt.want)
 			}

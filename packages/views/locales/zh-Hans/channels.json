@@ -608,6 +608,7 @@
     "media_failed": "语音连接失败，请检查麦克风权限和网络。",
     "rtc_diagnostic_code": "RTC 诊断码：{{code}}",
     "create_failed": "无法发起通话，请重试。",
+    "activation_timeout": "智能体未及时接通，请重试。",
     "server_failed": "语音服务出错，通话已结束。",
     "close": "关闭"
   },

@@ -608,6 +608,7 @@
     "media_failed": "Voice connection failed. Check microphone permission and network.",
     "rtc_diagnostic_code": "RTC diagnostic code: {{code}}",
     "create_failed": "Couldn't start the call. Try again.",
+    "activation_timeout": "The voice agent did not answer in time. Try again.",
     "server_failed": "The call ended because the voice service failed.",
     "close": "Close"
   },

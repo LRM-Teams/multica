@@ -128,3 +128,24 @@ Beckham's configured welcome message after the caller joins.
   integration tests when local PostgreSQL is unavailable; their new regression
   tests compile locally but require CI or a database-backed environment to
   execute.
+
+## Unanswered-call timeout
+
+- [x] Added a failing controller test reproducing an accepted provider start
+  that remains `connecting` indefinitely.
+- [x] Started a 30-second activation deadline only after the browser has joined
+  RTC and the provider start request has returned, so microphone setup time is
+  not counted against the agent.
+- [x] Forced one authoritative server read at the deadline instead of trusting
+  a possibly stale React Query cache or a missed WebSocket invalidation.
+- [x] Preserved a call when the final read reports `active`.
+- [x] Stopped ringback, disconnected RTC, and requested an idempotent server
+  stop when the provider is still non-terminal at the deadline.
+- [x] Added a distinct `provider_activation_timeout` client error and
+  user-facing messages in English, Simplified Chinese, Japanese, and Korean.
+- [x] Added regression coverage for both timeout cleanup and the final-read
+  active race.
+- [x] Verified 27 controller and panel tests.
+- [x] Verified `pnpm --filter @multica/views typecheck`.
+- [x] Verified `pnpm react:doctor` reports zero issues in the changed source.
+- [x] Verified `git diff --check`.

@@ -146,6 +146,22 @@ describe("VoiceCallPanel", () => {
     expect(props.onRetry).toHaveBeenCalledOnce();
   });
 
+  it("explains when the voice agent did not answer before the timeout", () => {
+    renderPanel({
+      phase: "failed",
+      error: {
+        source: "server",
+        code: "provider_activation_timeout",
+        message: "internal timeout detail",
+      },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The voice agent did not answer in time. Try again.",
+    );
+    expect(screen.queryByText("internal timeout detail")).not.toBeInTheDocument();
+  });
+
   it("shows a bounded RTC diagnostic code without exposing provider details", () => {
     renderPanel({
       phase: "failed",

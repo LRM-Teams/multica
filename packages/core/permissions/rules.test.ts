@@ -12,7 +12,7 @@ import {
   canEditSkill,
   canManageMembers,
   canUpdateWorkspaceSettings,
-  canViewAgentActivity,
+  canViewAgentSensitiveTabs,
 } from "./rules";
 
 const ALICE = "user-alice";
@@ -146,12 +146,12 @@ describe("canEditAgent", () => {
   });
 });
 
-describe("canViewAgentActivity", () => {
+describe("canViewAgentSensitiveTabs", () => {
   const privateAgent = makeAgent({ owner_id: ALICE, visibility: "private" });
 
   it("allows the agent owner", () => {
     expect(
-      canViewAgentActivity(privateAgent, { userId: ALICE, role: "member" })
+      canViewAgentSensitiveTabs(privateAgent, { userId: ALICE, role: "member" })
         .allowed,
     ).toBe(true);
   });
@@ -161,36 +161,39 @@ describe("canViewAgentActivity", () => {
   // layer did not, so admins could fetch activity but never saw the tab.
   it("allows a workspace admin who does not own the agent", () => {
     expect(
-      canViewAgentActivity(privateAgent, { userId: BOB, role: "admin" })
+      canViewAgentSensitiveTabs(privateAgent, { userId: BOB, role: "admin" })
         .allowed,
     ).toBe(true);
   });
   it("allows the workspace owner who does not own the agent", () => {
     expect(
-      canViewAgentActivity(privateAgent, { userId: BOB, role: "owner" })
+      canViewAgentSensitiveTabs(privateAgent, { userId: BOB, role: "owner" })
         .allowed,
     ).toBe(true);
   });
 
   it("denies a plain member on a private agent they do not own", () => {
-    const d = canViewAgentActivity(privateAgent, { userId: BOB, role: "member" });
+    const d = canViewAgentSensitiveTabs(privateAgent, { userId: BOB, role: "member" });
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("not_resource_owner");
   });
-  it("allows a plain member on a workspace-visibility agent", () => {
+  // Retired with agent visibility (Frank 2026-07-30: a plain member sees only
+  // their OWN agent's activity). This assertion is inverted from what it was,
+  // deliberately — it is the branch that was deleted.
+  it("denies a plain member on someone else's agent regardless of visibility", () => {
     const shared = makeAgent({ owner_id: ALICE, visibility: "workspace" });
     expect(
-      canViewAgentActivity(shared, { userId: BOB, role: "member" }).allowed,
-    ).toBe(true);
+      canViewAgentSensitiveTabs(shared, { userId: BOB, role: "member" }).allowed,
+    ).toBe(false);
   });
   it("denies a non-member even on a workspace-visibility agent", () => {
     const shared = makeAgent({ owner_id: ALICE, visibility: "workspace" });
     expect(
-      canViewAgentActivity(shared, { userId: BOB, role: null }).allowed,
+      canViewAgentSensitiveTabs(shared, { userId: BOB, role: null }).allowed,
     ).toBe(false);
   });
   it("denies when signed out", () => {
-    const d = canViewAgentActivity(privateAgent, { userId: null, role: null });
+    const d = canViewAgentSensitiveTabs(privateAgent, { userId: null, role: null });
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("not_authenticated");
   });
@@ -202,7 +205,7 @@ describe("canViewAgentActivity", () => {
       managed_role: "research_fleet",
     });
     expect(
-      canViewAgentActivity(marked, { userId: BOB, role: "member" }).allowed,
+      canViewAgentSensitiveTabs(marked, { userId: BOB, role: "member" }).allowed,
     ).toBe(false);
   });
 });
@@ -232,11 +235,21 @@ describe("canAssignAgentToIssue", () => {
       canAssignAgentToIssue(a, { userId: BOB, role: "admin" }).allowed,
     ).toBe(true);
   });
-  it("denies a plain member from assigning someone else's private agent", () => {
+  // Inverted with the visibility retirement: the private/workspace split *was*
+  // the visibility split, so there is no "leave it as it was" option here. The
+  // server remains the boundary — ListAgents (agent.go:800) does not hand a
+  // member another member's private agent in the first place.
+  it("allows a plain member to assign any agent it was given", () => {
     const a = makeAgent({ visibility: "private", owner_id: ALICE });
     const d = canAssignAgentToIssue(a, { userId: BOB, role: "member" });
+    expect(d.allowed).toBe(true);
+  });
+
+  it("still requires membership — a non-member cannot assign", () => {
+    const a = makeAgent({ visibility: "workspace" });
+    const d = canAssignAgentToIssue(a, { userId: BOB, role: null });
     expect(d.allowed).toBe(false);
-    expect(d.reason).toBe("private_visibility");
+    expect(d.reason).toBe("not_member");
   });
   it("denies logged-out users", () => {
     const a = makeAgent({ visibility: "workspace" });

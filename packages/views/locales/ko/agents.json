@@ -144,7 +144,6 @@
     "prop_runtime": "런타임",
     "prop_model": "모델",
     "prop_thinking": "추론",
-    "prop_visibility": "공개 범위",
     "prop_concurrency": "동시 실행",
     "prop_owner": "소유자",
     "prop_created": "생성일",
@@ -237,7 +236,6 @@
     "description_label": "설명",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "thinking_label": "추론",
-    "visibility_label": "공개 범위",
     "runtime_label": "런타임",
     "runtime_filter_mine": "내 것",
     "runtime_filter_all": "전체",
@@ -482,37 +480,6 @@
   },
   "presence": {
     "queue_badge": "+{{count}} 대기 중"
-  },
-  "visibility": {
-    "private": {
-      "label": "개인",
-      "tooltip": "개인 · 본인과 워크스페이스 관리자만 발견·초대·@ 가능"
-    },
-    "channel": {
-      "label": "仅本群",
-      "tooltip": "仅本群 · 바인딩된 그룹에서만 발견·초대·@"
-    },
-    "workspace": {
-      "label": "워크스페이스",
-      "tooltip": "워크스페이스 · 멤버가 발견·초대·@ 가능"
-    }
-  },
-  "visibility_bind": {
-    "pick_channel": "그룹 선택",
-    "search_placeholder": "그룹 검색…",
-    "loading": "그룹 불러오는 중…",
-    "load_failed": "그룹을 불러올 수 없습니다",
-    "retry": "다시 시도",
-    "no_groups": "그룹이 없습니다. 仅本群은 아래에서 바로 만들 수 있습니다",
-    "no_match": "일치하는 그룹 없음",
-    "home_required": "仅本群에는 home_channel_id 바인딩이 필요합니다",
-    "channel_unavailable": "홈 그룹을 사용할 수 없음",
-    "not_channel_permission_hint": "에이전트 가시성(발견/초대/@)이며 채널 사이드바 권한이 아닙니다. 다른 그룹에는 보이지 않으며, 기존 자리는 유지됩니다.",
-    "home_mode_existing": "기존 그룹",
-    "home_mode_new": "새 그룹 만들기",
-    "new_channel_name_label": "새 그룹 이름",
-    "new_channel_name_placeholder": "예: 연구 스쿼드",
-    "new_channel_name_required": "만들 그룹 이름을 입력하세요"
   },
   "profile_card": {
     "unavailable": "에이전트를 사용할 수 없습니다",

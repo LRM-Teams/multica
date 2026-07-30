@@ -3,7 +3,6 @@
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, Bell, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useConfigStore } from "@multica/core/config";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
 import { deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
@@ -22,7 +21,6 @@ import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
-import { VisibilityPicker } from "../../agents/components/inspector/visibility-picker";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
@@ -72,25 +70,24 @@ export function AgentSidePanel({
 }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
-  const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
-  const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
   // LRM-542: the header avatar is now editable. Compute the edit permission
   // once here so the header avatar and the Profile tab share one decision.
   //
-  // Workspace authority comes from the viewer's own membership, not from any
-  // marker on the agent. `devProfileAccess` stays separate: it is a local dev
-  // toggle, not a permission the backend would honour.
-  const { canEdit, canViewActivity: activityDecision } = useAgentPermissions(
-    agent,
-    agent.workspace_id,
-  );
-  const canViewActivity = activityDecision.allowed || (!!currentUserId && devProfileAccess);
+  // One gate for every sensitive tab — admin-or-owner, from the viewer's own
+  // membership (Frank 2026-07-30: "其余几个 tab 同理"). Profile stays ungated:
+  // it is "who is this agent", which everyone may see now that agent
+  // visibility is retired.
+  const { canEdit, canViewSensitiveTabs } = useAgentPermissions(agent, agent.workspace_id);
+  const canViewSensitive = canViewSensitiveTabs.allowed;
   const availableTabs: OwnerTab[] = ["profile"];
-  if (canViewActivity) availableTabs.push("activity");
-  if (canViewActivity) availableTabs.push("reminders");
-  if (canInspectAgent) availableTabs.push("files");
-  // LRM-448: Usage is always a direct tab (never stacked in Profile).
-  availableTabs.push("usage");
+  if (canViewSensitive) availableTabs.push("activity");
+  if (canViewSensitive) availableTabs.push("reminders");
+  if (canViewSensitive) availableTabs.push("files");
+  // LRM-448: Usage is a direct tab, never stacked in Profile. It used to be
+  // ungated — every member could read another agent's spend — so bringing it
+  // under this gate is a *tightening*, unlike Files which was owner-only and
+  // now admits admins.
+  if (canViewSensitive) availableTabs.push("usage");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
   const [mountedTabs, setMountedTabs] = useState<Set<OwnerTab>>(() => new Set(["profile"]));
@@ -186,7 +183,7 @@ export function AgentSidePanel({
             })}
           </div>
           <div ref={tabBodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-            {renderTab("activity") && canViewActivity ? (
+            {renderTab("activity") && canViewSensitive ? (
               <div className={tab === "activity" ? undefined : "hidden"}>
                 <ActivityTab agent={agent} />
               </div>
@@ -200,18 +197,18 @@ export function AgentSidePanel({
                 />
               </div>
             ) : null}
-            {renderTab("reminders") && canViewActivity ? (
+            {renderTab("reminders") && canViewSensitive ? (
               <div className={tab === "reminders" ? undefined : "hidden"}>
                 <RemindersTab agent={agent} />
               </div>
             ) : null}
-            {renderTab("files") && canInspectAgent ? (
+            {renderTab("files") && canViewSensitive ? (
               <div className={tab === "files" ? undefined : "hidden"}>
                 <AgentFilesPanel
                   agent={agent}
                   currentUserId={currentUserId}
                   members={members}
-                  canReadFiles={canInspectAgent}
+                  canReadFiles={canViewSensitive}
                   canEditFiles={isOwner}
                   onClose={onClose}
                   hideHeader
@@ -386,17 +383,6 @@ function AgentProfileTabContent({
                 value={agent.model ?? ""}
                 canEdit={canEditRuntime}
                 onChange={(m) => update({ model: m })}
-              />
-              <VisibilityPicker
-                value={agent.visibility}
-                homeChannelId={agent.home_channel_id ?? null}
-                canEdit={canEditRuntime}
-                onChange={(next) =>
-                  update({
-                    visibility: next.visibility,
-                    home_channel_id: next.home_channel_id,
-                  })
-                }
               />
             </div>
           </div>

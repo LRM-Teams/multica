@@ -1,13 +1,12 @@
 "use client";
 
-import { Cloud, Lock, Monitor } from "lucide-react";
+import { Cloud, Monitor } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { Agent, AgentRuntime } from "@multica/core/types";
 import {
   type AgentActivity,
   type AgentPresenceDetail,
   summarizeActivityWindow,
-  VISIBILITY_TOOLTIP,
 } from "@multica/core/agents";
 import {
   Tooltip,
@@ -169,7 +168,6 @@ function AgentNameCell({ row }: { row: AgentRow }) {
   const { t } = useT("agents");
   const { agent, ownerIdToShow, isOwnedByMe } = row;
   const isArchived = !!agent.archived_at;
-  const isPrivate = agent.visibility === "private";
   return (
     <div className="flex min-w-0 items-center gap-3">
         <ActorAvatar
@@ -189,18 +187,6 @@ function AgentNameCell({ row }: { row: AgentRow }) {
             }`}
             className="min-w-0 shrink"
           />
-          {isPrivate && !isArchived && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Lock className="h-3 w-3 shrink-0 text-muted-foreground/60" />
-                }
-              />
-              <TooltipContent>
-                {VISIBILITY_TOOLTIP.private}
-              </TooltipContent>
-            </Tooltip>
-          )}
           {isOwnedByMe && !ownerIdToShow && (
             <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
               {t(($) => $.row.you)}

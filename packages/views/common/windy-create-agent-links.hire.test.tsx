@@ -6,7 +6,6 @@ import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/re
 import type { AgentCreationDraft } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
-import { VISIBILITY_LABEL } from "@multica/core/agents";
 import enCommon from "../locales/en/common.json";
 import enAgents from "../locales/en/agents.json";
 import enModals from "../locales/en/modals.json";
@@ -142,7 +141,7 @@ function renderHire() {
   );
 }
 
-describe("Windy hire card discoverability (LRM-399)", () => {
+describe("Windy hire card create path", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listChannels.mockResolvedValue([
@@ -195,37 +194,41 @@ describe("Windy hire card discoverability (LRM-399)", () => {
     document.body.innerHTML = "";
   });
 
-  it("shows editable discoverability radios and submits home_channel_id", async () => {
+  // Guards the transition constant. Agent visibility is gone from the UI, but
+  // CreateAgent still *requires* a value (`agent.go:960` →
+  // resolveAgentVisibilityBinding, `agent_channel_visibility.go:30` rejects
+  // empty), so a hire that omits it 400s. This is the only test of the hire
+  // card's create path — if it stops asserting the field, nothing does.
+  it("submits workspace visibility and no home_channel_id", async () => {
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
-      expect(
-        screen.getByRole("radio", { name: new RegExp(VISIBILITY_LABEL.channel) }),
-      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
-    expect(
-      screen.getByRole("radio", { name: /仅本群/ }).getAttribute("aria-checked"),
-    ).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /^Create Agent$/i }));
     await waitFor(() => expect(createAgent).toHaveBeenCalled());
-    expect(createAgent.mock.calls[0]?.[0]).toMatchObject({
-      visibility: "channel",
-      home_channel_id: "ch-home",
-    });
+
+    const payload = createAgent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.visibility).toBe("workspace");
+    // Strictly undefined, not merely "not ch-home": the draft and the link both
+    // name ch-home, so a weaker assertion would pass on any other channel too.
+    expect(payload.home_channel_id).toBeUndefined();
+    expect(payload.draft_id).toBe("draft-1");
   });
 
-  it("keeps 仅本群 enabled with no groups and defaults to create-new-home", async () => {
-    listChannels.mockResolvedValue([]);
-    createAgentDraft.mockResolvedValue(makeDraft({ channel_id: null }));
+  // The link carries `visibility=channel&channel_id=ch-home` and the draft
+  // fixture says "channel" — both are now ignored rather than seeded, so this
+  // also covers that a stale Windy link cannot resurrect the retired tier.
+  it("renders no discoverability radios and ignores the link's visibility param", async () => {
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
-      expect(screen.getByRole("radio", { name: /仅本群/ })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("radio", { name: /仅本群/ }));
-    expect(
-      screen.getByRole("radio", { name: /仅本群/ }).getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(screen.getByLabelText(/New group name/i)).toBeTruthy();
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryByLabelText(/New group name/i)).toBeNull();
+
+    expect(createAgentDraft).toHaveBeenCalled();
+    expect(createAgentDraft.mock.calls[0]?.[0]).not.toHaveProperty("visibility");
   });
 });

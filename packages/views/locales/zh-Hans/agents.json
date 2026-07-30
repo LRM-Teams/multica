@@ -139,7 +139,6 @@
     "prop_runtime": "运行时",
     "prop_model": "模型",
     "prop_thinking": "思考",
-    "prop_visibility": "可见性",
     "prop_concurrency": "并发",
     "prop_owner": "所有者",
     "prop_created": "创建时间",
@@ -232,7 +231,6 @@
     "description_label": "描述",
     "description_placeholder": "这个智能体做什么？",
     "thinking_label": "思考等级",
-    "visibility_label": "可见性",
     "runtime_label": "运行时",
     "runtime_filter_mine": "我的",
     "runtime_filter_all": "全部",
@@ -472,37 +470,6 @@
   },
   "presence": {
     "queue_badge": "+{{count}} 排队"
-  },
-  "visibility": {
-    "private": {
-      "label": "个人",
-      "tooltip": "个人 · 仅你和工作区管理员可发现、邀请或 @"
-    },
-    "channel": {
-      "label": "仅本群",
-      "tooltip": "仅本群 · 只在绑定群可发现、邀请或出现在 @ 候选"
-    },
-    "workspace": {
-      "label": "工作区",
-      "tooltip": "工作区 · 工作区内成员可发现、邀请或 @"
-    }
-  },
-  "visibility_bind": {
-    "pick_channel": "选择绑定群",
-    "search_placeholder": "搜索群…",
-    "loading": "加载群列表…",
-    "load_failed": "无法加载频道",
-    "retry": "重试",
-    "no_groups": "还没有群——选「仅本群」时可直接新建",
-    "no_match": "没有匹配的群",
-    "home_required": "「仅本群」必须绑定 home_channel_id，缺少时不能提交",
-    "channel_unavailable": "绑定群不可用",
-    "not_channel_permission_hint": "这是 Agent 可见性（发现 / 邀请 / @），不是频道侧栏权限。其他群看不到此 Agent；已在其他群的席位不会自动移除。",
-    "home_mode_existing": "已有群",
-    "home_mode_new": "新建群聊",
-    "new_channel_name_label": "新群名称",
-    "new_channel_name_placeholder": "例如：研究小分队",
-    "new_channel_name_required": "请填写要创建的群名称"
   },
   "profile_card": {
     "unavailable": "智能体不可用",

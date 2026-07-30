@@ -144,7 +144,6 @@
     "prop_runtime": "Runtime",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
-    "prop_visibility": "Visibility",
     "prop_concurrency": "Concurrency",
     "prop_owner": "Owner",
     "prop_created": "Created",
@@ -237,7 +236,6 @@
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",
     "thinking_label": "Thinking",
-    "visibility_label": "Visibility",
     "runtime_label": "Runtime",
     "runtime_filter_mine": "Mine",
     "runtime_filter_all": "All",
@@ -482,37 +480,6 @@
   },
   "presence": {
     "queue_badge": "+{{count}} queued"
-  },
-  "visibility": {
-    "private": {
-      "label": "Personal",
-      "tooltip": "Personal · only you and workspace admins can discover, invite, or @mention"
-    },
-    "channel": {
-      "label": "仅本群",
-      "tooltip": "仅本群 · only in the bound group for discover, invite, or @mention"
-    },
-    "workspace": {
-      "label": "Workspace",
-      "tooltip": "Workspace · everyone in this workspace can discover, invite, or @mention"
-    }
-  },
-  "visibility_bind": {
-    "pick_channel": "Choose a group",
-    "search_placeholder": "Search groups…",
-    "loading": "Loading groups…",
-    "load_failed": "Couldn't load groups",
-    "retry": "Retry",
-    "no_groups": "No groups yet — create one below for 仅本群",
-    "no_match": "No matching groups",
-    "home_required": "Bind a home group for 仅本群 — cannot create without home_channel_id",
-    "channel_unavailable": "Home group unavailable",
-    "not_channel_permission_hint": "This is agent visibility (discover / invite / @), not channel sidebar permissions. Other groups won't see this agent; existing seats elsewhere are kept.",
-    "home_mode_existing": "Existing group",
-    "home_mode_new": "Create new group",
-    "new_channel_name_label": "New group name",
-    "new_channel_name_placeholder": "e.g. Research squad",
-    "new_channel_name_required": "Enter a group name to create"
   },
   "profile_card": {
     "unavailable": "Agent unavailable",

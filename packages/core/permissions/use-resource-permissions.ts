@@ -7,7 +7,7 @@ import {
   canDeleteSkill,
   canEditAgent,
   canEditSkill,
-  canViewAgentActivity,
+  canViewAgentSensitiveTabs,
 } from "./rules";
 import { deny, type Decision } from "./types";
 
@@ -35,17 +35,17 @@ export function useAgentPermissions(
 ): {
   canEdit: Decision;
   canAssign: Decision;
-  canViewActivity: Decision;
+  canViewSensitiveTabs: Decision;
 } {
   const { userId, role } = useCurrentMember(wsId);
   const ctx = { userId, role };
   if (agent === null) {
-    return { canEdit: PENDING, canAssign: PENDING, canViewActivity: PENDING };
+    return { canEdit: PENDING, canAssign: PENDING, canViewSensitiveTabs: PENDING };
   }
   return {
     canEdit: canEditAgent(agent, ctx),
     canAssign: canAssignAgentToIssue(agent, ctx),
-    canViewActivity: canViewAgentActivity(agent, ctx),
+    canViewSensitiveTabs: canViewAgentSensitiveTabs(agent, ctx),
   };
 }
 

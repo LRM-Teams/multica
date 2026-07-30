@@ -16,7 +16,6 @@ import { MessageSquare, Pencil } from "lucide-react";
 import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
-import { VisibilityBadge } from "./visibility-badge";
 import { deriveRuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
@@ -150,13 +149,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
               }`}
               className="min-w-0 shrink"
             />
-            {!isArchived && (
-              <VisibilityBadge
-                value={agent.visibility}
-                homeChannelId={agent.home_channel_id ?? null}
-                compact
-              />
-            )}
           </div>
           {/* LRM-248: archived is muted secondary copy; live presence is avatar badge only. */}
           {isArchived ? (

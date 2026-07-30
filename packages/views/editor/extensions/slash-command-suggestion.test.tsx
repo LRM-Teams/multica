@@ -220,7 +220,11 @@ describe("slash command suggestion items", () => {
     expect(items(qc)).toEqual([]);
   });
 
-  it("excludes skills from private agents the user cannot access", () => {
+  // Same premise as the @mention list: `ListAgents` (agent.go:800) already
+  // withholds another member's private agent, so the client-side check this
+  // used to assert was redundant. Retiring visibility drops it; the skills of
+  // an agent the server *did* send are now offered.
+  it("offers skills from any agent the server returned", () => {
     chatState.selectedAgentId = "private-agent";
     const qc = fakeQc({
       members: [
@@ -237,7 +241,7 @@ describe("slash command suggestion items", () => {
       ],
     });
 
-    expect(items(qc)).toEqual([]);
+    expect(items(qc).map((i) => i.label)).toEqual(["secret"]);
   });
 });
 

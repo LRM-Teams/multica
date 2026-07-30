@@ -1128,6 +1128,14 @@ func parseACPSessionNewModels(raw json.RawMessage) []Model {
 			CurrentModelIDSnake  string         `json:"current_model_id"`
 		} `json:"models"`
 	}
+	var presence struct {
+		Models json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &presence); err != nil || len(presence.Models) == 0 {
+		// No `models` key at all (or malformed payload): genuinely nothing to
+		// report, distinct from "models present but the catalog is empty".
+		return nil
+	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil
 	}

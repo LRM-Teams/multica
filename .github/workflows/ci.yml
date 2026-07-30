@@ -48,6 +48,27 @@ jobs:
         with:
           path: .turbo/cache
           key: ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-${{ github.sha }}
+          # These keys are own-first ON PURPOSE. Measured 2026-07-30; three of us
+          # spent two days on it, so the answer lives here rather than in chat.
+          #
+          # 1. Matching is scope-outer / keys-inner. A run searches its OWN cache
+          #    scope against every restore-key first, and returns on the first
+          #    match there — it only falls through to the base-branch scope when
+          #    NO key can match anything in its own scope.
+          # 2. So once a PR has saved one entry, the broad `-turbo-CI-` prefix
+          #    matches it and dev's entry is never consulted. That is inherent to
+          #    the mechanism, not a misconfiguration.
+          # 3. We keep it. An iterating PR's previous head is usually closer to
+          #    its current head than dev is: measured `Cached: 8 of 9` between
+          #    consecutive commits, versus `0 of 9` on a PR whose heads were
+          #    large rewrites. The bad case costs one round and self-heals.
+          # 4. Switching to dev-first requires deleting the broad prefix too.
+          #    Removing only the per-ref prefix changes NOTHING — tried it in
+          #    PR #1448, behaviour was identical, because the broad prefix still
+          #    matched the PR's own entry.
+          #
+          # The exact `key` carries github.sha, so same-commit re-runs hit it
+          # directly regardless of any of the above.
           restore-keys: |
             ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-
             ${{ runner.os }}-turbo-${{ github.workflow }}-

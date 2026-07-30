@@ -115,3 +115,20 @@ policy.
 - [ ] A PR into `dev` runs `CI / frontend` and `CI / backend` on a self-hosted runner (Aliyun and/or Tencent `ci`), not `ubuntu-latest`
 - [ ] Org Actions hosted-minute burn for `CI` drops after cutover
 - [ ] (Optional) Dedicated Tencent `ci` runner online for load relief
+
+## CI cache
+
+The Turbo cache is published on `dev` by the `push` trigger in `ci.yml`; pull
+requests restore it via the `-dev-` restore-key. There is deliberately no
+ref-scoped restore-key: it would shadow the dev entry with the PR's own older
+(or cancelled-run) cache. See PR #1448.
+
+### Verifying a cache-restore change
+
+A pull request's **first** run proves nothing: with no ref-scoped entry saved
+yet, it falls through to the `dev` key even with a broken configuration. Check
+the **second** run of the same branch, and read the restored key before the hit
+count — `Cache restored from key:` fails earlier and louder than `Cached: N`.
+
+Note that `github.ref_name` on a `pull_request` event is `<number>/merge`, so
+the entry to look for is `…-turbo-CI-<number>/merge-…`, not the branch name.

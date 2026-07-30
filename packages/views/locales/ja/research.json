@@ -13,6 +13,12 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "stage": {
+    "s1_plan": "S1 · 定義",
+    "s2_sources": "S2 · 探索",
+    "s3_validation": "S3 · 検証",
+    "s4_delivery": "S4 · 納品"
+  },
   "groups": {
     "in_progress": "進行中",
     "completed": "完了"

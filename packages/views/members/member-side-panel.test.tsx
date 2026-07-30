@@ -46,6 +46,7 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     agentDetail: (id: string) => `/agents/${id}`,
     actorProfile: (type: string, id: string) => `/profile/${type}/${id}`,
+    settings: () => "/ws-1/settings",
   }),
 }));
 
@@ -66,11 +67,15 @@ vi.mock("../common/agent-panel-context", () => ({
 }));
 
 vi.mock("../agents/components/inline-field-editor", () => ({
-  InlineFieldEditor: ({ value, emptyLabel }: { value: string; emptyLabel?: string }) => (
-    <div data-testid="member-profile-description-trigger">
-      {value || emptyLabel}
-    </div>
-  ),
+  InlineFieldEditor: ({
+    value,
+    emptyLabel,
+    testId = "inline-field-editor",
+  }: {
+    value: string;
+    emptyLabel?: string;
+    testId?: string;
+  }) => <div data-testid={`${testId}-trigger`}>{value || emptyLabel}</div>,
 }));
 
 vi.mock("../i18n/use-t", () => ({
@@ -91,6 +96,16 @@ vi.mock("../i18n/use-t", () => ({
           no_agents: "No agents created yet",
           message_aria: "Send message",
           you_suffix: "(you)",
+          edit_profile: "Edit profile",
+          name_label: "Name",
+          name_placeholder: "Enter your name",
+          name_required: "Name cannot be empty",
+          change_avatar_aria: "Change avatar",
+          avatar_updated_toast: "Avatar updated",
+          avatar_upload_failed: "Avatar upload failed",
+          avatar_err_type: "PNG/JPG only",
+          avatar_err_size: "Too large",
+          avatar_err_dimensions: "Too small",
         },
         profile_popover: { close_aria: "Close" },
       } as never),
@@ -219,5 +234,55 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     expect(screen.queryByTestId("member-side-panel-message")).toBeNull();
     expect(screen.getByText(/\(you\)/)).toBeTruthy();
     expect(screen.getByText("No agents created yet")).toBeTruthy();
+  });
+
+  it("self view (LRM-751): camera badge + name inline edit + 编辑资料 escape hatch", () => {
+    memberListMock.mockReturnValue({
+      data: [
+        {
+          id: "m-self",
+          workspace_id: "ws-1",
+          user_id: "u-self",
+          role: "member",
+          created_at: "2026-06-11T00:00:00Z",
+          name: "me",
+          display_name: "Me",
+          email: "self@example.com",
+          avatar_url: null,
+          profile_description: "Hello",
+        },
+      ],
+      isPending: false,
+    });
+    profileMock.mockReturnValue({
+      data: {
+        member_type: "user",
+        member_id: "u-self",
+        name: "me",
+        display_name: "Me",
+        avatar_url: null,
+        description: "Hello",
+        role: "member",
+        status: null,
+        recent_activity: [],
+        profile_access: "full",
+      },
+      isPending: false,
+    });
+    agentsMock.mockReturnValue({ data: [], isPending: false });
+    renderPanel("u-self");
+    expect(screen.getByTestId("member-self-avatar-change")).toBeTruthy();
+    expect(screen.getByTestId("member-profile-name-trigger").textContent).toContain("Me");
+    expect(screen.getByTestId("member-profile-description-trigger")).toBeTruthy();
+    const editLink = screen.getByTestId("member-side-panel-edit-profile").closest("a");
+    expect(editLink?.getAttribute("href")).toBe("/ws-1/settings?tab=profile");
+  });
+
+  it("other view (LRM-751): no edit entries at all", () => {
+    renderPanel("u-frank");
+    expect(screen.queryByTestId("member-self-avatar-change")).toBeNull();
+    expect(screen.queryByTestId("member-profile-name-trigger")).toBeNull();
+    expect(screen.queryByTestId("member-side-panel-edit-profile")).toBeNull();
+    expect(screen.getByTestId("member-side-panel-message")).toBeTruthy();
   });
 });

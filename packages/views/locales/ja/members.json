@@ -21,7 +21,17 @@
     "created_agents": "作成したエージェント",
     "no_agents": "まだエージェントがありません",
     "message_aria": "メッセージを送る",
-    "you_suffix": "(あなた)"
+    "you_suffix": "(あなた)",
+    "edit_profile": "プロフィールを編集",
+    "name_label": "名前",
+    "name_placeholder": "名前を入力",
+    "name_required": "名前は必須です",
+    "change_avatar_aria": "アバターを変更",
+    "avatar_updated_toast": "アバターを更新しました",
+    "avatar_upload_failed": "アバターのアップロードに失敗しました。再試行してください",
+    "avatar_err_type": "PNG または JPG 画像のみ対応しています",
+    "avatar_err_size": "画像は 5 MB 以下にしてください",
+    "avatar_err_dimensions": "画像は 256×256 以上にしてください"
   },
   "detail": {
     "workspace_fallback": "ワークスペース",

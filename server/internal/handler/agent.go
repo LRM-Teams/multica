@@ -1874,6 +1874,11 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	if h.AgentFleetRankService != nil {
+		if err := h.AgentFleetRankService.FreezeAgentOnArchive(r.Context(), archived.WorkspaceID, archived.ID); err != nil {
+			slog.Warn("freeze agent fleet rank on archive failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		}
+	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})

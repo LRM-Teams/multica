@@ -21,7 +21,17 @@
     "created_agents": "创建的智能体",
     "no_agents": "尚未创建智能体",
     "message_aria": "发送消息",
-    "you_suffix": "(你)"
+    "you_suffix": "(你)",
+    "edit_profile": "编辑资料",
+    "name_label": "名称",
+    "name_placeholder": "输入你的名字",
+    "name_required": "名字不能为空",
+    "change_avatar_aria": "更换头像",
+    "avatar_updated_toast": "头像已更新",
+    "avatar_upload_failed": "头像上传失败，请重试",
+    "avatar_err_type": "仅支持 PNG 或 JPG 图片",
+    "avatar_err_size": "图片不能超过 5 MB",
+    "avatar_err_dimensions": "图片尺寸至少 256×256"
   },
   "detail": {
     "workspace_fallback": "工作区",

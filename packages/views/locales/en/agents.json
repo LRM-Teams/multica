@@ -17,6 +17,7 @@
   },
   "sort": {
     "label_recent": "Recent activity",
+    "label_fleet": "Fleet power",
     "label_name": "Name",
     "label_runs": "Most runs",
     "label_created": "Recently created"
@@ -681,6 +682,19 @@
     "runtime_offline": "Daemon offline",
     "runtime_recovery": "Daemon restarted",
     "manual": "Cancelled by user"
+  },
+  "fleet": {
+    "title": "Fleet rank",
+    "score_label": "Fleet score",
+    "rank_of": "#{{rank}} of {{size}} active",
+    "frozen_hint": "Frozen at archive",
+    "warming_up": "Warming up · {{current}}/{{required}} tasks",
+    "pillars": {
+      "delivery": "Delivery",
+      "evolution": "Evolution",
+      "growth": "Growth",
+      "efficiency": "Efficiency"
+    }
   },
   "dashboard": {
     "all_agents": "All agents",

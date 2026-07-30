@@ -127,6 +127,7 @@ type Handler struct {
 	SandboxHub            *sandboxws.Hub
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
+	AgentFleetRankService *service.AgentFleetRankService
 	IssueService          *service.IssueService
 	AutopilotService      *service.AutopilotService
 	EmailService          *service.EmailService
@@ -285,6 +286,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:             daemonHub,
 		Bus:                   bus,
 		TaskService:           taskSvc,
+		AgentFleetRankService: service.NewAgentFleetRankService(queries),
 		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:          emailService,

@@ -22,7 +22,17 @@
     "created_agents": "생성한 에이전트",
     "no_agents": "아직 생성한 에이전트가 없습니다",
     "message_aria": "메시지 보내기",
-    "you_suffix": "(나)"
+    "you_suffix": "(나)",
+    "edit_profile": "프로필 편집",
+    "name_label": "이름",
+    "name_placeholder": "이름을 입력하세요",
+    "name_required": "이름은 비워둘 수 없습니다",
+    "change_avatar_aria": "아바타 변경",
+    "avatar_updated_toast": "아바타가 업데이트되었습니다",
+    "avatar_upload_failed": "아바타 업로드에 실패했습니다. 다시 시도하세요",
+    "avatar_err_type": "PNG 또는 JPG 이미지만 지원합니다",
+    "avatar_err_size": "이미지는 5MB 이하여야 합니다",
+    "avatar_err_dimensions": "이미지는 최소 256×256 이상이어야 합니다"
   },
   "detail": {
     "workspace_fallback": "워크스페이스",

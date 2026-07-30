@@ -17,6 +17,7 @@
   },
   "sort": {
     "label_recent": "最近活跃",
+    "label_fleet": "按战力",
     "label_name": "名称",
     "label_runs": "运行最多",
     "label_created": "最近创建"
@@ -669,6 +670,19 @@
     "runtime_offline": "守护进程离线",
     "runtime_recovery": "守护进程已重启",
     "manual": "用户取消"
+  },
+  "fleet": {
+    "title": "舰队战力",
+    "score_label": "战力值",
+    "rank_of": "活跃舰队第 {{rank}} / {{size}}",
+    "frozen_hint": "归档时冻结",
+    "warming_up": "样本不足 · {{current}}/{{required}} 次任务",
+    "pillars": {
+      "delivery": "交付",
+      "evolution": "进化",
+      "growth": "成长",
+      "efficiency": "效率"
+    }
   },
   "dashboard": {
     "all_agents": "全部智能体",

@@ -28,6 +28,7 @@ import { useOpenAgentPanel } from "./agent-panel-context";
 import { useOpenMemberPanel } from "./member-panel-context";
 import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
 import { AgentXpBurst } from "../agents/components/agent-xp-burst";
+import { FleetRankPennantOverlay } from "@multica/ui/components/fleet/fleet-class-badge";
 import {
   mentionTypeFromActorType,
   useResolvedActorIdentity,
@@ -91,6 +92,8 @@ interface ActorAvatarProps {
    * sidebar lists). No effect for non-agent actors.
    */
   showXpBurst?: boolean;
+  /** Top-3 fleet rank pennant on agent avatars. */
+  fleetRank?: number;
 }
 
 
@@ -111,6 +114,7 @@ export function ActorAvatar({
   hoverCardVariant = "profile",
   profileLink,
   showXpBurst = false,
+  fleetRank,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   // LRM-391: ListAgents hides channel/private / group-manager agents — resolve
@@ -163,11 +167,20 @@ export function ActorAvatar({
           {avatar}
         </MemberPresenceOverlay>
       );
-  const withXpBurst =
-    actorType === "agent" && showXpBurst ? (
-      <AgentXpBurst agentId={actorId}>{dotted}</AgentXpBurst>
+  const withFleetPennant =
+    actorType === "agent" && fleetRank ? (
+      <span className="relative inline-flex">
+        {dotted}
+        <FleetRankPennantOverlay fleetRank={fleetRank} />
+      </span>
     ) : (
       dotted
+    );
+  const withXpBurst =
+    actorType === "agent" && showXpBurst ? (
+      <AgentXpBurst agentId={actorId}>{withFleetPennant}</AgentXpBurst>
+    ) : (
+      withFleetPennant
     );
   const shouldLinkToProfile =
     profileLink ??

@@ -824,6 +824,32 @@ func TestCreateAgent_DefaultVisibilityIsWorkspace(t *testing.T) {
 	}
 }
 
+// TestCreateAgent_RejectsRetiredChannelVisibility locks the ORDER, not just
+// the outcome: visibility=channel must be rejected by application-layer
+// validation (400) before any DB write, not surface as a raw CHECK-constraint
+// violation (500). Nash's #1533 review (#multica thread f83df812, 2026-07-30
+// 18:37-18:39): this ordering is exactly the kind of thing a refactor could
+// silently invert, and "no test" means nothing will complain when it does.
+func TestCreateAgent_RejectsRetiredChannelVisibility(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	body := map[string]any{
+		"display_name":         "Retired Channel Visibility " + uuid.NewString()[:8],
+		"description":          "must be rejected before any DB write",
+		"runtime_id":           testRuntimeID,
+		"visibility":           "channel",
+		"max_concurrent_tasks": 1,
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("CreateAgent with visibility=channel: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

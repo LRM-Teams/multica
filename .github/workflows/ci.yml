@@ -118,10 +118,15 @@ jobs:
         # symptom and turn a stable red into an intermittent one.
         run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
   backend:
-    # Pull requests only. The dev push exists to warm the frontend Turbo cache;
-    # this job shares none of it, so running it after a merge would just repeat
-    # what the pull request already proved.
-    if: github.event_name == 'pull_request'
+    # Also runs on the dev push (unlike frontend's Test step above, which stays
+    # PR-only — it's the expensive half of that job and shares no cache with
+    # push). "The pull request already proved it" assumes no merge combination
+    # can break tests both branches passed individually; #1457/#1459/#1455 hit
+    # exactly that (2026-07-30): dev push had skipped backend since a day
+    # earlier, so a bad merge sat undetected until an unrelated PR's CI hit it.
+    # Backend is ~8 min and doesn't share a runner-scoped cache either way, so
+    # running it here trades a small, bounded daily cost for same-day baseline
+    # visibility instead of a silent, unbounded blind spot.
     # GitHub-hosted, same as frontend. Requires Docker for Postgres/Redis
     # service containers — see docs/ci-tencent-runner.md.
     runs-on: ubuntu-latest

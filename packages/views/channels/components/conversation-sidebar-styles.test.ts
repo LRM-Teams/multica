@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   CONVERSATION_SIDEBAR_ROW_ACTIVE,

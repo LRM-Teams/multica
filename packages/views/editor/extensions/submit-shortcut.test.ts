@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi } from "vitest";
 import { getExtensionField } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { FileCardExtension } from "./file-card";
 import { ImageExtension } from "./index";

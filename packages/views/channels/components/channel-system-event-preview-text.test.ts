@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
 import type { ChannelMessage } from "@multica/core/types";

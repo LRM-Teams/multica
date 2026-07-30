@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * LRM-359 — attachment chip filename vs chip surface contrast.
  *

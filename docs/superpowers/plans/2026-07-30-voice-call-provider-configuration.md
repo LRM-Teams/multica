@@ -168,3 +168,37 @@ Beckham's configured welcome message after the caller joins.
 - [ ] Complete one caller-driven browser test and confirm `taskStart`, a
   non-null `connected_at`, non-zero audio duration, and the configured welcome
   message. This step requires an authenticated browser microphone session.
+
+## Cross-service authorization repair
+
+- [x] Reproduced the production symptom at 15:38 CST: the call remained
+  `connecting` until the 30-second client deadline, then ended with
+  `connected_at = NULL`, zero input/output audio, and no turns.
+- [x] Confirmed the same room had no RTC diagnostic record after the documented
+  data-delay window.
+- [x] Rechecked the Web SDK contract and source: `joinRoom()` resolves only
+  after the RTC join request succeeds; the client was not treating a
+  fire-and-forget request as a completed room join.
+- [x] Opened the Volcengine RTC `跨服务授权` page and found the account in the
+  unconfigured state. This omitted `VoiceChatRoleForRTC`, which the current
+  Volcengine integration guide requires before RTC can invoke ASR, TTS, and
+  Ark LLM services.
+- [x] Enabled account-level cross-service authorization through the RTC
+  console and verified the page reports `账号跨服务授权已开通`.
+- [x] Added the required permissions to the `test` IAM user whose AK/SK is used
+  by the production backend. Reopening the unprivileged-user list returns no
+  remaining user.
+- [x] Created an isolated diagnostic RTC room with a short-lived
+  room-and-user-scoped token; no production conversation data was reused.
+- [x] Joined a real Web SDK user to that room and observed the successful RTC
+  connection state.
+- [x] Started a `StartVoiceChat` task with the same API version and
+  ASR/TTS/Ark configuration shape used by production.
+- [x] Observed the configured bot user join, publish audio, and deliver
+  `onRemoteAudioFirstFrame`, proving that the welcome-message path works after
+  authorization.
+- [x] Stopped the diagnostic VoiceChat task, left the RTC room, destroyed the
+  browser engine, and closed the temporary HTTPS test service.
+- [x] No business-code change was made: the failure was an account permission
+  prerequisite, and adding another client/server fallback would have hidden
+  that configuration error without granting RTC access to ASR, TTS, or LLM.

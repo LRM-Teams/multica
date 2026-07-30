@@ -11,12 +11,14 @@ import {
   FlaskConical,
   Bell,
   Plug,
+  Medal,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { AccountTab } from "./account-tab";
+import { HonorTab } from "./honor-tab";
 import { PreferencesTab } from "./preferences-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
@@ -28,9 +30,10 @@ import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { useT } from "../../i18n";
 
-const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
+const ACCOUNT_TAB_KEYS = ["profile", "honor", "preferences", "notifications", "tokens"] as const;
 const ACCOUNT_TAB_ICONS = {
   profile: User,
+  honor: Medal,
   preferences: SlidersHorizontal,
   notifications: Bell,
   tokens: Key,
@@ -183,6 +186,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
       <div className="flex-1 min-w-0 md:overflow-y-auto">
         <div className="w-full max-w-3xl mx-auto p-4 md:p-6">
           <TabsContent value="profile"><AccountTab /></TabsContent>
+          <TabsContent value="honor"><HonorTab /></TabsContent>
           <TabsContent value="preferences"><PreferencesTab /></TabsContent>
           <TabsContent value="notifications"><NotificationsTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>

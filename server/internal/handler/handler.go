@@ -128,6 +128,7 @@ type Handler struct {
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
 	IssueService          *service.IssueService
+	HonorService          *service.HonorService
 	AutopilotService      *service.AutopilotService
 	EmailService          *service.EmailService
 	EnvCheckpointService  EnvCheckpointServiceAPI
@@ -286,6 +287,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		HonorService:          service.NewHonorService(queries),
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:          emailService,
 		UpdateStore:           NewPostgresUpdateStore(updateDB),

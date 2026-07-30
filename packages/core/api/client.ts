@@ -224,6 +224,11 @@ import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
+  honorDashboardSchema,
+  honorPublicWallSchema,
+  honorRulesSchema,
+} from "./honor-schemas";
+import {
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
   AttachmentResponseSchema,
@@ -604,6 +609,73 @@ export class ApiClient {
     return parseWithFallback(raw, UserSchema, EMPTY_USER, {
       endpoint: "GET /api/me",
     });
+  }
+
+  async getHonorRules(): Promise<import("../types/honor").HonorRulesDocument> {
+    const raw = await this.fetch<unknown>("/api/honor/rules");
+    return parseWithFallback(
+      raw,
+      honorRulesSchema,
+      { version: "", founding_cutoff: "", level_thresholds: [], pillar_tier_tables: {}, action_rules: {}, name_style_unlocks: [], badge_catalog: [], changelog: [] },
+      { endpoint: "GET /api/honor/rules" },
+    );
+  }
+
+  async getMyHonor(): Promise<import("../types/honor").HonorDashboard> {
+    const raw = await this.fetch<unknown>("/api/me/honor");
+    return parseWithFallback(
+      raw,
+      honorDashboardSchema,
+      {
+        level: 1,
+        total_xp: 0,
+        xp_to_next_level: 0,
+        name_style: "default",
+        equipped_badge_id: null,
+        pillars: [],
+        unlocked_badges: [],
+        unlocked_styles: [],
+        recent_xp: [],
+      },
+      { endpoint: "GET /api/me/honor" },
+    );
+  }
+
+  async updateMyHonor(data: { equipped_badge_id: string }): Promise<import("../types/honor").HonorDashboard> {
+    const raw = await this.fetch<unknown>("/api/me/honor", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      honorDashboardSchema,
+      {
+        level: 1,
+        total_xp: 0,
+        xp_to_next_level: 0,
+        name_style: "default",
+        equipped_badge_id: data.equipped_badge_id,
+        pillars: [],
+        unlocked_badges: [],
+        unlocked_styles: [],
+        recent_xp: [],
+      },
+      { endpoint: "PATCH /api/me/honor" },
+    );
+  }
+
+  async postHonorPresence(): Promise<void> {
+    await this.fetch("/api/me/honor/presence", { method: "POST" });
+  }
+
+  async getUserHonor(userId: string): Promise<import("../types/honor").HonorPublicWall> {
+    const raw = await this.fetch<unknown>(`/api/users/${userId}/honor`);
+    return parseWithFallback(
+      raw,
+      honorPublicWallSchema,
+      { level: 1, name_style: "default", unlocked_badges: [] },
+      { endpoint: "GET /api/users/:id/honor" },
+    );
   }
 
   async markOnboardingComplete(payload?: {

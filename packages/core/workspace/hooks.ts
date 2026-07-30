@@ -7,6 +7,7 @@ import { memberListOptions, agentListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
 import { resolveActorDisplayName, resolveActorHandle } from "../identity";
 import type { MemberRole } from "../types/workspace";
+import type { HonorSnapshot } from "../types/honor";
 
 export function useActorName() {
   const wsId = useWorkspaceId();
@@ -31,6 +32,10 @@ export function useActorName() {
   // muted label). Missing members return null so ordinary/unknown stay quiet.
   const getMemberRole = useCallback((userId: string): MemberRole | null => {
     return members.find((m) => m.user_id === userId)?.role ?? null;
+  }, [members]);
+
+  const getMemberHonor = useCallback((userId: string): HonorSnapshot | undefined => {
+    return members.find((m) => m.user_id === userId)?.honor;
   }, [members]);
 
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
@@ -83,6 +88,7 @@ export function useActorName() {
       getMemberName,
       getMemberHandle,
       getMemberRole,
+      getMemberHonor,
       getAgentName,
       getAgentHandle,
       getActorName,
@@ -100,6 +106,7 @@ export function useActorName() {
       getMemberHandle,
       getMemberName,
       getMemberRole,
+      getMemberHonor,
     ],
   );
 }

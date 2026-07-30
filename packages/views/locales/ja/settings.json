@@ -27,6 +27,7 @@
     "workspace_fallback": "ワークスペース",
     "tabs": {
       "profile": "プロフィール",
+      "honor": "栄誉",
       "preferences": "環境設定",
       "notifications": "通知",
       "tokens": "API トークン",

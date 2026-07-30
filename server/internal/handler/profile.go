@@ -23,6 +23,7 @@ type MemberProfileResponse struct {
 	RecentActivity []AgentRecentActivityItem  `json:"recent_activity"`
 	ProfileAccess  string                     `json:"profile_access"`
 	MemoryGrowth   *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
+	Honor          *honorSnapshotResponse     `json:"honor,omitempty"`
 }
 
 type AgentRecentActivityItem struct {
@@ -91,7 +92,23 @@ func (h *Handler) getUserMemberProfile(w http.ResponseWriter, r *http.Request, u
 		Status:         nil,
 		RecentActivity: []AgentRecentActivityItem{},
 		ProfileAccess:  "full",
+		Honor:          h.userHonorSnapshot(r, user),
 	})
+}
+
+func (h *Handler) userHonorSnapshot(r *http.Request, user db.User) *honorSnapshotResponse {
+	if h.HonorService == nil {
+		return nil
+	}
+	wall, err := h.HonorService.GetPublicWall(r.Context(), user)
+	if err != nil {
+		return nil
+	}
+	return &honorSnapshotResponse{
+		Level:     wall.Level,
+		NameStyle: wall.NameStyle,
+		Badge:     wall.EquippedBadge,
+	}
 }
 
 func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, agentID string) {

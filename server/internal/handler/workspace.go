@@ -394,16 +394,17 @@ func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 type MemberWithUserResponse struct {
-	ID                 string  `json:"id"`
-	WorkspaceID        string  `json:"workspace_id"`
-	UserID             string  `json:"user_id"`
-	Role               string  `json:"role"`
-	CreatedAt          string  `json:"created_at"`
-	Name               string  `json:"name"`
-	DisplayName        string  `json:"display_name"`
-	Email              string  `json:"email"`
-	AvatarURL          *string `json:"avatar_url"`
-	ProfileDescription string  `json:"profile_description"`
+	ID                 string                 `json:"id"`
+	WorkspaceID        string                 `json:"workspace_id"`
+	UserID             string                 `json:"user_id"`
+	Role               string                 `json:"role"`
+	CreatedAt          string                 `json:"created_at"`
+	Name               string                 `json:"name"`
+	DisplayName        string                 `json:"display_name"`
+	Email              string                 `json:"email"`
+	AvatarURL          *string                `json:"avatar_url"`
+	ProfileDescription string                 `json:"profile_description"`
+	Honor              *honorSnapshotResponse `json:"honor,omitempty"`
 }
 
 func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
@@ -419,8 +420,19 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userIDs := make([]pgtype.UUID, len(members))
+	for i, m := range members {
+		userIDs[i] = m.UserID
+	}
+	honorByUser := h.honorSnapshotsForUsers(r, userIDs)
+
 	resp := make([]MemberWithUserResponse, len(members))
 	for i, m := range members {
+		var honor *honorSnapshotResponse
+		if snap, ok := honorByUser[uuidToString(m.UserID)]; ok {
+			copy := snap
+			honor = &copy
+		}
 		resp[i] = MemberWithUserResponse{
 			ID:                 uuidToString(m.ID),
 			WorkspaceID:        uuidToString(m.WorkspaceID),
@@ -432,6 +444,7 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 			Email:              m.UserEmail,
 			AvatarURL:          textToPtr(m.UserAvatarUrl),
 			ProfileDescription: m.UserProfileDescription,
+			Honor:              honor,
 		}
 	}
 

@@ -4779,6 +4779,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// Ack first: agent wake fanout (and Feishu sync) are O(agents)/network and
 	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
+	h.awardHonorXP(r.Context(), parseUUID(userID), "channel.message", msg.ID)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
 		if channelMessageNeedsVoiceTranscription(msg.Parts) {
 			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {

@@ -148,6 +148,16 @@ export type {
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {
+  HonorBadge,
+  HonorDashboard,
+  HonorNameStyleKey,
+  HonorPublicWall,
+  HonorPillarProgress,
+  HonorRulesDocument,
+  HonorSnapshot,
+  HonorXPEvent,
+} from "./honor";
+export type {
   Workspace,
   WorkspaceRepo,
   Member,

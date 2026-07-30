@@ -73,7 +73,11 @@ jobs:
             postgres_id="$(docker compose "${compose_args[@]}" ps -q postgres || true)"
           fi
           if [ -z "$postgres_id" ]; then
-            postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk 'BEGIN{IGNORECASE=1} /postgres|pgvector|multica-db/ {print $2; exit}')"
+            # Prefer the compose postgres service name; never match db-bridge.
+            postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '$1 ~ /postgres/ {print $2; exit}')"
+          fi
+          if [ -z "$postgres_id" ]; then
+            postgres_id="$(docker ps --format '{{.Image}} {{.ID}}' | awk '$1 ~ /pgvector|postgres/ {print $2; exit}')"
           fi
           if [ -z "$postgres_id" ]; then
             echo "::error::PostgreSQL container is not running"

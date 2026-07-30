@@ -19,6 +19,7 @@ vi.mock("../../i18n/use-t", () => ({
           tray_retry_aria: `Retry upload of ${vars?.filename ?? ""}`,
           tray_uploading: "Uploading",
           tray_upload_failed: "Upload failed",
+          tray_reselect: "Needs re-selection",
         },
       };
       const value = selector(dict);
@@ -102,6 +103,34 @@ describe("ComposerAttachmentTray", () => {
     );
     await user.click(screen.getByRole("button", { name: "Retry upload of broken.png" }));
     expect(onRetry).toHaveBeenCalledWith("err-1");
+  });
+
+  it("LRM-801: stale draft placeholder shows 需重新选择 + remove only (no retry)", async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    const onRetry = vi.fn();
+    const pending: PendingAttachment[] = [
+      item({
+        localId: "stale-1",
+        status: "stale",
+        filename: "gone.png",
+        previewUrl: undefined,
+        attachmentId: undefined,
+      }),
+    ];
+
+    render(
+      <ComposerAttachmentTray pending={pending} onRemove={onRemove} onRetry={onRetry} />,
+    );
+
+    const chip = screen.getByTestId("composer-tray-item-stale-1");
+    expect(chip).toHaveAttribute("data-status", "stale");
+    expect(chip.textContent).toContain("Needs re-selection");
+    expect(
+      screen.queryByRole("button", { name: /Retry upload/ }),
+    ).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Remove gone.png" }));
+    expect(onRemove).toHaveBeenCalledWith("stale-1");
   });
 
   it("marks uploading items", () => {

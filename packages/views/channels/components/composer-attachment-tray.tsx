@@ -115,6 +115,10 @@ export function ComposerAttachmentTray({
                   <p className="truncate text-[10px] leading-tight text-destructive">
                     {item.errorMessage || t(($) => $.composer.tray_upload_failed)}
                   </p>
+                ) : item.status === "stale" ? (
+                  <p className="truncate text-[10px] leading-tight text-muted-foreground">
+                    {t(($) => $.composer.tray_reselect)}
+                  </p>
                 ) : item.status === "uploading" ? (
                   <p className="truncate text-[10px] leading-tight text-muted-foreground">
                     {t(($) => $.composer.tray_uploading)}

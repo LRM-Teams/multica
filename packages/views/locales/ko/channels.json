@@ -429,7 +429,8 @@
     "tray_upload_failed": "업로드 실패",
     "voice_unsent": "음성 메시지가 전송되지 않았습니다({{duration}})",
     "voice_unsent_retry": "다시 보내기",
-    "voice_unsent_delete": "삭제"
+    "voice_unsent_delete": "삭제",
+    "tray_reselect": "다시 선택 필요"
   },
   "message": {
     "add_reaction": "반응 추가",

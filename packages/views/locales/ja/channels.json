@@ -429,7 +429,8 @@
     "tray_upload_failed": "アップロードに失敗しました",
     "voice_unsent": "音声メッセージは送信されていません（{{duration}}）",
     "voice_unsent_retry": "再送信",
-    "voice_unsent_delete": "削除"
+    "voice_unsent_delete": "削除",
+    "tray_reselect": "再選択が必要です"
   },
   "message": {
     "add_reaction": "リアクションを追加",

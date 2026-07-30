@@ -19,6 +19,7 @@ import {
   useEditChannelMessage,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
+  useComposerDraftStore,
 } from "@multica/core/channels";
 import { dmKeys, type DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
@@ -606,9 +607,17 @@ function DmChannelConversation({
     async (file: File) => upload(file, { channelId }),
     [channelId, upload],
   );
+  const dmDraftKey = `dm:${channelId}` as const;
   const dmPending = useComposerPendingAttachments({
     upload: uploadForDm,
     resetKey: channelId,
+    // LRM-801 — tray rides the same per-DM draft as the text.
+    persistence: {
+      load: () =>
+        useComposerDraftStore.getState().drafts[dmDraftKey]?.attachments,
+      save: (attachments) =>
+        useComposerDraftStore.getState().setDraftAttachments(dmDraftKey, attachments),
+    },
   });
   const threadPending = useComposerPendingAttachments({
     upload: uploadForDm,

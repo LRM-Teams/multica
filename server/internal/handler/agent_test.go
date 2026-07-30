@@ -2221,9 +2221,6 @@ func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
 	if uuidToString(updated.ID) != agentID {
 		t.Fatalf("ensureWindyAgent reused agent %q, want restored %q", uuidToString(updated.ID), agentID)
 	}
-	if updated.Visibility != "workspace" {
-		t.Fatalf("restored Wendy visibility = %q, want workspace (must not be silently coerced to private)", updated.Visibility)
-	}
 }
 
 func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {

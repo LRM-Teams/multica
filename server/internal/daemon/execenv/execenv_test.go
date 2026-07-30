@@ -4156,9 +4156,8 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 // comment-formatting block lives below the metadata write step in the
 // workflow, so any reordering or accidental absorption of the codex
 // section would surface here.
+// Not parallel: mutates the package-level runtimeGOOS.
 func TestInjectRuntimeConfigIssueMetadataCodexFormattingUnchanged(t *testing.T) {
-	t.Parallel()
-
 	oldGOOS := runtimeGOOS
 	t.Cleanup(func() { runtimeGOOS = oldGOOS })
 

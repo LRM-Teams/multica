@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -209,7 +210,7 @@ func numericToFloat64(n pgtype.Numeric) float64 {
 
 func float64ToNumeric(v float64) pgtype.Numeric {
 	var n pgtype.Numeric
-	_ = n.Scan(v)
+	_ = n.Scan(strconv.FormatFloat(v, 'f', 2, 64))
 	return n
 }
 

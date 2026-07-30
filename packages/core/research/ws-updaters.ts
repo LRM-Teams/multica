@@ -85,6 +85,11 @@ export function applyResearchWSEvent(
       break;
     }
     case "research_session:status_changed": {
+      if (payload.deleted === true) {
+        qc.removeQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+        void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+        break;
+      }
       const session = payload.session as ResearchSessionSnapshot["session"] | undefined;
       if (session) {
         patchSnapshot(qc, wsId, sessionId, (prev) => ({ ...prev, session }));

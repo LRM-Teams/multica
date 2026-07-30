@@ -16,6 +16,9 @@ function makeQc(initial: unknown) {
       return next;
     },
     invalidateQueries: vi.fn(),
+    removeQueries: ({ queryKey }: { queryKey: unknown }) => {
+      store.delete(JSON.stringify(queryKey));
+    },
     getData: () => store.get(JSON.stringify(researchKeys.snapshot("ws", "s1"))),
   } as unknown as QueryClient & { getData: () => unknown };
 }
@@ -37,6 +40,19 @@ describe("applyResearchWSEvent", () => {
     });
     const data = qc.getData() as typeof EMPTY_RESEARCH_SNAPSHOT;
     expect(data.nodes.map((n) => n.id).sort()).toEqual(["n1", "n2"]);
+  });
+
+  it("removes snapshot cache when session is deleted", () => {
+    const qc = makeQc({
+      ...EMPTY_RESEARCH_SNAPSHOT,
+      session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:status_changed",
+      payload: { session_id: "s1", deleted: true },
+    });
+    expect(qc.getData()).toBeUndefined();
+    expect(qc.invalidateQueries).toHaveBeenCalled();
   });
 
   it("stores ephemeral presence by agent", () => {

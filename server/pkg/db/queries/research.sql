@@ -73,6 +73,38 @@ UPDATE research_session SET
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
 
+-- name: DeleteResearchSession :exec
+DELETE FROM research_session
+WHERE id = $1 AND workspace_id = $2;
+
+-- name: CancelInFlightChatTasksByResearchTitle :many
+-- Stop research fleet wakes: suppress active inbox tasks tied to the
+-- research:<sessionUUID> chat session(s) for this workspace.
+UPDATE agent_inbox_event e
+SET status = 'suppressed',
+    terminal_outcome = 'cancelled',
+    completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    failure_reason = 'research_session_stopped'
+FROM chat_session cs
+WHERE e.chat_session_id = cs.id
+  AND cs.workspace_id = $1
+  AND cs.title = $2
+  AND e.status IN ('pending', 'draining', 'failed')
+RETURNING
+  e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id,
+  e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake,
+  e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error,
+  e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome,
+  e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id,
+  e.execution_config, e.delivery_mode, e.response_mode, e.channel_onboarding_id,
+  e.issue_id, e.source_chat_message_id, e.context, e.dispatched_at, e.started_at,
+  e.completed_at, e.result, e.error, e.session_id, e.work_dir,
+  e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id,
+  e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task,
+  e.wait_reason, e.initiator_user_id, e.agent_dm_exchange_id, e.agent_dm_turn;
+
 -- name: ListResearchGraphNodes :many
 SELECT * FROM research_graph_node
 WHERE session_id = $1 AND workspace_id = $2

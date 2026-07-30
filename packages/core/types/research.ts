@@ -3,7 +3,8 @@ export type ResearchSessionStatus =
   | "running"
   | "awaiting_user_confirm"
   | "completed"
-  | "archived";
+  | "archived"
+  | "paused";
 
 export type ResearchStage =
   | "s1_plan"

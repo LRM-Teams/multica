@@ -10,7 +10,19 @@
     "running": "Running",
     "awaiting_user_confirm": "Awaiting confirm",
     "completed": "Completed",
-    "archived": "Archived"
+    "archived": "Archived",
+    "paused": "Paused"
+  },
+  "actions": {
+    "menu": "Research actions",
+    "stop": "Stop",
+    "stop_done": "Research paused",
+    "delete": "Delete",
+    "delete_title": "Delete this research?",
+    "delete_desc": "The canvas, chat, and sources will be permanently removed.",
+    "delete_confirm": "Delete",
+    "delete_done": "Research deleted",
+    "cancel": "Cancel"
   },
   "panel": {
     "graph": "Exploration map",

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -38,8 +39,13 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if _, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID}); err != nil {
+	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if err != nil {
 		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	if session.Status == "paused" {
+		writeError(w, http.StatusConflict, "research session is paused")
 		return
 	}
 	var req appendGraphNodeRequest
@@ -355,6 +361,33 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		if _, ok := h.requireActiveFleetMember(w, r, wsUUID); !ok {
 			return
 		}
+		if session.Status == "paused" {
+			writeError(w, http.StatusConflict, "research session is paused")
+			return
+		}
+	}
+
+	// User chat while paused resumes the session before wake.
+	if senderType == "user" && session.Status == "paused" {
+		resumed, resumeErr := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
+			ID:          sessionID,
+			WorkspaceID: wsUUID,
+			Status:      pgtype.Text{String: "running", Valid: true},
+		})
+		if resumeErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to resume session")
+			return
+		}
+		session = resumed
+		h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
+			"session": researchSessionToResponse(session),
+		})
+		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, "user", userID, researchProcessEvent{
+			Op:    "session_resumed",
+			Title: "调研已恢复",
+			Body:  "舰队继续推进。",
+			Meta:  map[string]any{"status": "running"},
+		})
 	}
 
 	var target pgtype.UUID
@@ -597,6 +630,121 @@ func ternary(cond bool, a, b string) string {
 		return a
 	}
 	return b
+}
+
+func (h *Handler) stopResearchSessionWakes(ctx context.Context, workspaceID, sessionID pgtype.UUID) {
+	title := researchChatSessionTitle(sessionID)
+	rows, err := h.Queries.CancelInFlightChatTasksByResearchTitle(ctx, db.CancelInFlightChatTasksByResearchTitleParams{
+		WorkspaceID: workspaceID,
+		Title:       title,
+	})
+	if err != nil {
+		slog.Warn("research stop: cancel wakes failed",
+			"session_id", uuidToString(sessionID),
+			"error", err,
+		)
+		return
+	}
+	if h.TaskService == nil {
+		return
+	}
+	for _, task := range rows {
+		h.TaskService.CaptureCancelledTasks(ctx, []db.AgentInboxEvent{task})
+		h.TaskService.ReconcileAgentStatus(ctx, task.AgentID)
+	}
+}
+
+// StopResearchSession pauses a running research session. The session remains
+// readable; the next user chat message resumes it (status → running + wake).
+func (h *Handler) StopResearchSession(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	userID, userOK := requireUserID(w, r)
+	if !userOK {
+		return
+	}
+	sessionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "id")
+	if !ok {
+		return
+	}
+	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	switch session.Status {
+	case "paused":
+		writeJSON(w, http.StatusOK, researchSessionToResponse(session))
+		return
+	case "running", "awaiting_user_confirm", "drafting":
+		// ok
+	default:
+		writeError(w, http.StatusBadRequest, "session cannot be stopped in current status")
+		return
+	}
+
+	h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID)
+
+	updated, err := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
+		ID:          sessionID,
+		WorkspaceID: wsUUID,
+		Status:      pgtype.Text{String: "paused", Valid: true},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to stop session")
+		return
+	}
+	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
+		"session": researchSessionToResponse(updated),
+	})
+	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, "user", userID, researchProcessEvent{
+		Op:    "session_stopped",
+		Title: "调研已暂停",
+		Body:  "舰队已停止推进。在对话里继续发言即可恢复。",
+		Meta:  map[string]any{"status": "paused"},
+	})
+	writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
+}
+
+// DeleteResearchSession permanently removes a research session and cascaded
+// graph/messages/sources/report rows.
+func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	userID, userOK := requireUserID(w, r)
+	if !userOK {
+		return
+	}
+	sessionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "id")
+	if !ok {
+		return
+	}
+	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+
+	h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID)
+
+	if err := h.Queries.DeleteResearchSession(r.Context(), db.DeleteResearchSessionParams{
+		ID:          sessionID,
+		WorkspaceID: wsUUID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete session")
+		return
+	}
+	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
+		"session_id": uuidToString(session.ID),
+		"deleted":    true,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) ConfirmResearchSession(w http.ResponseWriter, r *http.Request) {

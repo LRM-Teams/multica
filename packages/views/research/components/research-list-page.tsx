@@ -17,6 +17,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { AppLink } from "../../navigation/app-link";
+import { ResearchSessionRowActions } from "./research-session-row-actions";
 
 export function ResearchListPage() {
   const { t } = useT("research");
@@ -82,19 +83,24 @@ export function ResearchListPage() {
           </div>
         ) : (
           sessions.map((s) => (
-            <AppLink
+            <div
               key={s.id}
-              href={paths.researchDetail(s.id)}
-              className="flex items-center justify-between rounded-md border px-4 py-3 hover:bg-accent/40"
+              className="flex items-center gap-2 rounded-md border px-4 py-3 hover:bg-accent/40"
             >
-              <div className="min-w-0">
-                <div className="truncate font-medium">{s.title || s.goal}</div>
-                <div className="truncate text-xs text-muted-foreground">{s.goal}</div>
-              </div>
-              <Badge variant="secondary">
-                {t(($) => $.status[s.status as keyof typeof $.status] ?? s.status)}
-              </Badge>
-            </AppLink>
+              <AppLink
+                href={paths.researchDetail(s.id)}
+                className="flex min-w-0 flex-1 items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{s.title || s.goal}</div>
+                  <div className="truncate text-xs text-muted-foreground">{s.goal}</div>
+                </div>
+                <Badge variant="secondary">
+                  {t(($) => $.status[s.status as keyof typeof $.status] ?? s.status)}
+                </Badge>
+              </AppLink>
+              <ResearchSessionRowActions session={s} />
+            </div>
           ))
         )}
       </div>

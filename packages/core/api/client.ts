@@ -3919,6 +3919,14 @@ export class ApiClient {
     return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
   }
 
+  async stopResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
+    return this.fetch(`/api/research/sessions/${id}/stop`, { method: "POST" });
+  }
+
+  async deleteResearchSession(id: string): Promise<void> {
+    await this.fetch(`/api/research/sessions/${id}`, { method: "DELETE" });
+  }
+
   async researchSessionHandoff(
     id: string,
     data: import("../types/research").ResearchHandoffRequest,

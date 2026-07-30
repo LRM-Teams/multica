@@ -40,6 +40,112 @@ func (q *Queries) ArchiveResearchFleetMember(ctx context.Context, arg ArchiveRes
 	return i, err
 }
 
+const cancelInFlightChatTasksByResearchTitle = `-- name: CancelInFlightChatTasksByResearchTitle :many
+UPDATE agent_inbox_event e
+SET status = 'suppressed',
+    terminal_outcome = 'cancelled',
+    completed_at = now(),
+    terminal_at = now(),
+    acked_at = now(),
+    failure_reason = 'research_session_stopped'
+FROM chat_session cs
+WHERE e.chat_session_id = cs.id
+  AND cs.workspace_id = $1
+  AND cs.title = $2
+  AND e.status IN ('pending', 'draining', 'failed')
+RETURNING
+  e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id,
+  e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake,
+  e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error,
+  e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome,
+  e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id,
+  e.execution_config, e.delivery_mode, e.response_mode, e.channel_onboarding_id,
+  e.issue_id, e.source_chat_message_id, e.context, e.dispatched_at, e.started_at,
+  e.completed_at, e.result, e.error, e.session_id, e.work_dir,
+  e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id,
+  e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task,
+  e.wait_reason, e.initiator_user_id, e.agent_dm_exchange_id, e.agent_dm_turn
+`
+
+type CancelInFlightChatTasksByResearchTitleParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Title       string      `json:"title"`
+}
+
+// Stop research fleet wakes: suppress active inbox tasks tied to the
+// research:<sessionUUID> chat session(s) for this workspace.
+func (q *Queries) CancelInFlightChatTasksByResearchTitle(ctx context.Context, arg CancelInFlightChatTasksByResearchTitleParams) ([]AgentInboxEvent, error) {
+	rows, err := q.db.Query(ctx, cancelInFlightChatTasksByResearchTitle, arg.WorkspaceID, arg.Title)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentInboxEvent{}
+	for rows.Next() {
+		var i AgentInboxEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.AgentSessionID,
+			&i.ConversationID,
+			&i.ChannelID,
+			&i.ChatSessionID,
+			&i.AgentID,
+			&i.SourceMessageID,
+			&i.Reason,
+			&i.RequiresWake,
+			&i.Status,
+			&i.Priority,
+			&i.SeqFrom,
+			&i.SeqTo,
+			&i.Attempt,
+			&i.LastError,
+			&i.ClaimedAt,
+			&i.AckedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TerminalOutcome,
+			&i.TerminalDeliveryID,
+			&i.Retryable,
+			&i.TerminalAt,
+			&i.RuntimeID,
+			&i.ExecutionConfig,
+			&i.DeliveryMode,
+			&i.ResponseMode,
+			&i.ChannelOnboardingID,
+			&i.IssueID,
+			&i.SourceChatMessageID,
+			&i.Context,
+			&i.DispatchedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.Result,
+			&i.Error,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.TriggerCommentID,
+			&i.AutopilotRunID,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.FailureReason,
+			&i.TriggerSummary,
+			&i.ForceFreshSession,
+			&i.IsLeaderTask,
+			&i.WaitReason,
+			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createResearchFleet = `-- name: CreateResearchFleet :one
 INSERT INTO research_fleet (workspace_id, lead_agent_id)
 VALUES ($1, $2)
@@ -392,6 +498,21 @@ func (q *Queries) CreateResearchSession(ctx context.Context, arg CreateResearchS
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteResearchSession = `-- name: DeleteResearchSession :exec
+DELETE FROM research_session
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteResearchSessionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteResearchSession(ctx context.Context, arg DeleteResearchSessionParams) error {
+	_, err := q.db.Exec(ctx, deleteResearchSession, arg.ID, arg.WorkspaceID)
+	return err
 }
 
 const createResearchStageEval = `-- name: CreateResearchStageEval :one

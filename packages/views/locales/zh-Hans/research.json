@@ -10,7 +10,19 @@
     "running": "进行中",
     "awaiting_user_confirm": "待确认",
     "completed": "已完成",
-    "archived": "已归档"
+    "archived": "已归档",
+    "paused": "已暂停"
+  },
+  "actions": {
+    "menu": "调研操作",
+    "stop": "停止",
+    "stop_done": "调研已暂停",
+    "delete": "删除",
+    "delete_title": "删除这条调研？",
+    "delete_desc": "画布、对话和来源都会被永久删除，无法恢复。",
+    "delete_confirm": "删除",
+    "delete_done": "调研已删除",
+    "cancel": "取消"
   },
   "panel": {
     "graph": "调研探索图",

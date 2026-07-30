@@ -2,9 +2,6 @@ package daemon
 
 import (
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"reflect"
 	"testing"
 )
@@ -57,72 +54,5 @@ func TestTaskAgentDataCarriesManagerChannelsAcrossClaimWire(t *testing.T) {
 		if got := item.FieldByName("Name").String(); got != want.name {
 			t.Fatalf("ManagerChannels[%d].Name=%q want %q", index, got, want.name)
 		}
-	}
-}
-
-func TestDaemonMapsTaskAgentManagerChannelsIntoRuntimeContext(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "daemon.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse daemon.go: %v", err)
-	}
-
-	var (
-		copiesAgentField bool
-		mapsContextField bool
-	)
-	isTaskAgentManagerChannels := func(expr ast.Expr) bool {
-		manager, ok := expr.(*ast.SelectorExpr)
-		if !ok || manager.Sel.Name != "ManagerChannels" {
-			return false
-		}
-		agent, ok := manager.X.(*ast.SelectorExpr)
-		if !ok || agent.Sel.Name != "Agent" {
-			return false
-		}
-		task, ok := agent.X.(*ast.Ident)
-		return ok && task.Name == "task"
-	}
-
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch typed := node.(type) {
-		case *ast.AssignStmt:
-			if len(typed.Lhs) != 1 || len(typed.Rhs) != 1 {
-				return true
-			}
-			lhs, ok := typed.Lhs[0].(*ast.Ident)
-			if ok && lhs.Name == "managerChannels" && isTaskAgentManagerChannels(typed.Rhs[0]) {
-				copiesAgentField = true
-			}
-		case *ast.CompositeLit:
-			selector, ok := typed.Type.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "TaskContextForEnv" {
-				return true
-			}
-			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Name != "execenv" {
-				return true
-			}
-			for _, element := range typed.Elts {
-				kv, ok := element.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				key, keyOK := kv.Key.(*ast.Ident)
-				value, valueOK := kv.Value.(*ast.Ident)
-				if keyOK && valueOK &&
-					key.Name == "ManagerChannels" && value.Name == "managerChannels" {
-					mapsContextField = true
-				}
-			}
-		}
-		return true
-	})
-
-	if !copiesAgentField || !mapsContextField {
-		t.Fatalf(
-			"daemon manager-channel mapper copies task.Agent.ManagerChannels=%t maps TaskContextForEnv.ManagerChannels=%t; both are required",
-			copiesAgentField,
-			mapsContextField,
-		)
 	}
 }

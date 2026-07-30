@@ -27,29 +27,18 @@ func TestStartupStaticDigestIgnoresPerTurnFields(t *testing.T) {
 	}
 }
 
-func TestStartupStaticDigestTracksManagerChannelsForResidentBrief(t *testing.T) {
-	ordinary := TaskContextForEnv{AgentID: "agent-a", AgentName: "Agent A"}
-	manager := ordinary
-	manager.ManagerChannels = []ManagerChannelContextForEnv{{
-		ID: "channel-a", Name: "group-a",
-	}}
-
-	if StartupStaticDigest("grok", ordinary) == StartupStaticDigest("grok", manager) {
-		t.Fatal("manager promotion must rotate the resident startup brief")
-	}
-	static := StartupStaticContext(manager)
-	if len(static.ManagerChannels) != 1 || static.ManagerChannels[0].ID != "channel-a" {
-		t.Fatalf("manager channels missing from startup context: %+v", static.ManagerChannels)
-	}
-	brief := RenderStartupMaterializationPlan("grok", static).RuntimeBrief
-	if !containsIgnoreCase(brief, "**Group manager: #group-a.**") {
-		t.Fatalf("resident startup brief missing current manager role:\n%s", brief)
-	}
-
-	demoted := manager
-	demoted.ManagerChannels = nil
-	if StartupStaticDigest("grok", manager) == StartupStaticDigest("grok", demoted) {
-		t.Fatal("manager demotion must rotate the resident startup brief")
+// TestStartupStaticDigestNoLongerReflectsManagerRole documents the D6 digest
+// half of retiring the startup group-manager brief: TaskContextForEnv has no
+// ManagerChannels field to feed the digest any longer, so a role change
+// cannot rotate/recreate the resident process. That's intentional — role
+// truth now reaches every wake via daemon.currentStateOverlay regardless of
+// session age, so paying for a process recreate on every promotion/demotion
+// would just be an expensive no-op. See TestStartupBriefNeverRendersGroupManagerDutySegment.
+func TestStartupStaticDigestNoLongerReflectsManagerRole(t *testing.T) {
+	ctx := TaskContextForEnv{AgentID: "agent-a", AgentName: "Agent A"}
+	brief := RenderStartupMaterializationPlan("grok", StartupStaticContext(ctx)).RuntimeBrief
+	if containsIgnoreCase(brief, "Group manager") {
+		t.Fatalf("resident startup brief must not contain manager duty text:\n%s", brief)
 	}
 }
 

@@ -60,14 +60,14 @@ func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request, mo
 	}
 	workspaceID := uuidToString(agent.WorkspaceID)
 	userID := requestUserID(r)
-	actorType, _ := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	if actorType == "agent" {
 		writeError(w, http.StatusForbidden, "agents may not access agent files")
 		return db.Agent{}, false
 	}
-	isOwner := userID != "" && agent.OwnerID.Valid && uuidToString(agent.OwnerID) == userID
-	if !isOwner && !(mode == agentFileAccessRead && userID != "" && devAgentProfileAccessEnabled()) {
-		writeError(w, http.StatusForbidden, "only the agent creator can access these files")
+	hasAccess := h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID)
+	if !hasAccess && !(mode == agentFileAccessRead && userID != "" && devAgentProfileAccessEnabled()) {
+		writeError(w, http.StatusForbidden, "only the agent creator or a workspace admin can access these files")
 		return db.Agent{}, false
 	}
 	return agent, true

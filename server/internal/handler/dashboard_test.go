@@ -248,6 +248,95 @@ func TestDashboardEndpoints(t *testing.T) {
 	}
 }
 
+// TestDashboardUsageByAgentGatesDetailToOwnerOrAdmin proves task #908's
+// aggregate-vs-detail split (#multica thread f83df812, Parker 2026-07-30
+// 17:46): per-agent token spend is "明细" (detail) and gated to admin|owner
+// or the agent's own owning member, while GetWorkspaceAgentRunCounts and
+// accessibleAgentIDs (the aggregate half) stay untouched.
+func TestDashboardUsageByAgentGatesDetailToOwnerOrAdmin(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	runtimeID := handlerTestRuntimeID(t)
+
+	memberID := createAgentFilesTestMember(t, "member")
+	adminID := createAgentFilesTestMember(t, "admin")
+
+	seedAgent := func(displayName, ownerID string) string {
+		handle := identityHandleCandidate(identityHandleBase(displayName, "agent"), 1)
+		var agentID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent (
+				workspace_id, name, display_name, description, runtime_mode, runtime_config,
+				runtime_id, visibility, max_concurrent_tasks, owner_id
+			)
+			VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 'private', 1, $5)
+			RETURNING id
+		`, testWorkspaceID, handle, displayName, runtimeID, ownerID).Scan(&agentID); err != nil {
+			t.Fatalf("seed agent %s: %v", displayName, err)
+		}
+		t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+		return agentID
+	}
+	seedUsage := func(agentID string) {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO agent_usage_hourly (
+				bucket_hour, workspace_id, runtime_id, agent_id, provider, model, input_tokens
+			) VALUES (date_trunc('hour', now()), $1, $2, $3, 'claude', 'claude-3-5-sonnet', 4242)
+		`, testWorkspaceID, runtimeID, agentID); err != nil {
+			t.Fatalf("seed usage for agent %s: %v", agentID, err)
+		}
+		t.Cleanup(func() {
+			testPool.Exec(context.Background(), `DELETE FROM agent_usage_hourly WHERE agent_id = $1`, agentID)
+		})
+	}
+
+	ownAgentID := seedAgent("usage-gate-own-agent", memberID)
+	otherAgentID := seedAgent("usage-gate-other-agent", testUserID)
+	seedUsage(ownAgentID)
+	seedUsage(otherAgentID)
+
+	hasAgent := func(t *testing.T, body []byte, agentID string) bool {
+		t.Helper()
+		var rows []DashboardUsageByAgentResponse
+		if err := json.Unmarshal(body, &rows); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		for _, r := range rows {
+			if r.AgentID == agentID {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("plain member sees only their own agent", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		testHandler.GetDashboardUsageByAgent(w, newRequestAs(memberID, http.MethodGet, "/api/dashboard/usage/by-agent?days=1", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if !hasAgent(t, w.Body.Bytes(), ownAgentID) {
+			t.Errorf("expected member's own agent %s in response, got %s", ownAgentID, w.Body.String())
+		}
+		if hasAgent(t, w.Body.Bytes(), otherAgentID) {
+			t.Errorf("expected other agent %s to be filtered out for plain member, got %s", otherAgentID, w.Body.String())
+		}
+	})
+
+	t.Run("admin sees every agent", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		testHandler.GetDashboardUsageByAgent(w, newRequestAs(adminID, http.MethodGet, "/api/dashboard/usage/by-agent?days=1", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if !hasAgent(t, w.Body.Bytes(), ownAgentID) || !hasAgent(t, w.Body.Bytes(), otherAgentID) {
+			t.Errorf("expected admin to see both agents, got %s", w.Body.String())
+		}
+	})
+}
+
 // TestDashboardUsageDailyBucketsByViewerTimezone proves the `?tz=` query
 // param drives the calendar-day boundary: the same UTC instant lands under
 // a different `date` for a UTC viewer vs an America/Los_Angeles viewer.

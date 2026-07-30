@@ -395,13 +395,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 				"agent_id", uuidToString(target),
 				"error", wakeErr,
 			)
-			h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{
-				Op:      "wake_failed",
-				Title:   "唤醒失败",
-				Body:    fmt.Sprintf("未能唤醒目标 agent：%v。请确认 runtime/daemon 在线后重试。", wakeErr),
-				ActorID: target,
-				Meta:    map[string]any{"error": wakeErr.Error()},
-			})
+			h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchWakeFailureEvent(target, wakeErr))
 		}
 	} else if target.Valid && senderType == "agent" {
 		initiator := session.CreatedBy
@@ -411,13 +405,9 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 				"agent_id", uuidToString(target),
 				"error", wakeErr,
 			)
-			h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{
-				Op:      "wake_failed",
-				Title:   "调度失败",
-				Body:    fmt.Sprintf("未能唤醒目标 agent：%v", wakeErr),
-				ActorID: target,
-				Meta:    map[string]any{"error": wakeErr.Error()},
-			})
+			ev := researchWakeFailureEvent(target, wakeErr)
+			ev.Title = "调度失败"
+			h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, ev)
 		}
 	} else if senderType == "user" && !target.Valid {
 		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{

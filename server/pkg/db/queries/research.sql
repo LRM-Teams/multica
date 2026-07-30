@@ -20,8 +20,7 @@ ORDER BY is_lead DESC, created_at ASC;
 
 -- name: GetResearchFleetMemberByAgent :one
 SELECT * FROM research_fleet_member
-WHERE workspace_id = $1 AND agent_id = $2
-  AND status <> 'archived';
+WHERE workspace_id = $1 AND agent_id = $2;
 
 -- name: CreateResearchFleetMember :one
 INSERT INTO research_fleet_member (

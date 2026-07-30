@@ -62,14 +62,8 @@ func (h *Handler) enqueueResearchAgentWake(
 		WorkspaceID: workspaceID,
 		AgentID:     targetAgentID,
 	})
-	if err != nil {
-		return fmt.Errorf("target is not a research fleet member")
-	}
-	if member.Status == "pending_prompt_review" {
-		return fmt.Errorf("fleet member pending prompt review cannot accept tasks")
-	}
-	if member.Status == "archived" {
-		return fmt.Errorf("fleet member is archived")
+	if statusErr := requireActiveResearchFleetMember(member, err); statusErr != nil {
+		return statusErr
 	}
 
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{

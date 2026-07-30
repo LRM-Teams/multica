@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import enResearch from "../../locales/en/research.json";
 
 const sessionsQueryRef = vi.hoisted(() => ({
-  current: { data: undefined, isLoading: false, isError: false, error: null, refetch: vi.fn() } as {
+  current: {
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  } as {
     data: { sessions: unknown[] } | undefined;
     isLoading: boolean;
     isError: boolean;
@@ -40,7 +46,9 @@ vi.mock("@multica/core/research", () => ({
     snapshot: (wsId: string, id: string) => ["research", wsId, "snapshot", id],
   },
   researchFleetOptions: (wsId: string) => ({ queryKey: ["research", wsId, "fleet"] }),
-  researchSessionListOptions: (wsId: string) => ({ queryKey: ["research", wsId, "sessions"] }),
+  researchSessionListOptions: (wsId: string) => ({
+    queryKey: ["research", wsId, "sessions"],
+  }),
 }));
 
 vi.mock("../../navigation/context", () => ({
@@ -48,8 +56,18 @@ vi.mock("../../navigation/context", () => ({
 }));
 
 vi.mock("../../navigation/app-link", () => ({
-  AppLink: ({ children, href, className }: { children: React.ReactNode; href: string; className?: string }) => (
-    <a href={href} className={className}>{children}</a>
+  AppLink: ({
+    children,
+    href,
+    className,
+  }: {
+    children: React.ReactNode;
+    href: string;
+    className?: string;
+  }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
   ),
 }));
 
@@ -135,7 +153,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(screen.getByText(enResearch.empty_title)).toBeTruthy();
     expect(screen.getByText(enResearch.empty_desc)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
-    const cta = screen.getByRole("button", { name: enResearch.list.empty_cta });
+    const cta = screen.getByRole("button", { name: enResearch.empty_cta });
     await userEvent.click(cta);
     const textarea = screen.getByPlaceholderText(enResearch.goal_placeholder);
     expect(document.activeElement).toBe(textarea);
@@ -155,9 +173,12 @@ describe("ResearchListPage list states (LRM-789)", () => {
     });
     render(<ResearchListPage />);
 
-    const inProgressHeader = screen.getByRole("heading", { name: enResearch.groups.in_progress });
-    const completedHeader = screen.getByRole("heading", { name: enResearch.groups.completed });
-    // Headers carry no counts.
+    const inProgressHeader = screen.getByRole("heading", {
+      name: enResearch.groups.in_progress,
+    });
+    const completedHeader = screen.getByRole("heading", {
+      name: enResearch.groups.completed,
+    });
     expect(inProgressHeader.textContent).toBe(enResearch.groups.in_progress);
     expect(completedHeader.textContent).toBe(enResearch.groups.completed);
 
@@ -170,7 +191,6 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(completedSection?.textContent).toContain("Delta");
     expect(completedSection?.textContent).not.toContain("Alpha");
 
-    // 进行中 group renders before 已完成 group.
     const order = inProgressHeader.compareDocumentPosition(completedHeader);
     expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -180,7 +200,66 @@ describe("ResearchListPage list states (LRM-789)", () => {
       data: { sessions: [session({ id: "s-run", status: "running", title: "Alpha" })] },
     });
     render(<ResearchListPage />);
-    expect(screen.getByRole("heading", { name: enResearch.groups.in_progress })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: enResearch.groups.completed })).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: enResearch.groups.in_progress }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: enResearch.groups.completed }),
+    ).toBeNull();
+  });
+});
+
+describe("ResearchListPage first-visit empty state (LRM-816)", () => {
+  beforeEach(() => {
+    setQuery({ data: { sessions: [] } });
+  });
+
+  it("shows explanation and at least 3 example questions when no sessions", () => {
+    render(<ResearchListPage />);
+
+    expect(screen.getByText(enResearch.empty_title)).toBeInTheDocument();
+    expect(screen.getByText(enResearch.empty_desc)).toBeInTheDocument();
+
+    const examples = Object.values(enResearch.empty_examples);
+    expect(examples.length).toBeGreaterThanOrEqual(3);
+    for (const text of examples) {
+      expect(screen.getByRole("button", { name: text })).toBeInTheDocument();
+    }
+
+    expect(
+      screen.getByRole("button", { name: enResearch.empty_cta }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
+  });
+
+  it("clicking an example fills the composer and stays editable", () => {
+    render(<ResearchListPage />);
+
+    const example = enResearch.empty_examples.q2;
+    fireEvent.click(screen.getByRole("button", { name: example }));
+
+    const composer = screen.getByPlaceholderText(
+      enResearch.goal_placeholder,
+    ) as HTMLTextAreaElement;
+    expect(composer.value).toBe(example);
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
+
+    fireEvent.change(composer, { target: { value: `${example} (edited)` } });
+    expect(composer.value).toBe(`${example} (edited)`);
+  });
+
+  it("does not show the empty state once sessions exist", () => {
+    setQuery({
+      data: {
+        sessions: [session({ id: "s-1", status: "running", title: "Vector DB comparison" })],
+      },
+    });
+    render(<ResearchListPage />);
+
+    expect(screen.getByText("Vector DB comparison")).toBeInTheDocument();
+    expect(screen.queryByText(enResearch.empty_title)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: enResearch.empty_examples.q1 }),
+    ).not.toBeInTheDocument();
   });
 });

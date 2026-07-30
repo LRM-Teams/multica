@@ -14,9 +14,10 @@ import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { AlertCircle, Telescope } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
+import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchSessionRow } from "./research-session-row";
 
 /** LRM-789: terminal sessions fall under the 已完成 group; everything else is 进行中. */
@@ -63,8 +64,14 @@ export function ResearchListPage() {
   const focusComposer = () => {
     const el = goalInputRef.current;
     if (!el) return;
-    el.scrollIntoView({ block: "center" });
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
     el.focus({ preventScroll: true });
+  };
+
+  const fillComposer = (text: string) => {
+    setGoal(text);
+    // Defer focus so the controlled value paints before the caret moves.
+    queueMicrotask(focusComposer);
   };
 
   const renderRow = (s: ResearchSession) => (
@@ -115,16 +122,10 @@ export function ResearchListPage() {
           </Button>
         </div>
       ) : sessions.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed px-6 py-12 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-            <Telescope className="size-6 text-muted-foreground" />
-          </div>
-          <div className="font-medium">{t(($) => $.empty_title)}</div>
-          <p className="max-w-md text-sm text-muted-foreground">{t(($) => $.empty_desc)}</p>
-          <Button size="sm" onClick={focusComposer}>
-            {t(($) => $.list.empty_cta)}
-          </Button>
-        </div>
+        <ResearchEmptyState
+          onSelectExample={fillComposer}
+          onStart={focusComposer}
+        />
       ) : (
         <div className="space-y-6">
           {inProgress.length > 0 && (

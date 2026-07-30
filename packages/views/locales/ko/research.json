@@ -3,6 +3,14 @@
   "new": "New research",
   "empty_title": "No research yet",
   "empty_desc": "Describe what you want to understand. The research fleet runs a multi-source methodology for you.",
+  "empty_examples_label": "어디서 시작할지 막막하다면 예시를 골라보세요:",
+  "empty_examples": {
+    "q1": "2026년 AI 코딩 어시스턴트 주요 제품과 차별점 정리",
+    "q2": "주요 벡터 데이터베이스의 프로덕션 비용과 성능 비교",
+    "q3": "Notion의 가격 전략과 사용자 평가 조사",
+    "q4": "올해 엠보디드 AI 분야의 주요 기술 혁신 정리"
+  },
+  "empty_cta": "첫 리서치 시작하기",
   "goal_placeholder": "What do you want researched? (goal only — no need to name sites)",
   "start": "Start research",
   "status": {

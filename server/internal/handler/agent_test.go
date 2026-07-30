@@ -2306,6 +2306,16 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 		t.Fatalf("load runtime: %v", err)
 	}
 
+	// This is a smoke test, not a deterministic regression guard: it proves
+	// the ensure() path doesn't fall over under real concurrency, but the
+	// actual collision window is narrow enough (~13% catch rate measured in
+	// #1471 review, mutating SetWorkspaceOnboardingAgentID to an unguarded
+	// write) that it will not reliably catch someone removing the CAS
+	// predicate later. `-race` only instruments Go memory races; it says
+	// nothing about this DB-level TOCTOU, so a green `-race` run here is not
+	// evidence the CAS guard is intact. TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull
+	// below is the deterministic guard for that; this test's job is only to
+	// surface interactions a sequential test wouldn't think to check.
 	const concurrency = 8
 	results := make([]db.Agent, concurrency)
 	errs := make([]error, concurrency)
@@ -2352,5 +2362,87 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 	}
 	if !boundID.Valid || uuidToString(boundID) != winnerID {
 		t.Fatalf("workspace.onboarding_agent_id = %v, want %s", boundID, winnerID)
+	}
+}
+
+// TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull is the deterministic
+// regression guard for the CAS predicate itself: TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent
+// above only catches a removed "AND onboarding_agent_id IS NULL" clause
+// probabilistically (~13% of runs per #1471 code review — concurrency alone
+// is a poor regression guard for a narrow DB-level TOCTOU window). This test
+// needs no timing and fails every single time the predicate is missing.
+func TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	q := db.New(testPool)
+	suffix := uuid.NewString()
+	workspace, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "onboarding-cas-" + suffix, Slug: "onboarding-cas-" + suffix, IssuePrefix: "OCS",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	var ownerID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+	`, "cas-owner-"+suffix, "cas-owner-"+suffix+"@example.test").Scan(&ownerID); err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	var runtimeID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, 'cas-runtime', 'cloud', 'daytona', 'online',
+		  '', '{}'::jsonb, 'private', now())
+		RETURNING id
+	`, workspace.ID, "cas-daemon-"+suffix).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspace.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	createAgent := func(name string) db.Agent {
+		t.Helper()
+		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
+			WorkspaceID: workspace.ID, Name: name, DisplayName: name,
+			Description: "cas test agent", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
+			RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerID,
+			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		})
+		if err != nil {
+			t.Fatalf("create agent %q: %v", name, err)
+		}
+		return agent
+	}
+	agentA := createAgent("cas-agent-a-" + suffix)
+	agentB := createAgent("cas-agent-b-" + suffix)
+
+	if err := testHandler.Queries.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{
+		ID: workspace.ID, OnboardingAgentID: agentA.ID,
+	}); err != nil {
+		t.Fatalf("bind agent A: %v", err)
+	}
+
+	// The binding is already set to A. A second, unconditional attempt to
+	// bind B must be a no-op: SetWorkspaceOnboardingAgentID's WHERE
+	// onboarding_agent_id IS NULL clause exists precisely so a losing
+	// concurrent writer never overwrites an already-decided winner.
+	if err := testHandler.Queries.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{
+		ID: workspace.ID, OnboardingAgentID: agentB.ID,
+	}); err != nil {
+		t.Fatalf("attempt bind agent B: %v", err)
+	}
+
+	boundID, err := testHandler.Queries.GetWorkspaceOnboardingAgentID(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("load onboarding binding: %v", err)
+	}
+	if !boundID.Valid || uuidToString(boundID) != uuidToString(agentA.ID) {
+		t.Fatalf("binding after second SetWorkspaceOnboardingAgentID = %v, want unchanged %s (CAS predicate must reject writes once bound)", boundID, uuidToString(agentA.ID))
 	}
 }

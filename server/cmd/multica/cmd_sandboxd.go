@@ -702,12 +702,12 @@ func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJ
 }
 
 func dockerRuntimeEntrypointScript() string {
+	// Keep PID 1 alive after the initial runtime start so reconfigure can
+	// restart the Multica daemon in-place via docker exec. Docker container
+	// env is immutable after create; updated Pi/model config is applied by
+	// restartRuntimeInDocker, not by docker rm/run.
 	return `/usr/local/bin/start-multica-runtime.sh
-while pgrep -f 'multica .*daemon start' >/dev/null; do
-  sleep 5
-done
-echo 'multica daemon exited'
-exit 1`
+exec tail -f /dev/null`
 }
 
 func dockerEndpointInfo(containerID, name, image string) map[string]any {
@@ -747,30 +747,112 @@ func (c *sandboxdClient) dockerLifecycle(ctx context.Context, containerID, actio
 	return map[string]any{"local_ref": containerID, "result": map[string]any{"action": action, "container_id": containerID}, "endpoint_info": nil}, nil
 }
 
-func (c *sandboxdClient) resumeDockerContainer(ctx context.Context, containerID string, _ sandboxJobPayload) (map[string]any, error) {
-	return c.dockerLifecycle(ctx, containerID, "start")
+func (c *sandboxdClient) dockerExec(ctx context.Context, containerID string, args ...string) (string, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return "", fmt.Errorf("docker container id is required")
+	}
+	cmdArgs := append([]string{"exec", containerID}, args...)
+	cmd := dockerCommand(ctx, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("docker exec: %s", strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
-func (c *sandboxdClient) reconfigureDockerContainer(ctx context.Context, job sandboxJob, containerID string, payload sandboxJobPayload) (map[string]any, error) {
-	oldID := strings.TrimSpace(containerID)
-	if oldID == "" {
-		if found, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
-			oldID = found
-		}
+// dockerEntrypointKeepaliveCmdline matches the legacy entrypoint pgrep
+// (`multica .*daemon start`) so older containers that still exit when the
+// real daemon dies stay alive during in-place reconfigure. It must NOT match
+// `pkill -f 'multica daemon'` used by buildStartRuntimeInCubeCode.
+const dockerEntrypointKeepaliveCmdline = "multica keepAlive daemon start"
+
+func (c *sandboxdClient) startDockerEntrypointKeepalive(ctx context.Context, containerID string) {
+	script := "pkill -f 'multica keepAlive daemon start' >/dev/null 2>&1 || true; " +
+		"exec -a '" + dockerEntrypointKeepaliveCmdline + "' sleep 7200"
+	cmd := dockerCommand(ctx, "exec", "-d", containerID, "bash", "-lc", script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		c.logger.Warn("docker entrypoint keepalive start failed", "container_id", containerID, "error", strings.TrimSpace(string(out)))
 	}
-	if oldID != "" {
-		if _, err := c.deleteDockerContainer(ctx, oldID); err != nil {
-			return nil, err
-		}
+}
+
+func (c *sandboxdClient) stopDockerEntrypointKeepalive(ctx context.Context, containerID string) {
+	_, _ = c.dockerExec(ctx, containerID, "bash", "-lc", "pkill -f 'multica keepAlive daemon start' >/dev/null 2>&1 || true")
+}
+
+func (c *sandboxdClient) restartRuntimeInDocker(ctx context.Context, containerID string, runtimeEnv map[string]string) error {
+	if len(runtimeEnv) == 0 || runtimeEnvToken(runtimeEnv) == "" {
+		return fmt.Errorf("runtime_env missing MULTICA_TOKEN")
 	}
-	result, err := c.createDockerContainer(ctx, job, payload)
+	code := buildStartRuntimeInCubeCode(runtimeEnv)
+	if _, err := c.dockerExec(ctx, containerID, "python3", "-c", code); err == nil {
+		return nil
+	} else if out, err2 := c.dockerExec(ctx, containerID, "python", "-c", code); err2 != nil {
+		msg := strings.TrimSpace(out)
+		if msg == "" {
+			msg = err2.Error()
+		}
+		return fmt.Errorf("restart runtime in docker: %s", msg)
+	}
+	return nil
+}
+
+func (c *sandboxdClient) resumeDockerContainer(ctx context.Context, containerID string, payload sandboxJobPayload) (map[string]any, error) {
+	result, err := c.dockerLifecycle(ctx, containerID, "start")
 	if err != nil {
 		return nil, err
 	}
-	if inner, ok := result["result"].(map[string]any); ok {
-		inner["reconfigured"] = true
+	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
+	if len(runtimeEnv) > 0 && runtimeEnvToken(runtimeEnv) != "" && hasRuntimeModelConfig(payload.Runtime) {
+		c.startDockerEntrypointKeepalive(ctx, containerID)
+		defer c.stopDockerEntrypointKeepalive(ctx, containerID)
+		if err := c.restartRuntimeInDocker(ctx, containerID, runtimeEnv); err != nil {
+			return nil, err
+		}
+		result["result"] = map[string]any{"resumed": true, "runtime_restarted": true, "container_id": containerID}
 	}
 	return result, nil
+}
+
+func (c *sandboxdClient) reconfigureDockerContainer(ctx context.Context, job sandboxJob, containerID string, payload sandboxJobPayload) (map[string]any, error) {
+	id := strings.TrimSpace(containerID)
+	if id == "" {
+		if found, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
+			id = found
+		}
+	}
+	if id == "" {
+		return nil, fmt.Errorf("docker container id is required")
+	}
+	if _, err := c.dockerLifecycle(ctx, id, "start"); err != nil {
+		return nil, err
+	}
+	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
+	if len(runtimeEnv) == 0 || runtimeEnvToken(runtimeEnv) == "" {
+		return nil, fmt.Errorf("runtime_env missing MULTICA_TOKEN")
+	}
+	// Keep legacy entrypoint watchers satisfied while the real daemon is swapped.
+	c.startDockerEntrypointKeepalive(ctx, id)
+	defer c.stopDockerEntrypointKeepalive(ctx, id)
+	if err := c.restartRuntimeInDocker(ctx, id, runtimeEnv); err != nil {
+		return nil, err
+	}
+	image := strings.TrimSpace(payload.DockerImage)
+	if image == "" {
+		image = stringFromRawObject(payload.EndpointInfo, "image")
+	}
+	name := firstNonEmpty(stringFromRawObject(payload.EndpointInfo, "container_name"), dockerContainerName(job.InstanceID))
+	endpoint := dockerEndpointInfo(id, name, image)
+	return map[string]any{
+		"local_ref":     id,
+		"endpoint_info": endpoint,
+		"result": map[string]any{
+			"reconfigured":   true,
+			"container_id":   id,
+			"container_name": name,
+			"image":          image,
+			"runtime_env":    redactedRuntimeEnv(runtimeEnv),
+		},
+	}, nil
 }
 
 func (c *sandboxdClient) deleteDockerContainer(ctx context.Context, containerID string) (map[string]any, error) {
@@ -1198,8 +1280,10 @@ func redactedRuntimeEnv(env map[string]string) map[string]string {
 }
 
 func (c *sandboxdClient) stopRuntimeInCube(ctx context.Context, sandboxID string) error {
+	// Use the [m]ultica trick so `python -c` /execute payloads that embed this
+	// snippet cannot match and kill themselves via pkill -f.
 	code := `import subprocess, time
-subprocess.run(["bash", "-lc", "pkill -f 'multica daemon' || pkill -f 'multica-daemon' || true"], check=False)
+subprocess.run(["bash", "-lc", "pkill -f '[m]ultica daemon' || pkill -f '[m]ultica-daemon' || true"], check=False)
 time.sleep(2)
 print("runtime stopped")
 `
@@ -1262,9 +1346,13 @@ func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID strin
 // and leftover profile-scoped daemon.id files can trigger legacy runtime merge
 // that steals the source row.
 func buildStartRuntimeInCubeCode(runtimeEnv map[string]string) string {
+	// pkill patterns use the [m]ultica trick: a `python3 -c '…pkill…'` process
+	// embeds this source in argv, so a literal `multica daemon` pattern would
+	// match and SIGTERM itself (exit 143) before configure-pi can write
+	// ~/.pi/agent/models.json — which is exactly how Docker reconfigure failed.
 	return fmt.Sprintf(`import json, os, pathlib, subprocess, time
 runtime_env = json.loads(%q)
-subprocess.run(["bash", "-lc", "pkill -f 'multica daemon' || pkill -f 'multica-daemon' || true"], check=False)
+subprocess.run(["bash", "-lc", "pkill -f '[m]ultica daemon' || pkill -f '[m]ultica-daemon' || true"], check=False)
 time.sleep(1)
 daemon_id = (runtime_env.get("MULTICA_DAEMON_ID") or "").strip()
 multica = pathlib.Path.home() / ".multica"

@@ -73,7 +73,7 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 		"MULTICA_DAEMON_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 	})
 	for _, want := range []string{
-		"pkill -f 'multica daemon'",
+		"pkill -f '[m]ultica daemon'",
 		`daemon_file.write_text(daemon_id + "\n")`,
 		`profiles.glob("*/daemon.id")`,
 		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -82,6 +82,36 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 		if !strings.Contains(code, want) {
 			t.Fatalf("start runtime code missing %q\n%s", want, code)
 		}
+	}
+	// A literal "multica daemon" substring in python -c argv would make pkill
+	// kill the reconfigure process itself before models.json is written.
+	if strings.Contains(code, "pkill -f 'multica daemon'") {
+		t.Fatal("pkill pattern must use [m]ultica trick to avoid self-match under python -c")
+	}
+}
+
+func TestDockerRuntimeEntrypointKeepsContainerAlive(t *testing.T) {
+	script := dockerRuntimeEntrypointScript()
+	if !strings.Contains(script, "/usr/local/bin/start-multica-runtime.sh") {
+		t.Fatalf("entrypoint missing runtime start:\n%s", script)
+	}
+	if !strings.Contains(script, "tail -f /dev/null") {
+		t.Fatalf("entrypoint should keep PID 1 alive for in-place reconfigure:\n%s", script)
+	}
+	if strings.Contains(script, "exit 1") {
+		t.Fatalf("entrypoint must not exit when daemon stops:\n%s", script)
+	}
+}
+
+func TestDockerEntrypointKeepaliveDoesNotMatchDaemonPkill(t *testing.T) {
+	// Keepalive must satisfy legacy `pgrep -f 'multica .*daemon start'` while
+	// surviving `pkill -f '[m]ultica daemon'` from buildStartRuntimeInCubeCode.
+	if !strings.Contains(dockerEntrypointKeepaliveCmdline, "multica") ||
+		!strings.Contains(dockerEntrypointKeepaliveCmdline, "daemon start") {
+		t.Fatalf("keepalive %q should match entrypoint pgrep pattern", dockerEntrypointKeepaliveCmdline)
+	}
+	if strings.Contains(dockerEntrypointKeepaliveCmdline, "multica daemon") {
+		t.Fatalf("keepalive %q must not match pkill -f '[m]ultica daemon'", dockerEntrypointKeepaliveCmdline)
 	}
 }
 

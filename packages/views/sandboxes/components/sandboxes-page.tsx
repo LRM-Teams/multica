@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import {
   Box,
@@ -88,6 +88,9 @@ import { NodeSnapshotsPanel } from "./node-snapshots-panel";
 
 type NodeDetailTab = "sandboxes" | "docker" | "templates" | "snapshots";
 
+const EMPTY_SANDBOX_INSTANCES: SandboxInstance[] = [];
+const EMPTY_SANDBOX_BINDINGS: SandboxBinding[] = [];
+
 type DockerContainerCreateRequest = {
   name: string;
   nodeId: string;
@@ -132,6 +135,7 @@ type PageUiState = {
   nodeSearch: string;
   selectedNodeId: string | null;
   createDialogOpen: boolean;
+  dockerCreateOpen: boolean;
   createForm: CreateFormState;
   deleteConfirmInstance: SandboxInstance | null;
   snapshotInstance: SandboxInstance | null;
@@ -145,6 +149,7 @@ type PageUiAction =
   | { type: "set_selected_node"; value: string | null }
   | { type: "open_create"; form: CreateFormState }
   | { type: "set_create_open"; open: boolean }
+  | { type: "set_docker_create_open"; open: boolean }
   | { type: "patch_create_form"; patch: Partial<CreateFormState> }
   | { type: "set_delete_confirm"; instance: SandboxInstance | null }
   | { type: "open_snapshot"; instance: SandboxInstance }
@@ -163,6 +168,8 @@ function pageUiReducer(state: PageUiState, action: PageUiAction): PageUiState {
       return { ...state, createDialogOpen: true, createForm: action.form };
     case "set_create_open":
       return { ...state, createDialogOpen: action.open };
+    case "set_docker_create_open":
+      return { ...state, dockerCreateOpen: action.open };
     case "patch_create_form":
       return { ...state, createForm: { ...state.createForm, ...action.patch } };
     case "set_delete_confirm":
@@ -191,6 +198,7 @@ const initialPageUiState: PageUiState = {
   nodeSearch: "",
   selectedNodeId: null,
   createDialogOpen: false,
+  dockerCreateOpen: false,
   createForm: buildDefaultCreateForm(""),
   deleteConfirmInstance: null,
   snapshotInstance: null,
@@ -215,6 +223,7 @@ export function SandboxesPage() {
     nodeSearch,
     selectedNodeId,
     createDialogOpen,
+    dockerCreateOpen,
     createForm,
     deleteConfirmInstance,
     snapshotInstance,
@@ -223,27 +232,47 @@ export function SandboxesPage() {
     creatingNode,
   } = ui;
 
-  const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
-  const { data: bindings = [], isLoading: bindingsLoading } = useQuery(sandboxBindingListOptions(wsId));
+  // Polling remounts/reflows the page and can dismiss open overlays (Dialog
+  // unmount → onOpenChange(false), or NodeDetail key change wiping local UI).
+  const overlayOpen =
+    createDialogOpen ||
+    dockerCreateOpen ||
+    !!snapshotInstance ||
+    !!deleteConfirmInstance;
+
+  const { data: instances, isPending: instancesPending } = useQuery({
+    ...sandboxListOptions(wsId),
+    refetchInterval: overlayOpen ? false : 2000,
+  });
+  const { data: bindings, isPending: bindingsPending } = useQuery({
+    ...sandboxBindingListOptions(wsId),
+    refetchInterval: overlayOpen ? false : 5000,
+  });
+  // Stable empty fallbacks — `?? []` allocates a new array every render and
+  // would invalidate the useMemos below while data is still undefined.
+  const instanceList = instances ?? EMPTY_SANDBOX_INSTANCES;
+  const bindingList = bindings ?? EMPTY_SANDBOX_BINDINGS;
+  const showInitialLoading =
+    (instancesPending && instances === undefined) || (bindingsPending && bindings === undefined);
 
   // Trust the API's already-computed node_status. Re-deriving from cached
   // last_seen_at with a local clock tick caused false offline flaps between
   // refetches even while sandboxd kept heartbeating.
   const connectedBindings = useMemo(
-    () => bindings.filter((binding) => binding.enabled),
-    [bindings],
+    () => bindingList.filter((binding) => binding.enabled),
+    [bindingList],
   );
   const hasConnectedNode = connectedBindings.length > 0;
 
   const instancesByNode = useMemo(() => {
     const map = new Map<string, SandboxInstance[]>();
-    for (const instance of instances) {
+    for (const instance of instanceList) {
       const list = map.get(instance.node_id) ?? [];
       list.push(instance);
       map.set(instance.node_id, list);
     }
     return map;
-  }, [instances]);
+  }, [instanceList]);
 
   const filteredBindings = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
@@ -267,6 +296,20 @@ export function SandboxesPage() {
       filteredBindings.find((binding) => binding.node_status === "online") ?? filteredBindings[0];
     return preferred?.node_id ?? null;
   }, [filteredBindings, selectedNodeId]);
+
+  // Pin the resolved node into UI state so a later bindings poll cannot flip
+  // "preferred online" and remount NodeDetail (which destroys local dialogs).
+  useEffect(() => {
+    if (!resolvedNodeId) return;
+    if (selectedNodeId === resolvedNodeId) return;
+    if (
+      selectedNodeId !== null &&
+      filteredBindings.some((binding) => binding.node_id === selectedNodeId)
+    ) {
+      return;
+    }
+    dispatch({ type: "set_selected_node", value: resolvedNodeId });
+  }, [filteredBindings, resolvedNodeId, selectedNodeId]);
 
   const selectedBinding =
     connectedBindings.find((binding) => binding.node_id === resolvedNodeId) ?? null;
@@ -315,6 +358,8 @@ export function SandboxesPage() {
   } = useQuery({
     ...sandboxNodeTemplatesOptions(createForm.nodeId),
     enabled: createDialogOpen && !!createForm.nodeId,
+    // Keep the create dialog's Select stable; template list polls when closed.
+    refetchInterval: createDialogOpen ? false : 10_000,
   });
   const createDefaultTemplateId = createTemplatesData?.default_template_id?.trim() ?? "";
   const createTemplateOptions = useMemo(() => {
@@ -403,9 +448,33 @@ export function SandboxesPage() {
     }
   };
 
-  if (isLoading || bindingsLoading) {
+  if (showInitialLoading) {
     return <SandboxesPageSkeleton />;
   }
+
+  const nodeDetailProps = {
+    binding: selectedBinding,
+    instances: selectedInstances,
+    onCreate: openCreateDialog,
+    onCreateDockerContainer: handleCreateDockerContainer,
+    creatingDockerContainer: create.isPending,
+    dockerCreateOpen,
+    onDockerCreateOpenChange: (open: boolean) =>
+      dispatch({ type: "set_docker_create_open", open }),
+    onCreateFromSnapshot: openCreateFromSnapshot,
+    onViewSetup: () => {
+      if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
+    },
+    stoppingId: stop.isPending ? stop.variables : undefined,
+    resumingId: resume.isPending ? resume.variables : undefined,
+    deletingId: del.isPending ? del.variables : undefined,
+    creatingTemplateId: createTemplate.isPending ? createTemplate.variables?.instanceId : undefined,
+    onOpen: (instanceId: string) => navigation.push(paths.sandboxDetail(instanceId)),
+    onStop: (instanceId: string) => stop.mutate(instanceId),
+    onResume: (instanceId: string) => resume.mutate(instanceId),
+    onCreateTemplate: openSnapshotDialog,
+    onDelete: (instance: SandboxInstance) => dispatch({ type: "set_delete_confirm", instance }),
+  };
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
@@ -413,9 +482,9 @@ export function SandboxesPage() {
         <div className="flex items-center gap-2">
           <Box className="h-4 w-4 text-muted-foreground" />
           <h1 className="text-sm font-medium">{t(($) => $.sandboxes_page.title)}</h1>
-          {instances.length > 0 && (
+          {instanceList.length > 0 && (
             <span className="font-mono text-xs tabular-nums text-muted-foreground/70">
-              {instances.length}
+              {instanceList.length}
             </span>
           )}
         </div>
@@ -441,28 +510,7 @@ export function SandboxesPage() {
             instancesByNode={instancesByNode}
             onSelect={(value) => dispatch({ type: "set_selected_node", value })}
           />
-          <NodeDetail
-            binding={selectedBinding}
-            instances={selectedInstances}
-            onCreate={openCreateDialog}
-            onCreateDockerContainer={handleCreateDockerContainer}
-            creatingDockerContainer={create.isPending}
-            onCreateFromSnapshot={openCreateFromSnapshot}
-            onViewSetup={() => {
-              if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
-            }}
-            stoppingId={stop.isPending ? stop.variables : undefined}
-            resumingId={resume.isPending ? resume.variables : undefined}
-            deletingId={del.isPending ? del.variables : undefined}
-            creatingTemplateId={
-              createTemplate.isPending ? createTemplate.variables?.instanceId : undefined
-            }
-            onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
-            onStop={(instanceId) => stop.mutate(instanceId)}
-            onResume={(instanceId) => resume.mutate(instanceId)}
-            onCreateTemplate={openSnapshotDialog}
-            onDelete={(instance) => dispatch({ type: "set_delete_confirm", instance })}
-          />
+          <NodeDetail {...nodeDetailProps} />
         </div>
       ) : (
         <div className="min-h-0 flex-1 border-t bg-background">
@@ -491,28 +539,7 @@ export function SandboxesPage() {
             </ResizablePanel>
             <ResizableHandle />
             <ResizablePanel id="detail" minSize="45%">
-              <NodeDetail
-                binding={selectedBinding}
-                instances={selectedInstances}
-                onCreate={openCreateDialog}
-                onCreateDockerContainer={handleCreateDockerContainer}
-                creatingDockerContainer={create.isPending}
-                onCreateFromSnapshot={openCreateFromSnapshot}
-                onViewSetup={() => {
-                  if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
-                }}
-                stoppingId={stop.isPending ? stop.variables : undefined}
-                resumingId={resume.isPending ? resume.variables : undefined}
-                deletingId={del.isPending ? del.variables : undefined}
-                creatingTemplateId={
-                  createTemplate.isPending ? createTemplate.variables?.instanceId : undefined
-                }
-                onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
-                onStop={(instanceId) => stop.mutate(instanceId)}
-                onResume={(instanceId) => resume.mutate(instanceId)}
-                onCreateTemplate={openSnapshotDialog}
-                onDelete={(instance) => dispatch({ type: "set_delete_confirm", instance })}
-              />
+              <NodeDetail {...nodeDetailProps} />
             </ResizablePanel>
           </ResizablePanelGroup>
         </div>
@@ -843,6 +870,8 @@ function NodeDetail(props: {
   onCreate: () => void;
   onCreateDockerContainer: (request: DockerContainerCreateRequest) => Promise<void>;
   creatingDockerContainer: boolean;
+  dockerCreateOpen: boolean;
+  onDockerCreateOpenChange: (open: boolean) => void;
   onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
@@ -948,6 +977,8 @@ function NodeDetailContent({
   onCreate,
   onCreateDockerContainer,
   creatingDockerContainer,
+  dockerCreateOpen,
+  onDockerCreateOpenChange,
   onCreateFromSnapshot,
   onViewSetup,
   stoppingId,
@@ -965,6 +996,8 @@ function NodeDetailContent({
   onCreate: () => void;
   onCreateDockerContainer: (request: DockerContainerCreateRequest) => Promise<void>;
   creatingDockerContainer: boolean;
+  dockerCreateOpen: boolean;
+  onDockerCreateOpenChange: (open: boolean) => void;
   onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
@@ -1063,6 +1096,8 @@ function NodeDetailContent({
             nodeOnline={online}
             instances={dockerInstances}
             creating={creatingDockerContainer}
+            dialogOpen={dockerCreateOpen}
+            onDialogOpenChange={onDockerCreateOpenChange}
             stoppingId={stoppingId}
             resumingId={resumingId}
             deletingId={deletingId}
@@ -1128,6 +1163,8 @@ function DockerContainersPanel({
   nodeOnline,
   instances,
   creating,
+  dialogOpen,
+  onDialogOpenChange,
   stoppingId,
   resumingId,
   deletingId,
@@ -1141,6 +1178,8 @@ function DockerContainersPanel({
   nodeOnline: boolean;
   instances: SandboxInstance[];
   creating: boolean;
+  dialogOpen: boolean;
+  onDialogOpenChange: (open: boolean) => void;
   stoppingId?: string;
   resumingId?: string;
   deletingId?: string;
@@ -1151,13 +1190,13 @@ function DockerContainersPanel({
   onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState(defaultDockerContainerName);
   const [selectedImageRef, setSelectedImageRef] = useState("");
   const [runtime, setRuntime] = useState(emptySandboxRuntimeForm);
   const { data, isLoading, error, refetch } = useQuery({
     ...sandboxNodeDockerImagesOptions(nodeId),
     enabled: dialogOpen && !!nodeId,
+    refetchInterval: dialogOpen ? false : 10_000,
   });
 
   const images = useMemo(
@@ -1174,14 +1213,14 @@ function DockerContainersPanel({
     setName(defaultDockerContainerName());
     setSelectedImageRef("");
     setRuntime(emptySandboxRuntimeForm());
-    setDialogOpen(true);
+    onDialogOpenChange(true);
   };
 
   const submit = async () => {
     if (!canCreate || !selectedImage) return;
     try {
       await onCreate({ name, nodeId, image, runtime });
-      setDialogOpen(false);
+      onDialogOpenChange(false);
     } catch {
       // The caller owns toast/error presentation; keep the dialog open for retry.
     }
@@ -1238,7 +1277,7 @@ function DockerContainersPanel({
         </div>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={onDialogOpenChange}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{t(($) => $.sandboxes_page.docker_create_dialog_title)}</DialogTitle>
@@ -1313,7 +1352,7 @@ function DockerContainersPanel({
 
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+            <Button variant="outline" onClick={() => onDialogOpenChange(false)}>
               {t(($) => $.sandboxes_page.cancel_action)}
             </Button>
             <Button onClick={() => void submit()} disabled={!canCreate}>

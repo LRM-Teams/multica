@@ -14,9 +14,9 @@ import {
   type MessageCollapseFadeVariant,
 } from "./mention-token";
 
-/** Slack-style collapsed body height (LRM-268 / channel bubbles). */
-export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
-const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
+/** Slack-style collapsed body height (LRM-268, widened ~2x by LRM-750). */
+export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 320;
+const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[320px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
 type CollapsibleMessageBodyProps = {

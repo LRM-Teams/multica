@@ -655,6 +655,14 @@ type DaemonHeartbeatAckPayload struct {
 	// and fall back to the singular PendingLocalSkillImport above.
 	PendingLocalSkillImports []DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_imports,omitempty"`
 	PendingMemoryCuration    *DaemonHeartbeatPendingMemoryCuration    `json:"pending_memory_curation,omitempty"`
+	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
+	// of where the daemon should download CLI update artifacts from. It takes
+	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
+	// var and compile-time default (see internal/cli.releaseManifestBaseURLWithOverride),
+	// so a blocked/changed download domain can be fixed with a server-side
+	// config change instead of touching every machine. Empty means "server has
+	// no opinion" — the daemon falls through to its own precedence.
+	ReleaseManifestBaseURL string `json:"release_manifest_base_url,omitempty"`
 }
 
 // HeartbeatStatusRuntimeGone is the ack Status used when the runtime row no

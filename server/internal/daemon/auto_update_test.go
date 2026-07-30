@@ -39,10 +39,41 @@ func newAutoUpdateTestDaemon(t *testing.T, currentVersion string) (*Daemon, *ato
 	return d, &restartCalls
 }
 
+// TestHandleHeartbeatActionsCachesReleaseManifestBaseURL proves the daemon
+// caches a non-empty ReleaseManifestBaseURL from a heartbeat ack (task #815
+// step 2) and does NOT clear the cache when a later ack omits the field — a
+// transient server-side hiccup should not blank out a previously-good
+// server-dispatched override.
+func TestHandleHeartbeatActionsCachesReleaseManifestBaseURL(t *testing.T) {
+	d := &Daemon{logger: slog.Default()}
+
+	if got := d.releaseManifestBaseURLOverride(); got != "" {
+		t.Fatalf("before any heartbeat: override = %q, want empty", got)
+	}
+
+	d.handleHeartbeatActions(context.Background(), "rt-1", &HeartbeatResponse{
+		RuntimeID:              "rt-1",
+		Status:                 "ok",
+		ReleaseManifestBaseURL: "https://oss.example.com/releases",
+	})
+	if got := d.releaseManifestBaseURLOverride(); got != "https://oss.example.com/releases" {
+		t.Fatalf("after ack with URL: override = %q, want the dispatched URL", got)
+	}
+
+	// A later ack that omits the field must not clobber the cached value.
+	d.handleHeartbeatActions(context.Background(), "rt-1", &HeartbeatResponse{
+		RuntimeID: "rt-1",
+		Status:    "ok",
+	})
+	if got := d.releaseManifestBaseURLOverride(); got != "https://oss.example.com/releases" {
+		t.Fatalf("after ack without URL: override = %q, want the previously cached URL preserved", got)
+	}
+}
+
 func withStubRelease(t *testing.T, release *cli.ReleaseManifest, err error) {
 	t.Helper()
 	prev := fetchLatestRelease
-	fetchLatestRelease = func() (*cli.ReleaseManifest, error) { return release, err }
+	fetchLatestRelease = func(string) (*cli.ReleaseManifest, error) { return release, err }
 	t.Cleanup(func() { fetchLatestRelease = prev })
 }
 
@@ -85,7 +116,7 @@ func TestTryAutoUpdateOwnsCheckingBeforeServerUpdateCanStart(t *testing.T) {
 	fetchStarted := make(chan struct{})
 	releaseFetch := make(chan struct{})
 	previousFetchLatestRelease := fetchLatestRelease
-	fetchLatestRelease = func() (*cli.ReleaseManifest, error) {
+	fetchLatestRelease = func(string) (*cli.ReleaseManifest, error) {
 		close(fetchStarted)
 		<-releaseFetch
 		return nil, errors.New("network down")

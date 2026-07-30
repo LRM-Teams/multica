@@ -972,6 +972,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if ack.PendingMemoryCuration != nil {
 		resp["pending_memory_curation"] = ack.PendingMemoryCuration
 	}
+	if ack.ReleaseManifestBaseURL != "" {
+		resp["release_manifest_base_url"] = ack.ReleaseManifestBaseURL
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1103,8 +1106,9 @@ func (h *Handler) processHeartbeat(
 	slog.Debug("daemon heartbeat", "runtime_id", runtimeID)
 
 	ack := &protocol.DaemonHeartbeatAckPayload{
-		RuntimeID: runtimeID,
-		Status:    "ok",
+		RuntimeID:              runtimeID,
+		Status:                 "ok",
+		ReleaseManifestBaseURL: serverDispatchedReleaseManifestBaseURL(),
 	}
 	if supportsMemoryCuration && agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMemoryCuration) {
 		pendingCuration, err := h.claimPendingMemoryCurationRun(ctx, rt, activeMemoryCurationRunID)

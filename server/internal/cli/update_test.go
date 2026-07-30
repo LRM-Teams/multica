@@ -50,6 +50,70 @@ func TestReleaseManifestBaseURLEnvOverride(t *testing.T) {
 	}
 }
 
+// TestReleaseManifestBaseURLWithOverridePrecedence proves the three-layer
+// precedence added for task #815 step 2: a server-dispatched value (arriving
+// over the daemon's heartbeat ack) wins over the env var, which wins over the
+// compile-time default. This is the one behavior this whole change exists to
+// add, so the "server wins over env" case is asserted explicitly and not just
+// implied by the other two.
+func TestReleaseManifestBaseURLWithOverridePrecedence(t *testing.T) {
+	t.Setenv(ReleaseManifestBaseURLEnv, "")
+	if got := releaseManifestBaseURLWithOverride(""); got != DefaultReleaseManifestBaseURL {
+		t.Fatalf("neither set: got %q, want default %q", got, DefaultReleaseManifestBaseURL)
+	}
+
+	t.Setenv(ReleaseManifestBaseURLEnv, "https://env-override.example.com/computer")
+	if got := releaseManifestBaseURLWithOverride(""); got != "https://env-override.example.com/computer" {
+		t.Fatalf("env set, server unset: got %q, want env value", got)
+	}
+
+	if got := releaseManifestBaseURLWithOverride("https://server-dispatched.example.com/computer"); got != "https://server-dispatched.example.com/computer" {
+		t.Fatalf("server wins over env: got %q, want server-dispatched value", got)
+	}
+
+	t.Setenv(ReleaseManifestBaseURLEnv, "")
+	if got := releaseManifestBaseURLWithOverride("https://server-dispatched.example.com/computer"); got != "https://server-dispatched.example.com/computer" {
+		t.Fatalf("server set, env unset: got %q, want server-dispatched value", got)
+	}
+
+	if got := releaseManifestBaseURLWithOverride("   "); got != DefaultReleaseManifestBaseURL {
+		t.Fatalf("server value whitespace-only: got %q, want default (not blank)", got)
+	}
+
+	// The zero-arg form must still behave exactly as before (no server
+	// context available), so existing callers (ReleaseWebURL, the CLI's own
+	// `multica update`) are unaffected by this change.
+	t.Setenv(ReleaseManifestBaseURLEnv, "https://env-override.example.com/computer")
+	if got := releaseManifestBaseURL(); got != "https://env-override.example.com/computer" {
+		t.Fatalf("zero-arg releaseManifestBaseURL() regressed: got %q", got)
+	}
+}
+
+// TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL proves the
+// daemon-facing entry point actually threads serverDispatched through to the
+// HTTP request, not just through the pure string-precedence helper tested
+// above.
+func TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL(t *testing.T) {
+	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/latest.json" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(want)
+	}))
+	defer server.Close()
+
+	t.Setenv(ReleaseManifestBaseURLEnv, "https://should-not-be-used.example.com/computer")
+
+	got, err := FetchLatestReleaseWithOverride(server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TagName != want.TagName {
+		t.Fatalf("got %+v, want %+v (server-dispatched base URL should have won over the env var)", got, want)
+	}
+}
+
 func TestFetchManifestParsesPublishedShape(t *testing.T) {
 	want := ReleaseManifest{
 		TagName: "v0.3.81",

@@ -101,6 +101,19 @@ func isExplicitDevEnvironment(raw string) bool {
 	}
 }
 
+// serverDispatchedReleaseManifestBaseURL is the server's current opinion of
+// where daemons should download CLI release artifacts from, dispatched over
+// every heartbeat ack (DaemonHeartbeatAckPayload.ReleaseManifestBaseURL).
+// Empty means "server has no opinion" — the daemon falls through to its own
+// MULTICA_RELEASE_MANIFEST_BASE_URL env var / compile-time default (task
+// #815 step 2; step 1 was the daemon-side env var override in #1526). A
+// plain env var is enough for v1: this is one global value, not
+// per-workspace/per-daemon, and an env change + server restart is far
+// cheaper than the alternative it replaces (reinstalling every machine).
+func serverDispatchedReleaseManifestBaseURL() string {
+	return strings.TrimSpace(os.Getenv("MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL"))
+}
+
 func daemonSetupURLsFromEnv() (string, string) {
 	serverURL := normalizePublicURL(os.Getenv("MULTICA_PUBLIC_URL"))
 	appURL := normalizePublicURL(os.Getenv("MULTICA_APP_URL"))

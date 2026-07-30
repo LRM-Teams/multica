@@ -12,7 +12,7 @@ import (
 // shelling out to brew/curl. Mirrors the pattern used at the top of daemon.go
 // for `isBrewInstall` / `getBrewPrefix` / `matchKnownBrewPrefix`.
 var (
-	fetchLatestRelease = cli.FetchLatestRelease
+	fetchLatestRelease = cli.FetchLatestReleaseWithOverride
 	isReleaseVersion   = cli.IsReleaseVersion
 	isNewerVersion     = cli.IsNewerVersion
 )
@@ -124,7 +124,7 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	if !d.beginUpdateObservation("auto", "checking", "") {
 		return
 	}
-	release, err := fetchLatestRelease()
+	release, err := fetchLatestRelease(d.releaseManifestBaseURLOverride())
 	if err != nil {
 		d.logger.Warn("auto-update: fetch latest release failed — will retry", "error", err)
 		d.finishUpdateObservation("waiting", "fetch_failed", "", "release_fetch_failed", "Unable to fetch the latest release.")

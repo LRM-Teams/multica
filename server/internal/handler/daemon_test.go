@@ -1335,6 +1335,62 @@ func TestDaemonHeartbeat_EmptyQueueSkipsPopPending(t *testing.T) {
 	}
 }
 
+func TestDaemonHeartbeat_ReleaseManifestBaseURLFromServerEnv(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
+
+	t.Setenv("MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL", "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases")
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
+		"runtime_id": runtimeID,
+	}, testWorkspaceID, "runtime-release-url-daemon")
+
+	testHandler.DaemonHeartbeat(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var ack protocol.DaemonHeartbeatAckPayload
+	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
+		t.Fatalf("decode ack: %v", err)
+	}
+	if ack.ReleaseManifestBaseURL != "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases" {
+		t.Fatalf("ReleaseManifestBaseURL = %q, want the server env value", ack.ReleaseManifestBaseURL)
+	}
+}
+
+func TestDaemonHeartbeat_ReleaseManifestBaseURLOmittedWhenServerEnvUnset(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
+
+	t.Setenv("MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL", "")
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
+		"runtime_id": runtimeID,
+	}, testWorkspaceID, "runtime-release-url-daemon-unset")
+
+	testHandler.DaemonHeartbeat(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var ack protocol.DaemonHeartbeatAckPayload
+	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
+		t.Fatalf("decode ack: %v", err)
+	}
+	if ack.ReleaseManifestBaseURL != "" {
+		t.Fatalf("ReleaseManifestBaseURL = %q, want empty when server env is unset", ack.ReleaseManifestBaseURL)
+	}
+}
+
 func TestGetTaskStatus_WithDaemonToken_CrossWorkspace(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

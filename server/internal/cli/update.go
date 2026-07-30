@@ -46,6 +46,20 @@ const ReleaseManifestBaseURLEnv = "MULTICA_RELEASE_MANIFEST_BASE_URL"
 // where the caller already re-execs per check (the CLI does; the daemon's
 // auto-update poll loop does too).
 func releaseManifestBaseURL() string {
+	return releaseManifestBaseURLWithOverride("")
+}
+
+// releaseManifestBaseURLWithOverride resolves the effective release feed base
+// URL with the full three-layer precedence (task #815 step 2):
+// serverDispatched (from the daemon's heartbeat ack) > ReleaseManifestBaseURLEnv
+// > DefaultReleaseManifestBaseURL. serverDispatched is blank for every caller
+// that has no daemon/server context (the CLI's own `multica update`,
+// ReleaseWebURL); only the daemon's auto-update loop can supply it, since only
+// it holds a live connection to ask the server in the first place.
+func releaseManifestBaseURLWithOverride(serverDispatched string) string {
+	if v := strings.TrimSpace(serverDispatched); v != "" {
+		return v
+	}
 	if v := strings.TrimSpace(os.Getenv(ReleaseManifestBaseURLEnv)); v != "" {
 		return v
 	}
@@ -271,7 +285,16 @@ func fetchReleaseByTag(tag string) (*ReleaseManifest, error) {
 // FetchLatestRelease fetches the promoted "latest" release manifest from the
 // Multica release feed.
 func FetchLatestRelease() (*ReleaseManifest, error) {
-	return fetchManifest(releaseManifestBaseURL() + "/latest.json")
+	return FetchLatestReleaseWithOverride("")
+}
+
+// FetchLatestReleaseWithOverride is FetchLatestRelease with the
+// server-dispatched top layer of the three-layer precedence (task #815 step
+// 2) applied. Only the daemon's auto-update loop has a serverDispatched
+// value to pass (cached from the heartbeat ack); every other caller passes
+// "" and gets identical behavior to before this change.
+func FetchLatestReleaseWithOverride(serverDispatched string) (*ReleaseManifest, error) {
+	return fetchManifest(releaseManifestBaseURLWithOverride(serverDispatched) + "/latest.json")
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.

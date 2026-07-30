@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -430,6 +431,34 @@ type presenceRequest struct {
 	Activity string `json:"activity"`
 }
 
+func (h *Handler) GetResearchPresence(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	sessionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "id")
+	if !ok {
+		return
+	}
+	if _, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID}); err != nil {
+		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	nodes, err := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{
+		SessionID:   sessionID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load presence")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": uuidToString(sessionID),
+		"presence":   buildResearchPresenceMap(nodes),
+	})
+}
+
 func (h *Handler) PostResearchPresence(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -447,10 +476,12 @@ func (h *Handler) PostResearchPresence(w http.ResponseWriter, r *http.Request) {
 	var req presenceRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	activity := strings.TrimSpace(req.Activity)
+	updatedAt := time.Now().UnixMilli()
 	h.publish(protocol.EventResearchSessionPresence, workspaceID, "agent", uuidToString(member.AgentID), map[string]any{
 		"session_id": uuidToString(sessionID),
 		"agent_id":   uuidToString(member.AgentID),
 		"activity":   activity,
+		"updated_at": updatedAt,
 	})
 	// Presence drives canvas pulse/captions via WS; do not spam chat cards.
 	// Only project a new activity chip when the caption actually changes.
@@ -483,7 +514,12 @@ func (h *Handler) PostResearchPresence(w http.ResponseWriter, r *http.Request) {
 			}, pgtype.UUID{}, "leads_to")
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"agent_id":   uuidToString(member.AgentID),
+		"activity":   activity,
+		"updated_at": updatedAt,
+	})
 }
 
 func (h *Handler) RequestResearchStageEval(w http.ResponseWriter, r *http.Request) {

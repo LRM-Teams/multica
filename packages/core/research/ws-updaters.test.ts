@@ -53,11 +53,38 @@ describe("applyResearchWSEvent", () => {
     } as unknown as QueryClient;
     applyResearchWSEvent(qc, "ws", {
       type: "research_session:presence",
-      payload: { session_id: "s1", agent_id: "a1", activity: "reading RFC" },
+      payload: { session_id: "s1", agent_id: "a1", activity: "reading RFC", updated_at: 100 },
     });
     const presence = store.get(JSON.stringify(researchKeys.presence("ws", "s1"))) as {
-      a1: { activity: string };
+      a1: { activity: string; updatedAt: number };
     };
     expect(presence.a1.activity).toBe("reading RFC");
+    expect(presence.a1.updatedAt).toBe(100);
+  });
+
+  it("clears presence when activity is empty", () => {
+    const store = new Map<string, unknown>();
+    store.set(JSON.stringify(researchKeys.presence("ws", "s1")), {
+      a1: { activity: "busy", updatedAt: 1 },
+    });
+    const qc = {
+      setQueryData: (_key: unknown, updater: unknown) => {
+        const key = JSON.stringify(_key);
+        const prev = store.get(key);
+        const next = typeof updater === "function" ? (updater as (p: unknown) => unknown)(prev) : updater;
+        store.set(key, next);
+        return next;
+      },
+      invalidateQueries: vi.fn(),
+    } as unknown as QueryClient;
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:presence",
+      payload: { session_id: "s1", agent_id: "a1", activity: "", updated_at: 2 },
+    });
+    const presence = store.get(JSON.stringify(researchKeys.presence("ws", "s1"))) as Record<
+      string,
+      unknown
+    >;
+    expect(presence.a1).toBeUndefined();
   });
 });

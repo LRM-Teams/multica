@@ -14,6 +14,18 @@ const ResearchFleetMemberSchema = z
     is_lead: z.boolean().optional().default(false),
     name: z.string().optional(),
     display_name: z.string().optional(),
+    avatar_url: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const ResearchFleetPreviewMemberSchema = z
+  .object({
+    agent_id: z.string(),
+    name: z.string().optional(),
+    display_name: z.string().optional(),
+    avatar_url: z.string().nullable().optional(),
+    role: z.string().optional(),
+    is_lead: z.boolean().optional(),
   })
   .passthrough();
 
@@ -43,6 +55,7 @@ const ResearchSessionSchema = z
     handoff_summary: z.string().nullable().optional().default(null),
     created_at: z.string().optional().default(""),
     updated_at: z.string().optional().default(""),
+    fleet_preview: z.array(ResearchFleetPreviewMemberSchema).optional(),
   })
   .passthrough();
 
@@ -56,6 +69,7 @@ const ResearchGraphNodeSchema = z
     status: z.string().optional().default("active"),
     actor_agent_id: z.string().nullable().optional().default(null),
     payload: z.unknown().optional().default({}),
+    confidence: z.number().nullable().optional(),
     created_at: z.string().optional().default(""),
     updated_at: z.string().optional().default(""),
   })

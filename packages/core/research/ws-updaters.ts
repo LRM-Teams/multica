@@ -96,12 +96,22 @@ export function applyResearchWSEvent(
       const agentId = typeof payload.agent_id === "string" ? payload.agent_id : null;
       const activity = typeof payload.activity === "string" ? payload.activity : "";
       if (!agentId) break;
+      const updatedAtRaw = payload.updated_at;
+      const updatedAt =
+        typeof updatedAtRaw === "number" && Number.isFinite(updatedAtRaw)
+          ? updatedAtRaw
+          : Date.now();
       qc.setQueryData<ResearchPresenceMap>(
         researchKeys.presence(wsId, sessionId),
-        (prev) => ({
-          ...(prev ?? {}),
-          [agentId]: { activity, updatedAt: Date.now() },
-        }),
+        (prev) => {
+          const next: ResearchPresenceMap = { ...(prev ?? {}) };
+          if (!activity.trim()) {
+            delete next[agentId];
+            return next;
+          }
+          next[agentId] = { activity, updatedAt };
+          return next;
+        },
       );
       break;
     }

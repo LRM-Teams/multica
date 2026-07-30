@@ -6,6 +6,11 @@ export type ResearchPresenceMap = Record<
   { activity: string; updatedAt: number }
 >;
 
+export type ResearchPresenceResponse = {
+  session_id: string;
+  presence: ResearchPresenceMap;
+};
+
 export const researchKeys = {
   all: (wsId: string) => ["research", wsId] as const,
   fleet: (wsId: string) => ["research", wsId, "fleet"] as const,
@@ -15,6 +20,26 @@ export const researchKeys = {
   presence: (wsId: string, sessionId: string) =>
     ["research", wsId, "presence", sessionId] as const,
 };
+
+/** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
+export function normalizeResearchPresenceMap(
+  raw: Record<string, { activity?: string; updated_at?: number; updatedAt?: number }> | null | undefined,
+): ResearchPresenceMap {
+  const out: ResearchPresenceMap = {};
+  if (!raw) return out;
+  for (const [agentId, entry] of Object.entries(raw)) {
+    const activity = typeof entry?.activity === "string" ? entry.activity.trim() : "";
+    if (!activity) continue;
+    const updatedAt =
+      typeof entry.updated_at === "number"
+        ? entry.updated_at
+        : typeof entry.updatedAt === "number"
+          ? entry.updatedAt
+          : Date.now();
+    out[agentId] = { activity, updatedAt };
+  }
+  return out;
+}
 
 export function researchFleetOptions(wsId: string) {
   return queryOptions({
@@ -41,5 +66,17 @@ export function researchSessionSnapshotOptions(wsId: string, sessionId: string) 
       const status = query.state.data?.session?.status;
       return status === "running" ? 4000 : false;
     },
+  });
+}
+
+export function researchPresenceOptions(wsId: string, sessionId: string) {
+  return queryOptions({
+    queryKey: researchKeys.presence(wsId, sessionId),
+    queryFn: async (): Promise<ResearchPresenceMap> => {
+      const res = await api.getResearchPresence(sessionId);
+      return normalizeResearchPresenceMap(res.presence);
+    },
+    enabled: !!wsId && !!sessionId,
+    staleTime: 30_000,
   });
 }

@@ -110,7 +110,7 @@ func privateAgentTestFixture(t *testing.T) (agentID, ownerID, memberID string) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
-		) VALUES ($1, 'private-access-test-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		, model) VALUES ($1, 'private-access-test-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, handlerTestRuntimeID(t), ownerID).Scan(&agentID); err != nil {
 		t.Fatalf("create private agent: %v", err)
@@ -691,7 +691,7 @@ func TestMentionAgent_RejectsCrossWorkspaceAgentUUID(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
-		) VALUES ($1, 'foreign-private-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		, model) VALUES ($1, 'foreign-private-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, foreignWorkspaceID, foreignRuntimeID, foreignUserID).Scan(&foreignAgentID); err != nil {
 		t.Fatalf("create foreign agent: %v", err)

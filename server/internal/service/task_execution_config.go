@@ -2,7 +2,9 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 )
 
 const taskExecutionConfigKey = "execution_config"
@@ -11,6 +13,20 @@ const (
 	ExecutionProfileFull         = "full"
 	ExecutionProfileProtocolTurn = "protocol_turn"
 )
+
+// ErrAgentModelRequired is returned when work would snapshot an empty agent
+// model. Empty models previously fell through to a broken provider launch on
+// some runtimes (looking like mute); callers must set an explicit model rather
+// than silently substituting a provider-specific default such as "auto".
+var ErrAgentModelRequired = errors.New("agent model is required")
+
+// RequireAgentModel rejects blank model identifiers.
+func RequireAgentModel(model string) error {
+	if strings.TrimSpace(model) == "" {
+		return ErrAgentModelRequired
+	}
+	return nil
+}
 
 // TaskExecutionConfig is the task-scoped runtime configuration. New work
 // snapshots it at enqueue time so later edits to an agent affect only work
@@ -36,6 +52,9 @@ func WithTaskExecutionConfig(contextJSON []byte, model, thinkingLevel string) ([
 // isolation contract. Restricted profiles are consumed by the daemon and must
 // never silently degrade to a full tool-capable run.
 func WithTaskExecutionProfile(contextJSON []byte, model, thinkingLevel, executionProfile string) ([]byte, error) {
+	if err := RequireAgentModel(model); err != nil {
+		return nil, err
+	}
 	contextMap := map[string]json.RawMessage{}
 	if len(contextJSON) > 0 {
 		if err := json.Unmarshal(contextJSON, &contextMap); err != nil {
@@ -50,7 +69,7 @@ func WithTaskExecutionProfile(contextJSON []byte, model, thinkingLevel, executio
 		return nil, fmt.Errorf("unsupported execution profile %q", executionProfile)
 	}
 	configSnapshot := TaskExecutionConfig{
-		Model:            model,
+		Model:            strings.TrimSpace(model),
 		ThinkingLevel:    thinkingLevel,
 		ExecutionProfile: profile,
 		Snapshotted:      true,

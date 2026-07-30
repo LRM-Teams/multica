@@ -227,7 +227,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			CustomEnv:          []byte("{}"),
 			CustomArgs:         []byte("[]"),
 			McpConfig:          nil,
-			Model:              pgtype.Text{},
+			Model:              pgTextModelForRuntime(runtime.Provider),
 		}, onboardingAssistantName, onboardingAssistantName)
 		if err != nil {
 			slog.Warn("bootstrap onboarding (shim): create assistant failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID)...)
@@ -235,6 +235,12 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		assistantCreated = true
+	}
+
+	assistant, err = ensureAgentHasExplicitModel(r.Context(), qtx, assistant, runtime.Provider)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to configure onboarding assistant model")
+		return
 	}
 
 	var emptyUUID pgtype.UUID

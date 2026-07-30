@@ -186,7 +186,7 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 	`, workspaceID, "Integration Test Agent", runtimeID, userID); err != nil {
 		return "", "", err
 	}

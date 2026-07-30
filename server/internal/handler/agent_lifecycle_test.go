@@ -314,7 +314,7 @@ func createAgentLifecycleFixture(t *testing.T, capable bool) (agentID, runtimeID
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, runtime_mode, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, 'Lifecycle test', 'local', $3, 1, $4)
+		, model) VALUES ($1, $2, 'Lifecycle test', 'local', $3, 1, $4, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, "lifecycle-agent-"+randomID(), runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create lifecycle agent: %v", err)

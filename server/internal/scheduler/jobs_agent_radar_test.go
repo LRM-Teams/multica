@@ -213,7 +213,8 @@ func seedRadarTestAgent(t *testing.T, runtimeStatus string) radarTestAgent {
 		Instructions:       "",
 		CustomEnv:          []byte("{}"),
 		CustomArgs:         []byte("[]"),
-	})
+			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -263,7 +264,8 @@ func seedAdditionalRadarTestAgent(t *testing.T, base radarTestAgent, displayName
 		Instructions:       "",
 		CustomEnv:          []byte("{}"),
 		CustomArgs:         []byte("[]"),
-	})
+			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+})
 	if err != nil {
 		t.Fatalf("create %s agent: %v", displayName, err)
 	}
@@ -310,7 +312,8 @@ func seedAdditionalRadarOwnerWendy(t *testing.T, base radarTestAgent, displayNam
 		Description: "replacement workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
 		RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-	})
+			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+})
 	if err != nil {
 		t.Fatalf("create additional owner %s: %v", displayName, err)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -446,7 +447,11 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		CustomEnv:          ce,
 		CustomArgs:         ca,
 		McpConfig:          nil,
-		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
+		Model:              pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
+	}
+	if err := service.RequireAgentModel(createParams.Model.String); err != nil {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
 	}
 	applyCreateAgentAvatar(&createParams, avatar)
 	agent, err := h.createAgentWithIdentity(r.Context(), qtx, createParams, nameSeed, firstNonEmpty(displayName, nameSeed))

@@ -445,9 +445,9 @@ func TestRerunIssueTargetsSourceTaskAgent(t *testing.T) {
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, max_concurrent_tasks, owner_id
-		)
+		, model)
 		SELECT a.workspace_id, 'Rerun Secondary Agent', '', 'cloud', '{}'::jsonb,
-		       a.runtime_id, 1, a.owner_id
+		       a.runtime_id, 1, a.owner_id, 'composer-1.5'
 		FROM agent a WHERE a.id = $1
 		RETURNING id
 	`, primaryAgentID).Scan(&secondaryAgentID); err != nil {

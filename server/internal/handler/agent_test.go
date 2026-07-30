@@ -745,6 +745,7 @@ func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T
 		"display_name":         displayName,
 		"description":          "first description",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
@@ -801,6 +802,7 @@ func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
 	body := map[string]any{
 		"username":             handle,
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
@@ -832,6 +834,7 @@ func TestCreateAgent_RejectsNonASCIIExplicitUsername(t *testing.T) {
 	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", map[string]any{
 		"username":             "小雅",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}))
@@ -864,6 +867,7 @@ func TestCreateAgent_GeneratesASCIIUsernamesFromDisplayNames(t *testing.T) {
 				"display_name":         tt.displayName,
 				"description":          marker,
 				"runtime_id":           testRuntimeID,
+				"model":                "composer-1.5",
 				"visibility":           "private",
 				"max_concurrent_tasks": 1,
 			}))
@@ -889,12 +893,14 @@ func TestAgentRejectsLegacyNameField(t *testing.T) {
 	createBody := map[string]any{
 		"display_name":         "Legacy Rename Agent",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
 	legacyCreate := map[string]any{
 		"name":                 "Legacy Rename Agent",
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
@@ -940,6 +946,7 @@ func TestUpdateAgent_UsernameChangesHandle(t *testing.T) {
 		"display_name":         "贝克汉姆",
 		"description":          marker,
 		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}))
@@ -1134,7 +1141,7 @@ func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
-		) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+		, model) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, agentName, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1215,7 +1222,7 @@ func TestAgentResponseRuntimeNamePrefersDisplayName(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
-		) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+		, model) VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, agentName, runtimeID, testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1903,7 +1910,8 @@ func TestBindWorkspaceRadarSupervisorReplacesArchivedPriorAndCancelsOnlyItsRadar
 			Description: "workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
 			RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-		})
+					Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+})
 		if err != nil {
 			t.Fatalf("create %s: %v", name, err)
 		}
@@ -2150,9 +2158,9 @@ func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T
 			workspace_id, name, display_name, description, instructions, avatar_url,
 			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			archived_at, archived_by
-		)
+		, model)
 		VALUES ($1, $2, 'Wendy', 'archived Wendy', 'instructions', '/legacy.png',
-			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4)
+			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, "archived_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("seed archived Wendy agent: %v", err)
@@ -2203,9 +2211,9 @@ func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
 			workspace_id, name, display_name, description, instructions, avatar_url,
 			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			archived_at, archived_by
-		)
+		, model)
 		VALUES ($1, $2, 'Wendy', 'archived workspace-visible Wendy', 'instructions', '/legacy.png',
-			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4)
+			'cloud', '{}'::jsonb, $3, 1, $4, now(), $4, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, "archived_workspace_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("seed archived workspace-visible Wendy agent: %v", err)
@@ -2235,9 +2243,9 @@ func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 			workspace_id, name, display_name, description, instructions, avatar_url,
 			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			created_at, updated_at
-		)
+		, model)
 		VALUES ($1, $2, 'Wendy', 'active Wendy', '', '/wendy.png',
-			'cloud', '{}'::jsonb, $3, 1, $4, now() - interval '2 hours', now() - interval '2 hours')
+			'cloud', '{}'::jsonb, $3, 1, $4, now() - interval '2 hours', now() - interval '2 hours', 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, "active_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), activeRuntime, testUserID).Scan(&activeID); err != nil {
 		t.Fatalf("seed active Wendy: %v", err)
@@ -2247,10 +2255,10 @@ func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 			workspace_id, name, display_name, description, instructions, avatar_url,
 			runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id,
 			created_at, updated_at, archived_at, archived_by
-		)
+		, model)
 		VALUES ($1, $2, 'Wendy', 'archived newer Wendy', '', '/wendy.png',
 			'cloud', '{}'::jsonb, $3, 1, $4,
-			now() - interval '1 hour', now() - interval '1 hour', now(), $4)
+			now() - interval '1 hour', now() - interval '1 hour', now(), $4, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, "archived_newer_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), activeRuntime, testUserID).Scan(&archivedID); err != nil {
 		t.Fatalf("seed archived Wendy: %v", err)
@@ -2303,7 +2311,7 @@ func TestEnsureWindyRenamesLegacyWindyAgent(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, instructions, avatar_url, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
-		) VALUES ($1, $2, 'Windy', 'legacy windy', 'legacy instructions', '/legacy.png', 'cloud', '{}'::jsonb, $3, 1, $4)
+		, model) VALUES ($1, $2, 'Windy', 'legacy windy', 'legacy instructions', '/legacy.png', 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
 		RETURNING id
 	`, testWorkspaceID, "legacy_windy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
 		t.Fatalf("seed legacy Windy agent: %v", err)
@@ -2497,7 +2505,8 @@ func TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull(t *testing.T) {
 			Description: "cas test agent", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
 			RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-		})
+					Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+})
 		if err != nil {
 			t.Fatalf("create agent %q: %v", name, err)
 		}

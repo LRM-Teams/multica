@@ -17,6 +17,7 @@
   },
   "sort": {
     "label_recent": "最近のアクティビティ",
+    "label_fleet": "戦力順",
     "label_name": "名前",
     "label_runs": "実行回数の多い順",
     "label_created": "最近作成"
@@ -661,6 +662,19 @@
     "runtime_offline": "デーモンがオフライン",
     "runtime_recovery": "デーモンが再起動しました",
     "manual": "ユーザーがキャンセルしました"
+  },
+  "fleet": {
+    "title": "艦隊戦力",
+    "score_label": "戦力値",
+    "rank_of": "アクティブ {{size}} 中 #{{rank}}",
+    "frozen_hint": "アーカイブ時に凍結",
+    "warming_up": "ウォームアップ中 · {{current}}/{{required}} タスク",
+    "pillars": {
+      "delivery": "デリバリー",
+      "evolution": "進化",
+      "growth": "成長",
+      "efficiency": "効率"
+    }
   },
   "runtime_filter": {
     "all": "すべてのランタイム",

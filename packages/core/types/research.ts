@@ -124,12 +124,78 @@ export interface ResearchSource {
   updated_at: string;
 }
 
+/** Outline tree node for report navigation (LRM-843). */
+export interface ResearchReportOutlineNode {
+  id: string;
+  title: string;
+  /** Heading level 1–6. */
+  level: number;
+  /** Child section ids (order preserved). */
+  children: string[];
+}
+
+/** One report chapter/section body. */
+export interface ResearchReportSection {
+  id: string;
+  title: string;
+  level: number;
+  markdown: string;
+  citation_ids: string[];
+}
+
+/** In-text citation pointing at a research_source row (and optional quote). */
+export interface ResearchReportCitation {
+  id: string;
+  /** 1-based display index. */
+  index: number;
+  source_id: string;
+  label: string;
+  quote?: string;
+  /** Optional page / section / anchor locator. */
+  locator?: string;
+}
+
+/**
+ * Denormalized source snapshot embedded in the report for export / offline mock.
+ * Live session still exposes `sources[]` on the snapshot; prefer matching by `source_id`.
+ */
+export interface ResearchReportSourceRef {
+  source_id: string;
+  title: string;
+  url: string;
+  credibility_weight: number;
+  source_class: string;
+}
+
+/**
+ * `report.structured` payload when `schema_version === 1`.
+ * Server currently stores this as opaque JSON (no hard validation).
+ */
+export interface ResearchReportStructuredV1 {
+  schema_version: 1;
+  title: string;
+  outline: ResearchReportOutlineNode[];
+  sections: ResearchReportSection[];
+  citations: ResearchReportCitation[];
+  sources: ResearchReportSourceRef[];
+  gaps?: string[];
+  conclusion?: string;
+}
+
+export type ResearchReportStructured = ResearchReportStructuredV1;
+
 export interface ResearchReport {
   id: string;
   session_id: string;
+  /** Row / delivery version — increments on every PATCH. */
   revision: number;
+  /** Authoritative readable Markdown body. */
   content_md: string;
-  structured: Record<string, unknown> | unknown;
+  /**
+   * Structured outline / sections / citations / sources.
+   * Legacy rows may be `{}` or omit `schema_version` — see normalizeReportStructured.
+   */
+  structured: ResearchReportStructured | Record<string, unknown> | unknown;
   created_at: string;
   updated_at: string;
 }

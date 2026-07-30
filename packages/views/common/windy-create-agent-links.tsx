@@ -71,7 +71,7 @@ export function WindyCreateAgentLink({
             // No `visibility`: agent visibility was retired, and a link's
             // `visibility=` param is now ignored rather than seeded into the
             // draft. Omitting it is safe on this endpoint specifically —
-            // `windy.go:701-703` defaults an empty value to "private", which
+            // `windy.go:799-801` defaults an empty value to "private", which
             // is exactly what this code used to send for a missing param.
             // (Agent *creation* also defaults empty to "private" —
             // `agent.go:939` — but there that default is unsafe: it would

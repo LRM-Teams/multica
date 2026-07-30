@@ -76,3 +76,12 @@ Beckham's configured welcome message after the caller joins.
 - [x] Verified `pnpm react:doctor` reports zero issues in the changed source.
 - [x] Verified `pnpm test`: 104 core files / 968 tests, 307 views files /
   2,975 passed and 5 skipped, and 14 web files / 69 tests.
+
+## Verification-script defect found during this repair
+
+- [x] Reproduced `scripts/check.sh` returning success and printing
+  `All checks passed` when PostgreSQL setup exits non-zero.
+- [x] Added a process-level regression test with a failing PostgreSQL fixture.
+- [x] Set the shared check exit code before the EXIT trap runs.
+- [x] Verified `scripts/check-exit-status.test.sh`,
+  `scripts/selfhost-config.test.sh`, and `git diff --check`.

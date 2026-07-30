@@ -66,10 +66,16 @@ func (h *Handler) seedResearchSessionKickoff(
 	}
 
 	activeCount := 0
+	seenRole := map[string]bool{}
+	uniqueMembers := make([]db.ResearchFleetMember, 0, len(members))
 	for _, m := range members {
-		if m.Status == "archived" {
+		if m.Status == "archived" || seenRole[m.Role] {
 			continue
 		}
+		seenRole[m.Role] = true
+		uniqueMembers = append(uniqueMembers, m)
+	}
+	for _, m := range uniqueMembers {
 		activeCount++
 		name, display := "", ""
 		if agent, aerr := h.Queries.GetAgent(ctx, m.AgentID); aerr == nil {
@@ -129,7 +135,7 @@ func (h *Handler) seedResearchSessionKickoff(
 			slog.Warn("research kickoff lead wake failed", "error", err)
 		}
 	}
-	for _, m := range members {
+	for _, m := range uniqueMembers {
 		if m.Status != "active" || m.IsLead || !m.AgentID.Valid {
 			continue
 		}

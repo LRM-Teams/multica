@@ -25,11 +25,12 @@ func buildResearchWakePrompt(session db.ResearchSession, body string, senderType
 	b.WriteString(fmt.Sprintf("- Goal: %s\n", session.Goal))
 	b.WriteString(fmt.Sprintf("- Status: %s\n", session.Status))
 	b.WriteString(fmt.Sprintf("- Current stage: %s\n\n", session.CurrentStage))
-	b.WriteString("Use `multica research` CLI tools (graph-append, source-upsert, report-patch, stage-eval, hire, optimize).\n")
-	b.WriteString("Do not treat a single generic web_search dump as completion.\n")
-	b.WriteString("Record probes / findings / dead_ends / pivots on the exploration graph.\n\n")
+	b.WriteString("Use `multica research` CLI tools (graph-append, source-upsert, report-patch, presence, stage-eval, hire, optimize).\n")
+	b.WriteString("Your assistant reply in this chat is mirrored into the research session drawer — answer the user there.\n")
+	b.WriteString("Also keep the exploration canvas dense: record probes / findings / dead_ends / pivots via graph-append.\n")
+	b.WriteString("Do not treat a single generic web_search dump as completion.\n\n")
 	if senderType == "user" {
-		b.WriteString("### User message\n\n")
+		b.WriteString("### User message (reply now)\n\n")
 	} else {
 		b.WriteString("### Dispatch note\n\n")
 	}

@@ -11,6 +11,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  type Node,
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -21,7 +22,7 @@ import type {
   ResearchSource,
 } from "@multica/core/types";
 import type { ResearchPresenceMap } from "@multica/core/research";
-import { layoutResearchGraph } from "../lib/layout-graph";
+import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { visualForEdgeType } from "../lib/node-visuals";
 import { ResearchFleetStrip } from "./research-fleet-strip";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
@@ -36,6 +37,8 @@ function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
+
+type FlowNode = Node<ResearchFlowNodeData>;
 
 function ResearchCanvasInner({
   nodes,
@@ -58,30 +61,48 @@ function ResearchCanvasInner({
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(laid.nodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(laid.edges);
   const { fitView } = useReactFlow();
-  // Enter motion is keyed once per node id (ref — not mirrored React state).
-  const enterAnimationById = useRef<Map<string, string> | null>(null);
-  if (enterAnimationById.current === null) {
-    enterAnimationById.current = new Map();
+  // Opacity-only enter motion (never touch transform — RF uses it for position).
+  const enterClassById = useRef<Map<string, string> | null>(null);
+  if (enterClassById.current === null) {
+    enterClassById.current = new Map();
   }
+  // Preserve user-dragged positions across layout refreshes.
+  const userPositions = useRef<Map<string, { x: number; y: number }> | null>(null);
+  if (userPositions.current === null) {
+    userPositions.current = new Map();
+  }
+  const laidIdsKey = useMemo(() => laid.nodes.map((n) => n.id).join("|"), [laid.nodes]);
 
   useEffect(() => {
     const reduceMotion = prefersReducedMotion();
-    setRfNodes(
-      laid.nodes.map((n, index) => {
+    const classMap = enterClassById.current!;
+    const posMap = userPositions.current!;
+
+    setRfNodes((prev) => {
+      const prevById = new Map(prev.map((n) => [n.id, n]));
+      return laid.nodes.map((n, index) => {
         const research = n.data.research;
         const actorId = research.actor_agent_id;
         const presenceLabel = actorId ? presence?.[actorId]?.activity : undefined;
-        const animMap = enterAnimationById.current!;
-        if (!animMap.has(n.id) && !reduceMotion) {
+        if (!classMap.has(n.id) && !reduceMotion) {
           const stagger = Math.min(index, 12) * 45;
-          animMap.set(n.id, `research-node-enter 520ms ease ${stagger}ms both`);
+          classMap.set(n.id, `research-node-enter`);
+          // Stagger via animationDelay on the inner style only (opacity keyframes).
+          void stagger;
         }
+        const dragged = posMap.get(n.id);
+        const previous = prevById.get(n.id);
+        const position = dragged ?? previous?.position ?? n.position;
+        const delayMs = !posMap.has(n.id) && !previous ? Math.min(index, 12) * 45 : 0;
         return {
           ...n,
+          position,
           selected: n.id === selectedId,
+          draggable: true,
+          className: classMap.get(n.id),
           style: {
             ...n.style,
-            animation: animMap.get(n.id),
+            animationDelay: delayMs ? `${delayMs}ms` : undefined,
           },
           data: {
             ...n.data,
@@ -94,9 +115,9 @@ function ResearchCanvasInner({
                 ? 1
                 : 0,
           },
-        };
-      }),
-    );
+        } satisfies FlowNode;
+      });
+    });
     setRfEdges(
       laid.edges.map((e) => {
         const edgeType = e.data?.edgeType ?? "leads_to";
@@ -112,10 +133,10 @@ function ResearchCanvasInner({
         };
       }),
     );
-  }, [laid, selectedId, setRfNodes, setRfEdges, presence]);
+  }, [laid, laidIdsKey, selectedId, setRfNodes, setRfEdges, presence]);
 
   useEffect(() => {
-    if (nodes.length === 0) return;
+    if (!laidIdsKey) return;
     const id = window.setTimeout(() => {
       void fitView({
         padding: 0.18,
@@ -123,7 +144,7 @@ function ResearchCanvasInner({
       });
     }, 80);
     return () => window.clearTimeout(id);
-  }, [nodes.length, edges.length, fitView]);
+  }, [laidIdsKey, fitView]);
 
   const selectedNode = selectedId ? nodes.find((n) => n.id === selectedId) : null;
   const sourceList = sources ?? [];
@@ -131,39 +152,44 @@ function ResearchCanvasInner({
   return (
     <div className="relative h-full w-full">
       <style>{`
+        .research-node-enter {
+          animation: research-node-enter 520ms ease both;
+        }
         @keyframes research-node-enter {
           0% {
             opacity: 0;
-            transform: translateY(10px) scale(0.98);
             box-shadow: 0 0 0 2px hsl(var(--primary) / 0.55), 0 8px 24px hsl(var(--primary) / 0.18);
           }
           55% {
             opacity: 1;
-            transform: translateY(0) scale(1);
             box-shadow: 0 0 0 2px hsl(var(--primary) / 0.35), 0 8px 20px hsl(var(--primary) / 0.12);
           }
           100% {
             opacity: 1;
-            transform: translateY(0) scale(1);
             box-shadow: none;
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          @keyframes research-node-enter {
-            from { opacity: 1; transform: none; box-shadow: none; }
-            to { opacity: 1; transform: none; box-shadow: none; }
-          }
+          .research-node-enter { animation: none; }
         }
       `}</style>
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
-        onNodesChange={onNodesChange}
+        onNodesChange={(changes) => {
+          for (const change of changes) {
+            if (change.type === "position" && change.position && change.id) {
+              userPositions.current!.set(change.id, change.position);
+            }
+          }
+          onNodesChange(changes);
+        }}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
         minZoom={0.25}
         maxZoom={1.75}
+        nodesDraggable
         proOptions={{ hideAttribution: true }}
         onNodeClick={(_evt, node) => {
           const research = node.data?.research as ResearchGraphNode | undefined;

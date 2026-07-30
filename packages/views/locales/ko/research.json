@@ -35,6 +35,8 @@
   },
   "chat": {
     "you": "You",
+    "from_you": "You",
+    "to_lead": "Ronaldo",
     "process": "Process",
     "system": "System",
     "process_tag": "Process",

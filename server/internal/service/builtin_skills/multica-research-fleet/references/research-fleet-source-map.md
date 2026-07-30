@@ -7,6 +7,8 @@
 | Graph/source/report/message/stage/handoff | `server/internal/handler/research_ops.go`, `research_stage.go`, `research_handoff.go` |
 | Session kickoff graph + process cards | `server/internal/handler/research_kickoff.go`, `research_process.go` |
 | Message `card_kind` / `meta` | migration `246_research_message_cards` |
+| Unique active fleet role + dedupe | migration `247_research_fleet_member_role_unique` |
+| Mirror agent chat replies into research drawer | `server/internal/service/research_chat_mirror.go` |
 | Session wake / fleet dispatch | `server/internal/handler/research_dispatch.go` (`EnqueueChatTask`) |
 | Domain playbooks | `references/playbooks/*.md` + `seedResearchFleetPlaybooks` |
 | Schema | `server/migrations/244_research_fleet.up.sql` |

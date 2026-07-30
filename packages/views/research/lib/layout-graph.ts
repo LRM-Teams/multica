@@ -3,7 +3,8 @@ import type { Edge, Node } from "@xyflow/react";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 
 export const RESEARCH_NODE_WIDTH = 260;
-export const RESEARCH_NODE_HEIGHT = 96;
+/** Approximate rendered card height (avatar + title + 2-line summary). */
+export const RESEARCH_NODE_HEIGHT = 120;
 
 export type ResearchFlowNodeData = {
   research: ResearchGraphNode;
@@ -23,7 +24,7 @@ export function layoutResearchGraph(
 ): { nodes: Node<ResearchFlowNodeData>[]; edges: Edge<ResearchFlowEdgeData>[] } {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: 48, ranksep: 72, marginx: 24, marginy: 24 });
+  g.setGraph({ rankdir: "TB", nodesep: 56, ranksep: 100, marginx: 32, marginy: 32 });
 
   for (const n of nodes) {
     g.setNode(n.id, { width: RESEARCH_NODE_WIDTH, height: RESEARCH_NODE_HEIGHT });
@@ -44,7 +45,7 @@ export function layoutResearchGraph(
       type: "research",
       position: { x, y },
       data: { research: n },
-      draggable: false,
+      draggable: true,
     };
   });
 

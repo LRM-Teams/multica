@@ -106,6 +106,16 @@ func (h *Handler) ensureResearchFleet(ctx context.Context, workspaceID, userID p
 }
 
 func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.ResearchFleet, workspaceID, userID pgtype.UUID) (db.ResearchFleet, []db.ResearchFleetMember, error) {
+	// Serialize concurrent first-time seeds so two List+Create races cannot mint
+	// duplicate roles (罗纳尔多×2). Paired with unique (fleet_id, role) for active rows.
+	if h.DB != nil {
+		if _, lockErr := h.DB.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1::text))`, "research_fleet_seed:"+uuidToString(fleet.ID)); lockErr == nil {
+			defer func() {
+				_, _ = h.DB.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext($1::text))`, "research_fleet_seed:"+uuidToString(fleet.ID))
+			}()
+		}
+	}
+
 	runtime, ok := h.pickVisibleAgentRuntime(ctx, workspaceID, userID)
 	if !ok {
 		return db.ResearchFleet{}, nil, errors.New("no agent runtime available to seed research fleet")
@@ -120,6 +130,9 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 	}
 	byRole := map[string]db.ResearchFleetMember{}
 	for _, m := range existing {
+		if m.Status == "archived" {
+			continue
+		}
 		byRole[m.Role] = m
 	}
 
@@ -167,7 +180,29 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 			IsLead:      seed.IsLead,
 		})
 		if err != nil {
-			return db.ResearchFleet{}, nil, err
+			// Unique (fleet_id, role) race — reload and continue with survivor.
+			relisted, lerr := h.Queries.ListResearchFleetMembers(ctx, db.ListResearchFleetMembersParams{
+				FleetID:     fleet.ID,
+				WorkspaceID: workspaceID,
+			})
+			if lerr != nil {
+				return db.ResearchFleet{}, nil, err
+			}
+			found := false
+			for _, m := range relisted {
+				if m.Status != "archived" && m.Role == seed.Role {
+					byRole[seed.Role] = m
+					if seed.IsLead {
+						leadID = m.AgentID
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return db.ResearchFleet{}, nil, err
+			}
+			continue
 		}
 		byRole[seed.Role] = member
 		if seed.IsLead {
@@ -225,7 +260,25 @@ func (h *Handler) researchFleetToResponse(ctx context.Context, fleet db.Research
 		CreatedAt:   timestampToString(fleet.CreatedAt),
 		UpdatedAt:   timestampToString(fleet.UpdatedAt),
 	}
+	// One active member per role (defensive against historical seed races).
+	seenRole := map[string]db.ResearchFleetMember{}
 	for _, m := range members {
+		if m.Status == "archived" {
+			continue
+		}
+		prev, ok := seenRole[m.Role]
+		if !ok || (m.IsLead && !prev.IsLead) || (!m.IsLead && !prev.IsLead && m.CreatedAt.Time.Before(prev.CreatedAt.Time)) {
+			seenRole[m.Role] = m
+		}
+	}
+	ordered := make([]db.ResearchFleetMember, 0, len(seenRole))
+	for _, m := range members {
+		if kept, ok := seenRole[m.Role]; ok && kept.ID == m.ID {
+			ordered = append(ordered, m)
+			delete(seenRole, m.Role)
+		}
+	}
+	for _, m := range ordered {
 		item := ResearchFleetMemberResp{
 			ID:      uuidToString(m.ID),
 			AgentID: uuidToString(m.AgentID),

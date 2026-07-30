@@ -221,6 +221,12 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: oss-cn-beijing
+      # AWS SDK v2's default PutObject checksum encoding
+      # (STREAMING-UNSIGNED-PAYLOAD-TRAILER) isn't supported by Aliyun OSS's
+      # S3-compatible layer ("NotImplemented"). Same fix already documented
+      # for the app's own S3-compatible attachment storage (.env.example).
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
       OSS_ENDPOINT_URL: https://oss-cn-beijing.aliyuncs.com
       OSS_BUCKET: lrm-2-0-release
       # Public HTTPS base objects are readable at. Not a secret (it's the

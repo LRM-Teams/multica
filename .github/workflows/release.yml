@@ -97,6 +97,11 @@ jobs:
           - platform: linux/amd64
             runs-on: ubuntu-latest
     runs-on: ${{ matrix.runs-on }}
+    # One mutable cache head per image/platform; serialize tag releases so two
+    # writers cannot overwrite the same registry cache concurrently.
+    concurrency:
+      group: release-docker-backend-cache-${{ matrix.platform }}
+      cancel-in-progress: false
     steps:
       - name: Prepare
         run: |
@@ -134,16 +139,13 @@ jobs:
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # No cache-from/cache-to here. A release build runs on a tag ref,
-          # which never rebuilds — any cache-to is dead weight from the moment
-          # this job finishes, and type=gha cache-from can't reach it either:
-          # GitHub Actions cache is only readable from the current ref, a PR's
-          # base ref, or the default branch (main here) — not an unrelated
-          # branch like dev, where deploy-backend/deploy-web are written. This
-          # dead cache-to was filling the repo's 10GB Actions cache quota and
-          # evicting the actively-reused dev/turbo caches (see task #18).
-          # Cold build is correct here; a real speedup needs a registry-based
-          # cache (type=registry) reachable across refs — separate follow-up.
+          # Registry caches are ref-independent. Prefer the release lane and
+          # fall back to dev for the first release cache seed. GHCR is free
+          # under GitHub's 2026-07 policy; re-evaluate if that policy changes.
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-backend:buildcache-release-${{ env.PLATFORM_PAIR }}
+            type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-backend:buildcache-dev-${{ env.PLATFORM_PAIR }}
+          cache-to: type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-backend:buildcache-release-${{ env.PLATFORM_PAIR }},mode=max
           build-args: |
             VERSION=${{ needs.verify.outputs.tag_name }}
             COMMIT=${{ github.sha }}
@@ -222,6 +224,11 @@ jobs:
           - platform: linux/amd64
             runs-on: ubuntu-latest
     runs-on: ${{ matrix.runs-on }}
+    # One mutable cache head per image/platform; serialize tag releases so two
+    # writers cannot overwrite the same registry cache concurrently.
+    concurrency:
+      group: release-docker-web-cache-${{ matrix.platform }}
+      cancel-in-progress: false
     steps:
       - name: Prepare
         run: |
@@ -259,16 +266,12 @@ jobs:
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # No cache-from/cache-to here. A release build runs on a tag ref,
-          # which never rebuilds — any cache-to is dead weight from the moment
-          # this job finishes, and type=gha cache-from can't reach it either:
-          # GitHub Actions cache is only readable from the current ref, a PR's
-          # base ref, or the default branch (main here) — not an unrelated
-          # branch like dev, where deploy-backend/deploy-web are written. This
-          # dead cache-to was filling the repo's 10GB Actions cache quota and
-          # evicting the actively-reused dev/turbo caches (see task #18).
-          # Cold build is correct here; a real speedup needs a registry-based
-          # cache (type=registry) reachable across refs — separate follow-up.
+          # Registry caches are ref-independent. Prefer the release lane and
+          # fall back to dev for the first release cache seed.
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-web:buildcache-release-${{ env.PLATFORM_PAIR }}
+            type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-web:buildcache-dev-${{ env.PLATFORM_PAIR }}
+          cache-to: type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-web:buildcache-release-${{ env.PLATFORM_PAIR }},mode=max
           build-args: |
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}

@@ -170,8 +170,10 @@ jobs:
           build-args: |
             VERSION=${{ steps.prep.outputs.tag }}
             COMMIT=${{ github.sha }}
-          cache-from: type=gha,scope=deploy-backend
-          cache-to: type=gha,mode=max,scope=deploy-backend
+          # BuildKit cache lives in GHCR (free under GitHub's 2026-07 policy;
+          # re-evaluate this backend if GitHub starts charging for GHCR).
+          cache-from: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64,mode=max
 
       - name: Build & push web
         uses: docker/build-push-action@v6
@@ -186,8 +188,8 @@ jobs:
           build-args: |
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
-          cache-from: type=gha,scope=deploy-web
-          cache-to: type=gha,mode=max,scope=deploy-web
+          cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64,mode=max
 
       - name: Build & push db-bridge
         # The multica-side bridge server image. Context is the db_bridge/
@@ -205,8 +207,8 @@ jobs:
           tags: |
             ${{ steps.prep.outputs.db_bridge_image }}:latest
             ${{ steps.prep.outputs.db_bridge_image }}:${{ steps.prep.outputs.tag }}
-          cache-from: type=gha,scope=deploy-db-bridge
-          cache-to: type=gha,mode=max,scope=deploy-db-bridge
+          cache-from: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-dev-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-dev-amd64,mode=max
 
   deploy:
     needs: [prepare, build]

@@ -42,6 +42,13 @@ vi.mock("@multica/core/auth", () => ({
   ),
 }));
 
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getMemberHonor: () => undefined,
+    getAgentFleetRank: () => undefined,
+  }),
+}));
+
 vi.mock("@multica/core/dm", () => ({
   dmListOptions: () => ({ kind: "dms" as const }),
   useSetDMPinned: () => ({ mutate: vi.fn() }),

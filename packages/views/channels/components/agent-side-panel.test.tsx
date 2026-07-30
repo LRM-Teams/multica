@@ -146,7 +146,14 @@ vi.mock("@multica/core/permissions", () => ({
 vi.mock("../../runtimes/components/shared", () => ({
   useRuntimeHealthStateLabel: () => (state: string) => state,
 }));
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getAgentFleetRank: () => undefined,
+    getMemberHonor: () => undefined,
+  }),
+}));
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: (options: unknown) => options,
   useQuery: (options: { kind?: string; queryKey?: unknown[] }) => ({
     data:
       options.kind === "usage-by-agent"

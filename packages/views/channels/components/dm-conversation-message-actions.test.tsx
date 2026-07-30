@@ -175,6 +175,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getActorAvatarUrl: () => null,
     getActorName: () => null,
     getMemberRole: () => null,
+    getMemberHonor: () => undefined,
+    getAgentFleetRank: () => undefined,
   }),
 }));
 vi.mock("@multica/core/agents", () => ({ useAgentPresenceDetail: () => "loading" }));

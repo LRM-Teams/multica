@@ -267,10 +267,8 @@ func TestAgentAvatar_DirectInsertUsesSameDurableBoundary(t *testing.T) {
 	var agentID, avatarURL, avatarSource string
 	err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, display_name, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 'private', 1, $4)
+			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 1, $4)
 		RETURNING id, avatar_url, avatar_source
 	`, testWorkspaceID, name, testRuntimeID, testUserID).Scan(&agentID, &avatarURL, &avatarSource)
 	if err != nil {
@@ -327,9 +325,8 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 			var id, avatarURL, source string
 			err := testPool.QueryRow(context.Background(), `
 				INSERT INTO agent (
-					workspace_id, name, display_name, runtime_mode, runtime_config,
-					runtime_id, visibility, max_concurrent_tasks, owner_id
-				) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 'private', 1, $4)
+			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, $2, 'cloud', '{}'::jsonb, $3, 1, $4)
 				RETURNING id, avatar_url, avatar_source
 			`, testWorkspaceID, name, testRuntimeID, testUserID).Scan(&id, &avatarURL, &source)
 			if err != nil {

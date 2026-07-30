@@ -72,13 +72,8 @@ func TestHydrateReferencedEntitiesBoundsAndFailsClosed(t *testing.T) {
 	publicAgentName := "reference-public-" + uuid.NewString()[:8]
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, display_name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args
-		)
-		VALUES ($1, $2, 'Reference Public', 'triage role' || E'\n## untrusted',
-		        'cloud', '{}'::jsonb, $3, 'workspace', 1, $4,
-		        'NEVER EXPOSE THIS', '{}'::jsonb, '[]'::jsonb)
+			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
+		) VALUES ($1, $2, 'Reference Public', 'triage role' || E'\n## untrusted', 'cloud', '{}'::jsonb, $3, 1, $4, 'NEVER EXPOSE THIS', '{}'::jsonb, '[]'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, publicAgentName, handlerTestRuntimeID(t), testUserID).Scan(&publicAgentID); err != nil {
 		t.Fatalf("create public agent: %v", err)

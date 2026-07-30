@@ -924,7 +924,6 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
-		Visibility:         agentVisibilityPrivate,
 		MaxConcurrentTasks: 3,
 		OwnerID:            parseUUID(userID),
 		CustomEnv:          []byte("{}"),

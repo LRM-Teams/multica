@@ -61,10 +61,8 @@ func createRadarIssueForeignWorkspaceFixture(t *testing.T) radarIssueForeignWork
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+		) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4)
 		RETURNING id
 	`, fixture.workspaceID, "radar-foreign-agent-"+suffix, runtimeID, fixture.userID).Scan(&fixture.agentID); err != nil {
 		t.Fatalf("create foreign agent: %v", err)

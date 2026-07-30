@@ -447,7 +447,7 @@ func assignEvolutionValues(dest []any, values []any) error {
 }
 
 func evolutionAgentValues(a db.Agent) []any {
-	return []any{a.ID, a.WorkspaceID, a.Name, a.AvatarUrl, a.RuntimeMode, a.RuntimeConfig, a.Visibility, a.Status, a.MaxConcurrentTasks, a.OwnerID, a.CreatedAt, a.UpdatedAt, a.Description, a.RuntimeID, a.Instructions, a.ArchivedAt, a.ArchivedBy, a.CustomEnv, a.CustomArgs, a.McpConfig, a.Model, a.ThinkingLevel}
+	return []any{a.ID, a.WorkspaceID, a.Name, a.AvatarUrl, a.RuntimeMode, a.RuntimeConfig, a.Status, a.MaxConcurrentTasks, a.OwnerID, a.CreatedAt, a.UpdatedAt, a.Description, a.RuntimeID, a.Instructions, a.ArchivedAt, a.ArchivedBy, a.CustomEnv, a.CustomArgs, a.McpConfig, a.Model, a.ThinkingLevel}
 }
 
 func evolutionSubmissionValues(s db.EvolutionUnitSubmission) []any {

@@ -28,11 +28,6 @@ func TestMemberAllowedForPrivateAgent_Pure(t *testing.T) {
 		OwnerID:     util.MustParseUUID(ownerUserID),
 		DisplayName: "Wendy",
 	}
-	publicWendy := db.Agent{
-		OwnerID:     util.MustParseUUID(ownerUserID),
-		DisplayName: "Wendy",
-		Visibility:  "workspace",
-	}
 
 	cases := []struct {
 		name   string
@@ -62,9 +57,6 @@ func TestMemberAllowedForPrivateAgent_Pure(t *testing.T) {
 	}
 	if !memberAllowedForPrivateAgent(wendy, ownerUserID, "member") {
 		t.Fatal("Wendy owner should see their private Wendy")
-	}
-	if memberAllowedForPrivateAgent(publicWendy, otherUserID, "admin") {
-		t.Fatal("workspace admin should not see another user's workspace-visible Wendy")
 	}
 }
 
@@ -117,12 +109,8 @@ func privateAgentTestFixture(t *testing.T) (agentID, ownerID, memberID string) {
 
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
-			instructions, custom_env, custom_args
-		)
-		VALUES ($1, 'private-access-test-agent', '', 'cloud', '{}'::jsonb,
-		        $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
+		) VALUES ($1, 'private-access-test-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb)
 		RETURNING id
 	`, testWorkspaceID, handlerTestRuntimeID(t), ownerID).Scan(&agentID); err != nil {
 		t.Fatalf("create private agent: %v", err)
@@ -384,6 +372,11 @@ func TestWendyListedAndDetailFollowsGenericInternalsRule(t *testing.T) {
 // ordinary private agent that a user happened to rename "Wendy" (or any
 // isWindyAgentName match) would incorrectly get the owner-only treatment
 // meant only for the actual bound onboarding agent.
+// TestPublishAgentReminderChangedScopesByOnboardingBinding proves task #908's
+// simplified two-tier scoping: the bound onboarding agent (Wendy) publishes
+// owner-only; every other agent — private or not, Wendy-named or not —
+// broadcasts workspace-wide like any other usage surface, since
+// agent.visibility no longer exists to scope on.
 func TestPublishAgentReminderChangedScopesByOnboardingBinding(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -392,24 +385,21 @@ func TestPublishAgentReminderChangedScopesByOnboardingBinding(t *testing.T) {
 
 	agentID, ownerID, _ := privateAgentTestFixture(t)
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("rename private agent to Wendy: %v", err)
+		t.Fatalf("rename agent to Wendy: %v", err)
 	}
 	wsUUID := util.MustParseUUID(testWorkspaceID)
 	agentUUID := util.MustParseUUID(agentID)
 
 	// Not bound as the onboarding agent yet: a Wendy-named agent that isn't
-	// the canonical binding must scope like any other private agent (owner +
-	// workspace owner/admin), not owner-only.
+	// the canonical binding broadcasts workspace-wide (no explicit recipient
+	// list) like any other agent.
 	events1 := captureReminderChangedEvents(t, testHandler, agentID)
 	testHandler.publishAgentReminderChanged(ctx, wsUUID, agentUUID)
 	if len(*events1) != 1 {
 		t.Fatalf("unbound Wendy-named agent: got %d events, want 1", len(*events1))
 	}
-	if !recipientsInclude(t, (*events1)[0], ownerID) {
-		t.Fatalf("unbound Wendy-named agent: recipients must include owner")
-	}
-	if !recipientsInclude(t, (*events1)[0], testUserID) {
-		t.Fatalf("unbound Wendy-named agent: recipients must include workspace owner/admin (not owner-only) since it is not the bound onboarding agent")
+	if len((*events1)[0].RecipientUserIDs) != 0 {
+		t.Fatalf("unbound Wendy-named agent: expected a workspace-wide broadcast (no explicit recipients), got %v", (*events1)[0].RecipientUserIDs)
 	}
 
 	// Bind it as the workspace's onboarding agent — now it must scope
@@ -699,8 +689,9 @@ func TestMentionAgent_RejectsCrossWorkspaceAgentUUID(t *testing.T) {
 		t.Fatalf("create foreign runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, description, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args)
-		VALUES ($1, 'foreign-private-agent', '', 'cloud', '{}'::jsonb, $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
+		) VALUES ($1, 'foreign-private-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb)
 		RETURNING id
 	`, foreignWorkspaceID, foreignRuntimeID, foreignUserID).Scan(&foreignAgentID); err != nil {
 		t.Fatalf("create foreign agent: %v", err)

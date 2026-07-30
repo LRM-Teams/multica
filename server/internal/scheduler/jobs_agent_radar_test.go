@@ -208,7 +208,6 @@ func seedRadarTestAgent(t *testing.T, runtimeStatus string) radarTestAgent {
 		RuntimeMode:        "cloud",
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtimeID,
-		Visibility:         "workspace",
 		MaxConcurrentTasks: 1,
 		OwnerID:            userID,
 		Instructions:       "",
@@ -259,7 +258,6 @@ func seedAdditionalRadarTestAgent(t *testing.T, base radarTestAgent, displayName
 		RuntimeMode:        "cloud",
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          base.runtimeID,
-		Visibility:         "workspace",
 		MaxConcurrentTasks: 1,
 		OwnerID:            baseAgent.OwnerID,
 		Instructions:       "",
@@ -310,7 +308,7 @@ func seedAdditionalRadarOwnerWendy(t *testing.T, base radarTestAgent, displayNam
 	agent, err := q.CreateAgent(t.Context(), db.CreateAgentParams{
 		WorkspaceID: base.workspaceID, Name: "radar-owner-wendy-" + suffix, DisplayName: displayName,
 		Description: "replacement workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-		RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerID,
+		RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 	})
 	if err != nil {

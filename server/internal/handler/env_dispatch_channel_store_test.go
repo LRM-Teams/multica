@@ -305,10 +305,10 @@ func TestAgentLineageRejectsCrossWorkspaceSource(t *testing.T) {
 	_, err := testPool.Exec(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, display_name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_id, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args, mcp_config, source_agent_id
 		)
-		VALUES ($1, $2, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)`,
+		VALUES ($1, $2, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, $5)`,
 		foreignWS, "derived-cross-ws-"+uuid.NewString(), foreignRuntimeID, testUserID, sourceAgentID)
 	require.Error(t, err, "cross-workspace source_agent_id must be rejected by the workspace-scoped FK")
 }

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Pencil } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { agentRunCounts30dOptions } from "@multica/core/agents";
@@ -34,6 +34,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import { cn } from "@multica/ui/lib/utils";
 import { InlineFieldEditor } from "../agents/components/inline-field-editor";
+import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
@@ -282,13 +283,26 @@ function MemberSidePanelReady({
         >
           <MessageSquare className="size-4" />
         </Button>
+      ) : isSelf ? (
+        // LRM-751 — own card keeps a settings-page escape hatch (design gate
+        // topbar「编辑资料」outline) alongside the inline entries.
+        <AppLink href={`${paths.settings()}?tab=profile`}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            data-testid="member-side-panel-edit-profile"
+          >
+            <Pencil className="size-3" />
+            {t(($) => $.panel.edit_profile)}
+          </Button>
+        </AppLink>
       ) : null,
-    [canMessage, messageAriaLabel, onMessage, userId],
+    [canMessage, isSelf, messageAriaLabel, onMessage, paths, t, userId],
   );
 
-  const saveDescription = async (next: string) => {
-    const updated = await api.updateMe({ profile_description: next });
-    setUser(updated);
+  const invalidateProfileCaches = () => {
     void qc.invalidateQueries({
       predicate: (q) =>
         q.queryKey[0] === "workspaces" && q.queryKey[2] === "members",
@@ -296,6 +310,18 @@ function MemberSidePanelReady({
     void qc.invalidateQueries({
       queryKey: workspaceKeys.memberProfile(wsId, "user", userId),
     });
+  };
+
+  const saveDescription = async (next: string) => {
+    const updated = await api.updateMe({ profile_description: next });
+    setUser(updated);
+    invalidateProfileCaches();
+  };
+
+  const saveName = async (next: string) => {
+    const updated = await api.updateMe({ display_name: next.trim() });
+    setUser(updated);
+    invalidateProfileCaches();
   };
 
   return (
@@ -314,19 +340,49 @@ function MemberSidePanelReady({
         data-testid="member-side-panel"
       >
         <div className="mb-1 flex items-start gap-3">
-          <ActorAvatar
-            actorType="member"
-            actorId={userId}
-            size={64}
-            avatarUrlHint={member?.avatar_url ?? profile?.avatar_url}
-            showStatusDot
-            profileLink={false}
-            className="rounded-[10px]"
-          />
+          {isSelf ? (
+            <MemberSelfAvatarEditor userId={userId}>
+              <ActorAvatar
+                actorType="member"
+                actorId={userId}
+                size={64}
+                avatarUrlHint={member?.avatar_url ?? profile?.avatar_url}
+                showStatusDot
+                profileLink={false}
+                className="rounded-[10px]"
+              />
+            </MemberSelfAvatarEditor>
+          ) : (
+            <ActorAvatar
+              actorType="member"
+              actorId={userId}
+              size={64}
+              avatarUrlHint={member?.avatar_url ?? profile?.avatar_url}
+              showStatusDot
+              profileLink={false}
+              className="rounded-[10px]"
+            />
+          )}
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className="truncate text-[15px] font-bold leading-tight">
-              {displayName}
-            </p>
+            {isSelf ? (
+              <InlineFieldEditor
+                value={displayName}
+                onSave={saveName}
+                kind="input"
+                label={t(($) => $.panel.name_label)}
+                placeholder={t(($) => $.panel.name_placeholder)}
+                maxLength={80}
+                validate={(draft) =>
+                  draft.trim() ? null : t(($) => $.panel.name_required)
+                }
+                displayClassName="truncate text-[15px] font-bold leading-tight"
+                testId="member-profile-name"
+              />
+            ) : (
+              <p className="truncate text-[15px] font-bold leading-tight">
+                {displayName}
+              </p>
+            )}
             {(showHandle && handle) || youSuffix ? (
               <p className="mt-1 truncate text-xs text-muted-foreground">
                 {showHandle && handle ? handle : null}

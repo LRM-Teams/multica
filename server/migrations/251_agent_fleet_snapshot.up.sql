@@ -22,3 +22,6 @@ CREATE TABLE agent_fleet_snapshot (
 CREATE INDEX idx_agent_fleet_snapshot_workspace_rank
     ON agent_fleet_snapshot (workspace_id, fleet_rank)
     WHERE frozen = false;
+
+CREATE INDEX idx_agent_fleet_snapshot_agent
+    ON agent_fleet_snapshot (agent_id);

@@ -149,3 +149,22 @@ Beckham's configured welcome message after the caller joins.
 - [x] Verified `pnpm --filter @multica/views typecheck`.
 - [x] Verified `pnpm react:doctor` reports zero issues in the changed source.
 - [x] Verified `git diff --check`.
+
+## Rollout verification
+
+- [x] Merged server-level callback support in PR #1502.
+- [x] Merged unanswered-call cleanup in PR #1506.
+- [x] Verified the successful `dev` deployment uses image tag `sha-ae9e795`.
+- [x] Verified the deployed frontend is healthy and the deployed backend logs
+  `voice call integration enabled provider=volcengine`.
+- [x] Verified all required RTC, Ark, ASR, TTS, and callback environment names
+  are present in the backend container without reading their secret values.
+- [x] Verified `https://leagent.me/healthz` returns HTTP 200 through the
+  production Caddy route.
+- [x] Verified `https://leagent.me/api/voice-calls/callback` returns the
+  provider-required HTTP 200 `ok` response through the production route.
+- [x] Verified the callback URL returns HTTP 200 from all eight Check-Host
+  locations in report `45df409ak83c`, including Hong Kong.
+- [ ] Complete one caller-driven browser test and confirm `taskStart`, a
+  non-null `connected_at`, non-zero audio duration, and the configured welcome
+  message. This step requires an authenticated browser microphone session.

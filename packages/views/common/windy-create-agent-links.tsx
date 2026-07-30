@@ -71,10 +71,14 @@ export function WindyCreateAgentLink({
             // No `visibility`: agent visibility was retired, and a link's
             // `visibility=` param is now ignored rather than seeded into the
             // draft. Omitting it is safe on this endpoint specifically —
-            // `windy.go:701-703` defaults an empty value to "private", which
+            // `windy.go:799-801` defaults an empty value to "private", which
             // is exactly what this code used to send for a missing param.
-            // (Agent *creation* differs: `agent.go:960` rejects empty, hence
-            // the transition constant in the payload below.)
+            // (Agent *creation* also defaults empty to "private" —
+            // `agent.go:939` — but there that default is unsafe: it would
+            // silently recreate the retired private-visibility path against
+            // the current "visible to the whole workspace" rule. Hence the
+            // transition constant in the payload below, which sends an
+            // explicit value instead of relying on the default.)
             project_id: url.searchParams.get("project_id") || null,
             channel_id: url.searchParams.get("channel_id") || null,
             can_execute_code: url.searchParams.get("can_execute_code") === "true",
@@ -189,10 +193,12 @@ function InlineCreateAgentDialog({
         // trigger assigns a random human preset when the draft has none.
         avatar_selection: avatarSelectionRef.current ?? undefined,
         // TRANSITION CONSTANT — delete with #908, same as create-agent-dialog.
-        // Agent visibility is retired in the UI, but CreateAgent still requires
-        // a value: `agent.go:960` hands req.Visibility to
-        // resolveAgentVisibilityBinding and `agent_channel_visibility.go:30`
-        // rejects empty, so omitting it would 400 every hire from a Windy card.
+        // Agent visibility is retired in the UI, but omitting the field is
+        // NOT safe: `agent.go:939` defaults an empty value to "private", not
+        // workspace. That would silently recreate the retired private-
+        // visibility access path (`agent_access.go:26`) and contradict the
+        // current rule that every agent is visible to the whole workspace —
+        // with no error to catch it.
         // No `home_channel_id`: it was only ever sent for channel visibility.
         visibility: "workspace",
         runtime_id: selectedRuntime.id,

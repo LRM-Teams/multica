@@ -195,10 +195,10 @@ describe("Windy hire card create path", () => {
   });
 
   // Guards the transition constant. Agent visibility is gone from the UI, but
-  // CreateAgent still *requires* a value (`agent.go:960` →
-  // resolveAgentVisibilityBinding, `agent_channel_visibility.go:30` rejects
-  // empty), so a hire that omits it 400s. This is the only test of the hire
-  // card's create path — if it stops asserting the field, nothing does.
+  // an omitted value is NOT safe: `agent.go:939` defaults empty to "private",
+  // silently recreating the retired private-visibility path. This is the
+  // only test of the hire card's create path — if it stops asserting the
+  // field, nothing does.
   it("submits workspace visibility and no home_channel_id", async () => {
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));

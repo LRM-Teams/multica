@@ -155,11 +155,12 @@ export function CreateAgentDialog({
         runtime_id: selectedRuntime.id,
         // TRANSITION CONSTANT — delete with #908.
         // Agent visibility is retired and the user no longer chooses it, but
-        // CreateAgent still *requires* a value: `agent.go:960` passes
-        // req.Visibility straight to resolveAgentVisibilityBinding, and
-        // `agent_channel_visibility.go:30` rejects empty ("callers that want a
-        // default must set it explicitly"). Omitting it would 400 every agent
-        // creation. Dies when #908 drops the column and that validation.
+        // omitting the field is NOT safe: `agent.go:939` defaults an empty
+        // value to "private", not workspace. That would silently recreate
+        // the retired private-visibility access path (`agent_access.go:26`)
+        // and contradict the current rule that every agent is visible to the
+        // whole workspace — with no error to catch it. Dies when #908 drops
+        // the column and that default.
         visibility: "workspace",
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,

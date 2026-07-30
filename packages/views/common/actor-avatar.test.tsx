@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActorAvatar, AgentKindBadge, AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
+import { ActorAvatar, AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
 
 // AgentStatusDot reads presence via useAgentPresenceDetail and the current
 // workspace via useCurrentWorkspace. Default to "online + idle" so the dot
@@ -152,41 +152,6 @@ describe("AgentPresenceOverlay", () => {
     const box = screen.getByLabelText(/^Status:/).closest('[data-slot="agent-presence"]');
     expect(box).toHaveClass("mt-0.5");
     expect(box).toHaveClass("relative");
-  });
-
-  // The agent-vs-human mixed-list confusion this badge exists to fix: agent
-  // avatars share the same 24-face preset pool as human members, so the two
-  // both need to be findable in the same box without colliding.
-  it("renders both the kind badge and the status dot, on opposite corners", () => {
-    render(
-      <AgentPresenceOverlay agentId="agent-1" size={36}>
-        <div />
-      </AgentPresenceOverlay>,
-    );
-    const badge = screen.getByLabelText("Agent");
-    const dot = screen.getByLabelText(/^Status:/);
-    expect(badge).toHaveClass("top-0", "right-0");
-    expect(dot.parentElement).toHaveClass("bottom-0", "right-0");
-    const box = badge.closest('[data-slot="agent-presence"]');
-    expect(box).toContainElement(dot);
-  });
-});
-
-describe("AgentKindBadge", () => {
-  it("sizes the badge and icon proportionally to the avatar (Iris's spec: 40px→14px, 36px→13px)", () => {
-    const { container: c40 } = render(<AgentKindBadge size={40} />);
-    const badge40 = c40.querySelector('[aria-label="Agent"]') as HTMLElement;
-    expect(badge40).toHaveStyle({ width: "14px", height: "14px" });
-
-    const { container: c36 } = render(<AgentKindBadge size={36} />);
-    const badge36 = c36.querySelector('[aria-label="Agent"]') as HTMLElement;
-    expect(badge36).toHaveStyle({ width: "13px", height: "13px" });
-  });
-
-  it("uses the fixed brand-solid fill, not the per-agent rotating palette", () => {
-    const { container } = render(<AgentKindBadge size={40} />);
-    const badge = container.querySelector('[aria-label="Agent"]');
-    expect(badge).toHaveClass("bg-brand-solid", "text-brand-solid-foreground");
   });
 });
 

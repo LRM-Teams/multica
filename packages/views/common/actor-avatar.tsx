@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
@@ -339,33 +338,6 @@ function ActorAvatarMemberPanelTrigger({
   );
 }
 
-// Agent avatars share the same 24-face preset pool as human members
-// (agent-avatars/human-NN.jpg, an intentional "agent = coworker" choice, not
-// a bug), plus many agent display names read as human names — so a mixed
-// list (e.g. a channel's member panel) can genuinely be misread as "which of
-// these is the person." This badge is the category signal DOM already knows
-// (data-slot="agent-presence" vs "member-presence") made visible. Anchored
-// top-right opposite the presence dot (bottom-right) so the two never
-// collide. Diameter ≈35% of the avatar (14px @ 40px, 13px @ 36px — matches
-// the presence dot's proportional-sizing convention at a deliberately larger
-// ratio, since an icon needs more area than a solid dot to read as a shape).
-// Fixed `--brand-solid` fill (Slack-blue, `#1264a3`), not `agent-color.ts`'s
-// per-agent rotating palette — that palette answers "which agent"; this
-// answers "agent or human," a different axis that must never rotate.
-export function AgentKindBadge({ size }: { size?: number }) {
-  const diameter = Math.max(10, Math.round((size ?? 20) * 0.35));
-  const iconSize = Math.round(diameter * 0.57);
-  return (
-    <span
-      aria-label="Agent"
-      style={{ width: diameter, height: diameter }}
-      className="absolute top-0 right-0 inline-flex items-center justify-center rounded-full bg-brand-solid text-brand-solid-foreground ring-2 ring-background"
-    >
-      <Bot aria-hidden="true" style={{ width: iconSize, height: iconSize }} />
-    </span>
-  );
-}
-
 /**
  * The single, stretch-proof presence container. Renders a **fixed-size,
  * non-stretchable** box exactly the avatar's size, with the status dot
@@ -407,7 +379,6 @@ export function AgentPresenceOverlay({
       style={{ width: boxSize, height: boxSize }}
     >
       {children}
-      <AgentKindBadge size={size} />
       <AgentStatusDot agentId={agentId} size={size} />
     </span>
   );

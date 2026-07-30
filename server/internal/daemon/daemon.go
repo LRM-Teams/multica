@@ -34,8 +34,7 @@ import (
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
 const (
-	taskSlotWaitTimeout                 = 2 * time.Second
-	taskSlotCapacityBackoff             = 5 * time.Second
+	agentCapacityBackoff                = 5 * time.Second
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
 	taskMessageTrajectoryMaxChars       = 2000
@@ -146,6 +145,7 @@ type Daemon struct {
 	restartBinary     string                        // non-empty after a successful update; path to the new binary
 	updating          atomic.Bool                   // prevents concurrent update attempts
 	activeTasks       atomic.Int64                  // number of tasks currently in handleTask; exposed via /health
+	taskSlotCounter   atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, not a bounded pool index — see activeAgentGate)
 	ready             atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
 	updateObservation *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
 
@@ -726,7 +726,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"heartbeat_interval", d.cfg.HeartbeatInterval,
 		"agent_timeout", d.cfg.AgentTimeout,
 		"idle_watchdog", d.cfg.AgentIdleWatchdog,
-		"max_concurrent_tasks", d.cfg.MaxConcurrentTasks,
+		"max_concurrent_agents", d.cfg.MaxConcurrentAgents,
 		"gc_enabled", d.cfg.GCEnabled,
 		"auto_update", d.cfg.AutoUpdateEnabled,
 		"launched_by", d.cfg.LaunchedBy,
@@ -2406,7 +2406,7 @@ func (d *Daemon) restartBinaryPath() (string, error) {
 // longer delays claims on every other runtime — that was the cross-workspace
 // stall mode reported in MUL-1744.
 func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) error {
-	sem := newTaskSlotSemaphore(d.cfg.MaxConcurrentTasks)
+	gate := newActiveAgentGate(d.cfg.MaxConcurrentAgents)
 	var taskWG sync.WaitGroup   // tracks in-flight handleTask goroutines
 	var pollerWG sync.WaitGroup // tracks runRuntimePoller goroutines
 
@@ -2440,7 +2440,7 @@ func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) er
 			pollerWG.Add(1)
 			go func(rid string, pctx context.Context, wakeup <-chan struct{}) {
 				defer pollerWG.Done()
-				d.runRuntimePoller(pctx, ctx, rid, sem, wakeup, &taskWG)
+				d.runRuntimePoller(pctx, ctx, rid, gate, wakeup, &taskWG)
 			}(rid, pctx, wakeup)
 		}
 	}
@@ -2502,19 +2502,19 @@ func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) er
 // poll cadence and wakeup channel so that a slow HTTP claim for this runtime
 // cannot delay any other runtime's claims.
 //
-// The execution slot is acquired BEFORE ClaimTask. The alternative —
-// claiming first and then waiting for a slot — would let claimed tasks pile
-// up in the server-side `dispatched` state without a corresponding
-// StartTask, and the server's sweeper would fail them as `failed/timeout`
-// after dispatchTimeoutSeconds=300s (runtime_sweeper.go:25). That is the
-// exact user-visible failure this issue is fixing, so we cannot risk
-// recreating it under load.
+// Entry into the active-agent gate happens BEFORE ClaimTask, same reasoning
+// as before this was task-count-based: claiming first and then waiting for
+// capacity would let claimed tasks pile up in the server-side `dispatched`
+// state without a corresponding StartTask, and the server's sweeper would
+// fail them as `failed/timeout` after dispatchTimeoutSeconds=300s
+// (runtime_sweeper.go:25). That is the exact user-visible failure MUL-1744
+// fixed, so we cannot risk recreating it under load.
 //
-// Slot-before-claim does mean a slow claim holds a slot during its HTTP
-// roundtrip; the upper bound is `client.Timeout = 30s` (client.go:59), well
-// below the 300s dispatch timeout, so other runtimes' tasks stay in
-// server-side `queued` state (which has no timeout) rather than entering
-// `dispatched` and racing the sweeper.
+// Gate-before-claim does mean a slow claim holds this runtime's gate entry
+// during its HTTP roundtrip; the upper bound is `client.Timeout = 30s`
+// (client.go:59), well below the 300s dispatch timeout, so other runtimes'
+// tasks stay in server-side `queued` state (which has no timeout) rather
+// than entering `dispatched` and racing the sweeper.
 //
 // pollerCtx is cancelled when this runtime is removed from the watched set
 // (e.g. workspace de-registered). parentCtx is the daemon's root ctx and is
@@ -2524,7 +2524,7 @@ func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) er
 func (d *Daemon) runRuntimePoller(
 	pollerCtx, parentCtx context.Context,
 	rid string,
-	sem chan int,
+	gate *activeAgentGate,
 	wakeup <-chan struct{},
 	taskWG *sync.WaitGroup,
 ) {
@@ -2544,22 +2544,26 @@ func (d *Daemon) runRuntimePoller(
 			return
 		}
 
-		// Acquire an execution slot before claiming. If at capacity, sleep
+		// Enter the active-agent gate before claiming. If this runtime isn't
+		// already active and there's no free slot for a new one, sleep
 		// without claiming so we don't push a task into `dispatched` and
 		// then race the 5-min server-side dispatch timeout while waiting.
-		slot, acquired, woke, err := waitForTaskSlot(pollerCtx, sem, wakeup, taskSlotWaitTimeout)
-		if err != nil {
-			return
-		}
-		if !acquired {
-			d.logger.Debug("poll: at capacity", "runtime_id", rid, "running", d.cfg.MaxConcurrentTasks)
-			if woke {
+		// Once entered, this runtime may dispatch any number of concurrent
+		// tasks below with no further gating — see activeAgentGate.
+		if !gate.tryEnter(rid) {
+			d.logger.Debug("poll: at agent capacity", "runtime_id", rid, "max_concurrent_agents", d.cfg.MaxConcurrentAgents)
+			select {
+			case <-gate.freed:
+				// Another runtime just released; recheck immediately
+				// instead of idling out the full backoff window.
+				continue
+			case <-wakeup:
+				continue
+			case <-pollerCtx.Done():
+				return
+			case <-time.After(capacityBackoff(d.cfg.PollInterval)):
 				continue
 			}
-			if err := sleepWithContextOrWakeup(pollerCtx, capacityBackoff(d.cfg.PollInterval), wakeup); err != nil {
-				return
-			}
-			continue
 		}
 
 		// Refuse new claims while an auto-update is preparing to roll the
@@ -2568,7 +2572,7 @@ func (d *Daemon) runRuntimePoller(
 		// the auto-update path is guaranteed to defer until this poller has
 		// handed the task off (or given up).
 		if !d.tryEnterClaim() {
-			sem <- slot
+			gate.exit(rid)
 			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
@@ -2578,7 +2582,7 @@ func (d *Daemon) runRuntimePoller(
 		task, err := d.drainInboxTask(pollerCtx, rid)
 		if err != nil {
 			d.exitClaim()
-			sem <- slot
+			gate.exit(rid)
 			if pollerCtx.Err() == nil {
 				if isRuntimeNotFoundError(err) {
 					// Server says this runtime is gone — recover and exit
@@ -2597,7 +2601,7 @@ func (d *Daemon) runRuntimePoller(
 		}
 		if task == nil {
 			d.exitClaim()
-			sem <- slot
+			gate.exit(rid)
 			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
@@ -2611,11 +2615,12 @@ func (d *Daemon) runRuntimePoller(
 		d.logger.Info("task received", "task", shortID(task.ID), "target", taskTarget)
 		taskWG.Add(1)
 		d.activeTasks.Add(1)
+		slot := d.nextTaskSlot()
 		go func(t Task, slot int) {
 			defer taskWG.Done()
 			defer d.exitClaim()
 			defer d.activeTasks.Add(-1)
-			defer func() { sem <- slot }()
+			defer gate.exit(rid)
 			d.handleTask(parentCtx, t, slot)
 		}(*task, slot)
 		// Loop immediately: more tasks may already be queued for this runtime.
@@ -2672,48 +2677,94 @@ func runtimePollOffset(runtimeID string, interval time.Duration) time.Duration {
 }
 
 func capacityBackoff(pollInterval time.Duration) time.Duration {
-	if pollInterval <= 0 || pollInterval > taskSlotCapacityBackoff {
-		return taskSlotCapacityBackoff
+	if pollInterval <= 0 || pollInterval > agentCapacityBackoff {
+		return agentCapacityBackoff
 	}
 	return pollInterval
 }
 
-func waitForTaskSlot(ctx context.Context, sem chan int, wakeup <-chan struct{}, wait time.Duration) (slot int, acquired, woke bool, err error) {
-	select {
-	case slot = <-sem:
-		return slot, true, false, nil
-	case <-ctx.Done():
-		return 0, false, false, ctx.Err()
-	default:
-	}
+// activeAgentGate bounds how many distinct runtimes (agents) may have any
+// in-flight task at once — it does not bound the number of tasks. Per-agent
+// execution is already serialized to one in-flight task via
+// acquireAgentWakeSlot, so once a runtime is in the active set it may
+// dispatch as many concurrent tasks as its own work requires with no
+// further gating here: the real machine resource this protects is "one
+// more live agent process", not "one more task". A runtime leaves the
+// active set only when its last in-flight task completes, freeing the slot
+// for a different runtime.
+//
+// Neither Raft's own daemon nor Multica's per-task message queue has an
+// equivalent "N tasks total, machine-wide" limiter — Raft bounds live agent
+// processes (a billing/seat concept, not a runtime throttle) and per-task
+// message ordering is unrelated to inter-task concurrency. maxConcurrent<=0
+// means unlimited (used by tests only; production always has a positive
+// default — see DefaultMaxConcurrentAgents).
+type activeAgentGate struct {
+	mu       sync.Mutex
+	inFlight map[string]int
+	max      int
+	freed    chan struct{}
+}
 
-	if wait <= 0 {
-		return 0, false, false, nil
-	}
-
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case slot = <-sem:
-		return slot, true, false, nil
-	case <-wakeup:
-		return 0, false, true, nil
-	case <-ctx.Done():
-		return 0, false, false, ctx.Err()
-	case <-timer.C:
-		return 0, false, false, nil
+func newActiveAgentGate(maxConcurrentAgents int) *activeAgentGate {
+	return &activeAgentGate{
+		inFlight: make(map[string]int),
+		max:      maxConcurrentAgents,
+		freed:    make(chan struct{}, 1),
 	}
 }
 
-// newTaskSlotSemaphore returns a buffered channel pre-populated with stable
-// slot indices [0, n). Receive to acquire a slot, send the same slot back to
-// release. Used by pollLoop to expose MULTICA_TASK_SLOT to spawned tasks.
-func newTaskSlotSemaphore(maxConcurrentTasks int) chan int {
-	sem := make(chan int, maxConcurrentTasks)
-	for i := 0; i < maxConcurrentTasks; i++ {
-		sem <- i
+// tryEnter reports whether rid may proceed: true if rid already has an
+// in-flight task (this call just adds another) or if there is a free slot
+// for a new runtime; false if the daemon is at its distinct-runtime cap and
+// rid is not already one of the active ones.
+func (g *activeAgentGate) tryEnter(rid string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inFlight[rid] > 0 {
+		g.inFlight[rid]++
+		return true
 	}
-	return sem
+	if g.max > 0 && len(g.inFlight) >= g.max {
+		return false
+	}
+	g.inFlight[rid] = 1
+	return true
+}
+
+// exit releases one in-flight task for rid, removing rid from the active
+// set once its count reaches zero. Non-blockingly pings freed so a poller
+// waiting on capacity can recheck immediately rather than idling out the
+// full backoff window.
+func (g *activeAgentGate) exit(rid string) {
+	g.mu.Lock()
+	if n := g.inFlight[rid]; n <= 1 {
+		delete(g.inFlight, rid)
+	} else {
+		g.inFlight[rid] = n - 1
+	}
+	g.mu.Unlock()
+	select {
+	case g.freed <- struct{}{}:
+	default:
+	}
+}
+
+// activeCount reports the number of distinct runtimes currently counted as
+// active (test/observability use).
+func (g *activeAgentGate) activeCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.inFlight)
+}
+
+// nextTaskSlot returns a unique, ever-increasing sequence number for
+// MULTICA_TASK_SLOT. Tasks are no longer capacity-limited (see
+// activeAgentGate), so there is no fixed-size pool to index into; this
+// value exists only so spawned tasks/logs can distinguish concurrently
+// running tasks from each other, not to select a bounded resource.
+func (d *Daemon) nextTaskSlot() int {
+	return int(d.taskSlotCounter.Add(1))
 }
 
 // acquireAgentWakeSlot serializes every wake execution for one agent inside

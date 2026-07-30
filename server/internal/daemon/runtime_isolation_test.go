@@ -96,18 +96,18 @@ func TestRunRuntimePollerClaimsImmediatelyBeforeInitialOffset(t *testing.T) {
 	defer srv.Close()
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour,
-		PollInterval:       interval,
-		MaxConcurrentTasks: 1,
+		ServerBaseURL:       srv.URL,
+		HeartbeatInterval:   time.Hour,
+		PollInterval:        interval,
+		MaxConcurrentAgents: 1,
 	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sem := newTaskSlotSemaphore(d.cfg.MaxConcurrentTasks)
+	gate := newActiveAgentGate(d.cfg.MaxConcurrentAgents)
 	var taskWG sync.WaitGroup
-	go d.runRuntimePoller(ctx, ctx, runtimeID, sem, make(chan struct{}, 1), &taskWG)
+	go d.runRuntimePoller(ctx, ctx, runtimeID, gate, make(chan struct{}, 1), &taskWG)
 
 	select {
 	case <-firstClaim:
@@ -121,11 +121,11 @@ func TestRunRuntimePollerClaimsImmediatelyBeforeInitialOffset(t *testing.T) {
 // claims on any other runtime. The pre-refactor pollLoop's serial round-
 // robin made every runtime wait behind the slow one's HTTP roundtrip.
 //
-// MaxConcurrentTasks=4 leaves headroom so each runtime gets its own slot.
-// The poller does acquire a slot before claiming (see runRuntimePoller for
-// why), so this test deliberately uses a capacity that fits both runtimes
-// concurrently — that's the case where slot-before-claim still gives full
-// isolation.
+// MaxConcurrentAgents=4 leaves headroom so each runtime gets its own gate
+// entry. The poller does acquire a gate entry before claiming (see
+// runRuntimePoller for why), so this test deliberately uses a capacity that
+// fits both runtimes concurrently — that's the case where slot-before-claim
+// still gives full isolation.
 func TestRunRuntimePollerIsolatesSlowRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -159,25 +159,25 @@ func TestRunRuntimePollerIsolatesSlowRuntime(t *testing.T) {
 	defer close(releaseSlow)
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour, // disable WS-suppression effects
-		PollInterval:       50 * time.Millisecond,
-		MaxConcurrentTasks: 4,
+		ServerBaseURL:       srv.URL,
+		HeartbeatInterval:   time.Hour, // disable WS-suppression effects
+		PollInterval:        50 * time.Millisecond,
+		MaxConcurrentAgents: 4,
 	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sem := newTaskSlotSemaphore(d.cfg.MaxConcurrentTasks)
+	gate := newActiveAgentGate(d.cfg.MaxConcurrentAgents)
 	var taskWG sync.WaitGroup
 
 	slowCtx, slowCancel := context.WithCancel(ctx)
 	defer slowCancel()
-	go d.runRuntimePoller(slowCtx, ctx, "runtime-slow", sem, make(chan struct{}, 1), &taskWG)
+	go d.runRuntimePoller(slowCtx, ctx, "runtime-slow", gate, make(chan struct{}, 1), &taskWG)
 
 	fastCtx, fastCancel := context.WithCancel(ctx)
 	defer fastCancel()
-	go d.runRuntimePoller(fastCtx, ctx, "runtime-fast", sem, make(chan struct{}, 1), &taskWG)
+	go d.runRuntimePoller(fastCtx, ctx, "runtime-fast", gate, make(chan struct{}, 1), &taskWG)
 
 	// Wait for the slow handler to actually enter (so we know its claim is
 	// in flight) before checking fast-runtime progress.
@@ -220,25 +220,26 @@ func TestRunRuntimePollerSkipsClaimWhenAtCapacity(t *testing.T) {
 	defer srv.Close()
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour,
-		PollInterval:       20 * time.Millisecond,
-		MaxConcurrentTasks: 1,
+		ServerBaseURL:       srv.URL,
+		HeartbeatInterval:   time.Hour,
+		PollInterval:        20 * time.Millisecond,
+		MaxConcurrentAgents: 1,
 	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Drain the only slot to simulate a long-running handleTask occupying
-	// capacity. The poller must observe an empty sem and skip ClaimTask.
-	sem := newTaskSlotSemaphore(d.cfg.MaxConcurrentTasks)
-	<-sem // hold it: never returned during this test
+	// Occupy the only agent slot with a different runtime to simulate a
+	// long-running handleTask occupying capacity. The poller must observe
+	// the gate as full and skip ClaimTask.
+	gate := newActiveAgentGate(d.cfg.MaxConcurrentAgents)
+	gate.tryEnter("runtime-other") // hold it: never released during this test
 
 	var taskWG sync.WaitGroup
-	go d.runRuntimePoller(ctx, ctx, "runtime-busy", sem, make(chan struct{}, 1), &taskWG)
+	go d.runRuntimePoller(ctx, ctx, "runtime-busy", gate, make(chan struct{}, 1), &taskWG)
 
-	// Give the poller several PollInterval ticks to race against the empty
-	// sem. With slot-before-claim it must report zero claim attempts; the
+	// Give the poller several PollInterval ticks to race against the full
+	// gate. With slot-before-claim it must report zero claim attempts; the
 	// older "claim first" path would have hammered ClaimTask each tick.
 	time.Sleep(200 * time.Millisecond)
 
@@ -262,21 +263,21 @@ func TestRunRuntimePollerClaimsWhenSlotBecomesAvailable(t *testing.T) {
 	defer srv.Close()
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour,
-		PollInterval:       time.Hour,
-		MaxConcurrentTasks: 1,
+		ServerBaseURL:       srv.URL,
+		HeartbeatInterval:   time.Hour,
+		PollInterval:        time.Hour,
+		MaxConcurrentAgents: 1,
 	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sem := newTaskSlotSemaphore(d.cfg.MaxConcurrentTasks)
-	slot := <-sem
+	gate := newActiveAgentGate(d.cfg.MaxConcurrentAgents)
+	gate.tryEnter("runtime-other")
 
 	var taskWG sync.WaitGroup
 	wakeup := make(chan struct{}, 1)
-	go d.runRuntimePoller(ctx, ctx, "runtime-waiting", sem, wakeup, &taskWG)
+	go d.runRuntimePoller(ctx, ctx, "runtime-waiting", gate, wakeup, &taskWG)
 	wakeup <- struct{}{}
 
 	time.Sleep(100 * time.Millisecond)
@@ -284,7 +285,7 @@ func TestRunRuntimePollerClaimsWhenSlotBecomesAvailable(t *testing.T) {
 		t.Fatalf("poller claimed before a slot was available; got %d claims", got)
 	}
 
-	sem <- slot
+	gate.exit("runtime-other")
 
 	deadline := time.After(2 * time.Second)
 	for claimAttempts.Load() < 1 {
@@ -338,10 +339,10 @@ func TestPollLoopShutdownWaitsForPollersBeforeTaskWG(t *testing.T) {
 	defer srv.Close()
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour,
-		PollInterval:       50 * time.Millisecond,
-		MaxConcurrentTasks: 1,
+		ServerBaseURL:       srv.URL,
+		HeartbeatInterval:   time.Hour,
+		PollInterval:        50 * time.Millisecond,
+		MaxConcurrentAgents: 1,
 	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
 	d.workspaces["ws-1"] = &workspaceState{
 		workspaceID: "ws-1",
@@ -404,10 +405,10 @@ func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 	defer srv.Close()
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour,
-		PollInterval:       time.Hour,
-		MaxConcurrentTasks: 4,
+		ServerBaseURL:       srv.URL,
+		HeartbeatInterval:   time.Hour,
+		PollInterval:        time.Hour,
+		MaxConcurrentAgents: 4,
 	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
 	d.workspaces["ws-1"] = &workspaceState{
 		workspaceID: "ws-1",

@@ -47,11 +47,32 @@ const (
 	// window while a tool is in flight, because a real build/install/test
 	// legitimately runs silently for many minutes. Set
 	// MULTICA_AGENT_TOOL_WATCHDOG=0 to disable the in-flight probe.
-	DefaultAgentToolWatchdog        = 2 * time.Hour
-	DefaultRuntimeName              = "Local Agent"
-	DefaultWorkspaceSyncInterval    = 30 * time.Second
-	DefaultHealthPort               = 19514
-	DefaultMaxConcurrentTasks       = 20
+	DefaultAgentToolWatchdog     = 2 * time.Hour
+	DefaultRuntimeName           = "Local Agent"
+	DefaultWorkspaceSyncInterval = 30 * time.Second
+	DefaultHealthPort            = 19514
+	// DefaultMaxConcurrentAgents caps how many distinct runtimes (agents) may
+	// have any in-flight task at once on this one daemon — it does NOT cap
+	// the number of tasks. Each agent already self-serializes to at most one
+	// in-flight task via acquireAgentWakeSlot, so the real machine resource
+	// to protect is "one more live agent process" (memory/CPU), not "one
+	// more task"; once a runtime is active it may dispatch as many
+	// concurrent tasks as it needs with no further gating (activeAgentGate).
+	//
+	// This replaces a prior daemon-wide task-count semaphore (default 20,
+	// picked with no documented rationale when concurrent execution was
+	// first added) that was discovered actively saturating a real, ordinarily
+	// busy dev daemon (s144, 3 workspaces): `poll: at capacity running=20`
+	// firing continuously with 12+ distinct runtime_ids queued behind it at
+	// once. Under D6-1b's always-resident sessions a task holds its slot for
+	// the resident session's active turn rather than a short one-shot
+	// dispatch, so slots were held far longer than when 20 was chosen — and
+	// since tasks no longer share a bounded pool, task count itself is
+	// unlimited now (confirmed against Raft's own daemon: it has no
+	// equivalent machine-wide task limiter either, only a live-agent-process
+	// ceiling, which is a billing/seat concept there but a real resource
+	// concern here).
+	DefaultMaxConcurrentAgents      = 20
 	DefaultGCInterval               = 1 * time.Hour
 	DefaultGCTTL                    = 24 * time.Hour // 1 day — AI-coding issues rarely stay open long
 	DefaultGCOrphanTTL              = 72 * time.Hour // 3 days — orphans with no meta (crashes, pre-GC leftovers)
@@ -91,7 +112,7 @@ type Config struct {
 	WorkspacesRoot                string                // base path for execution envs (default: ~/multica_workspaces)
 	KeepEnvAfterTask              bool                  // preserve env after task for debugging
 	HealthPort                    int                   // local HTTP port for health checks (default: 19514)
-	MaxConcurrentTasks            int                   // max tasks running in parallel (default: 20)
+	MaxConcurrentAgents           int                   // max distinct runtimes/agents with any in-flight task at once; tasks themselves are unlimited (default: 20)
 	GCEnabled                     bool                  // enable periodic workspace garbage collection (default: true)
 	GCInterval                    time.Duration         // how often the GC loop runs (default: 1h)
 	GCTTL                         time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
@@ -134,7 +155,7 @@ type Overrides struct {
 	// distinguishable from "flag not passed". nil = use env/default.
 	AgentTimeout                   *time.Duration
 	CodexSemanticInactivityTimeout time.Duration
-	MaxConcurrentTasks             int
+	MaxConcurrentAgents            int
 	DaemonID                       string
 	DeviceName                     string
 	RuntimeName                    string
@@ -381,12 +402,16 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		return Config{}, err
 	}
 
-	maxConcurrentTasks, err := intFromEnv("MULTICA_DAEMON_MAX_CONCURRENT_TASKS", DefaultMaxConcurrentTasks)
+	// Renamed from MULTICA_DAEMON_MAX_CONCURRENT_TASKS: the old name is no
+	// longer read. It capped task count; this caps distinct active agents
+	// instead (see DefaultMaxConcurrentAgents) — keeping the old name would
+	// silently change what a previously-set value means.
+	maxConcurrentAgents, err := intFromEnv("MULTICA_DAEMON_MAX_CONCURRENT_AGENTS", DefaultMaxConcurrentAgents)
 	if err != nil {
 		return Config{}, err
 	}
-	if overrides.MaxConcurrentTasks > 0 {
-		maxConcurrentTasks = overrides.MaxConcurrentTasks
+	if overrides.MaxConcurrentAgents > 0 {
+		maxConcurrentAgents = overrides.MaxConcurrentAgents
 	}
 
 	// Profile
@@ -593,7 +618,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		GrokPersistentIdleTTL:          grokPersistentIdleTTL,
 		PiPersistentIdleTTL:            piPersistentIdleTTL,
 		HealthPort:                     healthPort,
-		MaxConcurrentTasks:             maxConcurrentTasks,
+		MaxConcurrentAgents:            maxConcurrentAgents,
 		PollInterval:                   pollInterval,
 		HeartbeatInterval:              heartbeatInterval,
 		InboundWatchdog:                inboundWatchdog,

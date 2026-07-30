@@ -1,0 +1,165 @@
+# Temporary: when runner_label=aliyun, repair research fleet runtime to Wendy.
+# Revert after the ops run succeeds. Original probe behavior kept for other labels.
+name: runner-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Second label to target (must be on a registered runner)"
+        required: true
+        default: "ci"
+
+jobs:
+  probe:
+    runs-on: [self-hosted, "${{ inputs.runner_label }}" ]
+    timeout-minutes: 10
+    steps:
+      - name: Report the runner that accepted this job
+        run: |
+          echo "dispatched to: ${RUNNER_NAME:-<unset>}"
+          echo "os/arch: ${RUNNER_OS:-?}/${RUNNER_ARCH:-?}"
+          echo "workspace: ${GITHUB_WORKSPACE:-?}"
+          echo "label: ${{ inputs.runner_label }}"
+
+      - name: Research fleet runtime match Wendy (aliyun only)
+        if: inputs.runner_label == 'aliyun'
+        run: |
+          set -euo pipefail
+          actual="$(id -un)"
+          if [ "$actual" != "dev" ]; then
+            echo "::error::expected runner user=dev, got=${actual}"
+            exit 1
+          fi
+          test -f /data/multica/.env
+
+          host_db_url="$(python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlparse, urlunparse
+          raw = None
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith("DATABASE_URL="):
+                  raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+                  break
+          if not raw:
+              raise SystemExit("DATABASE_URL missing")
+          u = urlparse(raw)
+          host = u.hostname or ""
+          if host in ("postgres", "db", "postgresql"):
+              netloc = u.netloc
+              if f"{host}:" in netloc:
+                  netloc = netloc.replace(f"{host}:", "127.0.0.1:", 1)
+              else:
+                  netloc = netloc.replace(host, "127.0.0.1", 1)
+              raw = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
+          print(raw)
+          PY
+          )"
+
+          run_sql() {
+            psql "$host_db_url" -v ON_ERROR_STOP=1 -c "$1"
+          }
+
+          echo "=== BEFORE ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug = 'lrm-team' LIMIT 1)
+          SELECT 'wendy' AS kind, a.name, a.runtime_id::text, r.name AS runtime_name, r.status
+          FROM agent a
+          JOIN ws ON a.workspace_id = ws.id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          WHERE a.archived_at IS NULL AND lower(a.name) LIKE '%wendy%'
+          UNION ALL
+          SELECT 'fleet', a.name, a.runtime_id::text, r.name, r.status
+          FROM research_fleet_member m
+          JOIN research_fleet f ON f.id = m.fleet_id
+          JOIN ws ON f.workspace_id = ws.id
+          JOIN agent a ON a.id = m.agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          WHERE m.status <> 'archived'
+          ORDER BY 1, 2;
+          SQL
+          )"
+
+          echo "=== APPLY ==="
+          run_sql "$(cat <<'SQL'
+          DO $$
+          DECLARE
+            rid uuid;
+            rmode text;
+            updated_n int;
+          BEGIN
+            SELECT a.runtime_id, a.runtime_mode
+              INTO rid, rmode
+            FROM agent a
+            JOIN workspace w ON w.id = a.workspace_id
+            WHERE w.slug = 'lrm-team'
+              AND a.archived_at IS NULL
+              AND (lower(a.name) = 'wendy' OR lower(a.name) LIKE '%wendy%')
+            ORDER BY CASE WHEN lower(a.name) = 'wendy' THEN 0 ELSE 1 END, a.created_at
+            LIMIT 1;
+
+            IF rid IS NULL THEN
+              RAISE EXCEPTION 'Wendy runtime_id is NULL or Wendy agent not found in lrm-team';
+            END IF;
+
+            UPDATE agent a
+            SET runtime_id = rid,
+                runtime_mode = COALESCE(rmode, a.runtime_mode),
+                updated_at = now()
+            FROM research_fleet_member m
+            JOIN research_fleet f ON f.id = m.fleet_id
+            JOIN workspace w ON w.id = f.workspace_id
+            WHERE w.slug = 'lrm-team'
+              AND a.id = m.agent_id
+              AND a.workspace_id = w.id
+              AND a.archived_at IS NULL
+              AND m.status <> 'archived';
+            GET DIAGNOSTICS updated_n = ROW_COUNT;
+            RAISE NOTICE 'updated fleet agents: %', updated_n;
+
+            UPDATE agent a
+            SET runtime_id = rid,
+                runtime_mode = COALESCE(rmode, a.runtime_mode),
+                updated_at = now()
+            FROM workspace w
+            WHERE w.slug = 'lrm-team'
+              AND a.workspace_id = w.id
+              AND a.archived_at IS NULL
+              AND a.name IN ('罗纳尔多', '寻源手', '深读手', '交叉验证', '报告官', '寻道手', '探探手');
+
+            UPDATE research_fleet f
+            SET lead_agent_id = m.agent_id,
+                updated_at = now()
+            FROM research_fleet_member m, workspace w
+            WHERE w.slug = 'lrm-team'
+              AND f.workspace_id = w.id
+              AND m.fleet_id = f.id
+              AND m.workspace_id = w.id
+              AND m.is_lead = true
+              AND m.status = 'active';
+          END $$;
+          SQL
+          )"
+
+          echo "=== AFTER ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug = 'lrm-team' LIMIT 1)
+          SELECT a.name, m.role, m.status, m.is_lead,
+                 a.runtime_id::text, r.name AS runtime_name, r.status AS runtime_status,
+                 (f.lead_agent_id = a.id) AS is_fleet_lead_ptr
+          FROM research_fleet f
+          JOIN ws ON f.workspace_id = ws.id
+          JOIN research_fleet_member m ON m.fleet_id = f.id
+          JOIN agent a ON a.id = m.agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          WHERE m.status <> 'archived'
+          ORDER BY m.is_lead DESC, a.name;
+          SQL
+          )"
+
+      - name: Confirm a toolchain exists (non-fatal, informational only)
+        if: inputs.runner_label != 'aliyun'
+        continue-on-error: true
+        run: |
+          node --version || echo "node: absent"
+          docker --version || echo "docker: absent"

@@ -3,10 +3,14 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -97,6 +101,76 @@ func TestVoiceCallCallbackAuthenticatesAndProcessesSubtitleWithoutContentType(t 
 	}
 }
 
+func TestVoiceCallCallbackAuthenticatesAndProcessesVoiceChatTaskStart(t *testing.T) {
+	processor := &fakeVoiceCallCallbackProcessor{
+		taskEventResult: voicecall.Session{
+			ID:          testVoiceAPICallID,
+			WorkspaceID: testVoiceAPIWorkspaceID,
+			UserID:      testVoiceAPIUserID,
+		},
+		taskEventChanged: true,
+	}
+	bus := events.New()
+	var published events.Event
+	bus.Subscribe(protocol.EventVoiceCallUpdated, func(event events.Event) {
+		published = event
+	})
+	handler := &Handler{
+		VoiceCallCallbackProcessor: processor,
+		VoiceCallCallbackSignature: "expected-signature",
+		Bus:                        bus,
+	}
+	body := voiceCallTaskEventBodyForTest(
+		t,
+		"expected-signature",
+		`{"AppId":"rtc-app","BusinessId":"","RoomId":"voice-call-abc","TaskId":"voice-task-abc","UserID":"voice-agent-abc","RoundID":0,"EventTime":1785391200000,"EventType":0,"RunStage":"taskStart"}`,
+	)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/voice-calls/callback",
+		strings.NewReader(body),
+	)
+	response := httptest.NewRecorder()
+
+	handler.HandleVoiceCallCallback(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "ok" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if processor.taskEventCalls != 1 ||
+		processor.taskEvent.TaskID != "voice-task-abc" ||
+		processor.taskEvent.RunStage !=
+			volcenginertc.VoiceChatRunStageTaskStart {
+		t.Fatalf("processor = %#v", processor)
+	}
+	assertVoiceCallUpdatedEvent(
+		t,
+		published,
+		testVoiceAPIWorkspaceID,
+		testVoiceAPICallID,
+		testVoiceAPIUserID,
+	)
+}
+
+func TestVoiceCallCallbackReturnsOKForConnectivityCheck(t *testing.T) {
+	handler := &Handler{
+		VoiceCallCallbackProcessor: &fakeVoiceCallCallbackProcessor{},
+		VoiceCallCallbackSignature: "expected-signature",
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/voice-calls/callback",
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.HandleVoiceCallCallback(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "ok" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+}
+
 func TestVoiceCallCallbackRejectsWrongSignatureBeforeDecoding(t *testing.T) {
 	processor := &fakeVoiceCallCallbackProcessor{}
 	handler := &Handler{
@@ -119,6 +193,34 @@ func TestVoiceCallCallbackRejectsWrongSignatureBeforeDecoding(t *testing.T) {
 	}
 	if processor.statusCalls != 0 || processor.subtitleCalls != 0 {
 		t.Fatalf("processor = %#v", processor)
+	}
+}
+
+func TestVoiceCallCallbackRejectsWrongVoiceChatSignature(t *testing.T) {
+	processor := &fakeVoiceCallCallbackProcessor{}
+	handler := &Handler{
+		VoiceCallCallbackProcessor: processor,
+		VoiceCallCallbackSignature: "expected-signature",
+	}
+	body := voiceCallTaskEventBodyForTest(
+		t,
+		"wrong-signature",
+		`{"AppId":"rtc-app","RoomId":"voice-call-abc","TaskId":"voice-task-abc","EventTime":1785391200000,"EventType":0,"RunStage":"taskStart"}`,
+	)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/voice-calls/callback",
+		strings.NewReader(body),
+	)
+	response := httptest.NewRecorder()
+
+	handler.HandleVoiceCallCallback(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+	if processor.taskEventCalls != 0 {
+		t.Fatalf("task event processor called %d times", processor.taskEventCalls)
 	}
 }
 
@@ -188,12 +290,16 @@ func TestVoiceCallCallbackReturnsUnavailableUntilConfigured(t *testing.T) {
 }
 
 type fakeVoiceCallCallbackProcessor struct {
-	statusCalls   int
-	subtitleCalls int
-	status        volcenginertc.ConversationStatus
-	subtitle      volcenginertc.ConversationSubtitle
-	statusResult  voicecall.Session
-	err           error
+	statusCalls      int
+	subtitleCalls    int
+	taskEventCalls   int
+	status           volcenginertc.ConversationStatus
+	subtitle         volcenginertc.ConversationSubtitle
+	taskEvent        volcenginertc.VoiceChatTaskEvent
+	statusResult     voicecall.Session
+	taskEventResult  voicecall.Session
+	taskEventChanged bool
+	err              error
 }
 
 func (processor *fakeVoiceCallCallbackProcessor) HandleConversationStatus(
@@ -214,10 +320,54 @@ func (processor *fakeVoiceCallCallbackProcessor) HandleConversationSubtitle(
 	return processor.err
 }
 
+func (processor *fakeVoiceCallCallbackProcessor) HandleVoiceChatTaskEvent(
+	_ context.Context,
+	event volcenginertc.VoiceChatTaskEvent,
+) (voicecall.Session, bool, error) {
+	processor.taskEventCalls++
+	processor.taskEvent = event
+	return processor.taskEventResult, processor.taskEventChanged, processor.err
+}
+
 func voiceCallCallbackPayloadForTest(magic string, payload string) string {
 	data := make([]byte, 8+len(payload))
 	copy(data[:4], magic)
 	binary.BigEndian.PutUint32(data[4:8], uint32(len(payload)))
 	copy(data[8:], payload)
 	return base64.StdEncoding.EncodeToString(data)
+}
+
+func voiceCallTaskEventBodyForTest(
+	t *testing.T,
+	secret string,
+	eventData string,
+) string {
+	t.Helper()
+	envelope := volcenginertc.VoiceChatEventEnvelope{
+		EventType: "VoiceChat",
+		EventData: eventData,
+		EventTime: "2026-07-30T14:00:00+08:00",
+		EventID:   "event-1",
+		AppID:     "rtc-app",
+		Version:   "2020-12-01",
+		Nonce:     "aB12",
+	}
+	values := []string{
+		envelope.EventType,
+		envelope.EventData,
+		envelope.EventTime,
+		envelope.EventID,
+		envelope.AppID,
+		envelope.Version,
+		envelope.Nonce,
+		secret,
+	}
+	sort.Strings(values)
+	sum := sha256.Sum256([]byte(strings.Join(values, "")))
+	envelope.Signature = hex.EncodeToString(sum[:])
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal task event: %v", err)
+	}
+	return string(body)
 }

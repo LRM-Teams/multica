@@ -48,6 +48,7 @@ func TestMainRouterHasChannelMessageEditDeleteRoutes(t *testing.T) {
 func TestMainRouterHasPublicVoiceCallProviderRoutes(t *testing.T) {
 	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
 	want := map[string]bool{
+		http.MethodGet + " " + voiceCallCallbackPath:  false,
 		http.MethodPost + " " + voiceCallCallbackPath: false,
 		http.MethodPost + " " + voiceCallLLMPath:      false,
 	}

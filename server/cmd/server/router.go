@@ -531,9 +531,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// only forward the bytes + the Stripe-Signature header; see
 	// HandleCloudBillingStripeWebhook for the rationale).
 	r.Post("/api/webhooks/stripe", h.HandleCloudBillingStripeWebhook)
-	// Volcengine RTC callback (no Multica auth). The provider echoes the
-	// server-configured signature in the JSON body; the handler validates it
-	// before decoding the binary conversation event.
+	// Volcengine RTC callbacks (no Multica auth). GET is the provider's
+	// connectivity check. POST supports both signed server-level VoiceChat
+	// events and signed binary conversation messages.
+	r.Get(voiceCallCallbackPath, h.HandleVoiceCallCallback)
 	r.Post(voiceCallCallbackPath, h.HandleVoiceCallCallback)
 	// Volcengine RTC CustomLLM endpoint (no Multica user auth). A dedicated
 	// bearer credential authenticates the provider before any transcript is

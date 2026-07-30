@@ -47,8 +47,9 @@ Beckham's configured welcome message after the caller joins.
   `Running`.
 - [x] Stored the speech AppIDs and Ark endpoint in the `aliyun-dev` GitHub
   environment and removed the obsolete display-model secret.
-- [ ] Merge the PR into `dev`.
-- [ ] Verify the deployed image SHA and external `/readyz`.
+- [x] Merged PR #1495 into `dev`.
+- [x] Verified the deployed `sha-4f2b0b6` image contains PR #1495.
+- [ ] Verify `/readyz` consistently from mainland and provider networks.
 - [ ] Start a real call and verify provider active callback, non-zero audio, and
   the welcome message.
 
@@ -102,3 +103,28 @@ Beckham's configured welcome message after the caller joins.
 - [x] Added a static regression test proving the resolved Compose environment
   remains available until the OSS credential preflight consumes it.
 - [x] Moved `unset compose_environment` after that preflight.
+
+## Server-level VoiceChat task events
+
+- [x] Confirmed the provider's server-level callback contract from the current
+  Volcengine documentation instead of reusing the binary conversation-message
+  envelope.
+- [x] Added the documented SHA-256 callback signature verification and verified
+  it against Volcengine's published example.
+- [x] Added strict decoding for `VoiceChat` task state and task error events.
+- [x] Mapped `taskStart` and every documented in-progress run stage to an
+  idempotent provider-active update, so a delayed or out-of-order event can
+  still stop ringback.
+- [x] Mapped provider task errors to terminal session failures with the actual
+  Volcengine error code.
+- [x] Added the callback GET connectivity check required by the RTC console.
+- [x] Preserved the existing signed binary conversation status and subtitle
+  callbacks.
+- [x] Reproduced the old handler returning `401` for a correctly signed
+  server-level `VoiceChat` event with a standalone HTTP replay.
+- [x] Verified the same replay returns `200` and invokes the task-event
+  processor after the repair.
+- [x] Recorded that the repository's handler and `cmd/server` TestMain skip
+  integration tests when local PostgreSQL is unavailable; their new regression
+  tests compile locally but require CI or a database-backed environment to
+  execute.

@@ -85,6 +85,7 @@ interface ChatListChrome {
 }
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
+const ChatMessageBodyLayoutContext = createContext<(() => void) | null>(null);
 
 function ChatMessageListHeader() {
   const chrome = use(ChatListChromeContext);
@@ -227,6 +228,18 @@ export function ChatMessageList({
     scrollRef.current?.scrollTo({ top, behavior: "smooth" });
   }, []);
 
+  const handleMessageBodyLayoutChange = useCallback(() => {
+    const shouldKeepBottom = isNearBottom;
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+      updateScrollPosition();
+      if (shouldKeepBottom) {
+        const scrollEl = scrollRef.current;
+        if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+    });
+  }, [isNearBottom, updateScrollPosition]);
+
   const chromeValue = useMemo<ChatListChrome>(
     () => ({
       isFetchingOlderMessages,
@@ -256,6 +269,7 @@ export function ChatMessageList({
 
   return (
     <ChatListChromeContext.Provider value={chromeValue}>
+    <ChatMessageBodyLayoutContext.Provider value={handleMessageBodyLayoutChange}>
     <div className="relative flex-1 min-h-0">
       <div
         ref={setScrollContainerRef}
@@ -333,6 +347,7 @@ export function ChatMessageList({
         </div>
       )}
     </div>
+    </ChatMessageBodyLayoutContext.Provider>
     </ChatListChromeContext.Provider>
   );
 }
@@ -659,6 +674,7 @@ function ChatCollapsibleBody({
   fadeVariant?: import("../../common/mention-token").MessageCollapseFadeVariant;
 }) {
   const { t } = useT("chat");
+  const onBodyLayoutChange = use(ChatMessageBodyLayoutContext);
   return (
     <CollapsibleMessageBody
       contentKey={contentKey}
@@ -666,6 +682,7 @@ function ChatCollapsibleBody({
       expandLabel={t(($) => $.message_list.expand_action)}
       collapseLabel={t(($) => $.message_list.collapse_action)}
       fadeVariant={fadeVariant}
+      onExpandedChange={onBodyLayoutChange ? () => onBodyLayoutChange() : undefined}
     >
       {children}
     </CollapsibleMessageBody>

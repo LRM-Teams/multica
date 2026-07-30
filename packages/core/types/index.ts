@@ -348,6 +348,7 @@ export type {
   ChannelProjectFilesStatus,
   ChannelProjectFiles,
   ChannelProjectFileContent,
+  ChannelNotifyLevel,
 } from "./channel";
 
 export type {

@@ -651,5 +651,17 @@
     "dm_chat": "聊天",
     "tasks": "Issues",
     "files": "文件"
+  },
+  "notify_prefs": {
+    "title": "通知偏好",
+    "opt_default": "默认（跟随全局）",
+    "opt_default_hint": "不单独设置，跟全局通知偏好走",
+    "opt_all": "所有新消息",
+    "opt_all_hint": "每条消息都通知",
+    "opt_mentions": "仅 @ 提及我",
+    "opt_mentions_hint": "只有 @你 或 @all 时通知",
+    "opt_muted": "静音",
+    "opt_muted_hint": "不通知，列表里弱显示",
+    "global_settings": "全局通知设置 →"
   }
 }

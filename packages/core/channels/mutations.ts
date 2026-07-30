@@ -13,7 +13,7 @@ import {
 } from "./optimistic-send";
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
-import type { ChannelThreadMessagesPage, MessagePart } from "../types";
+import type { ChannelNotifyLevel, ChannelThreadMessagesPage, MessagePart } from "../types";
 import { userActivityKeys } from "../user-activity/queries";
 import {
   optimisticallyMarkActivityThreadRead,
@@ -113,6 +113,19 @@ export function useMuteChannel() {
 }
 
 export const useSetChannelMuted = useMuteChannel;
+
+/** LRM-748 / LRM-769 — set the viewer's per-channel notify level. The server
+ *  dual-writes `muted_at` for legacy clients, so invalidating the channel
+ *  list refreshes both fields at once. */
+export function useSetChannelNotifyPreference() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ channelId, level }: { channelId: string; level: ChannelNotifyLevel }) =>
+      api.setChannelNotifyPreference(channelId, level),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
 
 export function useSendChannelMessage() {
   const qc = useQueryClient();

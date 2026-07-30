@@ -651,5 +651,17 @@
     "dm_chat": "チャット",
     "tasks": "イシュー",
     "files": "ファイル"
+  },
+  "notify_prefs": {
+    "title": "通知設定",
+    "opt_default": "デフォルト（グローバルに従う）",
+    "opt_default_hint": "個別設定なし。グローバルの通知設定に従います",
+    "opt_all": "すべての新着メッセージ",
+    "opt_all_hint": "すべてのメッセージを通知",
+    "opt_mentions": "@メンションのみ",
+    "opt_mentions_hint": "@あなた または @all の場合のみ通知",
+    "opt_muted": "ミュート",
+    "opt_muted_hint": "通知なし。リストで淡色表示",
+    "global_settings": "グローバル通知設定 →"
   }
 }

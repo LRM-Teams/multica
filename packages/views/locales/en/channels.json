@@ -651,5 +651,17 @@
     "dm_chat": "Chat",
     "tasks": "Issues",
     "files": "Files"
+  },
+  "notify_prefs": {
+    "title": "Notification preference",
+    "opt_default": "Default (follow global)",
+    "opt_default_hint": "No channel override — follows your global notification settings",
+    "opt_all": "All new messages",
+    "opt_all_hint": "Notify for every message",
+    "opt_mentions": "Only @mentions",
+    "opt_mentions_hint": "Notify only when you're @mentioned or @all is used",
+    "opt_muted": "Muted",
+    "opt_muted_hint": "No notifications; dimmed in the list",
+    "global_settings": "Global notification settings →"
   }
 }

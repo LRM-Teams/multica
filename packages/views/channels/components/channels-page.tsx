@@ -49,6 +49,7 @@ import {
   useMarkChannelRead,
   useMarkChannelUnread,
   useMuteChannel,
+  useSetChannelNotifyPreference,
   useRemoveChannelMember,
   useUpdateChannelMemberRole,
   useTransferChannelOwnership,
@@ -78,7 +79,6 @@ import { ApiError, api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { notificationPreferenceOptions } from "@multica/core/notification-preferences/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -97,6 +97,7 @@ import {
 import type {
   Channel,
   ChannelActiveTask,
+  ChannelNotifyLevel,
   ChannelInviteCandidate,
   ChannelMember,
   ChannelMessage,
@@ -200,6 +201,11 @@ import {
   type ChannelDetailsTab,
 } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
+import { ChannelNotifyPrefsDialog } from "./channel-notify-prefs";
+import {
+  channelNotifyLevelLabel,
+  resolveChannelNotifyLevel,
+} from "./channel-notify-level";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
@@ -513,11 +519,6 @@ export function ChannelsPage({
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const { searchParams, replace, getShareableUrl, push } = useNavigation();
-  const { data: notifyPrefData } = useQuery(notificationPreferenceOptions(wsId));
-  const channelNotifyPrefLabel =
-    notifyPrefData?.preferences?.system_notifications === "muted"
-      ? t(($) => $.details.notify_pref_off)
-      : t(($) => $.details.notify_pref_all);
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
@@ -1953,6 +1954,8 @@ export function ChannelsPage({
   };
 
   const muteChannel = useMuteChannel();
+  const setNotifyPreference = useSetChannelNotifyPreference();
+  const [notifyPrefsOpen, setNotifyPrefsOpen] = useState(false);
 
   const handleToggleChannelMute = (channel: Channel) => {
     muteChannel.mutate(
@@ -3522,9 +3525,23 @@ export function ChannelsPage({
         stopAllDisabledReason: hasStoppableChannelTasks
           ? undefined
           : t(($) => $.stop_all_agents.empty_tooltip),
-        notifyPrefLabel: channelNotifyPrefLabel,
-        onOpenNotificationPrefs: () => {
+        notifyPrefLabel: channelNotifyLevelLabel(
+          t,
+          resolveChannelNotifyLevel(active!),
+        ),
+        notifyLevel: resolveChannelNotifyLevel(active!),
+        onSelectNotifyLevel: (level: ChannelNotifyLevel) => {
+          setNotifyPreference.mutate(
+            { channelId: active!.id, level },
+            { onError: () => showErrorToast(t(($) => $.dm.action_failed)) },
+          );
+        },
+        notifyLevelPending: setNotifyPreference.isPending,
+        onOpenGlobalNotifySettings: () => {
           push(`${wsPaths.settings()}?tab=notifications`);
+        },
+        onOpenNotificationPrefs: () => {
+          setNotifyPrefsOpen(true);
         },
       }
     : null;
@@ -3537,6 +3554,27 @@ export function ChannelsPage({
         variant="panel"
       />
     ) : null;
+  // LRM-748 frozen v2 — desktop notify prefs live in this dialog (never a
+  // page push); mobile drills into the details panel's internal sub-view.
+  const notifyPrefsDialog = active ? (
+    <ChannelNotifyPrefsDialog
+      open={notifyPrefsOpen}
+      onOpenChange={setNotifyPrefsOpen}
+      channelName={active.name}
+      level={resolveChannelNotifyLevel(active)}
+      pending={setNotifyPreference.isPending}
+      onSelect={(level) => {
+        setNotifyPreference.mutate(
+          { channelId: active.id, level },
+          { onError: () => showErrorToast(t(($) => $.dm.action_failed)) },
+        );
+      }}
+      onOpenGlobalSettings={() => {
+        setNotifyPrefsOpen(false);
+        push(`${wsPaths.settings()}?tab=notifications`);
+      }}
+    />
+  ) : null;
   const channelConversationPane = (
     <main
       ref={detailHeaderContainerRef}
@@ -4021,6 +4059,7 @@ export function ChannelsPage({
       >
         {channelConversationPane}
       </div>
+      {notifyPrefsDialog}
       {desktopSidePanel ? (
         <div
           data-testid={

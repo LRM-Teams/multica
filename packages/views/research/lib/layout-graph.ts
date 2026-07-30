@@ -8,6 +8,10 @@ export const RESEARCH_NODE_HEIGHT = 120;
 
 export type ResearchFlowNodeData = {
   research: ResearchGraphNode;
+  /** Live presence caption from research presence map (optional overlay). */
+  presenceLabel?: string;
+  /** Count of high-weight sources feeding a finding (optional badge). */
+  sourceBadgeCount?: number;
 };
 
 export type ResearchFlowEdgeData = {

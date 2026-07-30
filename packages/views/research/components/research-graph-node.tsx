@@ -11,13 +11,7 @@ import { isCompactActivityLabel } from "../../channels/components/is-compact-act
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 
-export type ResearchFlowNode = Node<
-  ResearchFlowNodeData & {
-    presenceLabel?: string;
-    sourceBadgeCount?: number;
-  },
-  "research"
->;
+export type ResearchFlowNode = Node<ResearchFlowNodeData, "research">;
 
 function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNode>) {
   const { t } = useT("research");

@@ -46,16 +46,19 @@ services:
       - "0.0.0.0:443:443"
       - "0.0.0.0:443:443/udp"
       - "0.0.0.0:8090:8090"
+    environment:
+      # Public CLI/daemon release feed target (see deploy/aliyun/Caddyfile
+      # handle_path /downloads/multica/*): the OSS/CDN base URL the release
+      # workflow's publish-downloads-feed job actually uploads to. Host-local
+      # config, not a secret — read from /data/multica/.env. Changing this
+      # (e.g. to a future CDN or self-owned domain) is a Caddy-only change;
+      # the CLI/daemon/install script never bake in this value, only
+      # https://leagent.me/downloads/multica.
+      RELEASES_PUBLIC_ORIGIN: ${RELEASES_PUBLIC_ORIGIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-      # Public, read-only CLI/daemon release feed (see deploy/aliyun/Caddyfile
-      # handle_path /downloads/multica/*). Mounted read-only into Caddy;
-      # `/data/multica/releases` is written only by the release workflow's
-      # publish-downloads-feed job on the aliyun runner, never by this
-      # deploy job or the app containers.
-      - /data/multica/releases:/srv/multica-releases:ro
     restart: unless-stopped
 
 volumes:

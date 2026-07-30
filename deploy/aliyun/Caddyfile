@@ -5,22 +5,21 @@
 	# catch-all reverse_proxy, which has no matcher and would otherwise
 	# swallow every request.
 	route {
-		# Public, read-only CLI/daemon release feed: immutable per-version
-		# archives/checksums plus the promoted latest.json, populated by the
-		# release workflow's publish-downloads-feed job. The CLI/daemon
-		# manifest client (server/internal/cli/update.go
-		# ReleaseManifestBaseURL) and the install script read from here
-		# instead of GitHub — an unauthenticated request to the private
-		# LRM-Teams/multica repo's GitHub API/asset hosts always 404s.
+		# Public CLI/daemon release feed. The CLI/daemon manifest client
+		# (server/internal/cli/update.go ReleaseManifestBaseURL) and the
+		# install script bake in *this* domain, not the storage backend —
+		# an unauthenticated request to the private LRM-Teams/multica repo's
+		# GitHub API/asset hosts always 404s, so it can never point there.
+		# We redirect to wherever the release workflow's publish-downloads-
+		# feed job actually put the immutable per-version archives/checksums
+		# and the promoted latest.json (OSS bucket today; a future CDN or
+		# self-owned domain is a one-line change here, not a client release).
 		# handle_path strips the /downloads/multica prefix and, being a
-		# `handle` block, owns the response exclusively: a miss here is a
-		# 404 from file_server, never a fall-through to the app.
+		# `handle` block, owns the response exclusively: a miss here is
+		# whatever the redirect target returns, never a fall-through to the
+		# app.
 		handle_path /downloads/multica/* {
-			root * /srv/multica-releases
-			# No `browse` subdirective: it is opt-in in Caddy (absent = off).
-			# Adding a bare `browse off` is a config bug, not a way to
-			# disable it — `off` is parsed as a browse template file path.
-			file_server
+			redir * {env.RELEASES_PUBLIC_ORIGIN}{uri} 302
 		}
 
 		@multica_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws

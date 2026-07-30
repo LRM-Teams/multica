@@ -88,34 +88,41 @@ jobs:
   # an unauthenticated request to the private LRM-Teams/multica repo's API or
   # asset host always 404s (no credential the CLI/daemon binary can carry).
   # This job re-publishes the same GoReleaser archives, plus a manifest CI
-  # derives from checksums.txt, to a public read-only path on the Aliyun host
-  # that Caddy serves at /downloads/multica/* (deploy/aliyun/Caddyfile). It
-  # only reads from the just-created GitHub release with the CI token and
-  # writes to /data/multica/releases — it never touches /data/multica broadly
-  # (the app's .env, database, etc.) and never mutates a running container.
+  # derives from checksums.txt, to an Aliyun OSS bucket that Caddy
+  # 302-redirects /downloads/multica/* to (deploy/aliyun/Caddyfile
+  # RELEASES_PUBLIC_ORIGIN). It only reads from the just-created GitHub
+  # release with the CI token; it never touches the deploy host or a running
+  # container — a plain hosted runner is enough, unlike the local-filesystem
+  # design this replaced.
+  #
+  # Credentials are a narrowly-scoped OSS sub-account (write access to the
+  # releases/ prefix only) — deliberately separate from the app's own
+  # S3_BUCKET/AWS_ACCESS_KEY_ID attachment-storage secrets, so a compromised
+  # release key can only ever overwrite published CLI archives, never touch
+  # user attachments in the app's bucket.
   publish-downloads-feed:
     needs: [verify, release]
     if: github.repository == 'LRM-Teams/multica'
-    runs-on: [self-hosted, aliyun]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     env:
-      RUNNER_EXPECTED_USER: dev
-      RELEASES_DIR: /data/multica/releases
       MANIFEST_BASE_URL: https://leagent.me/downloads/multica
       TAG_NAME: ${{ needs.verify.outputs.tag_name }}
       IS_STABLE: ${{ needs.verify.outputs.is_stable }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.RELEASES_OSS_REGION }}
+      OSS_ENDPOINT_URL: ${{ secrets.RELEASES_OSS_ENDPOINT_URL }}
+      OSS_BUCKET: ${{ secrets.RELEASES_OSS_BUCKET }}
+      # Public HTTPS base URL objects are readable at — must be the exact
+      # value deploy/aliyun/Caddyfile's RELEASES_PUBLIC_ORIGIN redirects to,
+      # kept as one value here rather than derived, since bucket-domain
+      # construction rules vary by provider/CDN and a mismatch would silently
+      # break every install/update until someone diffs the two.
+      OSS_PUBLIC_BASE_URL: ${{ secrets.RELEASES_OSS_PUBLIC_BASE_URL }}
     steps:
-      - name: Preflight runner identity
-        run: |
-          set -euo pipefail
-          actual_user="$(id -un)"
-          if [ "$actual_user" != "$RUNNER_EXPECTED_USER" ]; then
-            echo "::error title=Unexpected runner identity::expected=${RUNNER_EXPECTED_USER} actual=${actual_user}"
-            exit 1
-          fi
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -156,44 +163,72 @@ jobs:
             >"${RUNNER_TEMP}/release.json"
           cat "${RUNNER_TEMP}/release.json"
 
-      - name: Prepare releases directory
-        run: install -d -m 0755 "${RELEASES_DIR}"
-
-      - name: Publish immutable per-version directory
+      - name: Publish immutable per-version objects
         run: |
           set -euo pipefail
-          version_dir="${RELEASES_DIR}/${TAG_NAME}"
-          if [ -e "$version_dir" ]; then
-            echo "::error title=Immutable release directory already exists::${version_dir}"
+          prefix="releases/${TAG_NAME}"
+          # A single object PUT is atomic; there is no local staging/rename
+          # step to get right (unlike the filesystem design this replaced) —
+          # but we still refuse to silently overwrite an already-published
+          # immutable version.
+          if aws s3api head-object \
+            --endpoint-url "$OSS_ENDPOINT_URL" --bucket "$OSS_BUCKET" --key "${prefix}/release.json" \
+            >/dev/null 2>&1; then
+            echo "::error title=Immutable release object already exists::s3://${OSS_BUCKET}/${prefix}/release.json"
             exit 1
           fi
-          staging_dir="$(mktemp -d "${RELEASES_DIR}/.staging-${TAG_NAME}-XXXXXX")"
           shopt -s nullglob
           for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
-            install -m 0644 "$f" "$staging_dir/"
+            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" "$f" "s3://${OSS_BUCKET}/${prefix}/$(basename "$f")"
           done
-          install -m 0644 "${RUNNER_TEMP}/release-assets/checksums.txt" "$staging_dir/checksums.txt"
-          install -m 0644 "${RUNNER_TEMP}/release.json" "$staging_dir/release.json"
-          mv -T "$staging_dir" "$version_dir"
-          echo "Published immutable release directory: $version_dir"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            "${RUNNER_TEMP}/release-assets/checksums.txt" "s3://${OSS_BUCKET}/${prefix}/checksums.txt"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            "${RUNNER_TEMP}/release.json" "s3://${OSS_BUCKET}/${prefix}/release.json"
+          echo "Published immutable release objects: s3://${OSS_BUCKET}/${prefix}/"
 
       - name: Publish install scripts + docs (stable path, not per-version)
         run: |
           set -euo pipefail
-          install -m 0755 scripts/install.sh "${RELEASES_DIR}/install.sh.next"
-          mv -f "${RELEASES_DIR}/install.sh.next" "${RELEASES_DIR}/install.sh"
-          install -m 0755 scripts/install.ps1 "${RELEASES_DIR}/install.ps1.next"
-          mv -f "${RELEASES_DIR}/install.ps1.next" "${RELEASES_DIR}/install.ps1"
-          install -m 0644 CLI_INSTALL.md "${RELEASES_DIR}/CLI_INSTALL.md.next"
-          mv -f "${RELEASES_DIR}/CLI_INSTALL.md.next" "${RELEASES_DIR}/CLI_INSTALL.md"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" scripts/install.sh "s3://${OSS_BUCKET}/releases/install.sh"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" scripts/install.ps1 "s3://${OSS_BUCKET}/releases/install.ps1"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" CLI_INSTALL.md "s3://${OSS_BUCKET}/releases/CLI_INSTALL.md"
 
-      - name: Atomically promote latest.json
+      - name: Promote latest.json
         if: env.IS_STABLE == 'true'
         run: |
           set -euo pipefail
-          install -m 0644 "${RUNNER_TEMP}/release.json" "${RELEASES_DIR}/latest.json.next"
-          mv -f "${RELEASES_DIR}/latest.json.next" "${RELEASES_DIR}/latest.json"
-          echo "Promoted ${TAG_NAME} to latest.json"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" "${RUNNER_TEMP}/release.json" "s3://${OSS_BUCKET}/releases/latest.json"
+          echo "Promoted ${TAG_NAME} to s3://${OSS_BUCKET}/releases/latest.json"
+
+      # "Upload succeeded" is not "installable" — task #187 was exactly this
+      # shape (update request 200, nothing actually changed) and #15's s144
+      # incident was a silent-404 variant of the same failure. Prove the
+      # published bytes are the same bytes a real install/update would fetch
+      # over HTTPS, not just that the OSS API accepted the PUT.
+      - name: Verify the published feed is actually publicly downloadable
+        run: |
+          set -euo pipefail
+          verify_matches() {
+            local url="$1" want_file="$2" label="$3"
+            local got_file
+            got_file="$(mktemp)"
+            curl -fsSL "$url" -o "$got_file"
+            if ! cmp -s "$want_file" "$got_file"; then
+              echo "::error title=Published object does not match uploaded content::${label} (${url})"
+              exit 1
+            fi
+            rm -f "$got_file"
+          }
+          verify_matches "${OSS_PUBLIC_BASE_URL}/${TAG_NAME}/checksums.txt" \
+            "${RUNNER_TEMP}/release-assets/checksums.txt" "checksums.txt"
+          verify_matches "${OSS_PUBLIC_BASE_URL}/${TAG_NAME}/release.json" \
+            "${RUNNER_TEMP}/release.json" "release.json"
+          if [ "$IS_STABLE" = "true" ]; then
+            verify_matches "${OSS_PUBLIC_BASE_URL}/latest.json" \
+              "${RUNNER_TEMP}/release.json" "latest.json"
+          fi
+          echo "Verified: published objects are byte-identical when re-downloaded over HTTPS from the public feed."
 
   # The web-only release policy publishes Linux amd64 images only. The served
   # deployment target is amd64. Daemon archives are handled by the release job

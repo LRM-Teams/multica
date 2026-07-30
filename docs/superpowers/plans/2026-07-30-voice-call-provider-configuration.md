@@ -239,3 +239,11 @@ Beckham's configured welcome message after the caller joins.
   pre-existing files outside this change.
 - [x] Verified React Doctor reports zero issues in the changed source.
 - [x] Verified `git diff --check`.
+- [x] Merged the repair in PR #1516 with merge commit `bc378b7`.
+- [x] Verified Deploy run `30527088960` completed successfully.
+- [x] Verified production frontend and backend use image tag `sha-bc378b7`.
+- [x] Verified the production backend reports the Volcengine voice-call
+  integration enabled and `/readyz` reports both database and migrations OK.
+- [ ] Complete one authenticated caller microphone test on the deployed web
+  client and confirm ringback stops on the welcome-message audio instead of
+  the unreachable server callback.

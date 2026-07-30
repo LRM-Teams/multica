@@ -153,15 +153,6 @@ export function CreateAgentDialog({
         display_name: name.trim(),
         description: description.trim(),
         runtime_id: selectedRuntime.id,
-        // TRANSITION CONSTANT — delete with #908.
-        // Agent visibility is retired and the user no longer chooses it, but
-        // omitting the field is NOT safe: `agent.go:939` defaults an empty
-        // value to "private", not workspace. That would silently recreate
-        // the retired private-visibility access path (`agent_access.go:26`)
-        // and contradict the current rule that every agent is visible to the
-        // whole workspace — with no error to catch it. Dies when #908 drops
-        // the column and that default.
-        visibility: "workspace",
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,

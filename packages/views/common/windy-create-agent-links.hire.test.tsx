@@ -194,12 +194,9 @@ describe("Windy hire card create path", () => {
     document.body.innerHTML = "";
   });
 
-  // Guards the transition constant. Agent visibility is gone from the UI, but
-  // an omitted value is NOT safe: `agent.go:939` defaults empty to "private",
-  // silently recreating the retired private-visibility path. This is the
-  // only test of the hire card's create path — if it stops asserting the
-  // field, nothing does.
-  it("submits workspace visibility and no home_channel_id", async () => {
+  // This is the only test of the hire card's create path — if it stops
+  // asserting the field, nothing does.
+  it("submits no visibility and no home_channel_id", async () => {
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
@@ -209,7 +206,7 @@ describe("Windy hire card create path", () => {
     await waitFor(() => expect(createAgent).toHaveBeenCalled());
 
     const payload = createAgent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(payload.visibility).toBe("workspace");
+    expect(payload.visibility).toBeUndefined();
     // Strictly undefined, not merely "not ch-home": the draft and the link both
     // name ch-home, so a weaker assertion would pass on any other channel too.
     expect(payload.home_channel_id).toBeUndefined();

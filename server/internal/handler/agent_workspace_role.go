@@ -138,10 +138,6 @@ func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		resp := agentToResponse(updatedAgent)
-		if home, ok := h.loadAgentHomeChannelID(r.Context(), updatedAgent.ID); ok {
-			homeID := uuidToString(home)
-			resp.HomeChannelID = &homeID
-		}
 		if err := h.attachAgentSkills(r.Context(), &resp, updatedAgent.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 			return

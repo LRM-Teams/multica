@@ -171,15 +171,6 @@ func TestExistingChannelMemberWritersRecordCanonicalActorProvenance(t *testing.T
 		requireChannelMembershipActor(t, channel.ID, "agent", targetAgent, "user", testUserID)
 	})
 
-	t.Run("beckham system ensure uses a null actor id", func(t *testing.T) {
-		targetAgent := createHandlerTestAgent(t, "Beckham Provenance "+uuid.NewString()[:8], nil)
-		channelID := seedChannelForTest(t, "beckham-system-provenance-"+uuid.NewString(), testUserID)
-		testHandler.ensureChannelAgentMember(
-			context.Background(), parseUUID(testWorkspaceID), parseUUID(channelID), parseUUID(targetAgent),
-		)
-		requireChannelMembershipActor(t, channelID, "agent", targetAgent, "system", "")
-	})
-
 	t.Run("env dispatch create records user owner and system roster actors", func(t *testing.T) {
 		ctx, _, envID, _, targetAgent := setupEnvDispatchChannelStoreFixture(t)
 		projectID := projectIDForEnvDispatchStoreFixture(t, ctx, envID)

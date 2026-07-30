@@ -5777,62 +5777,6 @@ func TestChannelPermanentDeleteRemovesChannelAndMessages(t *testing.T) {
 	}
 }
 
-// LRM-449: channel-scoped agents used to block permanent delete via
-// agent.home_channel_id ON DELETE RESTRICT (+ visibility CHECK). Delete must
-// clear the binding (promote to workspace) and succeed for owner/admin.
-func TestChannelPermanentDeleteClearsAgentHomeChannel(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	channelID := seedChannelForTest(t, "perm-delete-home-"+uuid.NewString(), testUserID)
-
-	var agentID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, home_channel_id, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'channel', $4, 1, $5)
-		RETURNING id
-	`, testWorkspaceID, "home-bound-"+uuid.NewString(), testRuntimeID, channelID, testUserID).Scan(&agentID); err != nil {
-		t.Fatalf("seed channel-visibility agent: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
-	})
-
-	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withURLParam(req, "channelId", channelID)
-	rec := httptest.NewRecorder()
-	testHandler.DeleteChannel(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete channel with home-bound agent: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	var exists bool
-	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
-		t.Fatalf("check channel exists: %v", err)
-	}
-	if exists {
-		t.Fatal("channel row still present after permanent delete")
-	}
-
-	var visibility string
-	var home pgtype.UUID
-	if err := testPool.QueryRow(ctx, `SELECT visibility, home_channel_id FROM agent WHERE id = $1`, agentID).Scan(&visibility, &home); err != nil {
-		t.Fatalf("load agent after delete: %v", err)
-	}
-	if visibility != "workspace" {
-		t.Fatalf("agent visibility after delete: got %q want workspace", visibility)
-	}
-	if home.Valid {
-		t.Fatalf("agent home_channel_id still set after delete: %v", uuidToString(home))
-	}
-}
-
 func TestChannelPermanentDeleteWorksOnArchivedChannel(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

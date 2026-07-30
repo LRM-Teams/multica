@@ -789,6 +789,41 @@ func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T
 	}
 }
 
+// TestCreateAgent_DefaultVisibilityIsWorkspace proves task #908's default
+// flip (Parker, #multica thread f83df812, 2026-07-30 17:58): an agent
+// created without a visibility field defaults to "workspace", not the old
+// "private" — so omitting the field no longer silently contradicts the
+// "default public" product decision.
+func TestCreateAgent_DefaultVisibilityIsWorkspace(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	displayName := "Default Visibility Agent " + uuid.NewString()[:8]
+	body := map[string]any{
+		"display_name":         displayName,
+		"description":          "no visibility field set",
+		"runtime_id":           testRuntimeID,
+		"max_concurrent_tasks": 1,
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent without visibility: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp AgentResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, resp.ID)
+	})
+	if resp.Visibility != "workspace" {
+		t.Fatalf("visibility = %q, want workspace", resp.Visibility)
+	}
+}
+
 func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

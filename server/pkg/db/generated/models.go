@@ -49,7 +49,6 @@ type Agent struct {
 	SourceAgentID      pgtype.UUID        `json:"source_agent_id"`
 	AvatarSource       string             `json:"avatar_source"`
 	AvatarAttachmentID pgtype.UUID        `json:"avatar_attachment_id"`
-	HomeChannelID      pgtype.UUID        `json:"home_channel_id"`
 	WorkspaceRole      string             `json:"workspace_role"`
 }
 

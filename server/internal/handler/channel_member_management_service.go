@@ -689,12 +689,11 @@ func (h *Handler) validateMemberManagementTargetTx(
 		return nil
 	case PrincipalKindAgent:
 		var visibility string
-		var homeChannelID pgtype.UUID
 		var err error
 		if principal.Kind == PrincipalKindUser {
 			var ownerID pgtype.UUID
 			err = tx.QueryRow(ctx, `
-				SELECT visibility, owner_id, home_channel_id
+				SELECT visibility, owner_id
 				FROM agent
 				WHERE workspace_id = $1
 				  AND id = $2
@@ -702,7 +701,7 @@ func (h *Handler) validateMemberManagementTargetTx(
 				FOR SHARE`,
 				principal.WorkspaceID,
 				target.ID,
-			).Scan(&visibility, &ownerID, &homeChannelID)
+			).Scan(&visibility, &ownerID)
 			if err == nil &&
 				visibility == agentVisibilityPrivate &&
 				!hasWorkspaceManagementAuthority(principal.WorkspaceRole) &&
@@ -711,7 +710,7 @@ func (h *Handler) validateMemberManagementTargetTx(
 			}
 		} else {
 			err = tx.QueryRow(ctx, `
-				SELECT visibility, home_channel_id
+				SELECT visibility
 				FROM agent
 				WHERE workspace_id = $1
 				  AND id = $2
@@ -719,21 +718,13 @@ func (h *Handler) validateMemberManagementTargetTx(
 				FOR SHARE`,
 				principal.WorkspaceID,
 				target.ID,
-			).Scan(&visibility, &homeChannelID)
+			).Scan(&visibility)
 		}
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return memberManagementError(http.StatusNotFound, "agent not found")
 			}
 			return err
-		}
-		if visibility == agentVisibilityChannel {
-			if !homeChannelID.Valid {
-				return memberManagementError(http.StatusBadRequest, "channel-visibility agent is missing home_channel_id")
-			}
-			if homeChannelID.Bytes != channelID.Bytes {
-				return memberManagementError(http.StatusBadRequest, "channel-visibility agent can only be invited to its home channel")
-			}
 		}
 		return nil
 	default:

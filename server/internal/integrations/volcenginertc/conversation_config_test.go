@@ -14,6 +14,7 @@ func TestBuildStartConfigurationMatchesCurrentVolcengineContract(t *testing.T) {
 		ArkEndpointID:     "ep-20260723",
 		ASRAppID:          "speech-asr-app",
 		TTSAppID:          "speech-tts-app",
+		SpeechAccessToken: "speech-access-token",
 		TTSVoiceID:        "zh_male_m191_uranus_bigtts",
 		CallbackURL:       "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature: "callback-secret",
@@ -22,7 +23,7 @@ func TestBuildStartConfigurationMatchesCurrentVolcengineContract(t *testing.T) {
 		t.Fatalf("build start configuration: %v", err)
 	}
 
-	const wantConfig = `{"ASRConfig":{"Provider":"volcano","ProviderParams":{"Mode":"bigmodel","Credential":{"AppId":"speech-asr-app","ApiResourceId":"volc.seedasr.sauc.duration"},"StreamMode":2,"enable_nonstream":true},"TurnDetectionMode":0,"VADConfig":{"SilenceTime":600,"AIVAD":true}},"LLMConfig":{"Mode":"ArkV3","EndPointId":"ep-20260723","SystemMessages":["You are Beckham.","Keep spoken replies concise."],"HistoryLength":10,"MaxTokens":256,"ThinkingType":"disabled","Prefill":false},"TTSConfig":{"AutoActive":true,"Provider":"volcano_bidirection","ProviderParams":{"Credential":{"AppId":"speech-tts-app","ResourceId":"seed-tts-2.0"},"VolcanoTTSParameters":"{\"req_params\":{\"speaker\":\"zh_male_m191_uranus_bigtts\"}}"},"Prefill":true},"SubtitleConfig":{"ServerMessageUrl":"https://multica.example.com/api/voice-calls/callback","ServerMessageSignature":"callback-secret","DisableRTSSubtitle":false,"SubtitleMode":0},"InterruptMode":0}`
+	const wantConfig = `{"ASRConfig":{"Provider":"volcano","ProviderParams":{"Mode":"bigmodel","Credential":{"AppId":"speech-asr-app","AccessToken":"speech-access-token","ApiResourceId":"volc.seedasr.sauc.duration"},"StreamMode":2,"enable_nonstream":true},"TurnDetectionMode":0,"VADConfig":{"SilenceTime":600,"AIVAD":true}},"LLMConfig":{"Mode":"ArkV3","EndPointId":"ep-20260723","SystemMessages":["You are Beckham.","Keep spoken replies concise."],"HistoryLength":10,"MaxTokens":256,"ThinkingType":"disabled","Prefill":false},"TTSConfig":{"AutoActive":true,"Provider":"volcano_bidirection","ProviderParams":{"Credential":{"AppId":"speech-tts-app","Token":"speech-access-token","ResourceId":"seed-tts-2.0"},"VolcanoTTSParameters":"{\"req_params\":{\"speaker\":\"zh_male_m191_uranus_bigtts\"}}"},"Prefill":true},"SubtitleConfig":{"ServerMessageUrl":"https://multica.example.com/api/voice-calls/callback","ServerMessageSignature":"callback-secret","DisableRTSSubtitle":false,"SubtitleMode":0},"InterruptMode":0}`
 	if string(configuration.Config) != wantConfig {
 		t.Fatalf("Config = %s, want %s", configuration.Config, wantConfig)
 	}
@@ -81,6 +82,13 @@ func TestBuildStartConfigurationRejectsInvalidInput(t *testing.T) {
 			want:   "TTS AppId",
 		},
 		{
+			name: "missing speech access token",
+			mutate: func(input *StartConfigurationInput) {
+				input.SpeechAccessToken = ""
+			},
+			want: "speech access token",
+		},
+		{
 			name:   "empty system messages",
 			mutate: func(input *StartConfigurationInput) { input.SystemMessages = nil },
 			want:   "SystemMessages",
@@ -130,6 +138,7 @@ func validStartConfigurationInput() StartConfigurationInput {
 		ArkEndpointID:     "ep-20260723",
 		ASRAppID:          "speech-asr-app",
 		TTSAppID:          "speech-tts-app",
+		SpeechAccessToken: "speech-access-token",
 		TTSVoiceID:        "zh_male_m191_uranus_bigtts",
 		CallbackURL:       "https://multica.example.com/api/voice-calls/callback",
 		CallbackSignature: "callback-secret",

@@ -17,9 +17,11 @@ Beckham's configured welcome message after the caller joins.
   ASR and TTS configuration.
 - [x] The current Volcengine 2024-12-01 contract requires an Ark
   `EndPointId`; a console display model name is not a callable endpoint.
-- [x] The same contract requires the speech-service AppID in ASR and TTS
-  credentials. Access tokens may be omitted for the enabled big-model
-  services, but the AppIDs may not.
+- [x] The current contract requires both the speech-service AppID and
+  credential: ASR `Credential.AccessToken` and TTS `Credential.Token`.
+- [x] The deployed request supplied both AppIDs but omitted both credential
+  fields. This is a provider-contract defect consistent with an accepted
+  OpenAPI request whose asynchronous task never entered the RTC room.
 
 ## Implementation record
 
@@ -30,6 +32,11 @@ Beckham's configured welcome message after the caller joins.
 - [x] Added fail-closed startup and deployment validation for missing speech
   AppIDs, missing Ark endpoint ID, and obsolete display-model configuration.
 - [x] Added deployment variables for the ASR and TTS AppIDs.
+- [x] Corrected the incomplete credential contract: the provider request now
+  sends the existing `DOUBAO_SPEECH_API_KEY` as ASR `AccessToken` and TTS
+  `Token`, and startup fails closed when that credential is absent.
+- [x] Added request-contract, provider-propagation, and runtime-wiring
+  regression assertions for the credential.
 - [x] Corrected the earlier plan's unsupported claim that request acceptance
   proved a live provider task.
 - [x] Confirmed the account's speech application enables both streaming ASR
@@ -50,6 +57,8 @@ Beckham's configured welcome message after the caller joins.
 - [x] `go test ./internal/integrations/volcenginertc`
 - [x] `go test ./internal/service/voicecall`
 - [x] Focused `./cmd/server` voice-call wiring tests
+- [x] Re-ran all Volcengine RTC, voice-call service, and server wiring tests
+  after adding the missing credential fields.
 - [x] `bash scripts/validate-rtc-environment.test.sh`
 - [x] `bash scripts/selfhost-config.test.sh`
 - [x] `pnpm typecheck`

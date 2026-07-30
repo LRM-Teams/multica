@@ -21,6 +21,7 @@ type StartConfigurationInput struct {
 	ArkEndpointID     string
 	ASRAppID          string
 	TTSAppID          string
+	SpeechAccessToken string
 	TTSVoiceID        string
 	CallbackURL       string
 	CallbackSignature string
@@ -47,6 +48,7 @@ type startASRProviderParams struct {
 
 type startASRCredential struct {
 	AppID         string `json:"AppId"`
+	AccessToken   string `json:"AccessToken"`
 	APIResourceID string `json:"ApiResourceId"`
 }
 
@@ -79,6 +81,7 @@ type startTTSProviderParams struct {
 
 type startTTSCredential struct {
 	AppID      string `json:"AppId"`
+	Token      string `json:"Token"`
 	ResourceID string `json:"ResourceId"`
 }
 
@@ -153,6 +156,10 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 	if ttsAppID == "" {
 		return StartConfiguration{}, errors.New("volcengine RTC TTS AppId is required")
 	}
+	speechAccessToken := strings.TrimSpace(input.SpeechAccessToken)
+	if speechAccessToken == "" {
+		return StartConfiguration{}, errors.New("volcengine RTC speech access token is required")
+	}
 	callbackURL := strings.TrimSpace(input.CallbackURL)
 	if err := validatePublicHTTPSURL(callbackURL); err != nil {
 		return StartConfiguration{}, fmt.Errorf("volcengine RTC callback URL: %w", err)
@@ -175,6 +182,7 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 				Mode: "bigmodel",
 				Credential: startASRCredential{
 					AppID:         asrAppID,
+					AccessToken:   speechAccessToken,
 					APIResourceID: volcengineASRResourceID,
 				},
 				StreamMode:      2,
@@ -201,6 +209,7 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 			ProviderParams: startTTSProviderParams{
 				Credential: startTTSCredential{
 					AppID:      ttsAppID,
+					Token:      speechAccessToken,
 					ResourceID: volcengineTTSResourceID,
 				},
 				VolcanoTTSParameters: string(nativeTTS),

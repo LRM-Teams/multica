@@ -59,7 +59,6 @@ function agent(overrides: Partial<Agent>): Agent {
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility: "workspace",
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
@@ -234,7 +233,6 @@ describe("slash command suggestion items", () => {
       agents: [
         agent({
           id: "private-agent",
-          visibility: "private",
           owner_id: "u2",
           skills: [{ id: "private-skill", name: "secret", description: "" }],
         }),

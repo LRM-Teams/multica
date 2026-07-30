@@ -163,9 +163,7 @@ async function findOrCreateHelper(
     const agents = await api.listAgents({ workspace_id: workspaceId });
     const found = agents.find(
       (a) =>
-        (a.display_name || a.name) === HELPER_AGENT_NAME &&
-        a.visibility === "workspace" &&
-        !a.archived_at,
+        (a.display_name || a.name) === HELPER_AGENT_NAME && !a.archived_at,
     );
     if (found) return found;
     const lang = pickContentLang(language);
@@ -180,7 +178,6 @@ async function findOrCreateHelper(
       // its brand mark has a real server-owned path (registered preset or
       // an internal ensure-style write like Windy/Beckham).
       runtime_id: runtimeId,
-      visibility: "workspace",
       max_concurrent_tasks: 6,
       template: "multica_helper",
     });

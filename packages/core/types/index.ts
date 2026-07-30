@@ -14,7 +14,6 @@ export type {
   AgentMemoryGrowthNext,
   AgentStatus,
   AgentRuntimeMode,
-  AgentVisibility,
   RuntimeUpdateState,
   RuntimeHealthState,
   AgentTask,

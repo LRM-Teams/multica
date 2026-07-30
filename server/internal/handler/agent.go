@@ -739,10 +739,10 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	alwaysRedact := workspaceAlwaysRedactSecrets(ws.Settings)
 
-	// Resolve the request actor once — used below to redact secrets from
-	// non-agent viewers. Every agent in the workspace is listable by every
+	// Resolve the request actor once — used below to redact secrets/internal
+	// fields per row. Every agent in the workspace is listable by every
 	// member (task #908: agent existence/listing is no longer visibility-gated).
-	actorType, _ := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	// Research Fleet agents are infrastructure and stay out of the workspace
 	// agent directory / issue assignee picker.
 	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
@@ -781,6 +781,9 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		if actorType == "agent" || alwaysRedact || !canViewAgentSecrets(a, userID, member.Role) {
 			redactMcpConfig(&resp)
 		}
+		if !h.canAccessAgentInternals(r.Context(), a, actorType, actorID, workspaceID) {
+			redactAgentInternals(&resp)
+		}
 		visible = append(visible, resp)
 	}
 	h.attachAgentRuntimeNames(r.Context(), visible)
@@ -794,16 +797,14 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Private-agent gate: members must be in allowed_principals to view
-	// (and therefore navigate to) a private agent. The 403 lets the front-end
-	// render an explicit "no access" placeholder instead of a 404 — see
-	// agent-detail-page.tsx.
+	// GetAgent is unconditional (task #908: every agent is navigable/visible
+	// by every workspace member) — the 403 that used to gate this whole
+	// endpoint is gone. What still gates is the internal-construction fields
+	// below (Instructions/RuntimeConfig/CustomArgs/MemoryGrowth), via
+	// canAccessAgentInternals.
 	workspaceID := uuidToString(agent.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
-		return
-	}
+	hasInternalsAccess := h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID)
 	resp := agentToResponse(agent)
 	if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
 		homeID := uuidToString(home)
@@ -819,11 +820,13 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
 
-	if growth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load agent memory growth")
-		return
-	} else {
-		resp.MemoryGrowth = growth
+	if hasInternalsAccess {
+		if growth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load agent memory growth")
+			return
+		} else {
+			resp.MemoryGrowth = growth
+		}
 	}
 
 	// mcp_config redaction (custom_env was removed from this response shape
@@ -836,6 +839,9 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	alwaysRedact := workspaceAlwaysRedactSecrets(ws.Settings)
+	if !hasInternalsAccess {
+		redactAgentInternals(&resp)
+	}
 	// Agent actors NEVER see mcp_config (see ListAgents for the rationale).
 	if actorType == "agent" || alwaysRedact {
 		redactMcpConfig(&resp)
@@ -1267,6 +1273,20 @@ func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 	out := resp
 	redactMcpConfig(&out)
 	return out
+}
+
+// redactAgentInternals clears the agent's internal-construction fields —
+// Instructions, RuntimeConfig, CustomArgs, MemoryGrowth — from the response
+// when the caller isn't the agent's owner, a workspace owner/admin, or
+// another agent. Task #908: existence/identity/usage (name, avatar,
+// description, model, thinking_level, being chatted with or assigned work)
+// is unconditional for every workspace member; how the agent is built stays
+// admin|owner. See canAccessAgentInternals.
+func redactAgentInternals(resp *AgentResponse) {
+	resp.Instructions = ""
+	resp.RuntimeConfig = nil
+	resp.CustomArgs = []string{}
+	resp.MemoryGrowth = nil
 }
 
 // redactMcpConfig removes the mcp_config value from the response when the caller is not
@@ -1939,11 +1959,11 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Run history is part of the private-agent gate ("查看历史会话"). Same
-	// 403 semantics as GetAgent.
+	// Run history ("查看历史会话") is an internal surface under task #908's
+	// principle — gated to admin|owner, same predicate as the Activity tab.
 	workspaceID := uuidToString(agent.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+	if !h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return
 	}

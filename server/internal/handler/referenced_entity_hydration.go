@@ -87,7 +87,7 @@ func (h *Handler) hydrateReferencedEntities(
 			case "issue":
 				snapshot, ok = h.hydrateIssueReference(ctx, workspaceUUID, workspaceID, actorType, actorID, prefix, entityID)
 			case "agent":
-				snapshot, ok = h.hydrateAgentReference(ctx, workspaceUUID, workspaceID, actorType, actorID, entityID)
+				snapshot, ok = h.hydrateAgentReference(ctx, workspaceUUID, entityID)
 			}
 			if !ok {
 				continue
@@ -167,7 +167,7 @@ func (h *Handler) hydrateIssueReference(
 		fmt.Sprintf("issue %s: %s", identifier, issue.Title),
 		"status: " + issue.Status,
 	}
-	if assignee, ok := h.referencedIssueAssignee(ctx, issue, workspaceID, actorType, actorID); ok {
+	if assignee, ok := h.referencedIssueAssignee(ctx, issue, workspaceID); ok {
 		fields = append(fields, "assignee: "+assignee)
 	}
 	fields = append(fields, "priority: "+issue.Priority)
@@ -202,14 +202,13 @@ func (h *Handler) hydrateIssueReference(
 func (h *Handler) hydrateAgentReference(
 	ctx context.Context,
 	workspaceUUID pgtype.UUID,
-	workspaceID, actorType, actorID string,
 	agentID pgtype.UUID,
 ) (protocol.ReferencedEntitySnapshot, bool) {
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          agentID,
 		WorkspaceID: workspaceUUID,
 	})
-	if err != nil || agent.ArchivedAt.Valid || !h.canAccessPrivateAgent(ctx, agent, actorType, actorID, workspaceID) {
+	if err != nil || agent.ArchivedAt.Valid {
 		return protocol.ReferencedEntitySnapshot{}, false
 	}
 	role := strings.TrimSpace(agent.Description)
@@ -226,7 +225,7 @@ func (h *Handler) hydrateAgentReference(
 func (h *Handler) referencedIssueAssignee(
 	ctx context.Context,
 	issue db.Issue,
-	workspaceID, actorType, actorID string,
+	workspaceID string,
 ) (string, bool) {
 	if !issue.AssigneeID.Valid || !issue.AssigneeType.Valid {
 		return "unassigned", true
@@ -238,7 +237,7 @@ func (h *Handler) referencedIssueAssignee(
 			ID:          issue.AssigneeID,
 			WorkspaceID: issue.WorkspaceID,
 		})
-		if err != nil || agent.ArchivedAt.Valid || !h.canAccessPrivateAgent(ctx, agent, actorType, actorID, workspaceID) {
+		if err != nil || agent.ArchivedAt.Valid {
 			return "", false
 		}
 		return agentDisplayName(agent), true

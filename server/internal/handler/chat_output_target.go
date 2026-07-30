@@ -184,9 +184,6 @@ func (h *Handler) resolveDMOutputTarget(ctx context.Context, origin chatOutputOr
 	if err != nil || agent.ArchivedAt.Valid {
 		return "", pgtype.UUID{}, errChatOutputInvalidTarget
 	}
-	if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(userID), uuidToString(origin.workspaceID)) {
-		return "", pgtype.UUID{}, errChatOutputInvalidTarget
-	}
 	return "user", userID, nil
 }
 

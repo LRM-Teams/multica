@@ -554,7 +554,7 @@ func (h *Handler) prepareAgentActivityRequest(w http.ResponseWriter, r *http.Req
 		return agentActivityRequestContext{}, false
 	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+	if !h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return agentActivityRequestContext{}, false
 	}

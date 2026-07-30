@@ -73,15 +73,6 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent is archived")
 		return
 	}
-	// Private-agent gate: members must be in allowed_principals to start
-	// a chat with a private agent. Agent-to-agent chat sessions bypass
-	// the gate so A2A collaboration still works.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
-		return
-	}
-
 	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
 		WorkspaceID: workspaceUUID,
 		AgentID:     agentID,
@@ -294,14 +285,8 @@ func (h *Handler) gateChatSessionForUser(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return db.ChatSession{}, false
 	}
-	agent, err := h.Queries.GetAgent(r.Context(), session.AgentID)
-	if err != nil {
+	if _, err := h.Queries.GetAgent(r.Context(), session.AgentID); err != nil {
 		writeError(w, http.StatusNotFound, "agent not found")
-		return db.ChatSession{}, false
-	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return db.ChatSession{}, false
 	}
 	return session, true
@@ -1232,9 +1217,10 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// Issue / autopilot / quick_create tasks are all visible on the
-		// agent Activity tab + workspace snapshot, which gate private
-		// agents. Mirror that gate here.
+		// Cancelling an issue / autopilot / quick_create task is a control
+		// action on the agent (task #908 principle: control actions stay
+		// admin|owner, same predicate as the Activity tab) — not a chat/DM
+		// interaction, so it does not widen with the rest of #908.
 		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
 			ID:          task.AgentID,
 			WorkspaceID: wsUUID,
@@ -1244,7 +1230,7 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+		if !h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID) {
 			writeError(w, http.StatusForbidden, "you do not have access to this agent")
 			return
 		}
@@ -1321,6 +1307,9 @@ func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Req
 			return true
 		}
 	} else {
+		// Cancelling an inbox event is a control action on the agent (task
+		// #908 principle: control actions stay admin|owner). See the
+		// matching cancel-task branch above.
 		agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 			ID:          eventAgentID,
 			WorkspaceID: workspaceUUID,
@@ -1330,7 +1319,7 @@ func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-		if !h.canAccessPrivateAgent(ctx, agent, actorType, actorID, workspaceID) {
+		if !h.canAccessAgentInternals(ctx, agent, actorType, actorID, workspaceID) {
 			writeError(w, http.StatusForbidden, "you do not have access to this agent")
 			return true
 		}

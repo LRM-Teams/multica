@@ -1179,12 +1179,12 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 		threadRootComment != nil && threadRootComment.AuthorType == "agent" && !hasExplicitAgentContext
 
 	if replyTargetsThreadRootAgent {
-		if trigger, ok := h.computeThreadRootAgentCommentTrigger(ctx, issue, threadRootComment, actorType, actorID); ok {
+		if trigger, ok := h.computeThreadRootAgentCommentTrigger(ctx, issue, threadRootComment); ok {
 			add(trigger)
 		}
 	}
 
-	if actorType == "member" && !replyTargetsThreadRootAgent && h.shouldEnqueueOnComment(ctx, issue, actorType, actorID) &&
+	if actorType == "member" && !replyTargetsThreadRootAgent && h.shouldEnqueueOnComment(ctx, issue) &&
 		!h.commentMentionsOthersButNotAssignee(content, issue) &&
 		!h.isReplyToMemberThread(ctx, parentComment, content, issue) {
 		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
@@ -1231,7 +1231,7 @@ func (h *Handler) threadRootForParent(ctx context.Context, issue db.Issue, paren
 	return &root
 }
 
-func (h *Handler) computeThreadRootAgentCommentTrigger(ctx context.Context, issue db.Issue, threadRootComment *db.Comment, authorType, authorID string) (commentAgentTrigger, bool) {
+func (h *Handler) computeThreadRootAgentCommentTrigger(ctx context.Context, issue db.Issue, threadRootComment *db.Comment) (commentAgentTrigger, bool) {
 	if threadRootComment == nil || threadRootComment.AuthorType != "agent" || !threadRootComment.AuthorID.Valid {
 		return commentAgentTrigger{}, false
 	}
@@ -1241,9 +1241,6 @@ func (h *Handler) computeThreadRootAgentCommentTrigger(ctx context.Context, issu
 		WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
-		return commentAgentTrigger{}, false
-	}
-	if !h.canAccessPrivateAgent(ctx, agent, authorType, authorID, uuidToString(issue.WorkspaceID)) {
 		return commentAgentTrigger{}, false
 	}
 	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
@@ -1386,9 +1383,7 @@ func shouldInheritParentMentions(parentComment *db.Comment, replyMentions []util
 // are re-triggered by subsequent replies in the same thread — unless the reply
 // explicitly @mentions only non-agent entities (members, issues), which
 // signals the user is talking to other people and not the agent.
-// Skips agents with on_mention trigger disabled, and private agents mentioned
-// by non-owner members (only the agent owner or workspace admin/owner can
-// mention a private agent). Self-mentions are intentionally allowed so an
+// Skips agents with on_mention trigger disabled. Self-mentions are intentionally allowed so an
 // agent running in one issue can explicitly enqueue itself on another (e.g.
 // a child-issue run notifying the parent issue whose assignee is the same
 // agent); runaway loops are prevented by HasPendingTaskForIssueAndAgent
@@ -1396,7 +1391,6 @@ func shouldInheritParentMentions(parentComment *db.Comment, replyMentions []util
 // Note: no status gate here — @mention is an explicit action and should work
 // even on done/cancelled issues (the agent can reopen the issue if needed).
 func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issue db.Issue, content string, parentComment *db.Comment, authorType, authorID string) []commentAgentTrigger {
-	wsID := uuidToString(issue.WorkspaceID)
 	mentions := util.ParseMentions(content)
 	if shouldInheritParentMentions(parentComment, mentions, authorType) {
 		mentions = util.ParseMentions(parentComment.Content)
@@ -1431,11 +1425,6 @@ func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issu
 			WorkspaceID: issue.WorkspaceID,
 		})
 		if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
-			continue
-		}
-		// Private-agent gate (member→private requires allowed_principals;
-		// agent→agent always passes).
-		if !h.canAccessPrivateAgent(ctx, agent, authorType, authorID, wsID) {
 			continue
 		}
 		// Dedup: skip if this agent already has a pending task for this issue.

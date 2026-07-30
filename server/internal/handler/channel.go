@@ -4938,12 +4938,6 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusNotFound, "agent not found")
 			return false
 		}
-		userID, _ := requireUserID(w, r)
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-			writeError(w, http.StatusForbidden, "you do not have access to this agent")
-			return false
-		}
 		homeChannelID := ""
 		if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
 			homeChannelID = uuidToString(home)

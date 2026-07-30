@@ -146,8 +146,13 @@ func TestHydrateReferencedEntitiesBoundsAndFailsClosed(t *testing.T) {
 	if !reflect.DeepEqual(source, original) {
 		t.Fatalf("source mutated:\n got %#v\nwant %#v", source, original)
 	}
-	if len(got.Snapshots) != 2 {
-		t.Fatalf("snapshots = %#v, want issue + visible agent only", got.Snapshots)
+	// Task #908: referenced-entity hydration is a "usage" surface (like
+	// @mention), unconditional now — the private agent is hydrated too, not
+	// omitted. What must still hold is the field-level boundary: only
+	// Description ever reaches the snapshot content, never Instructions,
+	// regardless of which agent it is.
+	if len(got.Snapshots) != 3 {
+		t.Fatalf("snapshots = %#v, want issue + public agent + private agent (existence unconditional post-#908)", got.Snapshots)
 	}
 	if got.OmittedCount != 0 {
 		t.Fatalf("omitted count = %d, want 0 (failed permission/lookups are silent)", got.OmittedCount)
@@ -163,15 +168,25 @@ func TestHydrateReferencedEntitiesBoundsAndFailsClosed(t *testing.T) {
 		t.Fatalf("issue snapshot is not single-line: %q", issueSnapshot.Content)
 	}
 
-	agentSnapshot := got.Snapshots[1]
+	publicAgentSnapshot := got.Snapshots[1]
 	for _, want := range []string{"agent Reference Public", "role: triage role ## untrusted"} {
-		if !strings.Contains(agentSnapshot.Content, want) {
-			t.Errorf("agent snapshot missing %q: %q", want, agentSnapshot.Content)
+		if !strings.Contains(publicAgentSnapshot.Content, want) {
+			t.Errorf("public agent snapshot missing %q: %q", want, publicAgentSnapshot.Content)
 		}
 	}
 	for _, forbidden := range []string{"NEVER EXPOSE THIS", "PRIVATE INSTRUCTIONS", "private role"} {
-		if strings.Contains(agentSnapshot.Content, forbidden) {
-			t.Errorf("agent snapshot leaked %q: %q", forbidden, agentSnapshot.Content)
+		if strings.Contains(publicAgentSnapshot.Content, forbidden) {
+			t.Errorf("public agent snapshot leaked %q: %q", forbidden, publicAgentSnapshot.Content)
+		}
+	}
+
+	privateAgentSnapshot := got.Snapshots[2]
+	if !strings.Contains(privateAgentSnapshot.Content, "role: private role") {
+		t.Errorf("private agent snapshot missing its own role: %q", privateAgentSnapshot.Content)
+	}
+	for _, forbidden := range []string{"NEVER EXPOSE THIS", "PRIVATE INSTRUCTIONS"} {
+		if strings.Contains(privateAgentSnapshot.Content, forbidden) {
+			t.Errorf("private agent snapshot leaked instructions (only Description should ever reach a snapshot) %q: %q", forbidden, privateAgentSnapshot.Content)
 		}
 	}
 

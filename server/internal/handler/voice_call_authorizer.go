@@ -79,14 +79,5 @@ func (authorizer *VoiceCallDMAuthorizer) Authorize(ctx context.Context, scope vo
 	if err != nil || agent.ArchivedAt.Valid {
 		return fmt.Errorf("%w: agent does not exist", voicecall.ErrScopeNotFound)
 	}
-	if !authorizer.handler.canAccessPrivateAgent(
-		ctx,
-		agent,
-		"member",
-		scope.UserID,
-		scope.WorkspaceID,
-	) {
-		return fmt.Errorf("%w: member cannot access agent", voicecall.ErrScopeForbidden)
-	}
 	return nil
 }

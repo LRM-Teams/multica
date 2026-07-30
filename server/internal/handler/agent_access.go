@@ -3,33 +3,21 @@ package handler
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// canAccessPrivateAgent gates the four protected surfaces for private
-// agents: chat / @-mention dispatch, viewing the agent's history, editing
-// configuration, and deletion.
-//
-// Public agents are unrestricted — except Wendy, which is always owner-only so
-// each user gets a personal HR that cannot be searched or opened by coworkers.
-//
-// Agent-to-agent traffic is always allowed (actorType == "agent"); this is
-// what preserves A2A collaboration even with private agents. The trust
-// boundary is at member↔agent, not agent↔agent.
-//
-// For members, the implicit allowed_principals set is computed inline as:
-// {agent.owner_id} ∪ workspace owner/admin members. Manual configuration of
-// allowed_principals is not exposed in v1; future work can extend this set
-// without changing call sites.
-func (h *Handler) canAccessPrivateAgent(ctx context.Context, agent db.Agent, actorType, actorID, workspaceID string) bool {
-	if privateAgentOwnerOnly(agent) && actorType == "member" {
-		return uuidToString(agent.OwnerID) == actorID
-	}
-	if agent.Visibility != "private" {
-		return true
-	}
+// canAccessAgentInternals gates the agent's internal/control surfaces (task
+// #908 batch 2): run history, instructions/runtime config/custom args,
+// diagnostic logs, memory growth, and cancelling its system-generated tasks.
+// Existence/usage (chat, DM, @-mention, issue assignment, inviting to a
+// channel, etc.) is unconditional for every workspace member as of #908 —
+// this predicate is only for the surfaces Parker's principle (2026-07-30,
+// #multica thread f83df812) keeps gated: "使用面放开；内部面和控制面归
+// admin|owner" (usage widens; internal state and control actions stay
+// admin-or-owner). Agent-to-agent traffic still bypasses, mirroring the
+// historical A2A carve-out in the now-retired canAccessPrivateAgent.
+func (h *Handler) canAccessAgentInternals(ctx context.Context, agent db.Agent, actorType, actorID, workspaceID string) bool {
 	if actorType == "agent" {
 		return true
 	}
@@ -91,19 +79,4 @@ func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType
 		allowed[uuidToString(a.ID)] = struct{}{}
 	}
 	return allowed, true
-}
-
-// canEnqueueSquadLeader returns true when the given actor is allowed to
-// trigger the squad's private leader. It loads the leader agent and delegates
-// to canAccessPrivateAgent. Non-private leaders always pass. System-initiated
-// triggers (e.g. github webhooks) pass by treating "system" like "agent".
-func (h *Handler) canEnqueueSquadLeader(ctx context.Context, leaderID pgtype.UUID, actorType, actorID, workspaceID string) bool {
-	agent, err := h.Queries.GetAgent(ctx, leaderID)
-	if err != nil {
-		return false
-	}
-	if actorType == "system" {
-		actorType = "agent"
-	}
-	return h.canAccessPrivateAgent(ctx, agent, actorType, actorID, workspaceID)
 }

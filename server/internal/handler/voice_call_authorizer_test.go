@@ -72,7 +72,11 @@ func TestVoiceCallDMAuthorizerRejectsArchivedDM(t *testing.T) {
 	}
 }
 
-func TestVoiceCallDMAuthorizerReusesPrivateAgentAccess(t *testing.T) {
+// TestVoiceCallDMAuthorizerUnconditionalPostBatch908 supersedes the old
+// "reuses private agent access" regression: task #908 makes inviting an
+// agent to a voice call a "usage" surface, unconditional for every workspace
+// member with their own DM channel to that agent — same as chat/DM/mention.
+func TestVoiceCallDMAuthorizerUnconditionalPostBatch908(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -104,7 +108,7 @@ func TestVoiceCallDMAuthorizerReusesPrivateAgentAccess(t *testing.T) {
 	memberScope := ownerScope
 	memberScope.ChannelID = memberChannelID
 	memberScope.UserID = memberID
-	if err := authorizer.Authorize(context.Background(), memberScope); !errors.Is(err, voicecall.ErrScopeForbidden) {
-		t.Fatalf("unrelated member error = %v, want scope forbidden", err)
+	if err := authorizer.Authorize(context.Background(), memberScope); err != nil {
+		t.Fatalf("plain member with their own DM channel should be authorized (unconditional post-#908): %v", err)
 	}
 }

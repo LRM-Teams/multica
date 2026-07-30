@@ -116,12 +116,12 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Task #908: online/health presence (can I tell if it's around before I
+	// use it) is unconditional for every workspace member. The raw
+	// health_events diagnostic log stays admin|owner-gated below.
 	workspaceID := uuidToString(agent.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
-		return
-	}
+	hasInternalsAccess := h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID)
 
 	rt, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 		ID:          agent.RuntimeID,
@@ -167,6 +167,9 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	events = prependCurrentAgentHealthEvent(agent, rt, summary, events)
+	if !hasInternalsAccess {
+		events = []AgentHealthEvent{}
+	}
 	writeJSON(w, http.StatusOK, AgentHealthResponse{
 		Summary: summary,
 		Events:  events,

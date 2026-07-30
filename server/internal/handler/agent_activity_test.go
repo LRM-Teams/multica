@@ -17,6 +17,19 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+// promoteToWorkspaceAdmin upgrades an existing plain member to admin role in
+// testWorkspaceID, so the caller can be used to exercise admin|owner-gated
+// surfaces (task #908) while keeping any other test fixtures (channel
+// membership, ownership) already set up for that user id unchanged.
+func promoteToWorkspaceAdmin(t *testing.T, userID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE member SET role = 'admin' WHERE workspace_id = $1 AND user_id = $2`,
+		testWorkspaceID, userID); err != nil {
+		t.Fatalf("promote %s to admin: %v", userID, err)
+	}
+}
+
 func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -50,19 +63,37 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 		t.Fatalf("insert task messages: %v", err)
 	}
 
-	memberList := listAgentActivityForUser(t, memberID, agentID, "")
-	item := requireActivityItem(t, memberList, taskID)
-	if item.VisibleLevel != agentActivityVisibleSummary {
-		t.Fatalf("member visible_level = %q, want summary", item.VisibleLevel)
+	// Task #908: Activity is an internal/history surface gated to admin|owner
+	// — a plain member can no longer reach the list at all (superseding the
+	// old "summary for everyone, detail for owner" two-tier model; the tier
+	// distinction is now moot since only owner/admin ever pass the gate).
+	memberActivity := httptest.NewRecorder()
+	testHandler.ListAgentActivity(memberActivity, withURLParam(newRequestAs(memberID, http.MethodGet, "/api/agents/"+agentID+"/activity", nil), "id", agentID))
+	if memberActivity.Code != http.StatusForbidden {
+		t.Fatalf("member ListAgentActivity: expected 403, got %d: %s", memberActivity.Code, memberActivity.Body.String())
 	}
-	if item.Realtime != nil {
-		t.Fatalf("member summary must not include realtime detail contract: %+v", item.Realtime)
+
+	memberSteps := httptest.NewRecorder()
+	testHandler.ListAgentActivitySteps(memberSteps, agentActivityRequest(memberID, agentID, taskID, "/steps"))
+	if memberSteps.Code != http.StatusForbidden {
+		t.Fatalf("member steps: expected 403, got %d: %s", memberSteps.Code, memberSteps.Body.String())
+	}
+	memberDiag := httptest.NewRecorder()
+	testHandler.GetAgentActivityDiagnostic(memberDiag, agentActivityRequest(memberID, agentID, taskID, "/diagnostic"))
+	if memberDiag.Code != http.StatusForbidden {
+		t.Fatalf("member diagnostic: expected 403, got %d: %s", memberDiag.Code, memberDiag.Body.String())
+	}
+
+	ownerList := listAgentActivityForUser(t, testUserID, agentID, "")
+	item := requireActivityItem(t, ownerList, taskID)
+	if item.VisibleLevel != agentActivityVisibleDetail {
+		t.Fatalf("owner visible_level = %q, want detail", item.VisibleLevel)
 	}
 	if item.Run == nil || item.Run.StepCount != 2 {
-		t.Fatalf("member run summary missing step count: %+v", item.Run)
+		t.Fatalf("owner run summary missing step count: %+v", item.Run)
 	}
 	if item.Run.ResultState == nil || *item.Run.ResultState != "no_reply" || item.Run.Status != "no_reply" {
-		t.Fatalf("no_reply result not surfaced in summary: status=%q result=%v", item.Run.Status, item.Run.ResultState)
+		t.Fatalf("no_reply result not surfaced: status=%q result=%v", item.Run.Status, item.Run.ResultState)
 	}
 	if item.Run.Result.Action == nil || *item.Run.Result.Action != "no_reply" || item.Run.Result.MessageRef != nil {
 		t.Fatalf("no_reply result contract wrong: %+v", item.Run.Result)
@@ -79,19 +110,8 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 	if got := len(item.Run.Tokens); got != 1 {
 		t.Fatalf("token usage rows = %d, want 1", got)
 	}
-	if strings.Contains(memberList.raw, "sk_agent_step_secret") || strings.Contains(memberList.raw, "raw output secret") {
-		t.Fatalf("member summary leaked step payload: %s", memberList.raw)
-	}
-
-	memberSteps := httptest.NewRecorder()
-	testHandler.ListAgentActivitySteps(memberSteps, agentActivityRequest(memberID, agentID, taskID, "/steps"))
-	if memberSteps.Code != http.StatusForbidden {
-		t.Fatalf("member steps: expected 403, got %d: %s", memberSteps.Code, memberSteps.Body.String())
-	}
-	memberDiag := httptest.NewRecorder()
-	testHandler.GetAgentActivityDiagnostic(memberDiag, agentActivityRequest(memberID, agentID, taskID, "/diagnostic"))
-	if memberDiag.Code != http.StatusForbidden {
-		t.Fatalf("member diagnostic: expected 403, got %d: %s", memberDiag.Code, memberDiag.Body.String())
+	if strings.Contains(ownerList.raw, "sk_agent_step_secret") || strings.Contains(ownerList.raw, "raw output secret") {
+		t.Fatalf("owner list leaked raw step payload (list is summary-level, steps have their own endpoint): %s", ownerList.raw)
 	}
 
 	ownerSteps := httptest.NewRecorder()
@@ -134,8 +154,17 @@ func TestAgentActivity_TargetVisibilityForDMAndChannelRuns(t *testing.T) {
 		t.Skip("database not available")
 	}
 
+	// Task #908: Activity is admin|owner-gated now, so the per-conversation
+	// target-visibility checks below (which are an orthogonal, still-live
+	// boundary: even an admin/owner shouldn't see another user's private DM
+	// with the agent, or a channel run for a channel they aren't in) must be
+	// exercised by admin actors — a plain member can no longer reach
+	// ListAgentActivity at all, tested separately in
+	// TestAgentActivity_RoleGatesStepAndDiagnosticPayloads.
 	memberID := createWorkspaceMemberUser(t, "Activity Channel Member", "activity-channel-"+randomID()+"@multica.test")
 	outsiderID := createWorkspaceMemberUser(t, "Activity Channel Outsider", "activity-outsider-"+randomID()+"@multica.test")
+	promoteToWorkspaceAdmin(t, memberID)
+	promoteToWorkspaceAdmin(t, outsiderID)
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-target-agent")
 	dmSessionID := createActivityChatSession(t, agentID, testUserID, "owner dm")
 	dmTaskID := createActivityRunTask(t, agentID, dmSessionID, "running", "dm work")
@@ -183,7 +212,10 @@ func TestAgentActivity_EventRowsUseTargetVisibility(t *testing.T) {
 		t.Skip("database not available")
 	}
 
+	// Task #908: promoted to admin so this actor can reach Activity at all —
+	// see the comment in TestAgentActivity_TargetVisibilityForDMAndChannelRuns.
 	memberID := createWorkspaceMemberUser(t, "Activity Event Member", "activity-event-"+randomID()+"@multica.test")
+	promoteToWorkspaceAdmin(t, memberID)
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-event-agent")
 	dmSessionID := createActivityChatSession(t, agentID, testUserID, "event dm")
 	channelID, _ := createActivityChannelSession(t, agentID, memberID)
@@ -255,7 +287,10 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 		t.Skip("database not available")
 	}
 
+	// Task #908: promoted to admin so this actor can reach the events feed at
+	// all — see the comment in TestAgentActivity_TargetVisibilityForDMAndChannelRuns.
 	outsiderID := createWorkspaceMemberUser(t, "Activity Events Outsider", "activity-events-outsider-"+randomID()+"@multica.test")
+	promoteToWorkspaceAdmin(t, outsiderID)
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-events-agent")
 	dmSessionID := createActivityChatSession(t, agentID, testUserID, "activity events dm")
 	taskID := createActivityRunTask(t, agentID, dmSessionID, "running", "dm work")

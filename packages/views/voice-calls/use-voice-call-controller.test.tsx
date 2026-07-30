@@ -54,6 +54,14 @@ const endedCall: GetVoiceCallResponse = {
   },
 };
 
+const activeCall: GetVoiceCallResponse = {
+  call: {
+    ...createdCall.call,
+    status: "active",
+    connected_at: "2026-07-23T10:00:02Z",
+  },
+};
+
 function wrapper(queryClient: QueryClient) {
   return function QueryWrapper({ children }: { children: ReactNode }) {
     return (
@@ -137,7 +145,7 @@ describe("useVoiceCallController", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps ringback until media joins and the server starts the provider", async () => {
+  it("keeps ringback and connecting state until the server reports the provider active", async () => {
     let resolveCreate:
       | ((created: CreateVoiceCallResponse) => void)
       | undefined;
@@ -173,7 +181,19 @@ describe("useVoiceCallController", () => {
       await startPromise;
     });
 
-    expect(result.current.phase).toBe("connected");
+    expect(result.current.phase).toBe("joining");
+    expect(ringback.ringback.stop).not.toHaveBeenCalled();
+
+    act(() => {
+      queryClient.setQueryData<GetVoiceCallResponse>(
+        voiceCallKeys.detail("workspace-1", "call-1"),
+        activeCall,
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.phase).toBe("connected");
+    });
     expect(ringback.ringback.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -216,7 +236,7 @@ describe("useVoiceCallController", () => {
     expect(mediaJoinOrder).toBeDefined();
     expect(providerStartOrder).toBeDefined();
     expect(mediaJoinOrder!).toBeLessThan(providerStartOrder!);
-    expect(result.current.phase).toBe("connected");
+    expect(result.current.phase).toBe("joining");
   });
 
   it("creates the server call and connects media without exposing credentials", async () => {
@@ -248,7 +268,7 @@ describe("useVoiceCallController", () => {
       createdCall.media,
       "microphone-1",
     );
-    expect(result.current.phase).toBe("connected");
+    expect(result.current.phase).toBe("joining");
     expect(result.current.callId).toBe("call-1");
     expect(JSON.stringify(result.current)).not.toContain("short-lived-secret");
   });
@@ -477,6 +497,17 @@ describe("useVoiceCallController", () => {
         channel_id: "channel-1",
         agent_id: "agent-1",
       });
+    });
+    act(() => {
+      queryClient.setQueryData<GetVoiceCallResponse>(
+        voiceCallKeys.detail("workspace-1", "call-1"),
+        activeCall,
+      );
+    });
+    await waitFor(() => {
+      expect(result.current.phase).toBe("connected");
+    });
+    await act(async () => {
       await result.current.setMuted(true);
     });
     expect(result.current.phase).toBe("muted");

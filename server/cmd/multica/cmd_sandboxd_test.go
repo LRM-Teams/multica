@@ -85,6 +85,31 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 	}
 }
 
+func TestDockerRuntimeEntrypointKeepsContainerAlive(t *testing.T) {
+	script := dockerRuntimeEntrypointScript()
+	if !strings.Contains(script, "/usr/local/bin/start-multica-runtime.sh") {
+		t.Fatalf("entrypoint missing runtime start:\n%s", script)
+	}
+	if !strings.Contains(script, "tail -f /dev/null") {
+		t.Fatalf("entrypoint should keep PID 1 alive for in-place reconfigure:\n%s", script)
+	}
+	if strings.Contains(script, "exit 1") {
+		t.Fatalf("entrypoint must not exit when daemon stops:\n%s", script)
+	}
+}
+
+func TestDockerEntrypointKeepaliveDoesNotMatchDaemonPkill(t *testing.T) {
+	// Keepalive must satisfy legacy `pgrep -f 'multica .*daemon start'` while
+	// surviving `pkill -f 'multica daemon'` from buildStartRuntimeInCubeCode.
+	if !strings.Contains(dockerEntrypointKeepaliveCmdline, "multica") ||
+		!strings.Contains(dockerEntrypointKeepaliveCmdline, "daemon start") {
+		t.Fatalf("keepalive %q should match entrypoint pgrep pattern", dockerEntrypointKeepaliveCmdline)
+	}
+	if strings.Contains(dockerEntrypointKeepaliveCmdline, "multica daemon") {
+		t.Fatalf("keepalive %q must not match pkill -f 'multica daemon'", dockerEntrypointKeepaliveCmdline)
+	}
+}
+
 func TestMergeRuntimeEnvMultiProvider(t *testing.T) {
 	runtime := json.RawMessage(`{
 		"providers": [

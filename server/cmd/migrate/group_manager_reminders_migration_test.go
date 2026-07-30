@@ -206,7 +206,7 @@ func TestGroupManagerPatrolIntervalsMigration222UsesIssueProgressAndDormancy(t *
 	if _, err := conn.Exec(ctx, `
 		INSERT INTO agent (
 		  id, workspace_id, runtime_id, managed_role
-		, model) VALUES (
+		) VALUES (
 		  '31000000-0000-4000-8000-000000000222',
 		  '10000000-0000-4000-8000-000000000219',
 		  '60000000-0000-4000-8000-000000000219',
@@ -282,7 +282,7 @@ func TestGroupManagerPatrolIntervalsMigration222UsesIssueProgressAndDormancy(t *
 		  'ordinary reminder',
 		  '51000000-0000-4000-8000-000000000222',
 		  now() + interval '24 hours'
-		, 'composer-1.5')
+		)
 	`); err != nil {
 		t.Fatalf("seed pre-222 schedules: %v", err)
 	}
@@ -532,7 +532,7 @@ func seedPre221ManagedReminderRows(t *testing.T, ctx context.Context, conn *pgxp
 		);
 		INSERT INTO agent (
 		  id, workspace_id, runtime_id, managed_role
-		, model) VALUES (
+		) VALUES (
 		  '30000000-0000-4000-8000-000000000219',
 		  '10000000-0000-4000-8000-000000000219',
 		  '60000000-0000-4000-8000-000000000219',
@@ -561,7 +561,7 @@ func seedPre221ManagedReminderRows(t *testing.T, ctx context.Context, conn *pgxp
 		  '80000000-0000-4000-8000-000000000219',
 		  '50000000-0000-4000-8000-000000000219',
 		  '10000000-0000-4000-8000-000000000219'
-		, 'composer-1.5')
+		)
 	`); err != nil {
 		t.Fatalf("seed pre-219 rows: %v", err)
 	}

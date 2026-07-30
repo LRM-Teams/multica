@@ -323,7 +323,7 @@ INSERT INTO agent_runtime (
 INSERT INTO agent (
   id, workspace_id, name, display_name, description, runtime_mode,
   runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id
-, model) VALUES
+) VALUES
 (
   '7a000000-0000-4000-8000-000000000006',
   '7a000000-0000-4000-8000-000000000002',
@@ -379,7 +379,7 @@ INSERT INTO channel_member (
   'member',
   NULL,
   'system'
-, 'composer-1.5');
+);
 `
 
 const channelMemberActorProvenanceInvalidActorFixture = `
@@ -430,7 +430,7 @@ INSERT INTO agent_runtime (
 INSERT INTO agent (
   id, workspace_id, name, display_name, description, runtime_mode,
   runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id
-, model) VALUES (
+) VALUES (
   '7a000000-0000-4000-8000-000000000012',
   '7a000000-0000-4000-8000-000000000009',
   'actor_provenance_foreign_agent',
@@ -442,5 +442,5 @@ INSERT INTO agent (
   'workspace',
   1,
   '7a000000-0000-4000-8000-000000000011'
-, 'composer-1.5');
+);
 `

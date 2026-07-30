@@ -65,7 +65,7 @@ func TestAgentAvatarMigration203PreservesAndEnforcesDurableTruth(t *testing.T) {
 		{id: "00000000-0000-0000-0000-000000000204", url: nil},
 	}
 	for _, fixture := range fixtures {
-		if _, err := conn.Exec(ctx, `INSERT INTO agent (id, avatar_url, model) VALUES ($1, $2, 'composer-1.5')`, fixture.id, fixture.url); err != nil {
+		if _, err := conn.Exec(ctx, `INSERT INTO agent (id, avatar_url) VALUES ($1, $2)`, fixture.id, fixture.url); err != nil {
 			t.Fatalf("seed historical agent %s: %v", fixture.id, err)
 		}
 	}
@@ -111,8 +111,8 @@ func TestAgentAvatarMigration203PreservesAndEnforcesDurableTruth(t *testing.T) {
 	var directURL, directSource string
 	var directAttachmentID *string
 	if err := conn.QueryRow(ctx, `
-		INSERT INTO agent (id, avatar_url, model)
-		VALUES ('00000000-0000-0000-0000-000000000205', NULL, 'composer-1.5')
+		INSERT INTO agent (id, avatar_url)
+		VALUES ('00000000-0000-0000-0000-000000000205', NULL)
 		RETURNING avatar_url, avatar_source, avatar_attachment_id::text
 	`).Scan(&directURL, &directSource, &directAttachmentID); err != nil {
 		t.Fatalf("post-203 direct blank insert: %v", err)

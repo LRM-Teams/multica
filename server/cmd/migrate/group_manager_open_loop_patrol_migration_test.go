@@ -95,7 +95,7 @@ func TestGroupManagerOpenLoopPatrolMigrationRemovesIssueMachineAndRearmsDormant(
 		  id, workspace_id, name, display_name, description, runtime_mode,
 		  runtime_config, runtime_id, visibility, max_concurrent_tasks,
 		  owner_id, managed_role
-		, model) VALUES (
+		) VALUES (
 		  '78000000-0000-4000-8000-000000000004',
 		  '78000000-0000-4000-8000-000000000002',
 		  'open_loop_manager',
@@ -158,7 +158,7 @@ func TestGroupManagerOpenLoopPatrolMigrationRemovesIssueMachineAndRearmsDormant(
 		  'group_manager_auto',
 		  'patrol',
 		  'patrol:dormant'
-		, 'composer-1.5');
+		);
 	`); err != nil {
 		t.Fatalf("seed open-loop migration fixture: %v", err)
 	}

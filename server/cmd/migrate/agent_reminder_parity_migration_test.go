@@ -75,7 +75,7 @@ func TestAgentReminderParityMigration208PreservesFourV1StatesAcrossDownUp(t *tes
 	if _, err := conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1)`, workspaceID); err != nil {
 		t.Fatalf("seed V1 dependencies: %v", err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO agent (id, workspace_id, model) VALUES ($1, $2, 'composer-1.5')`, agentID, workspaceID); err != nil {
+	if _, err := conn.Exec(ctx, `INSERT INTO agent (id, workspace_id) VALUES ($1, $2)`, agentID, workspaceID); err != nil {
 		t.Fatalf("seed V1 agent: %v", err)
 	}
 	if _, err := conn.Exec(ctx, `INSERT INTO channel (id, workspace_id) VALUES ($1, $2)`, channelID, workspaceID); err != nil {

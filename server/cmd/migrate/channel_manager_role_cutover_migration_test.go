@@ -79,7 +79,7 @@ func TestChannelManagerRoleCutoverMigrationRetiresLegacyState(t *testing.T) {
 		INSERT INTO agent (
 			id, workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id, managed_role
-		, model) VALUES (
+		) VALUES (
 			'71000000-0000-4000-8000-000000000004',
 			'71000000-0000-4000-8000-000000000002',
 			'manager-cutover-agent',
@@ -135,7 +135,7 @@ func TestChannelManagerRoleCutoverMigrationRetiresLegacyState(t *testing.T) {
 			'group_manager_auto',
 			'patrol',
 			'patrol:manager-cutover'
-		, 'composer-1.5');
+		);
 	`); err != nil {
 		t.Fatalf("seed legacy manager state: %v", err)
 	}

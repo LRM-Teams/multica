@@ -74,9 +74,9 @@ func TestAgentGeneralChannelVisibilityRetiredMigration(t *testing.T) {
 		INSERT INTO agent (
 			id, workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id
-		, model) VALUES
+		) VALUES
 			('%[4]s', '%[2]s', 'general-retired-private-agent', '', 'cloud', '{}'::jsonb, '%[3]s', 'private', 1, '%[1]s'),
-			('%[5]s', '%[2]s', 'general-retired-visible-agent', '', 'cloud', '{}'::jsonb, '%[3]s', 'workspace', 1, '%[1]s', 'composer-1.5');
+			('%[5]s', '%[2]s', 'general-retired-visible-agent', '', 'cloud', '{}'::jsonb, '%[3]s', 'workspace', 1, '%[1]s');
 	`, ownerID, workspaceID, runtimeID, privateAgent, visibleAgent)); err != nil {
 		t.Fatalf("seed pre-251 fixture: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestAgentGeneralChannelVisibilityRetiredMigration(t *testing.T) {
 		INSERT INTO agent (
 			id, workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id
-		, model) VALUES ($1, $2, 'general-retired-late-private-agent', '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, 'composer-1.5')
+		) VALUES ($1, $2, 'general-retired-late-private-agent', '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4)
 	`, lateAgent, workspaceID, runtimeID, ownerID); err != nil {
 		t.Fatalf("seed late private agent: %v", err)
 	}

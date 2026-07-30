@@ -134,8 +134,12 @@ jobs:
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=release-backend-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=release-backend-${{ env.PLATFORM_PAIR }}
+          # Read-only: read from the deploy-backend cache warmed by dev builds.
+          # Do not write here — a tag ref never rebuilds, so any cache-to on a
+          # release build is dead weight from the moment this job finishes; it
+          # was filling the repo's 10GB Actions cache quota and evicting the
+          # actively-reused dev/turbo caches (see task #18).
+          cache-from: type=gha,scope=deploy-backend
           build-args: |
             VERSION=${{ needs.verify.outputs.tag_name }}
             COMMIT=${{ github.sha }}
@@ -251,8 +255,12 @@ jobs:
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=release-web-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=release-web-${{ env.PLATFORM_PAIR }}
+          # Read-only: read from the deploy-web cache warmed by dev builds.
+          # Do not write here — a tag ref never rebuilds, so any cache-to on a
+          # release build is dead weight from the moment this job finishes; it
+          # was filling the repo's 10GB Actions cache quota and evicting the
+          # actively-reused dev/turbo caches (see task #18).
+          cache-from: type=gha,scope=deploy-web
           build-args: |
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}

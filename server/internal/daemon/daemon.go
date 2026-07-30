@@ -149,6 +149,18 @@ type Daemon struct {
 	ready             atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
 	updateObservation *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
 
+	// serverReleaseManifestBaseURL caches the most recent non-empty
+	// ReleaseManifestBaseURL seen on a heartbeat ack (task #815 step 2: the
+	// server-dispatched top layer over the daemon-side env var from #1526).
+	// atomic.Value (not a mutex+field) because reads (auto-update loop) and
+	// writes (heartbeat loop) never need a compound read-then-write; a plain
+	// swap/load is sufficient. Holds only string, or is unset (zero Value)
+	// before the first heartbeat ack arrives. A later ack that omits the
+	// field intentionally does NOT clear a previously cached value — a
+	// transient server-side hiccup should not blank out a previously-good
+	// override (see cli.releaseManifestBaseURLWithOverride).
+	serverReleaseManifestBaseURL atomic.Value
+
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
 	// the lock so a slow per-runtime claim cannot stall auto-update or any
@@ -1619,6 +1631,9 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
+	if resp.ReleaseManifestBaseURL != "" {
+		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
+	}
 	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
@@ -1673,6 +1688,16 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			go d.handleMemoryCuration(ctx, *rt, *resp.PendingMemoryCuration)
 		}
 	}
+}
+
+// releaseManifestBaseURLOverride returns the most recent non-empty
+// server-dispatched release-manifest base URL seen on a heartbeat ack, or ""
+// if none has arrived yet. Passed to cli.releaseManifestBaseURLWithOverride
+// by the auto-update loop so a server-side domain change takes effect within
+// one heartbeat interval, no env var or redeploy required.
+func (d *Daemon) releaseManifestBaseURLOverride() string {
+	v, _ := d.serverReleaseManifestBaseURL.Load().(string)
+	return v
 }
 
 // handleModelList resolves the provider's supported models (via static

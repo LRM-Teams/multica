@@ -3,19 +3,46 @@ import { useQuery } from "@tanstack/react-query";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
 import { excludeChannelShellSessions } from "./exclude-channel-shell-sessions";
 
+export interface AgentBubbleActivity {
+  unreadCount: number;
+  latestUpdatedAt: string | null;
+}
+
 /**
- * Map agent_id → count of chat_sessions with unread assistant replies.
+ * Map agent_id → independent chat_session activity for DM bubble surfacing.
  * Used to surface bubble completion on the DM sidebar (bubble ≠ dm_channel).
  * Channel "#name" shells are excluded so group wakes do not badge the bubble.
  */
-export function useAgentBubbleUnreadByAgent(wsId: string): Map<string, number> {
+export function useAgentBubbleActivityByAgent(wsId: string): Map<string, AgentBubbleActivity> {
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
   return useMemo(() => {
-    const counts = new Map<string, number>();
+    const activity = new Map<string, AgentBubbleActivity>();
     for (const session of excludeChannelShellSessions(sessions)) {
-      if (!session.has_unread) continue;
-      counts.set(session.agent_id, (counts.get(session.agent_id) ?? 0) + 1);
+      const current = activity.get(session.agent_id) ?? {
+        unreadCount: 0,
+        latestUpdatedAt: null,
+      };
+      const latestUpdatedAt =
+        !current.latestUpdatedAt || session.updated_at > current.latestUpdatedAt
+          ? session.updated_at
+          : current.latestUpdatedAt;
+      activity.set(session.agent_id, {
+        unreadCount: current.unreadCount + (session.has_unread ? 1 : 0),
+        latestUpdatedAt,
+      });
+    }
+    return activity;
+  }, [sessions]);
+}
+
+/** Map agent_id → count of chat_sessions with unread assistant replies. */
+export function useAgentBubbleUnreadByAgent(wsId: string): Map<string, number> {
+  const activity = useAgentBubbleActivityByAgent(wsId);
+  return useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const [agentId, item] of activity) {
+      if (item.unreadCount > 0) counts.set(agentId, item.unreadCount);
     }
     return counts;
-  }, [sessions]);
+  }, [activity]);
 }

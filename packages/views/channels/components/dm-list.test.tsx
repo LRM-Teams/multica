@@ -20,6 +20,9 @@ const openDMMocks = vi.hoisted(() => ({
   openDM: vi.fn(),
   isPending: false,
 }));
+const mockBubbleActivity = vi.hoisted(() => ({
+  byAgent: new Map<string, { unreadCount: number; latestUpdatedAt: string | null }>(),
+}));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -57,6 +60,10 @@ vi.mock("../../common/use-open-dm", () => ({
     openDM: openDMMocks.openDM,
     isPending: openDMMocks.isPending,
   }),
+}));
+
+vi.mock("../../chat/lib/agent-bubble-unread", () => ({
+  useAgentBubbleActivityByAgent: () => mockBubbleActivity.byAgent,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
@@ -135,6 +142,7 @@ import { resetSidebarSectionCollapsedMemoryForTests } from "../hooks/use-sidebar
 beforeEach(() => {
   resetSidebarSectionCollapsedMemoryForTests();
   window.sessionStorage.clear();
+  mockBubbleActivity.byAgent = new Map();
 });
 
 function makeDm(overrides: Partial<DMItem> = {}): DMItem {
@@ -200,6 +208,7 @@ describe("DmList new-DM picker", () => {
     openDMMocks.isPending = false;
     openDMMocks.openDM.mockReset();
     openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
+    mockBubbleActivity.byAgent = new Map();
   });
 
   it("opens the desktop picker from the empty-state CTA", () => {
@@ -431,6 +440,60 @@ describe("DmList no Ask Wendy promo card (LRM-294)", () => {
 
     expect(screen.getByText("Wendy")).toBeInTheDocument();
     expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
+});
+
+
+describe("DmList bubble activity ordering", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.dmsPending = false;
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockBubbleActivity.byAgent = new Map();
+  });
+
+  it("keeps a recently replied agent row above older DM rows after unread is cleared", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-human",
+        peer: { type: "user", id: "user-2", name: "Human Peer" },
+        updated_at: "2026-07-30T10:00:00Z",
+      }),
+      makeDm({
+        id: "dm-agent",
+        peer: { type: "agent", id: "agent-1", name: "Agent Peer" },
+        updated_at: "2026-07-29T10:00:00Z",
+      }),
+    ];
+    mockBubbleActivity.byAgent = new Map([
+      ["agent-1", { unreadCount: 0, latestUpdatedAt: "2026-07-30T11:00:00Z" }],
+    ]);
+
+    renderDmList();
+
+    const agent = screen.getByText("Agent Peer");
+    const human = screen.getByText("Human Peer");
+    expect(agent.compareDocumentPosition(human) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Bubble replied")).not.toBeInTheDocument();
+  });
+
+  it("still shows the bubble replied preview while the agent has unread bubble replies", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-agent",
+        peer: { type: "agent", id: "agent-1", name: "Agent Peer" },
+      }),
+    ];
+    mockBubbleActivity.byAgent = new Map([
+      ["agent-1", { unreadCount: 1, latestUpdatedAt: "2026-07-30T11:00:00Z" }],
+    ]);
+
+    renderDmList();
+
+    expect(screen.getByText("Bubble replied")).toBeInTheDocument();
+    expect(screen.getByText("just now")).toBeInTheDocument();
   });
 });
 

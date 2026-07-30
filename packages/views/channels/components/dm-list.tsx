@@ -57,7 +57,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { useOpenDM } from "../../common/use-open-dm";
-import { useAgentBubbleUnreadByAgent } from "../../chat/lib/agent-bubble-unread";
+import { useAgentBubbleActivityByAgent } from "../../chat/lib/agent-bubble-unread";
 import {
   formatChannelMessagePreview,
   resolveChannelAuthorDisplayName,
@@ -116,7 +116,7 @@ export function DmList({
   const { data: dms = [], isPending: dmsPending } = useQuery(dmListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const bubbleUnreadByAgent = useAgentBubbleUnreadByAgent(wsId);
+  const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);
   // LRM-655: persist collapse across ChannelsPage/DmList remounts (e.g. select channel).
   const [collapsed, setCollapsed] = useSidebarSectionCollapsed("dms", wsId);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -133,11 +133,11 @@ export function DmList({
         (dm) => {
           const channelUnread = dm.real_unread ?? dm.unread ?? 0;
           if (dm.peer.type !== "agent") return channelUnread;
-          return channelUnread + (bubbleUnreadByAgent.get(dm.peer.id) ?? 0);
+          return channelUnread + (bubbleActivityByAgent.get(dm.peer.id)?.unreadCount ?? 0);
         },
         (dm) => isConversationMuted(dm),
       ),
-    [unpinnedDms, bubbleUnreadByAgent],
+    [unpinnedDms, bubbleActivityByAgent],
   );
 
   // Server already returns recency order; do not float pinned items — they live
@@ -158,17 +158,27 @@ export function DmList({
     const base = q
       ? unpinnedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q))
       : unpinnedDms;
-    // Bubble replies do not update dm_channel.updated_at — soft-bump agent
-    // rows that have unread chat_sessions so "顶上来" works without mirroring.
+    // Bubble replies do not update dm_channel.updated_at. Sort agent rows by
+    // the newest independent bubble session activity too, so a row that was
+    // bumped by a bubble reply does not fall back down the moment opening the
+    // bubble clears has_unread.
     return base.toSorted((a, b) => {
-      const aBubble =
-        a.peer.type === "agent" ? (bubbleUnreadByAgent.get(a.peer.id) ?? 0) : 0;
-      const bBubble =
-        b.peer.type === "agent" ? (bubbleUnreadByAgent.get(b.peer.id) ?? 0) : 0;
-      if (aBubble !== bBubble) return bBubble - aBubble;
+      const activityTime = (dm: DMItem) => {
+        const channelMs = Date.parse(dm.updated_at);
+        const bubbleUpdatedAt =
+          dm.peer.type === "agent"
+            ? bubbleActivityByAgent.get(dm.peer.id)?.latestUpdatedAt
+            : undefined;
+        if (!bubbleUpdatedAt) return Number.isNaN(channelMs) ? 0 : channelMs;
+        const bubbleMs = Date.parse(bubbleUpdatedAt);
+        if (Number.isNaN(bubbleMs)) return Number.isNaN(channelMs) ? 0 : channelMs;
+        return Math.max(Number.isNaN(channelMs) ? 0 : channelMs, bubbleMs);
+      };
+      const delta = activityTime(b) - activityTime(a);
+      if (delta !== 0) return delta;
       return 0;
     });
-  }, [searchQuery, unpinnedDms, bubbleUnreadByAgent]);
+  }, [searchQuery, unpinnedDms, bubbleActivityByAgent]);
   const hasSearchQuery = searchQuery.trim().length > 0;
 
   // Header "+" still available when the only DMs are pinned (they live above).
@@ -227,7 +237,7 @@ export function DmList({
           agents={agents}
           bubbleUnreadCount={
             dm.peer.type === "agent"
-              ? (bubbleUnreadByAgent.get(dm.peer.id) ?? 0)
+              ? (bubbleActivityByAgent.get(dm.peer.id)?.unreadCount ?? 0)
               : 0
           }
           onSelect={() => onSelect(dm)}

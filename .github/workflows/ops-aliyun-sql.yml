@@ -12,6 +12,7 @@ on:
         options:
           - research_fleet_runtime_match_wendy
           - voice_call_diagnose
+          - research_wake_diagnose
 
 jobs:
   run:
@@ -360,3 +361,134 @@ jobs:
           ORDER BY t.call_session_id, t.sequence;
           SQL
           )"
+
+      - name: research_wake_diagnose
+        if: inputs.action == 'research_wake_diagnose'
+        run: |
+          set -euo pipefail
+          DEPLOY_DIR=/data/multica
+          dotenv_value() {
+            python3 - "$1" "${2:-}" <<'PY'
+          import sys
+          from pathlib import Path
+          key, default = sys.argv[1], sys.argv[2]
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith(key + "="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  raise SystemExit(0)
+          print(default)
+          PY
+          }
+          db_user="$(dotenv_value POSTGRES_USER multica)"
+          db_name="$(dotenv_value POSTGRES_DB multica)"
+          db_password="$(dotenv_value POSTGRES_PASSWORD)"
+          postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '$1 ~ /postgres/ {print $2; exit}')"
+          run_sql() {
+            printf '%s\n' "$1" | docker exec -i -e PGPASSWORD="$db_password" "$postgres_id" \
+              psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1
+          }
+
+          echo "=== fleet + lead vs members ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team')
+          SELECT f.id::text AS fleet_id,
+                 f.lead_agent_id::text AS lead_agent_id,
+                 a.name AS lead_name,
+                 a.archived_at IS NOT NULL AS lead_agent_archived,
+                 a.runtime_id::text,
+                 r.name AS runtime_name, r.status AS runtime_status,
+                 EXISTS (
+                   SELECT 1 FROM research_fleet_member m
+                   WHERE m.workspace_id = f.workspace_id
+                     AND m.agent_id = f.lead_agent_id
+                     AND m.status <> 'archived'
+                 ) AS lead_is_active_member
+          FROM research_fleet f
+          JOIN ws ON ws.id = f.workspace_id
+          LEFT JOIN agent a ON a.id = f.lead_agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id;
+          SQL
+          )"
+
+          echo "=== all fleet members (incl archived) ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team')
+          SELECT m.role, m.status, m.is_lead, a.name, a.id::text AS agent_id,
+                 a.archived_at IS NOT NULL AS agent_archived,
+                 a.runtime_id::text, r.name AS runtime_name, r.status AS runtime_status
+          FROM research_fleet f
+          JOIN ws ON ws.id=f.workspace_id
+          JOIN research_fleet_member m ON m.fleet_id=f.id
+          JOIN agent a ON a.id=m.agent_id
+          LEFT JOIN agent_runtime r ON r.id=a.runtime_id
+          ORDER BY m.status, m.is_lead DESC, m.created_at;
+          SQL
+          )"
+
+          echo "=== recent research messages + wake targets ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team')
+          SELECT m.created_at AT TIME ZONE 'Asia/Shanghai' AS created_cst,
+                 m.sender_type, left(m.body,40) AS body,
+                 m.target_agent_id::text AS target_id,
+                 a.name AS target_name,
+                 m.card_kind,
+                 m.meta::text AS meta
+          FROM research_message m
+          JOIN ws ON ws.id=m.workspace_id
+          LEFT JOIN agent a ON a.id=m.target_agent_id
+          ORDER BY m.created_at DESC
+          LIMIT 15;
+          SQL
+          )"
+
+          echo "=== lead member lookup (exact wake check) ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team'),
+          fleet AS (
+            SELECT f.* FROM research_fleet f JOIN ws ON ws.id=f.workspace_id
+          )
+          SELECT
+            fleet.lead_agent_id::text AS lead_id,
+            lead_a.name AS lead_name,
+            m.id::text AS member_id,
+            m.status AS member_status,
+            m.role,
+            m.is_lead,
+            (m.id IS NOT NULL AND m.status <> 'archived') AS wake_would_pass
+          FROM fleet
+          LEFT JOIN agent lead_a ON lead_a.id = fleet.lead_agent_id
+          LEFT JOIN research_fleet_member m
+            ON m.workspace_id = fleet.workspace_id
+           AND m.agent_id = fleet.lead_agent_id
+           AND m.status <> 'archived';
+          SQL
+          )"
+
+          echo "=== distinct message targets wake check ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team'),
+          targets AS (
+            SELECT DISTINCT target_agent_id AS agent_id
+            FROM research_message
+            WHERE workspace_id = (SELECT id FROM ws)
+              AND target_agent_id IS NOT NULL
+          )
+          SELECT t.agent_id::text,
+                 a.name,
+                 m.status AS active_member_status,
+                 m.role,
+                 (m.id IS NOT NULL) AS wake_would_pass
+          FROM targets t
+          LEFT JOIN agent a ON a.id = t.agent_id
+          LEFT JOIN research_fleet_member m
+            ON m.workspace_id = (SELECT id FROM ws)
+           AND m.agent_id = t.agent_id
+           AND m.status <> 'archived'
+          ORDER BY a.name NULLS LAST;
+          SQL
+          )"
+
+          echo "=== backend wake logs ==="
+          docker logs multica-backend-1 --since 6h 2>&1 | grep -iE 'research agent wake|wake failed|not a research fleet|enqueue research' | tail -40 || true
+

@@ -42,10 +42,19 @@ export type UseComposerPendingAttachmentsOptions = {
    * draft. `load` is read on mount and at every `resetKey` change (must read
    * fresh, e.g. via `store.getState()`); `save` receives the serialized tray
    * on every change (`[]` clears the attachment half of the draft).
+   *
+   * Optional `hydrateSignal` must change when the backing store finishes
+   * async rehydration (e.g. a signature of `drafts[key]?.attachments`). The
+   * tray owns local `useState`, so without this signal a cold mount races
+   * zustand persist: `load()` returns `[]`, then `save([])` wipes the image
+   * half while the text draft (selector-driven) still restores — hard-refresh
+   * 「字在图丢」.
    */
   persistence?: {
     load: () => ComposerDraftAttachment[] | undefined;
     save: (items: ComposerDraftAttachment[]) => void;
+    /** Bumps when persisted attachments become available after rehydrate. */
+    hydrateSignal?: string;
   };
 };
 
@@ -149,6 +158,10 @@ export function useComposerPendingAttachments(
   // "stale" until the rehydrate effect commits, so the save effect never
   // writes conversation A's tray into conversation B's draft.
   const hydratedKeyRef = useRef(opts.resetKey);
+  // Until the backing draft store has finished (or timed out) rehydrating,
+  // do not persist an empty tray — that would wipe attachments that text
+  // already restored via its store selector.
+  const persistReadyRef = useRef(!opts.persistence);
 
   const runUpload = useCallback(async (localId: string, file: File) => {
     try {
@@ -280,6 +293,16 @@ export function useComposerPendingAttachments(
     });
   }, []);
 
+  const applyRestored = useCallback((items: ComposerDraftAttachment[]) => {
+    setPending((prev) => {
+      // User already has tray items (typed add / prior restore) — keep them.
+      if (prev.length > 0) return prev;
+      const restored = deserializeFromDraft(items);
+      for (const item of restored) liveIdsRef.current.add(item.localId);
+      return restored;
+    });
+  }, []);
+
   // Own the conversation-switch reset inside the hook so parents do not
   // bounce clear() through effects (react-doctor no-pass-data-to-parent).
   // With persistence attached, a switch restores that conversation's draft
@@ -291,6 +314,7 @@ export function useComposerPendingAttachments(
     }
     if (hydratedKeyRef.current === opts.resetKey) return;
     hydratedKeyRef.current = opts.resetKey;
+    persistReadyRef.current = !persistenceRef.current;
     setPending((prev) => {
       for (const item of prev) {
         liveIdsRef.current.delete(item.localId);
@@ -300,13 +324,33 @@ export function useComposerPendingAttachments(
       for (const item of restored) liveIdsRef.current.add(item.localId);
       return restored;
     });
+    if (!persistenceRef.current) persistReadyRef.current = true;
   }, [opts.resetKey, clear]);
+
+  // Late restore after zustand persist rehydration. When the parent passes
+  // `hydrateSignal`, "" means "store still rehydrating" — hold persistReady
+  // so save([]) cannot wipe attachments. Unit tests omit the signal and keep
+  // the sync load()/save() behavior.
+  useEffect(() => {
+    const persistence = persistenceRef.current;
+    if (!persistence) {
+      persistReadyRef.current = true;
+      return;
+    }
+    if (hydratedKeyRef.current !== opts.resetKey) return;
+    const signal = persistence.hydrateSignal;
+    if (signal === "") return;
+    const items = persistence.load() ?? [];
+    if (items.length > 0) applyRestored(items);
+    persistReadyRef.current = true;
+  }, [opts.resetKey, opts.persistence?.hydrateSignal, applyRestored]);
 
   // Persist every tray change into the draft (debounced at the storage layer).
   useEffect(() => {
     const persistence = persistenceRef.current;
     if (!persistence) return;
     if (hydratedKeyRef.current !== opts.resetKey) return;
+    if (!persistReadyRef.current) return;
     persistence.save(serializeForDraft(pending));
   }, [pending, opts.resetKey]);
 

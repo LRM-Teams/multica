@@ -13,6 +13,16 @@
     "archived": "Archived",
     "paused": "Paused"
   },
+  "groups": {
+    "in_progress": "In progress",
+    "completed": "Completed"
+  },
+  "list": {
+    "loading": "Loading research sessions",
+    "load_failed": "Couldn't load research sessions",
+    "retry": "Retry",
+    "empty_cta": "Start your first research"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",

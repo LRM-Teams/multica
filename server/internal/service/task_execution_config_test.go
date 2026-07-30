@@ -2,8 +2,27 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
+
+func TestRequireAgentModelRejectsEmpty(t *testing.T) {
+	if err := RequireAgentModel(""); !errors.Is(err, ErrAgentModelRequired) {
+		t.Fatalf("RequireAgentModel(\"\") = %v, want ErrAgentModelRequired", err)
+	}
+	if err := RequireAgentModel("   "); !errors.Is(err, ErrAgentModelRequired) {
+		t.Fatalf("RequireAgentModel(blank) = %v, want ErrAgentModelRequired", err)
+	}
+	if err := RequireAgentModel("gpt-5.4"); err != nil {
+		t.Fatalf("RequireAgentModel(explicit) = %v", err)
+	}
+}
+
+func TestTaskExecutionConfigRejectsEmptyModel(t *testing.T) {
+	if _, err := WithTaskExecutionConfig(nil, "", ""); !errors.Is(err, ErrAgentModelRequired) {
+		t.Fatalf("WithTaskExecutionConfig(empty model) = %v, want ErrAgentModelRequired", err)
+	}
+}
 
 func TestTaskExecutionConfigPreservesExistingContext(t *testing.T) {
 	contextJSON, err := WithTaskExecutionConfig([]byte(`{"squad_id":"squad-1"}`), "queued-model", "high")

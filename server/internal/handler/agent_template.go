@@ -446,7 +446,11 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		CustomEnv:          ce,
 		CustomArgs:         ca,
 		McpConfig:          nil,
-		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
+		Model:              pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
+	}
+	if err := service.RequireAgentModel(createParams.Model.String); err != nil {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
 	}
 	applyCreateAgentAvatar(&createParams, avatar)
 	agent, err := h.createAgentWithIdentity(r.Context(), qtx, createParams, nameSeed, firstNonEmpty(displayName, nameSeed))

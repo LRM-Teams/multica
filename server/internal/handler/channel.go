@@ -24,6 +24,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/promptcontext"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -5290,6 +5291,9 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 		return channelAgentPromptTxResult{}, err
 	} else if ok {
 		return coalesced, nil
+	}
+	if err := service.RequireAgentModel(agent.Model.String); err != nil {
+		return channelAgentPromptTxResult{}, fmt.Errorf("channel agent wake: %w", err)
 	}
 	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, trigger)
 	if err != nil {

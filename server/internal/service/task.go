@@ -755,6 +755,10 @@ func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, i
 		slog.Error("mention task enqueue failed: agent has no runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
 		return db.AgentInboxEvent{}, fmt.Errorf("agent has no runtime")
 	}
+	if err := RequireAgentModel(agent.Model.String); err != nil {
+		slog.Error("mention task enqueue failed: agent model required", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
+		return db.AgentInboxEvent{}, err
+	}
 	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
 	if err != nil {
 		return db.AgentInboxEvent{}, fmt.Errorf("snapshot mention task execution config: %w", err)

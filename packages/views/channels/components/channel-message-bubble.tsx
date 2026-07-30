@@ -28,6 +28,12 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
+import { HonorBadgeIcon, honorNameDisplayProps } from "@multica/ui/components/honor/honor-badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
@@ -303,7 +309,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
 // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
+  const { getActorName, getMemberHonor } = useActorName();
   // LRM-364: group managers miss ListAgents → resolve via member-profile, never
   // surface "Unknown Agent" in the reaction hover card.
   const getReactionActorName = useReactionActorName(message.reactions ?? []);
@@ -523,11 +529,34 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const avatar = avatarNode ? (
     <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
   ) : null;
+  const authorHonor =
+    message.type === "user" && message.author_id ? getMemberHonor(message.author_id) : undefined;
+  const authorNameDisplay = authorHonor
+    ? honorNameDisplayProps({
+        nameStyle: authorHonor.name_style,
+        level: authorHonor.level,
+        surface: "inline",
+      })
+    : null;
   const nameLabel = (
     // LRM-555/561 reading-flow baseline: author sits one step above body
     // (13.5px semibold foreground), not bold-ink competing with prose.
-    <span className="truncate text-[13.5px] font-semibold text-foreground">
-      {displayName}
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1 truncate text-[13.5px] font-semibold text-foreground">
+      <span
+        className={cn("truncate", authorNameDisplay?.className)}
+        data-honor-glow-tier={authorNameDisplay?.["data-honor-glow-tier"]}
+        style={authorNameDisplay?.style}
+      >
+        {displayName}
+      </span>
+      {authorHonor?.equipped_badge ? (
+        <Tooltip>
+          <TooltipTrigger className="inline-flex shrink-0">
+            <HonorBadgeIcon svgKey={authorHonor.equipped_badge.svg_key} title={authorHonor.equipped_badge.title} />
+          </TooltipTrigger>
+          <TooltipContent side="top">{authorHonor.equipped_badge.title}</TooltipContent>
+        </Tooltip>
+      ) : null}
     </span>
   );
 

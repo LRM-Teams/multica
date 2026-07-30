@@ -1,270 +1,102 @@
 # User honor system (levels, badges, name styles)
 
-Status: design approved in product discussion; implementation plan TBD  
+Status: approved; implementation in progress  
 Date: 2026-07-30  
-Audience: engineers, designers, operators
+Last updated: 2026-07-30 (cosmic IP + glow safety)
 
-## 1. Summary
+## Product summary
 
-Add a **platform-global** user honor system modeled on mature forum / game / QQ-VIP
-patterns: behavior earns XP, XP maps to **level**, level unlocks **name style**
-tiers (auto-equipped highest), independent **achievements** unlock **badges**
-(user picks one to wear). Early adopters (`user.created_at < 2026-08-01`) receive
-**Founding** identity. Rules are **public**; XP ledgers are **private** to the
-account owner.
+Global forum/QQ-style honor mechanics with a **sci-fi cosmic IP** skin (phased content rollout):
 
-Goal: distinguish veteran and founding users from ordinary users with visible
-identity (colored / glowing / animated names + badge) without inventing a novel
-gamification model.
+- Behavior → XP → level; four pillars with steep T1–T8 tiers
+- Badges unlocked by achievements; user equips **one**; name style = **auto highest**
+- Founding: `user.created_at < 2026-08-01T00:00:00Z`
+- Public rules; XP details private on Settings → **荣誉** (`?tab=honor`)
+- Owner/Admin role pills coexist
 
-## 2. Product decisions (locked)
+Mechanics follow industry patterns; **IP assets expand over time** without changing core rules.
 
-| Topic | Decision |
+---
+
+## Cosmic IP (content roadmap)
+
+**Setting:** users progress through a “collaboration universe” — inner planets → outer planets → stellar classes → phenomena badges.
+
+| Phase | Content |
 | --- | --- |
-| Scope | **Global** — same honor everywhere, attached to `user`, not `member` |
-| Unlock paths | Automatic achievements + level thresholds + **ops manual grants** |
-| Paid membership | **Not in v1**; schema reserves `membership_tier` / subscription fields |
-| Name style equip | **Auto highest** unlocked tier; no manual downgrade |
-| Badge equip | User **chooses one** among unlocked badges |
-| Display surfaces | **Everywhere** a user name renders (channels, issues, mentions, lists, popovers, search) |
-| vs Owner/Admin | **Coexist** — honor styling + worn badge + existing workspace role pills |
-| Badge assets | **Built-in SVG icon library**; must look polished / “cool”, not generic dots |
-| Public profile | Others see **level + worn badge + full unlocked badge gallery** (achievement wall) |
-| Others do **not** see | Total XP, XP bar, pillar breakdown, +XP event log |
-| Owner private page | Full XP, pillar tier progress, ledger, badge picker, style preview |
-| Founding cutoff | `user.created_at < 2026-08-01T00:00:00Z` (auto achievement + badge + style floor) |
-| Difficulty curve | Industry-standard **steep tier ladder** (see §5); not linear, not easy to max |
-| Mechanism style | Copy **forum level + QQ-style diamonds / colorful nicknames**; do not invent new rules |
-
-## 3. Non-goals (v1)
-
-- Paid subscription perks (reserved only)
-- Workspace-scoped honor or per-team leaderboards
-- Replacing Owner/Admin authorization or hiding those role labels
-- Showing level numbers inline on every message line (styles + badge only in feed)
-- Custom user-uploaded badge images (ops catalog only in v1)
-- Agent honor / XP (users only)
-
-## 4. Visibility model
-
-### 4.1 Others (any signed-in user)
+| **Now** | Core mechanics + placeholder badges (replace before ship) |
+| **Next** | 12–16 **ship-badge quality** SVGs: 9 planets + founding nebula + 3 stellar tiers |
+| **Later** | 40+ phenomenon/constellation badges; stellar rank titles (red dwarf → quasar) |
 
-- Resolved **name style** (highest unlocked)
-- **Worn badge** (one)
-- **Level** (e.g. `Lv.12`) on profile surfaces and member detail — not required on every inline name in feed
-- **Achievement wall**: all unlocked badges (worn badge highlighted)
-- Link to public **Honor rules** page (read-only)
-
-### 4.2 Self only
+Founding users get **Genesis Nebula** identity; does not auto-grant max stellar tier.
 
-Route: **`/:slug/settings/honor`** (Settings nav item **荣誉**; not workspace main nav)
+---
 
-Contents:
+## Visual quality bar (badges)
 
-- Current level, total XP, progress to next level
-- **Four pillar** tier progress (T1–T8) with thresholds
-- Recent **+XP ledger** (auditable events)
-- Unlocked name styles (read-only list; effective = highest)
-- Badge gallery + **equip picker** (one active)
-- Link to Honor rules
+**Not allowed:** flat 16px doodle icons.
 
-Entry points (low footprint):
+**Required:**
 
-- Settings → **荣誉** (primary)
-- Settings → Account: one-line summary `Lv.N · 查看详情 →`
-- Optional: avatar menu → **我的荣誉**
-- Own profile popover: level + badges + “查看我的荣誉详情” link; no XP in popover
+- Layered art: ring + core + highlight + optional particle layer
+- Source at 32/48px; scales down without losing detail
+- Sci-fi material language (metal, energy core, orbit lines)
+- Motion via CSS glow/pulse/shimmer on separate layers — not GIF stickers
 
-### 4.3 Honor rules page (public)
+---
 
-Static, versioned document (in-app help + linked from Settings):
+## Glow tiers (luminosity by level)
 
-- Pillar definitions: Usage, Presence, Delivery, Community
-- Action → XP table per pillar
-- Daily / per-action caps (anti-spam)
-- Level threshold table
-- Pillar tier T1–T8 thresholds per tag
-- Name style ↔ level / achievement matrix
-- Badge catalog and unlock conditions
-- Founding cutoff date
-- Changelog when rules version bumps
+Seven tiers (**I–VII**). Higher tier = larger halo, more layers, slightly faster pulse — **never strobe**.
 
-## 5. Progression design (industry-standard)
+| Tier | Typical level | Inline (messages) | Profile / honor page |
+| --- | --- | --- | --- |
+| **I** None | Lv1–5 | Plain | Plain |
+| **II** Micro | Lv6–12 | Soft edge | Soft edge |
+| **III** Steady | Lv13–22 | Slow breathe (3–4s) | Same |
+| **IV** Pulse | Lv23–35 | **Not inline** | Pulse + sparkles |
+| **V** Sweep | Lv36–45 | **Not inline** | Shimmer sweep |
+| **VI** Nebula | Lv46+ | **Not inline** | Flowing gradient |
+| **VII** Legend | Founding / stellar cap | **Not inline** | Full multi-layer sync |
 
-### 5.1 XP → level
+### Anti-harsh rules (approved)
 
-- Valid product actions append rows to **`user_xp_ledger`** (immutable, auditable)
-- **Total XP** = sum(ledger) subject to published caps
-- **Level** = lookup on public threshold table (exponential-style curve: fast early, very slow at top)
-- Reference: Discuz / forum level tables, QQ VIP level brackets — tune numbers in config, not code magic
+1. **Message/list surfaces cap at tier III** — no sweep or fast flash in feed.
+2. Glow on **halos only**; text keeps readable contrast.
+3. Pulse period **≥ 2.5s**; no sub-second flashing.
+4. Halo opacity cap ~**0.35–0.45**; avoid large pure-white flashes.
+5. **`prefers-reduced-motion: reduce`** → static high tier (color/metal only).
+6. Future optional: Settings honor motion = standard / soft / off.
 
-### 5.2 Four pillars (each has T1–T8 tiers)
+---
 
-| Pillar | Tag | Measures (examples) |
-| --- | --- | --- |
-| Usage | `usage` | Issue create/update, channel messages, research/automation actions |
-| Presence | `presence` | Active minutes (heartbeat + action-gated; AFK excluded) |
-| Delivery | `delivery` | Issue close/complete, project progress, substantive review activity |
-| Community | `community` | Invites, channel participation, collaboration signals (lower weight) |
+## Architecture
 
-**Tier difficulty template** (relative steepness, **not** literal calendar days):
+- **Global** `user_honor*` tables + seed defs (`honor_badge_def`, `honor_name_style_def`)
+- **HonorService** — XP ledger, pillar tiers, founding backfill, level/style reconciliation
+- **HTTP** — `GET /api/honor/rules`, `GET/PATCH /api/me/honor`, `POST /api/me/honor/presence`, `GET /api/users/{id}/honor`
+- **Embed** — compact `honor` on member list + user member profile
+- **UI** — `ActorIdentityRow`, channel author row, Settings **荣誉** tab
 
-`T1 → T2 → T4 → T8 → T16 → T30 → T60 → T100`
+CSS: `data-honor-glow-tier` + tokens (`--honor-glow-color`, `--honor-pulse-duration`).
 
-Use this as the **difficulty shape** when setting thresholds per pillar:
+---
 
-- T1–T2: onboarding feedback
-- T3–T5: regular users
-- T6–T7: veteran
-- T8: cap / legendary (months+ of real use)
+## v1 implementation status
 
-Publish exact thresholds per pillar in Honor rules config.
+- Migration `251_user_honor`
+- XP hooks: issue create/close, comment, channel message, presence endpoint
+- Four pillars + public rules API
+- Founding auto-unlock
+- **Placeholder** badge SVGs (must replace per quality bar above)
+- Basic name CSS tokens + reduced-motion fallback
 
-### 5.3 Name style tiers (auto highest)
+## Follow-ups
 
-Ordered by rarity (effective style = max unlocked):
-
-| Style key | Visual (direction) | Typical unlock |
-| --- | --- | --- |
-| `default` | Normal foreground | Everyone |
-| `member` | Red | Mid-low level or usage T2 |
-| `gold` | Gold | Mid level or multi-pillar T4 |
-| `prismatic` | Static rainbow gradient | High level |
-| `glow` | Glow / outline | High level or rare achievement |
-| `shimmer` | Shimmer sweep | Very high level |
-| `animated_prismatic` | Animated gradient | Top level + high pillar tiers |
-| `animated_glow` | Animated glow | Top level + special achievement |
-| `founding` | Founding-exclusive treatment | `created_at < 2026-08-01`; **floor** with level max, not a free max tier |
-
-Implementation: CSS token classes on display name (e.g. `honor-name--gold`). Respect `prefers-reduced-motion: reduce` → static fallback.
-
-### 5.4 Badges
-
-- Defined in **`honor_badge_def`** (id, name, description, svg_key, rarity, unlock_rule)
-- Unlock via achievements (level, pillar tier, founding, ops grant, etc.)
-- User **`equipped_badge_id`** — one at a time; user-selectable among unlocked
-- Render: small SVG after display name; hover shows title + description
-- Design bar: **visually distinctive** (forum/medal quality), shipped as static assets in `packages/ui`
-
-### 5.5 Ops manual grants
-
-- Operators can grant **badge** and/or **name style** unlocks by user id
-- Grants append to **`user_honor_grant`** audit table (who, when, reason)
-- **Must not** silently edit XP ledger (fairness); optional separate “honor grant” does not inflate level unless explicitly a documented rule
-- Founding backfill: one-time job for `created_at < 2026-08-01`
-
-### 5.6 Paid membership (reserved)
-
-Schema fields only in v1:
-
-- `membership_tier`, `membership_expires_at` on user honor snapshot
-- No scoring or UI in v1
-
-## 6. Rendering architecture
-
-### 6.1 Single pipeline
-
-All user name rendering goes through shared identity components:
-
-- `packages/views/common/actor-identity-row.tsx` (primary)
-- Mention tokens, comment cards, channel bubbles, member lists, search hits
-
-Extend **`MemberWithUser` / profile API** with compact honor snapshot:
-
-```typescript
-honor?: {
-  level: number;
-  name_style: HonorNameStyleKey; // server-computed max unlocked
-  equipped_badge?: { id: string; svg_key: string; title: string };
-  // full badge list only on profile/honor endpoints, not inline
-}
-```
-
-### 6.2 Inline vs profile
-
-| Surface | Name style | Worn badge | Level text | Badge wall |
-| --- | --- | --- | --- | --- |
-| Message / comment inline | yes | yes | no | no |
-| Member list | yes | yes | optional small `Lv.N` | no |
-| Profile popover / detail | yes | yes | yes | yes (others) |
-| Settings honor (self) | preview | picker | yes | yes + XP |
-
-Workspace **Owner/Admin** pills render **after** honor badge per product decision A.
-
-## 7. Data model (sketch)
-
-Global tables (names indicative):
-
-| Table | Purpose |
-| --- | --- |
-| `honor_name_style_def` | Style key, min level, min pillar rules, css token, sort rank |
-| `honor_badge_def` | Badge metadata, svg_key, rarity, unlock_rule JSON |
-| `honor_achievement_def` | Rule definitions (founding date, level, pillar tier, etc.) |
-| `user_honor` | user_id, level, total_xp (cached), equipped_badge_id, membership fields (reserved) |
-| `user_honor_unlock` | user_id, unlock_type (style/badge), def_id, granted_at, source (auto/ops) |
-| `user_xp_ledger` | user_id, pillar, action_type, xp_delta, ref_id, created_at |
-| `user_pillar_progress` | user_id, pillar, tier, progress counters (cached) |
-| `user_honor_grant` | ops audit log |
-
-Level and `name_style` on read path can be derived from unlocks + defs; cache on `user_honor` for hot paths.
-
-## 8. API (sketch)
-
-| Endpoint | Access | Returns |
-| --- | --- | --- |
-| `GET /api/honor/rules` | authenticated | Public rules document + version |
-| `GET /api/me/honor` | self | Full honor dashboard (XP, ledger, pillars, unlocks, equip) |
-| `PATCH /api/me/honor` | self | `{ equipped_badge_id }` only in v1 |
-| `GET /api/users/{id}/honor` | authenticated | Public wall: level, badges, worn badge — **no XP** |
-| Profile embed | authenticated | Compact `honor` on existing member profile responses |
-
-XP writes: internal service only (action hooks + nightly reconciliation), not client-callable.
-
-## 9. UI surfaces
-
-| Surface | Package / route |
-| --- | --- |
-| Settings nav item 荣誉 | `packages/views/settings/` → `/:slug/settings/honor` |
-| Account summary line | `account-tab.tsx` |
-| Honor rules help | `packages/views/settings/` or `packages/views/help/` |
-| Profile honor tab | `actor-profile-popover.tsx`, `member-detail-page.tsx` |
-| Inline name + badge | `actor-identity-row.tsx` |
-| Badge SVG components | `packages/ui/components/honor/` |
-
-Web + Desktop: wire routes in both apps (same pattern as other settings pages). Mobile: follow dashboard module coverage when honor ships.
-
-## 10. Fairness & anti-abuse
-
-- Published caps on repetitive actions per day
-- Presence requires activity signals, not idle tabs
-- Ledger retained for dispute/debug
-- Rule changes bump `rules_version` and appear in changelog
-- Founding is registration-time based, one-time
-
-## 11. Testing & acceptance
-
-- Go: ledger append, level computation, founding backfill, ops grant audit, equip validation
-- FE: malformed honor payload parsing (`parseWithFallback`), `ActorIdentityRow` styles, reduced-motion fallback
-- E2E smoke: founding user shows founding badge; self honor page shows XP; other profile hides XP
-
-## 12. Implementation sequencing (recommended)
-
-1. Schema + defs seed + founding backfill script
-2. XP ingestion hooks (minimal action set) + level calculator
-3. Profile honor embed + `ActorIdentityRow` rendering
-4. Settings honor page (self) + public rules page
-5. Badge SVG set + equip API
-6. Ops grant tooling
-7. Name style high tiers (animated) after base path stable
-
-See implementation plan (to be written): `docs/superpowers/plans/2026-07-30-user-honor-system.md`.
-
-## 13. Discussion log (why this doc exists)
-
-Product thread established:
-
-- Forum / QQ-style familiarity over custom gamification
-- Global identity for founding and veteran recognition
-- Steep tier curve (1/2/4/8/16/30/60/100 difficulty shape)
-- Transparency via public rules; privacy for XP details on Settings honor page only
-- Do not occupy workspace main navigation
+- Replace placeholders with cosmic badge set (batch 1: 12–16)
+- Map level → glow tier III cap in inline renderers
+- Ops manual grant API
+- CoreProvider presence heartbeat
+- Profile popover honor wall
+- Public rules help page
+- Paid `membership_tier` (schema reserved)

@@ -27,6 +27,7 @@
     "workspace_fallback": "工作区",
     "tabs": {
       "profile": "个人资料",
+      "honor": "荣誉",
       "preferences": "偏好设置",
       "notifications": "通知",
       "tokens": "API Token",
@@ -37,6 +38,21 @@
       "labs": "实验室",
       "members": "成员"
     }
+  },
+  "honor": {
+    "loading": "加载荣誉信息…",
+    "title": "我的荣誉",
+    "level": "等级",
+    "total_xp": "总经验",
+    "name_style": "名字样式",
+    "next_level": "下一等级进度",
+    "max_level": "已达最高等级",
+    "pillars_title": "维度进度",
+    "badges_title": "徽章（佩戴一枚）",
+    "recent_xp_title": "最近获得经验",
+    "rules_hint": "评分规则公开透明",
+    "account_link": "查看荣誉详情",
+    "account_level": "荣誉等级 Lv.{{level}}"
   },
   "account": {
     "section_profile": "个人资料",

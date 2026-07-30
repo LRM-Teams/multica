@@ -1568,3 +1568,66 @@ type ResearchStageEval struct {
 	Remediation string             `json:"remediation"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
+
+type HonorBadgeDef struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	SvgKey      string `json:"svg_key"`
+	Rarity      int32  `json:"rarity"`
+	SortRank    int32  `json:"sort_rank"`
+}
+
+type HonorNameStyleDef struct {
+	ID       string `json:"id"`
+	CssToken string `json:"css_token"`
+	SortRank int32  `json:"sort_rank"`
+	MinLevel int32  `json:"min_level"`
+}
+
+type UserHonor struct {
+	UserID              pgtype.UUID        `json:"user_id"`
+	TotalXp             int64              `json:"total_xp"`
+	Level               int32              `json:"level"`
+	EquippedBadgeID     pgtype.Text        `json:"equipped_badge_id"`
+	MembershipTier      pgtype.Text        `json:"membership_tier"`
+	MembershipExpiresAt pgtype.Timestamptz `json:"membership_expires_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserHonorGrant struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	GrantKind string             `json:"grant_kind"`
+	DefID     string             `json:"def_id"`
+	GrantedBy pgtype.UUID        `json:"granted_by"`
+	Reason    string             `json:"reason"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type UserHonorUnlock struct {
+	UserID     pgtype.UUID        `json:"user_id"`
+	UnlockKind string             `json:"unlock_kind"`
+	DefID      string             `json:"def_id"`
+	Source     string             `json:"source"`
+	GrantedAt  pgtype.Timestamptz `json:"granted_at"`
+}
+
+type UserPillarProgress struct {
+	UserID       pgtype.UUID        `json:"user_id"`
+	Pillar       string             `json:"pillar"`
+	CounterValue int64              `json:"counter_value"`
+	Tier         int32              `json:"tier"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserXpLedger struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Pillar     string             `json:"pillar"`
+	ActionType string             `json:"action_type"`
+	XpDelta    int32              `json:"xp_delta"`
+	RefID      pgtype.Text        `json:"ref_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}

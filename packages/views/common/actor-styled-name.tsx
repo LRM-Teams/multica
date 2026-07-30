@@ -4,7 +4,7 @@ import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import type { HonorSnapshot } from "@multica/core/types/honor";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
-import { honorNameDisplayProps } from "@multica/ui/components/honor/honor-name-display";
+import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
 import {
   Tooltip,

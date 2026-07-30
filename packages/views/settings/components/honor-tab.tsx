@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Medal } from "lucide-react";
 import { api } from "@multica/core/api";
 import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
-import { honorNameDisplayProps } from "@multica/ui/components/honor/honor-name-display";
+import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { Progress } from "@multica/ui/components/ui/progress";

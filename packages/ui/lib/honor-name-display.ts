@@ -4,7 +4,7 @@ import {
   honorPulseDurationSeconds,
   resolveHonorNameStyleForSurface,
   type HonorDisplaySurface,
-} from "../../lib/honor-glow";
+} from "./honor-glow";
 
 export function honorNameClassName(nameStyle: string | undefined): string {
   switch (nameStyle) {

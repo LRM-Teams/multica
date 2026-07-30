@@ -20,6 +20,7 @@
     "./lib/fleet-class": "./lib/fleet-class.ts",
     "./components/fleet/*": "./components/fleet/*.tsx",
     "./lib/honor-glow": "./lib/honor-glow.ts",
+    "./lib/honor-name-display": "./lib/honor-name-display.ts",
     "./components/honor/*": "./components/honor/*.tsx",
     "./lib/data-table": "./lib/data-table.ts",
     "./lib/code-style": "./lib/code-style.ts",

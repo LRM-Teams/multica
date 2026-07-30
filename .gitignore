@@ -74,5 +74,8 @@ data/
 # Delve debugger binaries (created by Go debug sessions)
 **/__debug_bin*
 .pyc
+*.pyc
+__pycache__/
+.pytest_cache/
 mf_cli/**/*.pyc
 db_bridge/.env.multica.example

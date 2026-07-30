@@ -52,7 +52,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		output, err := cli.UpdateViaBrew()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", output)
-			return fmt.Errorf("brew upgrade failed: %w\nSet MULTICA_BREW_PACKAGE to a valid Multica tap/package or use direct release downloads from %s", err, cli.ReleaseWebURL)
+			return fmt.Errorf("brew upgrade failed: %w\nSet MULTICA_BREW_PACKAGE to a valid Multica tap/package or use direct release downloads from %s", err, cli.ReleaseWebURL())
 		}
 		fmt.Fprintln(os.Stderr, "Update complete.")
 		return nil
@@ -63,7 +63,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 
 	// Not installed via brew — download binary directly from the release feed.
 	if latest == nil {
-		return fmt.Errorf("could not determine latest version; check %s", cli.ReleaseWebURL)
+		return fmt.Errorf("could not determine latest version; check %s", cli.ReleaseWebURL())
 	}
 	targetVersion := latest.TagName
 	fmt.Fprintf(os.Stderr, "Downloading %s from the Multica release feed...\n", targetVersion)

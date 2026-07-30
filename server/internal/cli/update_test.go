@@ -18,9 +18,35 @@ import (
 // silently point back at github.com or api.github.com.
 func TestReleaseManifestBaseURLIsNotGitHub(t *testing.T) {
 	for _, host := range []string{"github.com", "api.github.com", "raw.githubusercontent.com"} {
-		if strings.Contains(ReleaseManifestBaseURL, host) {
-			t.Fatalf("ReleaseManifestBaseURL = %q must not point at %s", ReleaseManifestBaseURL, host)
+		if strings.Contains(DefaultReleaseManifestBaseURL, host) {
+			t.Fatalf("DefaultReleaseManifestBaseURL = %q must not point at %s", DefaultReleaseManifestBaseURL, host)
 		}
+	}
+}
+
+// TestReleaseManifestBaseURLEnvOverride proves a machine can redirect the
+// release feed without a new release — e.g. the default address gets blocked
+// on some network's edge layer (2026-07-30 incident) and needs an immediate,
+// no-rebuild fallback. Mirrors Raft Computer's
+// DEFAULT_UPGRADE_BASE_URL/RAFT_COMPUTER_UPGRADE_BASE_URL shape.
+func TestReleaseManifestBaseURLEnvOverride(t *testing.T) {
+	t.Setenv(ReleaseManifestBaseURLEnv, "")
+	if got := releaseManifestBaseURL(); got != DefaultReleaseManifestBaseURL {
+		t.Fatalf("with env unset, releaseManifestBaseURL() = %q, want default %q", got, DefaultReleaseManifestBaseURL)
+	}
+
+	t.Setenv(ReleaseManifestBaseURLEnv, "https://backup.example.com/computer")
+	if got := releaseManifestBaseURL(); got != "https://backup.example.com/computer" {
+		t.Fatalf("with env set, releaseManifestBaseURL() = %q, want override", got)
+	}
+
+	t.Setenv(ReleaseManifestBaseURLEnv, "   ")
+	if got := releaseManifestBaseURL(); got != DefaultReleaseManifestBaseURL {
+		t.Fatalf("with env set to whitespace only, releaseManifestBaseURL() = %q, want default %q (not blank)", got, DefaultReleaseManifestBaseURL)
+	}
+
+	if ReleaseWebURL() != releaseManifestBaseURL() {
+		t.Fatalf("ReleaseWebURL() = %q must track the same override as releaseManifestBaseURL() = %q", ReleaseWebURL(), releaseManifestBaseURL())
 	}
 }
 

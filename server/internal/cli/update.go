@@ -23,14 +23,43 @@ import (
 
 const DefaultUpdateDownloadTimeout = 120 * time.Second
 
-// ReleaseManifestBaseURL is the read-only, publicly served release feed. It
-// is hosted alongside the app (not GitHub) because the CLI/daemon have no
-// credential that can read the private LRM-Teams/multica repo: an
+// DefaultReleaseManifestBaseURL is the read-only, publicly served release
+// feed. It is hosted alongside the app (not GitHub) because the CLI/daemon
+// have no credential that can read the private LRM-Teams/multica repo: an
 // unauthenticated GitHub Releases API/asset request from a bare install
 // always 404s. Caddy serves this path from an immutable per-version
 // directory tree that CI populates on tag; see deploy/aliyun/Caddyfile.
-const ReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
-const ReleaseWebURL = "https://cdn.leagent.me/computer"
+const DefaultReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
+
+// ReleaseManifestBaseURLEnv overrides DefaultReleaseManifestBaseURL when set,
+// with no rebuild/release required. Exists because the default address is a
+// single fixed domain: if it gets blocked on some machine's network edge (the
+// 2026-07-30 incident) or needs to move before a new release ships, this is
+// the only way to redirect an already-installed CLI/daemon. Mirrors Raft
+// Computer's DEFAULT_UPGRADE_BASE_URL / RAFT_COMPUTER_UPGRADE_BASE_URL shape.
+const ReleaseManifestBaseURLEnv = "MULTICA_RELEASE_MANIFEST_BASE_URL"
+
+// releaseManifestBaseURL resolves the effective release feed base URL:
+// ReleaseManifestBaseURLEnv when set to a non-blank value, DefaultReleaseManifestBaseURL
+// otherwise. Read fresh on every call (not cached at package init) so a
+// changed env var takes effect on the next update check without a restart
+// where the caller already re-execs per check (the CLI does; the daemon's
+// auto-update poll loop does too).
+func releaseManifestBaseURL() string {
+	if v := strings.TrimSpace(os.Getenv(ReleaseManifestBaseURLEnv)); v != "" {
+		return v
+	}
+	return DefaultReleaseManifestBaseURL
+}
+
+// ReleaseWebURL is the human-facing form of releaseManifestBaseURL(), for
+// error messages that point a user at the release source. Tracks the same
+// override so a redirected machine's error text matches where it actually
+// looked.
+func ReleaseWebURL() string {
+	return releaseManifestBaseURL()
+}
+
 const LegacyBrewPackage = "multica-ai/tap/multica"
 
 // BrewPackage returns the optional Homebrew package name to upgrade. It is
@@ -236,13 +265,13 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 // by UpdateViaDownload, which may target a specific version (a server-pushed
 // update or a rollback) rather than whatever is currently latest.
 func fetchReleaseByTag(tag string) (*ReleaseManifest, error) {
-	return fetchManifest(ReleaseManifestBaseURL + "/" + tag + "/release.json")
+	return fetchManifest(releaseManifestBaseURL() + "/" + tag + "/release.json")
 }
 
 // FetchLatestRelease fetches the promoted "latest" release manifest from the
 // Multica release feed.
 func FetchLatestRelease() (*ReleaseManifest, error) {
-	return fetchManifest(ReleaseManifestBaseURL + "/latest.json")
+	return fetchManifest(releaseManifestBaseURL() + "/latest.json")
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.

@@ -12,11 +12,8 @@ import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
 import { api } from "@multica/core/api";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
-  VISIBILITY_DESCRIPTION,
-  VISIBILITY_LABEL,
-  VISIBILITY_OPTIONS,
 } from "@multica/core/agents";
-import { channelKeys, channelsOptions } from "@multica/core/channels";
+import { channelsOptions } from "@multica/core/channels";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -44,7 +41,6 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CharCounter } from "./char-counter";
 import {
-  HomeChannelBindPanel,
   type HomeChannelMode,
 } from "./home-channel-bind-panel";
 import { randomPickedAvatarSelection } from "./avatar-preset";
@@ -118,25 +114,6 @@ export function CreateAgentDialog({
       : draft?.name ?? "",
   );
   const [description, setDescription] = useState(template?.description ?? draft?.description ?? "");
-  const [visibility, setVisibility] = useState<AgentVisibility>(() => {
-    const seed = template?.visibility ?? draft?.visibility ?? "workspace";
-    // Older drafts/templates may only carry workspace|private; never invent channel.
-    return seed === "channel" || seed === "private" || seed === "workspace"
-      ? seed
-      : "workspace";
-  });
-  const [homeMode, setHomeMode] = useState<HomeChannelMode>("existing");
-  const [homeChannelId, setHomeChannelId] = useState<string | null>(() => {
-    if (template?.visibility === "channel" && template.home_channel_id) {
-      return template.home_channel_id;
-    }
-    if (draft?.channel_id) return draft.channel_id;
-    return defaultHomeChannelId ?? null;
-  });
-  const [newChannelName, setNewChannelName] = useState(
-    () => draft?.name ?? template?.display_name ?? "",
-  );
-  const [homeInvalid, setHomeInvalid] = useState(false);
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
@@ -193,66 +170,25 @@ export function CreateAgentDialog({
     selectedRuntime != null &&
     !isRuntimeUsableForUser(selectedRuntime, currentUserId);
 
-  const pickVisibility = (next: AgentVisibility) => {
-    setVisibility(next);
-    setHomeInvalid(false);
-    if (next === "channel") {
-      if (!channelsLoading && !hasGroups) {
-        setHomeMode("new");
-        if (!newChannelName.trim()) {
-          setNewChannelName(name.trim() || draft?.name || "");
-        }
-      } else {
-        setHomeChannelId((prev) => {
-          // Keep an existing/default bind while the channel list is still
-          // loading — never wipe home just because groups[] is empty yet.
-          if (prev) return prev;
-          if (defaultHomeChannelId) return defaultHomeChannelId;
-          return groups[0]?.id ?? null;
-        });
-      }
-    } else {
-      setHomeChannelId(null);
-    }
-  };
 
   const handleSubmit = async () => {
     if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
-    const useNewHome = visibility === "channel" && (homeMode === "new" || (!channelsLoading && !hasGroups));
-    // Channel without home is an explicit hard stop — never silently
-    // rewrite to private/workspace (LRM-238 / LRM-371 AC).
-    if (visibility === "channel") {
-      if (useNewHome) {
-        if (!newChannelName.trim()) {
-          setHomeInvalid(true);
-          showErrorToast(t(($) => $.visibility_bind.new_channel_name_required));
-          return;
-        }
-      } else if (!homeChannelId) {
-        setHomeInvalid(true);
-        showErrorToast(t(($) => $.visibility_bind.home_required));
-        return;
-      }
-    }
     setCreating(true);
 
     try {
-      let resolvedHomeId = homeChannelId;
-      if (visibility === "channel" && useNewHome) {
-        const createdChannel = await api.createChannel({
-          name: newChannelName.trim(),
-        });
-        resolvedHomeId = createdChannel.id;
-        await queryClient.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-      }
       const trimmedInstructions = instructions.trim();
       const data: CreateAgentRequest = {
         display_name: name.trim(),
         description: description.trim(),
         runtime_id: selectedRuntime.id,
-        visibility,
-        home_channel_id:
-          visibility === "channel" ? resolvedHomeId : undefined,
+        // TRANSITION CONSTANT — delete with #908.
+        // Agent visibility is retired and the user no longer chooses it, but
+        // CreateAgent still *requires* a value: `agent.go:960` passes
+        // req.Visibility straight to resolveAgentVisibilityBinding, and
+        // `agent_channel_visibility.go:30` rejects empty ("callers that want a
+        // default must set it explicitly"). Omitting it would 400 every agent
+        // creation. Dies when #908 drops the column and that validation.
+        visibility: "workspace",
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
@@ -383,79 +319,6 @@ export function CreateAgentDialog({
               </div>
             </div>
 
-            <div>
-              <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.visibility_label)}</Label>
-              {/* 方案 A: vertical radio list;「仅本群」expands #home chip inline. */}
-              <div className="mt-1.5 flex flex-col gap-2" role="radiogroup" aria-label={t(($) => $.create_dialog.visibility_label)}>
-                {VISIBILITY_OPTIONS.map((option) => {
-                  const selected = visibility === option;
-                  return (
-                    <button
-                      key={option}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => pickVisibility(option)}
-                      className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
-                        selected
-                          ? "border-primary bg-primary/5"
-                          : "border-border hover:bg-muted"
-                      }`}
-                    >
-                      <span
-                        aria-hidden
-                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
-                          selected ? "border-primary" : "border-muted-foreground/50"
-                        }`}
-                      >
-                        {selected ? (
-                          <span className="h-2 w-2 rounded-full bg-primary" />
-                        ) : null}
-                      </span>
-                      <VisibilityOptionIcon
-                        value={option}
-                        className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
-                      />
-                      <div className="min-w-0 flex-1 text-left">
-                        <div className="font-medium">{VISIBILITY_LABEL[option]}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {VISIBILITY_DESCRIPTION[option]}
-                        </div>
-                        {option === "channel" && selected ? (
-                          <div className="mt-2">
-                            <HomeChannelBindPanel
-                              mode={!channelsLoading && !hasGroups ? "new" : homeMode}
-                              onModeChange={(next) => {
-                                setHomeMode(next);
-                                setHomeInvalid(false);
-                                if (next === "new" && !newChannelName.trim()) {
-                                  setNewChannelName(name.trim() || draft?.name || "");
-                                }
-                              }}
-                              existingChannelId={homeChannelId}
-                              onExistingChannelChange={(id) => {
-                                setHomeChannelId(id);
-                                setHomeInvalid(false);
-                              }}
-                              newChannelName={newChannelName}
-                              onNewChannelNameChange={(nextName) => {
-                                setNewChannelName(nextName);
-                                setHomeInvalid(false);
-                              }}
-                              invalid={homeInvalid}
-                              hasGroups={hasGroups || channelsLoading}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {t(($) => $.visibility_bind.not_channel_permission_hint)}
-              </p>
-            </div>
 
             <RuntimePicker
               runtimes={runtimes}

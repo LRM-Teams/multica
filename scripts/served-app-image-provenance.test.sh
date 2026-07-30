@@ -7,7 +7,7 @@ TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 mkdir -p "$TEST_DIR/bin" "$TEST_DIR/deploy"
-touch "$TEST_DIR/deploy/.env" "$TEST_DIR/selfhost.yml" "$TEST_DIR/host.yml"
+touch "$TEST_DIR/deploy/.env" "$TEST_DIR/selfhost.yml" "$TEST_DIR/host.yml" "$TEST_DIR/oss.yml"
 
 cat >"$TEST_DIR/bin/docker" <<'DOCKER'
 #!/usr/bin/env bash
@@ -60,6 +60,7 @@ run_checker() {
     "$TEST_DIR/deploy" \
     "$TEST_DIR/selfhost.yml" \
     "$TEST_DIR/host.yml" \
+    "$TEST_DIR/oss.yml" \
     ghcr.io/lrm-teams/multica-backend:sha-1234567 \
     ghcr.io/lrm-teams/multica-web:sha-1234567
 }

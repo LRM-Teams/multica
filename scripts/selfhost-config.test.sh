@@ -85,6 +85,9 @@ require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
 require_config "$deploy_workflow" 'scripts/assert-oss-compose-credentials.sh'
 require_config "$deploy_workflow" 'scripts/run-aliyun-backend-migration.sh'
 require_config "$deploy_workflow" 'scripts/validate-rtc-environment.sh'
+require_config "$deploy_workflow" 'docker-compose.oss.yml'
+require_config "$deploy_workflow" 'AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}'
+require_config "$deploy_workflow" 'AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}'
 require_config "$deploy_workflow" '- name: Run database migration'
 require_config "$deploy_workflow" 'Host-local database identity and protected speech/RTC configuration preflight passed.'
 require_config "$deploy_workflow" '--project-name multica'
@@ -262,6 +265,7 @@ aliyun_config="$(
     --env-file .env.example \
     -f docker-compose.selfhost.yml \
     -f docker-compose.aliyun.yml \
+    -f docker-compose.oss.yml \
     config
 )"
 aliyun_backend_config="$(
@@ -270,6 +274,7 @@ aliyun_backend_config="$(
     --env-file .env.example \
     -f docker-compose.selfhost.yml \
     -f docker-compose.aliyun.yml \
+    -f docker-compose.oss.yml \
     config backend
 )"
 
@@ -280,6 +285,10 @@ require_config "$aliyun_config" 'MULTICA_APP_URL: https://leagent.me'
 require_config "$aliyun_config" 'MULTICA_PUBLIC_URL: https://leagent.me'
 require_config "$aliyun_config" 'target: /etc/caddy/Caddyfile'
 require_config "$aliyun_backend_config" 'host_ip: 127.0.0.1'
+require_config "$aliyun_backend_config" 'AWS_ACCESS_KEY_ID'
+require_config "$aliyun_backend_config" 'AWS_SECRET_ACCESS_KEY'
+require_config "$aliyun_backend_config" 'AWS_REQUEST_CHECKSUM_CALCULATION: when_required'
+require_config "$aliyun_backend_config" 'AWS_RESPONSE_CHECKSUM_VALIDATION: when_required'
 if grep -Fq 'host_ip: 0.0.0.0' <<<"$aliyun_backend_config"; then
   echo "Aliyun backend must not publish its raw API port on all interfaces."
   exit 1
@@ -300,6 +309,7 @@ aliyun_ambient_config="$(
       --env-file .env.example \
       -f docker-compose.selfhost.yml \
       -f docker-compose.aliyun.yml \
+      -f docker-compose.oss.yml \
       config postgres backend
 )"
 require_config "$aliyun_ambient_config" 'POSTGRES_USER: runner_user'
@@ -317,6 +327,7 @@ aliyun_controlled_config="$(
         --env-file .env.example \
         -f docker-compose.selfhost.yml \
         -f docker-compose.aliyun.yml \
+        -f docker-compose.oss.yml \
         config postgres backend
 )"
 require_config "$aliyun_controlled_config" 'POSTGRES_USER: multica'

@@ -4,7 +4,7 @@
 >
 > | Role | Host |
 > | --- | --- |
-> | **Shared Multica `dev` deploy target** | **Aliyun** `101.200.210.144` (**leagent.me**); workflow `.github/workflows/deploy.yml` (`runs-on: [self-hosted, aliyun]`, Environment `aliyun-dev`, stack `/data/multica`). See `docker-compose.aliyun.yml` and `deploy/aliyun/`. |
+> | **Shared Multica `dev` deploy target** | **Aliyun** `101.200.210.144` (**leagent.me**); workflow `.github/workflows/deploy.yml` (`runs-on: [self-hosted, aliyun]`, Environment `aliyun-dev`, stack `/data/multica`). See `docker-compose.aliyun.yml`, `docker-compose.oss.yml`, and `deploy/aliyun/`. |
 > | **s89** | **CI runner host**, not the deploy target. It may still run jobs / hold residual services; that does **not** make it the product dev environment. |
 >
 > **Do not write that s89 is decommissioned** — it can remain as a runner.  

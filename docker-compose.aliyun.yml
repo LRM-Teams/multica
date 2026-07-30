@@ -1,6 +1,9 @@
 # The dev deployment on 101.200.210.144 is served through leagent.me by the
 # repository-managed Caddy service. Keep application ports private to the host
 # or Compose network; only Caddy exposes the public HTTP/HTTPS entrypoints.
+#
+# Aliyun OSS credentials / SDK workarounds live in docker-compose.oss.yml —
+# deploy.yml always stacks selfhost + aliyun + oss (see LRM-766).
 services:
   backend:
     ports: !override

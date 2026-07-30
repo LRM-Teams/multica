@@ -1,0 +1,234 @@
+# One-shot / rare ops against the Aliyun host DB. workflow_dispatch only.
+# Does not deploy. Does not touch images. Runs as the deploy owner `dev`.
+name: ops-aliyun-sql
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Named ops action to run"
+        required: true
+        type: choice
+        options:
+          - research_fleet_runtime_match_wendy
+
+jobs:
+  run:
+    runs-on: [self-hosted, aliyun]
+    timeout-minutes: 10
+    steps:
+      - name: Preflight runner identity
+        run: |
+          set -euo pipefail
+          actual="$(id -un)"
+          if [ "$actual" != "dev" ]; then
+            echo "::error::expected runner user=dev, got=${actual}"
+            exit 1
+          fi
+          test -f /data/multica/.env
+          test -f /data/multica/docker-compose.aliyun.yml || test -f /data/multica/docker-compose.yml
+
+      - name: research_fleet_runtime_match_wendy
+        if: inputs.action == 'research_fleet_runtime_match_wendy'
+        run: |
+          set -euo pipefail
+          cd /data/multica
+
+          # Parse host dotenv without sourcing (passwords may contain shell metacharacters).
+          db_url="$(python3 - <<'PY'
+          from pathlib import Path
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith("DATABASE_URL="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  break
+          else:
+              raise SystemExit("DATABASE_URL missing")
+          PY
+          )"
+
+          # Aliyun keeps Postgres on the host (often published as 127.0.0.1:5432).
+          # Compose-internal hostnames like `postgres` only work inside the network.
+          host_db_url="$(python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlparse, urlunparse
+          raw = None
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith("DATABASE_URL="):
+                  raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+                  break
+          if not raw:
+              raise SystemExit("DATABASE_URL missing")
+          u = urlparse(raw)
+          host = u.hostname or ""
+          if host in ("postgres", "db", "postgresql"):
+              # Rewrite to loopback; keep user/pass/db/port/query.
+              port = u.port or 5432
+              netloc = u.netloc.replace(f"@{host}", "@127.0.0.1").replace(f"@{host}:", "@127.0.0.1:")
+              if "@127.0.0.1" not in netloc and host in netloc:
+                  netloc = netloc.replace(host, "127.0.0.1", 1)
+              raw = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
+          print(raw)
+          PY
+          )"
+
+          run_sql() {
+            local sql="$1"
+            if command -v psql >/dev/null 2>&1; then
+              psql "$host_db_url" -v ON_ERROR_STOP=1 -c "$sql"
+              return
+            fi
+            # Fallback: exec via a running backend container that can resolve `postgres`.
+            local cid
+            cid="$(docker ps --filter name=multica-backend --format '{{.ID}}' | head -1)"
+            if [ -z "$cid" ]; then
+              cid="$(docker ps --format '{{.Names}} {{.ID}}' | awk '/backend/ {print $2; exit}')"
+            fi
+            if [ -n "$cid" ]; then
+              docker exec -i "$cid" sh -c 'command -v psql >/dev/null && psql "$DATABASE_URL" -v ON_ERROR_STOP=1' <<<"$sql"
+              return
+            fi
+            echo "::error::no psql on host and no backend container"
+            exit 1
+          }
+
+          echo "=== BEFORE: Wendy + research fleet agents ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (
+            SELECT id FROM workspace WHERE slug = 'lrm-team' LIMIT 1
+          ),
+          wendy AS (
+            SELECT a.id, a.name, a.runtime_id, a.runtime_mode, r.name AS runtime_name, r.status AS runtime_status
+            FROM agent a
+            LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+            JOIN ws ON a.workspace_id = ws.id
+            WHERE a.archived_at IS NULL
+              AND lower(a.name) LIKE '%wendy%'
+            ORDER BY a.created_at ASC
+            LIMIT 5
+          )
+          SELECT 'wendy' AS kind, id::text, name, runtime_id::text, runtime_mode, runtime_name, runtime_status
+          FROM wendy
+          UNION ALL
+          SELECT 'fleet', a.id::text, a.name, a.runtime_id::text, a.runtime_mode, r.name, r.status
+          FROM research_fleet_member m
+          JOIN research_fleet f ON f.id = m.fleet_id
+          JOIN ws ON f.workspace_id = ws.id
+          JOIN agent a ON a.id = m.agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          ORDER BY 1, 3;
+          SQL
+          )"
+
+          echo "=== APPLY: set fleet agents (+ lead) to Wendy runtime; repair lead pointer ==="
+          run_sql "$(cat <<'SQL'
+          BEGIN;
+
+          WITH ws AS (
+            SELECT id FROM workspace WHERE slug = 'lrm-team' LIMIT 1
+          ),
+          wendy AS (
+            SELECT a.id AS agent_id, a.runtime_id, a.runtime_mode
+            FROM agent a
+            JOIN ws ON a.workspace_id = ws.id
+            WHERE a.archived_at IS NULL
+              AND lower(a.name) = 'wendy'
+            ORDER BY a.created_at ASC
+            LIMIT 1
+          ),
+          wendy_fallback AS (
+            SELECT a.id AS agent_id, a.runtime_id, a.runtime_mode
+            FROM agent a
+            JOIN ws ON a.workspace_id = ws.id
+            WHERE a.archived_at IS NULL
+              AND lower(a.name) LIKE '%wendy%'
+              AND EXISTS (SELECT 1 FROM wendy) IS FALSE
+            ORDER BY a.created_at ASC
+            LIMIT 1
+          ),
+          src AS (
+            SELECT * FROM wendy
+            UNION ALL
+            SELECT * FROM wendy_fallback
+            LIMIT 1
+          )
+          SELECT CASE WHEN COUNT(*) = 1 THEN 'wendy_ok' ELSE 'wendy_missing' END AS check
+          FROM src;
+
+          -- Fail closed if Wendy / runtime missing.
+          DO $$
+          DECLARE
+            rid uuid;
+            rmode text;
+          BEGIN
+            SELECT a.runtime_id, a.runtime_mode
+              INTO rid, rmode
+            FROM agent a
+            JOIN workspace w ON w.id = a.workspace_id
+            WHERE w.slug = 'lrm-team'
+              AND a.archived_at IS NULL
+              AND (lower(a.name) = 'wendy' OR lower(a.name) LIKE '%wendy%')
+            ORDER BY CASE WHEN lower(a.name) = 'wendy' THEN 0 ELSE 1 END, a.created_at
+            LIMIT 1;
+
+            IF rid IS NULL THEN
+              RAISE EXCEPTION 'Wendy runtime_id is NULL or Wendy agent not found in lrm-team';
+            END IF;
+
+            UPDATE agent a
+            SET runtime_id = rid,
+                runtime_mode = COALESCE(rmode, a.runtime_mode),
+                updated_at = now()
+            FROM research_fleet_member m
+            JOIN research_fleet f ON f.id = m.fleet_id
+            JOIN workspace w ON w.id = f.workspace_id
+            WHERE w.slug = 'lrm-team'
+              AND a.id = m.agent_id
+              AND a.workspace_id = w.id
+              AND a.archived_at IS NULL
+              AND m.status <> 'archived';
+
+            -- Also fix any agent still named as seed roles even if member row drifted.
+            UPDATE agent a
+            SET runtime_id = rid,
+                runtime_mode = COALESCE(rmode, a.runtime_mode),
+                updated_at = now()
+            FROM workspace w
+            WHERE w.slug = 'lrm-team'
+              AND a.workspace_id = w.id
+              AND a.archived_at IS NULL
+              AND a.name IN ('罗纳尔多', '寻源手', '深读手', '交叉验证', '报告官', '寻道手', '探探手');
+
+            -- Repair fleet lead to the active lead member (avoids wake → not a fleet member).
+            UPDATE research_fleet f
+            SET lead_agent_id = m.agent_id,
+                updated_at = now()
+            FROM research_fleet_member m, workspace w
+            WHERE w.slug = 'lrm-team'
+              AND f.workspace_id = w.id
+              AND m.fleet_id = f.id
+              AND m.workspace_id = w.id
+              AND m.is_lead = true
+              AND m.status = 'active';
+          END $$;
+
+          COMMIT;
+          SQL
+          )"
+
+          echo "=== AFTER ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (
+            SELECT id FROM workspace WHERE slug = 'lrm-team' LIMIT 1
+          )
+          SELECT a.name, m.role, m.status, m.is_lead,
+                 a.runtime_id::text, r.name AS runtime_name, r.status AS runtime_status,
+                 f.lead_agent_id::text AS fleet_lead
+          FROM research_fleet f
+          JOIN ws ON f.workspace_id = ws.id
+          JOIN research_fleet_member m ON m.fleet_id = f.id
+          JOIN agent a ON a.id = m.agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          WHERE m.status <> 'archived'
+          ORDER BY m.is_lead DESC, a.name;
+          SQL
+          )"

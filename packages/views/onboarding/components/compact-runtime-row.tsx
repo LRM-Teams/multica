@@ -1,4 +1,5 @@
 import { cn } from "@multica/ui/lib/utils";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { AgentRuntime } from "@multica/core/types";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { useT } from "../../i18n";
@@ -20,7 +21,7 @@ export function CompactRuntimeRow({
   onSelect: () => void;
 }) {
   const { t: tAgents } = useT("agents");
-  const online = runtime.status === "online";
+  const online = deriveRuntimeHealth(runtime, Date.now()) === "online";
   return (
     <div
       role="button"

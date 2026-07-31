@@ -10,6 +10,8 @@ import {
   runtimeHasHealthAttention,
 } from "./runtime-health-state";
 
+const NOW = Date.parse("2026-07-03T00:00:00Z");
+
 function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   return {
     id: "rt-1",
@@ -41,6 +43,7 @@ describe("runtime health contract helpers", () => {
       runtimeCanStartSelfUpdate(
         makeRuntime({ runtime_health: "update_available" }),
         "user-1",
+        NOW,
       ),
     ).toBe(true);
 
@@ -51,6 +54,7 @@ describe("runtime health contract helpers", () => {
           update_state: "completed",
         }),
         "user-1",
+        NOW,
       ),
     ).toBe(false);
 
@@ -58,6 +62,7 @@ describe("runtime health contract helpers", () => {
       runtimeCanStartSelfUpdate(
         makeRuntime({ runtime_health: "update_available", target_version: null }),
         "user-1",
+        NOW,
       ),
     ).toBe(false);
   });
@@ -74,6 +79,7 @@ describe("runtime health contract helpers", () => {
       runtimeCanStartSelfUpdate(
         makeRuntime({ runtime_health: "updating" }),
         "user-1",
+        NOW,
       ),
     ).toBe(false);
   });
@@ -111,6 +117,7 @@ describe("runtimeCanStartSelfUpdate — update_state eligibility (#687)", () => 
           update_state: "ready_to_apply",
         }),
         "user-1",
+        NOW,
       ),
     ).toBe(false);
   });
@@ -121,6 +128,7 @@ describe("runtimeCanStartSelfUpdate — update_state eligibility (#687)", () => 
         runtimeCanStartSelfUpdate(
           makeRuntime({ runtime_health: "update_available", update_state }),
           "user-1",
+          NOW,
         ),
       ).toBe(false);
     }
@@ -137,6 +145,7 @@ describe("runtimeCanStartSelfUpdate — update_state eligibility (#687)", () => 
           update_state: "completed",
         }),
         "user-1",
+        NOW,
       ),
     ).toBe(true);
   });
@@ -146,8 +155,27 @@ describe("runtimeCanStartSelfUpdate — update_state eligibility (#687)", () => 
       runtimeCanStartSelfUpdate(
         makeRuntime({ runtime_health: "update_available", update_state: "idle" }),
         "user-1",
+        NOW,
       ),
     ).toBe(true);
+  });
+
+  it("is ineligible when status still says online but the heartbeat is hours stale (#10)", () => {
+    // Same bug class the sidebar attention badge already guarded against:
+    // the server hasn't flipped `status` to offline yet, but last_seen_at
+    // is far past deriveRuntimeHealth's recently_lost/offline windows.
+    expect(
+      runtimeCanStartSelfUpdate(
+        makeRuntime({
+          runtime_health: "update_available",
+          update_state: "idle",
+          status: "online",
+          last_seen_at: new Date(NOW - 8 * 60 * 60 * 1000).toISOString(),
+        }),
+        "user-1",
+        NOW,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -175,7 +203,7 @@ describe("sandbox daemons do not drive the upgrade prompt", () => {
   });
 
   it("never offers start-self-update for a sandbox daemon", () => {
-    expect(runtimeCanStartSelfUpdate(sandboxRuntime, "user-1")).toBe(false);
+    expect(runtimeCanStartSelfUpdate(sandboxRuntime, "user-1", NOW)).toBe(false);
   });
 });
 

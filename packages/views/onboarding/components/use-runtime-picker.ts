@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWSEvent } from "@multica/core/realtime";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import {
   runtimeKeys,
   runtimeListOptions,
@@ -45,7 +46,8 @@ export function useRuntimePicker(wsId: string): {
   useEffect(() => {
     if (selectedId) return;
     const preferred =
-      runtimes.find((r) => r.status === "online") ?? runtimes[0];
+      runtimes.find((r) => deriveRuntimeHealth(r, Date.now()) === "online") ??
+      runtimes[0];
     if (preferred) setSelectedId(preferred.id);
   }, [runtimes, selectedId]);
 

@@ -9,7 +9,7 @@ import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
-import { runtimeListOptions } from "@multica/core/runtimes";
+import { deriveRuntimeHealth, runtimeListOptions } from "@multica/core/runtimes";
 import type {
   Agent,
   AgentAvatarSelection,
@@ -173,6 +173,11 @@ function InlineCreateAgentDialog({
   const firstUsableRuntimeId = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null))?.id ?? "";
   const effectiveRuntimeId = selectedRuntimeId || firstUsableRuntimeId;
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app). Computed once so both dropdowns below agree.
+  const selectedRuntimeOnline =
+    !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
 
   const handleCreate = async () => {
@@ -290,7 +295,7 @@ function InlineCreateAgentDialog({
               </div>
               <ModelDropdown
                 runtimeId={effectiveRuntimeId || null}
-                runtimeOnline={selectedRuntime?.status === "online"}
+                runtimeOnline={selectedRuntimeOnline}
                 value={model}
                 onChange={setModel}
                 disabled={!effectiveRuntimeId}
@@ -299,7 +304,7 @@ function InlineCreateAgentDialog({
               />
               <ThinkingDropdown
                 runtimeId={effectiveRuntimeId || null}
-                runtimeOnline={selectedRuntime?.status === "online"}
+                runtimeOnline={selectedRuntimeOnline}
                 model={model}
                 value={thinkingLevel}
                 onChange={setThinkingLevel}

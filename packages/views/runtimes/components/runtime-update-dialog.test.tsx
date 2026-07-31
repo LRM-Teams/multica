@@ -55,7 +55,9 @@ function makeRuntime(
     runtime_health: overrides.health ?? "update_available",
     owner_id: "user-1",
     visibility: "private",
-    last_seen_at: null,
+    // Fresh relative to real time so deriveRuntimeHealth reads "online" —
+    // a fixed past timestamp would drift stale and flip these tests' gating.
+    last_seen_at: new Date().toISOString(),
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
   };

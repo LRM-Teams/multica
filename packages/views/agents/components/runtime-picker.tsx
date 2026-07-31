@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Cloud, Loader2, Lock } from "lucide-react";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import {
@@ -75,6 +76,10 @@ export function RuntimePicker({
     );
     onSelect(firstUsable?.id ?? "");
   };
+
+  // Computed once per render, outside JSX, so react:doctor's
+  // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
+  const now = Date.now();
 
   return (
     <div className="flex flex-col min-w-0">
@@ -218,7 +223,7 @@ export function RuntimePicker({
                 </div>
                 <span
                   className={`h-2 w-2 shrink-0 rounded-full ${
-                    device.status === "online"
+                    deriveRuntimeHealth(device, now) === "online"
                       ? "bg-success"
                       : "bg-muted-foreground/40"
                   }`}

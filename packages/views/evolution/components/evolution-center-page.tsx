@@ -27,7 +27,7 @@ import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import { runtimeListOptions } from "@multica/core/runtimes";
+import { deriveRuntimeHealth, runtimeListOptions } from "@multica/core/runtimes";
 import { useCurrentMember } from "@multica/core/permissions";
 import {
   dashboardAgentRunTimeOptions,
@@ -1024,6 +1024,9 @@ function CuratorProfileCard({
   const availableRuntimes = runtimes.filter(
     (runtime) => runtime.owner_id === userId || runtime.visibility === "public",
   );
+  // Computed once per render, outside JSX, so react:doctor's
+  // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
+  const now = Date.now();
   const ownedAgents = agents.filter((agent) => agent.owner_id === userId);
   const curatorAgents = ownedAgents.filter((agent) => agent.runtime_id === draft.runtimeId);
   const configured = !!profile?.id && !!profile.runtime_id && !!profile.curator_agent_id;
@@ -1115,7 +1118,7 @@ function CuratorProfileCard({
           <Field label={copy("runtime")}>
             <Select value={draft.runtimeId} onValueChange={(value) => setDraft((current) => ({ ...current, runtimeId: value ?? "", curatorAgentId: "" }))}>
               <SelectTrigger className="w-full"><SelectValue placeholder={copy("selectRuntime")} /></SelectTrigger>
-              <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtime.name} · {runtime.status}</SelectItem>)}</SelectContent>
+              <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtime.name} · {deriveRuntimeHealth(runtime, now)}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
           <Field label={copy("curatorAgent")}>

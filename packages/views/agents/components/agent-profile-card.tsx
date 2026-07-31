@@ -16,7 +16,7 @@ import { MessageSquare, Pencil } from "lucide-react";
 import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
-import { deriveRuntimeHealthPresentation } from "@multica/core/runtimes";
+import { deriveRuntimeHealth, deriveRuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { ModelPicker } from "./inspector/model-picker";
@@ -102,6 +102,10 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
     ? members.find((m) => m.user_id === agent.owner_id) ?? null
     : null;
   const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app). Computed once so both dropdowns below agree.
+  const runtimeOnline = !!runtime && deriveRuntimeHealth(runtime, Date.now()) === "online";
   const isArchived = !!agent.archived_at;
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   // Client-side handle grammar check (mirrors the server validator); the code
@@ -267,7 +271,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
             <ModelPicker
               runtimeId={agent.runtime_id}
-              runtimeOnline={runtime?.status === "online"}
+              runtimeOnline={runtimeOnline}
               value={agent.model ?? ""}
               canEdit={canEdit.allowed}
               onChange={(m) => update({ model: m })}
@@ -275,7 +279,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           </PropRow>
           <ThinkingPropRow
             runtimeId={agent.runtime_id}
-            runtimeOnline={runtime?.status === "online"}
+            runtimeOnline={runtimeOnline}
             model={agent.model ?? ""}
             value={agent.thinking_level ?? ""}
             canEdit={canEdit.allowed}

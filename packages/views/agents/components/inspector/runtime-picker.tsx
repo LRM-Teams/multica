@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Cloud, Lock, Monitor } from "lucide-react";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import {
@@ -42,6 +43,9 @@ export function RuntimePicker({
 
   const selected = runtimes.find((r) => r.id === value) ?? null;
   const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
+  // Computed once per render, outside JSX, so react:doctor's
+  // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
+  const now = Date.now();
 
   // Compute filtered list unconditionally — the early `!canEdit` return
   // below would otherwise re-order this hook across renders.
@@ -70,7 +74,7 @@ export function RuntimePicker({
   }, [runtimes, filter, currentUserId]);
 
   if (!canEdit) {
-    const isOnline = selected?.status === "online";
+    const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
     return (
       <span className="inline-flex min-w-0 items-center gap-1.5 px-1.5 py-0.5 text-xs text-muted-foreground">
         <Icon className="h-3 w-3 shrink-0" />
@@ -93,7 +97,7 @@ export function RuntimePicker({
   // also leads with the host and would just repeat what's already in name,
   // producing the "Claude (host) (host · 2.1.121 (Claude Code))" mess.
   const triggerLabel = selected?.name ?? t(($) => $.pickers.runtime_none);
-  const isOnline = selected?.status === "online";
+  const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
   const triggerTitle = selected
     ? t(($) => $.pickers.runtime_tooltip, {
         name: selected.name,
@@ -166,7 +170,7 @@ export function RuntimePicker({
       ) : (
         filtered.map((rt) => {
           const owner = getOwner(rt.owner_id);
-          const rtOnline = rt.status === "online";
+          const rtOnline = deriveRuntimeHealth(rt, now) === "online";
           const locked = isDisabled(rt);
           const tooltip = [
             rt.name,

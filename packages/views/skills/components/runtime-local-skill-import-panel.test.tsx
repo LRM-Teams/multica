@@ -36,16 +36,20 @@ vi.mock("@multica/core/auth", () => {
   return { useAuthStore };
 });
 
-vi.mock("@multica/core/runtimes", () => ({
-  runtimeListOptions: (...args: unknown[]) => mockRuntimeListOptions(...args),
-  runtimeLocalSkillsOptions: (...args: unknown[]) =>
-    mockRuntimeLocalSkillsOptions(...args),
-  runtimeLocalSkillsKeys: {
-    forRuntime: (runtimeId: string) => ["runtimes", "local-skills", runtimeId],
-  },
-  resolveRuntimeLocalSkillImport: (...args: unknown[]) =>
-    mockResolveRuntimeLocalSkillImport(...args),
-}));
+vi.mock("@multica/core/runtimes", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/runtimes")>();
+  return {
+    ...actual,
+    runtimeListOptions: (...args: unknown[]) => mockRuntimeListOptions(...args),
+    runtimeLocalSkillsOptions: (...args: unknown[]) =>
+      mockRuntimeLocalSkillsOptions(...args),
+    runtimeLocalSkillsKeys: {
+      forRuntime: (runtimeId: string) => ["runtimes", "local-skills", runtimeId],
+    },
+    resolveRuntimeLocalSkillImport: (...args: unknown[]) =>
+      mockResolveRuntimeLocalSkillImport(...args),
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -79,7 +83,9 @@ const MOCK_RUNTIME = {
   update_state: "idle",
   runtime_health: "ok",
   owner_id: "user-1",
-  last_seen_at: null,
+  // Fresh relative to real time so deriveRuntimeHealth reads "online" — a
+  // fixed past timestamp would drift stale and flip these tests' gating.
+  last_seen_at: new Date().toISOString(),
   created_at: "2026-04-16T00:00:00Z",
   updated_at: "2026-04-16T00:00:00Z",
 };

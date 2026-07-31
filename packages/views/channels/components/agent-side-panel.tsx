@@ -5,7 +5,7 @@ import { Activity, BarChart3, Bell, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
-import { deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
+import { deriveRuntimeHealth, deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { useActorName } from "@multica/core/workspace/hooks";
 import {
@@ -288,7 +288,11 @@ function AgentProfileTabContent({
   const canEditIdentity = canEdit.allowed;
 
   const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
-  const isOnline = selectedRuntime?.status === "online";
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app).
+  const isOnline =
+    !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
   const runtimeUpdateHealth =
     agent.runtime_mode !== "cloud" && selectedRuntime ? deriveRuntimeHealthPresentation(selectedRuntime) : "ok";
 

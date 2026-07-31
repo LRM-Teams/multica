@@ -174,6 +174,8 @@ vi.mock("@multica/core/runtimes", () => ({
       : rt?.update_state === "pending" || rt?.update_state === "running"
         ? "updating"
         : (rt?.runtime_health ?? "ok"),
+  deriveRuntimeHealth: (rt: { status?: string }) =>
+    rt?.status === "online" ? "online" : "offline",
 }));
 vi.mock("@multica/core/dashboard/queries", () => ({
   dashboardUsageByAgentOptions: () => ({ kind: "usage-by-agent" }),

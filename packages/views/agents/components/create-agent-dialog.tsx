@@ -12,6 +12,7 @@ import { api } from "@multica/core/api";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
 } from "@multica/core/agents";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -134,6 +135,11 @@ export function CreateAgentDialog({
   });
 
   const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app). Computed once so both dropdowns below agree.
+  const selectedRuntimeOnline =
+    !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
   // Defense-in-depth: even if a locked runtime somehow ends up selected
   // (e.g. duplicate of an agent whose template runtime is now locked, and
   // the workspace has no usable fallback), gate Create on it so we don't
@@ -300,7 +306,7 @@ export function CreateAgentDialog({
 
             <ModelDropdown
               runtimeId={selectedRuntime?.id ?? null}
-              runtimeOnline={selectedRuntime?.status === "online"}
+              runtimeOnline={selectedRuntimeOnline}
               value={model}
               onChange={(next) => {
                 setModel(next);
@@ -313,7 +319,7 @@ export function CreateAgentDialog({
 
             <ThinkingDropdown
               runtimeId={selectedRuntime?.id ?? null}
-              runtimeOnline={selectedRuntime?.status === "online"}
+              runtimeOnline={selectedRuntimeOnline}
               model={model}
               value={thinkingLevel}
               onChange={setThinkingLevel}

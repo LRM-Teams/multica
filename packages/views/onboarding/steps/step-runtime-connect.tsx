@@ -8,6 +8,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { runtimeKeys } from "@multica/core/runtimes/queries";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { AgentRuntime } from "@multica/core/types";
 import { DragStrip } from "@multica/views/platform";
 import { StepHeader } from "../components/step-header";
@@ -115,7 +116,13 @@ function FancyView({
   const phase: Phase =
     runtimes.length > 0 ? "found" : hasTimedOut ? "empty" : "scanning";
 
-  const onlineCount = runtimes.filter((r) => r.status === "online").length;
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app). Onboarding runtimes are freshly registering, so this rarely
+  // changes the count in practice, but it keeps online-ness on one source.
+  const onlineCount = runtimes.filter(
+    (r) => deriveRuntimeHealth(r, Date.now()) === "online",
+  ).length;
 
   // One-shot analytics event when the scan window resolves. Answers the
   // question "did the user actually have any AI CLI installed on this
@@ -597,7 +604,7 @@ function RuntimeCard({
   onSelect: () => void;
 }) {
   const { t } = useT("onboarding");
-  const online = runtime.status === "online";
+  const online = deriveRuntimeHealth(runtime, Date.now()) === "online";
 
   return (
     <button

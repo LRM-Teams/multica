@@ -86,6 +86,7 @@ interface AgentOverviewPaneProps {
   runtimes: AgentRuntime[];
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
   canManage: boolean;
+  initialTab?: DetailTab;
   /**
    * One-shot request from a sibling (the inspector's compact Lark status
    * row) to focus a specific tab. Routed through the same `requestTabChange`
@@ -124,12 +125,15 @@ export function AgentOverviewPane({
   runtimes,
   onUpdate,
   canManage,
+  initialTab,
   navIntent,
   onNavIntentHandled,
 }: AgentOverviewPaneProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
-  const [activeTab, setActiveTab] = useState<DetailTab>("activity");
+  const [activeTab, setActiveTab] = useState<DetailTab>(
+    initialTab ?? "activity",
+  );
   const [activeDirty, setActiveDirty] = useState(false);
   // Holds the destination when a tab change is intercepted by the dirty
   // guard. Null means no pending change. The AlertDialog reads non-null as
@@ -217,6 +221,7 @@ export function AgentOverviewPane({
           <button
             key={tab.id}
             type="button"
+            data-active={effectiveTab === tab.id ? "true" : undefined}
             onClick={() => requestTabChange(tab.id)}
             className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
               effectiveTab === tab.id

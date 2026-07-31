@@ -11,10 +11,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import {
-  HonorBadgeCrest,
-  HonorBadgeIcon,
-} from "@multica/ui/components/honor/honor-badge";
+import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import {
   HoverCard,
   HoverCardContent,
@@ -32,7 +29,6 @@ import type { MemberProfile } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import {
   formatActorHandleLabel,
   resolveActorHandle,
@@ -302,6 +298,12 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
               {handleLabel}
             </span>
           ) : null}
+          {profile.member_type === "user" ? (
+            <MemberHonorSummary userId={profile.member_id} />
+          ) : null}
+          {isAgent && !isIdentityOnly ? (
+            <AgentHonorSummary agentId={profile.member_id} />
+          ) : null}
         </div>
       </div>
 
@@ -313,15 +315,6 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             {description}
           </p>
         </section>
-      ) : null}
-      {profile.member_type === "user" ? (
-        <MemberHonorShowcase
-          userId={profile.member_id}
-          displayName={displayName}
-        />
-      ) : null}
-      {isAgent && !isIdentityOnly ? (
-        <AgentHonorShowcase agentId={profile.member_id} />
       ) : null}
       {/* LRM-304: agent member card — growth only on full-access profiles. */}
       {isAgent && !isIdentityOnly && profile.memory_growth ? (
@@ -343,7 +336,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
 }
 
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
-function AgentHonorShowcase({ agentId }: { agentId: string }) {
+function AgentHonorSummary({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
   const workspaceId = useWorkspaceId();
   const { data: honor, isPending, isError } = useQuery(
@@ -353,112 +346,45 @@ function AgentHonorShowcase({ agentId }: { agentId: string }) {
   if (isError) return null;
   if (isPending || !honor) {
     return (
-      <section
-        className="honor-dark-surface border-b bg-slate-950 px-3 py-3 text-slate-100"
+      <div
+        className="mt-1.5 h-4 w-24 animate-pulse rounded bg-muted"
         data-testid="agent-honor-showcase-loading"
-      >
-        <div className="h-3 w-24 animate-pulse rounded-full bg-violet-200/20" />
-        <div className="mt-2 h-8 animate-pulse rounded-lg bg-white/10" />
-      </section>
+      />
     );
   }
 
   const equipped = honor.achievements.find(
     (item) => item.id === honor.equipped_achievement_id && item.unlocked,
   );
-  const showcase = honor.showcase_achievement_ids
-    .map((id) => honor.achievements.find((item) => item.id === id && item.unlocked))
-    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .slice(0, 3);
-  const unlocked = honor.achievements.filter((item) => item.unlocked).length;
-
   return (
-    <section
-      className="honor-dark-surface relative isolate overflow-hidden border-b bg-[radial-gradient(circle_at_12%_12%,rgba(139,92,246,0.24),transparent_38%),radial-gradient(circle_at_88%_88%,rgba(34,211,238,0.18),transparent_42%),linear-gradient(135deg,#020617,#172554)] px-3 py-3 text-slate-100"
+    <div
+      className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
       data-testid="agent-honor-showcase"
     >
-      <div className="relative flex items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.16em] text-violet-100/85">
-          <Sparkles className="size-3" aria-hidden />
-          {t(($) => $.profile_popover.honor.agent_title)}
-        </span>
-        <span className="rounded-full border border-cyan-200/20 bg-cyan-300/10 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-cyan-100">
-          {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
-        </span>
-      </div>
-
-      <div className="relative mt-2.5 flex items-center gap-3">
+      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border/60 bg-muted/60">
         {equipped ? (
-          <HonorBadgeCrest
+          <HonorBadgeIcon
             svgKey={equipped.svg_key}
             title={equipped.title}
-            className="size-12"
-            rare={equipped.rarity >= 70}
-            animated
+            className="size-3.5"
           />
         ) : (
-          <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-white/15 bg-white/5 text-violet-100/75">
-            <Sparkles className="size-5" aria-hidden />
-          </span>
+          <Sparkles className="size-3" aria-hidden />
         )}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-white">
-            {equipped?.title ?? honor.fleet.class_label}
-          </p>
-          <p className="mt-0.5 flex items-center gap-1.5 text-[10px] tabular-nums text-slate-300">
-            <span>{honor.total_xp} XP</span>
-            <span aria-hidden>·</span>
-            <span>{honor.fleet.class_label}</span>
-            {honor.fleet.fleet_rank > 0 ? (
-              <>
-                <span aria-hidden>·</span>
-                <span>#{honor.fleet.fleet_rank}</span>
-              </>
-            ) : null}
-          </p>
-        </div>
-      </div>
-
-      <div className="relative mt-2.5 flex items-center justify-between gap-3 border-t border-white/10 pt-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          {showcase.length > 0 ? (
-            showcase.map((achievement) => (
-              <span
-                key={achievement.id}
-                className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.07]"
-                title={achievement.title}
-              >
-                <HonorBadgeIcon
-                  svgKey={achievement.svg_key}
-                  title={achievement.title}
-                  className="size-[18px]"
-                />
-              </span>
-            ))
-          ) : (
-            <span className="text-[10px] text-slate-400">
-              {t(($) => $.profile_popover.honor.keep_building)}
-            </span>
-          )}
-        </div>
-        <span className="shrink-0 text-[10px] tabular-nums text-slate-300">
-          {t(($) => $.profile_popover.honor.agent_collection, { unlocked })}
-        </span>
-      </div>
-    </section>
+      </span>
+      <span className="shrink-0 font-medium tabular-nums text-foreground/80">
+        {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
+      </span>
+      <span aria-hidden>·</span>
+      <span className="truncate">{equipped?.title ?? honor.fleet.class_label}</span>
+    </div>
   );
 }
 
-// User honor is deliberately shown only inside the roomy profile surface. Dense
-// message/member lists keep the readable styled name without another badge.
+// Honor stays on one compact identity line. Dense message/member lists keep the
+// readable styled name without another badge.
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
-function MemberHonorShowcase({
-  userId,
-  displayName,
-}: {
-  userId: string;
-  displayName: string;
-}) {
+function MemberHonorSummary({ userId }: { userId: string }) {
   const { t } = useT("channels");
   const { data: honor, isPending, isError } = useQuery({
     queryKey: ["honor", "wall", userId],
@@ -470,106 +396,39 @@ function MemberHonorShowcase({
 
   if (isPending || !honor) {
     return (
-      <section
-        className="honor-dark-surface relative overflow-hidden border-b bg-slate-950 px-3 py-3 text-slate-100 last:border-b-0"
+      <div
+        className="mt-1.5 h-4 w-24 animate-pulse rounded bg-muted"
         data-testid="member-honor-showcase-loading"
-      >
-        <div className="h-3 w-24 animate-pulse rounded-full bg-cyan-200/20" />
-        <div className="mt-2 h-8 animate-pulse rounded-lg bg-white/10" />
-      </section>
+      />
     );
   }
 
   const equipped = honor.equipped_badge;
-  const showcase = (honor.showcase_badges ?? honor.unlocked_badges)
-    .filter((badge) => badge.id !== equipped?.id)
-    .slice(0, 3);
-  const nameDisplay = honorNameDisplayProps({
-    nameStyle: honor.name_style,
-    level: honor.level,
-    surface: "profile",
-  });
-  const unlocked = honor.badges_unlocked ?? honor.unlocked_badges.length;
-  const total = honor.badges_total ?? unlocked;
 
   return (
-    <section
-      className="honor-dark-surface relative isolate overflow-hidden border-b bg-[radial-gradient(circle_at_86%_18%,rgba(34,211,238,0.22),transparent_32%),radial-gradient(circle_at_10%_90%,rgba(139,92,246,0.2),transparent_42%),linear-gradient(135deg,#020617,#111827_52%,#172554)] px-3 py-3 text-slate-100 last:border-b-0"
+    <div
+      className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
       data-testid="member-honor-showcase"
     >
-      <span
-        aria-hidden
-        className="absolute -right-6 -top-7 size-24 rounded-full border border-cyan-200/15 shadow-[0_0_40px_rgba(34,211,238,0.12)]"
-      />
-      <div className="relative flex items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.16em] text-cyan-100/80">
-          <Sparkles className="size-3" aria-hidden />
-          {t(($) => $.profile_popover.honor.title)}
-        </span>
-        <span className="rounded-full border border-violet-200/20 bg-violet-300/10 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-violet-100">
-          {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
-        </span>
-      </div>
-
-      <div className="relative mt-2.5 flex items-center gap-3">
+      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border/60 bg-muted/60">
         {equipped ? (
-          <HonorBadgeCrest
+          <HonorBadgeIcon
             svgKey={equipped.svg_key}
             title={equipped.title}
-            className="size-12"
-            rare={honor.level >= 42}
-            animated
+            className="size-3.5"
           />
         ) : (
-          <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-white/15 bg-white/5 text-cyan-100/70">
-            <Sparkles className="size-5" aria-hidden />
-          </span>
+          <Sparkles className="size-3" aria-hidden />
         )}
-        <div className="min-w-0 flex-1">
-          <span
-            className={cn("block truncate text-sm font-bold", nameDisplay.className)}
-            data-honor-glow-tier={nameDisplay["data-honor-glow-tier"]}
-            data-honor-surface={nameDisplay["data-honor-surface"]}
-            style={nameDisplay.style}
-          >
-            {displayName}
-          </span>
-          <p className="mt-0.5 truncate text-[11px] text-slate-300">
-            {equipped?.title ?? t(($) => $.profile_popover.honor.no_badge)}
-          </p>
-        </div>
-      </div>
-
-      <div className="relative mt-2.5 flex items-center justify-between gap-3 border-t border-white/10 pt-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          {showcase.length > 0 ? (
-            showcase.map((badge) => (
-              <span
-                key={badge.id}
-                className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.07] shadow-[0_0_14px_rgba(56,189,248,0.08)]"
-                title={badge.title}
-              >
-                <HonorBadgeIcon
-                  svgKey={badge.svg_key}
-                  title={badge.title}
-                  className="size-[18px]"
-                />
-              </span>
-            ))
-          ) : (
-            <span className="text-[10px] text-slate-400">
-              {t(($) => $.profile_popover.honor.keep_building)}
-            </span>
-          )}
-        </div>
-        <span className="shrink-0 text-[10px] tabular-nums text-slate-300">
-          {t(($) => $.profile_popover.honor.collection, {
-            unlocked,
-            total,
-          })}
-        </span>
-      </div>
-    </section>
+      </span>
+      <span className="shrink-0 font-medium tabular-nums text-foreground/80">
+        {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
+      </span>
+      <span aria-hidden>·</span>
+      <span className="truncate">
+        {equipped?.title ?? t(($) => $.profile_popover.honor.no_badge)}
+      </span>
+    </div>
   );
 }
 

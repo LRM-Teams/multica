@@ -114,6 +114,35 @@ export function getNextHonorBadges(
     .slice(0, limit);
 }
 
+/**
+ * Resolve the public showcase without leaving a new user's cabinet empty.
+ * Explicit, unlocked selections keep their saved order. When no saved
+ * selection is usable, the rarest unlocked badges become the default set.
+ */
+export function getHonorShowcaseBadges(
+  items: HonorBadgeCatalogItem[],
+  showcaseIds: string[],
+  limit = 3,
+): HonorBadgeCatalogItem[] {
+  const catalogById = new Map(items.map((item) => [item.id, item]));
+  const selected = showcaseIds
+    .map((id) => catalogById.get(id))
+    .filter(
+      (item): item is HonorBadgeCatalogItem => item?.unlocked === true,
+    )
+    .slice(0, limit);
+
+  if (selected.length > 0) return selected;
+
+  return [...items]
+    .filter((item) => item.unlocked)
+    .sort(
+      (left, right) =>
+        right.rarity - left.rarity || left.id.localeCompare(right.id),
+    )
+    .slice(0, limit);
+}
+
 export function filterHonorBadges(
   items: HonorBadgeCatalogItem[],
   filter: HonorBadgeFilter,

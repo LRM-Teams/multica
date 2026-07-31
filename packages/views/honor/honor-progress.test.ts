@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HonorBadgeCatalogItem } from "@multica/core/types/honor";
 import {
   filterHonorBadges,
+  getHonorShowcaseBadges,
   getNextHonorBadges,
   honorBadgePresentation,
   honorLevelProgress,
@@ -40,6 +41,39 @@ describe("honor progression presentation", () => {
       "half",
       "far",
     ]);
+  });
+
+  it("fills an empty showcase with the rarest unlocked badges", () => {
+    const items = [
+      badge({ id: "common", unlocked: true, rarity: 10 }),
+      badge({ id: "locked", rarity: 100 }),
+      badge({ id: "epic", unlocked: true, rarity: 80 }),
+      badge({ id: "rare", unlocked: true, rarity: 40 }),
+      badge({ id: "legendary", unlocked: true, rarity: 100 }),
+    ];
+
+    expect(getHonorShowcaseBadges(items, []).map((item) => item.id)).toEqual([
+      "legendary",
+      "epic",
+      "rare",
+    ]);
+  });
+
+  it("preserves explicit showcase order and ignores locked selections", () => {
+    const items = [
+      badge({ id: "first", unlocked: true, rarity: 10 }),
+      badge({ id: "second", unlocked: true, rarity: 100 }),
+      badge({ id: "locked", rarity: 200 }),
+    ];
+
+    expect(
+      getHonorShowcaseBadges(items, ["first", "locked", "second"]).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["first", "second"]);
+    expect(
+      getHonorShowcaseBadges(items, ["locked"]).map((item) => item.id),
+    ).toEqual(["second", "first"]);
   });
 
   it("redacts every identifying field for a locked secret badge", () => {

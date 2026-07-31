@@ -134,5 +134,12 @@
     "zoom_out": "缩小",
     "fit": "适应画布",
     "toggle_detail": "开关详情面板"
+  },
+  "timeline": {
+    "label": "调研阶段",
+    "done": "已完成",
+    "current": "进行中",
+    "upcoming": "未开始",
+    "done_feedback": "阶段已完成"
   }
 }

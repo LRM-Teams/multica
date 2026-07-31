@@ -134,5 +134,12 @@
     "zoom_out": "축소",
     "fit": "화면 맞추기",
     "toggle_detail": "상세 패널 토글"
+  },
+  "timeline": {
+    "label": "리서치 단계",
+    "done": "완료",
+    "current": "진행 중",
+    "upcoming": "대기",
+    "done_feedback": "단계 완료"
   }
 }

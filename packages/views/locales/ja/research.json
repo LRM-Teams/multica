@@ -134,5 +134,12 @@
     "zoom_out": "縮小",
     "fit": "全体表示",
     "toggle_detail": "詳細パネル切替"
+  },
+  "timeline": {
+    "label": "リサーチ段階",
+    "done": "完了",
+    "current": "進行中",
+    "upcoming": "未着手",
+    "done_feedback": "段階完了"
   }
 }

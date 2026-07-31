@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer } from "react";
+import { useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -17,10 +17,19 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useT } from "../../i18n/use-t";
+import {
+  RESEARCH_STAGE_ORDER,
+  resolveStageStepState,
+  stageAnchorId,
+} from "../lib/research-stages";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchSessionChrome } from "./research-session-chrome";
+import {
+  ResearchStageChatMarker,
+  ResearchStageTimeline,
+} from "./research-stage-timeline";
 
 type UiState = {
   selected: ResearchGraphNode | null;
@@ -74,6 +83,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data, isLoading } = useQuery(researchSessionSnapshotOptions(wsId, sessionId));
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   const send = useMutation({
     mutationFn: () => api.postResearchMessage(sessionId, { body: ui.body.trim() }),
@@ -115,6 +125,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleet = { ...data.fleet, members: fleetMembers };
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
+  const startedStages = RESEARCH_STAGE_ORDER.filter(
+    (stage) =>
+      resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
+  );
+
+  const scrollToStage = (stage: string) => {
+    setChatOpen(true);
+    // Wait a frame so the chat pane mounts before scrolling.
+    requestAnimationFrame(() => {
+      const el =
+        document.getElementById(stageAnchorId(stage)) ??
+        chatScrollRef.current?.querySelector(`[data-research-stage="${stage}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -134,6 +159,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         selectedSummary={
           ui.selected ? `${ui.selected.title} — ${ui.selected.summary}` : null
         }
+      />
+
+      <ResearchStageTimeline
+        currentStage={session.current_stage}
+        sessionStatus={session.status}
+        onSelectStage={scrollToStage}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -210,7 +241,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   ))}
               </div>
             ) : null}
-            <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
+            <div ref={chatScrollRef} className="flex-1 space-y-2.5 overflow-y-auto p-3">
+              {startedStages.map((stage) => (
+                <ResearchStageChatMarker
+                  key={stage}
+                  stage={stage}
+                  label={t(($) => $.stage[stage])}
+                />
+              ))}
               {messages.length === 0 ? (
                 <p className="px-1 text-xs text-muted-foreground">{t(($) => $.chat.empty)}</p>
               ) : (

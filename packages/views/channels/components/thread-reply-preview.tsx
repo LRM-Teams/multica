@@ -100,7 +100,7 @@ export function ThreadReplyPreview({
       >
         <span className="min-w-0 truncate">{countLabel}</span>
         <span aria-hidden className="shrink-0">
-          {">"}
+          {" >"}
         </span>
       </div>
       <ul className="flex flex-col gap-1">

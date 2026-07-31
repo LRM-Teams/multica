@@ -478,19 +478,8 @@ function MachineListView({
             return (
               <div
                 key={machine.id}
-                role="button"
-                tabIndex={0}
-                aria-pressed={selected}
-                aria-label={machine.title}
-                onClick={() => onSelect(machine.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelect(machine.id);
-                  }
-                }}
                 className={cn(
-                  "flex cursor-pointer items-center gap-3",
+                  "relative flex items-center gap-3",
                   layout === "full"
                     ? "border-b px-4 py-3.5"
                     : cn(
@@ -499,15 +488,24 @@ function MachineListView({
                       ),
                 )}
               >
-                <span className="shrink-0" aria-hidden>
+                <button
+                  type="button"
+                  aria-pressed={selected}
+                  aria-label={machine.title}
+                  onClick={() => onSelect(machine.id)}
+                  className="absolute inset-0 z-0 rounded-[inherit]"
+                />
+                <span className="relative z-10 shrink-0 pointer-events-none" aria-hidden>
                   <HealthDot health={machine.health} />
                 </span>
-                <div className="min-w-0 flex-1">
-                  <MachineNameEditor
-                    machine={machine}
-                    wsId={wsId}
-                    variant="list"
-                  />
+                <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
+                  <div className="pointer-events-auto">
+                    <MachineNameEditor
+                      machine={machine}
+                      wsId={wsId}
+                      variant="list"
+                    />
+                  </div>
                   <div className="mt-0.5 truncate text-xs text-muted-foreground">
                     {labelOf(machine.health)}
                     {count > 0 && (
@@ -528,7 +526,7 @@ function MachineListView({
                 </div>
                 {showChevron ? (
                   <ChevronRight
-                    className="h-4 w-4 shrink-0 text-muted-foreground/45"
+                    className="relative z-10 h-4 w-4 shrink-0 pointer-events-none text-muted-foreground/45"
                     aria-hidden
                   />
                 ) : null}

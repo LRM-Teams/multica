@@ -322,8 +322,8 @@
   --honor-glow-color: #0ea5e9;
   color: #0369a1;
   text-shadow:
-    0 0 1px color-mix(in srgb, #e0f2fe 76%, transparent),
-    0 0 7px color-mix(in srgb, #38bdf8 24%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 44%, transparent),
+    0 0 7px color-mix(in srgb, #0284c7 18%, transparent);
 }
 
 .dark .honor-name--member {
@@ -332,10 +332,10 @@
 
 .honor-name--gold {
   --honor-glow-color: #f59e0b;
-  color: #b45309;
+  color: #92400e;
   text-shadow:
-    0 0 1px color-mix(in srgb, #fffbeb 82%, transparent),
-    0 0 8px color-mix(in srgb, #f59e0b 28%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 48%, transparent),
+    0 0 7px color-mix(in srgb, #d97706 20%, transparent);
 }
 
 .dark .honor-name--gold {
@@ -358,7 +358,14 @@
 
 .honor-name--founding {
   --honor-glow-color: #f59e0b;
-  background-image: linear-gradient(105deg, #b45309 0%, #fbbf24 38%, #fff7ae 52%, #f97316 100%);
+  background-image: linear-gradient(
+    105deg,
+    #78350f 0%,
+    #b45309 36%,
+    #c2410c 54%,
+    #92400e 74%,
+    #78350f 100%
+  );
   background-size: 180% 100%;
 }
 
@@ -367,12 +374,12 @@
   --honor-glow-color: #8b5cf6;
   background-image: linear-gradient(
     105deg,
-    #0891b2 0%,
+    #0e7490 0%,
     #2563eb 22%,
-    #8b5cf6 45%,
-    #db2777 67%,
-    #d97706 84%,
-    #0891b2 100%
+    #6d28d9 45%,
+    #be185d 67%,
+    #92400e 84%,
+    #0e7490 100%
   );
   background-size: 260% 100%;
 }
@@ -397,11 +404,11 @@
 .honor-name--glow,
 .honor-name--animated-glow {
   --honor-glow-color: #8b5cf6;
-  color: #7c3aed;
+  color: #6d28d9;
   text-shadow:
-    0 0 1px color-mix(in srgb, #f5f3ff 92%, transparent),
-    0 0 6px color-mix(in srgb, #8b5cf6 44%, transparent),
-    0 0 14px color-mix(in srgb, #22d3ee 18%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 50%, transparent),
+    0 0 6px color-mix(in srgb, #7c3aed 30%, transparent),
+    0 0 14px color-mix(in srgb, #0891b2 12%, transparent);
 }
 
 .dark .honor-name--glow,
@@ -413,11 +420,11 @@
   --honor-glow-color: #f59e0b;
   background-image: linear-gradient(
     105deg,
-    #b45309 0%,
-    #fbbf24 32%,
-    #fff7c2 48%,
-    #f59e0b 62%,
-    #b45309 100%
+    #78350f 0%,
+    #92400e 28%,
+    #c2410c 48%,
+    #a16207 68%,
+    #78350f 100%
   );
   background-size: 260% 100%;
   animation: honor-name-spectrum 8s ease-in-out infinite;
@@ -478,8 +485,8 @@
   --honor-halo-opacity: 0.12;
   --honor-halo-low-opacity: 0.08;
   text-shadow:
-    0 0 1px color-mix(in srgb, white 72%, transparent),
-    0 0 8px color-mix(in srgb, var(--honor-glow-color) 30%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 52%, transparent),
+    0 0 7px color-mix(in srgb, var(--honor-glow-color) 22%, transparent);
 }
 
 .honor-name-glow[data-honor-glow-tier="3"] {
@@ -611,15 +618,15 @@
 @keyframes honor-name-light-pulse {
   0%, 100% {
     text-shadow:
-      0 0 1px color-mix(in srgb, white 78%, transparent),
-      0 0 7px color-mix(in srgb, #8b5cf6 42%, transparent),
-      0 0 14px color-mix(in srgb, #22d3ee 18%, transparent);
+      0 0 1px color-mix(in srgb, currentColor 54%, transparent),
+      0 0 7px color-mix(in srgb, #7c3aed 30%, transparent),
+      0 0 14px color-mix(in srgb, #0891b2 12%, transparent);
   }
   50% {
     text-shadow:
-      0 0 2px color-mix(in srgb, white 94%, transparent),
-      0 0 11px color-mix(in srgb, #a78bfa 58%, transparent),
-      0 0 22px color-mix(in srgb, #22d3ee 30%, transparent);
+      0 0 1px color-mix(in srgb, currentColor 68%, transparent),
+      0 0 10px color-mix(in srgb, #7c3aed 42%, transparent),
+      0 0 20px color-mix(in srgb, #0891b2 20%, transparent);
   }
 }
 

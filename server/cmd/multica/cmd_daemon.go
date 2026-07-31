@@ -327,6 +327,19 @@ func runDaemonForeground(cmd *cobra.Command) error {
 
 	profile := resolveProfile(cmd)
 
+	// Preflight: an external supervisor (task #815) always restarts this
+	// process using the same fixed WorkerPath, so the process that comes up
+	// after any restart — graceful, crashed, or force-killed — must correct
+	// itself onto whatever the VersionStore's Active pointer actually says,
+	// not just keep running whatever binary happened to be at that path. No
+	// task has been claimed yet at this point, so handing off here is always
+	// safe: nothing to drain.
+	if target, err := resolveVersionHandoffTarget(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: version handoff check failed, continuing on running binary: %v\n", err)
+	} else if target != "" {
+		return handoffAndWait(target, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile), daemonPIDPathForProfile(profile))
+	}
+
 	serverURL := cli.FlagOrEnv(cmd, "server-url", "MULTICA_SERVER_URL", "")
 	if serverURL == "" {
 		if c, err := cli.LoadCLIConfigForProfile(profile); err == nil && c.ServerURL != "" {
@@ -389,56 +402,16 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if the daemon needs to restart after a CLI update.
+	// Check if the daemon needs to restart after a CLI update. Waits for the
+	// new binary's own run rather than spawning-and-exiting immediately —
+	// see handoffAndWait's doc comment for why (task #815, Barry's PR #1584
+	// review finding).
 	if restartBin := d.RestartBinary(); restartBin != "" {
 		logger.Info("restarting daemon with updated binary", "path", restartBin)
 
-		args := buildDaemonStartArgs(cmd)
-		child := exec.Command(restartBin, args...)
-
-		logPath := daemonLogPathForProfile(profile)
-		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			logger.Error("failed to open log file for restart", "error", err)
-			// Runtimes were already deregistered by triggerRestart() before handoff.
-			// The supervisor-spawned successor re-registers on startup; do not
-			// duplicate cleanup here.
-			return fmt.Errorf("failed to open daemon log file %s for restart: %w", logPath, err)
-		}
-		child.Stdout = logFile
-		child.Stderr = logFile
-		// Break out of the parent's Job Object on Windows; see the
-		// runDaemonBackground call site for rationale.
-		child.SysProcAttr = daemonSysProcAttr(true)
-
-		if err := child.Start(); err != nil {
-			// Runtimes were already deregistered by triggerRestart() before handoff.
-			// The supervisor-spawned successor re-registers on startup; do not
-			// duplicate cleanup here.
-			if isAccessDeniedSpawnErr(err) {
-				child = exec.Command(restartBin, args...)
-				child.Stdout = logFile
-				child.Stderr = logFile
-				child.SysProcAttr = daemonSysProcAttr(false)
-				if err := child.Start(); err != nil {
-					logFile.Close()
-					logger.Error("failed to start new daemon (no breakaway)", "error", err)
-					return fmt.Errorf("failed to start new daemon at %s without breakaway: %w", restartBin, err)
-				}
-			} else {
-				logFile.Close()
-				logger.Error("failed to start new daemon", "error", err)
-				return fmt.Errorf("failed to start new daemon at %s: %w", restartBin, err)
-			}
-		}
-		logFile.Close()
-		child.Process.Release()
-
-		// Write new PID file.
-		pidPath := daemonPIDPathForProfile(profile)
-		os.WriteFile(pidPath, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
-
-		logger.Info("new daemon started", "pid", child.Process.Pid)
+		// Runtimes were already deregistered by triggerRestart() before handoff.
+		// The successor re-registers on startup; do not duplicate cleanup here.
+		return handoffAndWait(restartBin, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile), daemonPIDPathForProfile(profile))
 	}
 
 	return nil

@@ -99,6 +99,19 @@
     "process_tag": "过程事件",
     "empty": "画布推进时，舰队对话与过程事件会出现在这里。"
   },
+  "step_card": {
+    "status": {
+      "done": "完成",
+      "running": "进行中",
+      "waiting": "等待",
+      "failed": "失败"
+    },
+    "expand": "展开证据",
+    "collapse": "收起",
+    "retry": "重试",
+    "reassign": "改派",
+    "standby": "已就位"
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",

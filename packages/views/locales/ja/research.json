@@ -99,6 +99,19 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
+  "step_card": {
+    "status": {
+      "done": "完了",
+      "running": "進行中",
+      "waiting": "待機",
+      "failed": "失敗"
+    },
+    "expand": "根拠を展開",
+    "collapse": "閉じる",
+    "retry": "再試行",
+    "reassign": "再割当",
+    "standby": "待機中"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

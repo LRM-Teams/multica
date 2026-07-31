@@ -99,6 +99,19 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
+  "step_card": {
+    "status": {
+      "done": "Done",
+      "running": "Running",
+      "waiting": "Waiting",
+      "failed": "Failed"
+    },
+    "expand": "Expand evidence",
+    "collapse": "Collapse",
+    "retry": "Retry",
+    "reassign": "Reassign",
+    "standby": "Standing by"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

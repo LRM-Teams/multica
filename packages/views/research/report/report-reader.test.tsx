@@ -97,4 +97,14 @@ describe("ReportReader", () => {
     fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("renders a centered modal shell (not a corner float)", () => {
+    render(<ReportReader open onClose={vi.fn()} report={report} sources={sources} />);
+    const dialog = screen.getByTestId("research-delivery-modal");
+    expect(dialog.className).toContain("justify-center");
+    expect(dialog.className).toContain("sm:items-center");
+    const card = dialog.querySelector("[role='document']");
+    expect(card?.className).toMatch(/sm:max-w-/);
+    expect(card?.className).toMatch(/sm:rounded/);
+  });
 });

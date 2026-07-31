@@ -153,8 +153,8 @@ export function ReportReader({
       ref={bindDialog}
       data-testid="research-delivery-modal"
       className={cn(
-        "fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-black/45 p-0 open:flex sm:items-center sm:p-6 md:p-8",
-        "backdrop:bg-black/45",
+        "fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-transparent p-0 open:flex sm:items-center sm:p-6 md:p-8",
+        "backdrop:bg-black/55 backdrop:backdrop-blur-[2px]",
       )}
       aria-label={t(($) => $.panel.delivery)}
       aria-modal="true"
@@ -169,12 +169,19 @@ export function ReportReader({
       }}
       onClose={onClose}
     >
+      <button
+        type="button"
+        className="absolute inset-0 z-0 cursor-default bg-transparent"
+        aria-label={t(($) => $.panel.hide_chat)}
+        onClick={onClose}
+      />
       <div
+        role="document"
         data-testid="research-delivery-modal-card"
         className={cn(
-          "flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
+          "relative z-10 flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
           // Desktop: dominant reading region (not a 420px corner chip).
-          "sm:h-[min(920px,calc(100vh-4rem))] sm:max-w-[min(1120px,calc(100vw-4rem))] sm:rounded-xl",
+          "sm:h-[min(920px,calc(100vh-4rem))] sm:w-full sm:max-w-[min(1120px,calc(100vw-4rem))] sm:rounded-2xl",
         )}
       >
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">

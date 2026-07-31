@@ -35,7 +35,6 @@ import { PageHeader } from "../../layout/page-header";
 import { useT, Time } from "../../i18n";
 import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
-import { AgentDMPausedInboxActions } from "./agent-dm-paused-inbox-actions";
 import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
@@ -468,10 +467,6 @@ export function InboxPage() {
         </div>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
-        {/* #692 owner alert: jump to the DM + inline pair/global gate actions. */}
-        {selectedInbox.type === "agent_dm_paused" ? (
-          <AgentDMPausedInboxActions item={selectedInbox} />
-        ) : null}
         {selectedInbox.type === "quick_create_failed" ? (
           <Button
             size="sm"

@@ -58,7 +58,6 @@ import {
   parseProjectSystemEvent,
   parseReminderSystemEvent,
   parseThreadSystemEvent,
-  parseAgentDMPauseSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
@@ -67,7 +66,6 @@ import {
   ProjectSystemEventContent,
   ReminderSystemEventContent,
   ThreadSystemEventContent,
-  AgentDMPauseSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
@@ -152,10 +150,6 @@ function ChannelSystemMessageRow({
   // LRM-540: thread unfollow/follow — structured actor token (display_name),
   // never the BE `@handle unfollowed this thread` fallback content.
   const threadEvent = parseThreadSystemEvent(message);
-  // #692: A2A agent-pair DM gate rows (budget/frequency auto-pause, owner
-  // pause/resume pair or global). Owner-private history marker; localized copy
-  // from structured params, never the BE English fallback.
-  const agentDMPauseEvent = parseAgentDMPauseSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -200,8 +194,6 @@ function ChannelSystemMessageRow({
             <ReminderSystemEventContent event={reminderEvent} />
           ) : threadEvent ? (
             <ThreadSystemEventContent event={threadEvent} />
-          ) : agentDMPauseEvent ? (
-            <AgentDMPauseSystemEventContent event={agentDMPauseEvent} />
           ) : hasReferenceParts ? (
             // Spans are anchored to the RAW `message.content`; feeding the trimmed
             // `systemText` would shift every offset and misplace the tokens.

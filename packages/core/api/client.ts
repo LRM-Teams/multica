@@ -215,13 +215,7 @@ import type {
   GetVoiceCallResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
-import type {
-  DMItem,
-  CreateOrFindDMBody,
-  AgentDMControl,
-  AgentDMControlAction,
-  AgentDMGlobalControl,
-} from "../dm/types";
+import type { DMItem, CreateOrFindDMBody } from "../dm/types";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
@@ -2989,49 +2983,6 @@ export class ApiClient {
   /** Close Chat — soft-hides the conversation from the user's list (recoverable). */
   async closeDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
     return this.fetch(this.dmOpsPath(source, id), { method: "DELETE" });
-  }
-
-  /**
-   * #692 owner control on a supervised agent_pair DM. Pause/resume this pair,
-   * grant more rounds to the current exchange, or pause/resume ALL workspace
-   * agent↔agent DMs. `view_dm` is a client-only navigation affordance and is
-   * never sent to this endpoint (hence the `Exclude`). Returns the fresh control
-   * state the caller applies to the DM item.
-   */
-  async postAgentDMControl(
-    channelId: string,
-    body: {
-      action: Exclude<AgentDMControlAction, "view_dm">;
-      exchange_id?: string;
-      rounds?: number;
-    },
-  ): Promise<{ control: AgentDMControl }> {
-    return this.fetch(`/api/dm/channels/${channelId}/a2a-control`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  }
-
-  /**
-   * #692 read the workspace-level agent↔agent DM control — the source of truth
-   * for the global pause (independent of any DM channel). Manageable only by a
-   * user who owns at least one non-archived agent (else the server 403s).
-   */
-  async getAgentDMGlobalControl(): Promise<AgentDMGlobalControl> {
-    return this.fetch("/api/dm/a2a-control");
-  }
-
-  /**
-   * #692 pause / resume ALL agent↔agent DMs in the workspace. Distinct from the
-   * per-channel control endpoint — global state lives here, not on a channel.
-   */
-  async postAgentDMGlobalControl(
-    action: "pause_global" | "resume_global",
-  ): Promise<AgentDMGlobalControl> {
-    return this.fetch("/api/dm/a2a-control", {
-      method: "POST",
-      body: JSON.stringify({ action }),
-    });
   }
 
   async listChannels(options?: { archived?: boolean }): Promise<Channel[]> {

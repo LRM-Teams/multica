@@ -173,9 +173,14 @@ func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, o
 			Usage:     turn.usage(opts.Model),
 		}
 	}
+	// turn.output is the reconciled GET /session/:id/message read-back, not
+	// the SSE-accumulated `output` — per the design contract, it is
+	// authoritative for the final text even when message.part.delta dropped,
+	// duplicated, or arrived incomplete (the same class of upstream
+	// delivery bug this adapter exists to be resilient to).
 	return Result{
 		Status:    "completed",
-		Output:    output.String(),
+		Output:    turn.output,
 		SessionID: sessionID,
 		Usage:     turn.usage(opts.Model),
 	}
@@ -436,6 +441,12 @@ type opencodeServeTurnResult struct {
 	errMsg    string
 	toolCalls []Message
 	usageInfo *TokenUsage
+	// output is the reconciled final text, read back from GET
+	// /session/:id/message after session.idle — the authoritative source for
+	// Result.Output, per the design's "never trust SSE alone" contract. Only
+	// populated on the success path (reconcileFinalMessage is never called
+	// when the turn ended via session.error).
+	output string
 }
 
 func (r opencodeServeTurnResult) usage(model string) map[string]TokenUsage {
@@ -536,8 +547,11 @@ func (c *opencodeServeClient) reconcileFinalMessage(ctx context.Context, session
 	}
 	last := messages[len(messages)-1]
 	result := opencodeServeTurnResult{}
+	var text strings.Builder
 	for _, part := range last.Parts {
 		switch part.Type {
+		case "text":
+			text.WriteString(part.Text)
 		case "tool":
 			if part.State != nil {
 				var input map[string]any
@@ -562,6 +576,7 @@ func (c *opencodeServeClient) reconcileFinalMessage(ctx context.Context, session
 			}
 		}
 	}
+	result.output = text.String()
 	return result, nil
 }
 
@@ -707,6 +722,7 @@ type opencodeServeMessage struct {
 
 type opencodeServeMessagePart struct {
 	Type   string                  `json:"type"`
+	Text   string                  `json:"text,omitempty"`
 	Tool   string                  `json:"tool,omitempty"`
 	CallID string                  `json:"callID,omitempty"`
 	State  *opencodeServeToolState `json:"state,omitempty"`

@@ -182,7 +182,7 @@ func TestRunTurnCompletesViaSessionIdleWithoutMessageUpdated(t *testing.T) {
 		return []opencodeServeMessage{{
 			ID: "msg_1",
 			Parts: []opencodeServeMessagePart{
-				{Type: "text"},
+				{Type: "text", Text: "Hello, world"},
 				{Type: "tool", Tool: "read_file", CallID: "call_1", State: &opencodeServeToolState{Status: "completed", Output: "file contents"}},
 			},
 		}}
@@ -217,8 +217,62 @@ func TestRunTurnCompletesViaSessionIdleWithoutMessageUpdated(t *testing.T) {
 	if streamed.String() != "Hello, world" {
 		t.Fatalf("streamed text = %q, want %q", streamed.String(), "Hello, world")
 	}
+	if result.output != "Hello, world" {
+		t.Fatalf("result.output (reconciled) = %q, want %q — must come from the GET /session/:id/message poll, not the SSE deltas", result.output, "Hello, world")
+	}
 	if len(toolMessages) != 2 || toolMessages[0].Type != MessageToolUse || toolMessages[1].Type != MessageToolResult {
 		t.Fatalf("tool messages = %+v, want [ToolUse, ToolResult] from the reconciled final message", toolMessages)
+	}
+}
+
+// TestRunTurnOutputComesFromReconcilePollNotSSEDeltas is the regression test
+// Vera's review flagged as missing: it scripts ZERO message.part.delta
+// events (simulating dropped/incomplete SSE delivery — the same class of
+// upstream bug this adapter is designed to tolerate) while the reconcile
+// poll's final message DOES carry the full text. If result.output were
+// still derived from accumulated SSE deltas, this would produce an empty
+// string; deriving it from the reconciled poll produces the real text.
+func TestRunTurnOutputComesFromReconcilePollNotSSEDeltas(t *testing.T) {
+	const fullText = "The answer, reconciled from the poll, not the stream."
+	fake := newFakeOpenCodeServeServer()
+	fake.scriptEvents = func(sessionID string) []string {
+		// No message.part.delta at all — only the terminal signal.
+		return []string{sessionIdleEvent(sessionID)}
+	}
+	fake.scriptMessages = func(sessionID string) []opencodeServeMessage {
+		return []opencodeServeMessage{{
+			ID:    "msg_1",
+			Parts: []opencodeServeMessagePart{{Type: "text", Text: fullText}},
+		}}
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	client := newTestOpenCodeServeClient(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessionID, err := client.createSession(ctx, "")
+	if err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	result, err := client.runTurn(ctx, sessionID, "hi", ExecOptions{}, func(msg Message) {
+		if msg.Type == MessageText {
+			streamed.WriteString(msg.Content)
+		}
+	})
+	if err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+	if result.errMsg != "" {
+		t.Fatalf("runTurn returned error result: %v", result.errMsg)
+	}
+	if streamed.String() != "" {
+		t.Fatalf("streamed (SSE delta) text = %q, want empty — no deltas were scripted", streamed.String())
+	}
+	if result.output != fullText {
+		t.Fatalf("result.output = %q, want %q — final text must come from the reconcile poll even when SSE deltas never arrived", result.output, fullText)
 	}
 }
 

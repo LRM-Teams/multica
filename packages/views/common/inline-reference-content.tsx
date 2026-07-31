@@ -7,6 +7,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { mentionTokenClassName } from "./mention-token";
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import { IssueRefLink } from "../issues/components/issue-ref-link";
+import { ChannelRefLink } from "../channels/components/channel-ref-link";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
 /**
@@ -189,6 +190,15 @@ function renderReferenceToken({
         highlightQuery={highlightQuery}
       />
     );
+  }
+
+  if (reference.ref_type === "channel-ref") {
+    // Non-interactive surfaces (the excerpt) render the span substring as
+    // styled text only — same discipline as issue-ref below, no live query.
+    if (!interactive) {
+      return <span className="text-brand">{text}</span>;
+    }
+    return <ChannelRefLink channelId={reference.ref_id} label={reference.label ?? text} />;
   }
 
   // issue-ref (#469): raft-style lightweight inline link — uniform link color,

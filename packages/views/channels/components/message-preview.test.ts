@@ -74,6 +74,28 @@ describe("formatChannelMessagePreview", () => {
     ).toBe("Atlas: fix MUL-9 today");
   });
 
+  it("collapses a channel-ref to a #label, never leaking the raw markdown link (task #912)", () => {
+    // Unlike issue-ref, a channel-ref is ALWAYS authored via the composer's
+    // `[team-a](mention://channel/<id>)` markdown link — there is no bare-text
+    // form — so its anchored span covers the WHOLE link syntax. Falling
+    // through to the "verbatim span substring" rule (like issue-ref above)
+    // would leak `[team-a](mention://channel/channel-uuid)` — internal UUID
+    // and all — into the sidebar preview.
+    const raw = "[team-a](mention://channel/channel-uuid)";
+    expect(
+      formatChannelMessagePreview("Atlas", `see ${raw} for context`, resolveMention, [
+        {
+          type: "reference",
+          ref_type: "channel-ref",
+          ref_id: "channel-uuid",
+          label: "team-a",
+          content_start_utf16: 4,
+          content_end_utf16: 4 + raw.length,
+        },
+      ] as never),
+    ).toBe("Atlas: see #team-a for context");
+  });
+
   it("still renders plain text when nothing is anchored — the control (#530)", () => {
     // Without this, a projection that returned "" for everything would make the
     // leak tests pass while destroying every ordinary preview.

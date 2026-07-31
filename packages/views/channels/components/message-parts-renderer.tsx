@@ -116,7 +116,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
   } else if (part.type === "sticker") {
     base = `sticker-${part.pack_id ?? "default"}-${part.sticker_id}-${hashString(part.alt ?? "")}`;
   } else if (part.type === "reference") {
-    base = `reference-${part.ref_type}-${part.ref_subtype ?? "none"}-${part.ref_id}`;
+    const refSubtype = "ref_subtype" in part ? (part.ref_subtype ?? "none") : "none";
+    base = `reference-${part.ref_type}-${refSubtype}-${part.ref_id}`;
   } else if (part.type === "system_event") {
     base = `system-event-${part.event}-${hashString(JSON.stringify(part.event_params))}`;
   } else if (part.type === "voice") {

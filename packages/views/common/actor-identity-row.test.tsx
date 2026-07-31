@@ -25,4 +25,44 @@ describe("ActorIdentityRow", () => {
     expect(screen.getByText("Aegis")).toBeInTheDocument();
     expect(screen.getByText("@agent_aegis")).toBeInTheDocument();
   });
+
+  it("keeps honor name color while hiding badges in dense lists", () => {
+    render(
+      <ActorIdentityRow
+        displayName="Aurora"
+        honor={{
+          level: 24,
+          name_style: "gold",
+          equipped_badge: {
+            id: "first-delivery",
+            title: "First delivery",
+            description: "Delivered the first issue",
+            svg_key: "delivery",
+          },
+        }}
+        fleet={{
+          agent_id: "aurora",
+          fleet_score: 720,
+          class_id: "frigate",
+          class_label: "Frigate",
+          fleet_rank: 2,
+          fleet_size: 12,
+          sample_tasks: 8,
+          sample_sufficient: true,
+          frozen: false,
+          pillars: {
+            delivery: 80,
+            evolution: 72,
+            growth: 68,
+            efficiency: 74,
+          },
+        }}
+        showBadges={false}
+      />,
+    );
+
+    expect(screen.getByText("Aurora")).toHaveClass("honor-name--gold");
+    expect(screen.queryByTitle("First delivery")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Frigate")).not.toBeInTheDocument();
+  });
 });

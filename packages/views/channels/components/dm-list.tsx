@@ -431,6 +431,7 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 showHandle={item.presentation.showHandleLabel}
                 honor={item.kind === "user" ? getMemberHonor(item.id) : undefined}
                 fleet={item.kind === "agent" ? getAgentFleetRank(item.id) : undefined}
+                showBadges={false}
                 primaryClassName="truncate text-sm font-medium text-foreground"
               />
               <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -611,6 +612,7 @@ export function DmConversationRow({
                       displayName={title}
                       honor={peerHonor}
                       fleet={peerFleet}
+                      showBadges={false}
                       className={cn("text-sm text-foreground", titleWeightClass)}
                     />
                     {dupHandleLabel && (

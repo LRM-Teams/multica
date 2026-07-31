@@ -302,196 +302,367 @@
   }
 }
 
-/* User honor name styles */
+/* User honor name styles. Name color is earned; level controls luminosity. */
+.honor-name {
+  --honor-glow-color: #38bdf8;
+  --honor-pulse-duration: 6s;
+  --honor-halo-opacity: 0;
+  --honor-halo-low-opacity: 0;
+  position: relative;
+  isolation: isolate;
+  text-decoration: none;
+  text-shadow: 0 0 1px color-mix(in srgb, currentColor 28%, transparent);
+}
+
 .honor-name--default {
   color: inherit;
 }
 
 .honor-name--member {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, #38bdf8 55%, transparent);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.22em;
+  --honor-glow-color: #0ea5e9;
+  color: #0369a1;
+  text-shadow:
+    0 0 1px color-mix(in srgb, #e0f2fe 76%, transparent),
+    0 0 7px color-mix(in srgb, #38bdf8 24%, transparent);
 }
 
-.honor-name--gold,
-.honor-name--founding {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, #f59e0b 65%, transparent);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.22em;
+.dark .honor-name--member {
+  color: #67e8f9;
 }
 
-.honor-name--founding {
-  text-shadow: 0 0 8px color-mix(in srgb, #f59e0b 22%, transparent);
+.honor-name--gold {
+  --honor-glow-color: #f59e0b;
+  color: #b45309;
+  text-shadow:
+    0 0 1px color-mix(in srgb, #fffbeb 82%, transparent),
+    0 0 8px color-mix(in srgb, #f59e0b 28%, transparent);
 }
 
+.dark .honor-name--gold {
+  color: #fcd34d;
+}
+
+.honor-name--founding,
 .honor-name--prismatic,
 .honor-name--shimmer,
 .honor-name--animated-prismatic {
-  color: inherit;
-  padding-bottom: 0.08em;
-  background-image: linear-gradient(90deg, #22d3ee, #818cf8, #c084fc, #f59e0b);
-  background-position: 0 100%;
-  background-repeat: no-repeat;
-  background-size: 100% 2px;
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-repeat: repeat;
+  filter: drop-shadow(
+    0 0 4px color-mix(in srgb, var(--honor-glow-color) 30%, transparent)
+  );
 }
 
-.honor-name--glow {
-  color: inherit;
-  text-shadow: 0 0 8px color-mix(in srgb, #f59e0b 28%, transparent);
+.honor-name--founding {
+  --honor-glow-color: #f59e0b;
+  background-image: linear-gradient(105deg, #b45309 0%, #fbbf24 38%, #fff7ae 52%, #f97316 100%);
+  background-size: 180% 100%;
+}
+
+.honor-name--prismatic,
+.honor-name--animated-prismatic {
+  --honor-glow-color: #8b5cf6;
+  background-image: linear-gradient(
+    105deg,
+    #0891b2 0%,
+    #2563eb 22%,
+    #8b5cf6 45%,
+    #db2777 67%,
+    #d97706 84%,
+    #0891b2 100%
+  );
+  background-size: 260% 100%;
+}
+
+.dark .honor-name--founding {
+  background-image: linear-gradient(105deg, #f59e0b 0%, #fde68a 38%, #ffffff 52%, #fb7185 100%);
+}
+
+.dark .honor-name--prismatic,
+.dark .honor-name--animated-prismatic {
+  background-image: linear-gradient(
+    105deg,
+    #67e8f9 0%,
+    #93c5fd 22%,
+    #c4b5fd 45%,
+    #f0abfc 67%,
+    #fde68a 84%,
+    #67e8f9 100%
+  );
+}
+
+.honor-name--glow,
+.honor-name--animated-glow {
+  --honor-glow-color: #8b5cf6;
+  color: #7c3aed;
+  text-shadow:
+    0 0 1px color-mix(in srgb, #f5f3ff 92%, transparent),
+    0 0 6px color-mix(in srgb, #8b5cf6 44%, transparent),
+    0 0 14px color-mix(in srgb, #22d3ee 18%, transparent);
+}
+
+.dark .honor-name--glow,
+.dark .honor-name--animated-glow {
+  color: #ddd6fe;
 }
 
 .honor-name--shimmer {
-  background-image: linear-gradient(90deg, #f59e0b, #fde68a, #f59e0b);
-  background-size: 220% 2px;
-  animation: honor-shimmer 2.8s linear infinite;
+  --honor-glow-color: #f59e0b;
+  background-image: linear-gradient(
+    105deg,
+    #b45309 0%,
+    #fbbf24 32%,
+    #fff7c2 48%,
+    #f59e0b 62%,
+    #b45309 100%
+  );
+  background-size: 260% 100%;
+  animation: honor-name-spectrum 8s ease-in-out infinite;
+}
+
+.dark .honor-name--shimmer {
+  background-image: linear-gradient(
+    105deg,
+    #f59e0b 0%,
+    #fde68a 32%,
+    #ffffff 48%,
+    #fbbf24 62%,
+    #f59e0b 100%
+  );
 }
 
 .honor-name--animated-prismatic {
-  background-size: 300% 2px;
-  animation: honor-prismatic 6s linear infinite;
+  animation: honor-name-spectrum 10s linear infinite;
 }
 
 .honor-name--animated-glow {
-  color: inherit;
-  animation: honor-glow 2.4s ease-in-out infinite;
+  animation: honor-name-light-pulse 6s ease-in-out infinite;
 }
 
-@keyframes honor-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-@keyframes honor-prismatic {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 300% 50%; }
-}
-
-@keyframes honor-glow {
-  0%, 100% { text-shadow: 0 0 5px color-mix(in srgb, #f59e0b 24%, transparent); }
-  50% { text-shadow: 0 0 10px color-mix(in srgb, #fde68a 38%, transparent); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .honor-name--shimmer,
-  .honor-name--animated-prismatic,
-  .honor-name--animated-glow {
-    animation: none;
-  }
-  .honor-name--animated-prismatic {
-    background-position: 0 100%;
-  }
-  .honor-name-glow[data-honor-glow-tier] {
-    animation: none !important;
-  }
-}
-
-/* Level-based luminosity tiers (I–VII). Effects decorate readable text. */
-.honor-name-glow {
-  --honor-glow-color: #f59e0b;
-  --honor-pulse-duration: 3s;
-  --honor-halo-opacity: 0.1;
-  position: relative;
-  isolation: isolate;
+/* Level-based luminosity tiers (I–VII). */
+.honor-name-glow::before,
+.honor-name-glow::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: -1;
 }
 
 .honor-name-glow::before {
-  content: "";
-  position: absolute;
-  inset: -0.08em -0.22em;
-  border-radius: 0.35em;
-  pointer-events: none;
-  z-index: -1;
+  inset: -0.22em -0.36em;
+  border-radius: 0.5em;
   opacity: var(--honor-halo-opacity);
   background: radial-gradient(
     ellipse at center,
-    color-mix(in srgb, var(--honor-glow-color) 38%, transparent) 0%,
+    color-mix(in srgb, var(--honor-glow-color) 56%, transparent) 0%,
     transparent 72%
   );
 }
 
+.honor-name-glow::after {
+  inset: -0.12em -0.28em;
+  border: 1px solid transparent;
+  border-radius: 0.42em;
+  opacity: 0;
+}
+
 .honor-name-glow[data-honor-glow-tier="1"] {
-  --honor-halo-opacity: 0.06;
-  text-shadow: 0 0 4px color-mix(in srgb, var(--honor-glow-color) 18%, transparent);
+  --honor-halo-opacity: 0.07;
+  --honor-halo-low-opacity: 0.05;
 }
 
 .honor-name-glow[data-honor-glow-tier="2"] {
-  --honor-halo-opacity: 0.08;
-  text-shadow: 0 0 6px color-mix(in srgb, var(--honor-glow-color) 22%, transparent);
+  --honor-halo-opacity: 0.12;
+  --honor-halo-low-opacity: 0.08;
+  text-shadow:
+    0 0 1px color-mix(in srgb, white 72%, transparent),
+    0 0 8px color-mix(in srgb, var(--honor-glow-color) 30%, transparent);
 }
 
 .honor-name-glow[data-honor-glow-tier="3"] {
-  --honor-halo-opacity: 0.1;
-  animation: honor-tier-breathe var(--honor-pulse-duration) ease-in-out infinite;
+  --honor-halo-opacity: 0.17;
+  --honor-halo-low-opacity: 0.1;
+}
+
+.honor-name-glow[data-honor-glow-tier="3"]::before,
+.honor-name-glow[data-honor-glow-tier="4"]::before,
+.honor-name-glow[data-honor-glow-tier="5"]::before,
+.honor-name-glow[data-honor-glow-tier="6"]::before,
+.honor-name-glow[data-honor-glow-tier="7"]::before {
+  animation: honor-tier-halo var(--honor-pulse-duration) ease-in-out infinite;
 }
 
 .honor-name-glow[data-honor-glow-tier="4"] {
   --honor-glow-color: #a78bfa;
-  --honor-halo-opacity: 0.12;
-  animation: honor-tier-breathe var(--honor-pulse-duration) ease-in-out infinite;
+  --honor-halo-opacity: 0.2;
+  --honor-halo-low-opacity: 0.12;
 }
 
 .honor-name-glow[data-honor-glow-tier="4"]::after {
-  content: "";
-  position: absolute;
-  inset: auto -0.18em -0.16em;
-  height: 2px;
-  border-radius: 0.4em;
-  pointer-events: none;
-  z-index: -2;
-  opacity: 0.5;
-  background: linear-gradient(90deg, transparent, #c4b5fd, transparent);
-  animation: honor-tier-sparkle calc(var(--honor-pulse-duration) * 1.4) ease-in-out infinite;
+  border-color: color-mix(in srgb, #a78bfa 30%, transparent);
+  opacity: 0.34;
+  box-shadow:
+    0 0 4px color-mix(in srgb, #a78bfa 22%, transparent),
+    inset 0 0 3px color-mix(in srgb, #67e8f9 14%, transparent);
+  animation: honor-tier-outline calc(var(--honor-pulse-duration) * 1.35) ease-in-out infinite;
 }
 
 .honor-name-glow[data-honor-glow-tier="5"] {
-  --honor-glow-color: #67e8f9;
-  --honor-halo-opacity: 0.14;
-  animation: honor-tier-breathe calc(var(--honor-pulse-duration) * 1.4) ease-in-out infinite;
+  --honor-glow-color: #22d3ee;
+  --honor-halo-opacity: 0.23;
+  --honor-halo-low-opacity: 0.14;
+}
+
+.honor-name-glow[data-honor-glow-tier="5"]::after {
+  border-color: color-mix(in srgb, #67e8f9 38%, transparent);
+  opacity: 0.42;
+  box-shadow:
+    0 0 6px color-mix(in srgb, #22d3ee 28%, transparent),
+    0 0 12px color-mix(in srgb, #a78bfa 14%, transparent);
+  animation: honor-tier-outline calc(var(--honor-pulse-duration) * 1.3) ease-in-out infinite;
 }
 
 .honor-name-glow[data-honor-glow-tier="6"] {
   --honor-glow-color: #818cf8;
-  --honor-halo-opacity: 0.16;
-  animation: honor-tier-breathe calc(var(--honor-pulse-duration) * 1.25) ease-in-out infinite;
+  --honor-halo-opacity: 0.27;
+  --honor-halo-low-opacity: 0.17;
+}
+
+.honor-name-glow[data-honor-glow-tier="6"]::after {
+  border-color: color-mix(in srgb, #a5b4fc 48%, transparent);
+  opacity: 0.5;
+  box-shadow:
+    0 0 7px color-mix(in srgb, #818cf8 34%, transparent),
+    0 0 16px color-mix(in srgb, #e879f9 18%, transparent),
+    inset 0 0 4px color-mix(in srgb, #67e8f9 20%, transparent);
+  animation: honor-tier-outline calc(var(--honor-pulse-duration) * 1.25) ease-in-out infinite;
 }
 
 .honor-name-glow[data-honor-glow-tier="7"] {
   --honor-glow-color: #fde68a;
-  --honor-halo-opacity: 0.18;
-  animation: honor-tier-legend calc(var(--honor-pulse-duration) * 2) ease-in-out infinite;
+  --honor-halo-opacity: 0.32;
+  --honor-halo-low-opacity: 0.2;
 }
 
 .honor-name-glow[data-honor-glow-tier="7"]::after {
+  border-color: color-mix(in srgb, #fde68a 58%, transparent);
+  opacity: 0.62;
+  box-shadow:
+    0 0 8px color-mix(in srgb, #fde68a 32%, transparent),
+    0 0 18px color-mix(in srgb, #22d3ee 22%, transparent),
+    0 0 26px color-mix(in srgb, #c084fc 18%, transparent),
+    inset 0 0 5px color-mix(in srgb, white 24%, transparent);
+  animation: honor-tier-legend calc(var(--honor-pulse-duration) * 1.35) ease-in-out infinite;
+}
+
+/* Equipped honor badges use a spectrum ring plus a tone-aware breathing halo. */
+.actor-badge-frame--animated {
+  --honor-badge-accent: #a78bfa;
+}
+
+.actor-badge-frame--animated[data-honor-badge-tone="gold"],
+.actor-badge-frame--animated[data-honor-badge-tone="amber"] {
+  --honor-badge-accent: #fbbf24;
+}
+
+.actor-badge-frame--animated[data-honor-badge-tone="cyan"],
+.actor-badge-frame--animated[data-honor-badge-tone="sky"] {
+  --honor-badge-accent: #22d3ee;
+}
+
+.actor-badge-frame--animated[data-honor-badge-tone="emerald"] {
+  --honor-badge-accent: #34d399;
+}
+
+.actor-badge-frame--animated::before {
   content: "";
   position: absolute;
-  inset: auto -0.24em -0.18em;
-  height: 2px;
-  border-radius: 0.45em;
+  inset: -0.28rem;
+  z-index: 0;
+  border-radius: 999px;
   pointer-events: none;
-  z-index: -2;
-  opacity: 0.7;
-  background: linear-gradient(90deg, #22d3ee, #818cf8, #fde68a, #c084fc, #22d3ee);
-  background-size: 240% 100%;
-  animation: honor-prismatic calc(var(--honor-pulse-duration) * 2) linear infinite;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--honor-badge-accent) 48%, transparent) 0%,
+    transparent 68%
+  );
+  filter: blur(3px);
+  opacity: 0.34;
+  animation: honor-badge-halo 5.8s ease-in-out infinite;
 }
 
-@keyframes honor-tier-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.86; }
+.actor-badge-frame--animated > :first-child {
+  animation: honor-badge-spectrum 8s ease-in-out infinite;
 }
 
-@keyframes honor-tier-sparkle {
-  0%, 100% { opacity: 0.12; transform: scale(0.98); }
-  50% { opacity: 0.28; transform: scale(1.02); }
+.honor-badge-crest--animated {
+  animation: honor-badge-crest-breathe 5.8s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes honor-name-spectrum {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes honor-name-light-pulse {
+  0%, 100% {
+    text-shadow:
+      0 0 1px color-mix(in srgb, white 78%, transparent),
+      0 0 7px color-mix(in srgb, #8b5cf6 42%, transparent),
+      0 0 14px color-mix(in srgb, #22d3ee 18%, transparent);
+  }
+  50% {
+    text-shadow:
+      0 0 2px color-mix(in srgb, white 94%, transparent),
+      0 0 11px color-mix(in srgb, #a78bfa 58%, transparent),
+      0 0 22px color-mix(in srgb, #22d3ee 30%, transparent);
+  }
+}
+
+@keyframes honor-tier-halo {
+  0%, 100% { opacity: var(--honor-halo-low-opacity); transform: scale(0.96); }
+  50% { opacity: var(--honor-halo-opacity); transform: scale(1.04); }
+}
+
+@keyframes honor-tier-outline {
+  0%, 100% { opacity: 0.24; transform: scale(0.99); }
+  50% { opacity: 0.52; transform: scale(1.015); }
 }
 
 @keyframes honor-tier-legend {
-  0%, 100% { text-shadow: 0 0 7px color-mix(in srgb, var(--honor-glow-color) 24%, transparent); }
-  50% { text-shadow: 0 0 11px color-mix(in srgb, var(--honor-glow-color) 38%, transparent); }
+  0%, 100% { opacity: 0.4; transform: scale(0.985); filter: hue-rotate(0deg); }
+  50% { opacity: 0.72; transform: scale(1.025); filter: hue-rotate(28deg); }
+}
+
+@keyframes honor-badge-halo {
+  0%, 100% { opacity: 0.24; transform: scale(0.88); }
+  50% { opacity: 0.58; transform: scale(1.14); }
+}
+
+@keyframes honor-badge-spectrum {
+  0%, 100% {
+    filter: hue-rotate(0deg) saturate(1.05);
+    box-shadow: 0 0 4px color-mix(in srgb, var(--honor-badge-accent) 30%, transparent);
+  }
+  50% {
+    filter: hue-rotate(34deg) saturate(1.35);
+    box-shadow: 0 0 9px color-mix(in srgb, var(--honor-badge-accent) 58%, transparent);
+  }
+}
+
+@keyframes honor-badge-crest-breathe {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 5px color-mix(in srgb, currentColor 24%, transparent));
+  }
+  50% {
+    transform: scale(1.025);
+    filter: drop-shadow(0 0 13px color-mix(in srgb, currentColor 48%, transparent));
+  }
 }
 
 @keyframes honor-unlock-in {
@@ -501,15 +672,14 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .honor-name-glow[data-honor-glow-tier="3"],
-  .honor-name-glow[data-honor-glow-tier="4"],
-  .honor-name-glow[data-honor-glow-tier="5"],
-  .honor-name-glow[data-honor-glow-tier="6"],
-  .honor-name-glow[data-honor-glow-tier="7"] {
-    animation: none;
-  }
-  .honor-name-glow[data-honor-glow-tier="4"]::after,
-  .honor-name-glow[data-honor-glow-tier="7"]::after {
-    animation: none;
+  .honor-name--shimmer,
+  .honor-name--animated-prismatic,
+  .honor-name--animated-glow,
+  .honor-name-glow::before,
+  .honor-name-glow::after,
+  .actor-badge-frame--animated::before,
+  .actor-badge-frame--animated > :first-child,
+  .honor-badge-crest--animated {
+    animation: none !important;
   }
 }

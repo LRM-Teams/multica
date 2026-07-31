@@ -151,6 +151,7 @@ export function AccountTab() {
               svgKey={equippedBadge?.svg_key ?? "stardust"}
               title={equippedBadge?.title}
               locked={!equippedBadge}
+              animated={Boolean(equippedBadge)}
               className="size-14"
             />
             <div className="min-w-0 flex-1">

@@ -144,6 +144,7 @@ export function HonorBadgeCatalog({
                     title={presentation.title}
                     locked={!item.unlocked}
                     rare={rare && item.unlocked}
+                    animated={equipped}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">

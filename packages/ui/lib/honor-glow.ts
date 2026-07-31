@@ -3,7 +3,7 @@ export type HonorGlowTier = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type HonorDisplaySurface = "inline" | "profile";
 
 /** Max glow tier shown in message lists and compact identity rows. */
-export const INLINE_GLOW_CAP: HonorGlowTier = 3;
+export const INLINE_GLOW_CAP: HonorGlowTier = 5;
 
 export function glowTierFromLevel(level: number): HonorGlowTier {
   if (level <= 5) return 1;
@@ -44,9 +44,9 @@ export function resolveHonorNameStyleForSurface(
 
 export function honorPulseDurationSeconds(glowTier: HonorGlowTier): number {
   if (glowTier <= 1) return 0;
-  if (glowTier === 2) return 3.5;
-  if (glowTier === 3) return 3;
-  if (glowTier === 4) return 2.8;
-  if (glowTier === 5) return 2.6;
-  return 2.5;
+  if (glowTier === 2) return 6.4;
+  if (glowTier === 3) return 6;
+  if (glowTier === 4) return 5.6;
+  if (glowTier === 5) return 5.2;
+  return 4.8;
 }

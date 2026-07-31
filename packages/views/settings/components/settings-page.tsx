@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
+import { cn } from "@multica/ui/lib/utils";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { AccountTab } from "./account-tab";
@@ -184,7 +185,14 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
 
       {/* Right content */}
       <div className="flex-1 min-w-0 md:overflow-y-auto">
-        <div className="w-full max-w-3xl mx-auto p-4 md:p-6">
+        <div
+          className={cn(
+            "mx-auto w-full p-4 md:p-6",
+            activeTab === "honor"
+              ? "max-w-none xl:px-8 2xl:px-10"
+              : "max-w-3xl",
+          )}
+        >
           <TabsContent value="profile"><AccountTab /></TabsContent>
           <TabsContent value="honor"><HonorTab /></TabsContent>
           <TabsContent value="preferences"><PreferencesTab /></TabsContent>

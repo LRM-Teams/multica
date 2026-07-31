@@ -9,6 +9,38 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+// TestValidateRadarIssueCreateAssigneeForChannel_AllowsOrdinaryAgent proves
+// the narrowed gate (task #903) does not reject a plain agent that was never
+// a research_fleet member — the prior `managedRole.Valid` check behaved as a
+// blanket "any managed role" gate purely because research_fleet was the only
+// value ever written, not by design; this locks the narrowed, explicit scope.
+func TestValidateRadarIssueCreateAssigneeForChannel_AllowsOrdinaryAgent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	suffix := uuid.NewString()
+
+	ordinaryAgentID := createHandlerTestAgent(t, "ordinary-radar-"+suffix, nil)
+	supervisorID := createHandlerTestAgent(t, "supervisor-ordinary-"+suffix, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $1 WHERE id = $2`, runtimeID, ordinaryAgentID); err != nil {
+		t.Fatalf("attach runtime: %v", err)
+	}
+
+	run := db.AgentRadarRun{WorkspaceID: parseUUID(testWorkspaceID)}
+	supervisor := db.Agent{ID: parseUUID(supervisorID)}
+	err := testHandler.validateRadarIssueCreateAssigneeForChannel(
+		ctx, run, supervisor,
+		pgtype.UUID{},
+		pgtype.Text{String: "agent", Valid: true},
+		parseUUID(ordinaryAgentID),
+	)
+	if err != nil {
+		t.Fatalf("ordinary agent with no research fleet membership should be assignable, got error: %v", err)
+	}
+}
+
 // TestValidateRadarIssueCreateAssigneeForChannel_RejectsResearchFleetMember
 // locks task #903's redirect: the "managed group manager cannot be assigned
 // delivery work" gate keys off research_fleet_member table membership, not

@@ -78,15 +78,22 @@ var researchReportToLeadCmd = &cobra.Command{
 
 var researchHireCmd = &cobra.Command{
 	Use:   "hire",
-	Short: "Hire a fleet member (pending prompt review)",
+	Short: "Hire a fleet member (pending prompt review; lead only)",
 	RunE:  runResearchHire,
 }
 
 var researchOptimizeCmd = &cobra.Command{
 	Use:   "optimize <member-id>",
-	Short: "Rewrite member instructions and optionally activate",
+	Short: "Rewrite member instructions/model and optionally activate (lead only)",
 	Args:  exactArgs(1),
 	RunE:  runResearchOptimize,
+}
+
+var researchArchiveCmd = &cobra.Command{
+	Use:   "archive <member-id>",
+	Short: "Archive (减员) a fleet member; cancels wakes (lead only)",
+	Args:  exactArgs(1),
+	RunE:  runResearchArchive,
 }
 
 func init() {
@@ -112,13 +119,19 @@ func init() {
 	researchReportToLeadCmd.Flags().String("body", "", "message body for 罗纳尔多")
 	_ = researchReportToLeadCmd.MarkFlagRequired("body")
 	researchHireCmd.Flags().String("name", "", "agent name")
-	researchHireCmd.Flags().String("role", "", "fleet role")
+	researchHireCmd.Flags().String("role", "", "fleet role (unique among non-archived)")
 	researchHireCmd.Flags().String("description", "", "description")
+	researchHireCmd.Flags().String("instructions", "", "initial instructions (rewritten on optimize)")
+	researchHireCmd.Flags().String("model", "", "specialty model (defaults to runtime explicit model)")
+	researchHireCmd.Flags().String("reason", "", "specialty gap / why hire (audit + canvas)")
 	_ = researchHireCmd.MarkFlagRequired("name")
 	_ = researchHireCmd.MarkFlagRequired("role")
 	researchOptimizeCmd.Flags().String("instructions", "", "new instructions")
+	researchOptimizeCmd.Flags().String("model", "", "optional model override")
+	researchOptimizeCmd.Flags().String("reason", "", "why optimize (audit + canvas)")
 	researchOptimizeCmd.Flags().Bool("activate", true, "activate after optimize")
 	_ = researchOptimizeCmd.MarkFlagRequired("instructions")
+	researchArchiveCmd.Flags().String("reason", "", "why archive / 减员 (audit + canvas)")
 
 	researchSessionCmd.AddCommand(researchSessionGetCmd)
 	researchCmd.AddCommand(researchSessionCmd)
@@ -131,6 +144,7 @@ func init() {
 	researchCmd.AddCommand(researchReportToLeadCmd)
 	researchCmd.AddCommand(researchHireCmd)
 	researchCmd.AddCommand(researchOptimizeCmd)
+	researchCmd.AddCommand(researchArchiveCmd)
 }
 
 func runResearchSessionGet(cmd *cobra.Command, args []string) error {
@@ -243,18 +257,49 @@ func runResearchHire(cmd *cobra.Command, args []string) error {
 	name, _ := cmd.Flags().GetString("name")
 	role, _ := cmd.Flags().GetString("role")
 	desc, _ := cmd.Flags().GetString("description")
-	return researchPostJSON(cmd, "/api/research/fleet/members", map[string]any{
+	instructions, _ := cmd.Flags().GetString("instructions")
+	model, _ := cmd.Flags().GetString("model")
+	reason, _ := cmd.Flags().GetString("reason")
+	body := map[string]any{
 		"name": name, "role": role, "description": desc,
-	})
+	}
+	if instructions != "" {
+		body["instructions"] = instructions
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	return researchPostJSON(cmd, "/api/research/fleet/members", body)
 }
 
 func runResearchOptimize(cmd *cobra.Command, args []string) error {
 	instructions, _ := cmd.Flags().GetString("instructions")
 	activate, _ := cmd.Flags().GetBool("activate")
-	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/optimize", map[string]any{
+	model, _ := cmd.Flags().GetString("model")
+	reason, _ := cmd.Flags().GetString("reason")
+	body := map[string]any{
 		"instructions": instructions,
 		"activate":     activate,
-	})
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/optimize", body)
+}
+
+func runResearchArchive(cmd *cobra.Command, args []string) error {
+	reason, _ := cmd.Flags().GetString("reason")
+	body := map[string]any{}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/archive", body)
 }
 
 func researchPostJSON(cmd *cobra.Command, path string, body map[string]any) error {

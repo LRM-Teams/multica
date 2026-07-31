@@ -88,17 +88,30 @@ describe("MachineNameEditor", () => {
   it("shows hostname placeholder when display_name is unset", () => {
     const { container, unmount } = render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineNameEditor machine={makeMachine()} wsId="ws-1" />
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="list" />
       </I18nProvider>,
     );
     expect(editButton(container)).toBeTruthy();
     unmount();
   });
 
+  it("list variant: only the pencil button starts rename (row click can select)", () => {
+    const { container, unmount } = render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="list" />
+      </I18nProvider>,
+    );
+    // Name text itself is not a button — avoids swallowing list-row select (LRM-923).
+    expect(within(container).getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(editButton(container));
+    expect(within(container).getByRole("textbox")).toBeTruthy();
+    unmount();
+  });
+
   it("patches display_name on all runtimes when saved", () => {
     const { container, unmount } = render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineNameEditor machine={makeMachine()} wsId="ws-1" />
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="title" />
       </I18nProvider>,
     );
     fireEvent.click(editButton(container));

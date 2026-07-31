@@ -112,5 +112,25 @@
     "composer_hint": "⌘⏎ で開始",
     "creating": "艦隊を編成中…",
     "create_failed": "調査セッションを作成できませんでした"
+  },
+  "ring": {
+    "title": "ノード操作",
+    "detail": "詳細",
+    "locate_source": "ソース",
+    "copy_prompt": "コピー",
+    "retry": "再試行",
+    "dig_deeper": "深掘り",
+    "more": "その他",
+    "soon": "近日",
+    "esc_hint": "Esc で閉じる",
+    "retry_message": "行き止まりノード「{{title}}」（{{id}}）から再探索してください。"
+  },
+  "dock": {
+    "label": "キャンバス操作",
+    "north_star": "ノーススター",
+    "zoom_in": "拡大",
+    "zoom_out": "縮小",
+    "fit": "全体表示",
+    "toggle_detail": "詳細パネル切替"
   }
 }

@@ -34,24 +34,35 @@ import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
 import { ResearchTemplateCards } from "./research-template-cards";
 
+/** Composer draft — one state object so create/template/goal update together (react-doctor). */
+type ComposerDraft = {
+  goal: string;
+  template: ResearchTemplate | null;
+  draftTitle: string | undefined;
+};
+
+const EMPTY_COMPOSER: ComposerDraft = {
+  goal: "",
+  template: null,
+  draftTitle: undefined,
+};
+
 export function ResearchListPage() {
   const { t, i18n } = useT("research");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const nav = useNavigation();
   const qc = useQueryClient();
-  const [goal, setGoal] = useState("");
-  const [selectedTemplate, setSelectedTemplate] = useState<ResearchTemplate | null>(
-    null,
-  );
+  const [composer, setComposer] = useState<ComposerDraft>(EMPTY_COMPOSER);
   const [titleQuery, setTitleQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
-  const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Scroll offset captured when filters first become active; restored on clear. */
   const savedScrollTop = useRef<number | null>(null);
+
+  const { goal, template: selectedTemplate, draftTitle } = composer;
 
   useQuery(researchFleetOptions(wsId));
   const { data, isLoading, isError, error, refetch } = useQuery(
@@ -129,9 +140,7 @@ export function ResearchListPage() {
   };
 
   const fillComposer = (text: string, title?: string) => {
-    setSelectedTemplate(null);
-    setGoal(text);
-    setDraftTitle(title);
+    setComposer({ goal: text, template: null, draftTitle: title });
     // Defer focus so the controlled value paints before the caret moves.
     queueMicrotask(focusComposer);
   };
@@ -139,15 +148,20 @@ export function ResearchListPage() {
   /** LRM-906 T2: chip only — never dump ≥800-char professional prompt into the box. */
   const applyTemplate = (template: ResearchTemplate) => {
     const language = i18n?.language;
-    setSelectedTemplate(template);
-    setDraftTitle(localizeTemplateField(template.sessionTitle, language));
-    setGoal("");
+    setComposer({
+      goal: "",
+      template,
+      draftTitle: localizeTemplateField(template.sessionTitle, language),
+    });
     queueMicrotask(focusComposer);
   };
 
   const clearTemplate = () => {
-    setSelectedTemplate(null);
-    if (!goal.trim()) setDraftTitle(undefined);
+    setComposer((prev) => ({
+      ...prev,
+      template: null,
+      draftTitle: prev.goal.trim() ? prev.draftTitle : undefined,
+    }));
   };
 
   const canSubmit =
@@ -224,7 +238,9 @@ export function ResearchListPage() {
             <Textarea
               ref={goalInputRef}
               value={goal}
-              onChange={(e) => setGoal(e.target.value)}
+              onChange={(e) =>
+                setComposer((prev) => ({ ...prev, goal: e.target.value }))
+              }
               placeholder={
                 selectedTemplate
                   ? t(($) => $.home.goal_placeholder_with_template)

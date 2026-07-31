@@ -285,15 +285,6 @@ const supervisedDm: DMItem = {
     { type: "agent", id: "agent-b", name: "Agent B" },
   ],
   supervised: true,
-  a2a_control: {
-    state: "active",
-    round: 0,
-    round_limit: 3,
-    can_grant_rounds: false,
-    can_pause_pair: true,
-    can_pause_global: true,
-    actions: ["view_dm", "pause_pair", "pause_global"],
-  },
   unread: 0,
   updated_at: "2026-06-17T09:00:00Z",
 };

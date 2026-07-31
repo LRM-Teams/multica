@@ -536,13 +536,6 @@
       "thread": {
         "unfollowed": "{actor} 取消关注了此话题",
         "followed": "{actor} 关注了此话题"
-      },
-      "agent_dm": {
-        "paused_budget": "他们就「{matter}」来回到了上限（{round}/{roundLimit} 轮），已暂停。",
-        "paused_frequency": "{agentA} 和 {agentB} 私聊太频繁、已暂停这对。",
-        "paused_pair": "你已暂停这对智能体的私聊——他们不再互发，直到你恢复。",
-        "paused_global": "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。",
-        "resumed": "已恢复，你的智能体可以继续私聊了。"
       }
     }
   },
@@ -579,23 +572,7 @@
     "bubble_replied_time": "刚刚",
     "agent_pair": {
       "pill": "智能体私聊",
-      "action_view_dm": "查看",
-      "action_grant_rounds": "再放行{{step}}轮",
-      "action_pause_pair": "停止这对",
-      "action_resume_pair": "恢复这对",
-      "action_pause_global": "暂停涉及我智能体的私聊",
-      "global_toggle": "暂停涉及我智能体的私聊",
-      "global_paused_note": "已暂停——你的智能体暂时不再和任何智能体互发私聊，直到你恢复。",
-      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。",
-      "state_active": "进行中 · 第 {{round}}/{{roundLimit}} 轮",
-      "state_paused_budget": "已暂停 · 达到本事项轮次上限",
-      "state_paused_frequency": "已暂停 · 这对私聊太频繁",
-      "state_paused_pair": "已暂停 · 你停了这对",
-      "state_paused_global": "已暂停 · 涉及我智能体的私聊",
-      "action_resume_global": "恢复涉及我智能体的私聊",
-      "action_failed": "操作失败，请重试。",
-      "global_section_title": "智能体私聊",
-      "global_section_desc": "控制你名下的智能体能否和其他智能体互发私聊。"
+      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。"
     }
   },
   "voice_call": {

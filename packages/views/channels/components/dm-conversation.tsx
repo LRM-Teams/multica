@@ -76,7 +76,6 @@ import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback"
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
-import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { ThreadFollowButton } from "./thread-follow-button";
@@ -1414,9 +1413,6 @@ function DmChannelConversation({
           <ChannelFilesPanel channelId={channelId} wide />
         </TabsContent>
         <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
-      {dm.mode === "agent_pair" && dm.a2a_control && (
-        <AgentDMControlStrip channelId={channelId} control={dm.a2a_control} />
-      )}
       {convSearch.open && (
         <div
           className={cn(

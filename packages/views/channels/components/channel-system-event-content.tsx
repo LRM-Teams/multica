@@ -20,8 +20,6 @@ import {
   type ReminderSystemEvent,
   THREAD_EVENTS,
   type ThreadSystemEvent,
-  AGENT_DM_PAUSE_EVENTS,
-  type AgentDMPauseSystemEvent,
 } from "./channel-system-event";
 
 /**
@@ -665,50 +663,3 @@ export function ThreadSystemEventContent({ event }: { event: ThreadSystemEvent }
   return interpolateActorSlot(template, actor);
 }
 
-// A2A pause/resume rows interpolate only plain-text values (source matter,
-// round counts, agent display names) — never a clickable identity: the two
-// agents are the DM's own participants (already named in the header), so a
-// quiet name-in-prose notice reads more naturally than an @mention chip, the
-// same way the reminder row keeps its title plain. Single-brace `{slot}` so
-// i18next leaves the template untouched; the value is substituted once and
-// never re-scanned.
-function fillAgentDMTextSlots(template: string, slots: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
-    Object.prototype.hasOwnProperty.call(slots, key) ? (slots[key] ?? match) : match,
-  );
-}
-
-/**
- * Renders the composed, localized copy for an A2A agent↔agent DM gate row
- * (#692, parsed by channel-system-event.ts). Owner-private, read-only — no
- * actor token, no action affordances (the owner acts from the control strip /
- * inbox, not this history marker). `budget` interpolates matter + rounds;
- * `frequency` interpolates the two agent names; `pair`/`global`/`resumed` are
- * static localized sentences.
- */
-export function AgentDMPauseSystemEventContent({
-  event,
-}: {
-  event: AgentDMPauseSystemEvent;
-}): ReactNode {
-  const { t } = useT("channels");
-  switch (event.event) {
-    case AGENT_DM_PAUSE_EVENTS.budget:
-      return fillAgentDMTextSlots(t(($) => $.message.system_event.agent_dm.paused_budget), {
-        matter: event.matter,
-        round: String(event.round),
-        roundLimit: String(event.roundLimit),
-      });
-    case AGENT_DM_PAUSE_EVENTS.frequency:
-      return fillAgentDMTextSlots(t(($) => $.message.system_event.agent_dm.paused_frequency), {
-        agentA: event.agentAName,
-        agentB: event.agentBName,
-      });
-    case AGENT_DM_PAUSE_EVENTS.pair:
-      return t(($) => $.message.system_event.agent_dm.paused_pair);
-    case AGENT_DM_PAUSE_EVENTS.global:
-      return t(($) => $.message.system_event.agent_dm.paused_global);
-    default:
-      return t(($) => $.message.system_event.agent_dm.resumed);
-  }
-}

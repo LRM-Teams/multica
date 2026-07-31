@@ -1864,7 +1864,7 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at FROM agent
 WHERE id = $1
 `
 
@@ -1899,6 +1899,7 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
 	)
 	return i, err
 }
@@ -3207,6 +3208,22 @@ func (q *Queries) ListWorkspaceAgentTaskSnapshot(ctx context.Context, workspaceI
 		return nil, err
 	}
 	return items, nil
+}
+
+const markAgentRuntimeReassigned = `-- name: MarkAgentRuntimeReassigned :exec
+UPDATE agent SET runtime_reassigned_at = now()
+WHERE id = $1
+`
+
+// Stamped by UpdateAgent's handler when a request actually moves an agent
+// onto a different runtime (never on a no-op "update" that repeats the
+// current runtime_id). Read by EnsureDaemonAgentCredential (task #38) to
+// grant a short grace window where a stale-runtime 403 is reported as a
+// silent, retryable in-progress-transition rather than the terminal
+// agent_reassigned_elsewhere failure from #1628.
+func (q *Queries) MarkAgentRuntimeReassigned(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markAgentRuntimeReassigned, id)
+	return err
 }
 
 const markAgentTaskWaitingLocalDirectory = `-- name: MarkAgentTaskWaitingLocalDirectory :one

@@ -40,6 +40,18 @@ var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace
 // "credential_unavailable" every other credential error produces.
 var errAgentReassignedElsewhere = errors.New("agent is no longer bound to this daemon's runtime (reassigned elsewhere)")
 
+// errRuntimeTransitionInProgress marks ensureTaskAgentCredential's
+// classification of the task #38 "runtime_transition_in_progress" 403 —
+// this daemon's runtime was reassigned within the server's grace window and
+// the new runtime hasn't confirmed the handoff yet. Unlike
+// errAgentReassignedElsewhere this is expected to self-resolve shortly
+// (either the new runtime confirms, or the grace window expires and a later
+// attempt gets the terminal classification instead): callers must retry
+// quietly, without reporting a failed task result or logging above debug —
+// surfacing this to the user would recreate exactly the "why do I see scary
+// errors during a normal machine move" complaint task #38 exists to fix.
+var errRuntimeTransitionInProgress = errors.New("agent runtime transition in progress")
+
 const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
@@ -3278,6 +3290,16 @@ func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskL
 	}
 	resp, err := d.client.EnsureAgentCredential(ctx, task.RuntimeID, task.AgentID, cachedCredentialID)
 	if err != nil {
+		if isRuntimeTransitionInProgressError(err) {
+			// task #38: the reassignment may still complete within the
+			// server's grace window — do NOT drop the cached credential
+			// (it could still be valid if this ends up being a false
+			// alarm) and do not warn-log; this is expected traffic during
+			// a normal machine move, not a fault.
+			taskLog.Debug("agent runtime transition in progress; will retry",
+				"agent_id", shortID(task.AgentID), "runtime_id", shortID(task.RuntimeID))
+			return "", fmt.Errorf("%w: %s", errRuntimeTransitionInProgress, err.Error())
+		}
 		if isAgentNotBoundToRuntimeError(err) {
 			// This agent was reassigned to a different runtime (agent.runtime_id
 			// is a normal, user-editable field — not data corruption). Retrying
@@ -3749,6 +3771,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.isInboxTask() && agentToken == "" && !restrictedExecution {
 		token, err := d.ensureTaskAgentCredential(ctx, task, taskLog)
 		if err != nil {
+			if errors.Is(err, errRuntimeTransitionInProgress) {
+				// task #38: do not report a terminal TaskResult at all — an
+				// in-progress transition is not this task's failure to own,
+				// it is exactly the kind of internal noise the grace window
+				// exists to keep off the user's activity feed. Returning a
+				// plain error (not a TaskResult{Status:"failed",...}) routes
+				// through the same un-reported retry path setup failures
+				// above already use, so the caller's normal retry loop picks
+				// this task back up rather than the server ever seeing an
+				// outcome for it.
+				return TaskResult{}, err
+			}
 			if errors.Is(err, errAgentReassignedElsewhere) {
 				return TaskResult{
 					Status:        "failed",

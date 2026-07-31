@@ -23,6 +23,21 @@ const agentCredentialActivityDaemonEnsured = "agent_credential_daemon_ensured"
 const daemonAgentCredentialTTL = 24 * time.Hour
 const daemonAgentCredentialRefreshBeforeExpiry = time.Hour
 
+// agentRuntimeReassignmentGraceWindow (task #38) is how long after
+// agent.runtime_id changes a stale-runtime credential request is treated as
+// "transition still in flight" (silent, retryable) instead of the terminal
+// agent_reassigned_elsewhere failure from #1628. ~3x a normal daemon
+// heartbeat interval — enough for a newly-bound runtime's daemon to come up
+// and successfully ensure its first credential, confirming the handoff.
+const agentRuntimeReassignmentGraceWindow = 90 * time.Second
+
+// runtimeTransitionInProgressReason is the 403 body's "error" value during
+// the grace window — deliberately distinct from "agent is not bound to this
+// runtime" (the #1628 terminal message) so the daemon's error classifiers
+// treat the two differently: this one backs off silently, that one reports
+// a clear one-time "agent moved elsewhere" outcome.
+const runtimeTransitionInProgressReason = "runtime_transition_in_progress"
+
 type CreateAgentCredentialRequest struct {
 	ExpiresInDays *int `json:"expires_in_days"`
 }
@@ -254,6 +269,20 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if uuidToString(agent.WorkspaceID) != uuidToString(runtime.WorkspaceID) || uuidToString(agent.RuntimeID) != uuidToString(runtime.ID) {
+		// task #38: a runtime reassignment stamped within the last
+		// agentRuntimeReassignmentGraceWindow is presumed still in flight —
+		// the daemon calling from the *old* runtime hasn't found out yet,
+		// which is expected and not an error. Report a distinct, retryable
+		// reason instead of the terminal "not bound" failure so the caller
+		// can back off silently rather than surfacing this to the user.
+		// Outside the window (or no reassignment on record at all) falls
+		// through unchanged to the existing #1628 behavior.
+		if uuidToString(agent.WorkspaceID) == uuidToString(runtime.WorkspaceID) &&
+			agent.RuntimeReassignedAt.Valid &&
+			time.Since(agent.RuntimeReassignedAt.Time) < agentRuntimeReassignmentGraceWindow {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": runtimeTransitionInProgressReason})
+			return
+		}
 		writeError(w, http.StatusForbidden, "agent is not bound to this runtime")
 		return
 	}
@@ -368,6 +397,16 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 					writeError(w, http.StatusInternalServerError, "audit log write failed; credential validation rolled back")
 					return
 				}
+				// task #38: a successful ensure on the current runtime is the
+				// handoff confirmation — clear any in-flight transition
+				// marker so a later, unrelated reassignment starts its own
+				// fresh grace window.
+				if agent.RuntimeReassignedAt.Valid {
+					if err := qtx.ClearAgentRuntimeReassignedAt(r.Context(), agent.ID); err != nil {
+						slog.Warn("failed to clear agent runtime reassignment marker",
+							append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+					}
+				}
 				if err := tx.Commit(r.Context()); err != nil {
 					writeError(w, http.StatusInternalServerError, "failed to validate agent credential")
 					return
@@ -460,6 +499,12 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if agent.RuntimeReassignedAt.Valid {
+		if err := qtx.ClearAgentRuntimeReassignedAt(r.Context(), agent.ID); err != nil {
+			slog.Warn("failed to clear agent runtime reassignment marker",
+				append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		slog.Error("daemon agent credential ensure: tx commit failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)

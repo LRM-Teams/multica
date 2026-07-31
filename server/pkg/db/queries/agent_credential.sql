@@ -29,6 +29,16 @@ WHERE agent.id = sqlc.arg(agent_id)
   AND agent.archived_at IS NULL
 FOR UPDATE OF agent, runtime;
 
+-- name: ClearAgentRuntimeReassignedAt :exec
+-- The first successful EnsureDaemonAgentCredential call on the (new)
+-- current runtime is treated as confirmation the transition finished —
+-- clears the grace-window marker MarkAgentRuntimeReassigned set, so a
+-- later, unrelated reassignment starts its own fresh window rather than
+-- inheriting a stale timestamp. WHERE runtime_reassigned_at IS NOT NULL
+-- keeps this a no-op write on the common case (no transition in flight).
+UPDATE agent SET runtime_reassigned_at = NULL
+WHERE id = $1 AND runtime_reassigned_at IS NOT NULL;
+
 -- name: GetAgentCredentialByHash :one
 SELECT ac.*
 FROM agent_credential AS ac

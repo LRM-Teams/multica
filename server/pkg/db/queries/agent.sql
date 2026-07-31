@@ -62,6 +62,16 @@ UPDATE agent SET
 WHERE id = $1
 RETURNING *;
 
+-- name: MarkAgentRuntimeReassigned :exec
+-- Stamped by UpdateAgent's handler when a request actually moves an agent
+-- onto a different runtime (never on a no-op "update" that repeats the
+-- current runtime_id). Read by EnsureDaemonAgentCredential (task #38) to
+-- grant a short grace window where a stale-runtime 403 is reported as a
+-- silent, retryable in-progress-transition rather than the terminal
+-- agent_reassigned_elsewhere failure from #1628.
+UPDATE agent SET runtime_reassigned_at = now()
+WHERE id = $1;
+
 -- name: ClearAgentThinkingLevel :one
 -- Explicit NULL-clear for thinking_level. COALESCE-based UpdateAgent cannot
 -- set the column back to NULL, so the API layer routes "user picked Default"

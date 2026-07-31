@@ -141,5 +141,18 @@
     "current": "进行中",
     "upcoming": "未开始",
     "done_feedback": "阶段已完成"
+  },
+  "reader": {
+    "outline": "大纲",
+    "copy_md": "复制 MD",
+    "copied": "已复制",
+    "export": "导出",
+    "meta": "交付完成 · schema v{{revision}} · {{count}} 来源",
+    "sources_heading": "加权源地图",
+    "sources_hint": "按可信度排序。权重高的为权威基线，低权重仅作旁证。",
+    "col_weight": "权重",
+    "col_type": "类型",
+    "col_source": "来源",
+    "col_purpose": "用途"
   }
 }

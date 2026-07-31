@@ -141,5 +141,18 @@
     "current": "進行中",
     "upcoming": "未着手",
     "done_feedback": "段階完了"
+  },
+  "reader": {
+    "outline": "アウトライン",
+    "copy_md": "MD をコピー",
+    "copied": "コピー済み",
+    "export": "エクスポート",
+    "meta": "納品 · v{{revision}} · 出典 {{count}}",
+    "sources_heading": "重み付きソースマップ",
+    "sources_hint": "信頼度順。高スコアは基線、低スコアは傍証のみ。",
+    "col_weight": "重み",
+    "col_type": "種別",
+    "col_source": "ソース",
+    "col_purpose": "用途"
   }
 }

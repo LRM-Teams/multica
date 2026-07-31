@@ -141,5 +141,18 @@
     "current": "Current",
     "upcoming": "Upcoming",
     "done_feedback": "Stage completed"
+  },
+  "reader": {
+    "outline": "Outline",
+    "copy_md": "Copy MD",
+    "copied": "Copied",
+    "export": "Export",
+    "meta": "Delivery · v{{revision}} · {{count}} sources",
+    "sources_heading": "Weighted source map",
+    "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",
+    "col_weight": "Weight",
+    "col_type": "Type",
+    "col_source": "Source",
+    "col_purpose": "Purpose"
   }
 }

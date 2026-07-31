@@ -6,7 +6,7 @@ import { cn } from "../../lib/utils";
 export function HonorBadgeIcon({
   svgKey,
   title,
-  className = "size-4 shrink-0",
+  className,
   medal = false,
 }: {
   svgKey: string;
@@ -16,12 +16,21 @@ export function HonorBadgeIcon({
   medal?: boolean;
 }) {
   const Icon = HONOR_BADGE_ICONS[svgKey] ?? GenesisNebulaIcon;
-  const icon = <Icon title={title} className={cn(medal ? "size-4" : className)} />;
+  const icon = (
+    <Icon
+      title={title}
+      className={cn(medal ? "size-4" : (className ?? "size-4 shrink-0"))}
+    />
+  );
 
   if (!medal) return icon;
 
   return (
-    <ActorBadgeFrame tone={honorBadgeTone(svgKey)} className={className}>
+    <ActorBadgeFrame
+      tone={honorBadgeTone(svgKey)}
+      className={className ?? "size-6"}
+      animated
+    >
       {icon}
     </ActorBadgeFrame>
   );
@@ -43,12 +52,15 @@ export function HonorBadgeCrest({
   className,
   locked = false,
   rare = false,
+  animated = false,
 }: {
   svgKey: string;
   title?: string;
   className?: string;
   locked?: boolean;
   rare?: boolean;
+  /** Slow breathing treatment for equipped or showcased badges. */
+  animated?: boolean;
 }) {
   const tone = honorBadgeTone(svgKey);
 
@@ -60,6 +72,7 @@ export function HonorBadgeCrest({
         "bg-gradient-to-br p-px shadow-[0_14px_30px_-16px_currentColor]",
         crestToneClass[tone],
         rare && "size-[4.5rem] drop-shadow-[0_0_16px_rgba(251,191,36,0.3)]",
+        animated && !locked && "honor-badge-crest--animated",
         locked && "grayscale",
         className,
       )}

@@ -61,6 +61,7 @@ export function HonorWall({
                 <HonorBadgeCrest
                   svgKey={badge.svg_key}
                   title={badge.title}
+                  animated
                   className="size-12"
                 />
                 <span className="mt-2 line-clamp-2 text-[10px] font-medium leading-4 text-slate-200">

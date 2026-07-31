@@ -188,6 +188,9 @@ export function HonorTab() {
     dashboard.unlocked_badges.find(
       (item) => item.id === dashboard.equipped_badge_id,
     );
+  const nameStyleRules = [...(rules?.name_style_unlocks ?? [])]
+    .filter((item) => item.id !== "founding")
+    .sort((left, right) => left.min_level - right.min_level);
   const unlocked =
     dashboard.badges_unlocked ?? dashboard.unlocked_badges.length;
   const total = dashboard.badges_total ?? catalog.length;
@@ -334,6 +337,77 @@ export function HonorTab() {
         />
       </section>
 
+      {nameStyleRules.length > 0 ? (
+        <section
+          aria-labelledby="honor-nameplate-title"
+          className="overflow-hidden rounded-2xl border border-violet-500/20 bg-[linear-gradient(135deg,rgba(15,23,42,1),rgba(30,27,75,0.94)_48%,rgba(8,47,73,0.92))] p-4 text-white shadow-[0_20px_60px_-44px_rgba(34,211,238,0.75)] sm:p-5"
+        >
+          <SectionHeading
+            id="honor-nameplate-title"
+            icon={<Sparkles className="size-4" aria-hidden="true" />}
+            title={t(($) => $.honor.nameplate_progression_title)}
+            hint={t(($) => $.honor.nameplate_progression_hint)}
+            dark
+          />
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
+            {nameStyleRules.map((styleRule) => {
+              const isCurrent = dashboard.name_style === styleRule.id;
+              const isUnlocked =
+                dashboard.unlocked_styles.includes(styleRule.id) ||
+                dashboard.level >= styleRule.min_level;
+
+              return (
+                <article
+                  key={styleRule.id}
+                  className={`relative min-w-0 overflow-hidden rounded-xl border px-3 py-3 ${
+                    isCurrent
+                      ? "border-cyan-300/45 bg-cyan-300/10 shadow-[0_0_20px_-10px_rgba(103,232,249,0.8)]"
+                      : "border-white/10 bg-white/[0.045]"
+                  }`}
+                  data-current={isCurrent ? "true" : undefined}
+                >
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                      {t(($) => $.honor.level_value, {
+                        level: styleRule.min_level,
+                      })}
+                    </span>
+                    <span
+                      className={`size-1.5 rounded-full ${
+                        isCurrent
+                          ? "bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.95)]"
+                          : isUnlocked
+                            ? "bg-emerald-400"
+                            : "bg-slate-600"
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <ActorStyledName
+                    displayName={displayName}
+                    honor={{
+                      level: styleRule.min_level,
+                      name_style: styleRule.id,
+                    }}
+                    honorSurface="profile"
+                    nameClassName="text-sm font-semibold"
+                  />
+                  <p className="mt-2 truncate text-[10px] text-slate-400">
+                    {isCurrent
+                      ? t(($) => $.honor.nameplate_current)
+                      : isUnlocked
+                        ? t(($) => $.honor.nameplate_unlocked)
+                        : t(($) => $.honor.nameplate_locked)}
+                    {" · "}
+                    {nameStyleLabel(styleRule.id, t)}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       {rules ? (
         <section
           aria-labelledby="honor-earn-title"
@@ -454,6 +528,7 @@ export function HonorTab() {
                       svgKey={badge.svg_key}
                       title={badge.title}
                       rare={isRareHonorBadge(badge)}
+                      animated
                       className="size-14"
                     />
                     <p className="mt-2 line-clamp-2 text-[11px] font-medium leading-4 text-slate-200">
@@ -707,6 +782,29 @@ function actionLabel(action: string, t: TranslationFunction): string {
       return t(($) => $.honor.action_research_session);
     default:
       return t(($) => $.honor.action_fallback);
+  }
+}
+
+function nameStyleLabel(style: string, t: TranslationFunction): string {
+  switch (style) {
+    case "default":
+      return t(($) => $.honor.nameplate_style_default);
+    case "member":
+      return t(($) => $.honor.nameplate_style_member);
+    case "gold":
+      return t(($) => $.honor.nameplate_style_gold);
+    case "prismatic":
+      return t(($) => $.honor.nameplate_style_prismatic);
+    case "glow":
+      return t(($) => $.honor.nameplate_style_glow);
+    case "shimmer":
+      return t(($) => $.honor.nameplate_style_shimmer);
+    case "animated_prismatic":
+      return t(($) => $.honor.nameplate_style_animated_prismatic);
+    case "animated_glow":
+      return t(($) => $.honor.nameplate_style_animated_glow);
+    default:
+      return style;
   }
 }
 

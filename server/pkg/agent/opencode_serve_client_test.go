@@ -1,0 +1,307 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeOpenCodeServeServer is a scripted stand-in for `opencode serve`,
+// speaking only the subset of the API opencodeServeClient uses:
+// POST /session, POST /session/:id/message, GET /session/:id/message,
+// GET /event (SSE), GET /doc (readiness probe).
+type fakeOpenCodeServeServer struct {
+	mu       sync.Mutex
+	sessions map[string]*fakeOpenCodeServeSession
+	sseConns []chan string
+	// scriptEvents is called after a message send completes, returning the
+	// raw SSE `data: ...` payloads (without the "data:" prefix) to publish
+	// for that session, in order.
+	scriptEvents func(sessionID string) []string
+	// scriptMessages controls what GET /session/:id/message returns.
+	scriptMessages func(sessionID string) []opencodeServeMessage
+}
+
+type fakeOpenCodeServeSession struct{ id string }
+
+func newFakeOpenCodeServeServer() *fakeOpenCodeServeServer {
+	return &fakeOpenCodeServeServer{sessions: make(map[string]*fakeOpenCodeServeSession)}
+}
+
+func (f *fakeOpenCodeServeServer) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/doc", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/session", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		id := fmt.Sprintf("ses_%d", len(f.sessions)+1)
+		f.mu.Lock()
+		f.sessions[id] = &fakeOpenCodeServeSession{id: id}
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
+	})
+	mux.HandleFunc("/session/", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/session/")
+		parts := strings.SplitN(rest, "/", 2)
+		sessionID := parts[0]
+		if len(parts) == 2 && parts[1] == "message" {
+			switch r.Method {
+			case http.MethodPost:
+				w.WriteHeader(http.StatusOK)
+				go func() {
+					if f.scriptEvents == nil {
+						return
+					}
+					for _, payload := range f.scriptEvents(sessionID) {
+						f.publish(payload)
+					}
+				}()
+				return
+			case http.MethodGet:
+				var messages []opencodeServeMessage
+				if f.scriptMessages != nil {
+					messages = f.scriptMessages(sessionID)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(messages)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		ch := make(chan string, 64)
+		f.mu.Lock()
+		f.sseConns = append(f.sseConns, ch)
+		f.mu.Unlock()
+		fmt.Fprintf(w, "data: %s\n\n", `{"type":"server.connected","properties":{}}`)
+		flusher.Flush()
+		for {
+			select {
+			case payload, ok := <-ch:
+				if !ok {
+					return
+				}
+				fmt.Fprintf(w, "data: %s\n\n", payload)
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
+	})
+	return mux
+}
+
+func (f *fakeOpenCodeServeServer) publish(payload string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, ch := range f.sseConns {
+		select {
+		case ch <- payload:
+		default:
+		}
+	}
+}
+
+func sessionIdleEvent(sessionID string) string {
+	return fmt.Sprintf(`{"type":"session.idle","properties":{"sessionID":%q}}`, sessionID)
+}
+
+func sessionErrorEvent(sessionID, message string) string {
+	return fmt.Sprintf(`{"type":"session.error","properties":{"sessionID":%q,"error":{"name":"ProviderError","data":{"message":%q}}}}`, sessionID, message)
+}
+
+func messagePartDeltaEvent(sessionID, text string) string {
+	return fmt.Sprintf(`{"type":"message.part.delta","properties":{"sessionID":%q,"part":{"type":"text","text":%q}}}`, sessionID, text)
+}
+
+// messageUpdatedEvent simulates the upstream OpenCode event this client must
+// NOT depend on (github.com/anomalyco/opencode#27966: message.updated /
+// message.part.updated silently stop being delivered on 1.14.42+). Tests
+// that omit this event entirely from the script prove completion still
+// works via session.idle alone.
+func messageUpdatedEvent(sessionID string) string {
+	return fmt.Sprintf(`{"type":"message.updated","properties":{"sessionID":%q}}`, sessionID)
+}
+
+// newTestOpenCodeServeClient wires up a client against srv and registers
+// its Cleanup so the client's SSE connection is torn down (c.close, which
+// closes resp.Body) before the caller's own t.Cleanup(srv.Close) runs.
+// t.Cleanup runs LIFO, so callers MUST register srv's cleanup (or defer
+// srv.Close()) BEFORE calling this — otherwise httptest.Server.Close()
+// blocks forever waiting for this test's deliberately-long-lived SSE
+// connection to end on its own.
+func newTestOpenCodeServeClient(t *testing.T, srv *httptest.Server) *opencodeServeClient {
+	t.Helper()
+	c := newOpenCodeServeClient(srv.URL, "opencode", "test-password", slog.Default())
+	go c.runEventLoop(func(error) {})
+	t.Cleanup(c.close)
+	// Give the event loop a moment to establish its SSE connection before
+	// the test starts sending messages, so publish() during runTurn always
+	// has a live subscriber.
+	time.Sleep(50 * time.Millisecond)
+	return c
+}
+
+// TestRunTurnCompletesViaSessionIdleWithoutMessageUpdated is the single most
+// important test in this file: it reproduces the confirmed upstream SSE
+// delivery bug (message.updated/message.part.updated silently dropped) by
+// never emitting them, and proves the turn still completes correctly
+// because completion is driven by session.idle plus a reconcile poll, not
+// by accumulating message.updated events.
+func TestRunTurnCompletesViaSessionIdleWithoutMessageUpdated(t *testing.T) {
+	fake := newFakeOpenCodeServeServer()
+	fake.scriptEvents = func(sessionID string) []string {
+		return []string{
+			messagePartDeltaEvent(sessionID, "Hello"),
+			messagePartDeltaEvent(sessionID, ", world"),
+			// Deliberately no message.updated / message.part.updated here.
+			sessionIdleEvent(sessionID),
+		}
+	}
+	fake.scriptMessages = func(sessionID string) []opencodeServeMessage {
+		return []opencodeServeMessage{{
+			ID: "msg_1",
+			Parts: []opencodeServeMessagePart{
+				{Type: "text"},
+				{Type: "tool", Tool: "read_file", CallID: "call_1", State: &opencodeServeToolState{Status: "completed", Output: "file contents"}},
+			},
+		}}
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	client := newTestOpenCodeServeClient(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessionID, err := client.createSession(ctx, "")
+	if err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	var toolMessages []Message
+	result, err := client.runTurn(ctx, sessionID, "hi", ExecOptions{}, func(msg Message) {
+		if msg.Type == MessageText {
+			streamed.WriteString(msg.Content)
+		}
+		if msg.Type == MessageToolUse || msg.Type == MessageToolResult {
+			toolMessages = append(toolMessages, msg)
+		}
+	})
+	if err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+	if result.errMsg != "" {
+		t.Fatalf("runTurn returned error result: %v", result.errMsg)
+	}
+	if streamed.String() != "Hello, world" {
+		t.Fatalf("streamed text = %q, want %q", streamed.String(), "Hello, world")
+	}
+	if len(toolMessages) != 2 || toolMessages[0].Type != MessageToolUse || toolMessages[1].Type != MessageToolResult {
+		t.Fatalf("tool messages = %+v, want [ToolUse, ToolResult] from the reconciled final message", toolMessages)
+	}
+}
+
+func TestRunTurnSurfacesSessionError(t *testing.T) {
+	fake := newFakeOpenCodeServeServer()
+	fake.scriptEvents = func(sessionID string) []string {
+		return []string{sessionErrorEvent(sessionID, "invalid model configuration")}
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	client := newTestOpenCodeServeClient(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessionID, err := client.createSession(ctx, "")
+	if err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	result, err := client.runTurn(ctx, sessionID, "hi", ExecOptions{}, func(Message) {})
+	if err != nil {
+		t.Fatalf("runTurn transport error: %v", err)
+	}
+	if result.errMsg != "invalid model configuration" {
+		t.Fatalf("result.errMsg = %q, want %q", result.errMsg, "invalid model configuration")
+	}
+}
+
+func TestRunTurnTimesOutWithoutTerminalEvent(t *testing.T) {
+	fake := newFakeOpenCodeServeServer()
+	fake.scriptEvents = func(sessionID string) []string {
+		return nil // never emit session.idle or session.error
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	client := newTestOpenCodeServeClient(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessionID, err := client.createSession(ctx, "")
+	if err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	_, err = client.runTurn(ctx, sessionID, "hi", ExecOptions{Timeout: 200 * time.Millisecond}, func(Message) {})
+	if err != errOpenCodeServeTurnTimeout {
+		t.Fatalf("runTurn error = %v, want errOpenCodeServeTurnTimeout", err)
+	}
+}
+
+// TestRunTurnIgnoresMessageUpdatedEvent proves that even when the (buggy or
+// fixed-upstream) message.updated event IS delivered, this client does not
+// treat it as a completion signal on its own — only session.idle does,
+// exercised here by emitting message.updated first, then waiting past a
+// short window before session.idle, and confirming the turn only resolves
+// once session.idle actually arrives.
+func TestRunTurnIgnoresMessageUpdatedEvent(t *testing.T) {
+	fake := newFakeOpenCodeServeServer()
+	fake.scriptEvents = func(sessionID string) []string {
+		return []string{
+			messageUpdatedEvent(sessionID),
+			messageUpdatedEvent(sessionID),
+			sessionIdleEvent(sessionID),
+		}
+	}
+	fake.scriptMessages = func(sessionID string) []opencodeServeMessage {
+		return []opencodeServeMessage{{ID: "msg_1", Parts: []opencodeServeMessagePart{{Type: "text"}}}}
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	client := newTestOpenCodeServeClient(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessionID, err := client.createSession(ctx, "")
+	if err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+	result, err := client.runTurn(ctx, sessionID, "hi", ExecOptions{}, func(Message) {})
+	if err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+	if result.errMsg != "" {
+		t.Fatalf("unexpected error result: %v", result.errMsg)
+	}
+}

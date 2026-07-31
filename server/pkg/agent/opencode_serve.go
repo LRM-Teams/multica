@@ -1,0 +1,731 @@
+package agent
+
+import (
+	"bufio"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// ErrOpenCodeServeTurnBusy is returned when a second Execute overlaps an
+// in-flight resident opencode-serve turn. The daemon must acquire the pool
+// slot before claim, same invariant as ErrCursorACPTurnBusy.
+var ErrOpenCodeServeTurnBusy = errors.New("opencode serve turn busy")
+
+// OpenCodeServeBackend is the lifecycle surface for a long-lived
+// `opencode serve` child. Close is mandatory on eviction, config mismatch,
+// and failed turns — same contract as CursorACPBackend/GrokACPBackend.
+type OpenCodeServeBackend interface {
+	Backend
+	Close()
+}
+
+// opencodeServeBackend keeps one `opencode serve` child across compatible
+// turns. Unlike Cursor/Grok/Pi (resident over stdio ACP/RPC), OpenCode's
+// long-running mode is a headless HTTP+SSE server
+// (opencode.ai/docs/server): POST /session, POST /session/:id/message,
+// GET /event. The pool/lease pattern is identical; only the wire protocol
+// differs.
+type opencodeServeBackend struct {
+	cfg Config
+
+	mu      sync.Mutex
+	server  *opencodeServeProcess
+	running bool
+}
+
+type opencodeServeProcess struct {
+	cmd      *exec.Cmd
+	baseURL  string
+	password string
+	username string
+	client   *opencodeServeClient
+
+	sessionMu sync.Mutex
+	sessionID string
+}
+
+func newOpenCodeServeBackend(cfg Config) *opencodeServeBackend {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	return &opencodeServeBackend{cfg: cfg}
+}
+
+// NewOpenCodeServeBackend constructs a resident OpenCode backend for the
+// daemon's canonical agent×runtime pool.
+func NewOpenCodeServeBackend(cfg Config) OpenCodeServeBackend { return newOpenCodeServeBackend(cfg) }
+
+func (b *opencodeServeBackend) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.server != nil {
+		b.disposeServerLocked()
+	}
+}
+
+func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	b.mu.Lock()
+	if b.running {
+		b.mu.Unlock()
+		return nil, fmt.Errorf("%w: concurrent opencode serve turn", ErrOpenCodeServeTurnBusy)
+	}
+	b.running = true
+	b.mu.Unlock()
+
+	msgCh := make(chan Message, 256)
+	resCh := make(chan Result, 1)
+	go func() {
+		defer close(msgCh)
+		defer close(resCh)
+		var releaseOnce sync.Once
+		release := func() {
+			releaseOnce.Do(func() {
+				b.mu.Lock()
+				b.running = false
+				b.mu.Unlock()
+			})
+		}
+		defer release()
+		started := time.Now()
+		result := b.executeTurn(ctx, prompt, opts, msgCh)
+		result.DurationMs = time.Since(started).Milliseconds()
+		// Release admission before publishing the terminal result — same
+		// ordering cursorACPBackend.Execute uses, so an immediate follow-up
+		// turn never sees a false "busy" against a completed turn.
+		release()
+		resCh <- result
+	}()
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+func (b *opencodeServeBackend) runtimeAlive() (bool, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.server == nil {
+		return false, false
+	}
+	return processAlive(b.server.cmd.Process)
+}
+
+func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+	p, err := b.ensureServer(ctx, opts)
+	if err != nil {
+		return Result{Status: "failed", Error: err.Error()}
+	}
+
+	p.sessionMu.Lock()
+	sessionID := p.sessionID
+	p.sessionMu.Unlock()
+	if sessionID == "" {
+		parentID := ""
+		if opts.ResumeSessionID != "" {
+			parentID = opts.ResumeSessionID
+		}
+		created, err := p.client.createSession(ctx, parentID)
+		if err != nil {
+			b.disposeServer(p)
+			return Result{Status: "failed", Error: fmt.Sprintf("opencode serve create session: %v", err)}
+		}
+		sessionID = created
+		p.sessionMu.Lock()
+		p.sessionID = sessionID
+		p.sessionMu.Unlock()
+	}
+
+	var output strings.Builder
+	turn, err := p.client.runTurn(ctx, sessionID, prompt, opts, func(msg Message) {
+		if msg.Type == MessageText {
+			output.WriteString(msg.Content)
+		}
+		trySend(msgCh, msg)
+	})
+	if err != nil {
+		b.disposeServer(p)
+		status := "failed"
+		if ctx.Err() == context.DeadlineExceeded || errors.Is(err, errOpenCodeServeTurnTimeout) {
+			status = "timeout"
+		} else if ctx.Err() == context.Canceled {
+			status = "aborted"
+		}
+		return Result{Status: status, Output: output.String(), Error: err.Error(), SessionID: sessionID}
+	}
+	if turn.errMsg != "" {
+		return Result{
+			Status:    "failed",
+			Output:    output.String(),
+			Error:     turn.errMsg,
+			SessionID: sessionID,
+			Usage:     turn.usage(opts.Model),
+		}
+	}
+	return Result{
+		Status:    "completed",
+		Output:    output.String(),
+		SessionID: sessionID,
+		Usage:     turn.usage(opts.Model),
+	}
+}
+
+func (b *opencodeServeBackend) ensureServer(ctx context.Context, opts ExecOptions) (*opencodeServeProcess, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.server != nil {
+		return b.server, nil
+	}
+
+	execPath := b.cfg.ExecutablePath
+	if execPath == "" {
+		execPath = "opencode"
+	}
+	resolved, err := exec.LookPath(execPath)
+	if err != nil {
+		return nil, fmt.Errorf("opencode executable not found at %q: %w", execPath, err)
+	}
+	if runtime.GOOS == "windows" {
+		if native := resolveOpenCodeNativeFromShim(resolved, os.Stat); native != "" {
+			resolved = native
+		}
+	}
+
+	port, err := reserveLocalPort()
+	if err != nil {
+		return nil, fmt.Errorf("opencode serve: reserve port: %w", err)
+	}
+	password, err := randomOpenCodeServePassword()
+	if err != nil {
+		return nil, fmt.Errorf("opencode serve: generate password: %w", err)
+	}
+	const username = "opencode"
+
+	args := []string{"serve", "--port", strconv.Itoa(port), "--hostname", "127.0.0.1"}
+	cmd := exec.CommandContext(context.Background(), resolved, args...)
+	hideAgentWindow(cmd)
+	if opts.Cwd != "" {
+		cmd.Dir = opts.Cwd
+	}
+
+	env := buildEnv(b.cfg.Env)
+	// Same project-discovery anchoring opencode.go's one-shot Execute uses:
+	// OpenCode reads PWD before falling back to process.cwd() when it walks
+	// for AGENTS.md / .opencode/skills.
+	if opts.Cwd != "" {
+		env = append(env, "PWD="+opts.Cwd)
+	}
+	mcpContent, err := buildOpenCodeMCPConfigContent(opts.McpConfig)
+	if err != nil {
+		return nil, err
+	}
+	if mcpContent != "" {
+		env = append(env, "OPENCODE_CONFIG_CONTENT="+mcpContent)
+	}
+	env = append(env, "OPENCODE_SERVER_PASSWORD="+password, "OPENCODE_SERVER_USERNAME="+username)
+	cmd.Env = env
+	cmd.Stderr = newLogWriter(b.cfg.Logger, "[opencode-serve:stderr] ")
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start opencode serve: %w", err)
+	}
+	b.cfg.Logger.Info("opencode serve started", "pid", cmd.Process.Pid, "port", port)
+
+	baseURL := "http://127.0.0.1:" + strconv.Itoa(port)
+	client := newOpenCodeServeClient(baseURL, username, password, b.cfg.Logger)
+
+	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := client.waitReady(readyCtx); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("opencode serve did not become ready: %w", err)
+	}
+
+	p := &opencodeServeProcess{cmd: cmd, baseURL: baseURL, password: password, username: username, client: client}
+	go client.runEventLoop(func(err error) {
+		b.cfg.Logger.Warn("opencode serve event stream ended", "error", err)
+	})
+	b.server = p
+	return p, nil
+}
+
+func (b *opencodeServeBackend) disposeServer(p *opencodeServeProcess) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.server == p {
+		b.disposeServerLocked()
+	}
+}
+
+func (b *opencodeServeBackend) disposeServerLocked() {
+	p := b.server
+	b.server = nil
+	if p == nil {
+		return
+	}
+	p.client.close()
+	_ = p.cmd.Process.Kill()
+	_ = p.cmd.Wait()
+}
+
+// reserveLocalPort finds a free localhost TCP port by binding then
+// releasing it. There is an inherent (and accepted) race between release
+// and the child binding it — this process owns the host and the window is
+// a single scheduler tick, same tradeoff every "find a free port for a
+// child process" helper makes.
+func reserveLocalPort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+func randomOpenCodeServePassword() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// ── HTTP+SSE client ──
+
+var errOpenCodeServeTurnTimeout = errors.New("opencode serve turn timed out")
+
+// opencodeServeClient talks to one `opencode serve` process. Turn
+// completion is driven by the reliably-delivered `session.idle` bus event,
+// never by `message.updated`/`message.part.updated` — those two event
+// types silently stop being delivered over /event on OpenCode 1.14.42+
+// (github.com/anomalyco/opencode#27966: DB writes succeed but the
+// in-memory event bus never republishes them to SSE subscribers).
+// `session.idle`, `session.diff`, `session.status`, and
+// `message.part.delta` are confirmed unaffected. On session.idle this
+// client polls GET /session/:id/message for the authoritative final
+// content rather than trusting whatever streamed through SSE — SSE is
+// the live-typing UX layer only, never the source of truth.
+type opencodeServeClient struct {
+	baseURL  string
+	username string
+	password string
+	logger   *slog.Logger
+	http     *http.Client
+
+	mu       sync.Mutex
+	waiters  map[string]*opencodeServeWaiter
+	closed   bool
+	closeCh  chan struct{}
+	closeErr error
+}
+
+// opencodeServeWaiter is the per-session registration runTurn holds for the
+// life of one turn: a signal channel for the terminal event (session.idle /
+// session.error) and a callback for incremental message.part.delta text as
+// it streams in.
+type opencodeServeWaiter struct {
+	signal    chan opencodeServeSessionSignal
+	onMessage func(Message)
+}
+
+// opencodeServeSessionSignal is delivered to executeTurn's waiter when the
+// session this turn owns reaches a terminal SSE signal.
+type opencodeServeSessionSignal struct {
+	idle    bool
+	errText string
+}
+
+func newOpenCodeServeClient(baseURL, username, password string, logger *slog.Logger) *opencodeServeClient {
+	return &opencodeServeClient{
+		baseURL:  baseURL,
+		username: username,
+		password: password,
+		logger:   logger,
+		http:     &http.Client{},
+		waiters:  make(map[string]*opencodeServeWaiter),
+		closeCh:  make(chan struct{}),
+	}
+}
+
+func (c *opencodeServeClient) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.closed = true
+	close(c.closeCh)
+}
+
+func (c *opencodeServeClient) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(c.username, c.password)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
+// waitReady polls a lightweight endpoint until the server accepts
+// connections or ctx is done.
+func (c *opencodeServeClient) waitReady(ctx context.Context) error {
+	for {
+		req, err := c.newRequest(ctx, http.MethodGet, "/doc", nil)
+		if err == nil {
+			resp, err := c.http.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (c *opencodeServeClient) createSession(ctx context.Context, parentID string) (string, error) {
+	body := map[string]any{}
+	if parentID != "" {
+		body["parentID"] = parentID
+	}
+	payload, _ := json.Marshal(body)
+	req, err := c.newRequest(ctx, http.MethodPost, "/session", strings.NewReader(string(payload)))
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("create session: status %d: %s", resp.StatusCode, string(data))
+	}
+	var session struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+		return "", fmt.Errorf("create session: decode response: %w", err)
+	}
+	if session.ID == "" {
+		return "", errors.New("create session: response had no id")
+	}
+	return session.ID, nil
+}
+
+type opencodeServeTurnResult struct {
+	errMsg    string
+	toolCalls []Message
+	usageInfo *TokenUsage
+}
+
+func (r opencodeServeTurnResult) usage(model string) map[string]TokenUsage {
+	if r.usageInfo == nil {
+		return nil
+	}
+	u := *r.usageInfo
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheReadTokens == 0 && u.CacheWriteTokens == 0 {
+		return nil
+	}
+	if model == "" {
+		model = "unknown"
+	}
+	return map[string]TokenUsage{model: u}
+}
+
+// runTurn sends the prompt, waits for this session's terminal SSE signal
+// (session.idle or session.error), then reconciles the final message
+// content via a direct GET rather than trusting the SSE stream alone.
+func (c *opencodeServeClient) runTurn(ctx context.Context, sessionID, prompt string, opts ExecOptions, onMessage func(Message)) (opencodeServeTurnResult, error) {
+	signalCh := make(chan opencodeServeSessionSignal, 1)
+	c.registerWaiter(sessionID, &opencodeServeWaiter{signal: signalCh, onMessage: onMessage})
+	defer c.unregisterWaiter(sessionID)
+
+	if err := c.sendMessage(ctx, sessionID, prompt, opts); err != nil {
+		return opencodeServeTurnResult{}, err
+	}
+
+	select {
+	case <-ctx.Done():
+		return opencodeServeTurnResult{}, ctx.Err()
+	case <-c.closeCh:
+		return opencodeServeTurnResult{}, errors.New("opencode serve connection closed")
+	case sig := <-signalCh:
+		if sig.errText != "" {
+			return opencodeServeTurnResult{errMsg: sig.errText}, nil
+		}
+	case <-time.After(turnWatchdogTimeout(opts)):
+		return opencodeServeTurnResult{}, errOpenCodeServeTurnTimeout
+	}
+
+	return c.reconcileFinalMessage(ctx, sessionID, onMessage)
+}
+
+func turnWatchdogTimeout(opts ExecOptions) time.Duration {
+	if opts.Timeout > 0 {
+		return opts.Timeout
+	}
+	return 10 * time.Minute
+}
+
+func (c *opencodeServeClient) sendMessage(ctx context.Context, sessionID, prompt string, opts ExecOptions) error {
+	body := map[string]any{
+		"parts": []map[string]any{{"type": "text", "text": prompt}},
+	}
+	if opts.Model != "" {
+		if providerID, modelID, ok := strings.Cut(opts.Model, "/"); ok {
+			body["model"] = map[string]string{"providerID": providerID, "modelID": modelID}
+		}
+	}
+	payload, _ := json.Marshal(body)
+	req, err := c.newRequest(ctx, http.MethodPost, "/session/"+sessionID+"/message", strings.NewReader(string(payload)))
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("send message: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("send message: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *opencodeServeClient) reconcileFinalMessage(ctx context.Context, sessionID string, onMessage func(Message)) (opencodeServeTurnResult, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/session/"+sessionID+"/message", nil)
+	if err != nil {
+		return opencodeServeTurnResult{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return opencodeServeTurnResult{}, fmt.Errorf("reconcile: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return opencodeServeTurnResult{}, fmt.Errorf("reconcile: status %d: %s", resp.StatusCode, string(data))
+	}
+	var messages []opencodeServeMessage
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		return opencodeServeTurnResult{}, fmt.Errorf("reconcile: decode: %w", err)
+	}
+	if len(messages) == 0 {
+		return opencodeServeTurnResult{}, nil
+	}
+	last := messages[len(messages)-1]
+	result := opencodeServeTurnResult{}
+	for _, part := range last.Parts {
+		switch part.Type {
+		case "tool":
+			if part.State != nil {
+				var input map[string]any
+				if len(part.State.Input) > 0 {
+					_ = json.Unmarshal(part.State.Input, &input)
+				}
+				onMessage(Message{Type: MessageToolUse, Tool: part.Tool, CallID: part.CallID, Input: input})
+				if part.State.Status == "completed" {
+					onMessage(Message{Type: MessageToolResult, Tool: part.Tool, CallID: part.CallID, Output: extractToolOutput(part.State.Output)})
+				}
+			}
+		}
+		if part.Tokens != nil {
+			if result.usageInfo == nil {
+				result.usageInfo = &TokenUsage{}
+			}
+			result.usageInfo.InputTokens += part.Tokens.Input
+			result.usageInfo.OutputTokens += part.Tokens.Output
+			if part.Tokens.Cache != nil {
+				result.usageInfo.CacheReadTokens += part.Tokens.Cache.Read
+				result.usageInfo.CacheWriteTokens += part.Tokens.Cache.Write
+			}
+		}
+	}
+	return result, nil
+}
+
+func (c *opencodeServeClient) registerWaiter(sessionID string, waiter *opencodeServeWaiter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.waiters[sessionID] = waiter
+}
+
+func (c *opencodeServeClient) unregisterWaiter(sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.waiters, sessionID)
+}
+
+func (c *opencodeServeClient) deliver(sessionID string, sig opencodeServeSessionSignal) {
+	c.mu.Lock()
+	waiter, ok := c.waiters[sessionID]
+	c.mu.Unlock()
+	if ok {
+		trySendOpenCodeServeSignal(waiter.signal, sig)
+	}
+}
+
+// deliverText routes an incremental message.part.delta chunk to the turn
+// currently waiting on sessionID, if any. Silently dropped when no turn is
+// active for that session (e.g. a stray event after the turn's context was
+// already cancelled).
+func (c *opencodeServeClient) deliverText(sessionID, text string) {
+	c.mu.Lock()
+	waiter, ok := c.waiters[sessionID]
+	c.mu.Unlock()
+	if ok && waiter.onMessage != nil {
+		waiter.onMessage(Message{Type: MessageText, Content: text})
+	}
+}
+
+func trySendOpenCodeServeSignal(ch chan opencodeServeSessionSignal, sig opencodeServeSessionSignal) {
+	select {
+	case ch <- sig:
+	default:
+	}
+}
+
+// runEventLoop opens GET /event and dispatches session.idle / session.error
+// events to whichever turn is waiting on that sessionID. onDone is called
+// once the stream ends (process exit, network error, or Close()).
+func (c *opencodeServeClient) runEventLoop(onDone func(error)) {
+	req, err := c.newRequest(context.Background(), http.MethodGet, "/event", nil)
+	if err != nil {
+		onDone(err)
+		return
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		onDone(err)
+		return
+	}
+	defer resp.Body.Close()
+
+	go func() {
+		<-c.closeCh
+		resp.Body.Close()
+	}()
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
+		c.handleEventLine(data)
+	}
+	onDone(scanner.Err())
+}
+
+func (c *opencodeServeClient) handleEventLine(data string) {
+	var envelope struct {
+		Type       string          `json:"type"`
+		Properties json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(data), &envelope); err != nil {
+		return
+	}
+	switch envelope.Type {
+	case "session.idle":
+		var props struct {
+			SessionID string `json:"sessionID"`
+		}
+		_ = json.Unmarshal(envelope.Properties, &props)
+		if props.SessionID != "" {
+			c.deliver(props.SessionID, opencodeServeSessionSignal{idle: true})
+		}
+	case "session.error":
+		var props struct {
+			SessionID string `json:"sessionID"`
+			Error     struct {
+				Data struct {
+					Message string `json:"message"`
+				} `json:"data"`
+				Name string `json:"name"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(envelope.Properties, &props)
+		msg := props.Error.Data.Message
+		if msg == "" {
+			msg = props.Error.Name
+		}
+		if msg == "" {
+			msg = "unknown opencode error"
+		}
+		if props.SessionID != "" {
+			c.deliver(props.SessionID, opencodeServeSessionSignal{errText: msg})
+		}
+	case "message.part.delta":
+		var props struct {
+			SessionID string `json:"sessionID"`
+			Part      struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"part"`
+		}
+		_ = json.Unmarshal(envelope.Properties, &props)
+		// Incremental live-typing UX only; final content always comes from
+		// the post-idle reconcile poll, never accumulated from deltas.
+		if props.SessionID != "" && props.Part.Type == "text" && props.Part.Text != "" {
+			c.deliverText(props.SessionID, props.Part.Text)
+		}
+	}
+}
+
+// ── JSON types for the reconcile-poll response ──
+
+type opencodeServeMessage struct {
+	ID    string                     `json:"id"`
+	Parts []opencodeServeMessagePart `json:"parts"`
+}
+
+type opencodeServeMessagePart struct {
+	Type   string                  `json:"type"`
+	Tool   string                  `json:"tool,omitempty"`
+	CallID string                  `json:"callID,omitempty"`
+	State  *opencodeServeToolState `json:"state,omitempty"`
+	Tokens *opencodeServeTokens    `json:"tokens,omitempty"`
+}
+
+type opencodeServeToolState struct {
+	Status string          `json:"status,omitempty"`
+	Input  json.RawMessage `json:"input,omitempty"`
+	Output any             `json:"output,omitempty"`
+}
+
+type opencodeServeTokens struct {
+	Input  int64                     `json:"input"`
+	Output int64                     `json:"output"`
+	Cache  *opencodeServeCacheTokens `json:"cache,omitempty"`
+}
+
+type opencodeServeCacheTokens struct {
+	Read  int64 `json:"read"`
+	Write int64 `json:"write"`
+}

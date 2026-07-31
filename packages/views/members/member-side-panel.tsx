@@ -39,6 +39,7 @@ import { ActorAvatar } from "../common/actor-avatar";
 import { ActorStyledName } from "../common/actor-styled-name";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { AppLink } from "../navigation";
+import { HonorWall } from "../honor/honor-wall";
 import { useT } from "../i18n/use-t";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
@@ -170,10 +171,20 @@ function MemberSidePanelReady({
 }) {
   const { t } = useT("members");
   const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const paths = useWorkspacePaths();
   const qc = useQueryClient();
   const setUser = useAuthStore((s) => s.setUser);
   const openAgentFromContext = useOpenAgentPanel();
+  const { data: honorWall } = useQuery({
+    queryKey: ["honor", "wall", userId],
+    queryFn: () => api.getUserHonor(userId),
+  });
+  const { data: honorCompare } = useQuery({
+    queryKey: ["honor", "compare", currentUserId, userId],
+    queryFn: () => api.compareHonor(userId),
+    enabled: Boolean(currentUserId && !isSelf),
+  });
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: runCounts = [] } = useQuery(agentRunCounts30dOptions(wsId));
   const { data: fleetRankings = [] } = useQuery(agentFleetRankingsOptions(wsId));
@@ -408,6 +419,28 @@ function MemberSidePanelReady({
             </p>
           )}
         </section>
+
+        {honorWall ? (
+          <section className="mt-3.5 border-t border-border pt-3">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+              {t(($) => $.panel.honor_title)}
+            </h3>
+            <HonorWall
+              wall={honorWall}
+              completionLabel={t(($) => $.panel.honor_completion, {
+                unlocked: honorWall.badges_unlocked ?? honorWall.unlocked_badges.length,
+                total: honorWall.badges_total ?? honorWall.unlocked_badges.length,
+              })}
+              showcaseTitle={t(($) => $.panel.honor_showcase)}
+              recentTitle={t(($) => $.panel.honor_recent)}
+              compare={honorCompare ?? null}
+              compareTitle={!isSelf ? t(($) => $.panel.honor_compare) : undefined}
+              sharedTitle={t(($) => $.panel.honor_shared)}
+              youOnlyTitle={t(($) => $.panel.honor_you_only)}
+              themOnlyTitle={t(($) => $.panel.honor_them_only)}
+            />
+          </section>
+        ) : null}
 
         <section className="mt-3.5 border-t border-border pt-3">
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">

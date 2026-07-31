@@ -58,13 +58,6 @@ export function ActorStyledName({
           </TooltipTrigger>
           <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
         </Tooltip>
-      ) : honor && honor.level > 1 ? (
-        <Tooltip>
-          <TooltipTrigger className="inline-flex shrink-0">
-            <HonorBadgeIcon svgKey="stardust" title={`Lv.${honor.level}`} medal />
-          </TooltipTrigger>
-          <TooltipContent side="top">{`Honor Lv.${honor.level}`}</TooltipContent>
-        </Tooltip>
       ) : null}
       {fleet ? (
         <FleetRankBadge

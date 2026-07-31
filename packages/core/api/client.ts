@@ -232,6 +232,7 @@ import {
   agentFleetRulesSchema,
 } from "./agent-fleet-schemas";
 import {
+  honorCompareSchema,
   honorDashboardSchema,
   honorPublicWallSchema,
   honorRulesSchema,
@@ -640,6 +641,7 @@ export class ApiClient {
         xp_to_next_level: 0,
         name_style: "default",
         equipped_badge_id: null,
+        equipped_badge_manual: false,
         pillars: [],
         unlocked_badges: [],
         unlocked_styles: [],
@@ -649,7 +651,10 @@ export class ApiClient {
     );
   }
 
-  async updateMyHonor(data: { equipped_badge_id: string }): Promise<import("../types/honor").HonorDashboard> {
+  async updateMyHonor(data: {
+    equipped_badge_id?: string;
+    showcase_badge_ids?: string[];
+  }): Promise<import("../types/honor").HonorDashboard> {
     const raw = await this.fetch<unknown>("/api/me/honor", {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -662,13 +667,32 @@ export class ApiClient {
         total_xp: 0,
         xp_to_next_level: 0,
         name_style: "default",
-        equipped_badge_id: data.equipped_badge_id,
+        equipped_badge_id: data.equipped_badge_id ?? null,
+        equipped_badge_manual: data.equipped_badge_id != null && data.equipped_badge_id !== "",
         pillars: [],
         unlocked_badges: [],
         unlocked_styles: [],
         recent_xp: [],
       },
       { endpoint: "PATCH /api/me/honor" },
+    );
+  }
+
+  async compareHonor(withUserId: string): Promise<import("../types/honor").HonorCompareResult> {
+    const raw = await this.fetch<unknown>(
+      `/api/me/honor/compare?with=${encodeURIComponent(withUserId)}`,
+    );
+    return parseWithFallback(
+      raw,
+      honorCompareSchema,
+      {
+        self: { user_id: "", level: 1, unlocked_count: 0, total_badges: 0 },
+        other: { user_id: withUserId, level: 1, unlocked_count: 0, total_badges: 0 },
+        shared_badges: [],
+        self_only_badges: [],
+        other_only_badges: [],
+      },
+      { endpoint: "GET /api/me/honor/compare" },
     );
   }
 

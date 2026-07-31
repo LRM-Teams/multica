@@ -50,6 +50,8 @@
     "./chat": "./chat/index.ts",
     "./channels": "./channels/index.ts",
     "./settings": "./settings/index.ts",
+    "./honor": "./honor/index.ts",
+    "./honor/honor-unlock-listener": "./honor/honor-unlock-listener.tsx",
     "./settings/lark-tab": "./settings/components/lark-tab.tsx",
     "./settings/browser-notification-prompt": "./settings/components/browser-notification-prompt.tsx",
     "./lark": "./lark/index.ts",

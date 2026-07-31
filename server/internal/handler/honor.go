@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type honorSnapshotResponse struct {
@@ -69,7 +71,8 @@ func (h *Handler) GetMyHonor(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchMyHonorRequest struct {
-	EquippedBadgeID *string `json:"equipped_badge_id"`
+	EquippedBadgeID  *string   `json:"equipped_badge_id"`
+	ShowcaseBadgeIDs []string  `json:"showcase_badge_ids"`
 }
 
 func (h *Handler) PatchMyHonor(w http.ResponseWriter, r *http.Request) {
@@ -87,18 +90,26 @@ func (h *Handler) PatchMyHonor(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.EquippedBadgeID == nil {
-		writeError(w, http.StatusBadRequest, "equipped_badge_id is required")
+	if req.EquippedBadgeID == nil && req.ShowcaseBadgeIDs == nil {
+		writeError(w, http.StatusBadRequest, "equipped_badge_id or showcase_badge_ids is required")
 		return
 	}
-	if *req.EquippedBadgeID == "" {
-		if err := h.HonorService.ClearEquippedBadge(r.Context(), userUUID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update honor")
+	if req.EquippedBadgeID != nil {
+		if *req.EquippedBadgeID == "" {
+			if err := h.HonorService.ClearEquippedBadge(r.Context(), userUUID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update honor")
+				return
+			}
+		} else if err := h.HonorService.SetEquippedBadge(r.Context(), userUUID, *req.EquippedBadgeID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-	} else if err := h.HonorService.SetEquippedBadge(r.Context(), userUUID, *req.EquippedBadgeID); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	}
+	if req.ShowcaseBadgeIDs != nil {
+		if err := h.HonorService.SetShowcaseBadges(r.Context(), userUUID, req.ShowcaseBadgeIDs); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	user, err := h.Queries.GetUser(r.Context(), userUUID)
 	if err != nil {
@@ -152,6 +163,63 @@ func (h *Handler) GetUserHonor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, wall)
+}
+
+func (h *Handler) GetHonorCompare(w http.ResponseWriter, r *http.Request) {
+	if h.HonorService == nil {
+		writeError(w, http.StatusServiceUnavailable, "honor service unavailable")
+		return
+	}
+	selfID := requestUserID(r)
+	selfUUID, ok := parseUUIDOrBadRequest(w, selfID, "user id")
+	if !ok {
+		return
+	}
+	otherParam := r.URL.Query().Get("with")
+	if otherParam == "" {
+		writeError(w, http.StatusBadRequest, "with query param is required")
+		return
+	}
+	otherUUID, ok := parseUUIDOrBadRequest(w, otherParam, "with user id")
+	if !ok {
+		return
+	}
+	selfUser, err := h.Queries.GetUser(r.Context(), selfUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	otherUser, err := h.Queries.GetUser(r.Context(), otherUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "compare user not found")
+		return
+	}
+	result, err := h.HonorService.CompareWithUser(r.Context(), selfUser, otherUser)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to compare honor")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) wireHonorUnlockEvents() {
+	if h.HonorService == nil {
+		return
+	}
+	h.HonorService.OnBadgeUnlocked = func(ctx context.Context, evt service.HonorBadgeUnlockEvent) {
+		h.publishToUsers(
+			protocol.EventHonorBadgeUnlocked,
+			"",
+			"system",
+			"",
+			[]string{util.UUIDToString(evt.UserID)},
+			map[string]any{
+				"user_id":    util.UUIDToString(evt.UserID),
+				"badge":      evt.Badge,
+				"unlock_pct": evt.UnlockPct,
+			},
+		)
+	}
 }
 
 func (h *Handler) honorSnapshotsForUsers(r *http.Request, userIDs []pgtype.UUID) map[string]honorSnapshotResponse {

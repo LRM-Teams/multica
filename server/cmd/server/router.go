@@ -631,6 +631,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/api/feedback", h.CreateFeedback)
 		r.Get("/api/honor/rules", h.GetHonorRules)
 		r.Get("/api/me/honor", h.GetMyHonor)
+		r.Get("/api/me/honor/compare", h.GetHonorCompare)
 		r.Patch("/api/me/honor", h.PatchMyHonor)
 		r.Post("/api/me/honor/presence", h.PostHonorPresence)
 		r.Get("/api/users/{userId}/honor", h.GetUserHonor)

@@ -14,6 +14,7 @@ import { Toaster } from "@multica/ui/components/ui/sonner";
 import { DesktopLoginPage } from "./pages/login";
 import { DesktopShell } from "./components/desktop-layout";
 import { PageviewTracker } from "./components/pageview-tracker";
+import { HonorUnlockListener } from "@multica/views/honor";
 import { UpdateNotification } from "./components/update-notification";
 import { useTabStore } from "./stores/tab-store";
 import { useWindowOverlayStore } from "./stores/window-overlay-store";
@@ -250,6 +251,7 @@ function AppContent() {
   return (
     <>
       <PageviewTracker />
+      {user ? <HonorUnlockListener /> : null}
       {user ? <DesktopShell /> : <DesktopLoginPage />}
     </>
   );

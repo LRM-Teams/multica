@@ -1731,6 +1731,12 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			Now:           time.Now(),
 		})
 	}
+	if strings.TrimSpace(resp.ChannelID) != "" {
+		channelID := parseUUID(resp.ChannelID)
+		if goal, err := h.currentChannelGoal(ctx, event.WorkspaceID, channelID); err == nil {
+			resp.ChannelGoal = channelGoalContextForClaim(goal)
+		}
+	}
 	if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {
 		slog.Error("agent inbox claim: workspace isolation check failed",
 			"inbox_event_id", uuidToString(event.ID),

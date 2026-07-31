@@ -348,6 +348,7 @@ type AgentTaskResponse struct {
 	NewCommentCount          int                                `json:"new_comment_count,omitempty"`           // issue-wide comments since this agent's last run; excludes injected trigger + own comments; omitempty so old daemons ignore it
 	NewCommentsSince         string                             `json:"new_comments_since,omitempty"`          // RFC3339 anchor (last run's started_at) the count is measured from; omitempty so old daemons ignore it
 	AssignmentSnapshot       *protocol.IssueAssignmentSnapshot  `json:"assignment_snapshot,omitempty"`         // assignment-time stable fields plus claim-time current status
+	ChannelGoal              *protocol.ChannelGoalContext       `json:"channel_goal,omitempty"`                // active channel goal at claim time
 	ChatSessionID            string                             `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
 	ChatMessage              string                             `json:"chat_message,omitempty"`                // user message for chat tasks
 	ChatContextSummary       string                             `json:"chat_context_summary,omitempty"`        // compact surface-scoped context handoff when native resume is skipped

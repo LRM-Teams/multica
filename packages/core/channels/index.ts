@@ -91,3 +91,9 @@ export {
   messageMentionsViewer,
 } from "./mentions-viewer";
 export { classifyRoleChangeFailure, type RoleChangeFailure } from "./role-change-failure";
+export {
+  channelGoalKeys,
+  channelGoalOptions,
+  useCreateChannelGoal,
+  useUpdateChannelGoal,
+} from "./goal";

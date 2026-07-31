@@ -386,6 +386,11 @@ export type {
   ChannelProjectFiles,
   ChannelProjectFileContent,
   ChannelNotifyLevel,
+  ChannelGoal,
+  ChannelGoalStatus,
+  ChannelGoalEnvelope,
+  CreateChannelGoalRequest,
+  UpdateChannelGoalRequest,
 } from "./channel";
 
 export type {

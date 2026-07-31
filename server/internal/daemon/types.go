@@ -50,14 +50,15 @@ type Task struct {
 	// prompt set in Settings → General). Server populates this on every claim
 	// regardless of task kind so the daemon can inject `## Workspace Context`
 	// into the brief. Empty when the owner hasn't set one.
-	WorkspaceContext string                `json:"workspace_context,omitempty"`
-	ThreadName       string                `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Agent            *AgentData            `json:"agent,omitempty"`
-	Repos            []RepoData            `json:"repos,omitempty"`
-	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
-	ChannelID        string                `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
-	ProjectTitle     string                `json:"project_title,omitempty"`     // human-readable project title for context injection
-	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // project-scoped resources to expose to the agent
+	WorkspaceContext string                       `json:"workspace_context,omitempty"`
+	ThreadName       string                       `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Agent            *AgentData                   `json:"agent,omitempty"`
+	Repos            []RepoData                   `json:"repos,omitempty"`
+	ProjectID        string                       `json:"project_id,omitempty"`        // issue's project, when present
+	ChannelID        string                       `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
+	ChannelGoal      *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`      // active channel goal, refreshed on every claim
+	ProjectTitle     string                       `json:"project_title,omitempty"`     // human-readable project title for context injection
+	ProjectResources []ProjectResourceData        `json:"project_resources,omitempty"` // project-scoped resources to expose to the agent
 	// ProvisionManagedWorkdir / ManagedWorkdirRelPath: server asks the daemon to
 	// lazily create a managed shared working directory for this task's project
 	// (a project with no resource yet) at <WorkspacesRoot>/<rel>, run there, and

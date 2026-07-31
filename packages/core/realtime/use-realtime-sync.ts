@@ -56,6 +56,7 @@ import {
   upsertChannelMessageInCache,
   upsertChannelMessageThreadInCache,
 } from "../channels/queries";
+import { channelGoalKeys } from "../channels/goal";
 import { messageMentionsViewer } from "../channels/mentions-viewer";
 import { dmKeys } from "../dm/queries";
 import { applyResearchWSEvent } from "../research/ws-updaters";
@@ -1354,6 +1355,7 @@ export function useRealtimeSync(
       const id = getCurrentWsId();
       // Include archived-list (archive/restore) — list alone leaves Archived stale.
       if (id) qc.invalidateQueries({ queryKey: channelKeys.all(id) });
+      qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
     });
 
     const unsubVoiceCallUpdated = ws.on("voice_call:updated", (payload) => {

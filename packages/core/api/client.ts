@@ -142,6 +142,9 @@ import type {
   ChannelStats,
   ChannelProjectFiles,
   ChannelProjectFileContent,
+  ChannelGoalEnvelope,
+  CreateChannelGoalRequest,
+  UpdateChannelGoalRequest,
   CancelTaskResponse,
   WorkspaceSearchResponse,
   WorkspaceSearchScope,
@@ -295,6 +298,7 @@ import {
   AgentRuntimeListSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
+  ChannelGoalEnvelopeSchema,
   ChannelMessageSearchResponseSchema,
   WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
@@ -3591,6 +3595,39 @@ export class ApiClient {
 
   async getChannelStats(channelId: string): Promise<ChannelStats> {
     return this.fetch(`/api/channels/${channelId}/stats`);
+  }
+
+  async getChannelGoal(channelId: string): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`);
+    return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
+      endpoint: "GET /api/channels/:id/goal",
+    });
+  }
+
+  async createChannelGoal(
+    channelId: string,
+    input: CreateChannelGoalRequest,
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
+      endpoint: "POST /api/channels/:id/goal",
+    });
+  }
+
+  async updateChannelGoal(
+    channelId: string,
+    input: UpdateChannelGoalRequest,
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
+      endpoint: "PATCH /api/channels/:id/goal",
+    });
   }
 
   async listChannelProjectFiles(channelId: string): Promise<ChannelProjectFiles> {

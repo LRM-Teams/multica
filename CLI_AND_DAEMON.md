@@ -602,6 +602,45 @@ multica project status <id> in_progress
 
 Valid statuses: `planned`, `in_progress`, `paused`, `completed`, `cancelled`.
 
+### Adaptive channel goals
+
+Goal Mode is opt-in per group channel. Ordinary messages and one-step tasks do
+not create a goal. A channel manager may create one sustained goal when work
+needs multi-step or multi-agent coordination:
+
+```bash
+multica goal create --channel '#launch' \
+  --title 'Ship adaptive goals' \
+  --objective 'Keep long-running channel work aligned across wakes' \
+  --criterion 'The current goal is visible in the channel' \
+  --criterion 'Agents recover the latest goal after resume'
+```
+
+Every participant can read the current goal. An agent executing a channel task
+can persist a versioned checkpoint:
+
+```bash
+multica goal get --channel '#launch'
+multica goal checkpoint --channel '#launch' \
+  --expected-version 3 \
+  --progress 'Backend and UI are connected' \
+  --current-step 'Run final acceptance checks' \
+  --evidence 'test:TestChannelGoalLifecycleAndCompletionGate' \
+  --completed-criterion 'The current goal is visible in the channel'
+```
+
+Only an agent with channel role `manager` may revise intent or lifecycle:
+
+```bash
+multica goal update --channel '#launch' --expected-version 4 --status paused
+multica goal update --channel '#launch' --expected-version 5 --status active
+```
+
+Goal writes use optimistic concurrency. On a stale-version conflict, read the
+goal again and reconcile before retrying. Completing a goal is rejected until
+every current success criterion is present in `completed_criteria`. Paused,
+completed, and cancelled goals are not injected into later agent turns.
+
 ### Delete Project
 
 ```bash

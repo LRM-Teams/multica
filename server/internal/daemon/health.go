@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 )
 
@@ -55,10 +56,95 @@ func (d *Daemon) listenHealth() (net.Listener, error) {
 type repoCheckoutRequest struct {
 	URL         string `json:"url"`
 	WorkspaceID string `json:"workspace_id"`
-	WorkDir     string `json:"workdir"`
-	Ref         string `json:"ref,omitempty"`
-	AgentName   string `json:"agent_name"`
-	TaskID      string `json:"task_id"`
+	AgentID     string `json:"agent_id"`
+	// WorkDir is informational only (the CLI's CWD at invocation time) — it no
+	// longer determines the checkout location. See repoCheckoutHandler.
+	WorkDir   string `json:"workdir"`
+	Ref       string `json:"ref,omitempty"`
+	AgentName string `json:"agent_name"`
+	TaskID    string `json:"task_id"`
+}
+
+// repoCheckoutHandler returns the /repo/checkout HTTP handler. Extracted from
+// serveHealth so tests can exercise it without spinning up a listener.
+//
+// The checkout location is always the agent's persistent
+// AgentWorkspaceLayout.ReposDir, keyed by (workspace_id, agent_id) — never
+// req.WorkDir (the CLI's ambient CWD at invocation time, which is ephemeral
+// on the legacy one-shot execution path and can vary across tasks even on
+// the D6 canonical path if the agent cd's around). This is what makes the
+// same agent's second `multica repo checkout` of the same repo land on the
+// same on-disk worktree and take CreateWorktree's existing "already exists,
+// fetch + update" reuse path instead of a fresh clone — task #29's sibling
+// ask, "克隆过的项目留在 agent 自己工作区里，同一个 agent 下次直接用，不用每次重拉"
+// (Frank, 2026-07-31, #prj-daemon). Scope is deliberately narrow to repo
+// checkouts only — see #188's explicit-Save boundary for every other file
+// type, which this does not touch.
+func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req repoCheckoutRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.URL == "" {
+			http.Error(w, "url is required", http.StatusBadRequest)
+			return
+		}
+		if req.WorkspaceID == "" {
+			http.Error(w, "workspace_id is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agent_id is required", http.StatusBadRequest)
+			return
+		}
+
+		if d.repoCache == nil {
+			http.Error(w, "repo cache not initialized", http.StatusInternalServerError)
+			return
+		}
+
+		layout, err := execenv.ProvisionAgentWorkspace(d.cfg.WorkspacesRoot, req.WorkspaceID, req.AgentID, d.logger)
+		if err != nil {
+			d.logger.Error("repo checkout: provision agent workspace failed", "workspace_id", req.WorkspaceID, "agent_id", req.AgentID, "error", err)
+			http.Error(w, "provision agent workspace: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL); err != nil {
+			statusCode := http.StatusInternalServerError
+			if errors.Is(err, ErrRepoNotConfigured) {
+				statusCode = http.StatusBadRequest
+			}
+			d.logger.Error("repo checkout readiness failed", "workspace_id", req.WorkspaceID, "url", req.URL, "error", err)
+			http.Error(w, err.Error(), statusCode)
+			return
+		}
+
+		result, err := d.repoCache.CreateWorktree(repocache.WorktreeParams{
+			WorkspaceID:         req.WorkspaceID,
+			RepoURL:             req.URL,
+			WorkDir:             layout.ReposDir,
+			Ref:                 req.Ref,
+			AgentName:           req.AgentName,
+			TaskID:              req.TaskID,
+			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
+		})
+		if err != nil {
+			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	}
 }
 
 // healthHandler returns the /health HTTP handler. Extracted from serveHealth
@@ -139,63 +225,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 
-	mux.HandleFunc("/repo/checkout", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req repoCheckoutRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.URL == "" {
-			http.Error(w, "url is required", http.StatusBadRequest)
-			return
-		}
-		if req.WorkspaceID == "" {
-			http.Error(w, "workspace_id is required", http.StatusBadRequest)
-			return
-		}
-		if req.WorkDir == "" {
-			http.Error(w, "workdir is required", http.StatusBadRequest)
-			return
-		}
-
-		if d.repoCache == nil {
-			http.Error(w, "repo cache not initialized", http.StatusInternalServerError)
-			return
-		}
-
-		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL); err != nil {
-			statusCode := http.StatusInternalServerError
-			if errors.Is(err, ErrRepoNotConfigured) {
-				statusCode = http.StatusBadRequest
-			}
-			d.logger.Error("repo checkout readiness failed", "workspace_id", req.WorkspaceID, "url", req.URL, "error", err)
-			http.Error(w, err.Error(), statusCode)
-			return
-		}
-
-		result, err := d.repoCache.CreateWorktree(repocache.WorktreeParams{
-			WorkspaceID:         req.WorkspaceID,
-			RepoURL:             req.URL,
-			WorkDir:             req.WorkDir,
-			Ref:                 req.Ref,
-			AgentName:           req.AgentName,
-			TaskID:              req.TaskID,
-			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
-		})
-		if err != nil {
-			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
-	})
+	mux.HandleFunc("/repo/checkout", d.repoCheckoutHandler())
 
 	srv := &http.Server{Handler: mux}
 

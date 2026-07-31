@@ -41,10 +41,16 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	}
 
 	workspaceID := os.Getenv("MULTICA_WORKSPACE_ID")
+	agentID := os.Getenv("MULTICA_AGENT_ID")
+	if agentID == "" {
+		return fmt.Errorf("MULTICA_AGENT_ID not set (this command is intended to be run by an agent inside a daemon task)")
+	}
 	agentName := os.Getenv("MULTICA_AGENT_NAME")
 	taskID := os.Getenv("MULTICA_TASK_ID")
 
-	// Use current working directory as the checkout target.
+	// Informational only — the daemon checks out into the agent's persistent
+	// ReposDir regardless of the caller's CWD, so the same agent reuses the
+	// same on-disk checkout across tasks instead of re-cloning.
 	workDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
@@ -53,6 +59,7 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	reqBody := map[string]string{
 		"url":          repoURL,
 		"workspace_id": workspaceID,
+		"agent_id":     agentID,
 		"workdir":      workDir,
 		"ref":          repoCheckoutRef,
 		"agent_name":   agentName,

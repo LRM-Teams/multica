@@ -394,7 +394,7 @@ func setFetchRefspec(barePath, refspec string) error {
 type WorktreeParams struct {
 	WorkspaceID         string // workspace that owns the repo
 	RepoURL             string // remote URL to look up in the cache
-	WorkDir             string // parent directory for the worktree (e.g. task workdir)
+	WorkDir             string // parent directory for the worktree — callers should pass the agent's persistent ReposDir, not an ephemeral per-task dir, so repeat checkouts land on the same path and take the reuse branch below instead of re-cloning
 	Ref                 string // optional branch, tag, or commit to base the worktree on
 	AgentName           string // for branch naming
 	TaskID              string // for branch naming uniqueness

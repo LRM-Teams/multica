@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -3453,6 +3454,121 @@ func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
 	}
 	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
 		t.Fatal("expected repo to be cached after refresh")
+	}
+}
+
+// TestRepoCheckoutHandlerUsesAgentPersistentReposDir proves the /repo/checkout
+// HTTP handler checks out into the agent's persistent
+// AgentWorkspaceLayout.ReposDir, not the client-supplied (ephemeral) workdir
+// field — task #29's sibling ask (Frank, 2026-07-31, #prj-daemon): "克隆过的
+// 项目留在 agent 自己工作区里，同一个 agent 下次直接用，不用每次重拉".
+func TestRepoCheckoutHandlerUsesAgentPersistentReposDir(t *testing.T) {
+	t.Parallel()
+
+	sourceRepo := createDaemonTestRepo(t)
+	workspaceID := "11111111-1111-1111-1111-111111111111"
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  workspaceID,
+			Repos:        []RepoData{{URL: sourceRepo}},
+			ReposVersion: "v1",
+		})
+	})
+	d.cfg.WorkspacesRoot = t.TempDir()
+	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, nil, "", nil, nil)
+
+	srv := httptest.NewServer(d.repoCheckoutHandler())
+	t.Cleanup(srv.Close)
+
+	agentID := "22222222-2222-2222-2222-222222222222"
+	body, _ := json.Marshal(map[string]string{
+		"url":          sourceRepo,
+		"workspace_id": workspaceID,
+		"agent_id":     agentID,
+		"workdir":      "/some/ephemeral/task/dir", // must be ignored
+		"agent_name":   "Test Agent",
+		"task_id":      "b2c3d4e5-0000-0000-0000-000000000000",
+	})
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /repo/checkout: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+	}
+	var result repocache.WorktreeResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	layout, err := execenv.ResolveAgentWorkspaceLayout(d.cfg.WorkspacesRoot, workspaceID, agentID)
+	if err != nil {
+		t.Fatalf("ResolveAgentWorkspaceLayout: %v", err)
+	}
+	if filepath.Dir(result.Path) != layout.ReposDir {
+		t.Fatalf("checkout landed at %s, want it inside the agent's ReposDir %s (not the ephemeral workdir the client sent)", result.Path, layout.ReposDir)
+	}
+}
+
+// TestRepoCheckoutHandlerReusesCheckoutAcrossDifferentTaskWorkdirs is the
+// core reuse guarantee: two checkouts of the same repo by the same agent,
+// simulating two different tasks with two different ephemeral CWDs (exactly
+// what the legacy one-shot execution path produces per task via
+// execenv.PredictRootDir), must land on the identical worktree path and take
+// CreateWorktree's existing "already exists → fetch + update" branch instead
+// of creating a second, independent checkout.
+func TestRepoCheckoutHandlerReusesCheckoutAcrossDifferentTaskWorkdirs(t *testing.T) {
+	t.Parallel()
+
+	sourceRepo := createDaemonTestRepo(t)
+	workspaceID := "11111111-1111-1111-1111-111111111111"
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  workspaceID,
+			Repos:        []RepoData{{URL: sourceRepo}},
+			ReposVersion: "v1",
+		})
+	})
+	d.cfg.WorkspacesRoot = t.TempDir()
+	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, nil, "", nil, nil)
+
+	srv := httptest.NewServer(d.repoCheckoutHandler())
+	t.Cleanup(srv.Close)
+
+	agentID := "22222222-2222-2222-2222-222222222222"
+	checkout := func(workdir, taskID string) repocache.WorktreeResult {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{
+			"url":          sourceRepo,
+			"workspace_id": workspaceID,
+			"agent_id":     agentID,
+			"workdir":      workdir,
+			"agent_name":   "Test Agent",
+			"task_id":      taskID,
+		})
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST /repo/checkout: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			out, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+		}
+		var result repocache.WorktreeResult
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return result
+	}
+
+	first := checkout("/ws/task-a/workdir", "b2c3d4e5-0000-0000-0000-000000000001")
+	second := checkout("/ws/task-b/workdir", "b2c3d4e5-0000-0000-0000-000000000002")
+
+	if first.Path != second.Path {
+		t.Fatalf("checkout path differed across tasks: first=%s second=%s — same agent+repo must reuse one on-disk checkout, not re-clone per task", first.Path, second.Path)
 	}
 }
 

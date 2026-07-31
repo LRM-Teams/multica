@@ -291,7 +291,11 @@
     "menu_about": "关于",
     "menu_members": "成员",
     "menu_files": "文件",
-    "menu_settings": "设置"
+    "menu_settings": "设置",
+    "rename_empty": "频道名称不能为空",
+    "hero_manage_hint": "可管理：点字段即改 · 无独立编辑按钮",
+    "hero_name_hint": "Enter 保存 · Esc 取消 · 空名拒收",
+    "hero_desc_hint": "失焦保存 · Esc 取消 · 空串清描述"
   },
   "stats": {
     "title": "活跃度",

@@ -15,6 +15,7 @@ on:
           - research_wake_diagnose
           - research_wake_followup
           - research_mirror_check
+          - research_fleet_model_backfill
 
 jobs:
   run:
@@ -633,5 +634,88 @@ jobs:
                  '{"mirrored_from":"chat","backfill":true}'::jsonb, created_at
           FROM missing
           RETURNING id::text, session_id::text, left(body,80) AS body, created_at AT TIME ZONE 'Asia/Shanghai' AS cst;
+          SQL
+          )"
+
+      - name: research_fleet_model_backfill
+        if: inputs.action == 'research_fleet_model_backfill'
+        run: |
+          set -euo pipefail
+          DEPLOY_DIR=/data/multica
+          dotenv_value() {
+            python3 - "$1" "${2:-}" <<'PY'
+          import sys
+          from pathlib import Path
+          key, default = sys.argv[1], sys.argv[2]
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith(key + "="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  raise SystemExit(0)
+          print(default)
+          PY
+          }
+          db_user="$(dotenv_value POSTGRES_USER multica)"
+          db_name="$(dotenv_value POSTGRES_DB multica)"
+          db_password="$(dotenv_value POSTGRES_PASSWORD)"
+          postgres_id="$(docker ps --format '{{.Names}} {{.ID}}' | awk '$1 ~ /postgres/ {print $2; exit}')"
+          run_sql() {
+            printf '%s\n' "$1" | docker exec -i -e PGPASSWORD="$db_password" "$postgres_id" \
+              psql -h 127.0.0.1 -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1
+          }
+
+          echo "=== before: active fleet agents with blank/null model ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team')
+          SELECT a.id::text, a.name, a.model, r.provider, r.name AS runtime_name, r.status
+          FROM research_fleet f
+          JOIN ws ON ws.id = f.workspace_id
+          JOIN research_fleet_member m ON m.fleet_id = f.id AND m.status <> 'archived'
+          JOIN agent a ON a.id = m.agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          WHERE coalesce(trim(a.model), '') = ''
+          ORDER BY m.is_lead DESC, a.name;
+          SQL
+          )"
+
+          echo "=== backfill blank models by runtime provider ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team'),
+          targets AS (
+            SELECT a.id AS agent_id,
+                   CASE lower(coalesce(r.provider, ''))
+                     WHEN 'cursor' THEN 'composer-1.5'
+                     WHEN 'anthropic' THEN 'claude-sonnet-4-6'
+                     WHEN 'claude' THEN 'claude-sonnet-4-6'
+                     WHEN 'pi' THEN 'claude-sonnet-4-6'
+                     WHEN 'openai' THEN 'gpt-5.4'
+                     WHEN 'codex' THEN 'gpt-5.4'
+                     WHEN 'copilot' THEN 'gpt-5.4'
+                     ELSE 'composer-1.5'
+                   END AS model
+            FROM research_fleet f
+            JOIN ws ON ws.id = f.workspace_id
+            JOIN research_fleet_member m ON m.fleet_id = f.id AND m.status <> 'archived'
+            JOIN agent a ON a.id = m.agent_id
+            LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+            WHERE coalesce(trim(a.model), '') = ''
+          )
+          UPDATE agent a
+          SET model = t.model, updated_at = now()
+          FROM targets t
+          WHERE a.id = t.agent_id
+          RETURNING a.id::text, a.name, a.model;
+          SQL
+          )"
+
+          echo "=== after: active fleet agent models ==="
+          run_sql "$(cat <<'SQL'
+          WITH ws AS (SELECT id FROM workspace WHERE slug='lrm-team')
+          SELECT a.id::text, a.name, a.model, r.provider, r.status
+          FROM research_fleet f
+          JOIN ws ON ws.id = f.workspace_id
+          JOIN research_fleet_member m ON m.fleet_id = f.id AND m.status <> 'archived'
+          JOIN agent a ON a.id = m.agent_id
+          LEFT JOIN agent_runtime r ON r.id = a.runtime_id
+          ORDER BY m.is_lead DESC, a.name;
           SQL
           )"

@@ -33,6 +33,7 @@ export function ResearchCanvasDock({
       aria-label={t(($) => $.dock.label)}
     >
       <div className="flex h-[38px] items-center gap-1.5 px-3 text-[12.5px] font-semibold text-foreground">
+        {/* eslint-disable-next-line i18next/no-literal-string -- decorative glyph, not copy */}
         <span className="text-brand" aria-hidden>
           ★
         </span>

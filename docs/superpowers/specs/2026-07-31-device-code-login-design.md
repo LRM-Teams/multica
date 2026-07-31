@@ -4,8 +4,9 @@ Task #36 (Parker, 2026-07-31, high priority — weekend push). Replace the two
 painful CLI login paths (loopback-browser OAuth that requires browser+CLI on
 the same machine, and manual `--token` PAT paste) with an OAuth 2.0 Device
 Authorization Grant (RFC 8628) flow — the same shape GitHub CLI, `gcloud`,
-and `az` use. Also add `multica setup <workspace>` so setup takes the
-workspace in one step (Frank, 2026-07-31).
+and `az` use. Also add a one-step way to pin the workspace during setup
+(Frank, 2026-07-31) — see the CLI section below for why this landed as
+`--workspace` rather than the positional originally sketched here.
 
 ## Sources used
 
@@ -183,11 +184,19 @@ persisted. `/api/device/token` looks up by `HashToken(device_code)`.
 - `--token` flag path (`runAuthLoginToken`) is **kept as-is** — still the
   right answer for CI/scripted/non-interactive setups where there's no human
   to approve a device code at all.
-- `multica setup <workspace>`: new positional arg on the existing
-  `loginCmd`/`autoWatchWorkspaces` path. When given, resolves the argument
-  against `GET /api/workspaces` (match by id or slug) instead of picking
-  `workspaces[0]`, and errors clearly if no match — otherwise identical to
-  today's auto-watch behavior when no workspace argument is given.
+- `multica setup --workspace <id-or-slug>`: **implemented as a flag, not the
+  positional originally sketched here.** `setupCmd`/`setupCloudCmd`/
+  `setupSelfHostCmd` already forward their positional `args` into
+  `runLogin(cmd, args)`, which `loginCmd` also uses for its own
+  `--token mul_...` (space form) recovery — reusing that same positional for
+  a workspace identifier would make `multica setup mul_xxx` (a real recovery
+  invocation) ambiguous with `multica setup my-workspace-slug`. A dedicated
+  `--workspace` flag (plus `MULTICA_WORKSPACE` env, same `FlagOrEnv`
+  precedent every other CLI setting uses) avoids that collision outright and
+  is self-documenting. Threaded into `autoWatchWorkspaces`: when set,
+  resolves against `GET /api/workspaces` (match by id or slug) instead of
+  picking `workspaces[0]`, and errors clearly on no match — otherwise
+  identical to today's auto-watch behavior.
 
 ## Frontend (coordination point, not this PR)
 

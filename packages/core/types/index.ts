@@ -359,6 +359,7 @@ export type {
   ChannelReaction,
   ChannelThreadMessagesCursor,
   ChannelThreadMessagesPage,
+  ChannelMessageSearchParams,
   ChannelMessageSearchResponse,
   ChannelMessageSearchResult,
   ChannelStats,

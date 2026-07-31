@@ -130,6 +130,7 @@ import type {
   ChannelMessagesPage,
   MarkChannelReadResult,
   ChannelReaction,
+  ChannelMessageSearchParams,
   ChannelMessageSearchResponse,
   ChannelThreadMessagesPage,
   ChannelStats,
@@ -3168,10 +3169,22 @@ export class ApiClient {
     );
   }
 
-  async searchChannelMessages(channelId: string, query: string, limit?: number): Promise<ChannelMessageSearchResponse> {
-    const params = new URLSearchParams({ q: query });
-    if (limit) {
-      params.set("limit", String(limit));
+  async searchChannelMessages(
+    channelId: string,
+    queryOrParams: string | ChannelMessageSearchParams,
+    limit?: number,
+  ): Promise<ChannelMessageSearchResponse> {
+    const params = new URLSearchParams();
+    if (typeof queryOrParams === "string") {
+      params.set("q", queryOrParams);
+      if (limit) params.set("limit", String(limit));
+    } else {
+      if (queryOrParams.q) params.set("q", queryOrParams.q);
+      if (queryOrParams.author_id) params.set("author_id", queryOrParams.author_id);
+      if (queryOrParams.author_type) params.set("author_type", queryOrParams.author_type);
+      if (queryOrParams.include_thread === false) params.set("include_thread", "false");
+      if (queryOrParams.limit) params.set("limit", String(queryOrParams.limit));
+      if (queryOrParams.offset != null) params.set("offset", String(queryOrParams.offset));
     }
     const raw = await this.fetch<unknown>(`/api/channels/${channelId}/messages/search?${params.toString()}`);
     return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
@@ -3195,11 +3208,24 @@ export class ApiClient {
     // part of the request URL: the server resolves the workspace from the
     // auth context (ctxWorkspaceID). See LRM-605 / channel.go SearchGlobal.
     _workspaceId: string,
-    params: { q: string; scope?: WorkspaceSearchScope; limit?: number; signal?: AbortSignal },
+    params: {
+      q?: string;
+      scope?: WorkspaceSearchScope;
+      limit?: number;
+      /** LRM-874 from:@ — with scope=messages, q may be omitted. */
+      author_type?: "user" | "agent";
+      author_id?: string;
+      include_thread?: boolean;
+      signal?: AbortSignal;
+    },
   ): Promise<WorkspaceSearchResponse> {
-    const search = new URLSearchParams({ q: params.q });
+    const search = new URLSearchParams();
+    if (params.q) search.set("q", params.q);
     if (params.scope) search.set("scope", params.scope);
     if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.author_type) search.set("author_type", params.author_type);
+    if (params.author_id) search.set("author_id", params.author_id);
+    if (params.include_thread === false) search.set("include_thread", "false");
     const raw = await this.fetch<unknown>(
       `/api/search?${search.toString()}`,
       params.signal ? { signal: params.signal } : undefined,

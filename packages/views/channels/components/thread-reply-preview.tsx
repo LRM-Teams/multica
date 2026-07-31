@@ -95,13 +95,10 @@ export function ThreadReplyPreview({
       )}
     >
       <div
-        className="mb-1 flex items-center gap-1 text-[11px] text-muted-foreground"
+        className="mb-1 text-[11px] text-muted-foreground"
         data-testid="thread-reply-preview-count"
       >
-        <span className="min-w-0 truncate">{countLabel}</span>
-        <span aria-hidden className="shrink-0">
-          {" >"}
-        </span>
+        {`${countLabel} >`}
       </div>
       <ul className="flex flex-col gap-1">
         {previewRows.map((reply) => {

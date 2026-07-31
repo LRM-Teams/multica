@@ -56,6 +56,7 @@
     "./settings/browser-notification-prompt": "./settings/components/browser-notification-prompt.tsx",
     "./lark": "./lark/index.ts",
     "./invite": "./invite/index.ts",
+    "./device": "./device/index.ts",
     "./invitations": "./invitations/index.ts",
     "./onboarding": "./onboarding/index.ts",
     "./platform": "./platform/index.ts",

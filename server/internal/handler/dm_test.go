@@ -1288,6 +1288,44 @@ func TestListDMChannelsTreatsZeroReadSeqAsNoCursor(t *testing.T) {
 	}
 }
 
+// TestListDirectMessages_IncludesNonOwnerWendyDM is the end-to-end
+// regression test for the 2026-07-31 Wendy DM incident: a member who is not
+// the Wendy agent's owner must still see their own DM with it in
+// GET /api/dm. Before the fix, accessibleAgentIDs' owner-only gate for
+// Windy/Wendy-named agents silently dropped this DM from the list for
+// anyone but the agent's owner, even though the channel existed and its
+// messages were readable — reproducing exactly what Wren found live
+// (POST /api/dm 201, messages 200, GET /api/dm []).
+func TestListDirectMessages_IncludesNonOwnerWendyDM(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	cleanupDMArtifacts(t)
+	agentID, _, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename agent to Wendy: %v", err)
+	}
+	channelID := seedAgentDMChannelForUser(t, memberID, agentID)
+
+	req := newRequestAs(memberID, http.MethodGet, "/api/dm", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	rec := httptest.NewRecorder()
+	testHandler.ListDirectMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list DMs as non-owner member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var items []DMItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode DMs: %v body=%s", err, rec.Body.String())
+	}
+	for _, item := range items {
+		if item.ID == channelID {
+			return
+		}
+	}
+	t.Fatalf("non-owner member's Wendy DM (channel %s) missing from GET /api/dm: %+v", channelID, items)
+}
+
 func listDMItemsForTest(t *testing.T) []DMItem {
 	t.Helper()
 	req := newRequest(http.MethodGet, "/api/dm", nil)

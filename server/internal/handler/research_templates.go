@@ -193,7 +193,7 @@ Operating skeleton (fixed; playbooks evolve)
 
 Depth budget (align LRM-676)
 
-Default standard: ≤5 probe rounds / ≤15 minutes before a stage gate. On budget ceiling: ship partial conclusions + uncovered checklist — do not keep widening forever.
+Default standard soft probe budget: ≤5 probe rounds / ≤15 minutes before a stage gate (NOT the same as product Round N hard caps). On budget ceiling: ship partial conclusions + uncovered checklist — do not keep widening forever.
 
 Stage evaluation
 
@@ -204,7 +204,8 @@ Stage evaluation
 Exploration graph (required)
 
 Use research CLI/API tools to append nodes/edges so the left panel stays live:
-- node types: goal, subquestion, probe, finding, conflict, dead_end, refuted, pivot, roster_change, stage_gate, agent_activity
+- node types: goal, subquestion, probe, finding, conflict, dead_end, refuted, pivot, roster_change, stage_gate, agent_activity, product_round_gate
+- Product rounds (Round N) are distinct from S1–S4 stages and from single probe/search steps. Hard caps: shallow=2 / standard=5 / deep=10. End-of-round judgment via POST .../product-rounds/judgment (lead only). goal_patch_proposal is proposal-only; never write authoritative goal except via user-confirm (LRM-898).
 - edge types: leads_to, supports, contradicts, supersedes, abandons
 - Prefer dimension_family on subquestion payloads for adaptive routing visibility.
 - Never delete dead_end / refuted / pivot history; mark abandoned instead.

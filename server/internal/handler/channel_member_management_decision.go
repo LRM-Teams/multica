@@ -60,6 +60,10 @@ type MemberManagementTarget struct {
 	ID                       pgtype.UUID
 	Role                     ChannelRole
 	WouldBreakOwnerInvariant bool
+	// AddedBy* is optional provenance for inviter-scoped remove (LRM-869).
+	// Empty/invalid means no inviter exception applies.
+	AddedByKind PrincipalKind
+	AddedByID   pgtype.UUID
 }
 
 type MemberManagementRequest struct {
@@ -128,6 +132,11 @@ func DecideMemberManagement(req MemberManagementRequest) MemberManagementDecisio
 		if hasWorkspaceManagementAuthority(req.Principal.WorkspaceRole) ||
 			req.Principal.ChannelRole == ChannelRoleOwner ||
 			req.Principal.ChannelRole == ChannelRoleManager {
+			return allowMemberManagement()
+		}
+		// LRM-869: inviter may remove an Agent they themselves added, even
+		// without channel manager / workspace admin authority.
+		if isInviterOfTargetAgent(req.Principal, *req.Target) {
 			return allowMemberManagement()
 		}
 	case MemberManagementLeave:
@@ -212,4 +221,12 @@ func sameMemberManagementIdentity(principal MemberManagementPrincipal, target Me
 
 func isHumanChannelOwner(principal MemberManagementPrincipal) bool {
 	return principal.Kind == PrincipalKindUser && principal.ChannelRole == ChannelRoleOwner
+}
+
+func isInviterOfTargetAgent(principal MemberManagementPrincipal, target MemberManagementTarget) bool {
+	return target.Kind == PrincipalKindAgent &&
+		validPrincipalKind(target.AddedByKind) &&
+		validMemberManagementUUID(target.AddedByID) &&
+		principal.Kind == target.AddedByKind &&
+		principal.ID.Bytes == target.AddedByID.Bytes
 }

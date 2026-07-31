@@ -334,3 +334,50 @@ describe("ResearchListPage composer hero (LRM-787)", () => {
   });
 });
 
+describe("ResearchListPage search & status filter (LRM-818)", () => {
+  beforeEach(() => {
+    setQuery({
+      data: {
+        sessions: [
+          session({ id: "s-run", status: "running", title: "Alpha research" }),
+          session({ id: "s-done", status: "completed", title: "Beta report" }),
+          session({ id: "s-fail", status: "failed", title: "Alpha failed" }),
+        ],
+      },
+    });
+  });
+
+  it("filters titles in real time", () => {
+    render(<ResearchListPage />);
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "Alpha" },
+    });
+    expect(screen.getByText("Alpha research")).toBeInTheDocument();
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+    expect(screen.queryByText("Beta report")).not.toBeInTheDocument();
+  });
+
+  it("status chips are single-select and show empty copy when nothing matches", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("radio", { name: enResearch.filter.status_failed }));
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+    expect(screen.queryByText("Alpha research")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "zzz" },
+    });
+    expect(screen.getByText(enResearch.filter.no_results)).toBeInTheDocument();
+  });
+
+  it("clear restores the full list", () => {
+    render(<ResearchListPage />);
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "Beta" },
+    });
+    expect(screen.queryByText("Alpha research")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: enResearch.filter.clear }));
+    expect(screen.getByText("Alpha research")).toBeInTheDocument();
+    expect(screen.getByText("Beta report")).toBeInTheDocument();
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+  });
+});
+

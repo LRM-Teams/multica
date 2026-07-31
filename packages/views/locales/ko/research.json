@@ -37,6 +37,17 @@
     "retry": "다시 시도",
     "empty_cta": "첫 리서치 시작하기"
   },
+  "filter": {
+    "search_label": "세션 제목 검색",
+    "search_placeholder": "제목 검색…",
+    "status_label": "상태로 필터",
+    "status_in_progress": "진행 중",
+    "status_completed": "완료",
+    "status_failed": "실패",
+    "clear": "필터 지우기",
+    "no_results": "일치하는 세션이 없습니다",
+    "no_results_hint": "다른 키워드를 시도하거나 필터를 지워 전체를 보세요"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",

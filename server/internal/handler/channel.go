@@ -119,6 +119,7 @@ type GlobalSearchMessageResult struct {
 	ChannelName         string                       `json:"channel_name"`
 	ChannelKind         string                       `json:"channel_kind"`
 	ThreadRootMessageID *string                      `json:"thread_root_message_id,omitempty"`
+	InThread            bool                         `json:"in_thread"`
 	HitCount            int                          `json:"hit_count"`
 	AuthorType          string                       `json:"author_type"`
 	AuthorID            *string                      `json:"author_id"`
@@ -323,15 +324,20 @@ type ChannelReactionResponse struct {
 }
 
 type ChannelMessageSearchResponse struct {
-	Query   string                       `json:"query"`
-	Total   int                          `json:"total"`
-	Results []ChannelMessageSearchResult `json:"results"`
+	Query         string                       `json:"query"`
+	Total         int                          `json:"total"`
+	IncludeThread bool                         `json:"include_thread"`
+	AuthorType    string                       `json:"author_type,omitempty"`
+	AuthorID      string                       `json:"author_id,omitempty"`
+	Scope         string                       `json:"scope"`
+	Results       []ChannelMessageSearchResult `json:"results"`
 }
 
 type ChannelMessageSearchResult struct {
 	MessageID           string  `json:"message_id"`
 	ChannelID           string  `json:"channel_id"`
 	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
+	InThread            bool    `json:"in_thread"`
 	Type                string  `json:"type"`
 	AuthorID            *string `json:"author_id"`
 	AuthorName          string  `json:"author_name"`
@@ -2333,6 +2339,11 @@ func (h *Handler) SearchGlobal(w http.ResponseWriter, r *http.Request) {
 		writeCodedError(w, http.StatusBadRequest, "invalid_search_scope", "invalid search scope")
 		return
 	}
+	authorType, authorID, hasAuthor, ok := parseMessageSearchAuthorFilter(w, r)
+	if !ok {
+		return
+	}
+	includeThread := parseIncludeThreadQuery(r)
 	limit := boundedQueryInt(r, "limit", 20, 50)
 	resp := GlobalSearchResponse{
 		Query:    query,
@@ -2342,30 +2353,34 @@ func (h *Handler) SearchGlobal(w http.ResponseWriter, r *http.Request) {
 		DMs:      []GlobalSearchChannelResult{},
 		People:   []GlobalSearchPersonResult{},
 	}
-	if query == "" {
+	// Author/from: search may omit q when scope=messages; other scopes still need q.
+	if query == "" && !(hasAuthor && scope == "messages") {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	pattern := "%" + escapeLike(query) + "%"
+	pattern := ""
+	if query != "" {
+		pattern = "%" + escapeLike(query) + "%"
+	}
 	wsID := parseUUID(workspaceID)
 	uid := parseUUID(userID)
 
 	if scope == "all" || scope == "messages" {
-		if !h.globalSearchMessages(w, r, wsID, uid, pattern, query, limit, &resp) {
+		if !h.globalSearchMessages(w, r, wsID, uid, pattern, query, limit, includeThread, authorType, authorID, hasAuthor, &resp) {
 			return
 		}
 	}
-	if scope == "all" || scope == "channels" {
+	if query != "" && (scope == "all" || scope == "channels") {
 		if !h.globalSearchChannels(w, r, wsID, uid, pattern, "group", limit, &resp) {
 			return
 		}
 	}
-	if scope == "all" || scope == "dms" {
+	if query != "" && (scope == "all" || scope == "dms") {
 		if !h.globalSearchChannels(w, r, wsID, uid, pattern, "dm", limit, &resp) {
 			return
 		}
 	}
-	if scope == "all" || scope == "people" {
+	if query != "" && (scope == "all" || scope == "people") {
 		if !h.globalSearchPeople(w, r, wsID, uid, pattern, limit, &resp) {
 			return
 		}
@@ -2373,49 +2388,68 @@ func (h *Handler) SearchGlobal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, pattern, query string, limit int, resp *GlobalSearchResponse) bool {
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT count(*)
-		FROM channel_message m
+func (h *Handler) globalSearchMessages(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID, userID pgtype.UUID,
+	pattern, query string,
+	limit int,
+	includeThread bool,
+	authorType, authorID string,
+	hasAuthor bool,
+	resp *GlobalSearchResponse,
+) bool {
+	args := []any{workspaceID, userID}
+	where := []string{
+		"m.workspace_id = $1",
+		"m.author_type IN ('user', 'agent')",
+		"m.deleted_at IS NULL",
+	}
+	if !includeThread {
+		where = append(where, "m.thread_root_message_id IS NULL")
+	}
+	if hasAuthor {
+		args = append(args, authorType, parseUUID(authorID))
+		where = append(where, fmt.Sprintf("m.author_type = $%d AND m.author_id = $%d", len(args)-1, len(args)))
+	}
+	if pattern != "" {
+		args = append(args, pattern)
+		where = append(where, fmt.Sprintf("m.content ILIKE $%d ESCAPE '\\'", len(args)))
+	}
+	whereSQL := strings.Join(where, " AND ")
+	viewerJoin := `
 		JOIN channel ch ON ch.id = m.channel_id AND ch.workspace_id = m.workspace_id
 		JOIN channel_member viewer ON viewer.channel_id = ch.id
 		 AND viewer.workspace_id = ch.workspace_id
 		 AND viewer.member_type = 'user'
-		 AND viewer.member_id = $2
-		WHERE m.workspace_id = $1
-		  AND m.author_type <> 'system'
-		  AND m.deleted_at IS NULL
-		  AND m.content ILIKE $3 ESCAPE '\'`, workspaceID, userID, pattern).Scan(&resp.Counts.Messages); err != nil {
+		 AND viewer.member_id = $2`
+
+	countSQL := `SELECT count(*) FROM channel_message m` + viewerJoin + ` WHERE ` + whereSQL
+	if err := h.DB.QueryRow(r.Context(), countSQL, args...).Scan(&resp.Counts.Messages); err != nil {
 		writeCodedError(w, http.StatusInternalServerError, "global_search_message_count_failed", "failed to count global message search results")
 		return false
 	}
-	rows, err := h.DB.Query(r.Context(), `
+	args = append(args, limit)
+	listSQL := `
 		SELECT m.id, m.channel_id, ch.name, ch.kind, m.thread_root_message_id,
 		       m.author_type, m.author_id, m.author_name, m.content, m.created_at,
 		       count(*) OVER (PARTITION BY COALESCE(m.thread_root_message_id, m.id))::int AS hit_count
-		FROM channel_message m
-		JOIN channel ch ON ch.id = m.channel_id AND ch.workspace_id = m.workspace_id
-		JOIN channel_member viewer ON viewer.channel_id = ch.id
-		 AND viewer.workspace_id = ch.workspace_id
-		 AND viewer.member_type = 'user'
-		 AND viewer.member_id = $2
-		WHERE m.workspace_id = $1
-		  AND m.author_type <> 'system'
-		  AND m.deleted_at IS NULL
-		  AND m.content ILIKE $3 ESCAPE '\'
+		FROM channel_message m` + viewerJoin + `
+		WHERE ` + whereSQL + `
 		ORDER BY m.created_at DESC, m.id DESC
-		LIMIT $4`, workspaceID, userID, pattern, limit)
+		LIMIT $` + strconv.Itoa(len(args))
+	rows, err := h.DB.Query(r.Context(), listSQL, args...)
 	if err != nil {
 		writeCodedError(w, http.StatusInternalServerError, "global_search_messages_failed", "failed to search messages")
 		return false
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, chID, threadRootID, authorID pgtype.UUID
-		var channelName, channelKind, authorType, authorName, content string
+		var id, chID, threadRootID, rowAuthorID pgtype.UUID
+		var channelName, channelKind, rowAuthorType, authorName, content string
 		var createdAt pgtype.Timestamptz
 		var hitCount int
-		if err := rows.Scan(&id, &chID, &channelName, &channelKind, &threadRootID, &authorType, &authorID, &authorName, &content, &createdAt, &hitCount); err != nil {
+		if err := rows.Scan(&id, &chID, &channelName, &channelKind, &threadRootID, &rowAuthorType, &rowAuthorID, &authorName, &content, &createdAt, &hitCount); err != nil {
 			writeCodedError(w, http.StatusInternalServerError, "global_search_message_read_failed", "failed to read message search results")
 			return false
 		}
@@ -2426,9 +2460,10 @@ func (h *Handler) globalSearchMessages(w http.ResponseWriter, r *http.Request, w
 			ChannelName:         channelName,
 			ChannelKind:         channelKind,
 			ThreadRootMessageID: uuidToPtr(threadRootID),
+			InThread:            threadRootID.Valid,
 			HitCount:            hitCount,
-			AuthorType:          authorType,
-			AuthorID:            uuidToPtr(authorID),
+			AuthorType:          rowAuthorType,
+			AuthorID:            uuidToPtr(rowAuthorID),
 			AuthorName:          authorName,
 			Content:             content,
 			Snippet:             searchSnippet(content, query),
@@ -2635,43 +2670,87 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	if !h.requireChannelUserViewer(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	resp := ChannelMessageSearchResponse{Query: query, Results: []ChannelMessageSearchResult{}}
-	if query == "" {
+	includeThread := parseIncludeThreadQuery(r)
+	authorType, authorID, hasAuthor, ok := parseMessageSearchAuthorFilter(w, r)
+	if !ok {
+		return
+	}
+	resp := ChannelMessageSearchResponse{
+		Query:         query,
+		IncludeThread: includeThread,
+		AuthorType:    authorType,
+		AuthorID:      authorID,
+		Scope:         "channel",
+		Results:       []ChannelMessageSearchResult{},
+	}
+	// Text search still requires q; author/from: search may omit q.
+	if query == "" && !hasAuthor {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+
 	limit := boundedQueryInt(r, "limit", 50, 100)
-	pattern := "%" + escapeLike(query) + "%"
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND deleted_at IS NULL AND content ILIKE $3 ESCAPE '\'`,
-		channelID, parseUUID(workspaceID), pattern).Scan(&resp.Total); err != nil {
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			offset = n
+			if offset > 10_000 {
+				offset = 10_000
+			}
+		}
+	}
+
+	args := []any{channelID, parseUUID(workspaceID)}
+	where := []string{
+		"m.channel_id = $1",
+		"m.workspace_id = $2",
+		"m.author_type IN ('user', 'agent')",
+		"m.deleted_at IS NULL",
+	}
+	if !includeThread {
+		where = append(where, "m.thread_root_message_id IS NULL")
+	}
+	if hasAuthor {
+		args = append(args, authorType, parseUUID(authorID))
+		where = append(where, fmt.Sprintf("m.author_type = $%d AND m.author_id = $%d", len(args)-1, len(args)))
+	}
+	if query != "" {
+		args = append(args, "%"+escapeLike(query)+"%")
+		where = append(where, fmt.Sprintf("m.content ILIKE $%d ESCAPE '\\'", len(args)))
+	}
+	whereSQL := strings.Join(where, " AND ")
+
+	countSQL := `SELECT count(*) FROM channel_message m WHERE ` + whereSQL
+	if err := h.DB.QueryRow(r.Context(), countSQL, args...).Scan(&resp.Total); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
 		return
 	}
-	rows, err := h.DB.Query(r.Context(), `
+
+	args = append(args, limit, offset)
+	listSQL := `
 		SELECT m.id, m.channel_id, m.thread_root_message_id, m.author_type, m.author_id, m.author_name,
 		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       m.content, m.created_at
 		FROM channel_message m
 		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
 		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
-		WHERE m.channel_id = $1 AND m.workspace_id = $2 AND m.author_type <> 'system' AND m.deleted_at IS NULL AND m.content ILIKE $3 ESCAPE '\'
+		WHERE ` + whereSQL + `
 		ORDER BY m.seq ASC
-		LIMIT $4`, channelID, parseUUID(workspaceID), pattern, limit)
+		LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
+	rows, err := h.DB.Query(r.Context(), listSQL, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, chID, threadRootID, authorID pgtype.UUID
-		var authorType, authorName, content string
+		var id, chID, threadRootID, rowAuthorID pgtype.UUID
+		var rowAuthorType, authorName, content string
 		var avatarURL pgtype.Text
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &chID, &threadRootID, &authorType, &authorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
+		if err := rows.Scan(&id, &chID, &threadRootID, &rowAuthorType, &rowAuthorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel message search results")
 			return
 		}
@@ -2679,8 +2758,9 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 			MessageID:           uuidToString(id),
 			ChannelID:           uuidToString(chID),
 			ThreadRootMessageID: uuidToPtr(threadRootID),
-			Type:                authorType,
-			AuthorID:            uuidToPtr(authorID),
+			InThread:            threadRootID.Valid,
+			Type:                rowAuthorType,
+			AuthorID:            uuidToPtr(rowAuthorID),
 			AuthorName:          authorName,
 			AuthorAvatarURL:     textToPtr(avatarURL),
 			Content:             content,
@@ -2688,6 +2768,42 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseIncludeThreadQuery defaults to true (LRM-874 / LRM-862: 默认含 thread).
+func parseIncludeThreadQuery(r *http.Request) bool {
+	raw := strings.TrimSpace(r.URL.Query().Get("include_thread"))
+	if raw == "" {
+		return true
+	}
+	switch strings.ToLower(raw) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// parseMessageSearchAuthorFilter reads author_type + author_id for from:@ search.
+// Both must be present together; author_type is user|agent.
+func parseMessageSearchAuthorFilter(w http.ResponseWriter, r *http.Request) (authorType, authorID string, hasAuthor, ok bool) {
+	authorType = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("author_type")))
+	authorID = strings.TrimSpace(r.URL.Query().Get("author_id"))
+	if authorType == "" && authorID == "" {
+		return "", "", false, true
+	}
+	if authorType == "" || authorID == "" {
+		writeError(w, http.StatusBadRequest, "author_type and author_id must be provided together")
+		return "", "", false, false
+	}
+	if authorType != "user" && authorType != "agent" {
+		writeError(w, http.StatusBadRequest, "author_type must be user or agent")
+		return "", "", false, false
+	}
+	if _, parseOK := parseUUIDOrBadRequest(w, authorID, "author_id"); !parseOK {
+		return "", "", false, false
+	}
+	return authorType, authorID, true, true
 }
 
 func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, raw *string) (pgtype.UUID, bool) {

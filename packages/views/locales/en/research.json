@@ -37,6 +37,17 @@
     "retry": "Retry",
     "empty_cta": "Start your first research"
   },
+  "filter": {
+    "search_label": "Search session titles",
+    "search_placeholder": "Search titles…",
+    "status_label": "Filter by status",
+    "status_in_progress": "In progress",
+    "status_completed": "Completed",
+    "status_failed": "Failed",
+    "clear": "Clear filters",
+    "no_results": "No matching sessions",
+    "no_results_hint": "Try another keyword, or clear filters to see all"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",

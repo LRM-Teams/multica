@@ -37,6 +37,17 @@
     "retry": "再試行",
     "empty_cta": "最初のリサーチを始める"
   },
+  "filter": {
+    "search_label": "セッションタイトルを検索",
+    "search_placeholder": "タイトルを検索…",
+    "status_label": "ステータスで絞り込み",
+    "status_in_progress": "進行中",
+    "status_completed": "完了",
+    "status_failed": "失敗",
+    "clear": "条件をクリア",
+    "no_results": "一致するセッションがありません",
+    "no_results_hint": "別のキーワードを試すか、条件をクリアしてすべて表示"
+  },
   "actions": {
     "menu": "Research actions",
     "stop": "Stop",

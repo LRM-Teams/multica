@@ -4103,4 +4103,35 @@ export class ApiClient {
       body: JSON.stringify(data),
     });
   }
+
+  /** LRM-911 / LRM-913 — list end-of-round judgment cards. */
+  async listResearchProductRoundCards(
+    sessionId: string,
+  ): Promise<import("../types/research").ListResearchProductRoundCardsResponse> {
+    const {
+      ListResearchProductRoundCardsResponseSchema,
+      EMPTY_RESEARCH_PRODUCT_ROUNDS,
+    } = await import("../research/schemas");
+    try {
+      const raw = await this.fetch(
+        `/api/research/sessions/${sessionId}/product-rounds`,
+      );
+      return parseWithFallback(
+        raw,
+        ListResearchProductRoundCardsResponseSchema,
+        EMPTY_RESEARCH_PRODUCT_ROUNDS,
+        { endpoint: "GET /api/research/sessions/:id/product-rounds" },
+      );
+    } catch {
+      // Route absent until LRM-911 merges — FE still renders process/node fallbacks.
+      return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+    }
+  }
+
+  async getResearchProductRoundCard(
+    sessionId: string,
+    round: number,
+  ): Promise<import("../types/research").ResearchProductRoundCard> {
+    return this.fetch(`/api/research/sessions/${sessionId}/product-rounds/${round}`);
+  }
 }

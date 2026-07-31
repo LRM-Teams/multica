@@ -9,10 +9,11 @@ import {
   dedupeResearchFleetMembers,
   researchKeys,
   researchPresenceOptions,
+  researchProductRoundsOptions,
   researchSessionSnapshotOptions,
   useResearchUiStore,
 } from "@multica/core/research";
-import type { ResearchGraphNode } from "@multica/core/types";
+import type { ResearchGraphNode, ResearchProductRoundCard } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -25,6 +26,7 @@ import {
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
+import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchSessionChrome } from "./research-session-chrome";
 import {
   ResearchStageChatMarker,
@@ -82,14 +84,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   const { data, isLoading } = useQuery(researchSessionSnapshotOptions(wsId, sessionId));
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
+  const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   const send = useMutation({
-    mutationFn: () => api.postResearchMessage(sessionId, { body: ui.body.trim() }),
+    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
     onSuccess: () => {
       dispatch({ type: "clearBody" });
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
     },
   });
 
@@ -129,6 +133,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     (stage) =>
       resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
   );
+  const latestRound: ResearchProductRoundCard | undefined = productRounds?.rounds?.[
+    (productRounds.rounds.length ?? 0) - 1
+  ];
+
+  const postUser = (body: string) => send.mutate(body);
 
   const scrollToStage = (stage: string) => {
     setChatOpen(true);
@@ -225,6 +234,47 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 .map((m) => m.display_name || m.name || m.role)
                 .join(" · ")}
             </div>
+            {latestRound ? (
+              <div className="border-b px-3 py-2">
+                <ResearchProductRoundCardView
+                  card={latestRound}
+                  currentGoal={session.goal}
+                  compact
+                  pending={send.isPending}
+                  onAgree={() =>
+                    postUser(
+                      `同意罗纳尔多产品轮 Round ${latestRound.round_number} 裁定：${latestRound.decision}`,
+                    )
+                  }
+                  onRejectContinue={() => {
+                    void api.stopResearchSession(sessionId).then(() => {
+                      void qc.invalidateQueries({
+                        queryKey: researchKeys.snapshot(wsId, sessionId),
+                      });
+                    });
+                    postUser(
+                      `驳回 continue：请停止调研（Round ${latestRound.round_number}）。`,
+                    );
+                  }}
+                  onRejectStop={() =>
+                    postUser(
+                      `驳回 stop：请在预算内再开一轮加深（Round ${latestRound.round_number}，剩余 ${latestRound.budget_remaining}）。`,
+                    )
+                  }
+                  onConfirmGoalPatch={(text) =>
+                    postUser(`确认将调研最终目标更新为：${text}`)
+                  }
+                  onEditGoalPatch={(text) =>
+                    postUser(`请按以下文本更新调研最终目标：${text}`)
+                  }
+                  onRejectGoalPatch={() =>
+                    postUser(
+                      `拒绝本轮目标回灌提案（Round ${latestRound.round_number}），保持当前目标不变。`,
+                    )
+                  }
+                />
+              </div>
+            ) : null}
             {Object.keys(presence).length > 0 ? (
               <div className="space-y-1 border-b px-3 py-2 text-[11px]">
                 <div className="font-medium text-muted-foreground">{t(($) => $.panel.presence)}</div>
@@ -253,7 +303,42 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 <p className="px-1 text-xs text-muted-foreground">{t(($) => $.chat.empty)}</p>
               ) : (
                 messages.map((m) => (
-                  <ResearchChatCard key={m.id} message={m} members={fleet.members} />
+                  <ResearchChatCard
+                    key={m.id}
+                    message={m}
+                    members={fleet.members}
+                    currentGoal={session.goal}
+                    roundPending={send.isPending}
+                    onRoundAgree={(card) =>
+                      postUser(
+                        `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
+                      )
+                    }
+                    onRoundRejectContinue={(card) => {
+                      void api.stopResearchSession(sessionId).then(() => {
+                        void qc.invalidateQueries({
+                          queryKey: researchKeys.snapshot(wsId, sessionId),
+                        });
+                      });
+                      postUser(`驳回 continue：请停止调研（Round ${card.round_number}）。`);
+                    }}
+                    onRoundRejectStop={(card) =>
+                      postUser(
+                        `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
+                      )
+                    }
+                    onConfirmGoalPatch={(_card, text) =>
+                      postUser(`确认将调研最终目标更新为：${text}`)
+                    }
+                    onEditGoalPatch={(_card, text) =>
+                      postUser(`请按以下文本更新调研最终目标：${text}`)
+                    }
+                    onRejectGoalPatch={(card) =>
+                      postUser(
+                        `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
+                      )
+                    }
+                  />
                 ))
               )}
             </div>
@@ -267,7 +352,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               <Button
                 size="sm"
                 disabled={!ui.body.trim() || send.isPending}
-                onClick={() => send.mutate()}
+                onClick={() => send.mutate(ui.body.trim())}
               >
                 {t(($) => $.panel.send)}
               </Button>

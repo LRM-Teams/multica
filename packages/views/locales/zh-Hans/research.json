@@ -103,6 +103,7 @@
     "pivot": "转折",
     "roster_change": "编制变更",
     "stage_gate": "阶段门",
+    "product_round_gate": "产品轮判定",
     "agent_activity": "活动"
   },
   "home": {
@@ -141,5 +142,34 @@
     "current": "进行中",
     "upcoming": "未开始",
     "done_feedback": "阶段已完成"
+  },
+  "round": {
+    "round_n": "产品轮 {{n}}",
+    "subtitle": "罗纳尔多轮末判定（覆盖缺口 · 置信 · 预算）",
+    "open_detail": "查看判定依据",
+    "confidence": "置信",
+    "empty_confidence": "暂无置信说明",
+    "gaps": "覆盖缺口",
+    "gaps_empty": "关键标准已覆盖",
+    "budget_used": "已用轮",
+    "budget_remaining": "剩余轮",
+    "budget_chip": "轮 {{used}}/{{budget}}",
+    "budget_capped": "预算到顶",
+    "next_focus": "下一轮焦点",
+    "goal_patch": "目标回灌提案",
+    "goal_patch_hint": "未确认前不写权威目标；确认走 Goal Card 用户管线（LRM-898）",
+    "goal_dialog_title": "确认目标回灌",
+    "goal_confirm": "确认回灌",
+    "goal_edit": "编辑后确认",
+    "goal_edit_send": "按编辑稿发送",
+    "goal_reject": "拒绝提案",
+    "agree": "同意裁定",
+    "reject_continue": "驳回继续 · 要求停止",
+    "reject_stop": "驳回停止 · 再开一轮",
+    "decision": {
+      "continue": "继续加深",
+      "stop_enough": "够了 · 收口",
+      "stop_budget": "预算到顶 · 收口"
+    }
   }
 }

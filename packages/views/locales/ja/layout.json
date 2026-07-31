@@ -205,5 +205,10 @@
     "add_node_dialog_description": "The command writes {{file}} and starts sandboxd with the new node key.",
     "copy_command_action": "Copy command",
     "copied_action": "Copied"
+  },
+  "runtime_attention": {
+    "trigger_label_other": "{{count}} 台のマシンにアップデートがあります",
+    "count_other": "{{count}} 台のマシンに利用可能なアップデートがあります。",
+    "view": "表示"
   }
 }

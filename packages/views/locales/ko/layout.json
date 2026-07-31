@@ -205,5 +205,10 @@
     "add_node_dialog_description": "The command writes {{file}} and starts sandboxd with the new node key.",
     "copy_command_action": "Copy command",
     "copied_action": "Copied"
+  },
+  "runtime_attention": {
+    "trigger_label_other": "업데이트가 필요한 머신 {{count}}대",
+    "count_other": "사용 가능한 업데이트가 있는 머신이 {{count}}대 있습니다.",
+    "view": "보기"
   }
 }

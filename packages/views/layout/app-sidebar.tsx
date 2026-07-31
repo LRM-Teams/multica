@@ -7,6 +7,7 @@ import { AppLink } from "../navigation/app-link";
 import { useNavigation } from "../navigation/context";
 import { HelpLauncher } from "./help-launcher";
 import { InboxNavIcon } from "./inbox-nav-icon";
+import { RuntimeAttentionAlert } from "./runtime-attention-alert";
 import {
   DndContext,
   PointerSensor,
@@ -80,7 +81,6 @@ import {
 import { api, ApiError } from "@multica/core/api";
 import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
-import { useMyRuntimeHealthAttention } from "@multica/core/runtimes/hooks";
 import { pinListOptions } from "@multica/core/pins/queries";
 import { useDeletePin, useReorderPins } from "@multica/core/pins/mutations";
 import { issueDetailOptions } from "@multica/core/issues/queries";
@@ -368,7 +368,6 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
 
   const wsId = workspace?.id;
   const unreadCount = useUserActivityUnreadCount(wsId);
-  const hasRuntimeHealthAttention = useMyRuntimeHealthAttention(wsId);
   const { data: pinnedItems = EMPTY_PINS } = useQuery({
     ...pinListOptions(wsId ?? "", userId ?? ""),
     enabled: !!wsId && !!userId,
@@ -733,8 +732,8 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       >
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "runtimes" && hasRuntimeHealthAttention && (
-                          <span className="ml-auto size-1.5 rounded-full bg-destructive" />
+                        {item.key === "runtimes" && (
+                          <RuntimeAttentionAlert wsId={wsId} />
                         )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>

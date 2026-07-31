@@ -26,6 +26,8 @@ export interface ActorIdentityRowProps {
   fleet?: AgentFleetRank | null;
   /** Inline surfaces cap glow at tier III; profile allows full VII. */
   honorSurface?: "inline" | "profile";
+  /** Keep earned name styling but omit honor and fleet badges in dense lists. */
+  showBadges?: boolean;
   primaryClassName?: string;
   secondaryClassName?: string;
   className?: string;
@@ -43,6 +45,7 @@ export function ActorIdentityRow({
   honor,
   fleet,
   honorSurface = "inline",
+  showBadges = true,
   primaryClassName = "truncate",
   secondaryClassName = "truncate text-xs text-muted-foreground",
   className = "min-w-0 flex-1",
@@ -61,6 +64,7 @@ export function ActorIdentityRow({
         honor={honor}
         fleet={fleet}
         honorSurface={honorSurface}
+        showBadges={showBadges}
         className={primaryClassName}
       />
       {showHandleLabel && handleLabel ? (

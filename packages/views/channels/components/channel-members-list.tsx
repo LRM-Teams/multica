@@ -215,6 +215,7 @@ function MemberRow({
               displayName={presentation.displayName}
               honor={actorHonor}
               fleet={actorFleet}
+              showBadges={false}
               className="text-sm font-semibold text-ink"
             />
             {mutedRoleLabel ? (

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -166,22 +167,25 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		return db.AgentEventDelivery{}, err
 	}
 
-	// Clear up to a few membership-poison heads in one transaction so a
-	// directed wake immediately behind them can be leased without waiting
-	// for another drain poll. Bound the loop so a pathological backlog cannot
-	// monopolize the drain request.
+	// Clear up to a few membership-poison / stale-runtime heads in one
+	// transaction so a directed wake immediately behind them can be leased
+	// without waiting for another drain poll. Bound the loop so a pathological
+	// backlog cannot monopolize the drain request.
 	const maxPoisonTerminalizations = 8
 	terminalizedCount := 0
-	// commitNoDelivery makes any in-tx poison cleanup durable before reporting
-	// no leasable event. Without this, poison-only / empty-tail / max-cap paths
-	// would return ErrNoRows with defer Rollback and leave poisons pending.
+	healedRuntimeIDs := map[string]struct{}{}
+	// commitNoDelivery makes any in-tx poison cleanup / runtime heal durable
+	// before reporting no leasable event. Without this, poison-only /
+	// empty-tail / max-cap paths would return ErrNoRows with defer Rollback
+	// and leave poisons pending (or leave events pinned to a stale runtime).
 	commitNoDelivery := func() error {
-		if terminalizedCount == 0 {
+		if terminalizedCount == 0 && len(healedRuntimeIDs) == 0 {
 			return pgx.ErrNoRows
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
+		h.notifyRuntimesAfterInboxHeal(healedRuntimeIDs)
 		return pgx.ErrNoRows
 	}
 
@@ -250,11 +254,13 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			}
 		}
 
+		var agentRuntimeID pgtype.UUID
+		var agentArchivedAt pgtype.Timestamptz
 		if err := tx.QueryRow(ctx, `
-			SELECT id
+			SELECT id, runtime_id, archived_at
 			FROM agent
 			WHERE id = $1
-			FOR UPDATE`, agentID).Scan(&agentID); err != nil {
+			FOR UPDATE`, agentID).Scan(&agentID, &agentRuntimeID, &agentArchivedAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return db.AgentEventDelivery{}, commitNoDelivery()
 			}
@@ -299,6 +305,40 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 				return db.AgentEventDelivery{}, commitNoDelivery()
 			}
 			return db.AgentEventDelivery{}, err
+		}
+
+		// Agent was reassigned (or archived) after the inbox event pinned this
+		// runtime_id. UpdateAgent does not rewrite historical event.runtime_id
+		// (see CancelAgentTasksByRuntimeOrAgent), so without this heal the old
+		// daemon leases the event, ensure-credential 403s ("agent is not bound
+		// to this runtime"), and Activity fills with credential_unavailable.
+		// Move claimable events onto the agent's current runtime and wake it.
+		if agentArchivedAt.Valid || !agentRuntimeID.Valid {
+			terminalized, termErr := terminalizeStaleAgentInboxEventTx(ctx, tx, eventID,
+				"agent is archived or has no runtime", "agent_unavailable")
+			if termErr != nil {
+				return db.AgentEventDelivery{}, termErr
+			}
+			if terminalized {
+				terminalizedCount++
+			}
+			if attempt == maxPoisonTerminalizations {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			continue
+		}
+		if agentRuntimeID != runtime.ID {
+			healed, healErr := reassignStaleRuntimeInboxEventTx(ctx, tx, eventID, agentRuntimeID)
+			if healErr != nil {
+				return db.AgentEventDelivery{}, healErr
+			}
+			if healed {
+				healedRuntimeIDs[uuidToString(agentRuntimeID)] = struct{}{}
+			}
+			if attempt == maxPoisonTerminalizations {
+				return db.AgentEventDelivery{}, commitNoDelivery()
+			}
+			continue
 		}
 
 		if eventChannelID.Valid {
@@ -371,14 +411,111 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		if err := tx.Commit(ctx); err != nil {
 			return db.AgentEventDelivery{}, err
 		}
+		h.notifyRuntimesAfterInboxHeal(healedRuntimeIDs)
 		return delivery, nil
 	}
 	return db.AgentEventDelivery{}, commitNoDelivery()
 }
 
-// terminalizeUnauthorizedMembershipInboxEventTx permanently fails a pending/
-// failed inbox event whose agent is no longer a channel member (#801).
-func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID) (bool, error) {
+// reassignStaleRuntimeInboxEventTx moves a still-claimable inbox event (and its
+// session) onto the agent's current runtime after a reassignment. Returns true
+// when the event row was updated.
+func reassignStaleRuntimeInboxEventTx(ctx context.Context, tx pgx.Tx, eventID, newRuntimeID pgtype.UUID) (bool, error) {
+	if !newRuntimeID.Valid {
+		return false, nil
+	}
+	var movedID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		UPDATE agent_inbox_event e
+		SET runtime_id = $2,
+		    updated_at = now(),
+		    last_error = NULL
+		WHERE e.id = $1
+		  AND e.status IN ('pending', 'failed')
+		  AND e.runtime_id IS DISTINCT FROM $2
+		RETURNING e.id`, eventID, newRuntimeID).Scan(&movedID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_session s
+		SET runtime_id = $2,
+		    updated_at = now()
+		FROM agent_inbox_event e
+		WHERE e.id = $1
+		  AND s.id = e.agent_session_id
+		  AND s.runtime_id IS DISTINCT FROM $2`, eventID, newRuntimeID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (h *Handler) notifyRuntimesAfterInboxHeal(runtimeIDs map[string]struct{}) {
+	if h == nil || h.DaemonHub == nil || len(runtimeIDs) == 0 {
+		return
+	}
+	for runtimeID := range runtimeIDs {
+		if strings.TrimSpace(runtimeID) == "" {
+			continue
+		}
+		h.DaemonHub.NotifyTaskAvailable(runtimeID, "")
+	}
+}
+
+// reassignClaimableInboxEventsAfterAgentRuntimeMove rewrites still-claimable
+// inbox events (and their sessions) that were snapshotted onto oldRuntimeID
+// when the agent moves. Best-effort: UpdateAgent already committed; a heal
+// miss is recovered on the next old-runtime drain via leaseAgentInboxEventForRuntime.
+func (h *Handler) reassignClaimableInboxEventsAfterAgentRuntimeMove(ctx context.Context, agentID, oldRuntimeID, newRuntimeID pgtype.UUID) {
+	if h == nil || h.DB == nil || !agentID.Valid || !oldRuntimeID.Valid || !newRuntimeID.Valid || oldRuntimeID == newRuntimeID {
+		return
+	}
+	tag, err := h.DB.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET runtime_id = $3,
+		    updated_at = now(),
+		    last_error = NULL
+		WHERE agent_id = $1
+		  AND runtime_id = $2
+		  AND status IN ('pending', 'failed')`, agentID, oldRuntimeID, newRuntimeID)
+	if err != nil {
+		slog.Warn("agent runtime move: reassign claimable inbox events failed",
+			"agent_id", uuidToString(agentID),
+			"old_runtime_id", uuidToString(oldRuntimeID),
+			"new_runtime_id", uuidToString(newRuntimeID),
+			"error", err)
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE agent_session
+		SET runtime_id = $3,
+		    updated_at = now()
+		WHERE agent_id = $1
+		  AND runtime_id = $2
+		  AND status = 'active'`, agentID, oldRuntimeID, newRuntimeID); err != nil {
+		slog.Warn("agent runtime move: reassign agent sessions failed",
+			"agent_id", uuidToString(agentID),
+			"old_runtime_id", uuidToString(oldRuntimeID),
+			"new_runtime_id", uuidToString(newRuntimeID),
+			"error", err)
+	}
+	moved := tag.RowsAffected()
+	if moved > 0 {
+		slog.Info("agent runtime move: reassigned claimable inbox events",
+			"agent_id", uuidToString(agentID),
+			"old_runtime_id", uuidToString(oldRuntimeID),
+			"new_runtime_id", uuidToString(newRuntimeID),
+			"events_moved", moved)
+		h.notifyRuntimesAfterInboxHeal(map[string]struct{}{uuidToString(newRuntimeID): {}})
+	}
+}
+
+// terminalizeStaleAgentInboxEventTx permanently fails a still-claimable inbox
+// event that can never succeed on the draining runtime (archived agent, etc.).
+func terminalizeStaleAgentInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID, errMsg, failureReason string) (bool, error) {
 	var terminalizedID pgtype.UUID
 	err := tx.QueryRow(ctx, `
 		UPDATE agent_inbox_event e
@@ -387,13 +524,13 @@ func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.T
 		    terminal_at = now(),
 		    acked_at = now(),
 		    terminal_outcome = 'failed',
-		    error = 'agent is not a channel member',
-		    failure_reason = 'membership_revoked',
+		    error = $2,
+		    failure_reason = $3,
 		    updated_at = now()
 		WHERE e.id = $1
 		  AND e.status IN ('pending', 'failed', 'draining')
 		  AND e.terminal_outcome IS NULL
-		RETURNING e.id`, eventID).Scan(&terminalizedID)
+		RETURNING e.id`, eventID, errMsg, failureReason).Scan(&terminalizedID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
@@ -403,10 +540,10 @@ func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.T
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_event_delivery d
 		SET status = 'failed',
-		    last_error = 'agent is not a channel member',
+		    last_error = $2,
 		    updated_at = now()
 		WHERE d.inbox_event_id = $1
-		  AND d.status IN ('leased', 'processing')`, eventID); err != nil {
+		  AND d.status IN ('leased', 'processing')`, eventID, errMsg); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -419,6 +556,13 @@ func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.T
 		return false, err
 	}
 	return true, nil
+}
+
+// terminalizeUnauthorizedMembershipInboxEventTx permanently fails a pending/
+// failed inbox event whose agent is no longer a channel member (#801).
+func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID) (bool, error) {
+	return terminalizeStaleAgentInboxEventTx(ctx, tx, eventID,
+		"agent is not a channel member", "membership_revoked")
 }
 
 // terminalizeUnauthorizedRadarInboxEventTx permanently fails a still-pending

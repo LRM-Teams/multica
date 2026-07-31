@@ -12,6 +12,11 @@ const (
 	JobNameAgentMemorySelfReview = "agent_memory_self_review"
 	JobNameTeamMemoryCuration    = "team_memory_curation"
 
+	defaultMemoryCurationTimezone      = "Asia/Shanghai"
+	defaultAgentSelfReviewScheduleHour = 1
+	defaultAgentSelfReviewMode         = "auto_safe"
+	defaultAgentSelfReviewConfidence   = 0.8
+
 	// Backward-compatible names for older scheduler tests and deployments.
 	JobNameMemoryL1DailyRecord   = JobNameAgentMemorySelfReview
 	JobNameMemoryL2ReviewExtract = JobNameAgentMemorySelfReview
@@ -45,23 +50,25 @@ func memoryCurationJob(pool *pgxpool.Pool, name, stage string, hourOffset int) J
 	}
 }
 
-// makeMemoryCurationIntentHandler creates one nightly run intent per enabled
-// profile. The run is claimed by the selected online runtime and executed by
-// the selected curator agent. Self-review only targets agents that were active
-// during the day and whose own runtime is online.
+// makeMemoryCurationIntentHandler schedules self-review by default for active
+// agents. Team curation remains profile-backed so a workspace can choose one
+// curator runtime/agent for shared governance.
 func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset int) Handler {
 	stageName := normalizeScheduledMemoryCurationStage(stage)
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		if pool == nil {
 			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "database_unavailable", "stage": stageName}}, nil
 		}
-		enabledColumn := "team_curation_enabled"
-		if stageName == "agent_self_review" {
-			enabledColumn = "self_review_enabled"
-		}
 		agentRunTableAvailable, err := memoryCurationAgentRunTableExists(ctx, pool)
 		if err != nil {
 			return HandlerResult{}, err
+		}
+		if stageName == "agent_self_review" && agentRunTableAvailable {
+			return scheduleDefaultAgentSelfReviewRuns(ctx, pool, in.PlanTime, hourOffset, in.Heartbeat)
+		}
+		enabledColumn := "team_curation_enabled"
+		if stageName == "agent_self_review" {
+			enabledColumn = "self_review_enabled"
 		}
 		rows, err := pool.Query(ctx, `
 			SELECT p.id::text, p.workspace_id::text, p.user_id::text,
@@ -173,9 +180,98 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 	}
 }
 
+func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool, planTime time.Time, hourOffset int, heartbeat func(context.Context) error) (HandlerResult, error) {
+	loc, err := time.LoadLocation(defaultMemoryCurationTimezone)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	localPlan := planTime.In(loc)
+	cycleLocal := localPlan.Add(-time.Duration(hourOffset) * time.Hour)
+	if cycleLocal.Hour() != defaultAgentSelfReviewScheduleHour {
+		return HandlerResult{Result: map[string]any{"stage": "agent_self_review", "run_intents_created": int64(0), "reason": "not_default_schedule_hour"}}, nil
+	}
+	planDate := time.Date(cycleLocal.Year(), cycleLocal.Month(), cycleLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	legacyTaskQueueAvailable, err := relationExists(ctx, pool, "public.agent_task_queue")
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	activeSources := `
+		      SELECT agent_id
+		        FROM agent_inbox_event
+		       WHERE created_at >= $1::date
+		         AND created_at < ($1::date + interval '1 day')`
+	if legacyTaskQueueAvailable {
+		activeSources += `
+		      UNION
+		      SELECT q.agent_id
+		        FROM agent_task_queue q
+		       WHERE COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) >= $1::date
+		         AND COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) < ($1::date + interval '1 day')`
+	}
+	var created int64
+	err = pool.QueryRow(ctx, `
+		WITH active_agents AS MATERIALIZED (
+		  SELECT DISTINCT a.workspace_id, a.id AS agent_id, a.runtime_id, rt.status AS runtime_status
+		    FROM agent a
+		    JOIN agent_runtime rt ON rt.id = a.runtime_id
+		    JOIN (`+activeSources+`
+		    ) active ON active.agent_id = a.id
+		   WHERE a.archived_at IS NULL
+		     AND a.runtime_id IS NOT NULL
+		), workspace_targets AS (
+		  SELECT workspace_id,
+		         array_agg(agent_id ORDER BY agent_id) AS target_agent_ids,
+		         bool_or(runtime_status = 'online') AS has_online_runtime
+		    FROM active_agents
+		   GROUP BY workspace_id
+		), inserted AS (
+		  INSERT INTO memory_curation_run (
+		    workspace_id, stage, trigger_kind, status, date_from, date_to,
+		    curator_mode, confidence_threshold, target_agent_ids, execution_owner
+		  )
+		  SELECT wt.workspace_id, 'agent_self_review', 'scheduled',
+		         CASE WHEN wt.has_online_runtime THEN 'queued' ELSE 'waiting_runtime' END,
+		         $1::date, $1::date, $2, $3, wt.target_agent_ids, 'daemon'
+		    FROM workspace_targets wt
+		   WHERE NOT EXISTS (
+		     SELECT 1
+		       FROM memory_curation_run existing
+		      WHERE existing.workspace_id = wt.workspace_id
+		        AND existing.stage = 'agent_self_review'
+		        AND existing.trigger_kind = 'scheduled'
+		        AND existing.date_from = $1::date
+		        AND existing.profile_id IS NULL
+		   )
+		  RETURNING id, workspace_id
+		), child_runs AS (
+		  INSERT INTO memory_curation_agent_run (
+		    parent_run_id, workspace_id, agent_id, runtime_id, stage, status
+		  )
+		  SELECT i.id, i.workspace_id, a.agent_id, a.runtime_id, 'agent_self_review',
+		         CASE WHEN a.runtime_status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
+		    FROM inserted i
+		    JOIN active_agents a ON a.workspace_id = i.workspace_id
+		  ON CONFLICT (parent_run_id, agent_id, stage) DO NOTHING
+		  RETURNING 1
+		)
+		SELECT count(*) FROM inserted
+	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence).Scan(&created)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	if heartbeat != nil {
+		_ = heartbeat(ctx)
+	}
+	return HandlerResult{RowsAffected: created, Result: map[string]any{"stage": "agent_self_review", "run_intents_created": created, "schedule": "default_active_agents"}}, nil
+}
+
 func memoryCurationAgentRunTableExists(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	return relationExists(ctx, pool, "public.memory_curation_agent_run")
+}
+
+func relationExists(ctx context.Context, pool *pgxpool.Pool, name string) (bool, error) {
 	var exists bool
-	err := pool.QueryRow(ctx, `SELECT to_regclass('public.memory_curation_agent_run') IS NOT NULL`).Scan(&exists)
+	err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&exists)
 	return exists, err
 }
 

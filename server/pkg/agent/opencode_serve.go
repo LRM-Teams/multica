@@ -240,6 +240,11 @@ func (b *opencodeServeBackend) ensureServer(ctx context.Context, opts ExecOption
 	}
 	env = append(env, "OPENCODE_SERVER_PASSWORD="+password, "OPENCODE_SERVER_USERNAME="+username)
 	cmd.Env = env
+	// Diagnostic-only capture: opencode prints its own "listening on..."
+	// readiness signal to stdout (per its docs), not stderr — before this,
+	// a failed waitReady gave zero insight into what the subprocess itself
+	// was doing, because stdout was silently discarded.
+	cmd.Stdout = newLogWriter(b.cfg.Logger, "[opencode-serve:stdout] ")
 	cmd.Stderr = newLogWriter(b.cfg.Logger, "[opencode-serve:stderr] ")
 
 	if err := cmd.Start(); err != nil {
@@ -253,8 +258,15 @@ func (b *opencodeServeBackend) ensureServer(ctx context.Context, opts ExecOption
 	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := client.waitReady(readyCtx); err != nil {
+		// Diagnostic-only: distinguish "the process already exited" from
+		// "the process is alive but never accepted a connection" — these
+		// are different bugs (crash vs. hang) needing different fixes, and
+		// without this the timeout error alone can't tell them apart.
+		alive, known := processAlive(cmd.Process)
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		b.cfg.Logger.Warn("opencode serve readiness timeout",
+			"pid", cmd.Process.Pid, "port", port, "process_alive_at_timeout", alive, "liveness_check_known", known)
 		return nil, fmt.Errorf("opencode serve did not become ready: %w", err)
 	}
 
@@ -353,14 +365,26 @@ type opencodeServeSessionSignal struct {
 }
 
 func newOpenCodeServeClient(baseURL, username, password string, logger *slog.Logger) *opencodeServeClient {
+	// This client only ever talks to an opencode serve process we just
+	// spawned on 127.0.0.1 — a same-machine control channel, never a
+	// destination reachable through a proxy. Clone http.DefaultTransport
+	// (keeping its tuned connection-pool/timeout defaults intact) and only
+	// override Proxy, rather than relying on a host's HTTP_PROXY/NO_PROXY
+	// config correctly exempting 127.0.0.1, or constructing a bare
+	// &http.Transport{} that would silently drop those defaults. If this
+	// disable-proxy pattern gets copied to a different client (higher
+	// concurrency, non-localhost), re-check the cloned defaults still fit —
+	// this Clone() is scoped to this low-traffic localhost-only use case.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	return &opencodeServeClient{
 		baseURL:  baseURL,
 		username: username,
 		password: password,
 		logger:   logger,
-		http:     &http.Client{},
+		http:     &http.Client{Transport: transport},
 		waiters:  make(map[string]*opencodeServeWaiter),
-		closeCh:  make(chan struct{}),
+		closeCh: make(chan struct{}),
 	}
 }
 
@@ -386,18 +410,42 @@ func (c *opencodeServeClient) newRequest(ctx context.Context, method, path strin
 	return req, nil
 }
 
-// waitReady polls a lightweight endpoint until the server accepts
-// connections or ctx is done.
+// waitReadyProbeTimeout bounds a single readiness probe. c.http has no
+// client-wide Timeout (long-lived requests like the SSE event stream must
+// not be cut off), so without a per-probe deadline here, a connection that
+// succeeds but never gets a response header blocks c.http.Do for however
+// long ctx has left — consuming the *entire* remaining readiness budget on
+// one attempt instead of the intended 100ms retry cadence. Kept as a
+// defense-in-depth bound even after fixing the actual root cause below.
+const waitReadyProbeTimeout = 2 * time.Second
+
+// waitReady polls /global/health — opencode's documented lightweight
+// health-check endpoint — until the server responds or ctx is done.
+//
+// This used to probe /doc, which looks like a natural "is anything there"
+// check but is actually the full OpenAPI 3.1 spec renderer: authenticated,
+// it took ~1.9s to respond even with zero other load on the machine (vs.
+// ~4ms for /global/health), confirmed via manual curl. Unauthenticated it
+// fails fast (~45ms, auth middleware short-circuits before ever reaching the
+// spec generator), which is why an earlier no-auth-only investigation missed
+// this — this client always sends real Basic Auth, so it always paid the
+// slow path. Under production load (a dozen+ other resident agent processes
+// competing for CPU on the same machine), that ~1.9s stretched past our 15s
+// readiness deadline and opencode chat failed with "did not become ready"
+// even though the process and port were completely healthy the whole time.
 func (c *opencodeServeClient) waitReady(ctx context.Context) error {
 	for {
-		req, err := c.newRequest(ctx, http.MethodGet, "/doc", nil)
+		probeCtx, cancel := context.WithTimeout(ctx, waitReadyProbeTimeout)
+		req, err := c.newRequest(probeCtx, http.MethodGet, "/global/health", nil)
 		if err == nil {
 			resp, err := c.http.Do(req)
 			if err == nil {
 				resp.Body.Close()
+				cancel()
 				return nil
 			}
 		}
+		cancel()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

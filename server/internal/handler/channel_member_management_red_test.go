@@ -270,8 +270,8 @@ func TestInviterChannelMemberCanRemoveSelfAddedAgent(t *testing.T) {
 		  added_by_type, added_by_id, join_source
 		)
 		VALUES
-		  ($1, $2, 'user', $3, 'member', NULL, NULL, 'manual'),
-		  ($1, $2, 'user', $4, 'member', NULL, NULL, 'manual'),
+		  ($1, $2, 'user', $3, 'member', 'system', NULL, 'manual'),
+		  ($1, $2, 'user', $4, 'member', 'system', NULL, 'manual'),
 		  ($1, $2, 'agent', $5, 'member', 'user', $3, 'manual')`,
 		channelID, testWorkspaceID, inviterID, otherMemberID, agentID); err != nil {
 		t.Fatalf("seed inviter/other/agent members: %v", err)

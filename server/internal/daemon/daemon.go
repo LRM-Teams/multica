@@ -32,6 +32,14 @@ import (
 // server refresh.
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
+// errAgentReassignedElsewhere marks ensureTaskAgentCredential's terminal
+// classification of a 403 "agent is not bound to this runtime" response: the
+// agent this task names has been reassigned to a different runtime, and no
+// amount of retrying from this daemon will change that. Callers use this to
+// report a clear, distinct failure reason instead of the generic
+// "credential_unavailable" every other credential error produces.
+var errAgentReassignedElsewhere = errors.New("agent is no longer bound to this daemon's runtime (reassigned elsewhere)")
+
 const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
@@ -3256,6 +3264,19 @@ func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskL
 	}
 	resp, err := d.client.EnsureAgentCredential(ctx, task.RuntimeID, task.AgentID, cachedCredentialID)
 	if err != nil {
+		if isAgentNotBoundToRuntimeError(err) {
+			// This agent was reassigned to a different runtime (agent.runtime_id
+			// is a normal, user-editable field — not data corruption). Retrying
+			// with the same local state can never succeed, so drop the now-stale
+			// cached credential rather than let a future attempt reuse it if this
+			// agent is ever reassigned back to this runtime.
+			if removeErr := removeCachedAgentCredential(d.cfg, task.WorkspaceID, task.AgentID); removeErr != nil {
+				taskLog.Warn("failed to remove stale agent credential cache", "error", removeErr, "agent_id", shortID(task.AgentID))
+			}
+			taskLog.Warn("agent no longer bound to this runtime; this task's agent has moved elsewhere",
+				"agent_id", shortID(task.AgentID), "runtime_id", shortID(task.RuntimeID))
+			return "", fmt.Errorf("%w: %s", errAgentReassignedElsewhere, err.Error())
+		}
 		return "", fmt.Errorf("ensure daemon agent credential: %w", err)
 	}
 	if resp.Reused {
@@ -3715,6 +3736,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.isInboxTask() && agentToken == "" && !restrictedExecution {
 		token, err := d.ensureTaskAgentCredential(ctx, task, taskLog)
 		if err != nil {
+			if errors.Is(err, errAgentReassignedElsewhere) {
+				return TaskResult{
+					Status:        "failed",
+					Comment:       "agent_reassigned_elsewhere: this agent is now running on a different computer; no action needed on this machine",
+					FailureReason: "agent_reassigned_elsewhere",
+				}, nil
+			}
 			return TaskResult{
 				Status:        "failed",
 				Comment:       fmt.Sprintf("credential_unavailable: %s", err.Error()),

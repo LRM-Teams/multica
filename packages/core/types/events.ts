@@ -8,6 +8,7 @@ import type { Project } from "./project";
 import type { Label } from "./label";
 import type { ChannelMessage, ChannelReaction, ChannelTypingPayload } from "./channel";
 import type { MessagePart } from "./message-part";
+import type { AgentAchievement } from "./agent-honor";
 
 // WebSocket event types (matching Go server protocol/events.go)
 export type WSEventType =
@@ -48,6 +49,8 @@ export type WSEventType =
   | "member:removed"
   | "member:presence"
   | "honor:badge_unlocked"
+  | "agent_honor:achievement_unlocked"
+  | "agent_honor:fleet_class_changed"
   | "daemon:heartbeat"
   | "daemon:register"
   | "daemon:runtime_updated"
@@ -543,6 +546,18 @@ export interface HonorBadgeUnlockedPayload {
   unlock_pct?: number;
 }
 
+export interface AgentHonorUnlockedPayload {
+  agent_id: string;
+  achievement: AgentAchievement;
+}
+
+export interface AgentFleetClassChangedPayload {
+  agent_id: string;
+  previous_class_id: string;
+  class_id: string;
+  fleet_score: number;
+}
+
 /**
  * Maps every WSEventType to its payload interface. Events whose payload
  * shape isn't formally typed (server emits an object the client doesn't
@@ -599,6 +614,8 @@ export interface WSEventPayloadMap {
   "member:removed": MemberRemovedPayload;
   "member:presence": MemberPresencePayload;
   "honor:badge_unlocked": HonorBadgeUnlockedPayload;
+  "agent_honor:achievement_unlocked": AgentHonorUnlockedPayload;
+  "agent_honor:fleet_class_changed": AgentFleetClassChangedPayload;
   "subscriber:added": SubscriberAddedPayload;
   "subscriber:removed": SubscriberRemovedPayload;
   "activity:created": ActivityCreatedPayload;

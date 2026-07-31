@@ -175,6 +175,15 @@
     "no_recent_activity": "最近のアクティビティはありません",
     "close_aria": "プロフィールを閉じる",
     "no_permission_toast": "このメンバーのプロフィールを表示する権限がありません",
+    "honor": {
+      "title": "開発者栄誉",
+      "agent_title": "エージェント栄誉",
+      "no_badge": "バッジ未装備",
+      "keep_building": "開発を続けて栄誉を解除",
+      "collection": "{{unlocked}} / {{total}} 個収集",
+      "agent_collection": "{{unlocked}} 件解除",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "使用量",

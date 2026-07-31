@@ -175,6 +175,15 @@
     "no_recent_activity": "최근 활동이 없습니다",
     "close_aria": "프로필 닫기",
     "no_permission_toast": "이 멤버의 프로필을 볼 권한이 없습니다",
+    "honor": {
+      "title": "개발자 명예",
+      "agent_title": "에이전트 명예",
+      "no_badge": "장착한 배지 없음",
+      "keep_building": "계속 개발하여 명예 잠금 해제",
+      "collection": "{{unlocked}} / {{total}} 수집",
+      "agent_collection": "{{unlocked}}개 잠금 해제",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "사용량",

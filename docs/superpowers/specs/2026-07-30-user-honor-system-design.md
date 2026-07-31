@@ -1,12 +1,12 @@
 # User honor system (levels, badges, name styles)
 
-Status: approved; implementation in progress  
-Date: 2026-07-30  
-Last updated: 2026-07-30 (cosmic IP + glow safety)
+Status: implemented
+Date: 2026-07-30
+Last updated: 2026-07-31 (24 name tiers + 51-badge catalog + profile peek)
 
 ## Product summary
 
-Global forum/QQ-style honor mechanics with a **sci-fi cosmic IP** skin (phased content rollout):
+Global forum/QQ-style honor mechanics with a **sci-fi cosmic IP** skin:
 
 - Behavior → XP → level; four pillars with steep T1–T8 tiers
 - Badges unlocked by achievements; user equips **one**; name style = **auto highest**
@@ -14,19 +14,20 @@ Global forum/QQ-style honor mechanics with a **sci-fi cosmic IP** skin (phased c
 - Public rules; XP details private on Settings → **荣誉** (`?tab=honor`)
 - Owner/Admin role pills coexist
 
-Mechanics follow industry patterns; **IP assets expand over time** without changing core rules.
+The catalog now contains 24 visible name tiers and 51 badges. New definitions
+remain data-driven so later catalog additions do not change the XP ledger.
 
 ---
 
-## Cosmic IP (content roadmap)
+## Cosmic IP
 
 **Setting:** users progress through a “collaboration universe” — inner planets → outer planets → stellar classes → phenomena badges.
 
-| Phase | Content |
+| Layer | Content |
 | --- | --- |
-| **Now** | Core mechanics + placeholder badges (replace before ship) |
-| **Next** | 12–16 **ship-badge quality** SVGs: 9 planets + founding nebula + 3 stellar tiers |
-| **Later** | 40+ phenomenon/constellation badges; stellar rank titles (red dwarf → quasar) |
+| **Name progression** | 24 visible tiers from Default to Transcendent |
+| **Badge catalog** | 51 level, pillar, founding, stellar, and phenomenon badges |
+| **Late game** | Secret badges from Quantum Gate through Infinity Engine |
 
 Founding users get **Genesis Nebula** identity; does not auto-grant max stellar tier.
 
@@ -54,14 +55,15 @@ Seven tiers (**I–VII**). Higher tier = larger halo, more layers, slightly fast
 | **I** None | Lv1–5 | Plain | Plain |
 | **II** Micro | Lv6–12 | Soft edge | Soft edge |
 | **III** Steady | Lv13–22 | Slow breathe (3–4s) | Same |
-| **IV** Pulse | Lv23–35 | **Not inline** | Pulse + sparkles |
-| **V** Sweep | Lv36–45 | **Not inline** | Shimmer sweep |
-| **VI** Nebula | Lv46+ | **Not inline** | Flowing gradient |
-| **VII** Legend | Founding / stellar cap | **Not inline** | Full multi-layer sync |
+| **IV** Pulse | Lv23–35 | Static color + breathing halo | Pulse + sparkles |
+| **V** Sweep | Lv36–45 | Static gradient + breathing halo | Shimmer sweep |
+| **VI** Nebula | Lv46+ | Capped to V | Flowing gradient |
+| **VII** Legend | Lv50+ | Capped to V | Full multi-layer sync |
 
 ### Anti-harsh rules (approved)
 
-1. **Message/list surfaces cap at tier III** — no sweep or fast flash in feed.
+1. **Message/list surfaces cap at tier V**; text-gradient motion is disabled there,
+   while the slow halo may breathe.
 2. Glow on **halos only**; text keeps readable contrast.
 3. Pulse period **≥ 2.5s**; no sub-second flashing.
 4. Halo opacity cap ~**0.35–0.45**; avoid large pure-white flashes.
@@ -76,27 +78,28 @@ Seven tiers (**I–VII**). Higher tier = larger halo, more layers, slightly fast
 - **HonorService** — XP ledger, pillar tiers, founding backfill, level/style reconciliation
 - **HTTP** — `GET /api/honor/rules`, `GET/PATCH /api/me/honor`, `POST /api/me/honor/presence`, `GET /api/users/{id}/honor`
 - **Embed** — compact `honor` on member list + user member profile
-- **UI** — `ActorIdentityRow`, channel author row, Settings **荣誉** tab
+- **UI** — `ActorIdentityRow`, channel author row, full-width Settings **荣誉**
+  tab, member side-panel wall, and avatar/name profile popover showcase
 
 CSS: `data-honor-glow-tier` + tokens (`--honor-glow-color`, `--honor-pulse-duration`).
 
 ---
 
-## v1 implementation status
+## Implementation status
 
 - Migration `251_user_honor`
 - XP hooks: issue create/close, comment, channel message, presence endpoint
 - Four pillars + public rules API
 - Founding auto-unlock
-- **Placeholder** badge SVGs (must replace per quality bar above)
-- Basic name CSS tokens + reduced-motion fallback
+- 51 code-native cosmic badge SVGs, including 34 expanded catalog designs
+- 24 readable light/dark name styles + seven glow tiers + reduced-motion fallback
+- Xbox-style locked/in-progress/unlocked catalog, rarity, secret achievements,
+  equip, three-slot showcase, comparison, recent unlocks, and realtime toast
+- Dense member/DM lists suppress badge icons; profile/message surfaces retain
+  intentional honor presentation
+- Avatar/name hover cards fetch the public honor wall and display level, equipped
+  crest, showcase, and collection progress
 
-## Follow-ups
+## Reserved follow-up
 
-- Replace placeholders with cosmic badge set (batch 1: 12–16)
-- Map level → glow tier III cap in inline renderers
-- Ops manual grant API
-- CoreProvider presence heartbeat
-- Profile popover honor wall
-- Public rules help page
-- Paid `membership_tier` (schema reserved)
+- Paid `membership_tier` remains schema-only and has no scoring effect.

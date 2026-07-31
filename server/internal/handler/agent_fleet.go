@@ -8,10 +8,16 @@ import (
 )
 
 func (h *Handler) GetAgentFleetRankRules(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.workspaceMember(w, r, h.resolveWorkspaceID(r)); !ok {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, service.BuildFleetRulesDocument())
+	rules, err := h.AgentFleetRankService.GetRulesDocument(r.Context(), parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load fleet rank rules")
+		return
+	}
+	writeJSON(w, http.StatusOK, rules)
 }
 
 func (h *Handler) GetAgentFleetRankings(w http.ResponseWriter, r *http.Request) {

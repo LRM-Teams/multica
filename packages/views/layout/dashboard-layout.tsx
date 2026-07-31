@@ -11,6 +11,7 @@ import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 import { GlobalAgentPanel } from "./global-agent-panel";
 import { GlobalMemberPanel } from "./global-member-panel";
 import { AgentMemoryXpListener } from "../agents/components/agent-memory-xp-listener";
+import { AgentHonorUnlockListener } from "../agents/components/agent-honor-unlock-listener";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -42,6 +43,7 @@ export function DashboardLayout({
       <SidebarProvider className="h-svh">
         <WorkspacePresencePrefetch />
         <AgentMemoryXpListener />
+        <AgentHonorUnlockListener />
         <AppSidebar />
         <SidebarInset className="relative overflow-hidden">
           <NavigationProgress />

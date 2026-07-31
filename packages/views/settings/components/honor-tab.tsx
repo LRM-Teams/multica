@@ -230,7 +230,7 @@ export function HonorTab() {
 
   return (
     <div className="space-y-7 pb-4">
-      <section className="relative isolate min-h-[340px] overflow-hidden rounded-[1.75rem] border border-cyan-400/20 bg-slate-950 text-white shadow-[0_30px_90px_-50px_rgba(34,211,238,0.7)]">
+      <section className="honor-dark-surface relative isolate min-h-[340px] overflow-hidden rounded-[1.75rem] border border-cyan-400/20 bg-slate-950 text-white shadow-[0_30px_90px_-50px_rgba(34,211,238,0.7)]">
         <img
           src={honorHeroImageSrc}
           alt=""
@@ -340,7 +340,7 @@ export function HonorTab() {
       {nameStyleRules.length > 0 ? (
         <section
           aria-labelledby="honor-nameplate-title"
-          className="overflow-hidden rounded-2xl border border-violet-500/20 bg-[linear-gradient(135deg,rgba(15,23,42,1),rgba(30,27,75,0.94)_48%,rgba(8,47,73,0.92))] p-4 text-white shadow-[0_20px_60px_-44px_rgba(34,211,238,0.75)] sm:p-5"
+          className="honor-dark-surface overflow-hidden rounded-2xl border border-violet-500/20 bg-[linear-gradient(135deg,rgba(15,23,42,1),rgba(30,27,75,0.94)_48%,rgba(8,47,73,0.92))] p-4 text-white shadow-[0_20px_60px_-44px_rgba(34,211,238,0.75)] sm:p-5"
         >
           <SectionHeading
             id="honor-nameplate-title"
@@ -349,7 +349,7 @@ export function HonorTab() {
             hint={t(($) => $.honor.nameplate_progression_hint)}
             dark
           />
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
+          <div className="grid gap-2 sm:grid-cols-4 xl:grid-cols-8">
             {nameStyleRules.map((styleRule) => {
               const isCurrent = dashboard.name_style === styleRule.id;
               const isUnlocked =
@@ -789,20 +789,52 @@ function nameStyleLabel(style: string, t: TranslationFunction): string {
   switch (style) {
     case "default":
       return t(($) => $.honor.nameplate_style_default);
+    case "ice":
+      return t(($) => $.honor.nameplate_style_ice);
     case "member":
       return t(($) => $.honor.nameplate_style_member);
+    case "emerald":
+      return t(($) => $.honor.nameplate_style_emerald);
+    case "sapphire":
+      return t(($) => $.honor.nameplate_style_sapphire);
     case "gold":
       return t(($) => $.honor.nameplate_style_gold);
+    case "coral":
+      return t(($) => $.honor.nameplate_style_coral);
+    case "amethyst":
+      return t(($) => $.honor.nameplate_style_amethyst);
     case "prismatic":
       return t(($) => $.honor.nameplate_style_prismatic);
+    case "aurora":
+      return t(($) => $.honor.nameplate_style_aurora);
     case "glow":
       return t(($) => $.honor.nameplate_style_glow);
+    case "solar":
+      return t(($) => $.honor.nameplate_style_solar);
     case "shimmer":
       return t(($) => $.honor.nameplate_style_shimmer);
+    case "nebula":
+      return t(($) => $.honor.nameplate_style_nebula);
+    case "cyber":
+      return t(($) => $.honor.nameplate_style_cyber);
     case "animated_prismatic":
       return t(($) => $.honor.nameplate_style_animated_prismatic);
+    case "plasma":
+      return t(($) => $.honor.nameplate_style_plasma);
     case "animated_glow":
       return t(($) => $.honor.nameplate_style_animated_glow);
+    case "eclipse":
+      return t(($) => $.honor.nameplate_style_eclipse);
+    case "nova":
+      return t(($) => $.honor.nameplate_style_nova);
+    case "quantum":
+      return t(($) => $.honor.nameplate_style_quantum);
+    case "celestial":
+      return t(($) => $.honor.nameplate_style_celestial);
+    case "mythic":
+      return t(($) => $.honor.nameplate_style_mythic);
+    case "transcendent":
+      return t(($) => $.honor.nameplate_style_transcendent);
     default:
       return style;
   }

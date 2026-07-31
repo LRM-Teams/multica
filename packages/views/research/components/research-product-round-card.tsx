@@ -17,22 +17,27 @@ import { useT } from "../../i18n/use-t";
 
 function asGapList(gaps: unknown): string[] {
   if (!Array.isArray(gaps)) return [];
-  return gaps
-    .map((g) => {
-      if (typeof g === "string") return g.trim();
-      if (g && typeof g === "object" && "text" in g && typeof (g as { text: unknown }).text === "string") {
-        return (g as { text: string }).text.trim();
-      }
-      if (g && typeof g === "object" && "title" in g && typeof (g as { title: unknown }).title === "string") {
-        return (g as { title: string }).title.trim();
-      }
+  return gaps.flatMap((g) => {
+    let text = "";
+    if (typeof g === "string") text = g.trim();
+    else if (g && typeof g === "object" && "text" in g && typeof (g as { text: unknown }).text === "string") {
+      text = (g as { text: string }).text.trim();
+    } else if (
+      g &&
+      typeof g === "object" &&
+      "title" in g &&
+      typeof (g as { title: unknown }).title === "string"
+    ) {
+      text = (g as { title: string }).title.trim();
+    } else {
       try {
-        return JSON.stringify(g);
+        text = JSON.stringify(g);
       } catch {
-        return "";
+        text = "";
       }
-    })
-    .filter(Boolean);
+    }
+    return text ? [text] : [];
+  });
 }
 
 function decisionTone(decision: string): string {

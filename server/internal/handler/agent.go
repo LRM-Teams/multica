@@ -1605,9 +1605,16 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, updated, map[string]any{"agent": broadcastAgentResponse(resp)})
-	if existing.RuntimeID.Valid && updated.RuntimeID.Valid && existing.RuntimeID != updated.RuntimeID && h.ReminderNotifier != nil {
-		h.projectReminderOwnerStop(r.Context(), uuidToString(updated.ID), uuidToString(existing.RuntimeID))
-		h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+	if existing.RuntimeID.Valid && updated.RuntimeID.Valid && existing.RuntimeID != updated.RuntimeID {
+		if h.ReminderNotifier != nil {
+			h.projectReminderOwnerStop(r.Context(), uuidToString(updated.ID), uuidToString(existing.RuntimeID))
+			h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+		}
+		// agent_inbox_event.runtime_id is snapshotted at enqueue and is not
+		// rewritten by UpdateAgent itself. Move still-claimable events onto the
+		// new runtime so the old daemon cannot lease them and 403 on
+		// ensure-credential (LRM-927 / #1628 companion).
+		h.reassignClaimableInboxEventsAfterAgentRuntimeMove(r.Context(), updated.ID, existing.RuntimeID, updated.RuntimeID)
 	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)

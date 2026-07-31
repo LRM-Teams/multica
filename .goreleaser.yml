@@ -48,6 +48,24 @@ builds:
       - darwin
     goarch:
       - arm64
+  # CLI/daemon only (Frank, 2026-07-31) — re-enables the Windows target the
+  # 2026-07-29 web-only CI policy suspended. Does not touch apps/desktop
+  # (separate Electron build, untouched by goreleaser).
+  - id: multica-windows-amd64
+    main: ./cmd/multica
+    dir: server
+    binary: multica
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
 
 archives:
   # Legacy archive name kept so already-released CLIs (whose `multica update`

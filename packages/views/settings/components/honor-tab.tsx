@@ -14,13 +14,21 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
   Activity,
   BadgeCheck,
+  CircleCheckBig,
   CircleDashed,
+  FilePlus2,
   Gem,
+  MessageSquareText,
+  MessagesSquare,
+  Microscope,
   Orbit,
+  PencilLine,
   RotateCcw,
   Sparkles,
   Target,
+  Timer,
   Trophy,
+  UserPlus,
   Zap,
 } from "lucide-react";
 import { ActorStyledName } from "../../common/actor-styled-name";
@@ -36,6 +44,16 @@ const honorKeys = {
 };
 
 const maxShowcaseBadges = 3;
+const honorActionOrder = [
+  "issue.create",
+  "issue.update",
+  "issue.close",
+  "comment.create",
+  "channel.message",
+  "research.session",
+  "member.invite",
+  "presence.minute",
+] as const;
 const honorHeroImageSrc =
   typeof honorHeroImage === "string" ? honorHeroImage : honorHeroImage.src;
 
@@ -315,6 +333,52 @@ export function HonorTab() {
           }
         />
       </section>
+
+      {rules ? (
+        <section
+          aria-labelledby="honor-earn-title"
+          className="rounded-2xl border border-border/70 bg-card p-4 shadow-sm sm:p-5"
+        >
+          <SectionHeading
+            id="honor-earn-title"
+            icon={<Zap className="size-4" aria-hidden="true" />}
+            title={t(($) => $.honor.earn_title)}
+            hint={t(($) => $.honor.earn_hint)}
+          />
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {honorActionOrder.map((action) => {
+              const rule = rules.action_rules[action];
+              if (!rule) return null;
+
+              return (
+                <article
+                  key={action}
+                  className="group flex items-center gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 transition-colors hover:border-cyan-500/25 hover:bg-cyan-500/5"
+                >
+                  <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-500/15 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300">
+                    {actionIcon(action)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">
+                      {actionLabel(action, t)}
+                    </p>
+                    <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="font-mono text-sm font-semibold text-cyan-700 dark:text-cyan-300">
+                        +{numberFormatter.format(rule.xp_delta)} XP
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {t(($) => $.honor.daily_cap, {
+                          xp: numberFormatter.format(rule.daily_cap),
+                        })}
+                      </span>
+                    </p>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.75fr)]">
         <section
@@ -643,5 +707,30 @@ function actionLabel(action: string, t: TranslationFunction): string {
       return t(($) => $.honor.action_research_session);
     default:
       return t(($) => $.honor.action_fallback);
+  }
+}
+
+function actionIcon(action: string): React.ReactNode {
+  const className = "size-4";
+
+  switch (action) {
+    case "issue.create":
+      return <FilePlus2 className={className} aria-hidden="true" />;
+    case "issue.update":
+      return <PencilLine className={className} aria-hidden="true" />;
+    case "issue.close":
+      return <CircleCheckBig className={className} aria-hidden="true" />;
+    case "comment.create":
+      return <MessageSquareText className={className} aria-hidden="true" />;
+    case "channel.message":
+      return <MessagesSquare className={className} aria-hidden="true" />;
+    case "member.invite":
+      return <UserPlus className={className} aria-hidden="true" />;
+    case "presence.minute":
+      return <Timer className={className} aria-hidden="true" />;
+    case "research.session":
+      return <Microscope className={className} aria-hidden="true" />;
+    default:
+      return <Zap className={className} aria-hidden="true" />;
   }
 }

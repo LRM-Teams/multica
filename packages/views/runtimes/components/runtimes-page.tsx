@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Clock,
   Cloud,
   Folder,
   Loader2,
@@ -42,7 +43,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { workloadConfig } from "../../agents/presence";
+import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { formatRuntimeUpdateError } from "./update-error";
@@ -149,14 +150,16 @@ function formatMachineLastSeen(
   return formatLastSeen(machine.lastSeenAt);
 }
 
-function formatAgentActivity(
-  agentId: string,
-  snapshot: AgentTask[],
-  tAgents: ReturnType<typeof useT<"agents">>["t"],
-): string {
+// task #7 (2026-07-31): was tAgents($.workload[...]) (Working/Queued/Idle) —
+// aligned to the same Activity vocabulary as the rest of the product
+// (ACTIVITY_LABEL_EN). "Queued" folds into "Working" — this function has no
+// presence/availability data, only task counts, so it can't distinguish
+// online/offline; it only ever needed the idle-vs-active distinction anyway.
+function formatAgentActivity(agentId: string, snapshot: AgentTask[]): string {
   const tasks = snapshot.filter((task) => task.agent_id === agentId);
   const detail = deriveWorkloadDetail(tasks);
-  const label = tAgents(($) => $.workload[detail.workload]);
+  const label =
+    detail.workload === "idle" ? ACTIVITY_LABEL_EN.idle : ACTIVITY_LABEL_EN.working;
 
   if (detail.workload === "working" || detail.workload === "queued") {
     const active = tasks.find(
@@ -569,7 +572,6 @@ function MachineDetailView({
   showListActions: boolean;
 }) {
   const { t } = useT("runtimes");
-  const { t: tAgents } = useT("agents");
   const { getActorName } = useActorName();
   const openAgentPanel = useAgentPanelStore((s) => s.open);
   const user = useAuthStore((s) => s.user);
@@ -771,11 +773,7 @@ function MachineDetailView({
               <div className="overflow-hidden rounded-xl border bg-card">
                 {machineAgents.map((agent, idx) => {
                   const runtime = runtimeForAgent(agent, machine);
-                  const activity = formatAgentActivity(
-                    agent.id,
-                    snapshot,
-                    tAgents,
-                  );
+                  const activity = formatAgentActivity(agent.id, snapshot);
                   return (
                     <button
                       key={agent.id}
@@ -824,16 +822,11 @@ function MachineDetailView({
                   <tbody>
                     {machineAgents.map((agent) => {
                       const runtime = runtimeForAgent(agent, machine);
-                      const activity = formatAgentActivity(
-                        agent.id,
-                        snapshot,
-                        tAgents,
-                      );
+                      const activity = formatAgentActivity(agent.id, snapshot);
                       const tasks = snapshot.filter(
                         (task) => task.agent_id === agent.id,
                       );
                       const wl = deriveWorkloadDetail(tasks).workload;
-                      const wlVisual = workloadConfig[wl];
                       return (
                         <tr
                           key={agent.id}
@@ -869,14 +862,16 @@ function MachineDetailView({
                           </td>
                           <td className="px-4 py-3 text-sm text-muted-foreground">
                             <span className="inline-flex items-center gap-1">
-                              {wl !== "idle" && (
-                                <wlVisual.icon
-                                  className={cn(
-                                    "h-3 w-3",
-                                    wlVisual.textClass,
-                                    wl === "working" && "animate-spin",
-                                  )}
-                                />
+                              {/* task #7: genuinely running keeps the spinning
+                                  loader; purely-queued keeps the static clock
+                                  (folded into the same "Working" label in
+                                  `activity`, but nothing's actually moving
+                                  yet). */}
+                              {wl === "working" && (
+                                <Loader2 className="h-3 w-3 animate-spin text-running" />
+                              )}
+                              {wl === "queued" && (
+                                <Clock className="h-3 w-3 text-muted-foreground" />
                               )}
                               {activity}
                             </span>

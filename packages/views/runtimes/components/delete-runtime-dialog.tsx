@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Terminal } from "lucide-react";
+import { Check, Clock, Copy, Loader2, Terminal } from "lucide-react";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@multica/core/api";
@@ -28,7 +28,7 @@ import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { AppLink } from "../../navigation/app-link";
-import { availabilityConfig, workloadConfig } from "../../agents/presence";
+import { presentAgentActivityBand, resolveAgentActivityBand } from "../../agents/resolve-agent-live-status";
 import { useT } from "../../i18n";
 import { isSelfHealingRuntime } from "../utils";
 import { splitRuntimeName } from "./runtime-machines";
@@ -337,24 +337,24 @@ function PresenceCell({ presence }: { presence: AgentPresenceDetail | undefined 
       </span>
     );
   }
-  const av = availabilityConfig[presence.availability];
-  const wl = workloadConfig[presence.workload];
+  // task #7 (2026-07-31): was availabilityConfig + workloadConfig — a single
+  // combined cell (one dot, one label), no adjacent Status column elsewhere
+  // in this dialog, so `showDisconnected: true` — Activity carries the
+  // connectivity fact here since nothing else does.
+  const band = resolveAgentActivityBand(presence);
+  if (!band) return null;
+  const view = presentAgentActivityBand(band, true);
+  const isWorking = band === "working";
+  const isQueued = presence.workload === "queued";
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={`size-1.5 shrink-0 rounded-full ${av.dotClass}`} />
-      <span className={av.textClass}>
-        {presence.workload === "idle" &&
-          t(($) => $.detail.delete_dialog.blocked_by_agents.table.workload_idle)}
-        {presence.workload === "working" && (
-          <wl.icon className={`mr-1 inline size-3 align-[-2px] animate-spin ${wl.textClass}`} />
+      <span className={`size-1.5 shrink-0 rounded-full ${view.dotClass}`} />
+      <span className="text-foreground">
+        {isWorking && !isQueued && (
+          <Loader2 className="mr-1 inline size-3 align-[-2px] animate-spin text-running" />
         )}
-        {presence.workload === "queued" && (
-          <wl.icon className={`mr-1 inline size-3 align-[-2px] ${wl.textClass}`} />
-        )}
-        {presence.workload === "working" &&
-          t(($) => $.detail.delete_dialog.blocked_by_agents.table.workload_working)}
-        {presence.workload === "queued" &&
-          t(($) => $.detail.delete_dialog.blocked_by_agents.table.workload_queued)}
+        {isQueued && <Clock className="mr-1 inline size-3 align-[-2px] text-muted-foreground" />}
+        {view.label}
       </span>
     </span>
   );

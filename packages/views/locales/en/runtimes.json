@@ -216,10 +216,7 @@
         "close": "Close",
         "view_agent": "View agent",
         "table": {
-          "presence_unknown": "—",
-          "workload_idle": "Idle",
-          "workload_working": "Working",
-          "workload_queued": "Queued"
+          "presence_unknown": "—"
         }
       },
       "blocked_by_online_daemon": {

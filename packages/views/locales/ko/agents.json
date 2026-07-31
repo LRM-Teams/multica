@@ -71,7 +71,7 @@
   "columns": {
     "agent": "에이전트",
     "status": "상태",
-    "workload": "작업량",
+    "activity_band": "활동",
     "runtime": "런타임",
     "activity_7d": "활동(7일)",
     "runs": "실행"

@@ -216,10 +216,7 @@
         "close": "닫기",
         "view_agent": "에이전트 보기",
         "table": {
-          "presence_unknown": "—",
-          "workload_idle": "유휴",
-          "workload_working": "작업 중",
-          "workload_queued": "대기 중"
+          "presence_unknown": "—"
         }
       },
       "blocked_by_online_daemon": {

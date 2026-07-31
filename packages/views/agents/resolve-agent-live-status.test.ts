@@ -6,6 +6,8 @@ import type { AgentTask } from "@multica/core/types";
 import type { ActivityEvent } from "./components/tabs/activity-event";
 import {
   pickPrimaryActiveTask,
+  presentAgentActivityBand,
+  resolveAgentActivityBand,
   resolveAgentActivityProjection,
   resolveAgentLiveStatus,
 } from "./resolve-agent-live-status";
@@ -178,5 +180,67 @@ describe("resolveAgentActivityProjection (composer strip — non-live verbs)", (
     });
     expect(view?.label).toBe("Thinking");
     expect(view?.label).not.toMatch(/Queued|Unstable|Reconnecting/i);
+  });
+});
+
+// task #7 (2026-07-31): agents list / delete-computer confirmation coarse
+// Activity band — batched-presence-only, no per-agent activity subscription.
+describe("resolveAgentActivityBand", () => {
+  it("returns null when presence hasn't loaded", () => {
+    expect(resolveAgentActivityBand(undefined)).toBeNull();
+    expect(resolveAgentActivityBand(null)).toBeNull();
+  });
+
+  it("is idle when online with nothing on the plate", () => {
+    expect(resolveAgentActivityBand(presence({ availability: "online", workload: "idle" }))).toBe(
+      "idle",
+    );
+  });
+
+  it("is working when online and running", () => {
+    expect(
+      resolveAgentActivityBand(presence({ availability: "online", workload: "working" })),
+    ).toBe("working");
+  });
+
+  it("folds queued into working — the list is a coarse summary, not the detail page", () => {
+    expect(
+      resolveAgentActivityBand(presence({ availability: "online", workload: "queued" })),
+    ).toBe("working");
+  });
+
+  it("folds unstable into the SAME live-availability rule as everywhere else (never a distinct band)", () => {
+    expect(
+      resolveAgentActivityBand(presence({ availability: "unstable", workload: "idle" })),
+    ).toBe("idle");
+  });
+
+  it("is disconnected when offline, regardless of workload", () => {
+    expect(
+      resolveAgentActivityBand(presence({ availability: "offline", workload: "working" })),
+    ).toBe("disconnected");
+  });
+
+  it("is disconnected (not idle/working) for an archived agent's leftover presence row", () => {
+    expect(
+      resolveAgentActivityBand(presence({ availability: "archived", workload: "idle" })),
+    ).toBe("disconnected");
+  });
+});
+
+describe("presentAgentActivityBand", () => {
+  it("uses the canonical Activity vocabulary for idle/working", () => {
+    expect(presentAgentActivityBand("idle", true).label).toBe("Idle");
+    expect(presentAgentActivityBand("working", false).label).toBe("Working");
+  });
+
+  it("shows the word 'Disconnected' when the caller has no adjacent connectivity indicator", () => {
+    expect(presentAgentActivityBand("disconnected", true).label).toBe("Disconnected");
+  });
+
+  it("collapses to a bare em-dash — never the word Disconnected — when an adjacent Status column already owns connectivity (Frank 2026-07-31: no duplicate information)", () => {
+    const view = presentAgentActivityBand("disconnected", false);
+    expect(view.label).toBe("—");
+    expect(view.label).not.toMatch(/disconnected/i);
   });
 });

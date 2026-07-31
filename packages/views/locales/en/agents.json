@@ -71,7 +71,7 @@
   "columns": {
     "agent": "Agent",
     "status": "Status",
-    "workload": "Workload",
+    "activity_band": "Activity",
     "runtime": "Runtime",
     "activity_7d": "Activity (7d)",
     "runs": "Runs"

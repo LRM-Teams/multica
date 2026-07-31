@@ -210,10 +210,7 @@
         "close": "关闭",
         "view_agent": "查看智能体",
         "table": {
-          "presence_unknown": "—",
-          "workload_idle": "空闲",
-          "workload_working": "运行中",
-          "workload_queued": "排队中"
+          "presence_unknown": "—"
         }
       },
       "blocked_by_online_daemon": {

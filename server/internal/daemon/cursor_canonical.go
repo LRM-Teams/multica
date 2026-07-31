@@ -13,7 +13,7 @@ func usesCanonicalResidentChatRuntime(provider string, task Task) bool {
 		return usesPersistentGrokChatRuntime(provider, task)
 	case "pi":
 		return usesPersistentPiChatRuntime(provider, task)
-	case "cursor":
+	case "cursor", "opencode":
 		profile, err := taskExecutionProfile(task)
 		return err == nil && profile == executionProfileFull && task.ChatSessionID != ""
 	default:

@@ -164,7 +164,7 @@ func canonicalRuntimeModeFor(provider, executionProfile string) (canonicalRuntim
 		return "", fmt.Errorf("execution profile %q must not use the canonical agent session", executionProfile)
 	}
 	switch strings.TrimSpace(provider) {
-	case "pi", "grok", "cursor":
+	case "pi", "grok", "cursor", "opencode":
 		return canonicalRuntimeResident, nil
 	case "":
 		return "", errors.New("provider is required")
@@ -515,6 +515,8 @@ func defaultCanonicalRuntimeFactory(provider string, mode canonicalRuntimeMode) 
 				return newCanonicalGrokResidentBackend(config)
 			case "cursor":
 				return newCanonicalCursorResidentBackend(config)
+			case "opencode":
+				return newCanonicalOpenCodeResidentBackend(config)
 			default:
 				return nil, nil, fmt.Errorf("provider %q has no resident adapter", provider)
 			}

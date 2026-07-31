@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -307,9 +307,15 @@ vi.mock("@multica/core/hooks/use-file-upload", () => ({
   useFileUpload: () => ({ uploadWithToast: vi.fn() }),
 }));
 
+// Mutable so the DM-open-never-resolves suite can simulate a DM disappearing
+// from the list after selection (the real #{DM blank-page incident} shape:
+// createOrFind's optimistic setQueryData is overwritten by an
+// invalidate-triggered refetch that comes back empty). Every other suite
+// never touches this and sees the same `[]` the old static mock returned.
+const dmListFixture = vi.hoisted(() => ({ current: [] as import("@multica/core/dm").DMItem[] }));
 vi.mock("@multica/core/dm", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/dm")>()),
-  dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => [] }),
+  dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => dmListFixture.current }),
 }));
 
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
@@ -2005,5 +2011,85 @@ describe("ChannelsPage — Reminder anchor ?thread=&message= deep-link (#656)", 
       el.querySelector(`[data-testid="msg-${SECOND_THREAD_REPLY_ID}"]`),
     );
     expect(secondThreadList).toHaveAttribute("data-highlight", SECOND_THREAD_REPLY_ID);
+  });
+});
+
+// A production incident (2026-07-31): createOrFind's optimistic setQueryData
+// puts the new DM in the list, but the invalidate-triggered refetch that
+// follows can come back from a backend gap without it — `dms` goes back to
+// `[]`, `activeDm` resolves to null forever, and ConversationSwitchSkeleton
+// (built for the brief "list hasn't caught up yet" window) spun forever. That
+// reads as a blank page to the user. This suite reproduces the same shape —
+// a DM that resolves once, then vanishes from the list — entirely through
+// dmListFixture, and proves the page now surfaces an explicit retry instead
+// of a stuck skeleton.
+describe("ChannelsPage — DM that never reappears in the list shows a retry, not a stuck skeleton", () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    mobileViewport.value = false;
+    channelsFixture.current = [];
+    currentSearchParams.value = new URLSearchParams();
+    dmListFixture.current = [
+      {
+        id: "dm-1",
+        source: "dm_channel",
+        peer: { type: "agent", id: "agent-1", name: "Wendy" },
+        unread: 0,
+        updated_at: "2026-07-31T00:00:00Z",
+      },
+    ];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    dmListFixture.current = [];
+  });
+
+  it("swaps the stuck skeleton for a retry affordance after the timeout, and retry recovers once the DM reappears", async () => {
+    const { qc } = renderPage("dm-1");
+
+    // Resolves normally at first — proves the DM path itself isn't broken.
+    await screen.findByTestId("dm-conversation");
+
+    // Fake timers from here on, so the timeout effect's setTimeout (scheduled
+    // fresh once `activeDm` goes null below) is one we control.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // Simulate the list losing the DM on a subsequent fetch (the real bug:
+    // an invalidate-triggered refetch that comes back without it).
+    dmListFixture.current = [];
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ["dm-list"] });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("dm-conversation")).not.toBeInTheDocument();
+    });
+    // Still within the timeout window: the retry state hasn't appeared yet —
+    // this is the skeleton window.
+    expect(screen.queryByText("Couldn't open conversation. Please try again.")).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(8000);
+    });
+
+    const retryButton = screen.getByText("Couldn't open conversation. Please try again.");
+
+    // Recovery: the DM reappears in the list, then retry clears the failed
+    // state and remounts the real conversation.
+    dmListFixture.current = [
+      {
+        id: "dm-1",
+        source: "dm_channel",
+        peer: { type: "agent", id: "agent-1", name: "Wendy" },
+        unread: 0,
+        updated_at: "2026-07-31T00:00:00Z",
+      },
+    ];
+    vi.useRealTimers();
+    fireEvent.click(retryButton);
+
+    await screen.findByTestId("dm-conversation");
+    expect(screen.queryByText("Couldn't open conversation. Please try again.")).not.toBeInTheDocument();
   });
 });

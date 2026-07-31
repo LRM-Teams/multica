@@ -102,6 +102,7 @@ require_config "$deploy_workflow" 'VOLCENGINE_RTC_SECRET_ACCESS_KEY: ${{ secrets
 require_config "$deploy_workflow" 'VOLCENGINE_RTC_ARK_ENDPOINT_ID: ${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}'
 require_config "$deploy_workflow" 'VOLCENGINE_RTC_ASR_APP_ID: ${{ vars.VOLCENGINE_RTC_ASR_APP_ID }}'
 require_config "$deploy_workflow" 'VOLCENGINE_RTC_TTS_APP_ID: ${{ vars.VOLCENGINE_RTC_TTS_APP_ID }}'
+require_config "$deploy_workflow" 'VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN: ${{ secrets.VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN }}'
 require_config "$deploy_workflow" 'VOLCENGINE_RTC_CALLBACK_SIGNATURE: ${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}'
 if grep -Fq 'VOLCENGINE_RTC_ARK_MODEL_NAME:' <<<"$deploy_workflow"; then
   echo "Deploy workflow still accepts an Ark display model in place of an endpoint."
@@ -109,7 +110,10 @@ if grep -Fq 'VOLCENGINE_RTC_ARK_MODEL_NAME:' <<<"$deploy_workflow"; then
 fi
 require_config "$deploy_workflow" 'voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"'
 require_config "$deploy_workflow" 'DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment.'
+require_config "$deploy_workflow" 'rtc_speech_access_token="$(compose_env_value VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN)"'
+require_config "$deploy_workflow" 'VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN must be configured in the aliyun-dev Environment.'
 require_config "$deploy_workflow" 'backend_voice_configured="$('
+require_config "$deploy_workflow" 'backend_rtc_speech_configured="$('
 require_config "$deploy_workflow" '-U "$target_user"'
 require_config "$deploy_workflow" '-d "$target_db"'
 require_config "$deploy_workflow" 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD'

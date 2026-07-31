@@ -17,11 +17,16 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AlertCircle, Loader2, Telescope } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
+import {
+  DONE_STATUSES,
+  FAILED_STATUSES,
+  filterSessions,
+  isSessionListFilterActive,
+  type SessionStatusFilter,
+} from "../lib/session-list-filter";
 import { ResearchEmptyState } from "./research-empty-state";
+import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
-
-/** LRM-789: terminal sessions fall under the 已完成 group; everything else is 进行中. */
-const DONE_STATUSES = new Set(["completed", "archived"]);
 
 export function ResearchListPage() {
   const { t } = useT("research");
@@ -30,8 +35,13 @@ export function ResearchListPage() {
   const nav = useNavigation();
   const qc = useQueryClient();
   const [goal, setGoal] = useState("");
+  const [titleQuery, setTitleQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  /** Scroll offset captured when filters first become active; restored on clear. */
+  const savedScrollTop = useRef<number | null>(null);
 
   useQuery(researchFleetOptions(wsId));
   const { data, isLoading, isError, error, refetch } = useQuery(
@@ -59,8 +69,40 @@ export function ResearchListPage() {
   });
 
   const sessions = data?.sessions ?? [];
-  const inProgress = sessions.filter((s) => !DONE_STATUSES.has(s.status));
-  const completed = sessions.filter((s) => DONE_STATUSES.has(s.status));
+  const filterActive = isSessionListFilterActive(titleQuery, statusFilter);
+  const visibleSessions = filterSessions(sessions, titleQuery, statusFilter);
+  const inProgress = visibleSessions.filter(
+    (s) => !DONE_STATUSES.has(s.status) && !FAILED_STATUSES.has(s.status),
+  );
+  const completed = visibleSessions.filter((s) => DONE_STATUSES.has(s.status));
+  const failed = visibleSessions.filter((s) => FAILED_STATUSES.has(s.status));
+
+  const rememberScrollIfNeeded = () => {
+    if (savedScrollTop.current != null) return;
+    savedScrollTop.current = scrollRef.current?.scrollTop ?? 0;
+  };
+
+  const setTitleQueryTracked = (value: string) => {
+    if (value.trim() || statusFilter) rememberScrollIfNeeded();
+    setTitleQuery(value);
+  };
+
+  const setStatusFilterTracked = (value: SessionStatusFilter | null) => {
+    if (value != null || titleQuery.trim()) rememberScrollIfNeeded();
+    setStatusFilter(value);
+  };
+
+  const clearFilters = () => {
+    setTitleQuery("");
+    setStatusFilter(null);
+    const top = savedScrollTop.current;
+    savedScrollTop.current = null;
+    queueMicrotask(() => {
+      if (scrollRef.current != null && top != null) {
+        scrollRef.current.scrollTop = top;
+      }
+    });
+  };
 
   const focusComposer = () => {
     const el = goalInputRef.current;
@@ -105,7 +147,7 @@ export function ResearchListPage() {
   );
 
   return (
-    <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
+    <div ref={scrollRef} className="flex h-full flex-col gap-6 overflow-y-auto p-6">
       {/* LRM-787: hero composer card — brand presence, focus ring, inline failure. */}
       <section
         ref={composerCardRef}
@@ -213,22 +255,52 @@ export function ResearchListPage() {
           onStart={focusComposer}
         />
       ) : (
-        <div className="space-y-6">
-          {inProgress.length > 0 && (
-            <section>
-              <h2 className="px-1 text-xs font-medium text-muted-foreground">
-                {t(($) => $.groups.in_progress)}
-              </h2>
-              <div className="mt-2 space-y-2">{inProgress.map(renderRow)}</div>
-            </section>
-          )}
-          {completed.length > 0 && (
-            <section>
-              <h2 className="px-1 text-xs font-medium text-muted-foreground">
-                {t(($) => $.groups.completed)}
-              </h2>
-              <div className="mt-2 space-y-2">{completed.map(renderRow)}</div>
-            </section>
+        <div className="space-y-4">
+          <ResearchSessionFilterBar
+            query={titleQuery}
+            status={statusFilter}
+            active={filterActive}
+            onQueryChange={setTitleQueryTracked}
+            onStatusChange={setStatusFilterTracked}
+            onClear={clearFilters}
+          />
+          {visibleSessions.length === 0 ? (
+            <output className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center">
+              <p className="text-sm font-medium">{t(($) => $.filter.no_results)}</p>
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.filter.no_results_hint)}
+              </p>
+              <Button variant="outline" size="sm" onClick={clearFilters}>
+                {t(($) => $.filter.clear)}
+              </Button>
+            </output>
+          ) : (
+            <div className="space-y-6">
+              {inProgress.length > 0 && (
+                <section>
+                  <h2 className="px-1 text-xs font-medium text-muted-foreground">
+                    {t(($) => $.groups.in_progress)}
+                  </h2>
+                  <div className="mt-2 space-y-2">{inProgress.map(renderRow)}</div>
+                </section>
+              )}
+              {completed.length > 0 && (
+                <section>
+                  <h2 className="px-1 text-xs font-medium text-muted-foreground">
+                    {t(($) => $.groups.completed)}
+                  </h2>
+                  <div className="mt-2 space-y-2">{completed.map(renderRow)}</div>
+                </section>
+              )}
+              {failed.length > 0 && (
+                <section>
+                  <h2 className="px-1 text-xs font-medium text-muted-foreground">
+                    {t(($) => $.filter.status_failed)}
+                  </h2>
+                  <div className="mt-2 space-y-2">{failed.map(renderRow)}</div>
+                </section>
+              )}
+            </div>
           )}
         </div>
       )}

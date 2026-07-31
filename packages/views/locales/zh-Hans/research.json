@@ -37,6 +37,17 @@
     "retry": "重试",
     "empty_cta": "开始你的第一个调研"
   },
+  "filter": {
+    "search_label": "搜索会话标题",
+    "search_placeholder": "搜索标题…",
+    "status_label": "按状态筛选",
+    "status_in_progress": "进行中",
+    "status_completed": "已完成",
+    "status_failed": "失败",
+    "clear": "清除筛选",
+    "no_results": "没有匹配的会话",
+    "no_results_hint": "试试别的关键词，或清除筛选查看全部"
+  },
   "actions": {
     "menu": "调研操作",
     "stop": "停止",

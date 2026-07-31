@@ -327,17 +327,26 @@ func runDaemonForeground(cmd *cobra.Command) error {
 
 	profile := resolveProfile(cmd)
 
-	// Preflight: an external supervisor (task #815) always restarts this
-	// process using the same fixed WorkerPath, so the process that comes up
-	// after any restart — graceful, crashed, or force-killed — must correct
-	// itself onto whatever the VersionStore's Active pointer actually says,
-	// not just keep running whatever binary happened to be at that path. No
-	// task has been claimed yet at this point, so handing off here is always
-	// safe: nothing to drain.
+	// Preflight (task #815): every freshly started worker generation checks
+	// whether it's already on the VersionStore's committed Active version.
+	// No task has been claimed yet at this point, so handing off here is
+	// always safe: nothing to drain.
 	if target, err := resolveVersionHandoffTarget(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: version handoff check failed, continuing on running binary: %v\n", err)
 	} else if target != "" {
-		return handoffAndWait(target, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile), daemonPIDPathForProfile(profile))
+		if runningUnderSupervision() {
+			// The external supervisor (task #815) is watching for exactly
+			// this exit code and re-resolves which binary to run next
+			// itself — see buildSuperviseConfig's ResolveWorkerPath. No
+			// task has been claimed yet, so this is always safe: nothing to
+			// drain.
+			os.Exit(daemonHandoffExitCode)
+		}
+		// Outside supervision, nothing is watching to catch a worker that
+		// exits and doesn't come back — spawning a replacement unattended is
+		// worse than just staying on the current binary and saying so
+		// (Parker's call, task #815). Fall through and start normally.
+		fmt.Fprintf(os.Stderr, "Note: a newer version is staged (%s). Run `multica daemon restart` to apply it.\n", target)
 	}
 
 	serverURL := cli.FlagOrEnv(cmd, "server-url", "MULTICA_SERVER_URL", "")
@@ -402,16 +411,22 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if the daemon needs to restart after a CLI update. Waits for the
-	// new binary's own run rather than spawning-and-exiting immediately —
-	// see handoffAndWait's doc comment for why (task #815, Barry's PR #1584
-	// review finding).
+	// Check if the daemon needs to restart after a CLI update.
 	if restartBin := d.RestartBinary(); restartBin != "" {
-		logger.Info("restarting daemon with updated binary", "path", restartBin)
-
-		// Runtimes were already deregistered by triggerRestart() before handoff.
-		// The successor re-registers on startup; do not duplicate cleanup here.
-		return handoffAndWait(restartBin, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile), daemonPIDPathForProfile(profile))
+		if runningUnderSupervision() {
+			logger.Info("restarting daemon with updated binary via supervisor handoff", "path", restartBin)
+			// Runtimes were already deregistered by triggerRestart() before
+			// handoff. The supervisor-spawned successor re-registers on
+			// startup; do not duplicate cleanup here.
+			os.Exit(daemonHandoffExitCode)
+		}
+		// Outside supervision there's no one to catch a worker that exits
+		// and doesn't come back, so this deliberately does not try to
+		// self-restart (Parker's call, task #815): the daemon has already
+		// gracefully drained for this update and stops here; a human
+		// applies it with `daemon restart`.
+		logger.Warn("a newer version is staged but this daemon is not running under supervision; it will stay stopped until you run `multica daemon restart`",
+			"staged_version_path", restartBin)
 	}
 
 	return nil

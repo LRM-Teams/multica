@@ -110,7 +110,9 @@
     "collapse": "閉じる",
     "retry": "再試行",
     "reassign": "再割当",
-    "standby": "待機中"
+    "standby": "待機中",
+    "composer_hint": "Enter で送信 · Shift+Enter で改行",
+    "sending": "送信中…"
   },
   "node": {
     "goal": "Goal",

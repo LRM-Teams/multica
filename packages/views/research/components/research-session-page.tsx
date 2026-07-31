@@ -243,9 +243,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         </section>
 
         {chatOpen ? (
-          <aside className="flex w-[340px] shrink-0 flex-col border-l bg-background">
-            <div className="flex items-center justify-between border-b px-3 py-2">
-              <div className="text-xs font-medium text-muted-foreground">{t(($) => $.panel.chat)}</div>
+          <aside className="flex w-[min(100%,380px)] shrink-0 flex-col border-l bg-background">
+            <div className="flex items-center justify-between border-b px-3 py-2.5">
+              <div className="text-sm font-semibold text-foreground">{t(($) => $.panel.chat)}</div>
               <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
                 {t(($) => $.panel.hide_chat)}
               </Button>
@@ -327,20 +327,38 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 </>
               )}
             </div>
-            <div className="space-y-2 border-t p-3">
-              <Textarea
-                rows={3}
-                value={ui.body}
-                onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
-                placeholder={t(($) => $.panel.chat_placeholder)}
-              />
-              <Button
-                size="sm"
-                disabled={!ui.body.trim() || send.isPending}
-                onClick={() => send.mutate()}
-              >
-                {t(($) => $.panel.send)}
-              </Button>
+            <div className="border-t bg-card p-3">
+              <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                <Textarea
+                  rows={2}
+                  value={ui.body}
+                  onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    if (!ui.body.trim() || send.isPending) return;
+                    send.mutate();
+                  }}
+                  placeholder={t(($) => $.panel.chat_placeholder)}
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-1 py-1 text-[13px] shadow-none focus-visible:ring-0"
+                />
+                <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
+                  <span className="text-[10px] text-muted-foreground">
+                    {t(($) => $.step_card.composer_hint)}
+                  </span>
+                  <Button
+                    type="button"
+                    size="default"
+                    className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
+                    disabled={!ui.body.trim() || send.isPending}
+                    onClick={() => send.mutate()}
+                  >
+                    {send.isPending
+                      ? t(($) => $.step_card.sending)
+                      : t(($) => $.panel.send)}
+                  </Button>
+                </div>
+              </div>
             </div>
           </aside>
         ) : null}

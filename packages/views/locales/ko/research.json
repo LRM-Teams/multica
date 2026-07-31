@@ -110,7 +110,9 @@
     "collapse": "접기",
     "retry": "재시도",
     "reassign": "재배정",
-    "standby": "대기 중"
+    "standby": "대기 중",
+    "composer_hint": "Enter 전송 · Shift+Enter 줄바꿈",
+    "sending": "전송 중…"
   },
   "node": {
     "goal": "Goal",

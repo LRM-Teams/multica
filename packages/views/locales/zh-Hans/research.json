@@ -110,7 +110,9 @@
     "collapse": "收起",
     "retry": "重试",
     "reassign": "改派",
-    "standby": "已就位"
+    "standby": "已就位",
+    "composer_hint": "Enter 发送 · Shift+Enter 换行",
+    "sending": "发送中…"
   },
   "node": {
     "goal": "目标",

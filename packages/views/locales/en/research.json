@@ -110,7 +110,9 @@
     "collapse": "Collapse",
     "retry": "Retry",
     "reassign": "Reassign",
-    "standby": "Standing by"
+    "standby": "Standing by",
+    "composer_hint": "Enter to send · Shift+Enter for newline",
+    "sending": "Sending…"
   },
   "node": {
     "goal": "Goal",

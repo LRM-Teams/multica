@@ -245,6 +245,25 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(link).toHaveAttribute("href", expect.stringContaining("channels/channel-uuid"));
   });
 
+  it("on a non-interactive surface, renders a channel-ref's resolved label, never the raw markdown link (Wren, PR review)", () => {
+    // Same leak class as the interactive test above, but through the OTHER
+    // branch: `interactive={false}` skips ChannelRefLink and used to render
+    // `text` (the span substring) directly — which for channel-ref is always
+    // the whole `[Label](mention://channel/<uuid>)` string, not a bare id.
+    const raw = "[team-a](mention://channel/channel-uuid)";
+    const content = `see ${raw} for context`;
+    render(
+      <InlineReferenceContent
+        content={content}
+        parts={[channelRef(4, 4 + raw.length)]}
+        interactive={false}
+      />,
+    );
+    expect(screen.getByText("team-a")).toBeInTheDocument();
+    expect(screen.queryByText(raw, { exact: false })).toBeNull();
+    expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
+  });
+
   it("renders a **bold**-wrapped issue ref as actual bold, not literal asterisks (#635)", () => {
     // Each text run either side of the reference span is markdown-parsed
     // independently, so a lone "**" on each side used to fall through as

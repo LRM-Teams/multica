@@ -34,7 +34,7 @@ func TestBuildResearchWakePrompt(t *testing.T) {
 
 func TestResearchDomainPlaybooks(t *testing.T) {
 	books := researchDomainPlaybooks()
-	for _, domain := range []string{"tech", "market", "academic"} {
+	for _, domain := range []string{"tech", "market", "academic", "game", "ai_engineering", "academic_papers", "finance", "design_visual"} {
 		if books[domain] == "" {
 			t.Fatalf("missing playbook %s", domain)
 		}

@@ -126,6 +126,8 @@ type upsertSourceRequest struct {
 	Relevance         *float64        `json:"relevance"`
 	Summary           string          `json:"summary"`
 	Excerpt           string          `json:"excerpt"`
+	Why               string          `json:"why"`
+	DimensionFamily   string          `json:"dimension_family"`
 	Payload           json.RawMessage `json:"payload"`
 }
 
@@ -162,6 +164,9 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 	payload := req.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
+	}
+	if req.Why != "" || req.DimensionFamily != "" {
+		payload = mergeSourceWhyPayload(payload, req.Why, req.DimensionFamily)
 	}
 	var source db.ResearchSource
 	var err error

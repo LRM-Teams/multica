@@ -101,6 +101,8 @@ func init() {
 	researchSourceUpsertCmd.Flags().String("class", "other", "source class")
 	researchSourceUpsertCmd.Flags().Float64("weight", 0.5, "credibility weight 0-1")
 	researchSourceUpsertCmd.Flags().String("summary", "", "summary")
+	researchSourceUpsertCmd.Flags().String("why", "", "why this source (routing rationale / dimension)")
+	researchSourceUpsertCmd.Flags().String("dimension", "", "dimension_family this source serves")
 
 	researchReportPatchCmd.Flags().String("content", "", "markdown content")
 	researchPresenceCmd.Flags().String("activity", "", "activity text")
@@ -169,13 +171,22 @@ func runResearchSourceUpsert(cmd *cobra.Command, args []string) error {
 	class, _ := cmd.Flags().GetString("class")
 	weight, _ := cmd.Flags().GetFloat64("weight")
 	summary, _ := cmd.Flags().GetString("summary")
-	return researchPostJSON(cmd, "/api/research/sessions/"+args[0]+"/sources", map[string]any{
+	why, _ := cmd.Flags().GetString("why")
+	dimension, _ := cmd.Flags().GetString("dimension")
+	body := map[string]any{
 		"url":                url,
 		"title":              title,
 		"source_class":       class,
 		"credibility_weight": weight,
 		"summary":            summary,
-	})
+	}
+	if why != "" {
+		body["why"] = why
+	}
+	if dimension != "" {
+		body["dimension_family"] = dimension
+	}
+	return researchPostJSON(cmd, "/api/research/sessions/"+args[0]+"/sources", body)
 }
 
 func runResearchReportPatch(cmd *cobra.Command, args []string) error {

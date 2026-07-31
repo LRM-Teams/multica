@@ -148,11 +148,17 @@ export function ReportReader({
   return (
     <dialog
       ref={bindDialog}
+      data-testid="research-delivery-modal"
       className={cn(
-        "fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-background/70 p-0 backdrop-blur-sm open:flex sm:items-center sm:p-6",
-        "backdrop:bg-transparent",
+        "fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-transparent p-0 open:flex sm:items-center sm:p-6 md:p-8",
+        "backdrop:bg-black/55 backdrop:backdrop-blur-[2px]",
       )}
       aria-label={t(($) => $.panel.delivery)}
+      aria-modal="true"
+      onClick={(event) => {
+        // Click the dimmed backdrop (dialog element itself) to dismiss — not the card.
+        if (event.target === event.currentTarget) onClose();
+      }}
       onCancel={(event) => {
         event.preventDefault();
         const dialog = dialogRef.current;
@@ -165,10 +171,13 @@ export function ReportReader({
       onClose={onClose}
     >
       <div
+        role="document"
         className={cn(
           "flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
-          "sm:h-[min(900px,calc(100vh-3rem))] sm:max-w-[1120px] sm:rounded-xl",
+          // Centered reading card on desktop; near-fullscreen on narrow.
+          "sm:h-[min(920px,calc(100vh-4rem))] sm:w-full sm:max-w-[min(1120px,calc(100vw-4rem))] sm:rounded-2xl",
         )}
+        onClick={(event) => event.stopPropagation()}
       >
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
           <Button

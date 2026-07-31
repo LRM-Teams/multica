@@ -20,6 +20,7 @@ function DeviceConfirmPageContent() {
       const next = userCode
         ? `${paths.device()}?user_code=${encodeURIComponent(userCode)}`
         : paths.device();
+      // react-doctor-disable-next-line react-doctor/nextjs-no-client-side-redirect -- gated on the async useAuthStore subscription resolving (isLoading), not a user event; same established pattern as invite/[id]/page.tsx and login-page.tsx's cli-callback bounce
       router.replace(`${paths.login()}?next=${encodeURIComponent(next)}`);
     }
   }, [isLoading, user, router, userCode]);

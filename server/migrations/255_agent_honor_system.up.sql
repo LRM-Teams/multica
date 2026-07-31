@@ -13,6 +13,9 @@ CREATE TABLE agent_honor_state (
     CHECK (cardinality(showcase_achievement_ids) <= 3)
 );
 
+CREATE INDEX agent_honor_state_agent
+    ON agent_honor_state (agent_id);
+
 CREATE TABLE agent_honor_event (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
@@ -30,6 +33,9 @@ CREATE TABLE agent_honor_event (
 CREATE INDEX agent_honor_event_agent_created
     ON agent_honor_event (workspace_id, agent_id, created_at DESC);
 
+CREATE INDEX agent_honor_event_agent
+    ON agent_honor_event (agent_id);
+
 CREATE TABLE agent_honor_unlock (
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
@@ -41,6 +47,9 @@ CREATE TABLE agent_honor_unlock (
 
 CREATE INDEX agent_honor_unlock_achievement
     ON agent_honor_unlock (achievement_id, unlocked_at);
+
+CREATE INDEX agent_honor_unlock_agent
+    ON agent_honor_unlock (agent_id);
 
 CREATE TABLE agent_honor_rule_config (
     workspace_id UUID PRIMARY KEY REFERENCES workspace(id) ON DELETE CASCADE,
@@ -63,6 +72,9 @@ CREATE TABLE agent_honor_admin_audit (
 CREATE INDEX agent_honor_admin_audit_workspace_created
     ON agent_honor_admin_audit (workspace_id, created_at DESC);
 
+CREATE INDEX agent_honor_admin_audit_agent
+    ON agent_honor_admin_audit (agent_id);
+
 CREATE TABLE agent_fleet_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
@@ -83,6 +95,9 @@ CREATE TABLE agent_fleet_history (
 
 CREATE INDEX agent_fleet_history_agent_recorded
     ON agent_fleet_history (workspace_id, agent_id, recorded_at DESC);
+
+CREATE INDEX agent_fleet_history_agent
+    ON agent_fleet_history (agent_id);
 
 CREATE OR REPLACE FUNCTION create_agent_honor_state()
 RETURNS trigger

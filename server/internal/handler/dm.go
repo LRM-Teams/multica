@@ -33,6 +33,11 @@ type DMPeer struct {
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
 	AvatarURL *string `json:"avatar_url,omitempty"`
+	// Archived is true when the peer agent has been archived. The DM stays
+	// visible and readable (history is never hidden by archiving the peer),
+	// but the client should show a read-only/"archived" state and block new
+	// sends rather than 404 the whole conversation.
+	Archived bool `json:"archived,omitempty"`
 }
 
 // DMItem is one row in the unified DM list and the create-or-find response.
@@ -316,7 +321,11 @@ func (h *Handler) resolveDMChannelPeerForPreference(w http.ResponseWriter, ctx c
 	return dmPeerRef{}, false
 }
 
-func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Request, workspaceID, userID string, ch ChannelResponse) bool {
+// requireDMChannelAgentAccess gates access to a DM channel whose peer is an
+// agent. An archived peer never 404s the conversation — history stays
+// readable — but write operations (send/reply/choose-option) must pass
+// requireWrite=true so an archived peer still blocks new activity.
+func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Request, workspaceID, userID string, ch ChannelResponse, requireWrite bool) bool {
 	if ch.Kind != "dm" {
 		return true
 	}
@@ -331,8 +340,12 @@ func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Req
 		ID:          peer.ID,
 		WorkspaceID: parseUUID(workspaceID),
 	})
-	if err != nil || agent.ArchivedAt.Valid {
+	if err != nil {
 		writeError(w, http.StatusNotFound, "direct message peer not found")
+		return false
+	}
+	if agent.ArchivedAt.Valid && requireWrite {
+		writeError(w, http.StatusForbidden, "direct message peer has been archived and can no longer receive messages")
 		return false
 	}
 	return true
@@ -753,6 +766,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       peer.member_type, peer.member_id,
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
+		       a.archived_at AS peer_archived_at,
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0) AS real_unread,
 		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
@@ -817,14 +831,14 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 	out := []DMItem{}
 	for rows.Next() {
 		var id, peerID pgtype.UUID
-		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt, peerArchivedAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
 		var lastParts, runtimeStatsRaw []byte
 		var unread int
 		var hasMention bool
 		var lastReadSeq *int64
-		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
+		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar, &peerArchivedAt,
 			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq, &runtimeStatsRaw); err != nil {
 			continue
 		}
@@ -837,7 +851,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			ID:             uuidToString(id),
 			Source:         dmSourceChannel,
 			Mode:           "direct",
-			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar)},
+			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar), Archived: peerArchivedAt.Valid},
 			Unread:         unread,
 			RealUnread:     unread,
 			ManuallyUnread: manualUnreadAt.Valid,

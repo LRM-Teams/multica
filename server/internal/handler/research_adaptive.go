@@ -269,7 +269,7 @@ func adaptiveKickoffLeadPrompt(goal string, plan researchAdaptivePlan) string {
 	b.WriteString("Product Round N hard caps (LRM-676/911): shallow=2 / standard=5 / deep=10. End each product round with a judgment card (continue|stop_enough|stop_budget); do not equate one search step with one product round.\n")
 	b.WriteString("Adaptive depth rules (LRM-883/888):\n")
 	b.WriteString("- Do NOT use a fixed question checklist. Expand a dimension tree from the seeded dimension-family nodes; invent concrete sub-questions from the goal.\n")
-	b.WriteString("- Hire specialists via multica research hire when a dimension lacks coverage; soft roster cap 12 (archive idle before unbounded hire). Only you may change roster.\n")
+	b.WriteString("- Hire specialists via multica research hire only for a real specialty gap (required reason); soft roster cap 12. After activate, members must work. Capacity/409 fixtures use --fixture (no canvas pad walls). Only you may change roster.\n")
 	b.WriteString("- Do NOT rewrite the user's session goal; user mid-flight only (LRM-898).\n")
 	b.WriteString("- Route sources via general layer (web / X experts / GitHub) + domain layer below; every source-upsert MUST include payload.why (why this source for which dimension).\n")
 	b.WriteString("- Delivery/report MUST include human↔AI boundary: AI-only ceiling / must-have-human / human vs AI table.\n")

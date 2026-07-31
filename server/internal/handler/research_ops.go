@@ -902,7 +902,8 @@ type hireFleetMemberRequest struct {
 	Description  string `json:"description"`
 	Instructions string `json:"instructions"`
 	Model        string `json:"model"`
-	Reason       string `json:"reason"` // specialty gap / why hire (audit + canvas)
+	Reason       string `json:"reason"`  // specialty gap / why hire (audit + canvas)
+	Fixture      bool   `json:"fixture"` // capacity/409 test only; skips canvas projection
 }
 
 type optimizeFleetMemberRequest struct {
@@ -913,7 +914,8 @@ type optimizeFleetMemberRequest struct {
 }
 
 type archiveFleetMemberRequest struct {
-	Reason string `json:"reason"`
+	Reason  string `json:"reason"`
+	Fixture bool   `json:"fixture"` // capacity fixture cleanup only
 }
 
 func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request) {
@@ -946,6 +948,11 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to list members")
 		return
 	}
+	fixture := researchRosterFixtureRequested(r.Header.Get(researchRosterFixtureHeader), req.Fixture)
+	if gapErr := validateResearchHireGap(req.Name, role, req.Reason, members, fixture); gapErr != nil {
+		writeError(w, http.StatusBadRequest, gapErr.Error())
+		return
+	}
 	activeCount := countNonArchivedFleetMembers(members)
 	if researchRosterAtCap(activeCount) {
 		writeError(w, http.StatusConflict, fmt.Sprintf(
@@ -966,8 +973,8 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 	}
 	model := resolveResearchHireModel(req.Model, runtime.Provider)
 	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		reason = fmt.Sprintf("specialty gap: %s", role)
+	if fixture && reason == "" {
+		reason = "capacity fixture hire"
 	}
 
 	agent, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
@@ -1003,20 +1010,24 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
-		Action:      "hire",
-		Member:      member,
-		AgentName:   firstNonEmpty(agent.DisplayName, agent.Name),
-		Title:       fmt.Sprintf("新成员 · %s", firstNonEmpty(agent.DisplayName, agent.Name)),
-		Summary:     fmt.Sprintf("角色 %s 待提示词优化后激活 · %s", role, reason),
-		Op:          "roster_hire",
-		CardBody:    fmt.Sprintf("编制变更 · 雇佣 %s（%s），待提示词优化。原因：%s", firstNonEmpty(agent.DisplayName, agent.Name), role, reason),
-		Reason:      reason,
-		Model:       model.String,
-		ExtraPayload: map[string]any{
-			"status": member.Status,
-		},
-	})
+	// Fixture hires intentionally skip canvas/process projection (LRM-918 H3).
+	if !fixture {
+		h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
+			Action:    "hire",
+			Member:    member,
+			AgentName: firstNonEmpty(agent.DisplayName, agent.Name),
+			Title:     fmt.Sprintf("新成员 · %s", firstNonEmpty(agent.DisplayName, agent.Name)),
+			Summary:   fmt.Sprintf("角色 %s 待提示词优化后激活 · %s", role, reason),
+			Op:        "roster_hire",
+			CardBody:  fmt.Sprintf("编制变更 · 雇佣 %s（%s），待提示词优化。原因：%s", firstNonEmpty(agent.DisplayName, agent.Name), role, reason),
+			Reason:    reason,
+			Model:     model.String,
+			ExtraPayload: map[string]any{
+				"status":        member.Status,
+				"member_status": member.Status,
+			},
+		})
+	}
 
 	writeJSON(w, http.StatusCreated, ResearchFleetMemberResp{
 		ID:          uuidToString(member.ID),
@@ -1127,11 +1138,25 @@ func (h *Handler) OptimizeResearchFleetMember(w http.ResponseWriter, r *http.Req
 		Reason:    reason,
 		Model:     updatedAgent.Model.String,
 		ExtraPayload: map[string]any{
-			"prev_status": prevStatus,
-			"status":      updated.Status,
-			"activated":   req.Activate,
+			"prev_status":   prevStatus,
+			"status":        updated.Status,
+			"member_status": updated.Status,
+			"activated":     req.Activate,
 		},
 	})
+
+	// H2: activation must kick off observable work (activity node + wake).
+	if req.Activate && updated.Status == "active" {
+		h.assignWorkAfterRosterActivate(
+			r.Context(),
+			workspaceID,
+			wsUUID,
+			lead,
+			updated,
+			agentName,
+			parseUUID(requestUserID(r)),
+		)
+	}
 
 	writeJSON(w, http.StatusOK, ResearchFleetMemberResp{
 		ID:          uuidToString(updated.ID),
@@ -1200,6 +1225,17 @@ func (h *Handler) ArchiveResearchFleetMemberHandler(w http.ResponseWriter, r *ht
 		return
 	}
 
+	fixture := researchRosterFixtureRequested(r.Header.Get(researchRosterFixtureHeader), req.Fixture)
+	hasWork := h.researchAgentHasObservableWork(r.Context(), wsUUID, fleet.ID, target.AgentID)
+	var hiredAt time.Time
+	if target.CreatedAt.Valid {
+		hiredAt = target.CreatedAt.Time
+	}
+	if churnErr := validateResearchArchiveAntiChurn(*target, hiredAt, hasWork, fixture, time.Now().UTC()); churnErr != nil {
+		writeError(w, http.StatusConflict, churnErr.Error())
+		return
+	}
+
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {
 		reason = "idle or low effectiveness"
@@ -1234,19 +1270,23 @@ func (h *Handler) ArchiveResearchFleetMemberHandler(w http.ResponseWriter, r *ht
 		h.TaskService.ReconcileAgentStatus(r.Context(), updated.AgentID)
 	}
 
-	h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
-		Action:    "archive",
-		Member:    updated,
-		AgentName: agentName,
-		Title:     fmt.Sprintf("减员 · %s", agentName),
-		Summary:   fmt.Sprintf("归档角色 %s · %s", updated.Role, reason),
-		Op:        "roster_archive",
-		CardBody:  fmt.Sprintf("编制变更 · 归档 %s（%s）。原因：%s；已停止唤醒", agentName, updated.Role, reason),
-		Reason:    reason,
-		ExtraPayload: map[string]any{
-			"status": updated.Status,
-		},
-	})
+	if !fixture {
+		h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
+			Action:    "archive",
+			Member:    updated,
+			AgentName: agentName,
+			Title:     fmt.Sprintf("减员 · %s", agentName),
+			Summary:   fmt.Sprintf("已归档 · 角色 %s · %s", updated.Role, reason),
+			Op:        "roster_archive",
+			CardBody:  fmt.Sprintf("编制变更 · 已归档 %s（%s）。原因：%s；已停止唤醒", agentName, updated.Role, reason),
+			Reason:    reason,
+			ExtraPayload: map[string]any{
+				"status":         updated.Status,
+				"member_status":  "archived",
+				"display_status": "已归档",
+			},
+		})
+	}
 
 	writeJSON(w, http.StatusOK, ResearchFleetMemberResp{
 		ID:      uuidToString(updated.ID),
@@ -1300,27 +1340,34 @@ func (h *Handler) projectRosterChangeToActiveSessions(
 		for k, v := range p.ExtraPayload {
 			payload[k] = v
 		}
+		nodeStatus := researchRosterGraphStatus(p.Action)
 		_, _, _ = h.createResearchGraphNodePublished(ctx, workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), db.CreateResearchGraphNodeParams{
 			WorkspaceID:  wsUUID,
 			SessionID:    s.ID,
 			NodeType:     "roster_change",
 			Title:        p.Title,
 			Summary:      p.Summary,
-			Status:       "active",
+			Status:       nodeStatus,
 			ActorAgentID: lead.AgentID,
 			Payload:      marshalJSONRaw(payload),
 		}, pgtype.UUID{}, "leads_to")
+		cardMeta := map[string]any{
+			"action":        p.Action,
+			"member_id":     uuidToString(p.Member.ID),
+			"role":          p.Member.Role,
+			"reason":        p.Reason,
+			"member_status": p.Member.Status,
+			"node_status":   nodeStatus,
+		}
+		if p.Action == "archive" {
+			cardMeta["display_status"] = "已归档"
+		}
 		h.emitResearchProcessCard(ctx, workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), researchProcessEvent{
 			Op:      p.Op,
 			Title:   p.AgentName,
 			Body:    p.CardBody,
 			ActorID: lead.AgentID,
-			Meta: map[string]any{
-				"action":    p.Action,
-				"member_id": uuidToString(p.Member.ID),
-				"role":      p.Member.Role,
-				"reason":    p.Reason,
-			},
+			Meta:    cardMeta,
 		})
 	}
 }

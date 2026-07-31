@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import enResearch from "../../locales/en/research.json";
 
@@ -7,7 +7,11 @@ const avatarStackRef = vi.hoisted(() => ({ agentIds: undefined as readonly strin
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: typeof enResearch) => unknown) => fn(enResearch),
+    t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = fn(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
   }),
 }));
 
@@ -16,8 +20,20 @@ vi.mock("../../i18n/use-time-ago", () => ({
 }));
 
 vi.mock("../../navigation/app-link", () => ({
-  AppLink: ({ children, href, className }: { children: React.ReactNode; href: string; className?: string }) => (
-    <a href={href} className={className}>{children}</a>
+  AppLink: ({
+    children,
+    href,
+    className,
+    onClick,
+  }: {
+    children: React.ReactNode;
+    href: string;
+    className?: string;
+    onClick?: () => void;
+  }) => (
+    <a href={href} className={className} onClick={onClick}>
+      {children}
+    </a>
   ),
 }));
 
@@ -32,6 +48,20 @@ vi.mock("./research-session-row-actions", () => ({
   ResearchSessionRowActions: () => <span data-testid="row-actions" />,
 }));
 
+vi.mock("@multica/ui/components/ui/dialog", () => ({
+  Dialog: ({
+    open,
+    children,
+  }: {
+    open: boolean;
+    children: React.ReactNode;
+  }) => (open ? <div data-testid="goal-dialog">{children}</div> : null),
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
 import { ResearchSessionRow } from "./research-session-row";
 
 function session(partial: Partial<ResearchSession> = {}): ResearchSession {
@@ -41,7 +71,7 @@ function session(partial: Partial<ResearchSession> = {}): ResearchSession {
     fleet_id: "fleet-1",
     created_by: "user-1",
     title: "Alpha market map",
-    goal: "Map the alpha market",
+    goal: "Map the alpha market across regions with pricing and share",
     status: "running",
     current_stage: "s2_sources",
     project_id: null,
@@ -50,14 +80,14 @@ function session(partial: Partial<ResearchSession> = {}): ResearchSession {
     created_at: "2026-07-30T00:00:00Z",
     updated_at: "2026-07-30T03:00:00Z",
     fleet_preview: [
-      { agent_id: "agent-1" },
-      { agent_id: "agent-2" },
+      { agent_id: "agent-1", display_name: "Ronaldo", is_lead: true },
+      { agent_id: "agent-2", display_name: "Source" },
     ],
     ...partial,
   };
 }
 
-describe("ResearchSessionRow (LRM-788)", () => {
+describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
   it("running status paints a brand dot with pulse and an accessible label", () => {
     const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     const dot = container.querySelector("span.rounded-full.size-2");
@@ -84,13 +114,55 @@ describe("ResearchSessionRow (LRM-788)", () => {
     }
   });
 
-  it("truncates title and goal, falling back to goal when title is empty", () => {
-    const { container } = render(
-      <ResearchSessionRow session={session({ title: "" })} href="/research/s1" />,
+  it("shows a short title without dual-writing the full goal as a subtitle", () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    expect(screen.getByText("Alpha market map")).toBeTruthy();
+    // Full goal must not appear as a second muted line; only via chip / dialog.
+    expect(
+      screen.queryByText("Map the alpha market across regions with pricing and share"),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: /goal ·/i })).toBeTruthy();
+  });
+
+  it("falls back to a truncated goal as the title when title is empty", () => {
+    const longGoal =
+      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
+    render(
+      <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
     );
-    const title = container.querySelector(".font-medium");
-    expect(title?.className).toContain("truncate");
-    expect(title?.textContent).toBe("Map the alpha market");
+    const titleLink = screen.getAllByRole("link")[0];
+    expect(titleLink.textContent?.includes("…")).toBe(true);
+    expect(titleLink.textContent?.length ?? 0).toBeLessThan(longGoal.length);
+  });
+
+  it("opens a goal dialog from the colored chip", () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    expect(screen.queryByTestId("goal-dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /goal ·/i }));
+    expect(screen.getByTestId("goal-dialog")).toBeTruthy();
+    expect(screen.getByText(enResearch.list.goal_dialog_title)).toBeTruthy();
+    expect(
+      screen.getByText("Map the alpha market across regions with pricing and share"),
+    ).toBeTruthy();
+  });
+
+  it("renders stage, who, empty output, and fleet avatars", () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
+    expect(screen.getByText("Ronaldo working")).toBeTruthy();
+    expect(screen.getByText(enResearch.list.no_output)).toBeTruthy();
+    expect(screen.getByTestId("avatar-stack")).toBeTruthy();
+    expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
+  });
+
+  it("shows handoff summary as the output line when present", () => {
+    render(
+      <ResearchSessionRow
+        session={session({ handoff_summary: "Draft v0.3 ready" })}
+        href="/research/s1"
+      />,
+    );
+    expect(screen.getByText("Output · Draft v0.3 ready")).toBeTruthy();
   });
 
   it("renders the localized stage chip and falls back to the raw stage key", () => {
@@ -98,13 +170,6 @@ describe("ResearchSessionRow (LRM-788)", () => {
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
     rerender(<ResearchSessionRow session={session({ current_stage: "s9_unknown" })} href="/research/s1" />);
     expect(screen.getByText("s9_unknown")).toBeTruthy();
-  });
-
-  it("passes fleet preview ids to the avatar stack", () => {
-    avatarStackRef.agentIds = undefined;
-    render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.getByTestId("avatar-stack")).toBeTruthy();
-    expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
   });
 
   it("renders no avatar stack when the fleet preview is empty", () => {
@@ -120,12 +185,13 @@ describe("ResearchSessionRow (LRM-788)", () => {
     expect(chevron?.getAttribute("class")).toContain("group-hover:opacity-100");
   });
 
-  it("makes the whole row a link to the session, with the actions menu outside", () => {
+  it("links title/meta to the session, with the actions menu outside the links", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    const link = screen.getByRole("link");
-    expect(link.getAttribute("href")).toBe("/research/s1");
-    expect(link.textContent).toContain("Alpha market map");
+    const links = screen.getAllByRole("link");
+    expect(links.some((a) => a.getAttribute("href") === "/research/s1")).toBe(true);
     const actions = screen.getByTestId("row-actions");
-    expect(link.contains(actions)).toBe(false);
+    for (const link of links) {
+      expect(link.contains(actions)).toBe(false);
+    }
   });
 });

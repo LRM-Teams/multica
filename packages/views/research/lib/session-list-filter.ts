@@ -15,6 +15,32 @@ export function sessionDisplayTitle(session: Pick<ResearchSession, "title" | "go
   return (session.title || session.goal || "").trim();
 }
 
+/** Collapse whitespace and ellipsize for single-line list UI (LRM-906 L1/L2). */
+export function truncateOneLine(text: string, maxChars: number): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  if (t.length <= maxChars) return t;
+  if (maxChars <= 1) return "…";
+  return `${t.slice(0, maxChars - 1)}…`;
+}
+
+/** Short row title: prefer title; else truncate goal — never dual-write full goal. */
+export function sessionShortTitle(
+  session: Pick<ResearchSession, "title" | "goal">,
+  maxChars = 48,
+): string {
+  const title = session.title?.trim();
+  if (title) return truncateOneLine(title, maxChars);
+  return truncateOneLine(session.goal || "", maxChars);
+}
+
+/** Colored goal chip summary (LRM-906 L2). */
+export function sessionGoalSummary(
+  session: Pick<ResearchSession, "goal">,
+  maxChars = 36,
+): string {
+  return truncateOneLine(session.goal || "", maxChars);
+}
+
 export function matchesTitleQuery(
   session: Pick<ResearchSession, "title" | "goal">,
   query: string,

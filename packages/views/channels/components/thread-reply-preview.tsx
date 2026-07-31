@@ -8,6 +8,7 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n";
+import { Time } from "../../i18n/time";
 import {
   filterSpokenChannelMessages,
   spokenMessagePreviewText,
@@ -18,6 +19,7 @@ const PREVIEW_LIMIT = 3;
 /**
  * LRM-873 — Thread reply preview under a mainline parent (v1.1c).
  * Thin border + wash, no left accent. Spoken replies only (user|agent).
+ * Rows show HH:mm; header adds unread new-count when present.
  */
 export function ThreadReplyPreview({
   message,
@@ -30,6 +32,7 @@ export function ThreadReplyPreview({
   const rootId = message.id;
   const channelId = message.channel_id;
   const hintCount = message.thread_reply_count ?? 0;
+  const unreadCount = message.thread_unread_count ?? 0;
   const enabled = !!channelId && !!rootId && hintCount > 0 && !message.thread_root_message_id;
 
   const { data, isLoading, isError } = useQuery({
@@ -47,7 +50,7 @@ export function ThreadReplyPreview({
 
   const previewRows = spoken.slice(0, PREVIEW_LIMIT);
   // When we loaded the full window (no next cursor), trust the filtered count.
-  // Otherwise keep the server hint as a floor so "view all N" stays useful.
+  // Otherwise keep the server hint as a floor so the header count stays useful.
   const hasMorePages = !!data?.next_cursor;
   const spokenCount = hasMorePages
     ? Math.max(hintCount, spoken.length)
@@ -72,23 +75,30 @@ export function ThreadReplyPreview({
   if (spokenCount === 0) return null;
 
   const open = () => onOpenThread(message);
-  const viewAllLabel =
-    spokenCount > PREVIEW_LIMIT
-      ? t(($) => $.thread.preview_view_all, { count: spokenCount })
-      : t(($) => $.thread.preview_open);
+  const countLabel =
+    unreadCount > 0
+      ? t(($) => $.thread.preview_count_with_new, {
+          count: spokenCount,
+          newCount: unreadCount,
+        })
+      : t(($) => $.thread.preview_count, { count: spokenCount });
 
   return (
     <button
       type="button"
       data-testid="thread-reply-preview"
+      aria-label={t(($) => $.thread.preview_open)}
       onClick={open}
       className={cn(
         "mt-2 w-full rounded-lg border border-border/80 bg-muted/40 px-2.5 py-2 text-left",
         "transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       )}
     >
-      <div className="mb-1 text-[11px] text-muted-foreground">
-        {t(($) => $.thread.preview_count, { count: spokenCount })}
+      <div
+        className="mb-1 text-[11px] text-muted-foreground"
+        data-testid="thread-reply-preview-count"
+      >
+        {`${countLabel} >`}
       </div>
       <ul className="flex flex-col gap-1">
         {previewRows.map((reply) => {
@@ -126,13 +136,18 @@ export function ThreadReplyPreview({
                   </span>
                 ) : null}
               </span>
+              {reply.created_at ? (
+                <span
+                  data-testid="thread-reply-preview-time"
+                  className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70"
+                >
+                  <Time kind="clock" value={reply.created_at} title={false} />
+                </span>
+              ) : null}
             </li>
           );
         })}
       </ul>
-      <div className="mt-1.5 text-xs font-semibold text-brand">
-        {viewAllLabel}
-      </div>
     </button>
   );
 }

@@ -345,6 +345,7 @@
     "reply_aria": "スレッドで返信",
     "reply_count": "{{count}} 件の返信",
     "preview_count": "{{count}} 件の返信",
+    "preview_count_with_new": "{{count}} 件の返信 · {{newCount}} 件の新着",
     "preview_view_all": "{{count}} 件の返信をすべて表示 →",
     "preview_open": "スレッドを表示 →",
     "preview_image": "[画像]",

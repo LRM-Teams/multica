@@ -1,4 +1,11 @@
 {
+  "delete_confirm": {
+    "title": "Delete agent?",
+    "description": "You're about to delete \"{{name}}\". It won't be assignable or mentionable afterward. History is preserved and can be restored later.",
+    "cancel": "Cancel",
+    "confirm": "Delete",
+    "confirming": "Deleting…"
+  },
   "page": {
     "title": "Agents",
     "tagline": "AI teammates that pick up issues, comment, and update status.",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertCircle, Loader2, MessageSquare, RotateCcw, Square, Trash2 } from "lucide-react";
+import { Loader2, MessageSquare, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -16,19 +16,10 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@multica/ui/components/ui/alert-dialog";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
 import { AgentRestartModal } from "./agent-restart-modal";
+import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
 
 /**
@@ -103,12 +94,15 @@ export function AgentProfileActions({
 
   // LRM-448: "Delete" = deactivate via archiveAgent (soft-delete). No
   // hard-delete endpoint exists; history is preserved and restorable.
+  // LRM-865: keep the confirm dialog open until success (or leave it open
+  // on failure so the user can retry / cancel).
   const handleDelete = async () => {
     setDeleting(true);
     try {
       await api.archiveAgent(agent.id);
       invalidateAgents();
       toast.success(t(($) => $.side_panel.agent_deleted_toast));
+      setConfirmDelete(false);
     } catch (e) {
       showErrorToast(
         e instanceof Error ? e.message : t(($) => $.side_panel.delete_failed_toast),
@@ -227,41 +221,13 @@ export function AgentProfileActions({
         ) : null}
       </div>
 
-      {confirmDelete ? (
-        <AlertDialog open onOpenChange={(v) => { if (!v) setConfirmDelete(false); }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-                  <AlertCircle className="h-5 w-5 text-destructive" />
-                </div>
-                <div className="flex-1">
-                  <AlertDialogTitle>
-                    {t(($) => $.side_panel.delete_dialog_title)}
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {t(($) => $.side_panel.delete_dialog_description, { name: displayName })}
-                  </AlertDialogDescription>
-                </div>
-              </div>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>
-                {t(($) => $.side_panel.delete_dialog_cancel)}
-              </AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                onClick={() => {
-                  setConfirmDelete(false);
-                  void handleDelete();
-                }}
-              >
-                {t(($) => $.side_panel.delete_dialog_confirm)}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      ) : null}
+      <ConfirmDeleteAgent
+        open={confirmDelete}
+        displayName={displayName}
+        pending={deleting}
+        onConfirm={() => void handleDelete()}
+        onOpenChange={setConfirmDelete}
+      />
 
       {canManage && !isArchived ? (
         <AgentRestartModal

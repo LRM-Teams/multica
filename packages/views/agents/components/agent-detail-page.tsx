@@ -32,14 +32,6 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
 import { CapabilityBanner } from "@multica/ui/components/common/capability-banner";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@multica/ui/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -48,6 +40,7 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AppLink, useNavigation } from "../../navigation";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
+import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 import { PageHeader } from "../../layout/page-header";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentOverviewPane, type DetailTab } from "./agent-overview-pane";
@@ -106,6 +99,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { canEdit } = useAgentPermissions(agent, wsId);
 
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   // One-shot channel: the inspector's compact Lark status row asks the
   // overview pane to focus a tab. The pane clears it after consuming.
@@ -114,12 +108,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const handleUpdate = useUpdateAgent(wsId);
 
   const handleArchive = async (id: string) => {
+    setArchiving(true);
     try {
       await api.archiveAgent(id);
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.detail.agent_archived_toast));
+      setConfirmArchive(false);
+      navigation.push(paths.agents());
     } catch (e) {
       showErrorToast(e instanceof Error ? e.message : t(($) => $.detail.archive_failed_toast));
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -274,48 +273,13 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
         />
       </div>
 
-      {confirmArchive && (
-        <Dialog
-          open
-          onOpenChange={(v) => {
-            if (!v) setConfirmArchive(false);
-          }}
-        >
-          <DialogContent className="max-w-sm" showCloseButton={false}>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-                <AlertCircle className="h-5 w-5 text-destructive" />
-              </div>
-              <DialogHeader className="flex-1 gap-1">
-                <DialogTitle className="text-sm font-semibold">
-                  {t(($) => $.detail.archive_dialog_title)}
-                </DialogTitle>
-                <DialogDescription className="text-xs">
-                  {t(($) => $.detail.archive_dialog_description, { name: resolveActorDisplayName(agent, agent.id) })}
-                </DialogDescription>
-              </DialogHeader>
-            </div>
-            <DialogFooter>
-              <Button
-                variant="ghost"
-                onClick={() => setConfirmArchive(false)}
-              >
-                {t(($) => $.detail.archive_dialog_cancel)}
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  setConfirmArchive(false);
-                  handleArchive(agent.id);
-                  navigation.push(paths.agents());
-                }}
-              >
-                {t(($) => $.detail.archive_dialog_confirm)}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
+      <ConfirmDeleteAgent
+        open={confirmArchive}
+        displayName={resolveActorDisplayName(agent, agent.id)}
+        pending={archiving}
+        onConfirm={() => void handleArchive(agent.id)}
+        onOpenChange={setConfirmArchive}
+      />
     </div>
   );
 }

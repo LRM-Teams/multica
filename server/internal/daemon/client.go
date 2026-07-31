@@ -86,6 +86,24 @@ func isAgentNotBoundToRuntimeError(err error) bool {
 	return strings.Contains(strings.ToLower(reqErr.Body), "agent is not bound to this runtime")
 }
 
+// isRuntimeTransitionInProgressError returns true if the error is a 403
+// with "runtime_transition_in_progress" body (task #38,
+// server/internal/handler/agent_credential.go's runtimeTransitionInProgressReason).
+// Deliberately checked before isAgentNotBoundToRuntimeError's broader
+// "agent is not bound" substring elsewhere in the caller's dispatch, since
+// this body never contains that phrase — the two are mutually exclusive by
+// construction, not just by check ordering.
+func isRuntimeTransitionInProgressError(err error) bool {
+	var reqErr *requestError
+	if !errors.As(err, &reqErr) {
+		return false
+	}
+	if reqErr.StatusCode != http.StatusForbidden {
+		return false
+	}
+	return strings.Contains(strings.ToLower(reqErr.Body), "runtime_transition_in_progress")
+}
+
 func isInvalidDaemonTokenError(err error) bool {
 	var reqErr *requestError
 	if !errors.As(err, &reqErr) {

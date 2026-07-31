@@ -1685,6 +1685,72 @@ func TestIsAgentNotBoundToRuntimeError(t *testing.T) {
 	}
 }
 
+// TestIsRuntimeTransitionInProgressError covers task #38's new 403
+// classification, and locks the mutual-exclusivity guarantee the two
+// classifiers depend on: a body can never satisfy both
+// isAgentNotBoundToRuntimeError and isRuntimeTransitionInProgressError, so a
+// caller checking one first never accidentally shadows the other.
+func TestIsRuntimeTransitionInProgressError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "403 with transition-in-progress body",
+			err: &requestError{
+				StatusCode: http.StatusForbidden,
+				Body:       `{"error":"runtime_transition_in_progress"}`,
+			},
+			want: true,
+		},
+		{
+			name: "mixed-case body still matches",
+			err: &requestError{
+				StatusCode: http.StatusForbidden,
+				Body:       `{"error":"Runtime_Transition_In_Progress"}`,
+			},
+			want: true,
+		},
+		{
+			name: "404 with same body must NOT match (wrong status)",
+			err: &requestError{
+				StatusCode: http.StatusNotFound,
+				Body:       `{"error":"runtime_transition_in_progress"}`,
+			},
+			want: false,
+		},
+		{
+			name: "403 terminal agent-not-bound body is not a match",
+			err: &requestError{
+				StatusCode: http.StatusForbidden,
+				Body:       `{"error":"agent is not bound to this runtime"}`,
+			},
+			want: false,
+		},
+		{
+			name: "non-requestError is never a match",
+			err:  errors.New("boom"),
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isRuntimeTransitionInProgressError(tc.err)
+			if got != tc.want {
+				t.Fatalf("isRuntimeTransitionInProgressError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+			// Mutual exclusivity: whichever this body matches, it must
+			// never also match the other classifier.
+			if got && isAgentNotBoundToRuntimeError(tc.err) {
+				t.Fatalf("body matched both classifiers: %v", tc.err)
+			}
+		})
+	}
+}
+
 func TestIsRuntimeNotFoundError(t *testing.T) {
 	t.Parallel()
 

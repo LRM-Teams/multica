@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearAgentRuntimeReassignedAt = `-- name: ClearAgentRuntimeReassignedAt :exec
+UPDATE agent SET runtime_reassigned_at = NULL
+WHERE id = $1 AND runtime_reassigned_at IS NOT NULL
+`
+
+// The first successful EnsureDaemonAgentCredential call on the (new)
+// current runtime is treated as confirmation the transition finished —
+// clears the grace-window marker MarkAgentRuntimeReassigned set, so a
+// later, unrelated reassignment starts its own fresh window rather than
+// inheriting a stale timestamp. WHERE runtime_reassigned_at IS NOT NULL
+// keeps this a no-op write on the common case (no transition in flight).
+func (q *Queries) ClearAgentRuntimeReassignedAt(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearAgentRuntimeReassignedAt, id)
+	return err
+}
+
 const createAgentCredential = `-- name: CreateAgentCredential :one
 INSERT INTO agent_credential (token_hash, token_prefix, agent_id, workspace_id, user_id, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)

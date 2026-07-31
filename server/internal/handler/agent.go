@@ -1533,6 +1533,8 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	movingRuntime := req.RuntimeID != nil && targetRuntimeID != existing.RuntimeID
+
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
 		if isReminderDaemonOutdatedError(err) {
@@ -1550,6 +1552,19 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("update agent failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		writeError(w, http.StatusInternalServerError, "failed to update agent: "+err.Error())
 		return
+	}
+
+	// task #38: stamp the transition marker only when this request actually
+	// moved the agent onto a different runtime — never on a no-op update
+	// that repeats the current runtime_id. EnsureDaemonAgentCredential uses
+	// this to give the old runtime's daemon a short silent grace window
+	// instead of immediately reporting the terminal agent_reassigned_elsewhere
+	// failure. Best-effort: a failure here should not fail the update itself,
+	// it only means the grace window doesn't apply to this transition.
+	if movingRuntime {
+		if err := h.Queries.MarkAgentRuntimeReassigned(r.Context(), updated.ID); err != nil {
+			slog.Warn("failed to stamp agent runtime reassignment", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		}
 	}
 
 	// mcp_config / thinking_level: null/empty in the request means explicitly

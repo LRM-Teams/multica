@@ -341,6 +341,10 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 			if part.RefSubType != "issue" {
 				return protocol.MessagePart{}, fmt.Errorf("unsupported issue-ref ref_subtype %q", part.RefSubType)
 			}
+		case "channel-ref":
+			if part.RefSubType != "" {
+				return protocol.MessagePart{}, fmt.Errorf("unsupported channel-ref ref_subtype %q", part.RefSubType)
+			}
 		default:
 			return protocol.MessagePart{}, fmt.Errorf("unsupported ref_type %q", part.RefType)
 		}

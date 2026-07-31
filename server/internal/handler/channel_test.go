@@ -3577,6 +3577,85 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 	}
 }
 
+// TestChannelReferenceLinksBecomeStructuredMessageParts is task #912's
+// backend half of Felix's PR #1607 (FE-only, ChannelReferenceExtension):
+// the composer emits an already-resolved [Label](mention://channel/<id>)
+// link, and the server's job is to verify + anchor it, not fuzzy-match text.
+func TestChannelReferenceLinksBecomeStructuredMessageParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	targetChannelID := seedChannelForTest(t, "channel-ref-target-"+uuid.NewString()[:8], testUserID)
+	sourceChannelID := seedChannelForTest(t, "channel-ref-source-"+uuid.NewString()[:8], testUserID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(sourceChannelID))
+	if !found {
+		t.Fatal("source channel not found after seed")
+	}
+
+	label := "team-a\\[eu\\]" // an escaped literal bracket in the label
+	content := "see [" + label + "](mention://channel/" + targetChannelID + ") for context"
+	gotContent, gotParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	if err != nil {
+		t.Fatalf("enrich channel reference: %v", err)
+	}
+	if gotContent != content {
+		t.Fatalf("content = %q, want markdown link text unchanged %q", gotContent, content)
+	}
+
+	var refs []protocol.MessagePart
+	for _, part := range gotParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			refs = append(refs, part)
+		}
+	}
+	if len(refs) != 1 {
+		t.Fatalf("channel references = %+v, want exactly 1", refs)
+	}
+	ref := refs[0]
+	if ref.RefID != targetChannelID || ref.Label != "team-a[eu]" {
+		t.Fatalf("channel reference = %+v, want ref_id=%s label=%q (unescaped)", ref, targetChannelID, "team-a[eu]")
+	}
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+		t.Fatalf("channel reference is missing a content UTF-16 span: %+v", ref)
+	}
+	wantStart, wantEnd := contentUTF16Span(content, strings.Index(content, "["), strings.Index(content, ")")+1)
+	if *ref.ContentStartUTF16 != wantStart || *ref.ContentEndUTF16 != wantEnd {
+		t.Fatalf("channel reference span = [%d,%d), want the whole markdown link [%d,%d)", *ref.ContentStartUTF16, *ref.ContentEndUTF16, wantStart, wantEnd)
+	}
+
+	// A reference to a channel ID that doesn't exist in this workspace is
+	// dropped, not an error — the composer shouldn't be able to author one,
+	// but a dangling/foreign ID must never surface as a broken structured ref.
+	danglingContent := "see [ghost](mention://channel/" + uuid.NewString() + ")"
+	_, danglingParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, danglingContent, nil)
+	if err != nil {
+		t.Fatalf("enrich dangling channel reference: %v", err)
+	}
+	for _, part := range danglingParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			t.Fatalf("dangling channel id unexpectedly produced a channel-ref: %+v", part)
+		}
+	}
+
+	// A reference to a real channel ID that is a DM (not a linkable group
+	// channel) is dropped too — DMs are private 1:1s, not the shareable
+	// channel-ref target the composer's own suggestion list excludes them for.
+	dmAgentID := createHandlerTestAgent(t, "Channel Ref DM Peer "+uuid.NewString(), []byte("[]"))
+	dmChannelID := seedAgentDMChannel(t, dmAgentID)
+	dmContent := "see [dm](mention://channel/" + dmChannelID + ")"
+	_, dmParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, dmContent, nil)
+	if err != nil {
+		t.Fatalf("enrich dm channel reference: %v", err)
+	}
+	for _, part := range dmParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			t.Fatalf("dm channel id unexpectedly produced a channel-ref: %+v", part)
+		}
+	}
+}
+
 func TestChannelLegacyActorMentionMarkdownIsRejected(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

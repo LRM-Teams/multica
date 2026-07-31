@@ -3,12 +3,14 @@ package handler
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/mention"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -81,6 +83,7 @@ func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelRe
 		parts = appendReferenceOccurrences(parts, mentions)
 	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
+	parts = appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content))
 	return content, parts, nil
 }
 
@@ -131,6 +134,61 @@ func (h *Handler) resolveBareChannelIssueReferences(ctx context.Context, workspa
 		})
 	}
 	return out
+}
+
+// channelReferenceLinkRe matches the composer's [Label](mention://channel/<id>)
+// markdown link (ChannelReferenceExtension.renderMarkdown, packages/views).
+// Unlike @mention/#issue, the composer already resolved a real channel ID
+// client-side (picked from its own cached channel list) — there is no bare-text
+// form to fuzzy-match here, only a link to verify and anchor.
+var channelReferenceLinkRe = regexp.MustCompile(`\[((?:\\.|[^\]])+)\]\(mention://channel/([0-9a-fA-F-]+)\)`)
+
+// resolveChannelReferenceLinks verifies each composer-authored channel-reference
+// link still points at a real, non-DM channel in this workspace and anchors it
+// to its exact source span. task #912: server-resolved counterpart to
+// packages/views' ChannelReferenceExtension (Felix, PR #1607, FE-only until
+// this lands). A dangling reference (channel deleted, or somehow cross-
+// workspace) is silently dropped — the composer already prevents authoring
+// one, and messageparts.Normalize's own reference-verification discipline
+// (see appendReferenceOccurrences) is "never persist what we can't verify",
+// not "error the whole send over a stale link".
+func (h *Handler) resolveChannelReferenceLinks(ctx context.Context, workspaceID, content string) []protocol.MessagePart {
+	matches := channelReferenceLinkRe.FindAllStringSubmatchIndex(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]protocol.MessagePart, 0, len(matches))
+	for _, match := range matches {
+		start, end := match[0], match[1]
+		rawLabel := content[match[2]:match[3]]
+		channelIDStr := content[match[4]:match[5]]
+		channelID, err := util.ParseUUID(channelIDStr)
+		if err != nil {
+			continue
+		}
+		ch, ok := h.getChannel(ctx, workspaceID, channelID)
+		if !ok || ch.Kind != "group" {
+			continue
+		}
+		startUTF16, endUTF16 := contentUTF16Span(content, start, end)
+		out = append(out, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "channel-ref",
+			RefID:             ch.ID,
+			Label:             unescapeChannelReferenceLabel(rawLabel),
+			ContentStartUTF16: &startUTF16,
+			ContentEndUTF16:   &endUTF16,
+		})
+	}
+	return out
+}
+
+// unescapeChannelReferenceLabel reverses the composer's renderMarkdown escaping
+// of literal brackets in a label (ChannelReferenceExtension, packages/views).
+func unescapeChannelReferenceLabel(label string) string {
+	label = strings.ReplaceAll(label, `\[`, "[")
+	label = strings.ReplaceAll(label, `\]`, "]")
+	return label
 }
 
 func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, channelID string) map[string]channelMentionCandidate {

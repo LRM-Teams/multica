@@ -284,6 +284,54 @@ func TestNormalizeReferencePartsRejectsAllMention(t *testing.T) {
 	}
 }
 
+// TestNormalizeChannelReferencePart is task #912's unit coverage for
+// normalizePart's channel-ref case — the sidecar the client may submit
+// alongside a [Label](mention://channel/<id>) link (always without a source
+// span; channel_structured_mentions.go's resolver re-derives the verified
+// one). See TestChannelReferenceLinksBecomeStructuredMessageParts for the
+// end-to-end resolution/anchoring behavior.
+func TestNormalizeChannelReferencePart(t *testing.T) {
+	content, parts, err := Normalize("see #general", []protocol.MessagePart{{
+		Type:              protocol.MessagePartTypeReference,
+		RefType:           "channel-ref",
+		RefID:             "11111111-1111-1111-1111-111111111111",
+		Label:             "general",
+		ContentStartUTF16: intPtr(4),
+		ContentEndUTF16:   intPtr(12),
+	}})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "see #general" {
+		t.Fatalf("content = %q, want unchanged", content)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("parts len = %d, want 1", len(parts))
+	}
+	if parts[0].RefType != "channel-ref" || parts[0].RefSubType != "" || parts[0].RefID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("channel reference = %+v, want no ref_subtype", parts[0])
+	}
+	// Client-supplied source ranges are never trusted for a Reference part —
+	// see normalizePart's comment. A caller-chosen span could point anywhere
+	// in the visible content; only channel_structured_mentions.go's resolver
+	// (which re-derives it from the actual matched link) may set it.
+	if parts[0].ContentStartUTF16 != nil || parts[0].ContentEndUTF16 != nil {
+		t.Fatalf("channel reference retained caller-supplied span: %+v", parts[0])
+	}
+}
+
+func TestNormalizeReferencePartsRejectsChannelRefSubtype(t *testing.T) {
+	_, _, err := Normalize("see #general", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "channel-ref",
+		RefSubType: "group",
+		RefID:      "11111111-1111-1111-1111-111111111111",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported channel-ref ref_subtype") {
+		t.Fatalf("Normalize channel-ref subtype error = %v, want unsupported channel-ref subtype", err)
+	}
+}
+
 func TestNormalizeSystemEventPart(t *testing.T) {
 	content, parts, err := Normalize("", []protocol.MessagePart{{
 		Type:        protocol.MessagePartTypeSystemEvent,
@@ -450,3 +498,5 @@ func TestUnwrapStructuredMessageSendLeavesExistingPartsAlone(t *testing.T) {
 		t.Fatalf("content=%q parts=%+v, want unchanged input", content, parts)
 	}
 }
+
+func intPtr(v int) *int { return &v }

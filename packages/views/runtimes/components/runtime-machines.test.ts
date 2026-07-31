@@ -36,6 +36,20 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 }
 
 describe("runtime machine grouping", () => {
+  it("prefers display_name over hostname for machine title", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          display_name: "Andong's MacBook Pro",
+          name: "Claude (dev.local)",
+        }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+
+    expect(machines[0]?.title).toBe("Andong's MacBook Pro");
+  });
+
   it("groups multiple provider runtimes by daemon id", () => {
     const machines = buildRuntimeMachines(
       [

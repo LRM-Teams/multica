@@ -312,7 +312,7 @@ function runtimeMachineId(runtime: AgentRuntime): string {
   return `${runtime.runtime_mode}:runtime:${runtime.id}`;
 }
 
-function runtimeDeviceName(runtime: AgentRuntime): string | null {
+export function runtimeDeviceName(runtime: AgentRuntime): string | null {
   const host = splitRuntimeName(runtime.name).hostname;
   if (host) return host;
 
@@ -321,10 +321,21 @@ function runtimeDeviceName(runtime: AgentRuntime): string | null {
   return raw.split(" · ")[0]?.trim() || null;
 }
 
+function firstNonEmptyDisplayName(runtimes: AgentRuntime[]): string | null {
+  for (const runtime of runtimes) {
+    const value = runtime.display_name?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
 function machineTitle(
   runtimes: AgentRuntime[],
   options: { isCurrent: boolean; localMachineName?: string | null },
 ): string {
+  const displayName = firstNonEmptyDisplayName(runtimes);
+  if (displayName) return displayName;
+
   if (options.isCurrent && options.localMachineName) {
     return options.localMachineName;
   }
@@ -339,6 +350,28 @@ function machineTitle(
     return `${capitalize(first.provider)} cloud`;
   }
   return first.daemon_id ? shortDaemonId(first.daemon_id) : "Unknown machine";
+}
+
+/** Hostname placeholder when display_name is unset (grey label in rename UI). */
+export function machineHostname(machine: RuntimeMachine): string | null {
+  for (const runtime of machine.runtimes) {
+    const host = runtimeDeviceName(runtime);
+    if (host) return host;
+  }
+  if (machine.isCurrent && machine.title) return machine.title;
+  return machine.daemonId ? shortDaemonId(machine.daemonId) : null;
+}
+
+/** Prefer an online runtime id for API calls scoped to one daemon host. */
+export function machinePrimaryRuntimeId(
+  machine: RuntimeMachine,
+  now: number,
+): string | null {
+  if (machine.runtimes.length === 0) return null;
+  const online = machine.runtimes.find(
+    (runtime) => deriveRuntimeHealth(runtime, now) === "online",
+  );
+  return online?.id ?? machine.runtimes[0]?.id ?? null;
 }
 
 function machineSubtitle({

@@ -59,6 +59,27 @@
     "info_daemon_id": "Daemon ID",
     "info_providers": "Providers",
     "delete_danger_row": "删除这台机器",
+    "table_status": "状态",
+    "table_name": "名称",
+    "table_agents": "Agent",
+    "table_last_seen": "最后在线",
+    "table_agents_count_one": "{{count}} 个 agent",
+    "table_agents_count_other": "{{count}} 个 agent",
+    "last_seen_active_now": "刚刚活跃",
+    "basics_section": "基本信息",
+    "basics_display_name": "显示名称",
+    "basics_hostname": "主机名",
+    "basics_os": "操作系统",
+    "basics_daemon": "Daemon",
+    "agents_section": "Agent",
+    "workspaces_section": "Workspaces",
+    "scan_workspaces": "扫描 workspaces",
+    "scan_workspaces_offline": "机器在线时才能扫描 workspaces",
+    "scan_workspaces_error": "无法扫描此机器上的 workspaces",
+    "scan_workspaces_empty": "未发现 agent workspace",
+    "workspace_orphan": "agent 已删除",
+    "workspace_delete": "删除",
+    "rename_failed": "保存失败，已还原",
     "no_runtimes_hint": "这台机器上还没有运行时。",
     "back_to_list": "返回机器列表",
     "metrics": {
@@ -117,7 +138,9 @@
         "title": "无法删除这台电脑",
         "description": "「{{name}}」缺少电脑标识，无法永久删除。"
       }
-    }
+    },
+    "daemon_version_chip": "daemon v{{version}}",
+    "version_prefix": "v{{version}}"
   },
   "health": {
     "online": {
@@ -234,9 +257,9 @@
     "live_listening": "等待你的电脑上线",
     "live_listening_hint": "守护进程一启动就会被识别，通常不到一分钟。",
     "troubleshooting": "那台电脑打不开浏览器？",
-      "install_trouble_summary": "命令跑不通？",
-      "install_trouble_retry": "检查一下网络连接，再试一次这条命令——大部分情况是一次性的网络波动。",
-      "install_trouble_network": "如果你在公司网络、VPN 或防火墙环境下，可能是这些拦住了访问安装脚本的出站请求。换个网络试试，或者让网络管理员放行这个连接。",
+    "install_trouble_summary": "命令跑不通？",
+    "install_trouble_retry": "检查一下网络连接，再试一次这条命令——大部分情况是一次性的网络波动。",
+    "install_trouble_network": "如果你在公司网络、VPN 或防火墙环境下，可能是这些拦住了访问安装脚本的出站请求。换个网络试试，或者让网络管理员放行这个连接。",
     "trouble_intro": "改用 token 登录替代第 2 步，适用于任何有终端的环境。",
     "trouble_token_hint_prefix": "在 ",
     "trouble_token_hint_destination": "设置 → Tokens",

@@ -1308,13 +1308,12 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 	qLower := strings.ToLower(q)
 	qLike := "%" + qLower + "%"
 	includeAll := qLower == ""
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike, actorType, parseUUID(actorID)}
+	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike}
 	limitClause := ""
 	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
 		limit := boundedQueryInt(r, "limit", 200, 500)
 		args = append(args, limit)
-		limitClause = " LIMIT $7"
+		limitClause = " LIMIT $5"
 	}
 
 	query := `
@@ -1327,11 +1326,6 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 			  AND NOT EXISTS (
 				SELECT 1 FROM channel_member cm
 				WHERE cm.channel_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
-			  )
-			  AND (
-				$5::text = 'agent'
-				OR a.owner_id = $6::uuid
-				OR COALESCE(NULLIF(a.display_name, ''), a.name) NOT IN ('Wendy', 'Windy', 'Joe')
 			  )
 			  AND (
 				$3::boolean

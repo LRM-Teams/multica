@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Terminal } from "lucide-react";
+import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
@@ -105,8 +105,55 @@ export function CliInstallInstructions({
             {t(($) => $.cli_install.step2_hint)}
           </p>
         </div>
+        <TroubleshootingDetails />
       </CardContent>
     </Card>
+  );
+}
+
+// No known support inbox/channel exists to link here (checked repo + docs
+// before writing this) — self-diagnosis only, don't invent a destination.
+function TroubleshootingDetails() {
+  const { t } = useT("onboarding");
+  return (
+    <details className="group rounded-lg border border-dashed">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <ChevronRight
+          className="h-3 w-3 transition-transform group-open:rotate-90"
+          aria-hidden
+        />
+        {t(($) => $.cli_install.trouble_summary)}
+      </summary>
+      <div className="space-y-2 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
+        <p>{t(($) => $.cli_install.trouble_intro)}</p>
+        <ul className="list-disc space-y-1 pl-4">
+          <li>{t(($) => $.cli_install.trouble_retry)}</li>
+          <li>{t(($) => $.cli_install.trouble_check_network)}</li>
+          <li>
+            {t(($) => $.cli_install.trouble_check_daemon_prefix)}
+            <code
+              className={cn(
+                "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
+                CODE_LIGATURE_CLASS,
+              )}
+            >
+              {"multica daemon status"}
+            </code>
+            {" / "}
+            {/* CLI command — literal shell string, not i18n content. */}
+            <code
+              className={cn(
+                "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
+                CODE_LIGATURE_CLASS,
+              )}
+            >
+              {"multica daemon logs -f"}
+            </code>
+            {t(($) => $.cli_install.trouble_check_daemon_suffix)}
+          </li>
+        </ul>
+      </div>
+    </details>
   );
 }
 

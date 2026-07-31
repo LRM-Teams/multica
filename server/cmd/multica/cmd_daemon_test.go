@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
 
@@ -289,5 +293,57 @@ func writeDiskUsageFile(t *testing.T, path string) {
 	}
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Negative case: a fresh HOME with no VersionStore activation must fall back
+// to the invoking binary's own path — the current, unchanged behavior for
+// any install that has never run `multica update`.
+func TestResolveDaemonLaunchBinaryNoActiveVersionFallsBackToExecutable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := resolveDaemonLaunchBinary()
+	if err != nil {
+		t.Fatalf("resolveDaemonLaunchBinary: %v", err)
+	}
+	want, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if got != want {
+		t.Fatalf("resolveDaemonLaunchBinary = %q, want unchanged executable %q", got, want)
+	}
+}
+
+// Positive case (task #41): after `multica update` stages+activates a new
+// version into the VersionStore, resolveDaemonLaunchBinary must prefer that
+// staged binary over the invoking command's own path — this is exactly the
+// gap that left Frank's daemon stuck on the old version after `daemon
+// restart`, since update deliberately never touches the running binary.
+func TestResolveDaemonLaunchBinaryPrefersVersionStoreActive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storeRoot := filepath.Join(home, ".local", "share", "multica")
+	store, err := cli.NewVersionStore(storeRoot, "linux", func(context.Context, string, string) error { return nil })
+	if err != nil {
+		t.Fatalf("NewVersionStore: %v", err)
+	}
+	data := []byte("multica-v0.3.88")
+	sum := sha256.Sum256(data)
+	staged, err := store.StageBinary(context.Background(), "v0.3.88", data, hex.EncodeToString(sum[:]), 0o755)
+	if err != nil {
+		t.Fatalf("StageBinary: %v", err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
+		t.Fatalf("CompareAndSwapActivation: %v", err)
+	}
+
+	got, err := resolveDaemonLaunchBinary()
+	if err != nil {
+		t.Fatalf("resolveDaemonLaunchBinary: %v", err)
+	}
+	if got != staged.BinaryPath {
+		t.Fatalf("resolveDaemonLaunchBinary = %q, want staged Active path %q", got, staged.BinaryPath)
 	}
 }

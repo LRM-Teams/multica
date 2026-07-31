@@ -562,3 +562,87 @@ func TestVersionOutputMatchesRelease(t *testing.T) {
 		}
 	}
 }
+
+// Negative case: a fresh VersionStore that has never activated anything
+// (the normal state for an install that has never run `multica update`)
+// must report ok=false without error, so callers fall back to their own
+// default binary resolution.
+func TestVersionStoreActiveBinaryPathNoActivationYet(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+
+	path, ok, err := store.ActiveBinaryPath()
+	if err != nil {
+		t.Fatalf("ActiveBinaryPath: %v", err)
+	}
+	if ok {
+		t.Fatalf("ActiveBinaryPath ok = true with no activation, path = %q", path)
+	}
+	if path != "" {
+		t.Fatalf("ActiveBinaryPath path = %q, want empty", path)
+	}
+}
+
+// Positive case: after staging + activating a version, ActiveBinaryPath must
+// resolve to that staged binary's on-disk path (task #41 — this is the
+// signal `daemon restart` was previously ignoring, always re-exec'ing
+// whatever binary invoked the command instead).
+func TestVersionStoreActiveBinaryPathReturnsStagedActive(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	data := []byte("multica-v0.3.88")
+	staged, err := store.StageBinary(
+		context.Background(),
+		"v0.3.88",
+		data,
+		testBinaryDigest(data),
+		0o755,
+	)
+	if err != nil {
+		t.Fatalf("StageBinary: %v", err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
+		t.Fatalf("CompareAndSwapActivation: %v", err)
+	}
+
+	path, ok, err := store.ActiveBinaryPath()
+	if err != nil {
+		t.Fatalf("ActiveBinaryPath: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ActiveBinaryPath ok = false, want true")
+	}
+	if path != staged.BinaryPath {
+		t.Fatalf("ActiveBinaryPath = %q, want %q", path, staged.BinaryPath)
+	}
+}
+
+// If activation.json points at a version whose staged binary has since been
+// removed from disk, ActiveBinaryPath must report ok=false (not an error) so
+// callers fall back rather than exec a path that doesn't exist.
+func TestVersionStoreActiveBinaryPathMissingStagedFileFallsBackCleanly(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	data := []byte("multica-v0.3.88")
+	staged, err := store.StageBinary(
+		context.Background(),
+		"v0.3.88",
+		data,
+		testBinaryDigest(data),
+		0o755,
+	)
+	if err != nil {
+		t.Fatalf("StageBinary: %v", err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
+		t.Fatalf("CompareAndSwapActivation: %v", err)
+	}
+	if err := os.Remove(staged.BinaryPath); err != nil {
+		t.Fatalf("remove staged binary: %v", err)
+	}
+
+	path, ok, err := store.ActiveBinaryPath()
+	if err != nil {
+		t.Fatalf("ActiveBinaryPath: %v", err)
+	}
+	if ok {
+		t.Fatalf("ActiveBinaryPath ok = true for a removed staged binary, path = %q", path)
+	}
+}

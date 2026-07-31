@@ -150,6 +150,32 @@ func healthPortForProfile(profile string) int {
 	return daemon.DefaultHealthPort + 1 + (h % 1000)
 }
 
+// resolveDaemonLaunchBinary picks the binary to exec for a fresh daemon
+// process. It prefers a VersionStore Active version staged by `multica
+// update` (task #41: `daemon restart` previously always re-exec'd whatever
+// binary invoked the command, silently ignoring anything staged by a prior
+// `update` run) and falls back to the invoking binary's own path when there
+// is no Active version — the normal case for an install that has never run
+// `multica update`. Brew installs manage their own binary outside the
+// VersionStore and are left untouched.
+func resolveDaemonLaunchBinary() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if cli.IsBrewInstall() {
+		return exePath, nil
+	}
+	store, err := cli.OpenVersionStore("")
+	if err != nil {
+		return exePath, nil
+	}
+	if activePath, ok, err := store.ActiveBinaryPath(); err == nil && ok {
+		return activePath, nil
+	}
+	return exePath, nil
+}
+
 // --- daemon start ---
 
 func runDaemonStart(cmd *cobra.Command, _ []string) error {
@@ -177,8 +203,11 @@ func runDaemonBackground(cmd *cobra.Command) error {
 		return fmt.Errorf("%s is already running (pid %v). Use 'daemon restart' to restart it", label, int(pid))
 	}
 
-	// Resolve current executable.
-	exePath, err := os.Executable()
+	// Resolve current executable. Prefer a VersionStore Active binary (staged
+	// by `multica update`) over the invoking binary's own path — otherwise a
+	// staged update never takes effect until the old path is deleted/replaced,
+	// since `multica update` deliberately never touches it (task #41).
+	exePath, err := resolveDaemonLaunchBinary()
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}

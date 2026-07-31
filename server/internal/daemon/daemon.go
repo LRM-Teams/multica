@@ -2450,6 +2450,20 @@ func (d *Daemon) restartBinaryPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A staged Active version takes priority over the currently running
+	// binary's own path (task #41): d.restartBinary is normally already set
+	// from the staged path by the time triggerRestart runs, so this is only
+	// reached when triggerRestart fires without a prior update — still worth
+	// consulting the VersionStore for the same reason the manual `daemon
+	// restart` path does (resolveDaemonLaunchBinary). Brew installs manage
+	// their own binary outside the VersionStore and skip this lookup.
+	if !isBrewInstall() {
+		if store, storeErr := cli.OpenVersionStore(""); storeErr == nil {
+			if activePath, ok, activeErr := store.ActiveBinaryPath(); activeErr == nil && ok {
+				return activePath, nil
+			}
+		}
+	}
 	// On Linux, os.Executable() reads /proc/self/exe, which the kernel resolves
 	// to the Cellar path. brew cleanup deletes that path after upgrade, so we
 	// must use the stable <brew-prefix>/bin/multica symlink instead.

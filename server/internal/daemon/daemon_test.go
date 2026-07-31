@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -296,6 +299,44 @@ func TestTriggerRestart_BrewPrefixUnavailable_NoKnownPrefix_KeepsExecutable(t *t
 	}
 	if got := d.RestartBinary(); got != exe {
 		t.Fatalf("restart binary = %q, want unchanged executable %q", got, exe)
+	}
+}
+
+// Positive case (task #41): when a non-brew install has a staged+activated
+// VersionStore Active version, triggerRestart must prefer that binary over
+// the currently running executable's own path — this is the daemon-internal
+// counterpart to cmd_daemon.go's resolveDaemonLaunchBinary, covering the
+// (rare) triggerRestart callers that reach restartBinaryPath's fallback
+// without d.restartBinary already set.
+func TestTriggerRestart_PrefersVersionStoreActiveOverExecutable(t *testing.T) {
+	originalIsBrewInstall := isBrewInstall
+	t.Cleanup(func() { isBrewInstall = originalIsBrewInstall })
+	isBrewInstall = func() bool { return false }
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	storeRoot := filepath.Join(home, ".local", "share", "multica")
+	store, err := cli.NewVersionStore(storeRoot, "linux", func(context.Context, string, string) error { return nil })
+	if err != nil {
+		t.Fatalf("NewVersionStore: %v", err)
+	}
+	data := []byte("multica-v0.3.88")
+	sum := sha256.Sum256(data)
+	staged, err := store.StageBinary(context.Background(), "v0.3.88", data, hex.EncodeToString(sum[:]), 0o755)
+	if err != nil {
+		t.Fatalf("StageBinary: %v", err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
+		t.Fatalf("CompareAndSwapActivation: %v", err)
+	}
+
+	d := &Daemon{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	d.triggerRestart()
+
+	if got := d.RestartBinary(); got != staged.BinaryPath {
+		t.Fatalf("restart binary = %q, want staged Active path %q", got, staged.BinaryPath)
 	}
 }
 

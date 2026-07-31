@@ -128,6 +128,33 @@ func (s *VersionStore) ResolveStagedVersion(version string) (StagedVersion, erro
 	return s.stagedVersion(version)
 }
 
+// ActiveBinaryPath returns the staged binary path for the current Active
+// version recorded in activation.json, verifying the file actually exists on
+// disk. ok is false (with a nil error) when no version has ever been
+// activated on this machine — the normal state for an install that has never
+// run `multica update`. Callers should fall back to their own default binary
+// resolution in that case.
+func (s *VersionStore) ActiveBinaryPath() (path string, ok bool, err error) {
+	state, err := s.ReadActivationState()
+	if err != nil {
+		return "", false, err
+	}
+	if state.ActiveVersion == "" {
+		return "", false, nil
+	}
+	staged, err := s.stagedVersion(state.ActiveVersion)
+	if err != nil {
+		return "", false, err
+	}
+	if _, statErr := os.Stat(staged.BinaryPath); statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, statErr
+	}
+	return staged.BinaryPath, true, nil
+}
+
 // OpenVersionStore opens (or creates) the default user VersionStore root used by
 // daemon update staging. Verifier defaults to VerifyStagedBinaryVersion.
 func OpenVersionStore(root string) (*VersionStore, error) {

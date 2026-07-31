@@ -2,8 +2,9 @@
 -- handlers, scheduler job, service-layer completion hooks, daemon prompt
 -- wiring) was removed in the companion PR; this migration drops the schema
 -- it left behind: the change-journal triggers on 10 shared tables, their
--- trigger/helper functions, the one leftover shared-table column, and the
--- radar-owned tables themselves.
+-- trigger/helper functions, and the radar-owned tables themselves.
+-- (wendy_channel_ambient.active_radar_run_id needs no cleanup here — that
+-- table was already dropped whole by migration 247.)
 
 DROP TRIGGER IF EXISTS trg_journal_workspace_radar_agent ON agent;
 DROP TRIGGER IF EXISTS trg_journal_workspace_radar_event_delivery ON agent_event_delivery;
@@ -37,8 +38,6 @@ DROP FUNCTION IF EXISTS guard_workspace_radar_run_success_transition();
 DROP FUNCTION IF EXISTS workspace_radar_task_is_authorized(UUID);
 DROP FUNCTION IF EXISTS record_workspace_radar_change(UUID, TEXT, UUID, TIMESTAMPTZ, TEXT, UUID, JSONB);
 DROP FUNCTION IF EXISTS refresh_workspace_radar_time_signals(UUID, TIMESTAMPTZ);
-
-ALTER TABLE wendy_channel_ambient DROP COLUMN IF EXISTS active_radar_run_id;
 
 -- Children first, then the tables they reference.
 DROP TABLE IF EXISTS workspace_radar_directive_artifact;

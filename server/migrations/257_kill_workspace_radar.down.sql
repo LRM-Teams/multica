@@ -2,8 +2,6 @@
 -- for rollback only. Tables are re-created empty; historical row data is not
 -- recoverable by a down migration.
 
-ALTER TABLE wendy_channel_ambient ADD COLUMN IF NOT EXISTS active_radar_run_id UUID;
-
 CREATE TABLE IF NOT EXISTS workspace_radar_state (
   workspace_id UUID PRIMARY KEY REFERENCES workspace(id) ON DELETE CASCADE,
   supervisor_agent_id UUID NOT NULL,

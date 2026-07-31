@@ -34,7 +34,6 @@ export interface Comment {
 export type CommentTriggerSource =
   | "issue_assignee"
   | "mention_agent"
-  | "mention_squad_leader"
   | "thread_root_agent";
 
 export interface CommentTriggerPreviewAgent {

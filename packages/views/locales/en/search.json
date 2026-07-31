@@ -50,6 +50,8 @@
     "description": "Search channels, DMs, messages, and people",
     "placeholder": "Search channels, DMs and messages…",
     "from_placeholder": "Add a keyword (optional)…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "Remove from filter",
     "range_channel": "This channel",
     "range_workspace": "Workspace",
     "include_thread": "Include threads",

@@ -50,6 +50,8 @@
     "description": "搜索群、DM、消息和成员",
     "placeholder": "搜索群、DM 和消息…",
     "from_placeholder": "再输入关键词（可选）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "移除发送者筛选",
     "range_channel": "本频道",
     "range_workspace": "工作区",
     "include_thread": "含 thread",

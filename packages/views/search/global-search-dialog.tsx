@@ -403,10 +403,10 @@ export function GlobalSearchDialog() {
                   data-testid="search-from-chip"
                   className="inline-flex max-w-[40%] shrink-0 items-center gap-1 rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand"
                 >
-                  from:{fromAuthor.label}
+                  {t(($) => $.globalSearch.from_chip, { label: fromAuthor.label })}
                   <button
                     type="button"
-                    aria-label="Remove from filter"
+                    aria-label={t(($) => $.globalSearch.remove_from_filter)}
                     className="rounded p-0.5 hover:bg-brand/10"
                     onClick={() => setFromAuthor(null)}
                   >

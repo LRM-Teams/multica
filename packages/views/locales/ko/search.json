@@ -50,6 +50,8 @@
     "description": "채널·DM·메시지·멤버를 검색합니다",
     "placeholder": "채널·DM·메시지를 검색…",
     "from_placeholder": "키워드 추가（선택）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "작성자 필터 제거",
     "range_channel": "이 채널",
     "range_workspace": "워크스페이스",
     "include_thread": "스레드 포함",

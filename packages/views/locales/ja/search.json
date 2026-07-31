@@ -50,6 +50,8 @@
     "description": "チャンネル・DM・メッセージ・メンバーを検索",
     "placeholder": "チャンネル・DM・メッセージを検索…",
     "from_placeholder": "キーワードを追加（任意）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "送信者フィルターを解除",
     "range_channel": "このチャンネル",
     "range_workspace": "ワークスペース",
     "include_thread": "スレッドを含む",

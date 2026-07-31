@@ -57,6 +57,11 @@ CREATE TABLE research_product_round_card (
 CREATE INDEX research_product_round_card_session_idx
   ON research_product_round_card (session_id, round_number DESC);
 
+-- Supporting index for agent hard-delete / ON DELETE SET NULL on decided_by_agent_id.
+CREATE INDEX research_product_round_card_decided_by_agent_idx
+  ON research_product_round_card (decided_by_agent_id)
+  WHERE decided_by_agent_id IS NOT NULL;
+
 -- Optional canvas node for judgment cards (distinct from S1–S4 stage_gate).
 ALTER TABLE research_graph_node
   DROP CONSTRAINT IF EXISTS research_graph_node_node_type_check;

@@ -7,6 +7,7 @@ ALTER TABLE research_graph_node
     'refuted', 'pivot', 'roster_change', 'stage_gate', 'agent_activity'
   ));
 
+DROP INDEX IF EXISTS research_product_round_card_decided_by_agent_idx;
 DROP TABLE IF EXISTS research_product_round_card;
 
 ALTER TABLE research_session

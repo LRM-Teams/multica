@@ -327,6 +327,19 @@ func runDaemonForeground(cmd *cobra.Command) error {
 
 	profile := resolveProfile(cmd)
 
+	// Preflight: an external supervisor (task #815) always restarts this
+	// process using the same fixed WorkerPath, so the process that comes up
+	// after any restart — graceful, crashed, or force-killed — must correct
+	// itself onto whatever the VersionStore's Active pointer actually says,
+	// not just keep running whatever binary happened to be at that path. No
+	// task has been claimed yet at this point, so handing off here is always
+	// safe: nothing to drain.
+	if handedOff, err := handoffToActiveVersionIfNeeded(cmd, profile); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: version handoff check failed, continuing on running binary: %v\n", err)
+	} else if handedOff {
+		return nil
+	}
+
 	serverURL := cli.FlagOrEnv(cmd, "server-url", "MULTICA_SERVER_URL", "")
 	if serverURL == "" {
 		if c, err := cli.LoadCLIConfigForProfile(profile); err == nil && c.ServerURL != "" {
@@ -393,55 +406,54 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	if restartBin := d.RestartBinary(); restartBin != "" {
 		logger.Info("restarting daemon with updated binary", "path", restartBin)
 
-		args := buildDaemonStartArgs(cmd)
-		child := exec.Command(restartBin, args...)
-
-		logPath := daemonLogPathForProfile(profile)
-		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		// Runtimes were already deregistered by triggerRestart() before handoff.
+		// The successor re-registers on startup; do not duplicate cleanup here.
+		pid, err := spawnDetachedDaemonBinary(restartBin, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile))
 		if err != nil {
-			logger.Error("failed to open log file for restart", "error", err)
-			// Runtimes were already deregistered by triggerRestart() before handoff.
-			// The supervisor-spawned successor re-registers on startup; do not
-			// duplicate cleanup here.
-			return fmt.Errorf("failed to open daemon log file %s for restart: %w", logPath, err)
+			logger.Error("failed to start new daemon", "error", err)
+			return err
 		}
-		child.Stdout = logFile
-		child.Stderr = logFile
-		// Break out of the parent's Job Object on Windows; see the
-		// runDaemonBackground call site for rationale.
-		child.SysProcAttr = daemonSysProcAttr(true)
 
-		if err := child.Start(); err != nil {
-			// Runtimes were already deregistered by triggerRestart() before handoff.
-			// The supervisor-spawned successor re-registers on startup; do not
-			// duplicate cleanup here.
-			if isAccessDeniedSpawnErr(err) {
-				child = exec.Command(restartBin, args...)
-				child.Stdout = logFile
-				child.Stderr = logFile
-				child.SysProcAttr = daemonSysProcAttr(false)
-				if err := child.Start(); err != nil {
-					logFile.Close()
-					logger.Error("failed to start new daemon (no breakaway)", "error", err)
-					return fmt.Errorf("failed to start new daemon at %s without breakaway: %w", restartBin, err)
-				}
-			} else {
-				logFile.Close()
-				logger.Error("failed to start new daemon", "error", err)
-				return fmt.Errorf("failed to start new daemon at %s: %w", restartBin, err)
-			}
-		}
-		logFile.Close()
-		child.Process.Release()
-
-		// Write new PID file.
-		pidPath := daemonPIDPathForProfile(profile)
-		os.WriteFile(pidPath, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
-
-		logger.Info("new daemon started", "pid", child.Process.Pid)
+		os.WriteFile(daemonPIDPathForProfile(profile), []byte(strconv.Itoa(pid)), 0o644)
+		logger.Info("new daemon started", "pid", pid)
 	}
 
 	return nil
+}
+
+// spawnDetachedDaemonBinary starts binPath as a detached daemon process with
+// the given args, logging its stdout/stderr to logPath. On Windows it first
+// tries to break the child out of the parent's Job Object so the daemon
+// survives parent-process exit; if that's denied (ERROR_ACCESS_DENIED), it
+// retries without breakaway. Returns the new process's PID.
+func spawnDetachedDaemonBinary(binPath string, args []string, logPath string) (int, error) {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("open daemon log file %s: %w", logPath, err)
+	}
+	defer logFile.Close()
+
+	child := exec.Command(binPath, args...)
+	child.Stdout = logFile
+	child.Stderr = logFile
+	child.SysProcAttr = daemonSysProcAttr(true)
+
+	if err := child.Start(); err != nil {
+		if !isAccessDeniedSpawnErr(err) {
+			return 0, fmt.Errorf("start daemon at %s: %w", binPath, err)
+		}
+		child = exec.Command(binPath, args...)
+		child.Stdout = logFile
+		child.Stderr = logFile
+		child.SysProcAttr = daemonSysProcAttr(false)
+		if err := child.Start(); err != nil {
+			return 0, fmt.Errorf("start daemon at %s without breakaway: %w", binPath, err)
+		}
+	}
+
+	pid := child.Process.Pid
+	child.Process.Release()
+	return pid, nil
 }
 
 // --- daemon restart ---

@@ -22,6 +22,7 @@ const (
 	workerHelperSleepEnv  = "MULTICA_SUPERVISOR_TEST_SLEEP_SEQUENCE_MS"
 	workerHelperTermEnv   = "MULTICA_SUPERVISOR_TEST_TERM_DELAY_MS"
 	workerHelperReadyEnv  = "MULTICA_SUPERVISOR_TEST_READY_PATH"
+	workerHelperClaimEnv  = "MULTICA_SUPERVISOR_TEST_CLAIM_PATH"
 )
 
 func TestSupervisorWorkerProcess(t *testing.T) {
@@ -54,6 +55,20 @@ func TestSupervisorWorkerProcess(t *testing.T) {
 		}
 		os.Exit(0)
 	case "block":
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "claim-then-block":
+		// Simulates a daemon that has claimed a task (written proof of the
+		// claim somewhere durable — a delivery lease, in the real daemon)
+		// and is now mid-execution. It never writes anything else and never
+		// exits cleanly, matching a real in-flight task: no "done" signal is
+		// sent until work completes, and this worker is killed before that
+		// ever happens.
+		if err := os.WriteFile(os.Getenv(workerHelperClaimEnv), []byte("claimed"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(93)
+		}
 		for {
 			time.Sleep(time.Hour)
 		}

@@ -59,12 +59,13 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   return (
     <div
       className={cn(
-        "relative w-[260px] overflow-hidden rounded-xl border bg-card/95 text-left shadow-sm backdrop-blur-sm transition-[box-shadow,transform] duration-300",
+        "research-graph-node-shell relative w-[260px] overflow-hidden rounded-xl border bg-card/95 text-left shadow-sm backdrop-blur-sm transition-[box-shadow,transform] duration-300",
         n.status === "abandoned" && "opacity-85",
         visual.ringClass,
-        selected && "scale-[1.02] shadow-md ring-2 ring-primary",
+        // Selection halo is owned by the canvas (LRM-848 brand glow); keep a light lift here.
+        selected && "scale-[1.02]",
         pulse && "motion-safe:animate-pulse motion-safe:[animation-duration:2.2s]",
-        actorBusy && "shadow-[0_0_0_1px_hsl(var(--primary)/0.35)]",
+        actorBusy && "shadow-[0_0_22px_color-mix(in_oklch,var(--brand)_30%,transparent)]",
       )}
     >
       <div className={cn("absolute inset-y-0 left-0 w-1", visual.accentBarClass)} />

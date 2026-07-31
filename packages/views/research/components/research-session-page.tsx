@@ -146,6 +146,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             presence={presence}
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
+            onRetry={(node) => {
+              // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
+              // ask the fleet lead to re-explore from this dead_end via chat.
+              const body = t(($) => $.ring.retry_message, {
+                title: node.title || node.node_type,
+                id: node.id,
+              });
+              void api
+                .postResearchMessage(sessionId, { body })
+                .then(() =>
+                  qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+                );
+            }}
           />
           <ResearchDeliveryDrawer
             open={ui.deliveryOpen}

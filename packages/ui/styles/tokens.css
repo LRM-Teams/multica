@@ -52,6 +52,8 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-canvas-bg: var(--canvas-bg);
+    --color-canvas-dot: var(--canvas-dot);
     /* Product-surface aliases (design --ink / --line / …) */
     --color-ink: var(--ink);
     --color-ink-2: var(--ink-2);
@@ -137,6 +139,9 @@
     --scrollbar-thumb: oklch(0 0 0 / 10%);
     --scrollbar-thumb-hover: oklch(0 0 0 / 18%);
     --scrollbar-track: transparent;
+    /* LRM-848 — research session canvas atmosphere (light) */
+    --canvas-bg: oklch(0.985 0.002 286);
+    --canvas-dot: oklch(0.552 0.016 285.938 / 22%);
 }
 
 .dark {
@@ -198,4 +203,7 @@
     --scrollbar-thumb: oklch(1 0 0 / 8%);
     --scrollbar-thumb-hover: oklch(1 0 0 / 18%);
     --scrollbar-track: transparent;
+    /* LRM-848 — research session canvas atmosphere (dark) */
+    --canvas-bg: oklch(0.145 0.005 285.823);
+    --canvas-dot: oklch(1 0 0 / 9%);
 }

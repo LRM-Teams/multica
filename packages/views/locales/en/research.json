@@ -101,5 +101,25 @@
     "composer_hint": "Press ⌘⏎ to start",
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session"
+  },
+  "ring": {
+    "title": "Node actions",
+    "detail": "Details",
+    "locate_source": "Source",
+    "copy_prompt": "Copy",
+    "retry": "Retry",
+    "dig_deeper": "Dig deeper",
+    "more": "More",
+    "soon": "Soon",
+    "esc_hint": "Esc to close",
+    "retry_message": "Retry exploration from dead-end «{{title}}» (node {{id}})."
+  },
+  "dock": {
+    "label": "Canvas controls",
+    "north_star": "North star",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "fit": "Fit view",
+    "toggle_detail": "Toggle detail panel"
   }
 }

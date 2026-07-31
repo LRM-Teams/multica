@@ -101,5 +101,25 @@
     "composer_hint": "按 ⌘⏎ 开始",
     "creating": "组建舰队中…",
     "create_failed": "调研会话创建失败"
+  },
+  "ring": {
+    "title": "节点操作",
+    "detail": "详情",
+    "locate_source": "来源",
+    "copy_prompt": "复制",
+    "retry": "重试",
+    "dig_deeper": "深挖",
+    "more": "更多",
+    "soon": "待定",
+    "esc_hint": "Esc 关闭",
+    "retry_message": "请从死胡同节点「{{title}}」（{{id}}）重新探索。"
+  },
+  "dock": {
+    "label": "画布控件",
+    "north_star": "北极星",
+    "zoom_in": "放大",
+    "zoom_out": "缩小",
+    "fit": "适应画布",
+    "toggle_detail": "开关详情面板"
   }
 }

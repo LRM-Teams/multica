@@ -269,10 +269,22 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 }
 
 // fetchReleaseByTag fetches the immutable per-version manifest for tag. Used
-// by UpdateViaDownload, which may target a specific version (a server-pushed
-// update or a rollback) rather than whatever is currently latest.
+// by downloadReleaseBinary, which may target a specific version (a
+// server-pushed update or a rollback) rather than whatever is currently
+// latest.
 func fetchReleaseByTag(tag string) (*ReleaseManifest, error) {
-	return fetchManifest(releaseManifestBaseURL() + "/" + tag + "/release.json")
+	return fetchReleaseByTagWithOverride(tag, "")
+}
+
+// fetchReleaseByTagWithOverride is fetchReleaseByTag with the
+// server-dispatched top layer of the three-layer precedence applied — the
+// same override FetchLatestReleaseWithOverride already threads through for
+// the "check for a new version" step. Without this, a machine relying
+// purely on server-dispatch (no local env var set) could see a new version
+// at check time and then silently fall back to the compiled default at
+// download time.
+func fetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManifest, error) {
+	return fetchManifest(releaseManifestBaseURLWithOverride(serverDispatched) + "/" + tag + "/release.json")
 }
 
 // FetchLatestRelease fetches the promoted "latest" release manifest from the

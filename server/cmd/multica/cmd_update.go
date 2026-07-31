@@ -87,7 +87,10 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	result, err := cli.DownloadAndStageRelease(ctx, store, targetVersion, updateDownloadTimeout)
+	// No daemon connection here, so no server-dispatched override is
+	// available — this one-shot CLI process only ever sees env var/default
+	// (see cli.DownloadAndStageRelease's serverDispatched doc comment).
+	result, err := cli.DownloadAndStageRelease(ctx, store, targetVersion, updateDownloadTimeout, "")
 	if err != nil {
 		return fmt.Errorf("stage release failed: %w", err)
 	}

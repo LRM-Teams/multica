@@ -37,6 +37,7 @@ func TestRunStageUpdateDoesNotTouchSiblingExecutable(t *testing.T) {
 		store *cli.VersionStore,
 		targetVersion string,
 		_ time.Duration,
+		_ string,
 	) (cli.StageReleaseResult, error) {
 		data := []byte("candidate-v0.3.78")
 		return cli.StageReleaseBytes(ctx, store, targetVersion, data, "asset.tar.gz")
@@ -67,6 +68,66 @@ func TestRunStageUpdateDoesNotTouchSiblingExecutable(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatal("sibling executable was mutated — self-replace leak")
+	}
+}
+
+// TestRunStageUpdateUsesServerDispatchedBaseURLWithNoEnvVarFallback proves
+// the "check for a new version" step and the "download and stage" step
+// converge on the SAME base URL when a machine relies purely on
+// server-dispatch (task #815's whole promise) with no local env var set —
+// closing a gap Barry found reviewing #1561 (2026-07-31): downloadReleaseBinary
+// only ever saw the env var/compiled-default layer, never the
+// server-dispatched one, so a machine with no env var configured would see a
+// new version at check time and then silently fall back to the wrong base
+// URL at download time.
+func TestRunStageUpdateUsesServerDispatchedBaseURLWithNoEnvVarFallback(t *testing.T) {
+	t.Setenv(cli.ReleaseManifestBaseURLEnv, "") // explicitly no env var fallback
+
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, "store")
+	prevRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
+	t.Cleanup(func() { versionStoreRootFn = prevRoot })
+
+	prevOpen := openVersionStoreFn
+	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
+		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
+	}
+	t.Cleanup(func() { openVersionStoreFn = prevOpen })
+
+	var gotServerDispatched string
+	prevStage := downloadAndStageReleaseFn
+	downloadAndStageReleaseFn = func(
+		ctx context.Context,
+		store *cli.VersionStore,
+		targetVersion string,
+		_ time.Duration,
+		serverDispatched string,
+	) (cli.StageReleaseResult, error) {
+		gotServerDispatched = serverDispatched
+		data := []byte("candidate-v0.3.78")
+		return cli.StageReleaseBytes(ctx, store, targetVersion, data, "asset.tar.gz")
+	}
+	t.Cleanup(func() { downloadAndStageReleaseFn = prevStage })
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v0.3.77"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	// Same mechanism a real heartbeat ack uses to populate the cache the
+	// "check" step's fetchLatestRelease(d.releaseManifestBaseURLOverride())
+	// already reads from — see handleHeartbeatActions in daemon.go.
+	d.handleHeartbeatActions(context.Background(), "rt-1", &HeartbeatResponse{
+		RuntimeID:              "rt-1",
+		Status:                 "ok",
+		ReleaseManifestBaseURL: "https://server-dispatched.example.com/computer",
+	})
+
+	if _, err := d.runStageUpdate("v0.3.78"); err != nil {
+		t.Fatalf("runStageUpdate: %v", err)
+	}
+	if gotServerDispatched != "https://server-dispatched.example.com/computer" {
+		t.Fatalf("downloadAndStageReleaseFn's serverDispatched = %q, want the heartbeat-cached value (check and download must converge on the same base URL)", gotServerDispatched)
 	}
 }
 

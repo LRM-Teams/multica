@@ -84,7 +84,7 @@ func TestDownloadReleaseBinaryUsesManifestInlineSHA256(t *testing.T) {
 
 	t.Setenv(ReleaseManifestBaseURLEnv, server.URL)
 
-	got, assetName, err := downloadReleaseBinary("v1.2.3", DefaultUpdateDownloadTimeout)
+	got, assetName, err := downloadReleaseBinary("v1.2.3", DefaultUpdateDownloadTimeout, "")
 	if err != nil {
 		t.Fatalf("downloadReleaseBinary: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestDownloadReleaseBinaryRejectsChecksumMismatch(t *testing.T) {
 
 	t.Setenv(ReleaseManifestBaseURLEnv, server.URL)
 
-	if _, _, err := downloadReleaseBinary("v1.2.3", DefaultUpdateDownloadTimeout); err == nil {
+	if _, _, err := downloadReleaseBinary("v1.2.3", DefaultUpdateDownloadTimeout, ""); err == nil {
 		t.Fatal("expected checksum verification to fail, got nil error")
 	}
 }

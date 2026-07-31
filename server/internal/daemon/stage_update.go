@@ -47,7 +47,12 @@ func (d *Daemon) runStageUpdate(targetVersion string) (string, error) {
 	}
 
 	d.logger.Info("staging CLI release into VersionStore (no self-replace)", "target_version", targetVersion)
-	result, err := downloadAndStageReleaseFn(ctx, store, targetVersion, cli.DefaultUpdateDownloadTimeout)
+	// Same override the auto-update loop's "check for a new version" step
+	// already uses (see releaseManifestBaseURLOverride) — without threading
+	// it through here too, a machine relying purely on server-dispatch
+	// (no local env var set) could see a new version at check time and then
+	// silently fall back to the compiled default at download time.
+	result, err := downloadAndStageReleaseFn(ctx, store, targetVersion, cli.DefaultUpdateDownloadTimeout, d.releaseManifestBaseURLOverride())
 	if err != nil {
 		return "", fmt.Errorf("stage release failed: %w", err)
 	}

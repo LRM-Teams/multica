@@ -114,6 +114,36 @@ func TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL(t *testing.T)
 	}
 }
 
+// TestFetchReleaseByTagWithOverrideUsesServerDispatchedBaseURL mirrors
+// TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL for the
+// per-version manifest fetch. Closes a gap Barry found reviewing #1561
+// (2026-07-31): FetchLatestRelease (the "check for a new version" step)
+// already had a WithOverride variant threading the server-dispatched base
+// URL through, but fetchReleaseByTag (the "download and stage" step) did
+// not — meaning a machine relying purely on server-dispatch with no local
+// env var set could see a new version at check time and then fall back to
+// the compiled default at download time, silently disagreeing with itself.
+func TestFetchReleaseByTagWithOverrideUsesServerDispatchedBaseURL(t *testing.T) {
+	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0.3.83/release.json" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(want)
+	}))
+	defer server.Close()
+
+	t.Setenv(ReleaseManifestBaseURLEnv, "https://should-not-be-used.example.com/computer")
+
+	got, err := fetchReleaseByTagWithOverride("v0.3.83", server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TagName != want.TagName {
+		t.Fatalf("got %+v, want %+v (server-dispatched base URL should have won over the env var)", got, want)
+	}
+}
+
 func TestFetchManifestParsesPublishedShape(t *testing.T) {
 	want := ReleaseManifest{
 		TagName: "v0.3.81",

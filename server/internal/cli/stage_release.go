@@ -21,11 +21,20 @@ type StageReleaseResult struct {
 // DownloadAndStageRelease fetches a release asset, verifies checksums, and
 // stages the binary into the VersionStore under the release tag. It never
 // renames onto the running executable (CUT-T1/T2 prerequisite).
+//
+// serverDispatched is the same three-layer-precedence override
+// FetchLatestReleaseWithOverride takes for the "check for a new version"
+// step — pass "" when the caller has no server-dispatched value (e.g. the
+// CLI's own `multica update`, which has no daemon connection). Callers that
+// do have one (the daemon) must pass it here too, or a machine relying
+// purely on server-dispatch could see a new version at check time and then
+// silently fall back to the compiled default at download time.
 func DownloadAndStageRelease(
 	ctx context.Context,
 	store *VersionStore,
 	targetVersion string,
 	downloadTimeout time.Duration,
+	serverDispatched string,
 ) (StageReleaseResult, error) {
 	if store == nil {
 		return StageReleaseResult{}, fmt.Errorf("version store is required")
@@ -35,7 +44,7 @@ func DownloadAndStageRelease(
 		return StageReleaseResult{}, fmt.Errorf("invalid release version %q", targetVersion)
 	}
 
-	binary, assetName, err := downloadReleaseBinary(tag, downloadTimeout)
+	binary, assetName, err := downloadReleaseBinary(tag, downloadTimeout, serverDispatched)
 	if err != nil {
 		return StageReleaseResult{}, err
 	}
@@ -81,9 +90,9 @@ func StageReleaseBytes(
 // unauthenticated GitHub API path). The manifest carries each platform's
 // SHA-256 inline (ReleaseAsset.SHA256), so unlike the old GitHub-asset flow
 // this needs no separate checksum-manifest fetch/parse step.
-func downloadReleaseBinary(tag string, downloadTimeout time.Duration) ([]byte, string, error) {
+func downloadReleaseBinary(tag string, downloadTimeout time.Duration, serverDispatched string) ([]byte, string, error) {
 	tag = normalizeReleaseTag(tag)
-	release, err := fetchReleaseByTag(tag)
+	release, err := fetchReleaseByTagWithOverride(tag, serverDispatched)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch release metadata: %w", err)
 	}

@@ -166,7 +166,7 @@ func (builder *VoiceCallContextBuilder) Build(
 		),
 		boundedVoiceCallSystemMessage(
 			"Voice conversation behavior",
-			voiceCallBehaviorBody(),
+			voiceCallBehaviorBody(member),
 			voiceCallBehaviorMaxRunes,
 		),
 	}
@@ -444,8 +444,12 @@ func voiceCallProjectBody(contextScope voiceCallContextScope) string {
 	return strings.TrimSpace(body.String())
 }
 
-func voiceCallBehaviorBody() string {
-	return `Speak in the member's current language unless they ask to switch.
+func voiceCallBehaviorBody(member db.User) string {
+	languageInstruction := "Speak in the member's current language unless they ask to switch."
+	if voiceCallDefaultsToChinese(member) {
+		languageInstruction = "Speak in Simplified Chinese throughout the call. Do not switch to English unless the member explicitly asks you to."
+	}
+	return languageInstruction + `
 Use concise spoken sentences. Do not narrate Markdown, URLs, tables, code blocks, or internal protocol fields.
 Ask one concrete clarification when the request is ambiguous. State uncertainty when live facts have not been checked.
 Never claim that code, files, issues, or external systems changed unless an approved Multica tool returned a successful durable reference during this call.
@@ -456,7 +460,7 @@ The member may interrupt. Stop the current answer and respond to the newest comp
 func voiceCallWelcomeMessage(member db.User, agent db.Agent) string {
 	memberName := userDisplayName(member)
 	agentName := agentDisplayName(agent)
-	if strings.HasPrefix(strings.ToLower(member.Language.String), "zh") {
+	if voiceCallDefaultsToChinese(member) {
 		return fmt.Sprintf("你好，%s。我是%s。你想聊什么？", memberName, agentName)
 	}
 	return fmt.Sprintf(
@@ -464,6 +468,11 @@ func voiceCallWelcomeMessage(member db.User, agent db.Agent) string {
 		memberName,
 		agentName,
 	)
+}
+
+func voiceCallDefaultsToChinese(member db.User) bool {
+	language := strings.ToLower(strings.TrimSpace(member.Language.String))
+	return language == "" || strings.HasPrefix(language, "zh")
 }
 
 func mustVoiceCallJSON(value any) string {

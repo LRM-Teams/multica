@@ -49,6 +49,13 @@
     "title": "全局搜索",
     "description": "搜索群、DM、消息和成员",
     "placeholder": "搜索群、DM 和消息…",
+    "from_placeholder": "再输入关键词（可选）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "移除发送者筛选",
+    "range_channel": "本频道",
+    "range_workspace": "工作区",
+    "include_thread": "含 thread",
+    "mainline_only": "仅主线",
     "scope": {
       "all": "全部",
       "messages": "消息",
@@ -74,6 +81,8 @@
     },
     "row": {
       "thread_hits": "THREAD · {{count}} 命中",
+      "mainline": "主线",
+      "in_thread": "thread",
       "members": "{{count}} 成员",
       "joined": "你也在其中",
       "dm_placeholder": "私信"

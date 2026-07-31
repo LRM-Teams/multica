@@ -76,7 +76,20 @@ vi.mock("@multica/core/api", () => ({
 }));
 
 vi.mock("../agents/components/model-dropdown", () => ({
-  ModelDropdown: () => null,
+  ModelDropdown: ({
+    onChange,
+    value,
+    autoSelectFirst,
+  }: {
+    onChange: (value: string) => void;
+    value: string;
+    autoSelectFirst?: boolean;
+  }) => {
+    if (autoSelectFirst && !value.trim()) {
+      queueMicrotask(() => onChange("composer-1.5"));
+    }
+    return null;
+  },
 }));
 
 vi.mock("../agents/components/thinking-dropdown", () => ({
@@ -200,6 +213,13 @@ describe("Windy hire card create path", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
+    // LRM-808 / LRM-914: wait for auto-selected model so Create is enabled.
+    await waitFor(() => {
+      expect(
+        (screen.getByRole("button", { name: /^Create Agent$/i }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
     fireEvent.click(screen.getByRole("button", { name: /^Create Agent$/i }));
     await waitFor(() => expect(createAgent).toHaveBeenCalled());
 
@@ -209,6 +229,7 @@ describe("Windy hire card create path", () => {
     // name ch-home, so a weaker assertion would pass on any other channel too.
     expect(payload.home_channel_id).toBeUndefined();
     expect(payload.draft_id).toBe("draft-1");
+    expect(payload.model).toBe("composer-1.5");
   });
 
   // The link carries `visibility=channel&channel_id=ch-home` and the draft

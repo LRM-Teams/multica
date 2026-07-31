@@ -61,7 +61,7 @@ func (h *Handler) ChooseChannelMessageOption(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, true) {
 		return
 	}
 

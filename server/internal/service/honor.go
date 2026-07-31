@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -198,25 +199,24 @@ func (s *HonorService) AwardXP(ctx context.Context, userID pgtype.UUID, actionTy
 }
 
 func (s *HonorService) unlockLevelBadges(ctx context.Context, userID pgtype.UUID, level int) {
-	unlocks := []struct {
+	unlocks := make([]struct {
 		minLevel int
 		badgeID  string
-	}{
-		{3, "stardust"},
-		{5, "mercury"},
-		{8, "venus"},
-		{10, "earth"},
-		{12, "mars"},
-		{15, "jupiter"},
-		{18, "saturn"},
-		{20, "veteran"},
-		{22, "uranus"},
-		{26, "neptune"},
-		{30, "pluto"},
-		{35, "red_dwarf"},
-		{40, "blue_giant"},
-		{50, "quasar"},
+	}, 0, len(honorBadgeRequirements))
+	for badgeID, requirement := range honorBadgeRequirements {
+		if requirement.minLevel > 0 {
+			unlocks = append(unlocks, struct {
+				minLevel int
+				badgeID  string
+			}{minLevel: requirement.minLevel, badgeID: badgeID})
+		}
 	}
+	sort.Slice(unlocks, func(i, j int) bool {
+		if unlocks[i].minLevel == unlocks[j].minLevel {
+			return unlocks[i].badgeID < unlocks[j].badgeID
+		}
+		return unlocks[i].minLevel < unlocks[j].minLevel
+	})
 	for _, u := range unlocks {
 		if level >= u.minLevel {
 			s.tryUnlockBadge(ctx, userID, u.badgeID, "auto")
@@ -225,11 +225,15 @@ func (s *HonorService) unlockLevelBadges(ctx context.Context, userID pgtype.UUID
 }
 
 func (s *HonorService) unlockAchievementBadges(ctx context.Context, userID pgtype.UUID, pillar HonorPillar, tier int) {
-	switch {
-	case pillar == HonorPillarDelivery && tier >= 4:
-		s.tryUnlockBadge(ctx, userID, "builder", "auto")
-	case pillar == HonorPillarCommunity && tier >= 3:
-		s.tryUnlockBadge(ctx, userID, "collaborator", "auto")
+	badgeIDs := make([]string, 0)
+	for badgeID, requirement := range honorBadgeRequirements {
+		if requirement.pillar == pillar && requirement.minTier > 0 && tier >= requirement.minTier {
+			badgeIDs = append(badgeIDs, badgeID)
+		}
+	}
+	sort.Strings(badgeIDs)
+	for _, badgeID := range badgeIDs {
+		s.tryUnlockBadge(ctx, userID, badgeID, "auto")
 	}
 }
 
@@ -253,6 +257,13 @@ func (s *HonorService) reconcileUserHonor(ctx context.Context, userID pgtype.UUI
 				UserID: userID, UnlockKind: "style", DefID: style.ID, Source: "auto",
 			})
 		}
+	}
+	pillarRows, err := s.Queries.ListUserPillarProgress(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, progress := range pillarRows {
+		s.unlockAchievementBadges(ctx, userID, HonorPillar(progress.Pillar), int(progress.Tier))
 	}
 	_, err = s.Queries.UpdateUserHonorStats(ctx, db.UpdateUserHonorStatsParams{
 		UserID:  userID,

@@ -42,6 +42,40 @@ export function resolvePublicFileUrl(rawUrl: string | null | undefined): string 
 }
 
 /**
+ * True for the pre-OSS local upload path (`/uploads/...`). After the S3
+ * migration these URLs 404; they must not clobber a newer OSS/CDN face URL
+ * in RQ message cache or the identity sticky cache (LRM-855).
+ */
+export function isLegacyUploadsAvatarUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  if (url.startsWith("/uploads/")) return true;
+  try {
+    // Absolute https://host/uploads/... (or any origin) — path still legacy.
+    return new URL(url).pathname.startsWith("/uploads/");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pick an author face URL when both sides have one. Incoming (server) wins
+ * unless it is a legacy `/uploads/` path and the other side already has a
+ * non-legacy URL (OSS/CDN) — then keep the good one (LRM-855).
+ */
+export function preferAuthorAvatarUrl(
+  incoming: string | null | undefined,
+  cached: string | null | undefined,
+): string | null | undefined {
+  if (incoming && cached) {
+    if (isLegacyUploadsAvatarUrl(incoming) && !isLegacyUploadsAvatarUrl(cached)) {
+      return cached;
+    }
+    return incoming;
+  }
+  return incoming || cached || undefined;
+}
+
+/**
  * The shared 24-photo default-avatar pool (assets live at
  * `apps/web/public/agent-avatars/human-01..24.jpg`). Frank's #451 ruling:
  * retire the bot glyph / random colors; give an actor with no self-chosen

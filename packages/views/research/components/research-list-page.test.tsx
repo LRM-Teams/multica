@@ -91,7 +91,11 @@ vi.mock("./research-session-row", () => ({
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: typeof enResearch) => unknown) => fn(enResearch),
+    t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = fn(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
     i18n: { language: "en" },
   }),
 }));
@@ -276,19 +280,20 @@ describe("ResearchListPage first-visit empty state (LRM-816)", () => {
   });
 });
 
-describe("ResearchListPage composer hero (LRM-787)", () => {
+describe("ResearchListPage composer hero (LRM-787 / LRM-906)", () => {
   beforeEach(() => {
     setQuery({ data: { sessions: [] } });
   });
 
-  it("renders hero title, description, and start CTA inside a card", () => {
+  it("renders compact hero title and start CTA inside a card", () => {
     render(<ResearchListPage />);
     expect(screen.getByText(enResearch.home.hero_title)).toBeInTheDocument();
+    // Description stays for a11y but is visually collapsed (sr-only).
     expect(screen.getByText(enResearch.home.hero_desc)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
   });
 
-  it("disables start until the goal is non-empty", () => {
+  it("disables start until the goal is non-empty or a template chip is attached", () => {
     render(<ResearchListPage />);
     const start = screen.getByRole("button", { name: enResearch.start });
     expect(start).toBeDisabled();
@@ -382,7 +387,7 @@ describe("ResearchListPage search & status filter (LRM-818)", () => {
   });
 });
 
-describe("ResearchListPage quick templates (LRM-817)", () => {
+describe("ResearchListPage quick templates (LRM-817 / LRM-906 T2)", () => {
   beforeEach(() => {
     setQuery({ data: { sessions: [] } });
   });
@@ -395,15 +400,27 @@ describe("ResearchListPage quick templates (LRM-817)", () => {
     expect(screen.getByRole("button", { name: /Tech selection/i })).toBeInTheDocument();
   });
 
-  it("clicking a template prefills composer with goal + params and stays editable", () => {
+  it("clicking a template shows a chip and does not dump the long prompt into the textarea", () => {
     render(<ResearchListPage />);
     fireEvent.click(screen.getByRole("button", { name: /Industry research/i }));
-    const textarea = screen.getByPlaceholderText(enResearch.goal_placeholder) as HTMLTextAreaElement;
-    expect(textarea.value.length).toBeGreaterThan(20);
-    expect(textarea.value).toMatch(/Focus：|Focus:/);
+    const chip = screen.getByText(/Industry research prompt added/i);
+    expect(chip).toBeInTheDocument();
+    const textarea = screen.getByPlaceholderText(
+      enResearch.home.goal_placeholder_with_template,
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("");
     expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
-    fireEvent.change(textarea, { target: { value: `${textarea.value} (edited)` } });
-    expect(textarea.value.endsWith("(edited)")).toBe(true);
+    fireEvent.change(textarea, { target: { value: "Vector DB for RAG" } });
+    expect(textarea.value).toBe("Vector DB for RAG");
+  });
+
+  it("clearing the template chip disables start when the box is empty", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Competitor analysis/i }));
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: enResearch.home.template_chip_clear }));
+    expect(screen.queryByText(/prompt added/i)).toBeNull();
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeDisabled();
   });
 });
 

@@ -115,6 +115,7 @@ function renderPane(runtimes: AgentRuntime[]) {
           agent={baseAgent}
           runtimes={runtimes}
           onUpdate={vi.fn().mockResolvedValue(undefined)}
+          canManage
         />
       </QueryClientProvider>
     </I18nProvider>,

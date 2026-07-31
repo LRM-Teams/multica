@@ -35,7 +35,14 @@
     "loading": "Loading research sessions",
     "load_failed": "Couldn't load research sessions",
     "retry": "Retry",
-    "empty_cta": "Start your first research"
+    "empty_cta": "Start your first research",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "Research goal",
+    "goal_dialog_close": "Close",
+    "goal_dialog_open": "Open session",
+    "who_working": "{{name}} working",
+    "output_line": "Output · {{summary}}",
+    "no_output": "Output · none yet"
   },
   "filter": {
     "search_label": "Search session titles",
@@ -107,13 +114,16 @@
   },
   "home": {
     "composer_label": "Create a research session",
-    "hero_title": "Research, without the tab chaos",
+    "hero_title": "Name the goal — the fleet researches and delivers",
     "hero_desc": "Describe the goal — the research fleet explores sources, maps findings, and hands you a report.",
     "composer_hint": "Press ⌘⏎ to start",
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session",
     "templates_label": "Quick templates",
-    "templates_hint": "Pick one to prefill the goal and focus params — editable after"
+    "templates_hint": "Pick one to attach a professional prompt as a chip — keep typing your goal",
+    "template_chip": "{{title}} prompt added — keep typing your goal",
+    "template_chip_clear": "Remove template",
+    "goal_placeholder_with_template": "Add your specific goal…"
   },
   "ring": {
     "title": "Node actions",
@@ -134,5 +144,12 @@
     "zoom_out": "Zoom out",
     "fit": "Fit view",
     "toggle_detail": "Toggle detail panel"
+  },
+  "timeline": {
+    "label": "Research stages",
+    "done": "Done",
+    "current": "Current",
+    "upcoming": "Upcoming",
+    "done_feedback": "Stage completed"
   }
 }

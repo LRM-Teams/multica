@@ -60,11 +60,18 @@ SELECT
     )::float8 AS total_seconds,
     COALESCE(
         (
-            SELECT SUM(auh.input_tokens + auh.output_tokens)::bigint
-            FROM agent_usage_hourly auh
-            WHERE auh.workspace_id = $1
-              AND auh.agent_id = atq.agent_id
-              AND auh.bucket_hour >= now() - make_interval(days => $2::int)
+            SELECT SUM(usage.input_tokens + usage.output_tokens)::bigint
+            FROM agent_usage usage
+            JOIN agent_execution execution ON execution.id = usage.execution_id
+            JOIN agent_inbox_event completed_event
+              ON execution.source_kind = 'inbox'
+             AND completed_event.id = execution.source_event_id
+            WHERE execution.workspace_id = $1
+              AND execution.agent_id = atq.agent_id
+              AND completed_event.status = 'acked'
+              AND completed_event.terminal_outcome = 'completed'
+              AND completed_event.completed_at > now() - make_interval(days => $2::int)
+              AND COALESCE(completed_event.context->>'type', '') <> 'agent_radar'
         ),
         0
     )::bigint AS total_tokens
@@ -80,9 +87,13 @@ WHERE a.workspace_id = $1
 GROUP BY atq.agent_id;
 
 -- name: ListAgentFleetSnapshots :many
-SELECT * FROM agent_fleet_snapshot
-WHERE workspace_id = $1
-ORDER BY fleet_rank ASC, fleet_score DESC;
+SELECT snapshot.*
+FROM agent_fleet_snapshot snapshot
+JOIN agent a ON a.id = snapshot.agent_id
+WHERE snapshot.workspace_id = $1
+  AND a.archived_at IS NULL
+  AND snapshot.frozen = false
+ORDER BY snapshot.fleet_rank ASC, snapshot.fleet_score DESC;
 
 -- name: GetAgentFleetSnapshot :one
 SELECT * FROM agent_fleet_snapshot
@@ -113,3 +124,23 @@ WHERE agent_fleet_snapshot.frozen = false;
 UPDATE agent_fleet_snapshot
 SET frozen = true, frozen_at = now()
 WHERE workspace_id = $1 AND agent_id = $2;
+
+-- name: UnfreezeAgentFleetSnapshot :exec
+UPDATE agent_fleet_snapshot
+SET frozen = false, frozen_at = NULL
+WHERE workspace_id = $1 AND agent_id = $2;
+
+-- name: InsertAgentFleetHistory :one
+INSERT INTO agent_fleet_history (
+    workspace_id, agent_id, fleet_score, class_id, fleet_rank, fleet_size,
+    sample_tasks, pillar_delivery, pillar_evolution, pillar_growth, pillar_efficiency,
+    trigger_reason
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING *;
+
+-- name: ListAgentFleetHistory :many
+SELECT * FROM agent_fleet_history
+WHERE workspace_id = $1 AND agent_id = $2
+ORDER BY recorded_at DESC
+LIMIT $3;

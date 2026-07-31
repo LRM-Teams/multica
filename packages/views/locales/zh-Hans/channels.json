@@ -175,6 +175,15 @@
     "no_recent_activity": "暂无最近活动",
     "close_aria": "关闭资料卡",
     "no_permission_toast": "当前无权查看该成员资料",
+    "honor": {
+      "title": "开发者荣誉",
+      "agent_title": "智能体荣誉",
+      "no_badge": "尚未佩戴徽章",
+      "keep_building": "继续开发以解锁荣誉",
+      "collection": "已收集 {{unlocked}} / {{total}}",
+      "agent_collection": "已解锁 {{unlocked}} 项",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "用量",
@@ -291,7 +300,11 @@
     "menu_about": "关于",
     "menu_members": "成员",
     "menu_files": "文件",
-    "menu_settings": "设置"
+    "menu_settings": "设置",
+    "rename_empty": "频道名称不能为空",
+    "hero_manage_hint": "可管理：点字段即改 · 无独立编辑按钮",
+    "hero_name_hint": "Enter 保存 · Esc 取消 · 空名拒收",
+    "hero_desc_hint": "失焦保存 · Esc 取消 · 空串清描述"
   },
   "stats": {
     "title": "活跃度",
@@ -331,6 +344,12 @@
     "reply": "在线程中回复",
     "reply_aria": "在线程中回复",
     "reply_count": "{{count}} 条回复",
+    "preview_count": "{{count}} 条回复",
+    "preview_view_all": "查看全部 {{count}} 条回复 →",
+    "preview_open": "查看 thread →",
+    "preview_image": "[图片]",
+    "preview_sticker": "[表情]",
+    "preview_attachment": "[附件]",
     "meta_count": "{{count}} 条回复",
     "meta_empty": "还没有回复",
     "meta_loading": "加载中…",
@@ -554,6 +573,7 @@
     "thread_empty": "还没有消息，打个招呼吧。",
     "self_label": "你",
     "open_failed": "无法打开私聊，请重试",
+    "peer_deleted_notice": "该 agent 已删除。历史消息仍可查看，但无法再发送新消息。",
     "open_forbidden": "无权限与该 Agent 私聊",
     "mark_unread": "标为未读",
     "pin": "置顶",

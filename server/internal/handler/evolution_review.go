@@ -332,6 +332,12 @@ func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *htt
 		handleEvolutionReviewDecisionError(w, err)
 		return
 	}
+	if submission, loadErr := h.Queries.GetEvolutionUnitSubmissionInWorkspace(
+		r.Context(),
+		db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: wsUUID},
+	); loadErr == nil && submission.SourceAgentID.Valid {
+		h.refreshAgentHonor(r.Context(), wsUUID, submission.SourceAgentID, "evolution_promoted")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "promoted", "unit_id": uuidToString(unit.ID)})
 }
 

@@ -31,29 +31,7 @@ func (h *Handler) canAccessAgentInternals(ctx context.Context, agent db.Agent, a
 	return roleAllowed(member.Role, "owner", "admin")
 }
 
-// memberAllowedForPrivateAgent is the pure predicate used by
-// accessibleAgentIDs for the one remaining owner-only agent class
-// (privateAgentOwnerOnly — Windy/Wendy) now that task #908 retired
-// agent.visibility itself.
-func memberAllowedForPrivateAgent(agent db.Agent, userID, role string) bool {
-	if privateAgentOwnerOnly(agent) {
-		return uuidToString(agent.OwnerID) == userID
-	}
-	if roleAllowed(role, "owner", "admin") {
-		return true
-	}
-	return uuidToString(agent.OwnerID) == userID
-}
-
-func privateAgentOwnerOnly(agent db.Agent) bool {
-	return isWindyAgentName(agentDisplayName(agent))
-}
-
 func (h *Handler) publishAgentVisibilityEvent(eventType, workspaceID, actorType, actorID string, agent db.Agent, payload any) {
-	if privateAgentOwnerOnly(agent) {
-		h.publishToUsers(eventType, workspaceID, actorType, actorID, []string{uuidToString(agent.OwnerID)}, payload)
-		return
-	}
 	h.publish(eventType, workspaceID, actorType, actorID, payload)
 }
 
@@ -62,9 +40,9 @@ func (h *Handler) publishAgentVisibilityEvent(eventType, workspaceID, actorType,
 // (run counts, activity histograms, task snapshots). Task #908 retired
 // agent.visibility for usage/aggregate surfaces (Parker, #multica thread
 // f83df812, 2026-07-30 18:31: "accessibleAgentIDs 不动，喂列表页聚合，全员
-// 可见") — the only remaining owner-only class is Windy/Wendy
-// (privateAgentOwnerOnly), not a general private-agent concept. Returns nil
-// and false on error.
+// 可见"). Frank, 2026-07-31 (Wendy DM incident, #prj-daemon): every agent —
+// including Windy/Wendy — is usable by every workspace member; there is no
+// owner-only agent class. Returns nil and false on error.
 func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType, actorID, role string) (map[string]struct{}, bool) {
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
@@ -76,11 +54,6 @@ func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType
 	}
 	allowed := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
-		if actorType == "member" && privateAgentOwnerOnly(a) {
-			if !memberAllowedForPrivateAgent(a, actorID, role) {
-				continue
-			}
-		}
 		allowed[uuidToString(a.ID)] = struct{}{}
 	}
 	return allowed, true

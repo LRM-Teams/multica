@@ -75,6 +75,33 @@ func TestBuildHonorRulesDocumentPublishesEverySupportedLevel(t *testing.T) {
 	}
 }
 
+func TestExpandedHonorCatalogPublishesTwentyFourNameStylesAndFiftyOneBadges(t *testing.T) {
+	t.Parallel()
+
+	document := BuildHonorRulesDocument(nil)
+	visibleStyles := 0
+	lastLevel := 0
+	for _, style := range document.NameStyleUnlocks {
+		if style.ID == "founding" {
+			continue
+		}
+		visibleStyles++
+		if style.MinLevel <= lastLevel {
+			t.Fatalf("name style levels must increase, got %d after %d", style.MinLevel, lastLevel)
+		}
+		lastLevel = style.MinLevel
+	}
+	if got, want := visibleStyles, 24; got != want {
+		t.Fatalf("visible name styles = %d, want %d", got, want)
+	}
+	if got, want := len(honorBadgeRequirements), 51; got != want {
+		t.Fatalf("badge requirements = %d, want %d", got, want)
+	}
+	if honorBadgeRequirements["infinity_engine"].minLevel != MaxHonorLevel {
+		t.Fatal("Infinity Engine must remain the level-60 completion badge")
+	}
+}
+
 func TestMaskSecretBadgeHidesItsUnlockRuleUntilUnlocked(t *testing.T) {
 	t.Parallel()
 

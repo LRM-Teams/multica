@@ -10,6 +10,12 @@ vi.mock("@multica/core/api", () => ({
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+  isLegacyUploadsAvatarUrl: (url: string | null | undefined) =>
+    !!url && (url.startsWith("/uploads/") || /\/uploads\//.test(url)),
+  preferAuthorAvatarUrl: (
+    incoming: string | null | undefined,
+    cached: string | null | undefined,
+  ) => incoming || cached || undefined,
 }));
 
 const nameById = new Map<string, string>();

@@ -48,6 +48,7 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
+import { ThreadReplyPreview } from "./thread-reply-preview";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import {
@@ -546,7 +547,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const threadReplyCount = message.thread_reply_count ?? 0;
   const threadUnreadCount = message.thread_unread_count ?? 0;
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
-  const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
+  const hasReactions = (message.reactions?.length ?? 0) > 0;
+  const hasFeedback = hasReactions;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
   // Resolved once here for copy; `MessageBody` resolves the same way to render
   // the body (see resolveMessageParts for the envelope-unwrap rationale).
@@ -1168,24 +1170,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         )}
         {!isEditing && hasFeedback && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {hasThreadActivity && onOpenThread && (
-              <button
-                type="button"
-                onClick={() => onOpenThread(message)}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-muted/45 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:h-6",
-                  threadUnreadCount > 0 && "border-primary/35 bg-primary/10 text-primary",
-                )}
-              >
-                <MessageSquare className="size-3.5" />
-                <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
-                {threadUnreadCount > 0 && (
-                  <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-                    {threadUnreadCount}
-                  </span>
-                )}
-              </button>
-            )}
+            {/* LRM-873: reply count chip replaced by ThreadReplyPreview below. */}
             {onReact && (message.reactions?.length ?? 0) > 0 && (
               <ReactionBar
                 reactions={message.reactions ?? []}
@@ -1198,6 +1183,9 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             )}
           </div>
         )}
+        {!isEditing && hasThreadActivity && onOpenThread ? (
+          <ThreadReplyPreview message={message} onOpenThread={onOpenThread} />
+        ) : null}
       </div>
     </div>
   );

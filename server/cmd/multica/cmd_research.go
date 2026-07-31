@@ -78,15 +78,22 @@ var researchReportToLeadCmd = &cobra.Command{
 
 var researchHireCmd = &cobra.Command{
 	Use:   "hire",
-	Short: "Hire a fleet member (pending prompt review)",
+	Short: "Hire a fleet member (pending prompt review; lead only)",
 	RunE:  runResearchHire,
 }
 
 var researchOptimizeCmd = &cobra.Command{
 	Use:   "optimize <member-id>",
-	Short: "Rewrite member instructions and optionally activate",
+	Short: "Rewrite member instructions/model and optionally activate (lead only)",
 	Args:  exactArgs(1),
 	RunE:  runResearchOptimize,
+}
+
+var researchArchiveCmd = &cobra.Command{
+	Use:   "archive <member-id>",
+	Short: "Archive (减员) a fleet member; cancels wakes (lead only)",
+	Args:  exactArgs(1),
+	RunE:  runResearchArchive,
 }
 
 func init() {
@@ -101,6 +108,8 @@ func init() {
 	researchSourceUpsertCmd.Flags().String("class", "other", "source class")
 	researchSourceUpsertCmd.Flags().Float64("weight", 0.5, "credibility weight 0-1")
 	researchSourceUpsertCmd.Flags().String("summary", "", "summary")
+	researchSourceUpsertCmd.Flags().String("why", "", "why this source (routing rationale / dimension)")
+	researchSourceUpsertCmd.Flags().String("dimension", "", "dimension_family this source serves")
 
 	researchReportPatchCmd.Flags().String("content", "", "markdown content")
 	researchPresenceCmd.Flags().String("activity", "", "activity text")
@@ -110,13 +119,19 @@ func init() {
 	researchReportToLeadCmd.Flags().String("body", "", "message body for 罗纳尔多")
 	_ = researchReportToLeadCmd.MarkFlagRequired("body")
 	researchHireCmd.Flags().String("name", "", "agent name")
-	researchHireCmd.Flags().String("role", "", "fleet role")
+	researchHireCmd.Flags().String("role", "", "fleet role (unique among non-archived)")
 	researchHireCmd.Flags().String("description", "", "description")
+	researchHireCmd.Flags().String("instructions", "", "initial instructions (rewritten on optimize)")
+	researchHireCmd.Flags().String("model", "", "specialty model (defaults to runtime explicit model)")
+	researchHireCmd.Flags().String("reason", "", "specialty gap / why hire (audit + canvas)")
 	_ = researchHireCmd.MarkFlagRequired("name")
 	_ = researchHireCmd.MarkFlagRequired("role")
 	researchOptimizeCmd.Flags().String("instructions", "", "new instructions")
+	researchOptimizeCmd.Flags().String("model", "", "optional model override")
+	researchOptimizeCmd.Flags().String("reason", "", "why optimize (audit + canvas)")
 	researchOptimizeCmd.Flags().Bool("activate", true, "activate after optimize")
 	_ = researchOptimizeCmd.MarkFlagRequired("instructions")
+	researchArchiveCmd.Flags().String("reason", "", "why archive / 减员 (audit + canvas)")
 
 	researchSessionCmd.AddCommand(researchSessionGetCmd)
 	researchCmd.AddCommand(researchSessionCmd)
@@ -129,6 +144,7 @@ func init() {
 	researchCmd.AddCommand(researchReportToLeadCmd)
 	researchCmd.AddCommand(researchHireCmd)
 	researchCmd.AddCommand(researchOptimizeCmd)
+	researchCmd.AddCommand(researchArchiveCmd)
 }
 
 func runResearchSessionGet(cmd *cobra.Command, args []string) error {
@@ -169,13 +185,22 @@ func runResearchSourceUpsert(cmd *cobra.Command, args []string) error {
 	class, _ := cmd.Flags().GetString("class")
 	weight, _ := cmd.Flags().GetFloat64("weight")
 	summary, _ := cmd.Flags().GetString("summary")
-	return researchPostJSON(cmd, "/api/research/sessions/"+args[0]+"/sources", map[string]any{
+	why, _ := cmd.Flags().GetString("why")
+	dimension, _ := cmd.Flags().GetString("dimension")
+	body := map[string]any{
 		"url":                url,
 		"title":              title,
 		"source_class":       class,
 		"credibility_weight": weight,
 		"summary":            summary,
-	})
+	}
+	if why != "" {
+		body["why"] = why
+	}
+	if dimension != "" {
+		body["dimension_family"] = dimension
+	}
+	return researchPostJSON(cmd, "/api/research/sessions/"+args[0]+"/sources", body)
 }
 
 func runResearchReportPatch(cmd *cobra.Command, args []string) error {
@@ -232,18 +257,49 @@ func runResearchHire(cmd *cobra.Command, args []string) error {
 	name, _ := cmd.Flags().GetString("name")
 	role, _ := cmd.Flags().GetString("role")
 	desc, _ := cmd.Flags().GetString("description")
-	return researchPostJSON(cmd, "/api/research/fleet/members", map[string]any{
+	instructions, _ := cmd.Flags().GetString("instructions")
+	model, _ := cmd.Flags().GetString("model")
+	reason, _ := cmd.Flags().GetString("reason")
+	body := map[string]any{
 		"name": name, "role": role, "description": desc,
-	})
+	}
+	if instructions != "" {
+		body["instructions"] = instructions
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	return researchPostJSON(cmd, "/api/research/fleet/members", body)
 }
 
 func runResearchOptimize(cmd *cobra.Command, args []string) error {
 	instructions, _ := cmd.Flags().GetString("instructions")
 	activate, _ := cmd.Flags().GetBool("activate")
-	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/optimize", map[string]any{
+	model, _ := cmd.Flags().GetString("model")
+	reason, _ := cmd.Flags().GetString("reason")
+	body := map[string]any{
 		"instructions": instructions,
 		"activate":     activate,
-	})
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/optimize", body)
+}
+
+func runResearchArchive(cmd *cobra.Command, args []string) error {
+	reason, _ := cmd.Flags().GetString("reason")
+	body := map[string]any{}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/archive", body)
 }
 
 func researchPostJSON(cmd *cobra.Command, path string, body map[string]any) error {

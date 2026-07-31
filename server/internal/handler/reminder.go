@@ -1068,50 +1068,17 @@ type agentReminderChangedPayload struct {
 }
 
 // publishAgentReminderChanged emits only the invalidation key needed by human
-// clients. Task #908 retired agent.visibility — reminder-changed events now
-// broadcast workspace-wide like any other usage surface, except for the
-// onboarding agent (Wendy), which keeps the owner/admin-only scope
-// privateAgentOwnerOnly-style surfaces use elsewhere.
+// clients. Task #908 retired agent.visibility — reminder-changed events
+// broadcast workspace-wide like any other usage surface. Frank, 2026-07-31
+// (Wendy DM incident, #prj-daemon): no agent — including the onboarding
+// agent (Wendy) — gets owner-only scoping; every agent is usable by every
+// workspace member.
 func (h *Handler) publishAgentReminderChanged(ctx context.Context, workspaceID, agentID pgtype.UUID) {
 	if h == nil || h.Bus == nil || !workspaceID.Valid || !agentID.Valid {
 		return
 	}
 	payload := agentReminderChangedPayload{AgentID: uuidToString(agentID)}
-	var ownerID pgtype.UUID
-	if err := h.DB.QueryRow(ctx, `
-		SELECT owner_id
-		FROM agent
-		WHERE id = $1 AND workspace_id = $2`, agentID, workspaceID).Scan(&ownerID); err != nil {
-		return
-	}
-	// The onboarding agent's identity comes only from workspace.onboarding_agent_id
-	// (task #902) — never from display name, which an owner can rename freely.
-	onboardingAgentID, err := h.Queries.GetWorkspaceOnboardingAgentID(ctx, workspaceID)
-	isOnboardingAgent := err == nil && onboardingAgentID.Valid && uuidToString(onboardingAgentID) == uuidToString(agentID)
-
-	workspace := uuidToString(workspaceID)
-	if !isOnboardingAgent {
-		h.publish(protocol.EventAgentReminderChanged, workspace, "system", "", payload)
-		return
-	}
-
-	recipients := map[string]bool{uuidToString(ownerID): ownerID.Valid}
-	if !isOnboardingAgent {
-		rows, err := h.DB.Query(ctx, `
-			SELECT user_id
-			FROM member
-			WHERE workspace_id = $1 AND role IN ('owner', 'admin')`, workspaceID)
-		if err == nil {
-			for rows.Next() {
-				var id pgtype.UUID
-				if rows.Scan(&id) == nil && id.Valid {
-					recipients[uuidToString(id)] = true
-				}
-			}
-			rows.Close()
-		}
-	}
-	h.publishToUsers(protocol.EventAgentReminderChanged, workspace, "system", "", recipientUserIDsFromSet(recipients), payload)
+	h.publish(protocol.EventAgentReminderChanged, uuidToString(workspaceID), "system", "", payload)
 }
 
 func daemonIdentityOwnsRuntime(identity daemonws.ClientIdentity, runtimeID pgtype.UUID) bool {

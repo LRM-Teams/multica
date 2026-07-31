@@ -7873,6 +7873,43 @@ func TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents(
 	}
 }
 
+// TestListChannelInviteCandidatesIncludesNonOwnerWendy is the end-to-end
+// regression test for the 2026-07-31 Wendy DM incident's second bug (found
+// after B2 merged): ListChannelInviteCandidates had its own independent
+// hardcoded exclusion for display_name IN ('Wendy', 'Windy', 'Joe'), missed
+// by the agent_access.go cleanup because it was a raw SQL string literal,
+// not a call to the retired predicate functions. Frank: "不要有特殊逻辑" —
+// a non-owner member must be able to invite the workspace's shared Wendy
+// into a channel just like any other agent.
+func TestListChannelInviteCandidatesIncludesNonOwnerWendy(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, _, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename agent to Wendy: %v", err)
+	}
+	channelID := seedChannelForTest(t, "invite-candidates-wendy-"+uuid.NewString(), memberID)
+
+	req := newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/invite-candidates", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelInviteCandidates(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListChannelInviteCandidates: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp ChannelInviteCandidatesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode invite candidates: %v", err)
+	}
+	if !channelInviteCandidatesContain(resp.Candidates, "agent", agentID) {
+		t.Fatalf("non-owner member's shared Wendy %s missing from invite candidates: %+v", agentID, resp.Candidates)
+	}
+}
+
 func channelInviteCandidatesContain(candidates []ChannelInviteCandidateResponse, memberType, memberID string) bool {
 	for _, c := range candidates {
 		if c.MemberType == memberType && c.MemberID == memberID {

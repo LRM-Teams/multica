@@ -175,6 +175,15 @@
     "no_recent_activity": "최근 활동이 없습니다",
     "close_aria": "프로필 닫기",
     "no_permission_toast": "이 멤버의 프로필을 볼 권한이 없습니다",
+    "honor": {
+      "title": "개발자 명예",
+      "agent_title": "에이전트 명예",
+      "no_badge": "장착한 배지 없음",
+      "keep_building": "계속 개발하여 명예 잠금 해제",
+      "collection": "{{unlocked}} / {{total}} 수집",
+      "agent_collection": "{{unlocked}}개 잠금 해제",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "사용량",
@@ -291,7 +300,11 @@
     "menu_about": "정보",
     "menu_members": "멤버",
     "menu_files": "파일",
-    "menu_settings": "설정"
+    "menu_settings": "설정",
+    "rename_empty": "채널 이름은 비울 수 없습니다",
+    "hero_manage_hint": "관리자: 필드를 클릭해 수정 · 별도 편집 버튼 없음",
+    "hero_name_hint": "Enter 저장 · Esc 취소 · 빈 이름 거부",
+    "hero_desc_hint": "포커스 해제 시 저장 · Esc 취소 · 빈 값이면 설명 삭제"
   },
   "stats": {
     "title": "활동",
@@ -331,6 +344,12 @@
     "reply": "스레드에서 답장",
     "reply_aria": "스레드에서 답장",
     "reply_count": "답글 {{count}}개",
+    "preview_count": "답글 {{count}}개",
+    "preview_view_all": "답글 {{count}}개 모두 보기 →",
+    "preview_open": "스레드 보기 →",
+    "preview_image": "[이미지]",
+    "preview_sticker": "[스티커]",
+    "preview_attachment": "[첨부]",
     "meta_count": "답글 {{count}}개",
     "meta_empty": "아직 답글 없음",
     "meta_loading": "로딩 중…",
@@ -554,6 +573,7 @@
     "thread_empty": "아직 메시지가 없습니다. 인사를 건네 보세요.",
     "self_label": "나",
     "open_failed": "대화를 열 수 없습니다. 다시 시도해 주세요.",
+    "peer_deleted_notice": "이 에이전트는 삭제되었습니다. 기록은 계속 볼 수 있지만 새 메시지는 보낼 수 없습니다.",
     "open_forbidden": "이 에이전트에게 메시지를 보낼 권한이 없습니다",
     "mark_unread": "읽지 않음으로 표시",
     "pin": "고정",

@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage, ListIssuesParams } from "../types";
+import { preferAuthorAvatarUrl } from "../workspace/avatar-url";
 
 /**
  * Query params for the group-local Tasks projection (#562). Mirrors the API
@@ -356,26 +357,32 @@ function shouldRenderChannelMessage(message: ChannelMessage | null | undefined):
  * forgot to attach it) while list fetches include it. Prefer the incoming URL,
  * else keep the cached row's, else copy from another same-author bubble already
  * in the thread — so consecutive agent messages don't flicker to initials.
+ *
+ * LRM-855: a non-empty incoming URL still wins in the common case, but a stale
+ * legacy `/uploads/` path must not overwrite a cached OSS/CDN face (and the
+ * reverse — OSS incoming always replaces `/uploads/` cache).
  */
 export function withPreservedAuthorAvatar(
   incoming: ChannelMessage,
   existing: ChannelMessage | undefined,
   siblings: readonly ChannelMessage[] | undefined,
 ): ChannelMessage {
-  if (incoming.author_avatar_url) return incoming;
-  if (existing?.author_avatar_url) {
-    return { ...incoming, author_avatar_url: existing.author_avatar_url };
+  let fromSibling: string | null | undefined;
+  if (!incoming.author_avatar_url && !existing?.author_avatar_url && incoming.author_id && siblings?.length) {
+    fromSibling = siblings.find(
+      (m) =>
+        !matchesChannelMessage(m, incoming) &&
+        m.author_id === incoming.author_id &&
+        m.type === incoming.type &&
+        !!m.author_avatar_url,
+    )?.author_avatar_url;
   }
-  if (!incoming.author_id || !siblings?.length) return incoming;
-  const fromSibling = siblings.find(
-    (m) =>
-      !matchesChannelMessage(m, incoming) &&
-      m.author_id === incoming.author_id &&
-      m.type === incoming.type &&
-      !!m.author_avatar_url,
-  )?.author_avatar_url;
-  if (!fromSibling) return incoming;
-  return { ...incoming, author_avatar_url: fromSibling };
+  const chosen = preferAuthorAvatarUrl(
+    incoming.author_avatar_url,
+    existing?.author_avatar_url ?? fromSibling ?? null,
+  );
+  if (!chosen || chosen === incoming.author_avatar_url) return incoming;
+  return { ...incoming, author_avatar_url: chosen };
 }
 
 /**

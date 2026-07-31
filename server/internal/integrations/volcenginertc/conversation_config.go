@@ -40,16 +40,12 @@ type startASRConfig struct {
 }
 
 type startASRProviderParams struct {
-	Mode            string             `json:"Mode"`
-	Credential      startASRCredential `json:"Credential"`
-	StreamMode      int                `json:"StreamMode"`
-	EnableNonstream bool               `json:"enable_nonstream"`
-}
-
-type startASRCredential struct {
-	AppID         string `json:"AppId"`
-	AccessToken   string `json:"AccessToken"`
-	APIResourceID string `json:"ApiResourceId"`
+	Mode            string `json:"Mode"`
+	AppID           string `json:"AppId"`
+	AccessToken     string `json:"AccessToken"`
+	APIResourceID   string `json:"ApiResourceId"`
+	StreamMode      int    `json:"StreamMode"`
+	EnableNonstream bool   `json:"enable_nonstream"`
 }
 
 type startVADConfig struct {
@@ -179,12 +175,10 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 		ASRConfig: startASRConfig{
 			Provider: "volcano",
 			ProviderParams: startASRProviderParams{
-				Mode: "bigmodel",
-				Credential: startASRCredential{
-					AppID:         asrAppID,
-					AccessToken:   speechAccessToken,
-					APIResourceID: volcengineASRResourceID,
-				},
+				Mode:            "bigmodel",
+				AppID:           asrAppID,
+				AccessToken:     speechAccessToken,
+				APIResourceID:   volcengineASRResourceID,
 				StreamMode:      2,
 				EnableNonstream: true,
 			},

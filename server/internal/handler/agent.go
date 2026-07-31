@@ -846,21 +846,21 @@ type CreateAgentRequest struct {
 	// Username is an explicit, stable handle chosen by the caller. When it is
 	// omitted, the server generates the username from display_name and applies
 	// numeric collision suffixes.
-	Username        *string               `json:"username"`
-	DisplayName     string                `json:"display_name"`
-	Description     string                `json:"description"`
-	Instructions    string                `json:"instructions"`
-	AvatarSelection *AgentAvatarSelection `json:"avatar_selection"`
-	RuntimeID       string                `json:"runtime_id"`
-	RuntimeConfig   any                   `json:"runtime_config"`
-	CustomEnv       map[string]string     `json:"custom_env"`
-	CustomArgs      []string              `json:"custom_args"`
-	McpConfig          json.RawMessage   `json:"mcp_config"`
-	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
-	Model              string            `json:"model"`
-	ThinkingLevel      string            `json:"thinking_level"`
-	InitialNotes       map[string]string `json:"initial_notes"`
-	InitialMemory      map[string]string `json:"initial_memory"`
+	Username           *string               `json:"username"`
+	DisplayName        string                `json:"display_name"`
+	Description        string                `json:"description"`
+	Instructions       string                `json:"instructions"`
+	AvatarSelection    *AgentAvatarSelection `json:"avatar_selection"`
+	RuntimeID          string                `json:"runtime_id"`
+	RuntimeConfig      any                   `json:"runtime_config"`
+	CustomEnv          map[string]string     `json:"custom_env"`
+	CustomArgs         []string              `json:"custom_args"`
+	McpConfig          json.RawMessage       `json:"mcp_config"`
+	MaxConcurrentTasks int32                 `json:"max_concurrent_tasks"`
+	Model              string                `json:"model"`
+	ThinkingLevel      string                `json:"thinking_level"`
+	InitialNotes       map[string]string     `json:"initial_notes"`
+	InitialMemory      map[string]string     `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -1161,9 +1161,9 @@ type UpdateAgentRequest struct {
 	// secret values with literal `****`. See MUL-2600.
 	CustomArgs         *[]string        `json:"custom_args"`
 	McpConfig          *json.RawMessage `json:"mcp_config"`
-	Status             *string `json:"status"`
-	MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
-	Model              *string `json:"model"`
+	Status             *string          `json:"status"`
+	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
+	Model              *string          `json:"model"`
 	// ThinkingLevel is treated as a tri-state per-MUL-2339:
 	//   - field omitted → no change (leave existing value alone)
 	//   - field present with "" → explicit clear (use runtime default)
@@ -1813,6 +1813,12 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to restore agent")
 		return
 	}
+	if h.AgentFleetRankService != nil {
+		if err := h.AgentFleetRankService.RestoreAgent(r.Context(), restored.WorkspaceID, restored.ID); err != nil {
+			slog.Warn("restore agent fleet rank failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		}
+	}
+	h.refreshAgentHonor(r.Context(), restored.WorkspaceID, restored.ID, "agent_restored")
 
 	wsID := uuidToString(restored.WorkspaceID)
 	slog.Info("agent restored", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", wsID)...)

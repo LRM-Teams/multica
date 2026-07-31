@@ -65,6 +65,12 @@ import type {
   AgentRunCount,
   AgentFleetRank,
   AgentFleetRulesDocument,
+  AgentHonorAdminAudit,
+  AgentHonorDashboard,
+  AgentHonorGrantRequest,
+  AgentHonorRules,
+  AgentHonorRulesView,
+  UpdateAgentHonorShowcaseRequest,
   AgentRuntime,
   InboxItem,
   UserActivityListResponse,
@@ -232,6 +238,13 @@ import {
   agentFleetRankSchema,
   agentFleetRulesSchema,
 } from "./agent-fleet-schemas";
+import {
+  agentHonorAdminAuditListSchema,
+  agentHonorDashboardSchema,
+  agentHonorRulesViewSchema,
+  EMPTY_AGENT_HONOR_DASHBOARD,
+  EMPTY_AGENT_HONOR_RULES_VIEW,
+} from "./agent-honor-schemas";
 import {
   honorCompareSchema,
   honorDashboardSchema,
@@ -1883,6 +1896,90 @@ export class ApiClient {
       class_thresholds: [],
       changelog: [],
     }, { endpoint: "GET /api/agents/fleet-rank/rules" });
+  }
+
+  async getAgentHonorRules(): Promise<AgentHonorRulesView> {
+    const raw = await this.fetch<unknown>("/api/agents/honor/rules");
+    return parseWithFallback(
+      raw,
+      agentHonorRulesViewSchema,
+      EMPTY_AGENT_HONOR_RULES_VIEW,
+      { endpoint: "GET /api/agents/honor/rules" },
+    );
+  }
+
+  async updateAgentHonorRules(rules: AgentHonorRules): Promise<AgentHonorRulesView> {
+    const raw = await this.fetch<unknown>("/api/agents/honor/rules", {
+      method: "PUT",
+      body: JSON.stringify(rules),
+    });
+    return parseWithFallback(
+      raw,
+      agentHonorRulesViewSchema,
+      EMPTY_AGENT_HONOR_RULES_VIEW,
+      { endpoint: "PUT /api/agents/honor/rules" },
+    );
+  }
+
+  async getAgentHonorAdminAudit(agentId?: string): Promise<AgentHonorAdminAudit[]> {
+    const query = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+    const raw = await this.fetch<unknown>(`/api/agents/honor/audit${query}`);
+    return parseWithFallback(raw, agentHonorAdminAuditListSchema, [], {
+      endpoint: "GET /api/agents/honor/audit",
+    });
+  }
+
+  async getAgentHonor(agentId: string): Promise<AgentHonorDashboard> {
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/honor`);
+    return parseWithFallback(
+      raw,
+      agentHonorDashboardSchema,
+      { ...EMPTY_AGENT_HONOR_DASHBOARD, agent_id: agentId },
+      { endpoint: "GET /api/agents/:id/honor" },
+    );
+  }
+
+  async updateAgentHonorShowcase(
+    agentId: string,
+    input: UpdateAgentHonorShowcaseRequest,
+  ): Promise<AgentHonorDashboard> {
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/honor`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(
+      raw,
+      agentHonorDashboardSchema,
+      { ...EMPTY_AGENT_HONOR_DASHBOARD, agent_id: agentId },
+      { endpoint: "PATCH /api/agents/:id/honor" },
+    );
+  }
+
+  async grantAgentHonor(
+    agentId: string,
+    input: AgentHonorGrantRequest,
+  ): Promise<AgentHonorDashboard> {
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/honor/grants`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(
+      raw,
+      agentHonorDashboardSchema,
+      { ...EMPTY_AGENT_HONOR_DASHBOARD, agent_id: agentId },
+      { endpoint: "POST /api/agents/:id/honor/grants" },
+    );
+  }
+
+  async revokeAgentAchievement(
+    agentId: string,
+    achievementId: string,
+    reason: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/agents/${agentId}/honor/achievements/${encodeURIComponent(achievementId)}`,
+      { method: "DELETE", body: JSON.stringify({ reason }) },
+    );
   }
 
   async getActiveTasksForIssue(issueId: string): Promise<{ tasks: AgentTask[] }> {

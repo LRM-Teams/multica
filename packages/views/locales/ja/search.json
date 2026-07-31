@@ -49,6 +49,13 @@
     "title": "グローバル検索",
     "description": "チャンネル・DM・メッセージ・メンバーを検索",
     "placeholder": "チャンネル・DM・メッセージを検索…",
+    "from_placeholder": "キーワードを追加（任意）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "送信者フィルターを解除",
+    "range_channel": "このチャンネル",
+    "range_workspace": "ワークスペース",
+    "include_thread": "スレッドを含む",
+    "mainline_only": "メインのみ",
     "scope": {
       "all": "すべて",
       "messages": "メッセージ",
@@ -74,6 +81,8 @@
     },
     "row": {
       "thread_hits": "THREAD・{{count}}件一致",
+      "mainline": "メイン",
+      "in_thread": "スレッド",
       "members": "{{count}} メンバー",
       "joined": "参加済み",
       "dm_placeholder": "ダイレクトメッセージ"

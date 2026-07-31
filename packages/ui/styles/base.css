@@ -318,34 +318,94 @@
   color: inherit;
 }
 
+.honor-name--ice {
+  --honor-glow-color: #0891b2;
+  color: #155e75;
+}
+
 .honor-name--member {
   --honor-glow-color: #0ea5e9;
   color: #0369a1;
   text-shadow:
-    0 0 1px color-mix(in srgb, #e0f2fe 76%, transparent),
-    0 0 7px color-mix(in srgb, #38bdf8 24%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 44%, transparent),
+    0 0 7px color-mix(in srgb, #0284c7 18%, transparent);
 }
 
-.dark .honor-name--member {
+.dark .honor-name--ice,
+.honor-dark-surface .honor-name--ice {
+  color: #a5f3fc;
+}
+
+.dark .honor-name--member,
+.honor-dark-surface .honor-name--member {
   color: #67e8f9;
+}
+
+.honor-name--emerald {
+  --honor-glow-color: #10b981;
+  color: #166534;
+}
+
+.dark .honor-name--emerald,
+.honor-dark-surface .honor-name--emerald {
+  color: #86efac;
+}
+
+.honor-name--sapphire {
+  --honor-glow-color: #3b82f6;
+  color: #1e40af;
+}
+
+.dark .honor-name--sapphire,
+.honor-dark-surface .honor-name--sapphire {
+  color: #93c5fd;
 }
 
 .honor-name--gold {
   --honor-glow-color: #f59e0b;
-  color: #b45309;
+  color: #92400e;
   text-shadow:
-    0 0 1px color-mix(in srgb, #fffbeb 82%, transparent),
-    0 0 8px color-mix(in srgb, #f59e0b 28%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 48%, transparent),
+    0 0 7px color-mix(in srgb, #d97706 20%, transparent);
 }
 
-.dark .honor-name--gold {
+.dark .honor-name--gold,
+.honor-dark-surface .honor-name--gold {
   color: #fcd34d;
+}
+
+.honor-name--coral {
+  --honor-glow-color: #f43f5e;
+  color: #9f1239;
+}
+
+.dark .honor-name--coral,
+.honor-dark-surface .honor-name--coral {
+  color: #fda4af;
+}
+
+.honor-name--amethyst {
+  --honor-glow-color: #a855f7;
+  color: #6b21a8;
+}
+
+.dark .honor-name--amethyst,
+.honor-dark-surface .honor-name--amethyst {
+  color: #d8b4fe;
 }
 
 .honor-name--founding,
 .honor-name--prismatic,
+.honor-name--aurora,
 .honor-name--shimmer,
-.honor-name--animated-prismatic {
+.honor-name--nebula,
+.honor-name--animated-prismatic,
+.honor-name--plasma,
+.honor-name--nova,
+.honor-name--quantum,
+.honor-name--celestial,
+.honor-name--mythic,
+.honor-name--transcendent {
   color: transparent;
   -webkit-background-clip: text;
   background-clip: text;
@@ -358,7 +418,14 @@
 
 .honor-name--founding {
   --honor-glow-color: #f59e0b;
-  background-image: linear-gradient(105deg, #b45309 0%, #fbbf24 38%, #fff7ae 52%, #f97316 100%);
+  background-image: linear-gradient(
+    105deg,
+    #78350f 0%,
+    #b45309 36%,
+    #c2410c 54%,
+    #92400e 74%,
+    #78350f 100%
+  );
   background-size: 180% 100%;
 }
 
@@ -367,22 +434,32 @@
   --honor-glow-color: #8b5cf6;
   background-image: linear-gradient(
     105deg,
-    #0891b2 0%,
+    #0e7490 0%,
     #2563eb 22%,
-    #8b5cf6 45%,
-    #db2777 67%,
-    #d97706 84%,
-    #0891b2 100%
+    #6d28d9 45%,
+    #be185d 67%,
+    #92400e 84%,
+    #0e7490 100%
   );
   background-size: 260% 100%;
 }
 
-.dark .honor-name--founding {
+.honor-name--aurora {
+  --honor-glow-color: #14b8a6;
+  background-image: linear-gradient(105deg, #115e59 0%, #166534 30%, #075985 58%, #6b21a8 82%, #115e59 100%);
+  background-size: 260% 100%;
+  animation: honor-name-spectrum 14s ease-in-out infinite;
+}
+
+.dark .honor-name--founding,
+.honor-dark-surface .honor-name--founding {
   background-image: linear-gradient(105deg, #f59e0b 0%, #fde68a 38%, #ffffff 52%, #fb7185 100%);
 }
 
 .dark .honor-name--prismatic,
-.dark .honor-name--animated-prismatic {
+.dark .honor-name--animated-prismatic,
+.honor-dark-surface .honor-name--prismatic,
+.honor-dark-surface .honor-name--animated-prismatic {
   background-image: linear-gradient(
     105deg,
     #67e8f9 0%,
@@ -394,36 +471,57 @@
   );
 }
 
+.dark .honor-name--aurora,
+.honor-dark-surface .honor-name--aurora {
+  background-image: linear-gradient(105deg, #5eead4 0%, #86efac 30%, #7dd3fc 58%, #e879f9 82%, #5eead4 100%);
+}
+
 .honor-name--glow,
 .honor-name--animated-glow {
   --honor-glow-color: #8b5cf6;
-  color: #7c3aed;
+  color: #6d28d9;
   text-shadow:
-    0 0 1px color-mix(in srgb, #f5f3ff 92%, transparent),
-    0 0 6px color-mix(in srgb, #8b5cf6 44%, transparent),
-    0 0 14px color-mix(in srgb, #22d3ee 18%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 50%, transparent),
+    0 0 6px color-mix(in srgb, #7c3aed 30%, transparent),
+    0 0 14px color-mix(in srgb, #0891b2 12%, transparent);
 }
 
 .dark .honor-name--glow,
-.dark .honor-name--animated-glow {
+.dark .honor-name--animated-glow,
+.honor-dark-surface .honor-name--glow,
+.honor-dark-surface .honor-name--animated-glow {
   color: #ddd6fe;
+}
+
+.honor-name--solar {
+  --honor-glow-color: #f59e0b;
+  color: #9a3412;
+  text-shadow:
+    0 0 1px color-mix(in srgb, currentColor 55%, transparent),
+    0 0 8px color-mix(in srgb, #f59e0b 24%, transparent);
+}
+
+.dark .honor-name--solar,
+.honor-dark-surface .honor-name--solar {
+  color: #fdba74;
 }
 
 .honor-name--shimmer {
   --honor-glow-color: #f59e0b;
   background-image: linear-gradient(
     105deg,
-    #b45309 0%,
-    #fbbf24 32%,
-    #fff7c2 48%,
-    #f59e0b 62%,
-    #b45309 100%
+    #78350f 0%,
+    #92400e 28%,
+    #c2410c 48%,
+    #a16207 68%,
+    #78350f 100%
   );
   background-size: 260% 100%;
   animation: honor-name-spectrum 8s ease-in-out infinite;
 }
 
-.dark .honor-name--shimmer {
+.dark .honor-name--shimmer,
+.honor-dark-surface .honor-name--shimmer {
   background-image: linear-gradient(
     105deg,
     #f59e0b 0%,
@@ -434,12 +532,131 @@
   );
 }
 
+.honor-name--nebula {
+  --honor-glow-color: #a855f7;
+  background-image: linear-gradient(105deg, #4c1d95 0%, #831843 34%, #075985 68%, #4c1d95 100%);
+  background-size: 240% 100%;
+  animation: honor-name-spectrum 13s ease-in-out infinite;
+}
+
+.dark .honor-name--nebula,
+.honor-dark-surface .honor-name--nebula {
+  background-image: linear-gradient(105deg, #c4b5fd 0%, #f9a8d4 34%, #7dd3fc 68%, #c4b5fd 100%);
+}
+
+.honor-name--cyber {
+  --honor-glow-color: #06b6d4;
+  color: #0f766e;
+  text-shadow:
+    0 0 1px currentColor,
+    0 0 7px color-mix(in srgb, #06b6d4 32%, transparent);
+  animation: honor-name-light-pulse 10s ease-in-out infinite;
+}
+
+.dark .honor-name--cyber,
+.honor-dark-surface .honor-name--cyber {
+  color: #5eead4;
+}
+
 .honor-name--animated-prismatic {
   animation: honor-name-spectrum 10s linear infinite;
 }
 
+.honor-name--plasma {
+  --honor-glow-color: #d946ef;
+  background-image: linear-gradient(105deg, #9f1239 0%, #6b21a8 38%, #0e7490 72%, #9f1239 100%);
+  background-size: 260% 100%;
+  animation: honor-name-spectrum 11s linear infinite;
+}
+
+.dark .honor-name--plasma,
+.honor-dark-surface .honor-name--plasma {
+  background-image: linear-gradient(105deg, #f9a8d4 0%, #d8b4fe 38%, #67e8f9 72%, #f9a8d4 100%);
+}
+
 .honor-name--animated-glow {
   animation: honor-name-light-pulse 6s ease-in-out infinite;
+}
+
+.honor-name--eclipse {
+  --honor-glow-color: #6366f1;
+  color: #334155;
+  text-shadow:
+    -1px 0 color-mix(in srgb, #6d28d9 32%, transparent),
+    1px 0 color-mix(in srgb, #be123c 24%, transparent),
+    0 0 8px color-mix(in srgb, #4f46e5 24%, transparent);
+  animation: honor-name-light-pulse 9s ease-in-out infinite;
+}
+
+.dark .honor-name--eclipse,
+.honor-dark-surface .honor-name--eclipse {
+  color: #e2e8f0;
+}
+
+.honor-name--nova {
+  --honor-glow-color: #f97316;
+  background-image: linear-gradient(105deg, #9f1239 0%, #9a3412 36%, #854d0e 64%, #9f1239 100%);
+  background-size: 260% 100%;
+  animation: honor-name-spectrum 9s ease-in-out infinite;
+}
+
+.dark .honor-name--nova,
+.honor-dark-surface .honor-name--nova {
+  background-image: linear-gradient(105deg, #fda4af 0%, #fdba74 36%, #fde68a 64%, #fda4af 100%);
+}
+
+.honor-name--quantum {
+  --honor-glow-color: #8b5cf6;
+  background-image: linear-gradient(105deg, #1e40af 0%, #6b21a8 34%, #0f766e 66%, #1e40af 100%);
+  background-size: 300% 100%;
+  animation: honor-name-spectrum 8.5s linear infinite;
+}
+
+.dark .honor-name--quantum,
+.honor-dark-surface .honor-name--quantum {
+  background-image: linear-gradient(105deg, #93c5fd 0%, #d8b4fe 34%, #5eead4 66%, #93c5fd 100%);
+}
+
+.honor-name--celestial {
+  --honor-glow-color: #facc15;
+  background-image: linear-gradient(105deg, #854d0e 0%, #92400e 32%, #713f12 68%, #854d0e 100%);
+  background-size: 260% 100%;
+  animation: honor-name-spectrum 10s ease-in-out infinite;
+}
+
+.dark .honor-name--celestial,
+.honor-dark-surface .honor-name--celestial {
+  background-image: linear-gradient(105deg, #fde68a 0%, #ffffff 34%, #fdba74 68%, #fde68a 100%);
+}
+
+.honor-name--mythic {
+  --honor-glow-color: #d946ef;
+  background-image: linear-gradient(105deg, #581c87 0%, #831843 34%, #3730a3 68%, #581c87 100%);
+  background-size: 300% 100%;
+  animation: honor-name-spectrum 8s linear infinite;
+}
+
+.dark .honor-name--mythic,
+.honor-dark-surface .honor-name--mythic {
+  background-image: linear-gradient(105deg, #e879f9 0%, #f9a8d4 34%, #a5b4fc 68%, #e879f9 100%);
+}
+
+.honor-name--transcendent {
+  --honor-glow-color: #facc15;
+  background-image: linear-gradient(105deg, #164e63 0%, #4c1d95 28%, #831843 54%, #854d0e 78%, #164e63 100%);
+  background-size: 340% 100%;
+  animation:
+    honor-name-spectrum 7.5s linear infinite,
+    honor-name-light-pulse 5.8s ease-in-out infinite;
+}
+
+.dark .honor-name--transcendent,
+.honor-dark-surface .honor-name--transcendent {
+  background-image: linear-gradient(105deg, #67e8f9 0%, #c4b5fd 28%, #f9a8d4 54%, #fde68a 78%, #67e8f9 100%);
+}
+
+.honor-name[data-honor-surface="inline"] {
+  animation: none;
 }
 
 /* Level-based luminosity tiers (I–VII). */
@@ -478,8 +695,8 @@
   --honor-halo-opacity: 0.12;
   --honor-halo-low-opacity: 0.08;
   text-shadow:
-    0 0 1px color-mix(in srgb, white 72%, transparent),
-    0 0 8px color-mix(in srgb, var(--honor-glow-color) 30%, transparent);
+    0 0 1px color-mix(in srgb, currentColor 52%, transparent),
+    0 0 7px color-mix(in srgb, var(--honor-glow-color) 22%, transparent);
 }
 
 .honor-name-glow[data-honor-glow-tier="3"] {
@@ -611,15 +828,15 @@
 @keyframes honor-name-light-pulse {
   0%, 100% {
     text-shadow:
-      0 0 1px color-mix(in srgb, white 78%, transparent),
-      0 0 7px color-mix(in srgb, #8b5cf6 42%, transparent),
-      0 0 14px color-mix(in srgb, #22d3ee 18%, transparent);
+      0 0 1px color-mix(in srgb, currentColor 54%, transparent),
+      0 0 7px color-mix(in srgb, #7c3aed 30%, transparent),
+      0 0 14px color-mix(in srgb, #0891b2 12%, transparent);
   }
   50% {
     text-shadow:
-      0 0 2px color-mix(in srgb, white 94%, transparent),
-      0 0 11px color-mix(in srgb, #a78bfa 58%, transparent),
-      0 0 22px color-mix(in srgb, #22d3ee 30%, transparent);
+      0 0 1px color-mix(in srgb, currentColor 68%, transparent),
+      0 0 10px color-mix(in srgb, #7c3aed 42%, transparent),
+      0 0 20px color-mix(in srgb, #0891b2 20%, transparent);
   }
 }
 
@@ -672,6 +889,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .honor-name,
   .honor-name--shimmer,
   .honor-name--animated-prismatic,
   .honor-name--animated-glow,

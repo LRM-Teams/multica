@@ -11,7 +11,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestUpdateAgentWorkspaceRolePublishesCanonicalOwnerOnlyAgent(t *testing.T) {
+// TestUpdateAgentWorkspaceRolePublishesCanonicalBroadcast reflects the
+// 2026-07-31 Wendy DM incident fix: a Wendy-named agent's workspace-role
+// change now broadcasts workspace-wide like any other agent — no owner-only
+// recipient scoping.
+func TestUpdateAgentWorkspaceRolePublishesCanonicalBroadcast(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -57,8 +61,8 @@ func TestUpdateAgentWorkspaceRolePublishesCanonicalOwnerOnlyAgent(t *testing.T) 
 	if len(got) != 1 {
 		t.Fatalf("role-change events = %d, want 1", len(got))
 	}
-	if len(got[0].RecipientUserIDs) != 1 || got[0].RecipientUserIDs[0] != testUserID {
-		t.Fatalf("role-change recipients = %#v, want owner-only %s", got[0].RecipientUserIDs, testUserID)
+	if len(got[0].RecipientUserIDs) != 0 {
+		t.Fatalf("role-change recipients = %#v, want workspace-wide broadcast (no owner-only scoping)", got[0].RecipientUserIDs)
 	}
 	payloadJSON, err := json.Marshal(got[0].Payload)
 	if err != nil {

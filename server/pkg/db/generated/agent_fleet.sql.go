@@ -26,6 +26,23 @@ type AgentFleetSnapshot struct {
 	ComputedAt       pgtype.Timestamptz `json:"computed_at"`
 }
 
+type AgentFleetHistory struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	FleetScore       pgtype.Numeric     `json:"fleet_score"`
+	ClassID          string             `json:"class_id"`
+	FleetRank        int32              `json:"fleet_rank"`
+	FleetSize        int32              `json:"fleet_size"`
+	SampleTasks      int32              `json:"sample_tasks"`
+	PillarDelivery   pgtype.Numeric     `json:"pillar_delivery"`
+	PillarEvolution  pgtype.Numeric     `json:"pillar_evolution"`
+	PillarGrowth     pgtype.Numeric     `json:"pillar_growth"`
+	PillarEfficiency pgtype.Numeric     `json:"pillar_efficiency"`
+	TriggerReason    string             `json:"trigger_reason"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+}
+
 const listWorkspaceActiveAgentIDs = `-- name: ListWorkspaceActiveAgentIDs :many
 SELECT id FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
@@ -65,9 +82,9 @@ GROUP BY atq.agent_id
 `
 
 type GetFleetDeliveryStatsRow struct {
-	AgentID         pgtype.UUID `json:"agent_id"`
-	CompletedCount  int64       `json:"completed_count"`
-	FailedCount     int64       `json:"failed_count"`
+	AgentID        pgtype.UUID `json:"agent_id"`
+	CompletedCount int64       `json:"completed_count"`
+	FailedCount    int64       `json:"failed_count"`
 }
 
 type GetFleetDeliveryStatsParams struct {
@@ -105,9 +122,9 @@ GROUP BY agent_id
 `
 
 type GetFleetEvolutionFeedbackStatsRow struct {
-	AgentID        pgtype.UUID `json:"agent_id"`
-	SuccessCount   int64       `json:"success_count"`
-	FeedbackTotal  int64       `json:"feedback_total"`
+	AgentID       pgtype.UUID `json:"agent_id"`
+	SuccessCount  int64       `json:"success_count"`
+	FeedbackTotal int64       `json:"feedback_total"`
 }
 
 func (q *Queries) GetFleetEvolutionFeedbackStats(ctx context.Context, arg GetFleetDeliveryStatsParams) ([]GetFleetEvolutionFeedbackStatsRow, error) {
@@ -139,8 +156,8 @@ GROUP BY source_agent_id
 `
 
 type GetFleetEvolutionPromotionStatsRow struct {
-	AgentID         pgtype.UUID `json:"agent_id"`
-	PromotionCount  int64       `json:"promotion_count"`
+	AgentID        pgtype.UUID `json:"agent_id"`
+	PromotionCount int64       `json:"promotion_count"`
 }
 
 func (q *Queries) GetFleetEvolutionPromotionStats(ctx context.Context, arg GetFleetDeliveryStatsParams) ([]GetFleetEvolutionPromotionStatsRow, error) {
@@ -204,11 +221,18 @@ SELECT
     )::float8 AS total_seconds,
     COALESCE(
         (
-            SELECT SUM(auh.input_tokens + auh.output_tokens)::bigint
-            FROM agent_usage_hourly auh
-            WHERE auh.workspace_id = $1
-              AND auh.agent_id = atq.agent_id
-              AND auh.bucket_hour >= now() - make_interval(days => $2::int)
+            SELECT SUM(usage.input_tokens + usage.output_tokens)::bigint
+            FROM agent_usage usage
+            JOIN agent_execution execution ON execution.id = usage.execution_id
+            JOIN agent_inbox_event completed_event
+              ON execution.source_kind = 'inbox'
+             AND completed_event.id = execution.source_event_id
+            WHERE execution.workspace_id = $1
+              AND execution.agent_id = atq.agent_id
+              AND completed_event.status = 'acked'
+              AND completed_event.terminal_outcome = 'completed'
+              AND completed_event.completed_at > now() - make_interval(days => $2::int)
+              AND COALESCE(completed_event.context->>'type', '') <> 'agent_radar'
         ),
         0
     )::bigint AS total_tokens
@@ -225,10 +249,10 @@ GROUP BY atq.agent_id
 `
 
 type GetFleetEfficiencyStatsRow struct {
-	AgentID         pgtype.UUID `json:"agent_id"`
-	CompletedCount  int64       `json:"completed_count"`
-	TotalSeconds    float64     `json:"total_seconds"`
-	TotalTokens     int64       `json:"total_tokens"`
+	AgentID        pgtype.UUID `json:"agent_id"`
+	CompletedCount int64       `json:"completed_count"`
+	TotalSeconds   float64     `json:"total_seconds"`
+	TotalTokens    int64       `json:"total_tokens"`
 }
 
 func (q *Queries) GetFleetEfficiencyStats(ctx context.Context, arg GetFleetDeliveryStatsParams) ([]GetFleetEfficiencyStatsRow, error) {
@@ -249,9 +273,13 @@ func (q *Queries) GetFleetEfficiencyStats(ctx context.Context, arg GetFleetDeliv
 }
 
 const listAgentFleetSnapshots = `-- name: ListAgentFleetSnapshots :many
-SELECT workspace_id, agent_id, fleet_score, class_id, fleet_rank, fleet_size, sample_tasks, pillar_delivery, pillar_evolution, pillar_growth, pillar_efficiency, frozen, frozen_at, computed_at FROM agent_fleet_snapshot
-WHERE workspace_id = $1
-ORDER BY fleet_rank ASC, fleet_score DESC
+SELECT snapshot.workspace_id, snapshot.agent_id, snapshot.fleet_score, snapshot.class_id, snapshot.fleet_rank, snapshot.fleet_size, snapshot.sample_tasks, snapshot.pillar_delivery, snapshot.pillar_evolution, snapshot.pillar_growth, snapshot.pillar_efficiency, snapshot.frozen, snapshot.frozen_at, snapshot.computed_at
+FROM agent_fleet_snapshot snapshot
+JOIN agent a ON a.id = snapshot.agent_id
+WHERE snapshot.workspace_id = $1
+  AND a.archived_at IS NULL
+  AND snapshot.frozen = false
+ORDER BY snapshot.fleet_rank ASC, snapshot.fleet_score DESC
 `
 
 func (q *Queries) ListAgentFleetSnapshots(ctx context.Context, workspaceID pgtype.UUID) ([]AgentFleetSnapshot, error) {
@@ -354,4 +382,99 @@ type FreezeAgentFleetSnapshotParams struct {
 func (q *Queries) FreezeAgentFleetSnapshot(ctx context.Context, arg FreezeAgentFleetSnapshotParams) error {
 	_, err := q.db.Exec(ctx, freezeAgentFleetSnapshot, arg.WorkspaceID, arg.AgentID)
 	return err
+}
+
+const unfreezeAgentFleetSnapshot = `-- name: UnfreezeAgentFleetSnapshot :exec
+UPDATE agent_fleet_snapshot
+SET frozen = false, frozen_at = NULL
+WHERE workspace_id = $1 AND agent_id = $2
+`
+
+type UnfreezeAgentFleetSnapshotParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) UnfreezeAgentFleetSnapshot(ctx context.Context, arg UnfreezeAgentFleetSnapshotParams) error {
+	_, err := q.db.Exec(ctx, unfreezeAgentFleetSnapshot, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const insertAgentFleetHistory = `-- name: InsertAgentFleetHistory :one
+INSERT INTO agent_fleet_history (
+    workspace_id, agent_id, fleet_score, class_id, fleet_rank, fleet_size,
+    sample_tasks, pillar_delivery, pillar_evolution, pillar_growth, pillar_efficiency,
+    trigger_reason
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, workspace_id, agent_id, fleet_score, class_id, fleet_rank, fleet_size,
+          sample_tasks, pillar_delivery, pillar_evolution, pillar_growth, pillar_efficiency,
+          trigger_reason, recorded_at
+`
+
+type InsertAgentFleetHistoryParams struct {
+	WorkspaceID      pgtype.UUID    `json:"workspace_id"`
+	AgentID          pgtype.UUID    `json:"agent_id"`
+	FleetScore       pgtype.Numeric `json:"fleet_score"`
+	ClassID          string         `json:"class_id"`
+	FleetRank        int32          `json:"fleet_rank"`
+	FleetSize        int32          `json:"fleet_size"`
+	SampleTasks      int32          `json:"sample_tasks"`
+	PillarDelivery   pgtype.Numeric `json:"pillar_delivery"`
+	PillarEvolution  pgtype.Numeric `json:"pillar_evolution"`
+	PillarGrowth     pgtype.Numeric `json:"pillar_growth"`
+	PillarEfficiency pgtype.Numeric `json:"pillar_efficiency"`
+	TriggerReason    string         `json:"trigger_reason"`
+}
+
+func (q *Queries) InsertAgentFleetHistory(ctx context.Context, arg InsertAgentFleetHistoryParams) (AgentFleetHistory, error) {
+	row := q.db.QueryRow(ctx, insertAgentFleetHistory,
+		arg.WorkspaceID, arg.AgentID, arg.FleetScore, arg.ClassID, arg.FleetRank, arg.FleetSize,
+		arg.SampleTasks, arg.PillarDelivery, arg.PillarEvolution, arg.PillarGrowth, arg.PillarEfficiency,
+		arg.TriggerReason,
+	)
+	var i AgentFleetHistory
+	err := row.Scan(
+		&i.ID, &i.WorkspaceID, &i.AgentID, &i.FleetScore, &i.ClassID, &i.FleetRank,
+		&i.FleetSize, &i.SampleTasks, &i.PillarDelivery, &i.PillarEvolution,
+		&i.PillarGrowth, &i.PillarEfficiency, &i.TriggerReason, &i.RecordedAt,
+	)
+	return i, err
+}
+
+const listAgentFleetHistory = `-- name: ListAgentFleetHistory :many
+SELECT id, workspace_id, agent_id, fleet_score, class_id, fleet_rank, fleet_size,
+       sample_tasks, pillar_delivery, pillar_evolution, pillar_growth, pillar_efficiency,
+       trigger_reason, recorded_at
+FROM agent_fleet_history
+WHERE workspace_id = $1 AND agent_id = $2
+ORDER BY recorded_at DESC
+LIMIT $3
+`
+
+type ListAgentFleetHistoryParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	Limit       int32       `json:"limit"`
+}
+
+func (q *Queries) ListAgentFleetHistory(ctx context.Context, arg ListAgentFleetHistoryParams) ([]AgentFleetHistory, error) {
+	rows, err := q.db.Query(ctx, listAgentFleetHistory, arg.WorkspaceID, arg.AgentID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentFleetHistory{}
+	for rows.Next() {
+		var i AgentFleetHistory
+		if err := rows.Scan(
+			&i.ID, &i.WorkspaceID, &i.AgentID, &i.FleetScore, &i.ClassID, &i.FleetRank,
+			&i.FleetSize, &i.SampleTasks, &i.PillarDelivery, &i.PillarEvolution,
+			&i.PillarGrowth, &i.PillarEfficiency, &i.TriggerReason, &i.RecordedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
 }

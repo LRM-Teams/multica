@@ -240,10 +240,13 @@ describe("DmConversation — Reminder anchor ?thread=&message= deep-link (#656)"
     await waitFor(() => {
       expect(screen.getByText("Thread")).toBeInTheDocument();
     });
-    expect(await screen.findByText("The anchored reply")).toBeInTheDocument();
-
-    const replyRow = screen.getByText("The anchored reply").closest("[id]");
-    expect(replyRow).toHaveAttribute("id", `message-${REPLY_ID}`);
+    // LRM-873: the same reply text also appears in ThreadReplyPreview under
+    // the parent, so resolve the highlighted row by message id.
+    await waitFor(() => {
+      expect(document.getElementById(`message-${REPLY_ID}`)).toBeTruthy();
+    });
+    const replyRow = document.getElementById(`message-${REPLY_ID}`);
+    expect(replyRow?.textContent).toContain("The anchored reply");
     // Ring-highlight class applied by ChannelMessageList's `highlighted` prop.
     expect(replyRow?.className).toMatch(/ring/);
   });
@@ -263,7 +266,9 @@ describe("DmConversation — Reminder anchor ?thread=&message= deep-link (#656)"
   it("opens a SECOND, different thread when new deep-link props arrive without remounting (same-page navigation, no full reload)", async () => {
     const { rerender, qc } = renderDm({ threadDeepLinkId: ROOT_ID, deepLinkMessageId: REPLY_ID });
 
-    expect(await screen.findByText("The anchored reply")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.getElementById(`message-${REPLY_ID}`)).toBeTruthy();
+    });
 
     // Same DmConversation instance, same QueryClient — only the deep-link
     // props change (as they would when channels-page.tsx's reactive
@@ -282,9 +287,11 @@ describe("DmConversation — Reminder anchor ?thread=&message= deep-link (#656)"
       </I18nProvider>,
     );
 
-    expect(await screen.findByText("The second anchored reply")).toBeInTheDocument();
-    const secondReplyRow = screen.getByText("The second anchored reply").closest("[id]");
-    expect(secondReplyRow).toHaveAttribute("id", `message-${SECOND_REPLY_ID}`);
+    await waitFor(() => {
+      expect(document.getElementById(`message-${SECOND_REPLY_ID}`)).toBeTruthy();
+    });
+    const secondReplyRow = document.getElementById(`message-${SECOND_REPLY_ID}`);
+    expect(secondReplyRow?.textContent).toContain("The second anchored reply");
     expect(secondReplyRow?.className).toMatch(/ring/);
   });
 });

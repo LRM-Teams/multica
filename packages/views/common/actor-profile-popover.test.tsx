@@ -1,4 +1,9 @@
-import { render, screen, cleanup } from "@testing-library/react";
+import {
+  render as renderWithTestingLibrary,
+  screen,
+  cleanup,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { MemberProfile } from "@multica/core/types";
 import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
@@ -21,6 +26,14 @@ const mockActivity = vi.hoisted(() => ({
     latest: null as ActivityEvent | null,
     isLoading: false,
   },
+}));
+const mockHonorApi = vi.hoisted(() => ({
+  getAgentHonor: vi.fn(),
+  getUserHonor: vi.fn(),
+}));
+
+vi.mock("@multica/core/api", () => ({
+  api: mockHonorApi,
 }));
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
@@ -74,6 +87,15 @@ vi.mock("../i18n/use-t", () => {
       description: "Description",
       recent_activity: "Recent activity",
       no_recent_activity: "No recent activity",
+      honor: {
+        title: "Developer honor",
+        agent_title: "Agent honor",
+        no_badge: "No badge equipped",
+        keep_building: "Keep building",
+        collection: "{{unlocked}} / {{total}} collected",
+        agent_collection: "{{unlocked}} unlocked",
+        level_value: "LV.{{level}}",
+      },
       restricted: {
         runtime: "Runtime",
         usage: "Usage",
@@ -85,11 +107,28 @@ vi.mock("../i18n/use-t", () => {
   };
   return {
     useT: () => ({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      t: (selector: (r: any) => string) => selector(CHANNELS_RES),
+      t: (
+        selector: (r: any) => string,
+        values?: Record<string, string | number>,
+      ) => {
+        let value = selector(CHANNELS_RES);
+        for (const [key, replacement] of Object.entries(values ?? {})) {
+          value = value.replaceAll(`{{${key}}}`, String(replacement));
+        }
+        return value;
+      },
     }),
   };
 });
+
+function render(ui: React.ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderWithTestingLibrary(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
+  );
+}
 
 function makeEvent(index: number): ActivityEvent {
   return {
@@ -137,6 +176,14 @@ beforeEach(() => {
   cleanup();
   mockLiveStatus.current = live("Idle");
   mockActivity.current = { events: [], latest: null, isLoading: false };
+  mockHonorApi.getAgentHonor.mockReset();
+  mockHonorApi.getUserHonor.mockReset();
+  mockHonorApi.getAgentHonor.mockImplementation(
+    () => new Promise(() => undefined),
+  );
+  mockHonorApi.getUserHonor.mockImplementation(
+    () => new Promise(() => undefined),
+  );
 });
 
 describe("ActorProfileContentLoaded", () => {
@@ -218,5 +265,111 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.getByText("Runtime")).toBeInTheDocument();
     expect(screen.getByText("Usage")).toBeInTheDocument();
     expect(screen.getAllByText("Channel-only")).toHaveLength(3);
+  });
+
+  it("shows a human member's level, equipped badge, and public collection", async () => {
+    mockHonorApi.getUserHonor.mockResolvedValue({
+      level: 42,
+      name_style: "animated_prismatic",
+      equipped_badge: {
+        id: "prism_core",
+        title: "Prism Core",
+        description: "Late-game badge",
+        svg_key: "prism_core",
+      },
+      showcase_badges: [
+        { id: "earth", title: "Earth", description: "", svg_key: "earth" },
+        { id: "mars", title: "Mars", description: "", svg_key: "mars" },
+        { id: "saturn", title: "Saturn", description: "", svg_key: "saturn" },
+      ],
+      badges_unlocked: 28,
+      badges_total: 51,
+      unlocked_badges: [],
+    });
+    const profile: MemberProfile = {
+      member_type: "user",
+      member_id: "user-1",
+      name: "caosz2",
+      display_name: "caosz2",
+      avatar_url: null,
+      description: "Ships collaboration software.",
+      role: "admin",
+      status: "",
+      recent_activity: [],
+      profile_access: "full",
+    };
+
+    render(<ActorProfileContentLoaded profile={profile} />);
+
+    expect(await screen.findByTestId("member-honor-showcase")).toBeInTheDocument();
+    expect(screen.getByText("Developer honor")).toBeInTheDocument();
+    expect(screen.getByText("LV.42")).toBeInTheDocument();
+    expect(screen.getAllByText("Prism Core").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("28 / 51 collected")).toBeInTheDocument();
+    const styledName = screen.getAllByText("caosz2").at(-1);
+    expect(styledName).toHaveAttribute("data-honor-surface", "profile");
+    expect(styledName).toHaveClass("honor-name--animated-prismatic");
+  });
+
+  it("shows an agent's permanent XP, fleet class, and equipped achievement", async () => {
+    mockHonorApi.getAgentHonor.mockResolvedValue({
+      agent_id: "agent-1",
+      level: 12,
+      total_xp: 3_400,
+      xp_to_next_level: 200,
+      equipped_achievement_id: "streak_5",
+      showcase_achievement_ids: ["streak_5"],
+      metrics: {
+        completed_count: 32,
+        failed_count: 2,
+        success_streak: 8,
+        memory_writes: 14,
+        evolution_promotions: 1,
+        distinct_projects: 3,
+        recovery_count: 2,
+      },
+      fleet: {
+        agent_id: "agent-1",
+        fleet_score: 73,
+        class_id: "battleship",
+        class_label: "Battleship",
+        fleet_rank: 2,
+        fleet_size: 18,
+        sample_tasks: 34,
+        sample_sufficient: true,
+        frozen: false,
+        pillars: {
+          delivery: 0.82,
+          evolution: 0.65,
+          growth: 0.58,
+          efficiency: 0.74,
+        },
+      },
+      achievements: [
+        {
+          id: "streak_5",
+          title: "Clean Burn",
+          description: "Five accepted tasks in a row.",
+          svg_key: "venus",
+          category: "reliability",
+          xp_reward: 75,
+          rarity: 30,
+          secret: false,
+          unlocked: true,
+        },
+      ],
+      recent_events: [],
+      fleet_history: [],
+      rules_version: "test",
+    });
+
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
+
+    expect(await screen.findByTestId("agent-honor-showcase")).toBeInTheDocument();
+    expect(screen.getByText("Agent honor")).toBeInTheDocument();
+    expect(screen.getByText("LV.12")).toBeInTheDocument();
+    expect(screen.getAllByText("Clean Burn").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("3400 XP")).toBeInTheDocument();
+    expect(screen.getByText("Battleship")).toBeInTheDocument();
   });
 });

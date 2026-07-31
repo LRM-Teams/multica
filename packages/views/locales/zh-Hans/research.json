@@ -35,7 +35,14 @@
     "loading": "正在加载调研会话",
     "load_failed": "调研会话加载失败",
     "retry": "重试",
-    "empty_cta": "开始你的第一个调研"
+    "empty_cta": "开始你的第一个调研",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "调研目标",
+    "goal_dialog_close": "关闭",
+    "goal_dialog_open": "打开会话",
+    "who_working": "{{name}} 进行中",
+    "output_line": "产出 · {{summary}}",
+    "no_output": "产出 · 暂无产出"
   },
   "filter": {
     "search_label": "搜索会话标题",
@@ -107,13 +114,16 @@
   },
   "home": {
     "composer_label": "创建调研会话",
-    "hero_title": "调研，不再靠几十个标签页",
+    "hero_title": "说清目标——调研团多源取证并交付报告",
     "hero_desc": "说清目标——调研团去多源取证、梳理发现，并把报告交到你手上。",
     "composer_hint": "按 ⌘⏎ 开始",
     "creating": "组建舰队中…",
     "create_failed": "调研会话创建失败",
     "templates_label": "快捷模板",
-    "templates_hint": "点选预填目标与推荐关注维度，可再改"
+    "templates_hint": "点选后以彩色 chip 加入专业提示词，继续输入你的具体目标",
+    "template_chip": "{{title}} 提示词已加入，继续输入开发目标即可",
+    "template_chip_clear": "移除模板",
+    "goal_placeholder_with_template": "补充你的具体目标…"
   },
   "ring": {
     "title": "节点操作",
@@ -134,5 +144,12 @@
     "zoom_out": "缩小",
     "fit": "适应画布",
     "toggle_detail": "开关详情面板"
+  },
+  "timeline": {
+    "label": "调研阶段",
+    "done": "已完成",
+    "current": "进行中",
+    "upcoming": "未开始",
+    "done_feedback": "阶段已完成"
   }
 }

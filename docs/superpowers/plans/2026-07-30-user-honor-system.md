@@ -20,6 +20,6 @@
 - [x] Badge SVG + CSS tokens
 - [ ] Handler integration tests with DB
 - [ ] CoreProvider presence heartbeat
-- [ ] Profile popover honor wall
+- [x] Profile popover honor wall
 - [ ] Ops grant endpoint
-- [ ] `pnpm react:doctor` on FE diff
+- [ ] `pnpm react:doctor` on current FE diff

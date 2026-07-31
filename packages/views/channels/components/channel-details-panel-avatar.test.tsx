@@ -9,9 +9,7 @@ import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelDetailsPanel } from "./channel-details-panel";
 
-// LRM-724 — channel icon upload flow. The panel uploads through the shared
-// useFileUpload hook (api.uploadFile), then hands the persisted link to the
-// parent's onUpdateAvatar.
+// LRM-724 / LRM-860 — channel icon upload from the hero (no About → avatar sub-view).
 const uploadFile = vi.fn();
 vi.mock("@multica/core/api", () => ({
   api: {
@@ -57,6 +55,8 @@ function renderPanel(
   overrides: Partial<ComponentProps<typeof ChannelDetailsPanel>> = {},
 ) {
   const onUpdateAvatar = vi.fn();
+  const onRename = vi.fn();
+  const onUpdateDescription = vi.fn();
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   });
@@ -79,7 +79,8 @@ function renderPanel(
           onMuteToggle={() => {}}
           onShare={() => {}}
           onArchive={() => {}}
-          onRename={() => {}}
+          onRename={onRename}
+          onUpdateDescription={onUpdateDescription}
           onUpdateLarkChatId={() => {}}
           onUpdateAvatar={onUpdateAvatar}
           membersBody={<div>Members body</div>}
@@ -91,13 +92,7 @@ function renderPanel(
       </QueryClientProvider>
     </I18nProvider>,
   );
-  return { onUpdateAvatar };
-}
-
-async function openAvatarView() {
-  const user = userEvent.setup();
-  await user.click(screen.getByTestId("channel-details-about-avatar"));
-  return user;
+  return { onUpdateAvatar, onRename, onUpdateDescription };
 }
 
 function pickFile(file: File) {
@@ -106,21 +101,27 @@ function pickFile(file: File) {
   fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
 }
 
-describe("ChannelDetailsPanel avatar view (LRM-724)", () => {
+describe("ChannelDetailsPanel hero inline edit (LRM-860)", () => {
   beforeEach(() => {
     uploadFile.mockReset();
   });
 
-  it("uploads the chosen image and hands the link to onUpdateAvatar", async () => {
+  it("removes the About section rows", () => {
+    renderPanel();
+    expect(screen.queryByTestId("channel-details-about-name")).toBeNull();
+    expect(screen.queryByTestId("channel-details-about-avatar")).toBeNull();
+    expect(screen.getByTestId("channel-details-hero-name")).toBeTruthy();
+  });
+
+  it("uploads via the hero avatar click path", async () => {
     uploadFile.mockResolvedValue({
       id: "att-1",
       url: "/uploads/icon.png",
       markdown_url: "https://cdn.example.com/icon.png",
     });
     const { onUpdateAvatar } = renderPanel();
-    await openAvatarView();
 
-    expect(screen.getByTestId("channel-details-avatar-upload")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-avatar-change")).toBeTruthy();
     pickFile(new File(["x"], "icon.png", { type: "image/png" }));
 
     await waitFor(() => {
@@ -135,8 +136,6 @@ describe("ChannelDetailsPanel avatar view (LRM-724)", () => {
 
   it("rejects non-image files without calling onUpdateAvatar", async () => {
     const { onUpdateAvatar } = renderPanel();
-    await openAvatarView();
-
     pickFile(new File(["x"], "notes.txt", { type: "text/plain" }));
 
     await waitFor(() => {
@@ -145,7 +144,7 @@ describe("ChannelDetailsPanel avatar view (LRM-724)", () => {
     expect(onUpdateAvatar).not.toHaveBeenCalled();
   });
 
-  it("disables the avatar row for members without manage permission", () => {
+  it("hides the avatar change control without manage permission", () => {
     renderPanel({
       access: {
         canManage: false,
@@ -156,7 +155,17 @@ describe("ChannelDetailsPanel avatar view (LRM-724)", () => {
       },
       manageDisabledReason: "Only the channel creator or workspace admins can manage this channel.",
     });
-    const row = screen.getByTestId("channel-details-about-avatar") as HTMLButtonElement;
-    expect(row.disabled).toBe(true);
+    expect(screen.queryByTestId("channel-details-avatar-change")).toBeNull();
+    expect(screen.getByTestId("channel-details-hero-name").tagName).toBe("P");
+  });
+
+  it("renames from the hero name click path on Enter", async () => {
+    const user = userEvent.setup();
+    const { onRename } = renderPanel();
+    await user.click(screen.getByTestId("channel-details-hero-name"));
+    const input = screen.getByTestId("channel-details-hero-name-input");
+    await user.clear(input);
+    await user.type(input, "new-name{Enter}");
+    expect(onRename).toHaveBeenCalledWith("new-name");
   });
 });

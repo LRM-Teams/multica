@@ -126,6 +126,16 @@ export function projectReferencesToText(
         const resolved = resolveMention(ref.ref_subtype, ref.ref_id, ref.label ?? seg.text);
         return `@${resolved.replace(/^@+/, "")}`;
       }
+      // channel-ref (task #912) is ALWAYS authored via the composer's
+      // `[Label](mention://channel/<id>)` markdown link — unlike issue-ref,
+      // there is no bare-text form — so its span covers the WHOLE markdown
+      // link syntax, not just a bare identifier. Falling through to `seg.text`
+      // (the #467/#600 "verbatim span substring" rule below) would leak the
+      // raw `[Label](mention://channel/<uuid>)` source into the preview.
+      if (ref.ref_type === "channel-ref") {
+        const label = ref.label?.trim();
+        return `#${label || ref.ref_id}`;
+      }
       return seg.text;
     })
     .join("");

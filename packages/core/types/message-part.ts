@@ -52,6 +52,17 @@ export type MessagePart =
       content_end_utf16?: number;
     }
   | {
+      /** task #912: server-resolved counterpart to the composer's
+       *  `[Label](mention://channel/<id>)` link (ChannelReferenceExtension). */
+      type: "reference";
+      ref_type: "channel-ref";
+      ref_id: string;
+      label?: string;
+      /** Exact UTF-16 range in the message content; emitted by the server. */
+      content_start_utf16?: number;
+      content_end_utf16?: number;
+    }
+  | {
       type: "system_event";
       event: string;
       event_params: Record<string, unknown>;

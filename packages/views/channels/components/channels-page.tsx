@@ -4056,7 +4056,7 @@ export function ChannelsPage({
                         onExternalFiles={channelPending.addFiles}
                         submitOnEnter
                         showBubbleMenu={false}
-                        enableIssueReferences
+                        enableChannelReferences
                         mentionAllowedActorIds={channelMemberIds}
                         scopedMentionAgents={channelAgentCandidates}
                       />

@@ -2,6 +2,7 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 import { Suggestion, type SuggestionOptions } from "@tiptap/suggestion";
+import { PluginKey } from "@tiptap/pm/state";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
@@ -16,7 +17,18 @@ export const IssueReferenceExtension = Node.create({
 
   addOptions() {
     return {
-      suggestion: { char: "#", allow: () => false } as Omit<SuggestionOptions<MentionItem>, "editor">,
+      // Explicit pluginKey: @tiptap/suggestion's Suggestion() falls back to a
+      // MODULE-LEVEL SHARED PluginKey("suggestion") when none is given, so
+      // any two Suggestion-backed nodes both left at their bare/disabled
+      // default (as this one always is post-2026-07-31 — see
+      // channel-reference.tsx) collide with "Adding different instances of a
+      // keyed plugin" the moment both are registered in the same editor,
+      // even though neither is actually active.
+      suggestion: {
+        char: "#",
+        allow: () => false,
+        pluginKey: new PluginKey("issueReferenceSuggestionDisabled"),
+      } as Omit<SuggestionOptions<MentionItem>, "editor">,
     };
   },
 

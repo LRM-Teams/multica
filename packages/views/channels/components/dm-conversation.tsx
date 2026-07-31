@@ -1596,7 +1596,7 @@ function DmChannelConversation({
               mediaMode="external"
               onExternalFiles={dmPending.addFiles}
               disableMentions
-              enableIssueReferences
+              enableChannelReferences
               submitOnEnter
               showBubbleMenu={false}
             />

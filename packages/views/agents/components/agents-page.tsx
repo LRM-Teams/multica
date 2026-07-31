@@ -62,6 +62,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown";
 import { AgentDetailOverview, type AgentMetric } from "./agent-detail-overview";
+import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useOpenDM } from "../../common/use-open-dm";
 import { WindySetupModal } from "../../workspace/windy-setup-modal";
@@ -534,6 +535,8 @@ export function AgentsPage({
   // the chosen one drops out of the filtered list (filter/search change), so
   // the detail pane is never blank while agents exist.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false);
+  const [deletingSelected, setDeletingSelected] = useState(false);
   const selectedAgent = useMemo(() => {
     if (selectedId) {
       const found = sortedAgents.find((a) => a.id === selectedId);
@@ -557,16 +560,22 @@ export function AgentsPage({
     return isWorkspaceAdmin || isOwner;
   }, [selectedAgent, currentUser?.id, isWorkspaceAdmin]);
 
+  // LRM-865: never call archiveAgent from the overview Delete button —
+  // open ConfirmDeleteAgent first; only confirm submits.
   const handleArchiveSelected = useCallback(async () => {
     if (!selectedAgent) return;
+    setDeletingSelected(true);
     try {
       await api.archiveAgent(selectedAgent.id);
       toast.success(t(($) => $.dashboard.delete_success));
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      setConfirmDeleteSelected(false);
     } catch (err) {
       showErrorToast(
         err instanceof Error && err.message ? err.message : t(($) => $.dashboard.delete_failed),
       );
+    } finally {
+      setDeletingSelected(false);
     }
   }, [selectedAgent, qc, wsId, t]);
 
@@ -788,7 +797,7 @@ export function AgentsPage({
               fleet={fleetByAgentId.get(selectedAgent.id)}
               canManage={selectedCanManage}
               onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}
-              onDelete={handleArchiveSelected}
+              onDelete={() => setConfirmDeleteSelected(true)}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -797,6 +806,16 @@ export function AgentsPage({
           )}
         </div>
       )}
+
+      {selectedAgent ? (
+        <ConfirmDeleteAgent
+          open={confirmDeleteSelected}
+          displayName={resolveActorDisplayName(selectedAgent, selectedAgent.id)}
+          pending={deletingSelected}
+          onConfirm={() => void handleArchiveSelected()}
+          onOpenChange={setConfirmDeleteSelected}
+        />
+      ) : null}
 
       <WindySetupModal
         open={showWindySetup}

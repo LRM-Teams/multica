@@ -1,4 +1,11 @@
 {
+  "delete_confirm": {
+    "title": "删除智能体？",
+    "description": "即将删除“{{name}}”。删除后不可被指派或 @提及；历史记录会保留，可在以后恢复。",
+    "cancel": "取消",
+    "confirm": "删除",
+    "confirming": "删除中…"
+  },
   "page": {
     "title": "智能体",
     "tagline": "能领取 issue、留下评论、推进状态的 AI 队友。",

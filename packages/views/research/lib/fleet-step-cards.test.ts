@@ -127,6 +127,19 @@ describe("buildFleetChatFeed", () => {
   });
 });
 
+
+  it("keeps product_round_judgment as interactive chat cards", () => {
+    const feed = buildFleetChatFeed([
+      msg({
+        id: "r1",
+        body: "产品轮判定",
+        meta: { op: "product_round_judgment", decision: "continue", title: "判定" },
+      }),
+    ]);
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.kind).toBe("chat");
+  });
+
 describe("presenceRunningCards / nextStageWaitingCard", () => {
   it("builds running cards from presence", () => {
     const cards = presenceRunningCards(

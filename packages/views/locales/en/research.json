@@ -125,7 +125,8 @@
     "pivot": "Pivot",
     "roster_change": "Roster change",
     "stage_gate": "Stage gate",
-    "agent_activity": "Activity"
+    "agent_activity": "Activity",
+    "product_round_gate": "Product round"
   },
   "home": {
     "composer_label": "Create a research session",
@@ -166,6 +167,37 @@
     "current": "Current",
     "upcoming": "Upcoming",
     "done_feedback": "Stage completed"
+  },
+  "round": {
+    "round_n": "Round {{n}}",
+    "subtitle": "Ronaldo end-of-round judgment (gaps · confidence · budget)",
+    "open_detail": "Open judgment details",
+    "confidence": "Confidence",
+    "empty_confidence": "No confidence note",
+    "gaps": "Coverage gaps",
+    "gaps_empty": "Key criteria covered",
+    "budget_used": "Rounds used",
+    "budget_remaining": "Rounds left",
+    "budget_chip": "Round {{used}}/{{budget}}",
+    "budget_capped": "Budget capped",
+    "next_focus": "Next-round focus",
+    "goal_patch": "Goal patch proposal",
+    "goal_patch_hint": "Does not write authoritative goal until you confirm via Goal Card (LRM-898)",
+    "goal_dialog_title": "Confirm goal patch",
+    "goal_confirm": "Confirm patch",
+    "goal_edit": "Edit then confirm",
+    "goal_edit_send": "Send edited text",
+    "goal_reject": "Reject proposal",
+    "agree": "Agree with judgment",
+    "reject_continue": "Reject continue · stop instead",
+    "reject_stop": "Reject stop · open another round",
+    "auto_adopt_countdown": "Auto-adopt in {{s}}s",
+    "auto_adopted": "Timed out — adopted Ronaldo’s judgment (goal patch still needs your confirm)",
+    "decision": {
+      "continue": "Continue deeper",
+      "stop_enough": "Enough · close",
+      "stop_budget": "Budget hit · close"
+    }
   },
   "reader": {
     "outline": "Outline",

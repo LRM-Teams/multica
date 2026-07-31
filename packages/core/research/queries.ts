@@ -23,6 +23,8 @@ export const researchKeys = {
     ["research", wsId, "snapshot", sessionId] as const,
   presence: (wsId: string, sessionId: string) =>
     ["research", wsId, "presence", sessionId] as const,
+  productRounds: (wsId: string, sessionId: string) =>
+    ["research", wsId, "product-rounds", sessionId] as const,
 };
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
@@ -82,5 +84,15 @@ export function researchPresenceOptions(wsId: string, sessionId: string) {
     },
     enabled: !!wsId && !!sessionId,
     staleTime: 30_000,
+  });
+}
+
+export function researchProductRoundsOptions(wsId: string, sessionId: string) {
+  return queryOptions({
+    queryKey: researchKeys.productRounds(wsId, sessionId),
+    queryFn: () => api.listResearchProductRoundCards(sessionId),
+    enabled: !!wsId && !!sessionId,
+    // Endpoint lands with LRM-911 migration 255; empty is fine until then.
+    retry: false,
   });
 }

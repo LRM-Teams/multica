@@ -4,6 +4,7 @@ import {
   aggregateRuntimeHealthState,
   aggregateRuntimeHealthPresentation,
   deriveRuntimeHealthPresentation,
+  isSandboxRuntime,
   runtimeCanStartSelfUpdate,
   runtimeCurrentVersion,
   runtimeHasHealthAttention,
@@ -147,6 +148,34 @@ describe("runtimeCanStartSelfUpdate — update_state eligibility (#687)", () => 
         "user-1",
       ),
     ).toBe(true);
+  });
+});
+
+describe("sandbox daemons do not drive the upgrade prompt", () => {
+  // A sandbox daemon forwards MULTICA_SANDBOX_INSTANCE_ID, which the server
+  // records as metadata.sandbox_instance_id. Its CLI expiry is handled by the
+  // sandbox runtime, never the desktop upgrade popup / sidebar attention.
+  const sandboxRuntime = makeRuntime({
+    runtime_health: "update_available",
+    update_state: "idle",
+    target_version: "0.4.0",
+    metadata: { sandbox_instance_id: "sb-1" },
+  });
+
+  it("isSandboxRuntime reads metadata.sandbox_instance_id", () => {
+    expect(isSandboxRuntime(sandboxRuntime)).toBe(true);
+    expect(
+      isSandboxRuntime(makeRuntime({ metadata: { sandbox_instance_id: "  " } })),
+    ).toBe(false);
+    expect(isSandboxRuntime(makeRuntime({ metadata: {} }))).toBe(false);
+  });
+
+  it("never reports health attention for a sandbox daemon", () => {
+    expect(runtimeHasHealthAttention(sandboxRuntime, "user-1")).toBe(false);
+  });
+
+  it("never offers start-self-update for a sandbox daemon", () => {
+    expect(runtimeCanStartSelfUpdate(sandboxRuntime, "user-1")).toBe(false);
   });
 });
 

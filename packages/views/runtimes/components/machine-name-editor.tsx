@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState, type MouseEvent } from "react";
 import { Loader2, Pencil } from "lucide-react";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
@@ -42,15 +42,21 @@ export function MachineNameEditor({
   const visibleName = savedName || hostname;
   const isPlaceholder = !savedName;
 
-  useEffect(() => {
-    if (editing) {
-      setDraft(savedName);
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [editing, savedName]);
-
   const canEdit = machine.runtimes.length > 0;
+
+  const beginEdit = useCallback(
+    (e: MouseEvent) => {
+      e.stopPropagation();
+      setDraft(savedName);
+      setEditing(true);
+      // Focus after the input mounts (same tick as setState would race).
+      queueMicrotask(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
+    },
+    [savedName],
+  );
 
   const save = useCallback(() => {
     if (!canEdit || updateRuntime.isPending) return;
@@ -157,10 +163,7 @@ export function MachineNameEditor({
     >
       <button
         type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setEditing(true);
-        }}
+        onClick={beginEdit}
         aria-label={`${t(($) => $.machine.basics_display_name)}: ${visibleName}`}
         className={cn(
           "inline-flex min-w-0 items-center gap-1.5 text-left",

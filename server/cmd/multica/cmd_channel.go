@@ -41,6 +41,21 @@ var channelMembersCmd = &cobra.Command{
 	RunE: runChannelMembers,
 }
 
+var channelCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a temporary multi-agent coordination group",
+	Long: "Create an idempotent temporary coordination group from an active Agent run. " +
+		"The initiating human becomes the group owner and observer. This command is " +
+		"available only with an Agent task or inbox token.",
+	RunE: runAgentChannelCreate,
+}
+
+var channelArchiveCmd = &cobra.Command{
+	Use:   "archive",
+	Short: "Archive a temporary coordination group created by this Agent",
+	RunE:  runAgentChannelArchive,
+}
+
 var channelMuteCmd = &cobra.Command{
 	Use:   "mute",
 	Short: "Mute ambient channel delivery",
@@ -76,6 +91,8 @@ var channelMemberAddCmd = &cobra.Command{
 
 func init() {
 	channelCmd.AddCommand(channelListCmd)
+	channelCmd.AddCommand(channelCreateCmd)
+	channelCmd.AddCommand(channelArchiveCmd)
 	channelCmd.AddCommand(channelMembersCmd)
 	channelCmd.AddCommand(channelMuteCmd)
 	channelCmd.AddCommand(channelUnmuteCmd)
@@ -83,6 +100,17 @@ func init() {
 	channelMemberCmd.AddCommand(channelMemberAddCmd)
 
 	channelListCmd.Flags().String("output", "table", "Output format: table or json")
+	channelCreateCmd.Flags().String("name", "", "Coordination group name")
+	channelCreateCmd.Flags().String("description", "", "Optional group description")
+	channelCreateCmd.Flags().StringSlice("member", nil, "Agent UUID or name to add (repeatable)")
+	channelCreateCmd.Flags().String("parent", "", "Optional parent group (#name or UUID)")
+	channelCreateCmd.Flags().String("purpose", "", "Optional general coordination purpose")
+	channelCreateCmd.Flags().String("request-id", "", "Required idempotency key for this coordination group")
+	channelCreateCmd.Flags().String("output", "table", "Output format: table or json")
+	_ = channelCreateCmd.MarkFlagRequired("name")
+	_ = channelCreateCmd.MarkFlagRequired("request-id")
+	channelArchiveCmd.Flags().String("target", "", "Temporary coordination group (#name or UUID)")
+	_ = channelArchiveCmd.MarkFlagRequired("target")
 
 	channelMemberAddCmd.Flags().String("target", "", "Channel to add into (id or #channel-name)")
 	channelMemberAddCmd.Flags().String("output", "table", "Output format: table or json")
@@ -94,6 +122,104 @@ func init() {
 	_ = channelMuteCmd.MarkFlagRequired("target")
 	channelUnmuteCmd.Flags().String("target", "", "Channel to unmute (#channel-name)")
 	_ = channelUnmuteCmd.MarkFlagRequired("target")
+}
+
+func runAgentChannelArchive(cmd *cobra.Command, _ []string) error {
+	if !isAgentAPIToken(cmd) {
+		return fmt.Errorf("channel archive requires an active Agent task or inbox token")
+	}
+	target := strings.TrimSpace(flagString(cmd, "target"))
+	if target == "" {
+		return fmt.Errorf("--target is required")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	channelID, err := resolveChannelRef(ctx, client, strings.TrimPrefix(target, "#"))
+	if err != nil {
+		return fmt.Errorf("resolve coordination channel %q: %w", target, err)
+	}
+	var resp map[string]any
+	path := fmt.Sprintf("/api/agent/channels/%s/archive", url.PathEscape(channelID))
+	if err := client.PostJSON(ctx, path, map[string]any{}, &resp); err != nil {
+		return fmt.Errorf("archive coordination channel: %w", err)
+	}
+	fmt.Printf("Archived coordination channel %s\n", channelID)
+	return nil
+}
+
+func runAgentChannelCreate(cmd *cobra.Command, _ []string) error {
+	if !isAgentAPIToken(cmd) {
+		return fmt.Errorf("channel create requires an active Agent task or inbox token")
+	}
+	name := strings.TrimSpace(flagString(cmd, "name"))
+	requestID := strings.TrimSpace(flagString(cmd, "request-id"))
+	if name == "" {
+		return fmt.Errorf("--name is required")
+	}
+	if requestID == "" {
+		return fmt.Errorf("--request-id is required")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	memberRefs, _ := cmd.Flags().GetStringSlice("member")
+	memberIDs := make([]string, 0, len(memberRefs))
+	seen := map[string]struct{}{}
+	for _, ref := range memberRefs {
+		ref = strings.TrimPrefix(strings.TrimSpace(ref), "@")
+		if ref == "" {
+			continue
+		}
+		agent, err := resolveAgentRef(ctx, client, ref)
+		if err != nil {
+			return fmt.Errorf("resolve agent %q: %w", ref, err)
+		}
+		if _, exists := seen[agent.ID]; exists {
+			continue
+		}
+		seen[agent.ID] = struct{}{}
+		memberIDs = append(memberIDs, agent.ID)
+	}
+
+	body := map[string]any{
+		"name":              name,
+		"member_agent_ids":  memberIDs,
+		"client_request_id": requestID,
+	}
+	if description := strings.TrimSpace(flagString(cmd, "description")); description != "" {
+		body["description"] = description
+	}
+	if purpose := strings.TrimSpace(flagString(cmd, "purpose")); purpose != "" {
+		body["purpose"] = purpose
+	}
+	if parent := strings.TrimSpace(flagString(cmd, "parent")); parent != "" {
+		parentID, err := resolveChannelRef(ctx, client, strings.TrimPrefix(parent, "#"))
+		if err != nil {
+			return fmt.Errorf("resolve parent channel %q: %w", parent, err)
+		}
+		body["parent_channel_id"] = parentID
+	}
+
+	var resp map[string]any
+	if err := client.PostJSON(ctx, "/api/agent/channels", body, &resp); err != nil {
+		return fmt.Errorf("create coordination channel: %w", err)
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		data, _ := json.MarshalIndent(resp, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	fmt.Printf("Created coordination channel %s (%s)\n", strVal(resp, "name"), strVal(resp, "channel_id"))
+	return nil
 }
 
 func runChannelList(cmd *cobra.Command, _ []string) error {
@@ -432,4 +558,3 @@ func agentProjectResourcesPathAmbient(projectID string) string {
 	}
 	return "/api/projects/" + escaped + "/resources"
 }
-

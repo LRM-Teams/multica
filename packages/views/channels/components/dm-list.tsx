@@ -121,6 +121,11 @@ export function DmList({
   const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);
   // LRM-655: persist collapse across ChannelsPage/DmList remounts (e.g. select channel).
   const [collapsed, setCollapsed] = useSidebarSectionCollapsed("dms", wsId);
+  const [agentDmsCollapsed, setAgentDmsCollapsed] = useSidebarSectionCollapsed(
+    "agent-dms",
+    wsId,
+    true,
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const dmActions = useDmRowActions();
@@ -181,6 +186,34 @@ export function DmList({
       return 0;
     });
   }, [searchQuery, unpinnedDms, bubbleActivityByAgent]);
+  const directDms = useMemo(
+    () => filteredDms.filter((dm) => dm.mode !== "agent_pair"),
+    [filteredDms],
+  );
+  const agentPairDms = useMemo(
+    () => {
+      const q = searchQuery.trim().toLowerCase();
+      return filteredDms.filter(
+        (dm) =>
+          dm.mode === "agent_pair" &&
+          (!q ||
+            dm.participants?.some((participant) =>
+              participant.name.toLowerCase().includes(q),
+            ) ||
+            dm.peer.name.toLowerCase().includes(q)),
+      );
+    },
+    [filteredDms, searchQuery],
+  );
+  const agentPairUnread = useMemo(
+    () =>
+      sumUnmutedUnreadCounts(
+        agentPairDms,
+        (dm) => dm.real_unread ?? dm.unread ?? 0,
+        (dm) => isConversationMuted(dm),
+      ),
+    [agentPairDms],
+  );
   const hasSearchQuery = searchQuery.trim().length > 0;
 
   // Header "+" still available when the only DMs are pinned (they live above).
@@ -227,7 +260,7 @@ export function DmList({
       </div>
     ) : (
       <>
-        {filteredDms.map((dm) => (
+        {directDms.map((dm) => (
         <DmConversationRow
           key={`${dm.source}:${dm.id}`}
           dm={dm}
@@ -248,6 +281,50 @@ export function DmList({
           onClose={() => dmActions.close(dm)}
         />
         ))}
+        {agentPairDms.length > 0 && (
+          <div className="mt-1">
+            <button
+              type="button"
+              onClick={() => setAgentDmsCollapsed((value) => !value)}
+              className="flex w-full items-center gap-1 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              aria-expanded={!agentDmsCollapsed}
+            >
+              {agentDmsCollapsed ? (
+                <ChevronRight className="size-3.5 shrink-0" />
+              ) : (
+                <ChevronDown className="size-3.5 shrink-0" />
+              )}
+              <span className="flex-1 text-left">
+                {t(($) => $.dm.agent_pair.folder)}
+              </span>
+              <span className="text-[11px] tabular-nums">
+                {agentPairDms.length}
+              </span>
+              {agentPairUnread > 0 && (
+                <span className={CONVERSATION_SIDEBAR_UNREAD_BADGE}>
+                  {agentPairUnread > 99 ? "99+" : agentPairUnread}
+                </span>
+              )}
+            </button>
+            {!agentDmsCollapsed &&
+              agentPairDms.map((dm) => (
+                <DmConversationRow
+                  key={`${dm.source}:${dm.id}`}
+                  dm={dm}
+                  active={activeId === dm.id}
+                  currentUserName={currentUserName}
+                  resolveMentionPreview={resolveMentionPreview}
+                  members={members}
+                  agents={agents}
+                  onSelect={() => onSelect(dm)}
+                  onTogglePin={() => dmActions.togglePin(dm)}
+                  onMarkUnread={() => dmActions.markUnread(dm)}
+                  onToggleMute={() => dmActions.toggleMute(dm)}
+                  onClose={() => dmActions.close(dm)}
+                />
+              ))}
+          </div>
+        )}
       </>
     ));
 

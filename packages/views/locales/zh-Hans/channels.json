@@ -581,6 +581,7 @@
     "bubble_replied_time": "刚刚",
     "agent_pair": {
       "pill": "智能体私聊",
+      "folder": "智能体私聊",
       "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。"
     }
   },

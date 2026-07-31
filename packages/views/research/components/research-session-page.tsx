@@ -196,6 +196,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
             report={report}
             sources={sources}
+            titleFallback={session.title}
           />
           {!chatOpen ? (
             <Button

@@ -151,5 +151,18 @@
     "current": "진행 중",
     "upcoming": "대기",
     "done_feedback": "단계 완료"
+  },
+  "reader": {
+    "outline": "개요",
+    "copy_md": "MD 복사",
+    "copied": "복사됨",
+    "export": "내보내기",
+    "meta": "전달 · v{{revision}} · 출처 {{count}}",
+    "sources_heading": "가중 출처 지도",
+    "sources_hint": "신뢰도 순. 높은 가중치는 기준선, 낮은 가중치는 보조 근거입니다.",
+    "col_weight": "가중치",
+    "col_type": "유형",
+    "col_source": "출처",
+    "col_purpose": "용도"
   }
 }

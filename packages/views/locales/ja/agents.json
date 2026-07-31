@@ -62,7 +62,7 @@
   "columns": {
     "agent": "エージェント",
     "status": "ステータス",
-    "workload": "作業量",
+    "activity_band": "アクティビティ",
     "runtime": "ランタイム",
     "activity_7d": "アクティビティ（7日）",
     "runs": "実行"

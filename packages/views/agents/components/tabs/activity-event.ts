@@ -55,6 +55,7 @@ export type ActivityLabelKey =
   | "completed"
   | "working"
   | "idle"
+  | "disconnected"
   | "failed"
   | "waiting"
   | "running_command"
@@ -119,6 +120,7 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   completed: "Completed",
   working: "Working",
   idle: "Idle",
+  disconnected: "Disconnected",
   failed: "Failed",
   waiting: "Waiting",
   running_command: "Running command",

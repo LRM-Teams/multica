@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Cpu,
   Globe,
+  Loader2,
   Lock,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -39,7 +40,8 @@ import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { AppLink } from "../../navigation/app-link";
 import { useNavigation } from "../../navigation/context";
-import { availabilityConfig, workloadConfig } from "../../agents/presence";
+import { availabilityConfig } from "../../agents/presence";
+import { presentAgentActivityBand, resolveAgentActivityBand } from "../../agents/resolve-agent-live-status";
 import { formatLastSeen } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
@@ -380,7 +382,13 @@ function ServingAgentsCard({
               ? availabilityConfig[detail.availability]
               : availabilityConfig.offline;
             const avLabel = tAgents(($) => $.availability[detail?.availability ?? "offline"]);
-            const wl = detail ? workloadConfig[detail.workload] : null;
+            // task #7 (2026-07-31): was workloadConfig[detail.workload] — the
+            // availability dot/label right beside this already owns
+            // connectivity, so the band's own "disconnected" case is passed
+            // showDisconnected=false (renders "—"), matching Parker's
+            // "same fact once" rule.
+            const band = detail ? resolveAgentActivityBand(detail) : null;
+            const activityView = band ? presentAgentActivityBand(band, false) : null;
             const running = detail?.runningCount ?? 0;
             const queued = detail?.queuedCount ?? 0;
             const presentation = resolveActorIdentityPresentation(agent, agent.id);
@@ -404,13 +412,11 @@ function ServingAgentsCard({
                       <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />
                       <span className={av.textClass}>{avLabel}</span>
                     </span>
-                    {wl && detail && detail.workload !== "idle" && (
-                      <span className={`inline-flex items-center gap-1 ${wl.textClass}`}>
+                    {activityView && band === "working" && (
+                      <span className="inline-flex items-center gap-1 text-muted-foreground">
                         <span className="text-muted-foreground">·</span>
-                        <wl.icon
-                          className={`h-3 w-3 ${detail.workload === "working" ? "animate-spin" : ""}`}
-                        />
-                        {tAgents(($) => $.workload[detail.workload])}
+                        <Loader2 className="h-3 w-3 animate-spin text-running" />
+                        {activityView.label}
                         {running > 0 && (
                           <span className="text-muted-foreground">{t(($) => $.detail.running_chip, { count: running })}</span>
                         )}

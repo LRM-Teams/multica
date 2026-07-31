@@ -70,7 +70,7 @@
   "columns": {
     "agent": "智能体",
     "status": "状态",
-    "workload": "工作负载",
+    "activity_band": "活动",
     "runtime": "运行时",
     "activity_7d": "活动（7 天）",
     "runs": "运行次数"

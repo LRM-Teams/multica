@@ -84,22 +84,6 @@
     "rename_failed": "Could not save name — reverted",
     "no_runtimes_hint": "No runtimes on this machine yet.",
     "back_to_list": "Back to all machines",
-    "metrics": {
-      "runtimes": "Runtimes",
-      "runtimes_hint_one": "{{count}} online",
-      "runtimes_hint_other": "{{count}} online",
-      "health": "Health",
-      "health_clear": "No issues",
-      "health_issues_one": "{{count}} issue",
-      "health_issues_other": "{{count}} issues",
-      "workload": "Workload",
-      "workload_value_idle": "Idle",
-      "workload_idle": "All idle",
-      "workload_hint": "{{running}} running · {{queued}} queued",
-      "cli": "CLI",
-      "cloud_worker": "Cloud worker",
-      "local_daemon": "Local daemon"
-    },
     "delete_computer": {
       "button": "Delete computer",
       "toast_deleted": "Permanently deleted \"{{name}}\".",
@@ -216,10 +200,7 @@
         "close": "Close",
         "view_agent": "View agent",
         "table": {
-          "presence_unknown": "—",
-          "workload_idle": "Idle",
-          "workload_working": "Working",
-          "workload_queued": "Queued"
+          "presence_unknown": "—"
         }
       },
       "blocked_by_online_daemon": {

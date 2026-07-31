@@ -15,7 +15,8 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { availabilityConfig, workloadConfig } from "../presence";
+import { availabilityConfig } from "../presence";
+import { AgentActivityBandCell } from "./agent-activity-band-cell";
 import { AgentRowActions } from "./agent-row-actions";
 import { Sparkline } from "./sparkline";
 import { useT } from "../../i18n";
@@ -68,7 +69,7 @@ const COL_WIDTHS = {
 
 type ColumnHeaderT = ReturnType<typeof useT<"agents">>["t"];
 
-function makeHeaderRenderer(t: ColumnHeaderT, key: "agent" | "status" | "workload" | "runtime" | "activity_7d" | "runs") {
+function makeHeaderRenderer(t: ColumnHeaderT, key: "agent" | "status" | "activity_band" | "runtime" | "activity_7d" | "runs") {
   return key === "runs"
     ? () => <div className="text-right">{t(($) => $.columns.runs)}</div>
     : () => t(($) => $.columns[key]);
@@ -102,13 +103,13 @@ export function createAgentColumns({
     },
     {
       id: "workload",
-      header: makeHeaderRenderer(t, "workload"),
+      header: makeHeaderRenderer(t, "activity_band"),
       size: COL_WIDTHS.workload,
       cell: ({ row }) => {
         if (row.original.agent.archived_at) {
           return <span className="text-xs text-muted-foreground">—</span>;
         }
-        return <WorkloadCell presence={row.original.presence} />;
+        return <AgentActivityBandCell presence={row.original.presence} />;
       },
     },
     {
@@ -235,62 +236,6 @@ function AvailabilityCell({
     <span className="inline-flex items-center gap-1.5">
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
       <span className={`text-xs ${av.textClass}`}>{t(($) => $.availability[presence.availability])}</span>
-    </span>
-  );
-}
-
-function WorkloadCell({
-  presence,
-}: {
-  presence: AgentPresenceDetail | null | undefined;
-}) {
-  const { t } = useT("agents");
-  if (!presence) {
-    return (
-      <span className="inline-flex h-3 w-20 animate-pulse rounded bg-muted/60" />
-    );
-  }
-  // All three workload states render with the same shape (icon + label +
-  // optional counts). Idle agents show "Idle" rather than a bare em-dash
-  // — that hyphen used to mean both "no presence data" and "agent is
-  // idle", which conflated two distinct things. Em-dash is now reserved
-  // for archived rows / undefined presence (handled at the column level).
-  const wl = workloadConfig[presence.workload];
-  const isWorking = presence.workload === "working";
-  const isQueued = presence.workload === "queued";
-  // Queued's amber from workloadConfig is the severe tone for "stuck on
-  // offline runtime". On an online runtime queued is just a brief race
-  // between enqueue and daemon claim, where amber misreads as a warning.
-  // Compose with availability so the colour matches the actual signal.
-  const queuedTone =
-    presence.availability === "online" ? "text-muted-foreground" : wl.textClass;
-  const labelTone = isQueued ? queuedTone : wl.textClass;
-  // Working: show running/capacity, optionally with +Nq when overflow.
-  // Queued (= nothing running, things waiting — typically a stuck-on-
-  // offline-runtime signal): show the queued count directly so the user
-  // sees "Queued · 2" instead of misleading "Running 0/3 +2q".
-  // Idle: no counts — the label alone carries the meaning.
-  const counts = isWorking
-    ? presence.queuedCount > 0
-      ? `${presence.runningCount}/${presence.capacity} +${presence.queuedCount}q`
-      : `${presence.runningCount}/${presence.capacity}`
-    : isQueued
-      ? `${presence.queuedCount}`
-      : null;
-  return (
-    <span className="inline-flex items-center gap-1 text-xs">
-      {/* Icon only renders for working/queued — those carry visual meaning
-          (spinner = in motion, clock = waiting). Idle adding an icon read
-          as a warning marker, which is the wrong signal. */}
-      {presence.workload !== "idle" && (
-        <wl.icon
-          className={`h-3 w-3 shrink-0 ${labelTone} ${isWorking ? "animate-spin" : ""}`}
-        />
-      )}
-      <span className={`shrink-0 ${labelTone}`}>{t(($) => $.workload[presence.workload])}</span>
-      {counts && (
-        <span className="truncate text-muted-foreground">{counts}</span>
-      )}
     </span>
   );
 }

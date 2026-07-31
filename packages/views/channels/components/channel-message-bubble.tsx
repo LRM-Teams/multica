@@ -1011,8 +1011,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 {/* LRM-302: text link, not centered pill — must not cover body. */}
                 <button
                   type="button"
-                  className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => setExpandedForIdentity(collapseIdentity)}
+                  className="pointer-events-auto inline-flex min-h-8 touch-manipulation items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setExpandedForIdentity(collapseIdentity);
+                  }}
                 >
                   {t(($) => $.message.expand_action)}
                 </button>
@@ -1022,8 +1026,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <div className="mt-1 flex justify-start" data-testid="message-collapse-less">
                 <button
                   type="button"
-                  className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => setExpandedForIdentity(null)}
+                  className="inline-flex min-h-8 touch-manipulation items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setExpandedForIdentity(null);
+                  }}
                 >
                   {t(($) => $.message.collapse_action)}
                 </button>

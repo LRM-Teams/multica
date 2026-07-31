@@ -34,6 +34,11 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
+  // The repo's own `typecheck` turbo task (`tsc --noEmit`, run as a separate
+  // CI step) is the single source of truth for type errors. Without this,
+  // `next build` ALSO runs its own full TS check internally — same errors,
+  // twice, every CI run, and turbo can't dedupe it (two distinct tasks).
+  typescript: { ignoreBuildErrors: true },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
     : {}),

@@ -142,6 +142,28 @@ describe("withPreservedAuthorAvatar (LRM-202 / LRM-218)", () => {
       "/uploads/agent.png",
     );
   });
+
+  it("LRM-855: OSS incoming replaces cached /uploads/", () => {
+    const incoming = {
+      ...base,
+      author_avatar_url: "https://cdn.example.com/avatars/agent.png",
+    } as ChannelMessage;
+    const existing = { ...base, author_avatar_url: "/uploads/stale.png" } as ChannelMessage;
+    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
+      "https://cdn.example.com/avatars/agent.png",
+    );
+  });
+
+  it("LRM-855: stale /uploads/ incoming does not clobber cached OSS", () => {
+    const incoming = { ...base, author_avatar_url: "/uploads/stale.png" } as ChannelMessage;
+    const existing = {
+      ...base,
+      author_avatar_url: "https://cdn.example.com/avatars/agent.png",
+    } as ChannelMessage;
+    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
+      "https://cdn.example.com/avatars/agent.png",
+    );
+  });
 });
 
 describe("enrichChannelMessagesPreservingAvatars (LRM-218)", () => {

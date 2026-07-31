@@ -272,7 +272,9 @@ func (s *InMemoryUpdateStore) Fail(_ context.Context, id string, errMsg string) 
 		if req.Status == UpdateFailed {
 			return nil
 		}
-		if req.Status != UpdateRunning {
+		// #815 B-cutover path A: ready_to_apply → failed (e.g. drain_timeout)
+		// is a legal terminal abandon; completed/timeout stay non-overwritable here.
+		if req.Status != UpdateRunning && req.Status != UpdateReady {
 			return invalidUpdateTransition(req.Status, UpdateFailed)
 		}
 		req.Status = UpdateFailed
@@ -428,6 +430,13 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
+	// Narrow late report: server already timeout + daemon late failed+drain_timeout → 200 no-op.
+	// completed + late failed stays 409 via transition check below.
+	if lateFailedReportIsNoOp(existing, requestedStatus, req.Error) {
+		slog.Debug("ignoring late drain_timeout after server timeout", "runtime_id", runtimeID, "update_id", updateID)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
 	if !updateReportTransitionAllowed(existing.Status, requestedStatus) {
 		writeError(w, http.StatusConflict, invalidUpdateTransition(existing.Status, requestedStatus).Error())
 		return
@@ -493,8 +502,26 @@ func updateReportTransitionAllowed(from, to UpdateStatus) bool {
 	case UpdateRunning:
 		return to == UpdateReady || to == UpdateCompleted || to == UpdateFailed
 	case UpdateReady:
-		return to == UpdateCompleted
+		// completed (success apply) or failed (path A abandon / drain_timeout).
+		return to == UpdateCompleted || to == UpdateFailed
 	default:
 		return false
 	}
+}
+
+// DrainTimeoutError is the stable machine string daemons report on D6 path A.
+const DrainTimeoutError = "drain_timeout"
+
+// lateFailedReportIsNoOp reports whether a late failed report against an already
+// terminal server row should be accepted as 200 no-op (Barry cutover lock):
+// only timeout + exact failed+drain_timeout; failed is already covered by
+// status-equality idempotency. completed + late failed must stay 409.
+func lateFailedReportIsNoOp(existing *UpdateRequest, requestedStatus UpdateStatus, errMsg string) bool {
+	if existing == nil || requestedStatus != UpdateFailed {
+		return false
+	}
+	if existing.Status == UpdateTimeout && errMsg == DrainTimeoutError {
+		return true
+	}
+	return false
 }

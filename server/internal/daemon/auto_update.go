@@ -177,14 +177,24 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 		return
 	}
 
-	d.logger.Info("auto-update: upgrade completed, restarting", "target", release.TagName, "output", output, "verified_version", verifiedVersion)
-	// triggerRestart cancels the root context, which causes Run() to return
-	// and the parent (cmd_daemon.go) to re-exec the new binary. Leave both
-	// the updating flag and the claim barrier held — process exit is
-	// imminent and clearing either would open a window for new claims / a
-	// second auto-update tick to fire mid-shutdown.
+	d.logger.Info("auto-update: staged; activating and restarting", "target", release.TagName, "output", output, "verified_version", verifiedVersion)
+	// Stage-only path: CAS Active to staged tag then re-exec staged binary.
+	// Leave updating + barrier held through process exit (same as before).
 	if !d.finishUpdateObservation("restart_pending", "update_succeeded", release.TagName, "", "") {
 		return
+	}
+	activate := d.activateStagedFn
+	if activate == nil {
+		activate = d.commitStagedActivation
+	}
+	path, err := activate(ctx, "auto-"+release.TagName, output)
+	if err != nil {
+		d.logger.Warn("auto-update: activate CAS failed — will retry", "error", err)
+		d.finishUpdateObservation("waiting", "update_failed", release.TagName, "activation_cas_failed", "Staged release could not be activated.")
+		return
+	}
+	if path != "" {
+		d.restartBinary = path
 	}
 	released = true
 	barrierReleased = true

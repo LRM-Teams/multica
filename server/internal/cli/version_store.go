@@ -122,6 +122,25 @@ func (s *VersionStore) stagedVersion(version string) (StagedVersion, error) {
 	}, nil
 }
 
+// ResolveStagedVersion returns the immutable staged path for a release tag
+// without requiring the binary to already exist on disk.
+func (s *VersionStore) ResolveStagedVersion(version string) (StagedVersion, error) {
+	return s.stagedVersion(version)
+}
+
+// OpenVersionStore opens (or creates) the default user VersionStore root used by
+// daemon update staging. Verifier defaults to VerifyStagedBinaryVersion.
+func OpenVersionStore(root string) (*VersionStore, error) {
+	if strings.TrimSpace(root) == "" {
+		var err error
+		root, err = DefaultVersionStoreRoot()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return NewVersionStore(root, runtime.GOOS, nil)
+}
+
 func normalizeSHA256(expected string) (string, error) {
 	expected = strings.ToLower(strings.TrimSpace(expected))
 	if len(expected) != sha256.Size*2 {

@@ -13,9 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -200,11 +198,6 @@ func parseReleaseVersion(v string) ([3]int, bool) {
 	return out, true
 }
 
-type GitHubReleaseAsset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-}
-
 func normalizeReleaseTag(targetVersion string) string {
 	tag := strings.TrimSpace(targetVersion)
 	if !strings.HasPrefix(tag, "v") {
@@ -220,9 +213,9 @@ func platformKey(goos, goarch string) string {
 }
 
 // findPlatformAsset looks up the archive + checksum for goos/goarch in a
-// published manifest. Unlike the old GitHub-asset-name scan, there is no
-// legacy-name fallback: this manifest format was introduced with the
-// /downloads feed, so every entry it ever contains uses this one shape.
+// published manifest. There is no legacy-name fallback: this manifest format
+// was introduced with the /downloads feed, so every entry it ever contains
+// uses this one shape.
 func findPlatformAsset(manifest *ReleaseManifest, goos, goarch string) (*ReleaseAsset, error) {
 	key := platformKey(goos, goarch)
 	asset, ok := manifest.Platforms[key]
@@ -276,10 +269,22 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 }
 
 // fetchReleaseByTag fetches the immutable per-version manifest for tag. Used
-// by UpdateViaDownload, which may target a specific version (a server-pushed
-// update or a rollback) rather than whatever is currently latest.
+// by downloadReleaseBinary, which may target a specific version (a
+// server-pushed update or a rollback) rather than whatever is currently
+// latest.
 func fetchReleaseByTag(tag string) (*ReleaseManifest, error) {
-	return fetchManifest(releaseManifestBaseURL() + "/" + tag + "/release.json")
+	return fetchReleaseByTagWithOverride(tag, "")
+}
+
+// fetchReleaseByTagWithOverride is fetchReleaseByTag with the
+// server-dispatched top layer of the three-layer precedence applied — the
+// same override FetchLatestReleaseWithOverride already threads through for
+// the "check for a new version" step. Without this, a machine relying
+// purely on server-dispatch (no local env var set) could see a new version
+// at check time and then silently fall back to the compiled default at
+// download time.
+func fetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManifest, error) {
+	return fetchManifest(releaseManifestBaseURLWithOverride(serverDispatched) + "/" + tag + "/release.json")
 }
 
 // FetchLatestRelease fetches the promoted "latest" release manifest from the
@@ -398,106 +403,6 @@ func fetchURLBytes(url string, timeout time.Duration) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
 	return io.ReadAll(resp.Body)
-}
-
-// UpdateViaDownload downloads the latest release binary from GitHub and replaces
-// the current executable in-place. Returns the combined output message and any error.
-func UpdateViaDownload(targetVersion string) (string, error) {
-	return UpdateViaDownloadWithTimeout(targetVersion, DefaultUpdateDownloadTimeout)
-}
-
-// UpdateViaDownloadWithTimeout downloads the latest release binary with a caller-selected timeout.
-func UpdateViaDownloadWithTimeout(targetVersion string, downloadTimeout time.Duration) (string, error) {
-	// Determine current binary path.
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("resolve executable path: %w", err)
-	}
-	targetPath, err := updateTargetPath(exePath)
-	if err != nil {
-		return "", err
-	}
-
-	tag := normalizeReleaseTag(targetVersion)
-	release, err := fetchReleaseByTag(tag)
-	if err != nil {
-		return "", fmt.Errorf("fetch release metadata: %w", err)
-	}
-	asset, err := findPlatformAsset(release, runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		return "", err
-	}
-	assetName := path.Base(asset.URL)
-
-	// Buffer the archive into memory so we can verify the full SHA-256
-	// before writing anything to disk. Release archives are ~10–30 MB; the
-	// extraction code already buffers zip archives in full (random access
-	// requirement), so this is not a new memory cost on Windows. For tar.gz
-	// it adds a single in-RAM copy, which is preferable to running the
-	// untrusted bytes through gzip+tar extraction before the SHA-256 check.
-	timeout := updateDownloadTimeoutOrDefault(downloadTimeout)
-	archiveData, err := fetchURLBytes(asset.URL, timeout)
-	if err != nil {
-		return "", fmt.Errorf("download failed: %w", err)
-	}
-
-	if err := verifyAssetSHA256(archiveData, asset.SHA256, assetName); err != nil {
-		// Do NOT extract or replace; the next poll tick will retry. A
-		// corrupted asset is rare enough that retrying through the same
-		// CDN is the right default; persistent failures will surface in
-		// the daemon log.
-		return "", fmt.Errorf("verify download: %w", err)
-	}
-
-	// Extract the binary from the archive.
-	binaryName := "multica"
-	if runtime.GOOS == "windows" {
-		binaryName = "multica.exe"
-	}
-	var binaryData []byte
-	if runtime.GOOS == "windows" {
-		binaryData, err = extractBinaryFromZip(bytes.NewReader(archiveData), binaryName)
-	} else {
-		binaryData, err = extractBinaryFromTarGz(bytes.NewReader(archiveData), binaryName)
-	}
-	if err != nil {
-		return "", fmt.Errorf("extract binary: %w", err)
-	}
-
-	// Atomic replace: write to temp file, then rename over the original.
-	dir := filepath.Dir(targetPath)
-	tmpFile, err := os.CreateTemp(dir, "multica-update-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	if _, err := tmpFile.Write(binaryData); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("write temp file: %w", err)
-	}
-	tmpFile.Close()
-
-	// Preserve original file permissions.
-	info, err := os.Stat(targetPath)
-	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("stat original binary: %w", err)
-	}
-	if err := os.Chmod(tmpPath, info.Mode()); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("chmod temp file: %w", err)
-	}
-
-	// Replace the original binary. On Windows this moves the running executable
-	// aside first; on Unix a plain rename over the running inode is fine.
-	if err := replaceBinary(tmpPath, targetPath); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("replace binary: %w", err)
-	}
-
-	return fmt.Sprintf("Downloaded %s and replaced %s", assetName, targetPath), nil
 }
 
 // extractBinaryFromTarGz reads a .tar.gz stream and returns the contents of the

@@ -159,18 +159,36 @@ func cloneStringMap(source map[string]string) map[string]string {
 	return cloned
 }
 
+// isCanonicalResidentProvider is the single source of truth for which
+// providers use the shared agent×runtime canonical resident pool instead of
+// a one-shot per-turn backend. Every other canonical-path gate (tryCanonicalChatBackend's
+// entry switch, usesCanonicalResidentChatRuntime's dispatch) must consult this
+// instead of re-listing providers — #1623 added "opencode" here and to
+// usesCanonicalResidentChatRuntime's dispatch but not to tryCanonicalChatBackend's
+// separate hardcoded switch, so opencode full chat routed into the canonical
+// path and then failed closed as an "unrecognized provider" once it got there.
+// See TestCanonicalResidentProviderListsStayInSync.
+func isCanonicalResidentProvider(provider string) bool {
+	switch provider {
+	case "pi", "grok", "cursor", "opencode":
+		return true
+	default:
+		return false
+	}
+}
+
 func canonicalRuntimeModeFor(provider, executionProfile string) (canonicalRuntimeMode, error) {
 	if executionProfile != executionProfileFull {
 		return "", fmt.Errorf("execution profile %q must not use the canonical agent session", executionProfile)
 	}
-	switch strings.TrimSpace(provider) {
-	case "pi", "grok", "cursor", "opencode":
-		return canonicalRuntimeResident, nil
-	case "":
+	trimmed := strings.TrimSpace(provider)
+	if trimmed == "" {
 		return "", errors.New("provider is required")
-	default:
-		return canonicalRuntimeOneShot, nil
 	}
+	if isCanonicalResidentProvider(trimmed) {
+		return canonicalRuntimeResident, nil
+	}
+	return canonicalRuntimeOneShot, nil
 }
 
 type canonicalRuntimeBackendFactory func(agent.Config) (agent.Backend, func(), error)

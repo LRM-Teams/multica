@@ -1140,7 +1140,6 @@ SELECT
     $1, $2,
     $3,
     CASE
-      WHEN ($2::jsonb)->>'type' = 'agent_radar' THEN 'agent_radar'
       WHEN ($2::jsonb)->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
       WHEN ($2::jsonb)->>'type' = 'memory_curation' THEN 'memory_curation'
       WHEN ($2::jsonb)->>'type' = 'reminder' THEN 'reminder'
@@ -3610,10 +3609,6 @@ UPDATE agent_inbox_event AS atq
 SET started_at = COALESCE(started_at, now()), wait_reason = NULL
 WHERE atq.id = $1
   AND atq.status = 'draining'
-  AND (
-    atq.context->>'type' IS DISTINCT FROM 'agent_radar'
-    OR workspace_radar_task_is_authorized(atq.id)
-  )
 RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
 `
 

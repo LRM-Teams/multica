@@ -777,13 +777,6 @@
     "running_for": "進行中 · 経過 {{min}}min",
     "duration_min": "{{min}}min",
     "task_fallback": "タスク実行",
-    "radar_task": {
-      "queued": "能動探索 · キュー待ち",
-      "running": "能動探索 · 実行中",
-      "completed": "能動探索 · 完了",
-      "failed": "能動探索 · 失敗",
-      "cancelled": "能動探索 · キャンセル済み"
-    },
     "empty_select": "左のエージェントを選択すると詳細が表示されます",
     "delete_success": "エージェントを削除しました",
     "delete_failed": "エージェントの削除に失敗しました"

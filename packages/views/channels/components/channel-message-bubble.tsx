@@ -472,13 +472,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const isExternal = message.source === "lark";
   // LRM-270 (Slack align): message author row — name + time only.
   // No Owner/Admin chrome (Slack has none); no Agent/APP type pill.
-  // Radar / Feishu functional badges stay. Member-list muted role is unchanged.
+  // Feishu functional badge stays. Member-list muted role is unchanged.
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
     getActorName,
   });
-  const isRadarMessage = isAgent && message.content.trimStart().startsWith("主动发现：");
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -824,11 +823,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               </ActorProfileTrigger>
             ) : (
               nameLabel
-            )}
-            {isRadarMessage && (
-              <span className="shrink-0 rounded-full border border-border/60 bg-transparent px-2 py-0.5 text-[11px] font-normal leading-none text-muted-foreground">
-                {t(($) => $.message.radar_badge)}
-              </span>
             )}
             {isExternal && (
               <span className="shrink-0 rounded-full border border-border/60 bg-transparent px-2 py-0.5 text-[11px] leading-none text-muted-foreground">

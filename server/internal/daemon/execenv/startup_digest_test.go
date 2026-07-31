@@ -64,7 +64,6 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 		AutopilotSource:         "autopilot-source-alpha-review-sentinel",
 		AutopilotTriggerPayload: "autopilot-payload-alpha-review-sentinel",
 		QuickCreatePrompt:       "quick-create-alpha-review-sentinel",
-		AgentRadarPrompt:        "radar-alpha-review-sentinel",
 		IsSquadLeader:           true,
 	}
 	b := a
@@ -82,7 +81,6 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 	b.AutopilotSource = "autopilot-source-beta-review-sentinel"
 	b.AutopilotTriggerPayload = "autopilot-payload-beta-review-sentinel"
 	b.QuickCreatePrompt = "quick-create-beta-review-sentinel"
-	b.AgentRadarPrompt = "radar-beta-review-sentinel"
 	b.IsSquadLeader = false
 
 	if gotA, gotB := StartupStaticDigest("grok", a), StartupStaticDigest("grok", b); gotA != gotB {
@@ -96,7 +94,6 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 		"memory-alpha-review-sentinel",
 		"autopilot-alpha-review-sentinel",
 		"quick-create-alpha-review-sentinel",
-		"radar-alpha-review-sentinel",
 	} {
 		if containsIgnoreCase(brief, sentinel) {
 			t.Fatalf("turn-scoped sentinel leaked into startup brief: %q", sentinel)

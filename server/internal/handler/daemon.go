@@ -24,8 +24,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/radar"
-	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -1578,63 +1576,6 @@ func (h *Handler) persistChatRuntimeTokenStats(ctx context.Context, chatSessionI
 	}
 	if _, err := h.DB.Exec(ctx, `UPDATE chat_session SET runtime_token_stats = $2, updated_at = now() WHERE id = $1`, chatSessionID, raw); err != nil {
 		slog.Warn("persist chat runtime token stats failed", "chat_session_id", uuidToString(chatSessionID), "error", err)
-	}
-}
-
-func (h *Handler) handleClaimedAgentRadarTask(ctx context.Context, task db.AgentInboxEvent, run *db.AgentRadarRun) {
-	if run == nil {
-		return
-	}
-	if err := h.ReplayCompletedAgentRadarTask(ctx, task, *run); err != nil {
-		slog.Warn("agent radar action execution failed", "run_id", uuidToString(run.ID), "error", err)
-	}
-}
-
-// ReplayCompletedAgentRadarTask executes a claimed Radar run exclusively from
-// the durable task.Result payload. The scheduler calls this after leasing a
-// completed task whose original HTTP completion handler died before applying
-// its action plan; it never invokes the model again.
-func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.AgentInboxEvent, run db.AgentRadarRun) error {
-	if run.Status != "executing" {
-		return fmt.Errorf("radar run is not executing: %s", run.Status)
-	}
-	if task.Status != "acked" || !task.TerminalOutcome.Valid || task.TerminalOutcome.String != "completed" ||
-		!radarUUIDsMatch(task.ID, run.TaskID) || !radarUUIDsMatch(task.AgentID, run.AgentID) {
-		return errors.New("completed radar task does not match the executing run")
-	}
-	var radarCtx service.AgentRadarContext
-	if err := json.Unmarshal(task.Context, &radarCtx); err != nil || radarCtx.Type != service.AgentRadarContextType || radarCtx.RadarRunID != uuidToString(run.ID) {
-		return errors.New("completed task has an invalid radar run context")
-	}
-	var persisted TaskCompleteRequest
-	if err := json.Unmarshal(task.Result, &persisted); err != nil {
-		message := "parse persisted task result: " + err.Error()
-		h.failPersistedAgentRadarRun(ctx, run, message)
-		return errors.New(message)
-	}
-	agent, err := h.Queries.GetAgent(ctx, task.AgentID)
-	if err != nil {
-		return fmt.Errorf("load radar agent: %w", err)
-	}
-	plan, err := radar.ParseActionPlan(persisted.Output)
-	if err != nil {
-		message := "parse action plan: " + err.Error()
-		h.failPersistedAgentRadarRun(ctx, run, message)
-		return errors.New(message)
-	}
-	if err := h.ExecuteAgentRadarPlan(ctx, run, agent, plan); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (h *Handler) failPersistedAgentRadarRun(ctx context.Context, run db.AgentRadarRun, message string) {
-	if _, updateErr := h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
-		ID:     run.ID,
-		Status: "failed",
-		Error:  pgtype.Text{String: message, Valid: true},
-	}); updateErr == nil {
-		_, _ = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, run.ID)
 	}
 }
 

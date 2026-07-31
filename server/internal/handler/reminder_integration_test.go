@@ -750,7 +750,7 @@ func TestManagedPatrolMessageRearmDoesNotPublishOnCommitFailure(t *testing.T) {
 	notifier := &recordingReminderNotifier{}
 	h := *fixture.handler
 	h.ReminderNotifier = notifier
-	h.TxStarter = radarExecutorCommitFailingTxStarter{base: fixture.handler.TxStarter}
+	h.TxStarter = commitFailingTxStarter{base: fixture.handler.TxStarter}
 	content := "commit failure must not publish a patrol projection " + uuid.NewString()
 	if _, err := h.insertChannelMessageWithParts(
 		context.Background(),

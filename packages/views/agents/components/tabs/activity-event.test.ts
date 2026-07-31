@@ -309,7 +309,7 @@ describe("isNarrativeActivityEvent — tool_call always narrative (#601, was #38
     // duplicate. Field-driven on `detail_kind`, regardless of activity_kind.
     expect(isNarrativeActivityEvent({ ...evtBase("text"), detail_kind: "message_sent" })).toBe(false);
     expect(isNarrativeActivityEvent({ ...evtBase("custom"), detail_kind: "message_sent" })).toBe(false);
-    // A non-send text/Output (e.g. a radar decision) is NOT message_sent → stays.
+    // A non-send text/Output event is NOT message_sent → stays.
     expect(isNarrativeActivityEvent({ ...evtBase("text"), detail_kind: "text" })).toBe(true);
   });
 });
@@ -427,52 +427,6 @@ describe("activityPresentation — CLI commands show as Running command, no inve
   });
 });
 
-describe("isNarrativeActivityEvent — Radar actions", () => {
-  function radarEvent(
-    eventType: "radar_action_executed" | "radar_action_failed",
-    reasonCode = "create_issue",
-  ): ActivityEvent {
-    return {
-      id: eventType,
-      agent_id: "agent-1",
-      activity_kind: "custom",
-      detail_kind: eventType,
-      occurred_at: "2026-07-11T00:00:00Z",
-      text: eventType === "radar_action_failed" ? "Radar failed: create issue" : "Radar executed: create issue",
-      reason_code: reasonCode,
-      target_ref: { kind: "agent", id: "agent-1" },
-    };
-  }
-
-  it.each(["radar_action_executed", "radar_action_failed"] as const)(
-    "keeps %s in the narrative",
-    (eventType) => {
-      expect(isNarrativeActivityEvent(radarEvent(eventType))).toBe(true);
-    },
-  );
-
-  it("drops no_action from the narrative", () => {
-    expect(isNarrativeActivityEvent(radarEvent("radar_action_executed", "no_action"))).toBe(false);
-  });
-
-  it("drops an action whose execution target was not verified", () => {
-    expect(
-      isNarrativeActivityEvent(radarEvent("radar_action_failed", "radar_untrusted_target")),
-    ).toBe(false);
-  });
-
-  it("presents an executed radar action with its own radar label/tone, and a failed action as a failure", () => {
-    expect(activityPresentation(radarEvent("radar_action_executed"))).toMatchObject({
-      labelKey: "radar_executed",
-      tone: "radar",
-    });
-    expect(activityPresentation(radarEvent("radar_action_failed"))).toMatchObject({
-      labelKey: "failed",
-      tone: "failure",
-    });
-  });
-});
-
 describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () => {
   function statusEvent(status: "working" | "idle"): ActivityEvent {
     return {
@@ -527,7 +481,7 @@ describe("isIdleStatusEvent (#411/#525)", () => {
   it("does not match an ordinary custom/text event", () => {
     expect(isIdleStatusEvent(evtBase("text"))).toBe(false);
     expect(
-      isIdleStatusEvent({ ...evtBase("custom"), detail_kind: "radar_action_executed" }),
+      isIdleStatusEvent({ ...evtBase("custom"), detail_kind: "some_other_detail" }),
     ).toBe(false);
   });
 });

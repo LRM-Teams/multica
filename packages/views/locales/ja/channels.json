@@ -485,7 +485,6 @@
     "voice_preview": "音声メッセージ",
     "voice_preview_duration": "音声メッセージ · {{seconds}}秒",
     "agent_badge": "Agent",
-    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "編集",
     "delete_action": "削除",

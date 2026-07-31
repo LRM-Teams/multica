@@ -103,19 +103,6 @@ func (q *Queries) GetWorkNodeByIssue(ctx context.Context, arg GetWorkNodeByIssue
 	return i, err
 }
 
-const getWorkspaceSupervisorAgentID = `-- name: GetWorkspaceSupervisorAgentID :one
-SELECT supervisor_agent_id
-FROM workspace_radar_state
-WHERE workspace_id = $1
-`
-
-func (q *Queries) GetWorkspaceSupervisorAgentID(ctx context.Context, workspaceID pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getWorkspaceSupervisorAgentID, workspaceID)
-	var supervisor_agent_id pgtype.UUID
-	err := row.Scan(&supervisor_agent_id)
-	return supervisor_agent_id, err
-}
-
 const hasAnyWaitsOnEdge = `-- name: HasAnyWaitsOnEdge :one
 SELECT EXISTS (
     SELECT 1
@@ -133,31 +120,6 @@ type HasAnyWaitsOnEdgeParams struct {
 
 func (q *Queries) HasAnyWaitsOnEdge(ctx context.Context, arg HasAnyWaitsOnEdgeParams) (bool, error) {
 	row := q.db.QueryRow(ctx, hasAnyWaitsOnEdge, arg.WorkspaceID, arg.FromNodeID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const isWorkspaceWendyAgent = `-- name: IsWorkspaceWendyAgent :one
-SELECT EXISTS (
-    SELECT 1
-    FROM agent
-    WHERE workspace_id = $1
-      AND id = $2
-      AND (
-          lower(name) IN ('wendy', 'windy', 'joe')
-          OR lower(COALESCE(display_name, '')) IN ('wendy', 'windy', 'joe')
-      )
-)
-`
-
-type IsWorkspaceWendyAgentParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
-}
-
-func (q *Queries) IsWorkspaceWendyAgent(ctx context.Context, arg IsWorkspaceWendyAgentParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isWorkspaceWendyAgent, arg.WorkspaceID, arg.ID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

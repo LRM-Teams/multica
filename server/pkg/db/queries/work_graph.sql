@@ -115,23 +115,6 @@ WHERE workspace_id = $1
   AND status = 'resolved'
 ORDER BY to_node_id ASC;
 
--- name: GetWorkspaceSupervisorAgentID :one
-SELECT supervisor_agent_id
-FROM workspace_radar_state
-WHERE workspace_id = $1;
-
--- name: IsWorkspaceWendyAgent :one
-SELECT EXISTS (
-    SELECT 1
-    FROM agent
-    WHERE workspace_id = $1
-      AND id = $2
-      AND (
-          lower(name) IN ('wendy', 'windy', 'joe')
-          OR lower(COALESCE(display_name, '')) IN ('wendy', 'windy', 'joe')
-      )
-);
-
 -- name: TouchWorkNodeWendyNudge :one
 UPDATE work_node
 SET last_wendy_nudge_at = now(),

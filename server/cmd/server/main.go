@@ -462,15 +462,6 @@ func main() {
 			schedulerRegistered = true
 		}
 	}
-	if envBoolDefault("AGENT_RADAR_SCHEDULER_ENABLED", true) {
-		if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool, h.TaskService, h)); err != nil {
-			slog.Warn("scheduler: failed to register agent radar job", "error", err)
-		} else {
-			schedulerRegistered = true
-		}
-	} else {
-		slog.Info("scheduler: agent radar job disabled", "env", "AGENT_RADAR_SCHEDULER_ENABLED")
-	}
 	if err := schedulerMgr.Register(scheduler.ChannelVoiceTranscriptionJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register channel voice transcription job", "error", err)
 	} else {

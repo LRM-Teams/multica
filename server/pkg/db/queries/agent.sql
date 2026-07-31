@@ -170,7 +170,6 @@ SELECT
     sqlc.arg(runtime_id), sqlc.narg(context),
     sqlc.arg(issue_id),
     CASE
-      WHEN (sqlc.narg(context)::jsonb)->>'type' = 'agent_radar' THEN 'agent_radar'
       WHEN (sqlc.narg(context)::jsonb)->>'type' = 'environment_dispatch' THEN 'environment_dispatch'
       WHEN (sqlc.narg(context)::jsonb)->>'type' = 'memory_curation' THEN 'memory_curation'
       WHEN (sqlc.narg(context)::jsonb)->>'type' = 'reminder' THEN 'reminder'
@@ -369,10 +368,6 @@ UPDATE agent_inbox_event AS atq
 SET started_at = COALESCE(started_at, now()), wait_reason = NULL
 WHERE atq.id = $1
   AND atq.status = 'draining'
-  AND (
-    atq.context->>'type' IS DISTINCT FROM 'agent_radar'
-    OR workspace_radar_task_is_authorized(atq.id)
-  )
 RETURNING atq.*;
 
 -- name: MarkAgentTaskWaitingLocalDirectory :one

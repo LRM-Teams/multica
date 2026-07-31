@@ -21,7 +21,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -2703,129 +2702,6 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	}
 }
 
-func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
-	var projectID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO project (workspace_id, title)
-		VALUES ($1, 'Radar Project Context')
-		RETURNING id
-	`, testWorkspaceID).Scan(&projectID); err != nil {
-		t.Fatalf("create Radar project: %v", err)
-	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
-	const radarRepoURL = "https://github.com/example/radar-project-context"
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO project_resource (project_id, workspace_id, resource_type, resource_ref)
-		VALUES ($1, $2, 'github_repo', $3::jsonb)
-	`, projectID, testWorkspaceID, `{"url":"`+radarRepoURL+`"}`); err != nil {
-		t.Fatalf("create Radar project resource: %v", err)
-	}
-	channelID := seedChannelForTest(t, "radar-project-context-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, channelID); err != nil {
-		t.Fatalf("bind Radar channel project: %v", err)
-	}
-	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
-		WorkspaceID:    parseUUID(testWorkspaceID),
-		AgentID:        parseUUID(agentID),
-		ChannelID:      parseUUID(channelID),
-		ProjectID:      parseUUID(projectID),
-		ContextMode:    "coordination",
-		TriggerKind:    "manual",
-		TriggerRef:     "daemon-lifecycle-regression",
-		CooldownKey:    "daemon-lifecycle-regression",
-		ContextSummary: "daemon lifecycle regression",
-		ScheduledFor:   time.Now(),
-		Prompt:         "inspect workspace",
-	})
-	if err != nil {
-		t.Fatalf("enqueue Radar task: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
-		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID)
-	})
-	borrower := task
-	borrower.ID = parseUUID(uuid.NewString())
-	if got := testHandler.TaskService.ResolveTaskWorkspaceID(ctx, borrower); got != "" {
-		t.Fatalf("Radar context borrowed by another task resolved workspace %q", got)
-	}
-
-	claimed := claimTaskForRuntimeGuard(t, runtimeID, daemonID)
-	taskID := uuidToString(task.ID)
-	if claimed.ID != taskID {
-		t.Fatalf("claimed task = %q, want Radar task %q", claimed.ID, taskID)
-	}
-	if claimed.ChannelID != channelID || claimed.ProjectID != projectID {
-		t.Fatalf("claimed Radar scope channel=%q project=%q, want channel=%q project=%q",
-			claimed.ChannelID, claimed.ProjectID, channelID, projectID)
-	}
-	if len(claimed.Repos) != 1 || claimed.Repos[0].URL != radarRepoURL || len(claimed.ProjectResources) != 1 {
-		t.Fatalf("claimed Radar project resources = repos:%+v resources:%+v", claimed.Repos, claimed.ProjectResources)
-	}
-
-	w := httptest.NewRecorder()
-	req := withURLParam(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, uuid.NewString(), "cross-workspace-daemon"),
-		"taskId", taskID,
-	)
-	startTaskThroughInboxForTest(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("StartTask with cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-
-	w = httptest.NewRecorder()
-	req = withURLParam(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, daemonID),
-		"taskId", taskID,
-	)
-	startTaskThroughInboxForTest(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("StartTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var taskStatus, runStatus string
-	if err := testPool.QueryRow(ctx, `
-		SELECT task.status, radar.status
-		FROM agent_inbox_event task
-		JOIN agent_radar_run radar ON radar.task_id = task.id
-		WHERE task.id = $1
-	`, task.ID).Scan(&taskStatus, &runStatus); err != nil {
-		t.Fatalf("read started Radar lifecycle: %v", err)
-	}
-	if taskStatus != "draining" || runStatus != "running" {
-		t.Fatalf("started Radar lifecycle = task:%q run:%q, want draining/running", taskStatus, runStatus)
-	}
-
-	w = httptest.NewRecorder()
-	req = withURLParam(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", FailAgentInboxEventRequest{
-			Error:         "Radar regression failure",
-			FailureReason: "agent_error",
-		}, testWorkspaceID, daemonID),
-		"taskId", taskID,
-	)
-	failTaskThroughInboxForTest(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("FailTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_radar_run WHERE id = $1`, run.ID).Scan(&runStatus); err != nil {
-		t.Fatalf("read failed Radar run: %v", err)
-	}
-	if runStatus != "failed" {
-		t.Fatalf("Radar run after FailTask = %q, want failed", runStatus)
-	}
-}
-
-// ClaimTaskByRuntime must surface the issue's project github_repo resources
-// as resp.Repos and hide the workspace-bound repos. Without this the agent
-// would see two repo lists in the meta-skill and have no signal about which
-// belongs to the current issue.
 func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

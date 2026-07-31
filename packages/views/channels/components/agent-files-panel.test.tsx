@@ -10,7 +10,6 @@ import { AgentFilesPanel } from "./agent-files-panel";
 vi.mock("@multica/core/api", () => ({
   api: {
     listAgentFiles: vi.fn(),
-    listAgentRadarRuns: vi.fn(),
     getAgentFileContent: vi.fn(),
     updateAgentFileContent: vi.fn(),
   },
@@ -100,9 +99,6 @@ describe("AgentFilesPanel", () => {
       status: "ok",
       nodes: [{ path: "memory/MEMORY.md", is_dir: false, size: 12 }],
       truncated: false,
-    });
-    vi.mocked(api.listAgentRadarRuns).mockResolvedValue({
-      runs: [],
     });
     vi.mocked(api.getAgentFileContent).mockResolvedValue({
       content: "{\"ok\":true}",

@@ -350,6 +350,21 @@ func writeCodedError(w http.ResponseWriter, status int, code, msg string) {
 // For unvalidated user input at request boundaries, use parseUUIDOrBadRequest
 // (writes 400) — never feed raw chi.URLParam / request-body strings into
 // parseUUID directly when the call writes to the database.
+// directedAgentMentionLabel builds a safe @handle label for a directed agent
+// mention, neutralising Markdown delimiters and collapsing whitespace so the
+// label can't break the surrounding message's formatting.
+func directedAgentMentionLabel(handle string) string {
+	replacer := strings.NewReplacer(
+		"[", "［", "]", "］", "(", "（", ")", "）",
+		"\r", " ", "\n", " ", "\t", " ",
+	)
+	safeHandle := strings.Join(strings.Fields(replacer.Replace(strings.TrimSpace(handle))), " ")
+	if safeHandle == "" {
+		safeHandle = "agent"
+	}
+	return "@" + safeHandle
+}
+
 func parseUUID(s string) pgtype.UUID                { return util.MustParseUUID(s) }
 func uuidToString(u pgtype.UUID) string             { return util.UUIDToString(u) }
 func textToPtr(t pgtype.Text) *string               { return util.TextToPtr(t) }

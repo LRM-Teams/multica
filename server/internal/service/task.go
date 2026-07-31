@@ -18,7 +18,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
-	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -255,7 +254,6 @@ func (s *TaskService) captureTaskCompleted(ctx context.Context, task db.AgentInb
 }
 
 func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentInboxEvent) {
-	s.syncAgentRadarRunTerminal(ctx, task, "failed")
 	failureReason := taskFailureReason(task)
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
@@ -265,7 +263,6 @@ func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentInboxE
 }
 
 func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentInboxEvent) {
-	s.syncAgentRadarRunTerminal(ctx, task, "cancelled")
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskTerminal(util.UUIDToString(task.ID), source, runtimeMode, task.Status, taskRunSeconds(task), taskTotalSeconds(task), task.Attempt)
@@ -287,47 +284,6 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentInb
 	if err := s.Queries.DeleteAgentInboxTokensByEvent(ctx, task.ID); err != nil {
 		slog.Warn("cancel task: failed to revoke agent inbox tokens",
 			"task_id", util.UUIDToString(task.ID), "error", err)
-	}
-}
-
-func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.AgentInboxEvent, status string) {
-	errText := task.Error
-	if !errText.Valid && task.FailureReason.Valid {
-		errText = pgtype.Text{String: task.FailureReason.String, Valid: true}
-	}
-	var (
-		rows int64
-		err  error
-	)
-	switch status {
-	case "failed":
-		rows, err = s.Queries.FailAgentRadarRunByTaskID(ctx, db.FailAgentRadarRunByTaskIDParams{
-			TaskID: task.ID,
-			Error:  errText,
-		})
-	case "cancelled":
-		rows, err = s.Queries.CancelAgentRadarRunByTaskID(ctx, db.CancelAgentRadarRunByTaskIDParams{
-			TaskID: task.ID,
-			Error:  errText,
-		})
-	default:
-		return
-	}
-	if err != nil {
-		slog.Warn("sync radar terminal state failed", "task_id", util.UUIDToString(task.ID), "status", status, "error", err)
-		return
-	}
-	if rows > 0 {
-		slog.Info("agent radar run finalized from task", "task_id", util.UUIDToString(task.ID), "status", status)
-		if status == "failed" {
-			if _, stateErr := s.Queries.MarkWorkspaceRadarFailedByTaskID(ctx, task.ID); stateErr != nil {
-				slog.Warn("update workspace radar failure backoff failed", "task_id", util.UUIDToString(task.ID), "error", stateErr)
-			}
-		} else if status == "cancelled" {
-			if _, stateErr := s.Queries.MarkWorkspaceRadarCancelledByTaskID(ctx, task.ID); stateErr != nil {
-				slog.Warn("update workspace radar cancellation cadence failed", "task_id", util.UUIDToString(task.ID), "error", stateErr)
-			}
-		}
 	}
 }
 
@@ -875,20 +831,6 @@ type QuickCreateContext struct {
 // QuickCreateContextType marks a task as a quick-create job.
 const QuickCreateContextType = "quick_create"
 
-// AgentRadarContextType marks a task as an agent radar job.
-const AgentRadarContextType = "agent_radar"
-
-// AgentRadarContext is the JSON payload stored on radar tasks. The daemon
-// treats Prompt as the full turn prompt and returns a structured action plan.
-type AgentRadarContext struct {
-	Type        string `json:"type"`
-	RadarRunID  string `json:"radar_run_id"`
-	Prompt      string `json:"prompt"`
-	ChannelID   string `json:"channel_id,omitempty"`
-	ProjectID   string `json:"project_id,omitempty"`
-	ContextMode string `json:"context_mode,omitempty"`
-}
-
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
 // autopilot link — the user's natural-language prompt is stored in the
 // task's context JSONB and the agent is expected to translate it into a
@@ -987,220 +929,6 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	// sits in 'queued' until the next sleepWithContextOrWakeup tick.
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
-}
-
-var (
-	ErrAgentRadarRunActive = errors.New("agent radar run already active")
-	ErrAgentRadarNotReady  = errors.New("agent radar runtime not ready")
-)
-
-type EnqueueAgentRadarRunParams struct {
-	WorkspaceID    pgtype.UUID
-	AgentID        pgtype.UUID
-	ChannelID      pgtype.UUID
-	ProjectID      pgtype.UUID
-	ContextMode    string
-	TriggerKind    string
-	TriggerRef     string
-	CooldownKey    string
-	ContextSummary string
-	ScheduledFor   time.Time
-	Prompt         string
-	Scan           *radar.WorkspaceScanMetadata
-}
-
-// EnqueueAgentRadarRun atomically creates a radar run, its queue task, and the
-// run-to-task link. The daemon notification is deliberately emitted only after
-// commit so a wakeup can never race a partially-created run.
-func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentRadarRunParams) (db.AgentRadarRun, db.AgentInboxEvent, error) {
-	var run db.AgentRadarRun
-	var task db.AgentInboxEvent
-	enqueue := func(qtx *db.Queries) error {
-		agent, err := qtx.GetAgent(ctx, in.AgentID)
-		if err != nil {
-			return fmt.Errorf("load agent: %w", err)
-		}
-		if util.UUIDToString(agent.WorkspaceID) != util.UUIDToString(in.WorkspaceID) {
-			return fmt.Errorf("agent workspace mismatch")
-		}
-		ready, reason, err := AgentReadiness(ctx, qtx, agent)
-		if err != nil {
-			return fmt.Errorf("check agent radar readiness: %w", err)
-		}
-		if !ready {
-			return fmt.Errorf("%w: %s", ErrAgentRadarNotReady, reason)
-		}
-
-		run, err = qtx.CreateAgentRadarRun(ctx, db.CreateAgentRadarRunParams{
-			WorkspaceID:    in.WorkspaceID,
-			AgentID:        in.AgentID,
-			RuntimeID:      agent.RuntimeID,
-			TriggerKind:    in.TriggerKind,
-			TriggerRef:     in.TriggerRef,
-			Status:         "planned",
-			CooldownKey:    in.CooldownKey,
-			ContextSummary: in.ContextSummary,
-			ScheduledFor:   pgtype.Timestamptz{Time: in.ScheduledFor, Valid: true},
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrAgentRadarRunActive
-		}
-		if err != nil {
-			return fmt.Errorf("create radar run: %w", err)
-		}
-
-		contextJSON, err := json.Marshal(AgentRadarContext{
-			Type:        AgentRadarContextType,
-			RadarRunID:  util.UUIDToString(run.ID),
-			Prompt:      in.Prompt,
-			ChannelID:   util.UUIDToString(in.ChannelID),
-			ProjectID:   util.UUIDToString(in.ProjectID),
-			ContextMode: strings.TrimSpace(in.ContextMode),
-		})
-		if err != nil {
-			return fmt.Errorf("marshal radar context: %w", err)
-		}
-		contextJSON, err = WithTaskExecutionConfig(contextJSON, agent.Model.String, agent.ThinkingLevel.String)
-		if err != nil {
-			return fmt.Errorf("snapshot radar task execution config: %w", err)
-		}
-		task, err = qtx.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
-			AgentID:   in.AgentID,
-			RuntimeID: agent.RuntimeID,
-			Priority:  priorityToInt("low"),
-			Context:   contextJSON,
-		})
-		if err != nil {
-			return fmt.Errorf("create radar task: %w", err)
-		}
-		if err := qtx.SetAgentTaskMaxAttempts(ctx, db.SetAgentTaskMaxAttemptsParams{
-			ID:          task.ID,
-			MaxAttempts: 1,
-		}); err != nil {
-			return fmt.Errorf("set radar retry budget: %w", err)
-		}
-		task.MaxAttempts = 1
-		run, err = qtx.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
-			ID:     run.ID,
-			Status: "queued",
-			TaskID: task.ID,
-		})
-		if err != nil {
-			return fmt.Errorf("link radar task: %w", err)
-		}
-		return nil
-	}
-
-	var err error
-	if in.TriggerKind == "scheduled" {
-		if in.CooldownKey != radar.WorkspaceSupervisorCooldownKey {
-			return db.AgentRadarRun{}, db.AgentInboxEvent{}, errors.New("scheduled Radar is reserved for the workspace supervisor")
-		}
-		if s.TxStarter == nil {
-			return db.AgentRadarRun{}, db.AgentInboxEvent{}, errors.New("scheduled Radar transaction starter unavailable")
-		}
-		tx, beginErr := s.TxStarter.Begin(ctx)
-		if beginErr != nil {
-			return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("begin scheduled Radar enqueue: %w", beginErr)
-		}
-		defer tx.Rollback(ctx)
-		if authErr := lockAuthorizedWorkspaceRadarSupervisor(ctx, tx, in.WorkspaceID, in.AgentID); authErr != nil {
-			return db.AgentRadarRun{}, db.AgentInboxEvent{}, authErr
-		}
-		if enqueueErr := enqueue(s.Queries.WithTx(tx)); enqueueErr != nil {
-			return db.AgentRadarRun{}, db.AgentInboxEvent{}, enqueueErr
-		}
-		if in.Scan != nil {
-			nextCursors, marshalErr := json.Marshal(in.Scan.StaticNextCursors)
-			if marshalErr != nil {
-				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("marshal Radar static cursors: %w", marshalErr)
-			}
-			wrappedSections, marshalErr := json.Marshal(in.Scan.StaticWrappedSections)
-			if marshalErr != nil {
-				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("marshal Radar wrapped sections: %w", marshalErr)
-			}
-			if _, scanErr := tx.Exec(ctx, `
-				INSERT INTO workspace_radar_run_scan (
-				  radar_run_id, workspace_id, observed_at, observed_change_version,
-				  change_cursor_through_version, changes_has_more,
-				  static_next_cursors, static_wrapped_sections
-				) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
-			`, run.ID, in.WorkspaceID, in.Scan.ObservedAt,
-				in.Scan.ObservedChangeVersion, in.Scan.ChangeCursorThroughVersion,
-				in.Scan.ChangesHasMore, nextCursors, wrappedSections); scanErr != nil {
-				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("persist Radar scan receipt: %w", scanErr)
-			}
-		} else {
-			// Non-scheduler callers may enqueue an explicit scheduled fixture/run.
-			// Persist a conservative receipt that consumes no unseen change; the
-			// workspace remains due until a real context page is reviewed.
-			if _, scanErr := tx.Exec(ctx, `
-				INSERT INTO workspace_radar_run_scan (
-				  radar_run_id, workspace_id, observed_at, observed_change_version,
-				  change_cursor_through_version, changes_has_more,
-				  static_next_cursors, static_wrapped_sections
-				)
-				SELECT $1, state.workspace_id, $3, state.change_version,
-				       state.change_cursor_version,
-				       state.change_version > state.change_cursor_version,
-				       state.static_scan_cursors, '{}'::jsonb
-				FROM workspace_radar_state state
-				WHERE state.workspace_id = $2
-			`, run.ID, in.WorkspaceID, in.ScheduledFor); scanErr != nil {
-				return db.AgentRadarRun{}, db.AgentInboxEvent{}, fmt.Errorf("persist conservative Radar scan receipt: %w", scanErr)
-			}
-		}
-		err = tx.Commit(ctx)
-	} else {
-		err = s.runInTx(ctx, enqueue)
-	}
-	if err != nil {
-		return db.AgentRadarRun{}, db.AgentInboxEvent{}, err
-	}
-
-	slog.Info("agent radar task enqueued",
-		"task_id", util.UUIDToString(task.ID),
-		"agent_id", util.UUIDToString(in.AgentID),
-		"radar_run_id", util.UUIDToString(run.ID),
-	)
-	s.NotifyTaskEnqueued(ctx, task)
-	return run, task, nil
-}
-
-func lockAuthorizedWorkspaceRadarSupervisor(ctx context.Context, tx pgx.Tx, workspaceID, agentID pgtype.UUID) error {
-	var lockedWorkspaceID pgtype.UUID
-	if err := tx.QueryRow(ctx, `
-		SELECT id
-		FROM workspace
-		WHERE id = $1
-		FOR SHARE
-	`, workspaceID).Scan(&lockedWorkspaceID); err != nil {
-		return fmt.Errorf("lock scheduled Radar workspace: %w", err)
-	}
-
-	var supervisorID pgtype.UUID
-	if err := tx.QueryRow(ctx, `
-		SELECT state.supervisor_agent_id
-		FROM workspace_radar_state state
-		JOIN agent supervisor
-		  ON supervisor.workspace_id = state.workspace_id
-		 AND supervisor.id = state.supervisor_agent_id
-		JOIN member owner_member
-		  ON owner_member.workspace_id = state.workspace_id
-		 AND owner_member.user_id = supervisor.owner_id
-		 AND owner_member.role = 'owner'
-		WHERE state.workspace_id = $1
-		  AND state.supervisor_agent_id = $2
-		  AND state.enabled
-		  AND supervisor.archived_at IS NULL
-		FOR SHARE OF state, supervisor, owner_member
-	`, workspaceID, agentID).Scan(&supervisorID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("scheduled Radar supervisor is no longer authorized")
-		}
-		return fmt.Errorf("lock scheduled Radar supervisor: %w", err)
-	}
-	return nil
 }
 
 // ErrChatTaskAgentArchived signals that EnqueueChatTask refused to
@@ -1534,9 +1262,6 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 			return err
 		}
 		task = started
-		if _, err := qtx.MarkAgentRadarRunRunningByTaskID(ctx, taskID); err != nil {
-			return fmt.Errorf("mark radar run running: %w", err)
-		}
 		return nil
 	})
 	if err != nil {
@@ -1582,9 +1307,6 @@ func (s *TaskService) StartAgentInboxTask(ctx context.Context, executionID pgtyp
 			return err
 		}
 		task = started
-		if _, err := qtx.MarkAgentRadarRunRunningByTaskID(ctx, fence.InboxEventID); err != nil {
-			return fmt.Errorf("mark radar run running: %w", err)
-		}
 		return nil
 	})
 	if err != nil {
@@ -1635,7 +1357,6 @@ func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID 
 type CompleteTaskOutcome struct {
 	Task         db.AgentInboxEvent
 	CompletedNow bool
-	RadarRun     *db.AgentRadarRun
 	AckedSeq     int64
 }
 
@@ -1649,29 +1370,25 @@ type AgentInboxCompleteTxHooks struct {
 	After  func(qtx *db.Queries, tx pgx.Tx, outcome *CompleteTaskOutcome) error
 }
 
-// CompleteTask marks a task as completed. Callers that execute Radar output
-// must use CompleteDaemonTask so completing the task and claiming its Radar
-// run are one atomic transition.
+// CompleteTask marks a task as completed.
 func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentInboxEvent, error) {
-	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false, nil, AgentInboxCompleteTxHooks{})
+	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, nil, AgentInboxCompleteTxHooks{})
 	if err != nil {
 		return nil, err
 	}
 	return &outcome.Task, nil
 }
 
-// CompleteDaemonTask atomically completes a daemon task and, when the task is
-// an Agent Radar run, claims the linked run for action execution. A duplicate
-// or late completion returns CompletedNow=false and never carries execution
-// authority.
+// CompleteDaemonTask atomically completes a daemon task. A duplicate or late
+// completion returns CompletedNow=false.
 func (s *TaskService) CompleteDaemonTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
-	return s.completeTask(ctx, taskID, result, sessionID, workDir, true, nil, AgentInboxCompleteTxHooks{})
+	return s.completeTask(ctx, taskID, result, sessionID, workDir, nil, AgentInboxCompleteTxHooks{})
 }
 
 // CompleteDaemonInboxTask fences a non-chat terminal mutation with the active
 // transport delivery and acknowledges both in one transaction.
 func (s *TaskService) CompleteDaemonInboxTask(ctx context.Context, fence AgentInboxDeliveryFence, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
-	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, true, &fence, AgentInboxCompleteTxHooks{})
+	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, &fence, AgentInboxCompleteTxHooks{})
 }
 
 // CompleteDaemonInboxTaskWithFinalization keeps handler-owned terminal
@@ -1684,7 +1401,7 @@ func (s *TaskService) CompleteDaemonInboxTaskWithFinalization(
 	sessionID, workDir string,
 	hooks AgentInboxCompleteTxHooks,
 ) (*CompleteTaskOutcome, error) {
-	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, true, &fence, hooks)
+	return s.completeTask(ctx, fence.InboxEventID, result, sessionID, workDir, &fence, hooks)
 }
 
 // completeTask marks a task as completed.
@@ -1700,12 +1417,10 @@ func (s *TaskService) completeTask(
 	taskID pgtype.UUID,
 	result []byte,
 	sessionID, workDir string,
-	claimRadar bool,
 	fence *AgentInboxDeliveryFence,
 	hooks AgentInboxCompleteTxHooks,
 ) (*CompleteTaskOutcome, error) {
 	var task db.AgentInboxEvent
-	var radarRun *db.AgentRadarRun
 	var ackedSeq int64
 	completeAgentTaskUpdated := false
 	if err := s.runInTxWithTx(ctx, func(qtx *db.Queries, tx pgx.Tx) error {
@@ -1737,24 +1452,6 @@ func (s *TaskService) completeTask(
 		}
 		completeAgentTaskUpdated = true
 		task = t
-
-		if claimRadar && len(t.Context) > 0 {
-			var radarCtx AgentRadarContext
-			if json.Unmarshal(t.Context, &radarCtx) == nil && radarCtx.Type == AgentRadarContextType {
-				runID, err := util.ParseUUID(radarCtx.RadarRunID)
-				if err != nil {
-					return fmt.Errorf("parse radar run id: %w", err)
-				}
-				run, err := qtx.ClaimAgentRadarRunForCompletedTask(ctx, db.ClaimAgentRadarRunForCompletedTaskParams{
-					RunID:  runID,
-					TaskID: t.ID,
-				})
-				if err != nil {
-					return fmt.Errorf("claim completed radar run: %w", err)
-				}
-				radarRun = &run
-			}
-		}
 
 		if fence != nil {
 			acked, err := qtx.AckAgentInboxDelivery(ctx, db.AckAgentInboxDeliveryParams{
@@ -1795,7 +1492,6 @@ func (s *TaskService) completeTask(
 			if err := hooks.After(qtx, tx, &CompleteTaskOutcome{
 				Task:         task,
 				CompletedNow: true,
-				RadarRun:     radarRun,
 				AckedSeq:     ackedSeq,
 			}); err != nil {
 				return err
@@ -1992,7 +1688,6 @@ func (s *TaskService) completeTask(
 	return &CompleteTaskOutcome{
 		Task:         task,
 		CompletedNow: true,
-		RadarRun:     radarRun,
 		AckedSeq:     ackedSeq,
 	}, nil
 }
@@ -3327,8 +3022,7 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.
 // For issue tasks, it comes from the issue. For chat tasks, from the chat session.
-// For autopilot tasks, from the autopilot via its run. For Radar tasks, from
-// the linked Radar run after verifying that the run points back to this task.
+// For autopilot tasks, from the autopilot via its run.
 // Returns "" when none of the links resolve — callers treat that as "not found".
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentInboxEvent) string {
 	canonicalWorkspaceID := util.UUIDToString(task.WorkspaceID)
@@ -3361,21 +3055,6 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentI
 			}
 		}
 	}
-	if radarContext, ok := parseAgentRadarContext(task); ok {
-		runID, err := util.ParseUUID(radarContext.RadarRunID)
-		if err != nil {
-			return ""
-		}
-		run, err := s.Queries.GetAgentRadarRun(ctx, runID)
-		if err != nil || !run.TaskID.Valid || run.TaskID != task.ID {
-			return ""
-		}
-		sourceWorkspaceID := util.UUIDToString(run.WorkspaceID)
-		if canonicalWorkspaceID != "" && sourceWorkspaceID != canonicalWorkspaceID {
-			return ""
-		}
-		return sourceWorkspaceID
-	}
 	// Quick-create tasks have no issue / chat / autopilot link — workspace
 	// lives in the context JSONB. Returning "" here is what blocked
 	// requireDaemonTaskAccess (404 on /start, /progress, /complete, /fail
@@ -3388,20 +3067,6 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentI
 		return qc.WorkspaceID
 	}
 	return canonicalWorkspaceID
-}
-
-func parseAgentRadarContext(task db.AgentInboxEvent) (AgentRadarContext, bool) {
-	if len(task.Context) == 0 {
-		return AgentRadarContext{}, false
-	}
-	var radarContext AgentRadarContext
-	if err := json.Unmarshal(task.Context, &radarContext); err != nil {
-		return AgentRadarContext{}, false
-	}
-	if radarContext.Type != AgentRadarContextType || strings.TrimSpace(radarContext.RadarRunID) == "" {
-		return AgentRadarContext{}, false
-	}
-	return radarContext, true
 }
 
 func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentInboxEvent, msg *db.ChatMessage, outputType, target string, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {

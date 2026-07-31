@@ -150,13 +150,9 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 // locking the chosen agent, a second statement revalidates that same ordering
 // and the active-delivery predicate against a fresh READ COMMITTED snapshot.
 //
-// The pending→draining transition is hard-gated on UPDATE ... RETURNING: a
-// BEFORE trigger (Radar authorization guard) may suppress the row change with
-// RETURN NULL. In that case we must never INSERT a delivery. Permanently
-// unauthorized Radar heads are terminalized so they cannot livelock FIFO.
-// Any poison rows terminalized in this transaction are committed even when no
-// delivery is leased (poison-only / drained-to-empty / hit max), so cleanup is
-// durable across drain polls.
+// Any membership-poison rows terminalized in this transaction are committed
+// even when no delivery is leased (poison-only / drained-to-empty / hit max),
+// so cleanup is durable across drain polls.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
 	if h.TxStarter == nil {
 		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
@@ -170,8 +166,8 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		return db.AgentEventDelivery{}, err
 	}
 
-	// Clear up to a few unauthorized Radar poison heads in one transaction so
-	// a directed wake immediately behind them can be leased without waiting
+	// Clear up to a few membership-poison heads in one transaction so a
+	// directed wake immediately behind them can be leased without waiting
 	// for another drain poll. Bound the loop so a pathological backlog cannot
 	// monopolize the drain request.
 	const maxPoisonTerminalizations = 8
@@ -321,10 +317,10 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			}
 		}
 
-		// Hard gate: only proceed to delivery INSERT when the row actually
-		// transitioned to draining. Radar's BEFORE UPDATE guard returns NULL
-		// when unauthorized; Exec would succeed with 0 rows and silently leak
-		// a delivery while the event stays pending (FIFO livelock).
+		// Only proceed to delivery INSERT when the row actually transitioned
+		// to draining. A miss here means another concurrent lease already
+		// claimed it; keep any prior poison cleanups durable and report no
+		// delivery for this attempt.
 		err = tx.QueryRow(ctx, `
 			UPDATE agent_inbox_event
 			SET status = 'draining',
@@ -338,23 +334,7 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return db.AgentEventDelivery{}, err
 			}
-			// Transition suppressed (guard) or raced. Terminalize unauthorized
-			// Radar poison heads so they leave FIFO; then retry candidate
-			// selection for a later wake on the same runtime.
-			terminalized, termErr := terminalizeUnauthorizedRadarInboxEventTx(ctx, tx, eventID)
-			if termErr != nil {
-				return db.AgentEventDelivery{}, termErr
-			}
-			if !terminalized {
-				// Race or non-Radar suppression: keep any prior cleanups durable.
-				return db.AgentEventDelivery{}, commitNoDelivery()
-			}
-			terminalizedCount++
-			if attempt == maxPoisonTerminalizations {
-				// Cap reached after this durable cleanup; later polls continue.
-				return db.AgentEventDelivery{}, commitNoDelivery()
-			}
-			continue
+			return db.AgentEventDelivery{}, commitNoDelivery()
 		}
 
 		var delivery db.AgentEventDelivery
@@ -444,41 +424,6 @@ func terminalizeUnauthorizedMembershipInboxEventTx(ctx context.Context, tx pgx.T
 // terminalizeUnauthorizedRadarInboxEventTx permanently fails a still-pending
 // agent_radar event whose dispatch guard will never admit it. Returns true
 // when a row was terminalized so the caller may reselect a later FIFO head.
-func terminalizeUnauthorizedRadarInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID) (bool, error) {
-	var terminalizedID pgtype.UUID
-	err := tx.QueryRow(ctx, `
-		UPDATE agent_inbox_event e
-		SET status = 'acked',
-		    completed_at = now(),
-		    terminal_at = now(),
-		    acked_at = now(),
-		    terminal_outcome = 'failed',
-		    error = 'radar task not authorized for dispatch',
-		    failure_reason = 'radar_unauthorized',
-		    updated_at = now()
-		WHERE e.id = $1
-		  AND e.status IN ('pending', 'failed')
-		  AND e.context->>'type' = 'agent_radar'
-		  AND NOT workspace_radar_task_is_authorized(e.id)
-		RETURNING e.id`, eventID).Scan(&terminalizedID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_radar_run run
-		SET status = 'failed',
-		    finished_at = COALESCE(finished_at, now()),
-		    updated_at = now()
-		WHERE run.task_id = $1
-		  AND run.status IN ('planned', 'queued', 'running')`, eventID); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func (h *Handler) countReadyAgentInboxEventsForRuntime(ctx context.Context, runtime db.AgentRuntime) (int64, error) {
 	var count int64
 	err := h.DB.QueryRow(ctx, `

@@ -43,7 +43,7 @@ function mentionRefPart(): MessagePart {
 }
 
 describe("MessageBody reference-only messages", () => {
-  it("renders content when parts contain only a mention reference (agent/radar @mentions)", () => {
+  it("renders content when parts contain only a mention reference (agent @mentions)", () => {
     // Regression: reference-only parts + non-empty content used to collapse to an
     // empty bubble because hasBodyContent ignored reference overlays.
     render(<MessageBody content="@wendy_2 招人线继续推进，不等 MVP。" parts={[mentionRefPart()]} />);

@@ -16,7 +16,6 @@ import type {
   Agent,
   AgentFileContentResponse,
   AgentFilesResponse,
-  ListAgentRadarRunsResponse,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -264,7 +263,6 @@ import {
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_AGENT_FILES_RESPONSE,
-  EMPTY_AGENT_RADAR_RUNS_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
@@ -285,7 +283,6 @@ import {
   AppConfigSchema,
   AgentFileContentResponseSchema,
   AgentFilesResponseSchema,
-  AgentRadarRunsResponseSchema,
   AgentHealthResponseSchema,
   AgentRuntimeListSchema,
   ChannelMessagesPageSchema,
@@ -1256,13 +1253,6 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/agents/${id}/files${suffix}`);
     return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
       endpoint: "GET /api/agents/:id/files",
-    });
-  }
-
-  async listAgentRadarRuns(id: string): Promise<ListAgentRadarRunsResponse> {
-    const raw = await this.fetch<unknown>(`/api/agents/${id}/radar-runs`);
-    return parseWithFallback(raw, AgentRadarRunsResponseSchema, EMPTY_AGENT_RADAR_RUNS_RESPONSE, {
-      endpoint: "GET /api/agents/:id/radar-runs",
     });
   }
 

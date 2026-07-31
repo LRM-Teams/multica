@@ -56,6 +56,7 @@ func init() {
 	reactCmd.GroupID = groupCore
 	messageCmd.GroupID = groupCore
 	channelCmd.GroupID = groupCore
+	goalCmd.GroupID = groupCore
 	threadCmd.GroupID = groupCore
 	reminderCmd.GroupID = groupCore
 
@@ -96,6 +97,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(channelCmd)
+	rootCmd.AddCommand(goalCmd)
 	rootCmd.AddCommand(threadCmd)
 	rootCmd.AddCommand(reminderCmd)
 	rootCmd.AddCommand(stickerCmd)

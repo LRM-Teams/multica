@@ -5,6 +5,54 @@ import type { MessagePart } from "./message-part";
  *  `"default"` follows the workspace-global notification settings. */
 export type ChannelNotifyLevel = "default" | "all" | "mentions" | "muted";
 
+export type ChannelGoalStatus = "active" | "paused" | "completed" | "cancelled";
+
+export interface ChannelGoal {
+  id: string;
+  workspace_id: string;
+  channel_id: string;
+  title: string;
+  objective: string;
+  success_criteria: string[];
+  status: ChannelGoalStatus;
+  version: number;
+  progress_summary: string;
+  current_step: string;
+  blocker: string;
+  evidence_refs: string[];
+  completed_criteria: string[];
+  created_by_type: "user" | "agent";
+  created_by_id: string;
+  updated_by_type: "user" | "agent";
+  updated_by_id: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+export interface ChannelGoalEnvelope {
+  goal: ChannelGoal | null;
+}
+
+export interface CreateChannelGoalRequest {
+  title: string;
+  objective: string;
+  success_criteria: string[];
+}
+
+export interface UpdateChannelGoalRequest {
+  expected_version: number;
+  title?: string;
+  objective?: string;
+  success_criteria?: string[];
+  status?: ChannelGoalStatus;
+  progress_summary?: string;
+  current_step?: string;
+  blocker?: string;
+  evidence_refs?: string[];
+  completed_criteria?: string[];
+}
+
 export interface ChannelLastMessage {
   type: "user" | "agent" | "lark" | "system";
   author_name: string;

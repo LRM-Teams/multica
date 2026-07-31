@@ -812,6 +812,44 @@ func TestBuildPromptResumedNoDeltaDoesNotForceThreadRead(t *testing.T) {
 	}
 }
 
+func TestBuildPromptInjectsActiveChannelGoalEveryWake(t *testing.T) {
+	out := BuildPrompt(Task{
+		ChannelID:     "channel-1",
+		ChatSessionID: "chat-1",
+		ChatMessage:   "continue",
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID:                "goal-1",
+			Title:             "Ship Goal Mode",
+			Objective:         "Keep long-running work aligned",
+			SuccessCriteria:   []string{"Goal is visible", "Goal survives resume"},
+			CompletedCriteria: []string{"Goal is visible"},
+			Version:           3,
+			CurrentStep:       "Wire checkpoint",
+			Blocker:           "none",
+		},
+	}, "claude", "")
+
+	for _, want := range []string{
+		"Current channel goal this wake (server-claimed, authoritative):",
+		"Keep long-running work aligned",
+		"- [x] Goal is visible",
+		"- [ ] Goal survives resume",
+		"Goal version: 3",
+		"User message:\ncontinue",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("goal prompt missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged(t *testing.T) {
+	out := BuildPrompt(Task{ChatSessionID: "chat-1", ChatMessage: "hello"}, "claude", "")
+	if strings.Contains(out, "Current channel goal") {
+		t.Fatalf("ordinary chat unexpectedly entered goal mode:\n%s", out)
+	}
+}
+
 // TestWriteAgentRootSection asserts the layered layout: the three primary
 // surfaces (memory, skills, notes) get their own detailed line, the remaining
 // managed subdirs collapse into a single "Other local dirs" line, and an empty

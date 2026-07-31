@@ -145,6 +145,12 @@
 
 ## 4. Provider / 环境（daemon）
 
+### 4.0 Adaptive Channel Goal 是按需状态机，不是所有任务的默认模式 — `可执行`（⑤，owner: @AIhpJ ✅ 已签）
+- **启用边界**：问候、问答和一次性小任务不创建 Goal；只有明确的持续、多步骤或多 agent 协作目标，才由有权限的人或 group-manager agent 建立。无 Goal 的 channel claim 保持原行为。
+- **每轮重注入**：active Goal 的最新 `version`、目标、验收标准、进度、下一步和 blocker 必须进入每次 claim 的 current-state overlay；paused/completed/cancelled 不注入，不能只靠首次 prompt 让 agent 记忆。
+- **权限与完成门槛**：普通 executor 只能 checkpoint；manager 可维护 agent 自建目标，但不能改写 human-authored intent。完成必须同时满足全部 criteria 已确认且至少有一条 evidence；所有写入用 `expected_version` CAS，过期写返回 409。
+- **物**：完整产品/API/UI 契约见 [`docs/superpowers/specs/2026-07-31-adaptive-channel-goal-mode.md`](superpowers/specs/2026-07-31-adaptive-channel-goal-mode.md)；数据库约束 `257_adaptive_channel_goal`；handler/runtime/UI/locale parity 回归覆盖创建权限、每轮注入、checkpoint、证据完成门槛和 stale write。
+
 ### 4.0 Aliyun 单一正式 CD 与 runner ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry）
 - **唯一正式 dev 环境**：`dev` 只部署到 Aliyun `101.200.210.144`，canonical browser origin 是 `https://leagent.me`；`:8090` 只保留 daemon 兼容与部署探针。腾讯 s89 已退出正式 release path，只保留离线回滚资料；workflow 不得有 s89 runner、环境或 fallback 分支。
 - **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；Aliyun self-hosted runner 只下载同一 `github.sha` 的 immutable artifact、拉固定 SHA 镜像并在本机执行 Compose/Caddy/readyz。self-hosted deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免把 Actions checkout 变成人工/agent 共用源码树。

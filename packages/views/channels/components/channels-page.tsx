@@ -72,6 +72,7 @@ import {
   type GroupMemberActionKind,
   type ComposerDraftKey,
 } from "@multica/core/channels";
+import { ChannelGoalCard } from "./channel-goal-card";
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
@@ -3772,6 +3773,12 @@ export function ChannelsPage({
                 )}
               </div>
             }
+          />
+          <ChannelGoalCard
+            key={active.id}
+            channelId={active.id}
+            canManage={canArchive(active)}
+            archived={isActiveArchived}
           />
               {/* #562 — channel main-content tab switch: Chat (message list),
                   Tasks (channel-scoped board), and LRM-675 Files (channel

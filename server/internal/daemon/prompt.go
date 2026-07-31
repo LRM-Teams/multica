@@ -86,6 +86,7 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 // same way — but only the manager-role slot is implemented today.
 var currentStateSlots = []func(Task) string{
 	managerRoleStateSlot,
+	channelGoalStateSlot,
 }
 
 func currentStateOverlay(task Task) string {
@@ -117,7 +118,45 @@ func managerRoleStateSlot(task Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Group manager this wake (server-claimed): %s. Ignore any other session/brief for roles not listed.\n", strings.Join(refs, ", "))
 	b.WriteString("Per channel: close open loops — unanswered questions · unclaimed `todo` · stale `in_progress`/`in_review` · someone blocked on one owner. Nudge in-channel, not DM.\n")
+	b.WriteString("Adaptive Goal Mode: do not create a Goal for greetings, questions, or one-step work. When a human clearly asks you to lead sustained multi-step or multi-agent delivery, use `multica goal get --channel <id>` and create a durable Goal only if none exists; when authorization or completion standards are ambiguous, propose the Goal in-channel instead of silently activating it. You own decomposition, coordination, revision, and evidence-based completion; executors only checkpoint progress.\n")
 	b.WriteString("One anchored `multica reminder schedule` per channel; cancel any that don't match this list.\n\n")
+	return b.String()
+}
+
+func channelGoalStateSlot(task Task) string {
+	goal := task.ChannelGoal
+	if goal == nil || strings.TrimSpace(task.ChannelID) == "" {
+		return ""
+	}
+	completed := make(map[string]struct{}, len(goal.CompletedCriteria))
+	for _, criterion := range goal.CompletedCriteria {
+		completed[criterion] = struct{}{}
+	}
+	var b strings.Builder
+	b.WriteString("Current channel goal this wake (server-claimed, authoritative):\n")
+	fmt.Fprintf(&b, "- Goal ID: %s\n", goal.ID)
+	fmt.Fprintf(&b, "- Title: %s\n", goal.Title)
+	fmt.Fprintf(&b, "- Objective: %s\n", goal.Objective)
+	fmt.Fprintf(&b, "- Goal version: %d\n", goal.Version)
+	b.WriteString("- Success criteria:\n")
+	for _, criterion := range goal.SuccessCriteria {
+		mark := " "
+		if _, ok := completed[criterion]; ok {
+			mark = "x"
+		}
+		fmt.Fprintf(&b, "  - [%s] %s\n", mark, criterion)
+	}
+	if strings.TrimSpace(goal.ProgressSummary) != "" {
+		fmt.Fprintf(&b, "- Progress: %s\n", goal.ProgressSummary)
+	}
+	if strings.TrimSpace(goal.CurrentStep) != "" {
+		fmt.Fprintf(&b, "- Current step: %s\n", goal.CurrentStep)
+	}
+	if strings.TrimSpace(goal.Blocker) != "" {
+		fmt.Fprintf(&b, "- Blocker: %s\n", goal.Blocker)
+	}
+	b.WriteString("Advance only the work requested in this turn toward the goal. Preserve the objective and success standard; do not revise or lower the parent goal.\n")
+	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n\n", task.ChannelID, goal.Version, task.ChannelID)
 	return b.String()
 }
 

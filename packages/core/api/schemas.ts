@@ -52,6 +52,33 @@ import type {
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 
+export const ChannelGoalSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  channel_id: z.string(),
+  title: z.string(),
+  objective: z.string(),
+  success_criteria: z.array(z.string()).default([]),
+  status: z.enum(["active", "paused", "completed", "cancelled"]),
+  version: z.number(),
+  progress_summary: z.string().default(""),
+  current_step: z.string().default(""),
+  blocker: z.string().default(""),
+  evidence_refs: z.array(z.string()).default([]),
+  completed_criteria: z.array(z.string()).default([]),
+  created_by_type: z.enum(["user", "agent"]),
+  created_by_id: z.string(),
+  updated_by_type: z.enum(["user", "agent"]),
+  updated_by_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string().optional(),
+}).loose();
+
+export const ChannelGoalEnvelopeSchema = z.object({
+  goal: ChannelGoalSchema.nullable().default(null),
+}).loose();
+
 export interface AppConfigResponse {
   cdn_domain: string;
   allow_signup: boolean;

@@ -7,6 +7,7 @@ import { Progress } from "@multica/ui/components/ui/progress";
 export interface HonorWallProps {
   wall: HonorPublicWall;
   completionLabel: string;
+  statsLabel: string;
   showcaseTitle: string;
   recentTitle: string;
   compare?: HonorCompareResult | null;
@@ -19,6 +20,7 @@ export interface HonorWallProps {
 export function HonorWall({
   wall,
   completionLabel,
+  statsLabel,
   showcaseTitle,
   recentTitle,
   compare,
@@ -36,9 +38,7 @@ export function HonorWall({
       <div>
         <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
           <span>{completionLabel}</span>
-          <span className="tabular-nums">
-            {unlocked}/{total} · Lv.{wall.level}
-          </span>
+          <span className="tabular-nums">{statsLabel}</span>
         </div>
         <Progress value={pct} />
       </div>

@@ -35,6 +35,7 @@
     "avatar_err_dimensions": "Image must be at least 256×256",
     "honor_title": "Honor",
     "honor_completion": "{{unlocked}} / {{total}} badges",
+    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
     "honor_showcase": "Showcase",
     "honor_recent": "Recent unlocks",
     "honor_compare": "Compare with you",

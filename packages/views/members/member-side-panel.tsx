@@ -431,6 +431,11 @@ function MemberSidePanelReady({
                 unlocked: honorWall.badges_unlocked ?? honorWall.unlocked_badges.length,
                 total: honorWall.badges_total ?? honorWall.unlocked_badges.length,
               })}
+              statsLabel={t(($) => $.panel.honor_stats, {
+                unlocked: honorWall.badges_unlocked ?? honorWall.unlocked_badges.length,
+                total: honorWall.badges_total ?? honorWall.unlocked_badges.length,
+                level: honorWall.level,
+              })}
               showcaseTitle={t(($) => $.panel.honor_showcase)}
               recentTitle={t(($) => $.panel.honor_recent)}
               compare={honorCompare ?? null}

@@ -127,4 +127,19 @@ describe("ConnectRemoteDialog", () => {
 
     expect(tokenCode).toHaveClass(...ligatureClasses);
   });
+
+  // Distinct from the "can't open a browser" troubleshooting section — this
+  // one guards the step-1 install-command failure path added after users hit
+  // a blocked install host with no self-service guidance in the dialog.
+  it("offers self-service guidance for the install command itself failing", () => {
+    const { baseElement } = renderDialog();
+
+    expect(baseElement).toHaveTextContent("Command not working?");
+    expect(baseElement).toHaveTextContent(
+      "Check your internet connection and try the command again",
+    );
+    expect(baseElement).toHaveTextContent(
+      "it may be blocking outbound access to the install script",
+    );
+  });
 });

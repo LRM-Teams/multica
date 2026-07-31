@@ -47,6 +47,19 @@ export function runtimeLaunchedBy(runtime: AgentRuntime): string | null {
   return typeof launchedBy === "string" && launchedBy ? launchedBy : null;
 }
 
+/**
+ * Whether this runtime backs a daemon-enabled env-dispatch sandbox. The daemon
+ * forwards `MULTICA_SANDBOX_INSTANCE_ID` on registration, which the server
+ * records as `metadata.sandbox_instance_id` (see server daemon handler).
+ * Sandbox daemons are managed by the sandbox runtime, not the user's desktop,
+ * so a stale CLI on a sandbox must not drive the "your daemon needs an
+ * upgrade" popup or sidebar attention — only non-sandbox daemons prompt.
+ */
+export function isSandboxRuntime(runtime: AgentRuntime): boolean {
+  const sid = runtime.metadata?.sandbox_instance_id;
+  return typeof sid === "string" && sid.trim() !== "";
+}
+
 export function isDesktopManagedRuntime(runtime: AgentRuntime): boolean {
   return runtimeLaunchedBy(runtime) === "desktop";
 }
@@ -68,6 +81,9 @@ export function runtimeHasHealthAttention(
 ): boolean {
   if (!isCurrentUserLocalRuntime(runtime, userId)) return false;
   if (isDesktopManagedRuntime(runtime)) return false;
+  // Sandbox daemons are runtime-managed; their CLI expiry is handled by the
+  // sandbox runtime, so they must not surface an upgrade prompt to the user.
+  if (isSandboxRuntime(runtime)) return false;
   return ATTENTION_HEALTH_STATES.has(runtimeHealthState(runtime));
 }
 
@@ -77,6 +93,9 @@ export function runtimeCanStartSelfUpdate(
 ): boolean {
   if (!isCurrentUserLocalRuntime(runtime, userId)) return false;
   if (isDesktopManagedRuntime(runtime)) return false;
+  // Sandbox daemons are managed by the sandbox runtime; the user can't
+  // self-update them, so don't offer the start-update action.
+  if (isSandboxRuntime(runtime)) return false;
   if (runtime.status !== "online") return false;
   // Don't offer a new update while one is genuinely underway or staged. The
   // backend keeps `runtime_health: "update_available"` through `ready_to_apply`,

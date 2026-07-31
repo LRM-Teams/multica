@@ -667,3 +667,40 @@ describe("DmList duplicate agent display names (LRM-749)", () => {
     expect(screen.queryByText("@beckham-ops")).not.toBeInTheDocument();
   });
 });
+
+describe("DmList agent_pair row menu (LRM-752)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dmsPending = false;
+    mockQueryData.members = [];
+    mockQueryData.agents = [
+      { id: "agent-a", name: "alpha", display_name: "Alpha Bot", archived_at: null },
+      { id: "agent-b", name: "beta", display_name: "Beta Bot", archived_at: null },
+    ];
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-pair",
+        mode: "agent_pair",
+        supervised: true,
+        peer: { type: "agent", id: "agent-a", name: "Alpha Bot" },
+        participants: [
+          { type: "agent", id: "agent-a", name: "Alpha Bot" },
+          { type: "agent", id: "agent-b", name: "Beta Bot" },
+        ],
+      }),
+    ];
+  });
+
+  it("renders the ⋯ menu with all four list-preference actions on agent_pair rows", async () => {
+    renderDmList();
+    expect(screen.getByText("Alpha Bot · Beta Bot")).toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "Direct message actions" });
+    fireEvent.click(trigger);
+
+    expect(await screen.findByText("Mark as unread")).toBeInTheDocument();
+    expect(screen.getByText("Pin")).toBeInTheDocument();
+    expect(screen.getByText("Mute notifications")).toBeInTheDocument();
+    expect(screen.getByText("Close chat")).toBeInTheDocument();
+  });
+});

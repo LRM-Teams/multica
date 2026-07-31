@@ -3,14 +3,7 @@
 import type { ResearchSource } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
-
-export type WeightTier = "hi" | "mid" | "lo";
-
-export function weightTier(weight: number): WeightTier {
-  if (weight >= 0.8) return "hi";
-  if (weight >= 0.6) return "mid";
-  return "lo";
-}
+import { weightTier } from "./report-weight";
 
 function WeightBadge({ weight }: { weight: number }) {
   const tier = weightTier(weight);
@@ -38,7 +31,7 @@ function TypeChip({ value }: { value: string }) {
 
 export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
   const { t } = useT("research");
-  const sorted = [...sources].sort(
+  const sorted = sources.toSorted(
     (a, b) => (b.credibility_weight ?? 0) - (a.credibility_weight ?? 0),
   );
 

@@ -75,10 +75,11 @@ describe("ReportReader", () => {
     expect(document.querySelector("pre.whitespace-pre-wrap")).toBeNull();
   });
 
-  it("closes on Escape", () => {
+  it("closes on Escape (dialog cancel)", () => {
     const onClose = vi.fn();
     render(<ReportReader open onClose={onClose} report={report} sources={sources} />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    const dialog = screen.getByRole("dialog");
+    fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
     expect(onClose).toHaveBeenCalled();
   });
 });

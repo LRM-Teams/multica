@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ResearchSource } from "@multica/core/types";
-import { ReportSourceTable, weightTier } from "./report-source-table";
+import { ReportSourceTable } from "./report-source-table";
+import { weightTier } from "./report-weight";
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({

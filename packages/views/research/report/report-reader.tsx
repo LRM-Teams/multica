@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Copy, Download, List, X } from "lucide-react";
 import { normalizeReportStructured } from "@multica/core/research";
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
@@ -65,6 +65,7 @@ export function ReportReader({
   titleFallback?: string;
 }) {
   const { t } = useT("research");
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -93,21 +94,22 @@ export function ReportReader({
     titleFallback ||
     t(($) => $.panel.delivery);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  useEffect(() => {
+  // Reset transient UI when the panel closes — adjust during render (prev-prop).
+  const prevOpenRef = useRef(open);
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
     if (!open) {
       setOutlineOpen(false);
       setCopied(false);
     }
-  }, [open]);
+  }
+
+  const bindDialog = useCallback((dialog: HTMLDialogElement | null) => {
+    dialogRef.current = dialog;
+    if (!dialog || dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
 
   if (!open) return null;
 
@@ -144,11 +146,23 @@ export function ReportReader({
   };
 
   return (
-    <div
-      className="pointer-events-auto fixed inset-0 z-50 flex items-stretch justify-center bg-background/70 p-0 backdrop-blur-sm sm:items-center sm:p-6"
-      role="dialog"
-      aria-modal="true"
+    <dialog
+      ref={bindDialog}
+      className={cn(
+        "fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-background/70 p-0 backdrop-blur-sm open:flex sm:items-center sm:p-6",
+        "backdrop:bg-transparent",
+      )}
       aria-label={t(($) => $.panel.delivery)}
+      onCancel={(event) => {
+        event.preventDefault();
+        const dialog = dialogRef.current;
+        if (dialog?.open) {
+          if (typeof dialog.close === "function") dialog.close();
+          else dialog.removeAttribute("open");
+        }
+        onClose();
+      }}
+      onClose={onClose}
     >
       <div
         className={cn(
@@ -222,6 +236,6 @@ export function ReportReader({
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

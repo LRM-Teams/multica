@@ -14,9 +14,9 @@ import (
 )
 
 type honorSnapshotResponse struct {
-	Level     int                      `json:"level"`
-	NameStyle string                   `json:"name_style"`
-	Badge     *service.HonorBadgeView  `json:"equipped_badge,omitempty"`
+	Level     int                     `json:"level"`
+	NameStyle string                  `json:"name_style"`
+	Badge     *service.HonorBadgeView `json:"equipped_badge,omitempty"`
 }
 
 func honorSnapshotFromService(s service.HonorSnapshot) *honorSnapshotResponse {
@@ -71,8 +71,8 @@ func (h *Handler) GetMyHonor(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchMyHonorRequest struct {
-	EquippedBadgeID  *string   `json:"equipped_badge_id"`
-	ShowcaseBadgeIDs []string  `json:"showcase_badge_ids"`
+	EquippedBadgeID  *string  `json:"equipped_badge_id"`
+	ShowcaseBadgeIDs []string `json:"showcase_badge_ids"`
 }
 
 func (h *Handler) PatchMyHonor(w http.ResponseWriter, r *http.Request) {
@@ -249,4 +249,8 @@ func (h *Handler) awardHonorXP(ctx context.Context, userID pgtype.UUID, actionTy
 		// Honor must never block primary product actions.
 		return
 	}
+}
+
+func shouldAwardIssueUpdate(actorType string, changed bool) bool {
+	return actorType == "member" && changed
 }

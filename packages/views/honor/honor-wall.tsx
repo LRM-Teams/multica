@@ -1,7 +1,7 @@
 "use client";
 
 import type { HonorCompareResult, HonorPublicWall } from "@multica/core/types/honor";
-import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
+import { HonorBadgeCrest, HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import { Progress } from "@multica/ui/components/ui/progress";
 
 export interface HonorWallProps {
@@ -34,29 +34,42 @@ export function HonorWall({
   const pct = total > 0 ? Math.round((unlocked / total) * 100) : 0;
 
   return (
-    <div className="space-y-4">
-      <div>
+    <div className="space-y-5">
+      <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
         <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
           <span>{completionLabel}</span>
-          <span className="tabular-nums">{statsLabel}</span>
+          <span className="font-mono tabular-nums">{statsLabel}</span>
         </div>
-        <Progress value={pct} />
+        <Progress
+          aria-label={completionLabel}
+          value={pct}
+          className="[&_[data-slot=progress-indicator]]:bg-gradient-to-r [&_[data-slot=progress-indicator]]:from-cyan-500 [&_[data-slot=progress-indicator]]:to-violet-500 [&_[data-slot=progress-track]]:h-1.5"
+        />
       </div>
 
       {wall.showcase_badges && wall.showcase_badges.length > 0 ? (
-        <div>
-          <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+        <section className="overflow-hidden rounded-2xl border border-violet-500/20 bg-[linear-gradient(145deg,rgba(15,23,42,1),rgba(30,27,75,0.94))] p-4 text-white">
+          <h4 className="mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-200">
             {showcaseTitle}
           </h4>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {wall.showcase_badges.map((badge) => (
-              <div key={badge.id} className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1">
-                <HonorBadgeIcon svgKey={badge.svg_key} title={badge.title} medal />
-                <span className="text-xs font-medium">{badge.title}</span>
+              <div
+                key={badge.id}
+                className="flex min-h-28 flex-col items-center justify-center rounded-xl border border-white/10 bg-white/5 p-2 text-center"
+              >
+                <HonorBadgeCrest
+                  svgKey={badge.svg_key}
+                  title={badge.title}
+                  className="size-12"
+                />
+                <span className="mt-2 line-clamp-2 text-[10px] font-medium leading-4 text-slate-200">
+                  {badge.title}
+                </span>
               </div>
             ))}
           </div>
-        </div>
+        </section>
       ) : null}
 
       {wall.recent_unlocks && wall.recent_unlocks.length > 0 ? (
@@ -64,10 +77,13 @@ export function HonorWall({
           <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
             {recentTitle}
           </h4>
-          <ul className="space-y-1.5">
+          <ul className="space-y-1">
             {wall.recent_unlocks.map((item) => (
-              <li key={`${item.id}-${item.unlocked_at}`} className="flex items-center gap-2 text-xs">
-                <HonorBadgeIcon svgKey={item.svg_key} title={item.title} />
+              <li
+                key={`${item.id}-${item.unlocked_at}`}
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/50"
+              >
+                <HonorBadgeIcon svgKey={item.svg_key} title={item.title} medal />
                 <span className="font-medium">{item.title}</span>
               </li>
             ))}

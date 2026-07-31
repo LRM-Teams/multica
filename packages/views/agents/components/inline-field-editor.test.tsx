@@ -27,6 +27,23 @@ const RESOURCES = {
 };
 
 describe("InlineFieldEditor (LRM-471)", () => {
+  it("keeps a decorated display while preserving in-place editing", () => {
+    render(
+      <InlineFieldEditor
+        value="Atlas"
+        kind="input"
+        label="Display name"
+        onSave={vi.fn(async () => {})}
+        displayContent={<span data-testid="decorated-name">Decorated Atlas</span>}
+        testId="name"
+      />,
+    );
+
+    expect(screen.getByTestId("decorated-name")).toHaveTextContent("Decorated Atlas");
+    fireEvent.click(screen.getByTestId("name-trigger"));
+    expect(screen.getByLabelText("Display name")).toHaveValue("Atlas");
+  });
+
   it("turns the field into an in-place input — no dialog/popover", async () => {
     const onSave = vi.fn(async () => {});
     render(

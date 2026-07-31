@@ -117,8 +117,8 @@ func (s *HonorService) tryUnlockBadge(ctx context.Context, userID pgtype.UUID, b
 	pct, _ := s.unlockPctForBadge(ctx, badgeID)
 	if s.OnBadgeUnlocked != nil {
 		s.OnBadgeUnlocked(ctx, HonorBadgeUnlockEvent{
-			UserID: userID,
-			Badge:  *honorBadgeViewFromDef(def),
+			UserID:    userID,
+			Badge:     *honorBadgeViewFromDef(def),
 			UnlockPct: pct,
 		})
 	}
@@ -148,11 +148,14 @@ func (s *HonorService) unlockPctForBadge(ctx context.Context, badgeID string) (f
 	return m[badgeID], nil
 }
 
-func maskSecretBadge(def db.HonorBadgeDef, unlocked bool) (title, description, svgKey string) {
+func maskSecretBadge(
+	def db.HonorBadgeDef,
+	unlocked bool,
+) (title, description, svgKey, unlockRule string) {
 	if def.Secret && !unlocked {
-		return "Secret Badge", "Unlock to reveal this badge.", "stardust"
+		return "Secret Badge", "Unlock to reveal this badge.", "stardust", ""
 	}
-	return def.Title, def.Description, def.SvgKey
+	return def.Title, def.Description, def.SvgKey, def.UnlockRule
 }
 
 func (s *HonorService) buildBadgeCatalog(
@@ -185,14 +188,14 @@ func (s *HonorService) buildBadgeCatalog(
 		if unlocked {
 			unlockedCount++
 		}
-		title, desc, svgKey := maskSecretBadge(def, unlocked)
+		title, desc, svgKey, unlockRule := maskSecretBadge(def, unlocked)
 		item := HonorBadgeCatalogItem{
 			ID:          def.ID,
 			Title:       title,
 			Description: desc,
 			SvgKey:      svgKey,
 			Rarity:      int(def.Rarity),
-			UnlockRule:  def.UnlockRule,
+			UnlockRule:  unlockRule,
 			Secret:      def.Secret,
 			Unlocked:    unlocked,
 			UnlockPct:   pctMap[def.ID],

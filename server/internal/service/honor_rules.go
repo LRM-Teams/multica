@@ -8,7 +8,10 @@ const FoundingMemberCutoff = "2026-08-01T00:00:00Z"
 var foundingMemberCutoffTime = mustParseHonorTime(FoundingMemberCutoff)
 
 // HonorRulesVersion is bumped when public scoring tables change.
-const HonorRulesVersion = "2026-07-30.1"
+const HonorRulesVersion = "2026-07-31.1"
+
+// MaxHonorLevel is the highest level the progression curve can award.
+const MaxHonorLevel = 60
 
 type HonorPillar string
 
@@ -50,7 +53,7 @@ func pow115(exp int) float64 {
 // LevelFromTotalXP maps cumulative XP to display level.
 func LevelFromTotalXP(totalXP int64) int {
 	level := 1
-	for l := 2; l <= 60; l++ {
+	for l := 2; l <= MaxHonorLevel; l++ {
 		if totalXP >= honorLevelThresholdXP(l) {
 			level = l
 			continue
@@ -62,6 +65,9 @@ func LevelFromTotalXP(totalXP int64) int {
 
 // XPToNextLevel returns xp needed to reach next level from current total.
 func XPToNextLevel(totalXP int64, level int) int64 {
+	if level >= MaxHonorLevel {
+		return 0
+	}
 	next := honorLevelThresholdXP(level + 1)
 	if next <= totalXP {
 		return 0
@@ -124,8 +130,8 @@ type HonorBadgeCatalogEntry struct {
 }
 
 func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument {
-	levels := make([]HonorLevelThresholdEntry, 0, 30)
-	for l := 1; l <= 30; l++ {
+	levels := make([]HonorLevelThresholdEntry, 0, MaxHonorLevel)
+	for l := 1; l <= MaxHonorLevel; l++ {
 		levels = append(levels, HonorLevelThresholdEntry{Level: l, TotalXP: honorLevelThresholdXP(l)})
 	}
 	actions := make(map[string]HonorActionRuleEntry, len(honorActionRules))
@@ -137,11 +143,11 @@ func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument
 		pillars[string(p)] = thresholds
 	}
 	return HonorRulesDocument{
-		Version:         HonorRulesVersion,
-		FoundingCutoff:  FoundingMemberCutoff,
-		LevelThresholds: levels,
+		Version:          HonorRulesVersion,
+		FoundingCutoff:   FoundingMemberCutoff,
+		LevelThresholds:  levels,
 		PillarTierTables: pillars,
-		ActionRules:     actions,
+		ActionRules:      actions,
 		NameStyleUnlocks: []HonorNameStyleRuleEntry{
 			{ID: "default", MinLevel: 1},
 			{ID: "member", MinLevel: 5},
@@ -154,7 +160,10 @@ func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument
 			{ID: "founding", MinLevel: 1},
 		},
 		BadgeCatalog: badges,
-		Changelog:    []string{"2026-07-30: initial honor rules v1"},
+		Changelog: []string{
+			"2026-07-31: publish the complete level 1-60 progression table",
+			"2026-07-30: initial honor rules v1",
+		},
 	}
 }
 

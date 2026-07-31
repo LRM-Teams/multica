@@ -14,9 +14,9 @@ import (
 
 // HonorSnapshot is the compact honor payload embedded in profile/member APIs.
 type HonorSnapshot struct {
-	Level      int              `json:"level"`
-	NameStyle  string           `json:"name_style"`
-	Badge      *HonorBadgeView  `json:"equipped_badge,omitempty"`
+	Level     int             `json:"level"`
+	NameStyle string          `json:"name_style"`
+	Badge     *HonorBadgeView `json:"equipped_badge,omitempty"`
 }
 
 type HonorBadgeView struct {
@@ -96,16 +96,13 @@ func (s *HonorService) GetRules(ctx context.Context) (HonorRulesDocument, error)
 	}
 	catalog := make([]HonorBadgeCatalogEntry, len(rows))
 	for i, row := range rows {
+		title, description, svgKey, _ := maskSecretBadge(row, false)
 		catalog[i] = HonorBadgeCatalogEntry{
 			ID:          row.ID,
-			Title:       row.Title,
-			Description: row.Description,
-			SvgKey:      row.SvgKey,
+			Title:       title,
+			Description: description,
+			SvgKey:      svgKey,
 			Rarity:      int(row.Rarity),
-		}
-		if row.Secret {
-			catalog[i].Title = "Secret Badge"
-			catalog[i].Description = "Unlock to reveal."
 		}
 	}
 	return BuildHonorRulesDocument(catalog), nil

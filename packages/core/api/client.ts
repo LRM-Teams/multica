@@ -412,6 +412,18 @@ export interface LoginResponse {
   user: User;
 }
 
+/** RFC 8628 device-code confirmation (task #36). */
+export interface DevicePending {
+  /** Human-readable hint the CLI sent when it created the code (e.g. hostname). May be empty. */
+  client_hint: string;
+  /** RFC3339 timestamp of when the CLI requested this code. */
+  created_at: string;
+}
+
+export interface DeviceConfirmResponse {
+  status: "approved" | "denied";
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly statusText: string;
@@ -617,6 +629,19 @@ export class ApiClient {
 
   async logout(): Promise<void> {
     await this.fetch("/auth/logout", { method: "POST" });
+  }
+
+  // Device-code login confirmation (task #36, RFC 8628 §3.3).
+  async getDevicePending(userCode: string): Promise<DevicePending> {
+    const search = new URLSearchParams({ user_code: userCode });
+    return this.fetch(`/api/device/pending?${search}`);
+  }
+
+  async confirmDevice(userCode: string, approve: boolean): Promise<DeviceConfirmResponse> {
+    return this.fetch("/api/device/confirm", {
+      method: "POST",
+      body: JSON.stringify({ user_code: userCode, approve }),
+    });
   }
 
   async issueCliToken(): Promise<{ token: string }> {

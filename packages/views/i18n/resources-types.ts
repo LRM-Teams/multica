@@ -11,6 +11,7 @@ import type agents from "../locales/en/agents.json";
 import type editor from "../locales/en/editor.json";
 import type onboarding from "../locales/en/onboarding.json";
 import type invite from "../locales/en/invite.json";
+import type device from "../locales/en/device.json";
 import type labels from "../locales/en/labels.json";
 import type members from "../locales/en/members.json";
 import type myIssues from "../locales/en/my-issues.json";
@@ -56,6 +57,7 @@ declare global {
     editor: typeof editor;
     onboarding: typeof onboarding;
     invite: typeof invite;
+    device: typeof device;
     labels: typeof labels;
     members: typeof members;
     "my-issues": typeof myIssues;

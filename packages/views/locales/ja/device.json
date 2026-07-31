@@ -1,0 +1,27 @@
+{
+  "header": {
+    "log_out": "ログアウト"
+  },
+  "not_found": {
+    "title": "リンクが期限切れか無効です",
+    "description": "ターミナルに戻って「multica login」を再実行するか、表示されたリンクをもう一度クリックしてください。"
+  },
+  "main": {
+    "title": "サインインを確認",
+    "requested_from": "{{client_hint}} からのリクエスト",
+    "requested_from_unknown": "不明なデバイスからのリクエスト",
+    "deny": "拒否",
+    "denying": "拒否中...",
+    "approve": "承認",
+    "approving": "承認中..."
+  },
+  "done": {
+    "approved_title": "サインインを承認しました",
+    "approved_description": "このタブを閉じてターミナルに戻ってください。",
+    "denied_title": "サインインを拒否しました",
+    "denied_description": "CLIからのリクエストは拒否されました。"
+  },
+  "errors": {
+    "confirm_failed": "確認に失敗しました。もう一度お試しください。"
+  }
+}

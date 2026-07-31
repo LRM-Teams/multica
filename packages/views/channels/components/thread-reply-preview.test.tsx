@@ -34,7 +34,6 @@ vi.mock("../../i18n", () => ({
         thread: {
           preview_count: "{{count}} replies",
           preview_count_with_new: "{{count}} replies · {{newCount}} new",
-          preview_view_all: "View all {{count}} replies →",
           preview_open: "View thread →",
           preview_image: "[Image]",
           preview_sticker: "[Sticker]",
@@ -146,5 +145,7 @@ describe("ThreadReplyPreview", () => {
     expect(times[0]).toHaveTextContent("09:03");
     expect(times[1]).toHaveTextContent("09:04");
     expect(times[2]).toHaveTextContent("09:05");
+    expect(screen.queryByText(/View thread/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/View all/i)).not.toBeInTheDocument();
   });
 });

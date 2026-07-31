@@ -50,7 +50,7 @@ export function ThreadReplyPreview({
 
   const previewRows = spoken.slice(0, PREVIEW_LIMIT);
   // When we loaded the full window (no next cursor), trust the filtered count.
-  // Otherwise keep the server hint as a floor so "view all N" stays useful.
+  // Otherwise keep the server hint as a floor so the header count stays useful.
   const hasMorePages = !!data?.next_cursor;
   const spokenCount = hasMorePages
     ? Math.max(hintCount, spoken.length)
@@ -75,10 +75,6 @@ export function ThreadReplyPreview({
   if (spokenCount === 0) return null;
 
   const open = () => onOpenThread(message);
-  const viewAllLabel =
-    spokenCount > PREVIEW_LIMIT
-      ? t(($) => $.thread.preview_view_all, { count: spokenCount })
-      : t(($) => $.thread.preview_open);
   const countLabel =
     unreadCount > 0
       ? t(($) => $.thread.preview_count_with_new, {
@@ -91,6 +87,7 @@ export function ThreadReplyPreview({
     <button
       type="button"
       data-testid="thread-reply-preview"
+      aria-label={t(($) => $.thread.preview_open)}
       onClick={open}
       className={cn(
         "mt-2 w-full rounded-lg border border-border/80 bg-muted/40 px-2.5 py-2 text-left",
@@ -151,9 +148,6 @@ export function ThreadReplyPreview({
           );
         })}
       </ul>
-      <div className="mt-1.5 text-xs font-semibold text-brand">
-        {viewAllLabel}
-      </div>
     </button>
   );
 }

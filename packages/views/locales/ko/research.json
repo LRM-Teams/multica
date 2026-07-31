@@ -35,7 +35,14 @@
     "loading": "리서치를 불러오는 중입니다",
     "load_failed": "리서치를 불러오지 못했습니다",
     "retry": "다시 시도",
-    "empty_cta": "첫 리서치 시작하기"
+    "empty_cta": "첫 리서치 시작하기",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "Research goal",
+    "goal_dialog_close": "Close",
+    "goal_dialog_open": "Open session",
+    "who_working": "{{name}} working",
+    "output_line": "Output · {{summary}}",
+    "no_output": "Output · none yet"
   },
   "filter": {
     "search_label": "세션 제목 검색",
@@ -113,7 +120,10 @@
     "creating": "플릿 편성 중…",
     "create_failed": "리서치 세션을 만들지 못했습니다",
     "templates_label": "빠른 템플릿",
-    "templates_hint": "선택하면 목표와 추천 관점이 채워집니다(이후 수정 가능)"
+    "templates_hint": "선택하면 전문 프롬프트가 칩으로 붙고, 목표를 이어서 입력할 수 있습니다",
+    "template_chip": "{{title}} prompt added — keep typing your goal",
+    "template_chip_clear": "Remove template",
+    "goal_placeholder_with_template": "Add your specific goal…"
   },
   "ring": {
     "title": "노드 작업",

@@ -14,7 +14,7 @@ import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { AlertCircle, Loader2, Telescope } from "lucide-react";
+import { AlertCircle, Loader2, X } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import {
@@ -25,7 +25,7 @@ import {
   type SessionStatusFilter,
 } from "../lib/session-list-filter";
 import {
-  composeTemplateGoal,
+  buildCreateGoal,
   localizeTemplateField,
   type ResearchTemplate,
 } from "../lib/research-templates";
@@ -34,21 +34,35 @@ import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
 import { ResearchTemplateCards } from "./research-template-cards";
 
+/** Composer draft — one state object so create/template/goal update together (react-doctor). */
+type ComposerDraft = {
+  goal: string;
+  template: ResearchTemplate | null;
+  draftTitle: string | undefined;
+};
+
+const EMPTY_COMPOSER: ComposerDraft = {
+  goal: "",
+  template: null,
+  draftTitle: undefined,
+};
+
 export function ResearchListPage() {
   const { t, i18n } = useT("research");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const nav = useNavigation();
   const qc = useQueryClient();
-  const [goal, setGoal] = useState("");
+  const [composer, setComposer] = useState<ComposerDraft>(EMPTY_COMPOSER);
   const [titleQuery, setTitleQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
-  const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Scroll offset captured when filters first become active; restored on clear. */
   const savedScrollTop = useRef<number | null>(null);
+
+  const { goal, template: selectedTemplate, draftTitle } = composer;
 
   useQuery(researchFleetOptions(wsId));
   const { data, isLoading, isError, error, refetch } = useQuery(
@@ -56,11 +70,14 @@ export function ResearchListPage() {
   );
 
   const create = useMutation({
-    mutationFn: () =>
-      api.createResearchSession({
-        goal: goal.trim(),
+    mutationFn: () => {
+      const language = i18n?.language;
+      const mergedGoal = buildCreateGoal(selectedTemplate, goal, language);
+      return api.createResearchSession({
+        goal: mergedGoal,
         ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
-      }),
+      });
+    },
     onSuccess: (res) => {
       // Seed snapshot from kickoff payload so the session page paints a busy graph
       // without waiting on the first GET / WS round-trip.
@@ -123,23 +140,35 @@ export function ResearchListPage() {
   };
 
   const fillComposer = (text: string, title?: string) => {
-    setGoal(text);
-    setDraftTitle(title);
+    setComposer({ goal: text, template: null, draftTitle: title });
     // Defer focus so the controlled value paints before the caret moves.
     queueMicrotask(focusComposer);
   };
 
+  /** LRM-906 T2: chip only — never dump ≥800-char professional prompt into the box. */
   const applyTemplate = (template: ResearchTemplate) => {
     const language = i18n?.language;
-    fillComposer(
-      composeTemplateGoal(template, language),
-      localizeTemplateField(template.sessionTitle, language),
-    );
+    setComposer({
+      goal: "",
+      template,
+      draftTitle: localizeTemplateField(template.sessionTitle, language),
+    });
+    queueMicrotask(focusComposer);
   };
 
+  const clearTemplate = () => {
+    setComposer((prev) => ({
+      ...prev,
+      template: null,
+      draftTitle: prev.goal.trim() ? prev.draftTitle : undefined,
+    }));
+  };
+
+  const canSubmit =
+    Boolean(selectedTemplate) || Boolean(goal.trim());
+
   const submitCreate = () => {
-    const value = goal.trim();
-    if (!value || create.isPending) return;
+    if (!canSubmit || create.isPending) return;
     create.mutate();
   };
 
@@ -166,43 +195,59 @@ export function ResearchListPage() {
     <ResearchSessionRow key={s.id} session={s} href={paths.researchDetail(s.id)} />
   );
 
+  const templateTitle = selectedTemplate
+    ? localizeTemplateField(selectedTemplate.title, i18n?.language)
+    : "";
+
   return (
-    <div ref={scrollRef} className="flex h-full flex-col gap-6 overflow-y-auto p-6">
-      {/* LRM-787: hero composer card — brand presence, focus ring, inline failure. */}
+    <div ref={scrollRef} className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+      {/* LRM-906 H1: short hero — one value line + composer; list stays above the fold. */}
       <section
         ref={composerCardRef}
         aria-label={t(($) => $.home.composer_label)}
-        className="relative w-full max-w-3xl overflow-hidden rounded-2xl border bg-card shadow-sm"
+        className="relative w-full max-w-3xl overflow-hidden rounded-xl border bg-card shadow-sm"
       >
-        <div className="pointer-events-none absolute inset-0 bg-brand/4" aria-hidden />
-        <div className="relative flex flex-col gap-4 p-6 sm:p-8">
-          <div className="flex items-start gap-3">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
-              <Telescope className="size-5" aria-hidden />
-            </div>
-            <div className="min-w-0 space-y-1">
-              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-                {t(($) => $.home.hero_title)}
-              </h1>
-              <p className="text-sm text-muted-foreground sm:text-base">
-                {t(($) => $.home.hero_desc)}
-              </p>
-            </div>
-          </div>
+        <div className="relative flex flex-col gap-2.5 p-3 sm:p-4">
+          <h1 className="text-sm font-semibold tracking-tight sm:text-[15px]">
+            {t(($) => $.home.hero_title)}
+          </h1>
+          <p className="sr-only">{t(($) => $.home.hero_desc)}</p>
 
           <div
             className={
-              // Brand focus ring without a new hex token; 22% mix ≈ ring brand/22.
-              "rounded-xl border bg-background transition-shadow focus-within:border-brand/40 focus-within:ring-3 focus-within:ring-brand/22"
+              "rounded-lg border bg-muted/30 transition-shadow focus-within:border-brand/40 focus-within:ring-3 focus-within:ring-brand/22"
             }
           >
+            {selectedTemplate ? (
+              <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
+                <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-violet-500/30 bg-gradient-to-r from-violet-500/10 to-brand/10 px-2.5 py-1 text-[11px] font-semibold text-violet-700 dark:text-violet-300">
+                  <span className="truncate">
+                    {t(($) => $.home.template_chip, { title: templateTitle })}
+                  </span>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full p-0.5 opacity-60 hover:opacity-100"
+                    aria-label={t(($) => $.home.template_chip_clear)}
+                    onClick={clearTemplate}
+                  >
+                    <X className="size-3" aria-hidden />
+                  </button>
+                </span>
+              </div>
+            ) : null}
             <Textarea
               ref={goalInputRef}
               value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder={t(($) => $.goal_placeholder)}
-              rows={4}
-              className="border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+              onChange={(e) =>
+                setComposer((prev) => ({ ...prev, goal: e.target.value }))
+              }
+              placeholder={
+                selectedTemplate
+                  ? t(($) => $.home.goal_placeholder_with_template)
+                  : t(($) => $.goal_placeholder)
+              }
+              rows={2}
+              className="min-h-[52px] border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:border-transparent"
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
@@ -216,7 +261,7 @@ export function ResearchListPage() {
               </p>
               <Button
                 onClick={submitCreate}
-                disabled={!goal.trim() || create.isPending}
+                disabled={!canSubmit || create.isPending}
                 className="shrink-0"
               >
                 {create.isPending ? (
@@ -248,7 +293,7 @@ export function ResearchListPage() {
         </div>
       </section>
 
-      {/* LRM-817: quick template cards — always on homepage, fill composer + params. */}
+      {/* LRM-817: quick template cards — chip injection (LRM-906 T2). */}
       <ResearchTemplateCards onSelect={applyTemplate} />
 
       {isLoading ? (

@@ -27,9 +27,18 @@ const DefaultUpdateDownloadTimeout = 120 * time.Second
 // feed. It is hosted alongside the app (not GitHub) because the CLI/daemon
 // have no credential that can read the private LRM-Teams/multica repo: an
 // unauthenticated GitHub Releases API/asset request from a bare install
-// always 404s. Caddy serves this path from an immutable per-version
-// directory tree that CI populates on tag; see deploy/aliyun/Caddyfile.
-const DefaultReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
+// always 404s.
+//
+// Temporarily pointed at the OSS mirror instead of cdn.leagent.me/computer
+// (2026-07-31): the Aliyun host serving that domain sits behind a network
+// path that blocks curl-class clients for reasons still under investigation
+// (#prj-daemon) — exactly the client this default exists to serve. OSS
+// doesn't require mainland China ICP filing and isn't behind that path.
+// Revert to cdn.leagent.me/computer once the block is root-caused/fixed or
+// a proper custom domain is in front of the OSS bucket — one-line change,
+// see release.yml's publish-downloads-feed-oss job for how the OSS mirror
+// is kept in sync with the primary feed.
+const DefaultReleaseManifestBaseURL = "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases"
 
 // ReleaseManifestBaseURLEnv overrides DefaultReleaseManifestBaseURL when set,
 // with no rebuild/release required. Exists because the default address is a

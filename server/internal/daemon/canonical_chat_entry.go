@@ -38,9 +38,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 	if strings.TrimSpace(task.ChatSessionID) == "" || isRestrictedExecutionProfile(profile) {
 		return nil, nil, nil, false, nil
 	}
-	switch provider {
-	case "grok", "pi", "cursor":
-	default:
+	if !isCanonicalResidentProvider(provider) {
 		return nil, nil, nil, false, nil
 	}
 	if task.RuntimeStateGeneration <= 0 {

@@ -67,6 +67,25 @@ func isUnauthorizedError(err error) bool {
 	return reqErr.StatusCode == http.StatusUnauthorized
 }
 
+// isAgentNotBoundToRuntimeError returns true if the error is a 403 with
+// "agent is not bound to this runtime" body (server/internal/handler/agent_credential.go:256).
+// This fires when an agent has been reassigned to a different runtime (a
+// normal, supported operation — agent.runtime_id is user-editable) but this
+// daemon's local state still reflects the old binding. Unlike a transient
+// auth failure, retrying with the same local state can never succeed: the
+// daemon must stop treating this agent as its own rather than looping on
+// the same request.
+func isAgentNotBoundToRuntimeError(err error) bool {
+	var reqErr *requestError
+	if !errors.As(err, &reqErr) {
+		return false
+	}
+	if reqErr.StatusCode != http.StatusForbidden {
+		return false
+	}
+	return strings.Contains(strings.ToLower(reqErr.Body), "agent is not bound to this runtime")
+}
+
 func isInvalidDaemonTokenError(err error) bool {
 	var reqErr *requestError
 	if !errors.As(err, &reqErr) {

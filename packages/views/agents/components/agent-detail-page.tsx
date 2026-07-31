@@ -268,6 +268,12 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           agent={agent}
           runtimes={runtimes}
           onUpdate={handleUpdate}
+          canManage={canEdit.allowed}
+          initialTab={
+            navigation.searchParams.get("tab") === "honor"
+              ? "honor"
+              : undefined
+          }
           navIntent={tabNavIntent}
           onNavIntentHandled={() => setTabNavIntent(null)}
         />

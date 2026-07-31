@@ -41,7 +41,6 @@ import { setCurrentWorkspace } from "@multica/core/platform";
 import type { Workspace } from "@multica/core/types";
 import { useNavigation } from "../../navigation";
 import { DeleteWorkspaceDialog } from "./delete-workspace-dialog";
-import { AgentDMGlobalPauseSection } from "./agent-dm-global-pause-section";
 import { useT } from "../../i18n";
 
 export function WorkspaceTab() {
@@ -379,10 +378,6 @@ export function WorkspaceTab() {
           </CardContent>
         </Card>
       </section>
-
-      {/* #692 owner-only "pause all agent DMs" — self-gates on agent ownership,
-          renders nothing for everyone else. */}
-      <AgentDMGlobalPauseSection />
 
       {/* Danger Zone — gated on the member query settling so the owner-only
           Delete button and the sole-owner Leave guidance don't flash in

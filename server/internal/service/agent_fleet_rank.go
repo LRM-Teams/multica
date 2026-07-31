@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -55,23 +56,30 @@ type AgentFleetRankView struct {
 }
 
 type FleetClassThreshold struct {
-	ClassID   string  `json:"class_id"`
-	MinScore  float64 `json:"min_score"`
-	Label     string  `json:"label"`
-	SvgKey    string  `json:"svg_key"`
+	ClassID  string  `json:"class_id"`
+	MinScore float64 `json:"min_score"`
+	Label    string  `json:"label"`
+	SvgKey   string  `json:"svg_key"`
 }
 
 type FleetRulesDocument struct {
-	Version         string              `json:"version"`
-	WindowDays      int                 `json:"window_days"`
-	MinSampleTasks  int                 `json:"min_sample_tasks"`
-	PillarWeights   map[string]float64  `json:"pillar_weights"`
+	Version         string                `json:"version"`
+	WindowDays      int                   `json:"window_days"`
+	MinSampleTasks  int                   `json:"min_sample_tasks"`
+	PillarWeights   map[string]float64    `json:"pillar_weights"`
 	ClassThresholds []FleetClassThreshold `json:"class_thresholds"`
-	Changelog       []string            `json:"changelog"`
+	Changelog       []string              `json:"changelog"`
+}
+
+type AgentFleetRankChange struct {
+	CurrentAgentID  pgtype.UUID
+	PreviousClassID string
+	Current         AgentFleetRankView
 }
 
 type AgentFleetRankService struct {
-	Queries *db.Queries
+	Queries        *db.Queries
+	workspaceLocks sync.Map
 }
 
 func NewAgentFleetRankService(queries *db.Queries) *AgentFleetRankService {
@@ -79,28 +87,32 @@ func NewAgentFleetRankService(queries *db.Queries) *AgentFleetRankService {
 }
 
 func BuildFleetRulesDocument() FleetRulesDocument {
-	return FleetRulesDocument{
-		Version:        FleetRulesVersion,
-		WindowDays:     FleetWindowDays,
-		MinSampleTasks: FleetMinSampleTasks,
-		PillarWeights: map[string]float64{
-			"delivery":   fleetWeightDelivery,
-			"evolution":  fleetWeightEvolution,
-			"growth":     fleetWeightGrowth,
-			"efficiency": fleetWeightEfficiency,
-		},
-		ClassThresholds: []FleetClassThreshold{
-			{ClassID: "dreadnought", MinScore: 85, Label: "Dreadnought", SvgKey: "dreadnought"},
-			{ClassID: "battleship", MinScore: 70, Label: "Battleship", SvgKey: "battleship"},
-			{ClassID: "cruiser", MinScore: 55, Label: "Cruiser", SvgKey: "cruiser"},
-			{ClassID: "frigate", MinScore: 40, Label: "Frigate", SvgKey: "frigate"},
-			{ClassID: "corvette", MinScore: 25, Label: "Corvette", SvgKey: "corvette"},
-			{ClassID: "reserve", MinScore: 0, Label: "Reserve", SvgKey: "reserve"},
-		},
-		Changelog: []string{
-			"2026-07-30: Initial fleet rank — 30d window, 4 pillars, archive freeze.",
-		},
+	return fleetRulesDocumentFromHonorRules(DefaultAgentHonorRules())
+}
+
+func fleetRulesDocumentFromHonorRules(rules AgentHonorRules) FleetRulesDocument {
+	thresholds := make([]FleetClassThreshold, 0, len(rules.FleetClasses))
+	for _, class := range rules.FleetClasses {
+		thresholds = append(thresholds, FleetClassThreshold{
+			ClassID: class.ClassID, MinScore: class.Score, Label: class.Label, SvgKey: class.ClassID,
+		})
 	}
+	return FleetRulesDocument{
+		Version: rules.Version, WindowDays: rules.FleetWindowDays,
+		MinSampleTasks: rules.FleetMinSampleTasks, PillarWeights: rules.FleetWeights,
+		ClassThresholds: thresholds, Changelog: rules.Changelog,
+	}
+}
+
+func (s *AgentFleetRankService) GetRulesDocument(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+) (FleetRulesDocument, error) {
+	rules, _, err := loadAgentHonorRules(ctx, s.Queries, workspaceID)
+	if err != nil {
+		return FleetRulesDocument{}, err
+	}
+	return fleetRulesDocumentFromHonorRules(rules), nil
 }
 
 func bayesianSuccessRate(successes, failures int64) float64 {
@@ -152,10 +164,10 @@ func efficiencyPillar(completed int64, totalTokens int64, totalSeconds float64) 
 		return 0
 	}
 	tokensPerTask := float64(totalTokens) / float64(completed)
-	tokenScore := clamp01((500000 - tokensPerTask) / 450000) * 100
+	tokenScore := clamp01((500000-tokensPerTask)/450000) * 100
 
 	secondsPerTask := totalSeconds / float64(completed)
-	timeScore := clamp01((7200 - secondsPerTask) / 7000) * 100
+	timeScore := clamp01((7200-secondsPerTask)/7000) * 100
 
 	return (tokenScore + timeScore) / 2
 }
@@ -171,23 +183,25 @@ func clamp01(v float64) float64 {
 }
 
 func fleetClassFromScore(score float64, sampleSufficient bool) string {
+	return fleetClassFromRules(score, sampleSufficient, DefaultAgentHonorRules().FleetClasses)
+}
+
+func fleetClassFromRules(
+	score float64,
+	sampleSufficient bool,
+	classes []AgentHonorClassThreshold,
+) string {
 	if !sampleSufficient {
 		return "reserve"
 	}
-	switch {
-	case score >= 85:
-		return "dreadnought"
-	case score >= 70:
-		return "battleship"
-	case score >= 55:
-		return "cruiser"
-	case score >= 40:
-		return "frigate"
-	case score >= 25:
-		return "corvette"
-	default:
-		return "reserve"
+	sorted := append([]AgentHonorClassThreshold(nil), classes...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Score > sorted[j].Score })
+	for _, class := range sorted {
+		if score >= class.Score {
+			return class.ClassID
+		}
 	}
+	return "reserve"
 }
 
 func fleetClassLabel(classID string) string {
@@ -224,37 +238,62 @@ type fleetComputedRow struct {
 }
 
 func (s *AgentFleetRankService) RecomputeWorkspace(ctx context.Context, workspaceID pgtype.UUID) error {
-	if s == nil || s.Queries == nil {
-		return errors.New("agent fleet rank service unavailable")
-	}
+	_, err := s.RefreshWorkspace(ctx, workspaceID, "refresh")
+	return err
+}
 
-	window := int32(FleetWindowDays)
+func (s *AgentFleetRankService) RefreshWorkspace(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	triggerReason string,
+) ([]AgentFleetRankChange, error) {
+	if s == nil || s.Queries == nil {
+		return nil, errors.New("agent fleet rank service unavailable")
+	}
+	lockValue, _ := s.workspaceLocks.LoadOrStore(util.UUIDToString(workspaceID), &sync.Mutex{})
+	workspaceLock := lockValue.(*sync.Mutex)
+	workspaceLock.Lock()
+	defer workspaceLock.Unlock()
+
+	rules, _, err := loadAgentHonorRules(ctx, s.Queries, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	window := int32(rules.FleetWindowDays)
 	params := db.GetFleetDeliveryStatsParams{WorkspaceID: workspaceID, WindowDays: window}
 
 	activeIDs, err := s.Queries.ListWorkspaceActiveAgentIDs(ctx, workspaceID)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	previousRows, err := s.Queries.ListAgentFleetSnapshots(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	previousByAgent := make(map[string]db.AgentFleetSnapshot, len(previousRows))
+	for _, row := range previousRows {
+		previousByAgent[util.UUIDToString(row.AgentID)] = row
 	}
 
 	deliveryRows, err := s.Queries.GetFleetDeliveryStats(ctx, params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	evolutionFeedback, err := s.Queries.GetFleetEvolutionFeedbackStats(ctx, params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	evolutionPromos, err := s.Queries.GetFleetEvolutionPromotionStats(ctx, params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	growthRows, err := s.Queries.GetFleetGrowthStats(ctx, params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	efficiencyRows, err := s.Queries.GetFleetEfficiencyStats(ctx, params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	deliveryByAgent := map[string]db.GetFleetDeliveryStatsRow{}
@@ -291,7 +330,7 @@ func (s *AgentFleetRankService) RecomputeWorkspace(ctx context.Context, workspac
 		id := util.UUIDToString(agentID)
 		d := deliveryByAgent[id]
 		sampleTasks := int32(d.CompletedCount + d.FailedCount)
-		sampleSufficient := int64(sampleTasks) >= FleetMinSampleTasks
+		sampleSufficient := int(sampleTasks) >= rules.FleetMinSampleTasks
 
 		ev := evolutionByAgent[id]
 		g := growthByAgent[id]
@@ -304,13 +343,13 @@ func (s *AgentFleetRankService) RecomputeWorkspace(ctx context.Context, workspac
 			Efficiency: efficiencyPillar(ef.CompletedCount, ef.TotalTokens, ef.TotalSeconds) / 100,
 		}
 
-		score := pillars.Delivery*fleetWeightDelivery +
-			pillars.Evolution*fleetWeightEvolution +
-			pillars.Growth*fleetWeightGrowth +
-			pillars.Efficiency*fleetWeightEfficiency
+		score := pillars.Delivery*rules.FleetWeights["delivery"] +
+			pillars.Evolution*rules.FleetWeights["evolution"] +
+			pillars.Growth*rules.FleetWeights["growth"] +
+			pillars.Efficiency*rules.FleetWeights["efficiency"]
 		score *= 100
 
-		classID := fleetClassFromScore(score, sampleSufficient)
+		classID := fleetClassFromRules(score, sampleSufficient, rules.FleetClasses)
 		computed = append(computed, fleetComputedRow{
 			agentID:          agentID,
 			sampleTasks:      sampleTasks,
@@ -329,9 +368,10 @@ func (s *AgentFleetRankService) RecomputeWorkspace(ctx context.Context, workspac
 	})
 
 	fleetSize := int32(len(computed))
+	changes := make([]AgentFleetRankChange, 0, len(computed))
 	for i, row := range computed {
 		rank := int32(i + 1)
-		if err := s.Queries.UpsertAgentFleetSnapshot(ctx, db.UpsertAgentFleetSnapshotParams{
+		params := db.UpsertAgentFleetSnapshotParams{
 			WorkspaceID:      workspaceID,
 			AgentID:          row.agentID,
 			FleetScore:       float64ToNumeric(row.score),
@@ -343,14 +383,51 @@ func (s *AgentFleetRankService) RecomputeWorkspace(ctx context.Context, workspac
 			PillarEvolution:  float64ToNumeric(row.pillars.Evolution),
 			PillarGrowth:     float64ToNumeric(row.pillars.Growth),
 			PillarEfficiency: float64ToNumeric(row.pillars.Efficiency),
-		}); err != nil {
-			return err
 		}
+		if err := s.Queries.UpsertAgentFleetSnapshot(ctx, params); err != nil {
+			return nil, err
+		}
+		previous, existed := previousByAgent[util.UUIDToString(row.agentID)]
+		changed := !existed ||
+			previous.ClassID != row.classID ||
+			previous.FleetRank != rank ||
+			previous.FleetSize != fleetSize ||
+			previous.SampleTasks != row.sampleTasks ||
+			math.Abs(numericToFloat64(previous.FleetScore)-row.score) >= 0.01
+		if !changed {
+			continue
+		}
+		if _, err := s.Queries.InsertAgentFleetHistory(ctx, db.InsertAgentFleetHistoryParams{
+			WorkspaceID:      workspaceID,
+			AgentID:          row.agentID,
+			FleetScore:       params.FleetScore,
+			ClassID:          params.ClassID,
+			FleetRank:        rank,
+			FleetSize:        fleetSize,
+			SampleTasks:      params.SampleTasks,
+			PillarDelivery:   params.PillarDelivery,
+			PillarEvolution:  params.PillarEvolution,
+			PillarGrowth:     params.PillarGrowth,
+			PillarEfficiency: params.PillarEfficiency,
+			TriggerReason:    triggerReason,
+		}); err != nil {
+			return nil, err
+		}
+		changes = append(changes, AgentFleetRankChange{
+			CurrentAgentID:  row.agentID,
+			PreviousClassID: previous.ClassID,
+			Current: AgentFleetRankView{
+				AgentID: util.UUIDToString(row.agentID), FleetScore: row.score,
+				ClassID: row.classID, ClassLabel: fleetClassLabel(row.classID),
+				FleetRank: int(rank), FleetSize: int(fleetSize), SampleTasks: int(row.sampleTasks),
+				SampleSufficient: row.sampleSufficient, Pillars: row.pillars,
+			},
+		})
 	}
-	return nil
+	return changes, nil
 }
 
-func snapshotToView(row db.AgentFleetSnapshot) AgentFleetRankView {
+func snapshotToView(row db.AgentFleetSnapshot, minSampleTasks int) AgentFleetRankView {
 	sampleTasks := int(row.SampleTasks)
 	return AgentFleetRankView{
 		AgentID:          util.UUIDToString(row.AgentID),
@@ -360,7 +437,7 @@ func snapshotToView(row db.AgentFleetSnapshot) AgentFleetRankView {
 		FleetRank:        int(row.FleetRank),
 		FleetSize:        int(row.FleetSize),
 		SampleTasks:      sampleTasks,
-		SampleSufficient: sampleTasks >= FleetMinSampleTasks,
+		SampleSufficient: sampleTasks >= minSampleTasks,
 		Frozen:           row.Frozen,
 		Pillars: FleetPillarScores{
 			Delivery:   numericToFloat64(row.PillarDelivery),
@@ -372,7 +449,8 @@ func snapshotToView(row db.AgentFleetSnapshot) AgentFleetRankView {
 }
 
 func (s *AgentFleetRankService) ListRankings(ctx context.Context, workspaceID pgtype.UUID) ([]AgentFleetRankView, error) {
-	if err := s.RecomputeWorkspace(ctx, workspaceID); err != nil {
+	rules, _, err := loadAgentHonorRules(ctx, s.Queries, workspaceID)
+	if err != nil {
 		return nil, err
 	}
 	rows, err := s.Queries.ListAgentFleetSnapshots(ctx, workspaceID)
@@ -381,13 +459,14 @@ func (s *AgentFleetRankService) ListRankings(ctx context.Context, workspaceID pg
 	}
 	out := make([]AgentFleetRankView, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, snapshotToView(row))
+		out = append(out, snapshotToView(row, rules.FleetMinSampleTasks))
 	}
 	return out, nil
 }
 
 func (s *AgentFleetRankService) GetAgentRank(ctx context.Context, workspaceID, agentID pgtype.UUID) (AgentFleetRankView, error) {
-	if err := s.RecomputeWorkspace(ctx, workspaceID); err != nil {
+	rules, _, err := loadAgentHonorRules(ctx, s.Queries, workspaceID)
+	if err != nil {
 		return AgentFleetRankView{}, err
 	}
 	row, err := s.Queries.GetAgentFleetSnapshot(ctx, db.GetAgentFleetSnapshotParams{
@@ -405,15 +484,12 @@ func (s *AgentFleetRankService) GetAgentRank(ctx context.Context, workspaceID, a
 		}
 		return AgentFleetRankView{}, err
 	}
-	return snapshotToView(row), nil
+	return snapshotToView(row, rules.FleetMinSampleTasks), nil
 }
 
 func (s *AgentFleetRankService) FreezeAgentOnArchive(ctx context.Context, workspaceID, agentID pgtype.UUID) error {
 	if s == nil || s.Queries == nil {
 		return nil
-	}
-	if err := s.RecomputeWorkspace(ctx, workspaceID); err != nil {
-		return err
 	}
 	if err := s.Queries.FreezeAgentFleetSnapshot(ctx, db.FreezeAgentFleetSnapshotParams{
 		WorkspaceID: workspaceID,
@@ -421,5 +497,23 @@ func (s *AgentFleetRankService) FreezeAgentOnArchive(ctx context.Context, worksp
 	}); err != nil {
 		return err
 	}
-	return s.RecomputeWorkspace(ctx, workspaceID)
+	_, err := s.RefreshWorkspace(ctx, workspaceID, "agent_archived")
+	return err
+}
+
+func (s *AgentFleetRankService) RestoreAgent(
+	ctx context.Context,
+	workspaceID, agentID pgtype.UUID,
+) error {
+	if s == nil || s.Queries == nil {
+		return nil
+	}
+	if err := s.Queries.UnfreezeAgentFleetSnapshot(ctx, db.UnfreezeAgentFleetSnapshotParams{
+		WorkspaceID: workspaceID,
+		AgentID:     agentID,
+	}); err != nil {
+		return err
+	}
+	_, err := s.RefreshWorkspace(ctx, workspaceID, "agent_restored")
+	return err
 }

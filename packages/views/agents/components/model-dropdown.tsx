@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Cpu, Loader2, Plus, Check, Info } from "lucide-react";
 import { runtimeModelsOptions } from "@multica/core/runtimes";
@@ -28,16 +28,25 @@ export function ModelDropdown({
   value,
   onChange,
   disabled,
+  // Create/hire flows (LRM-808): empty model is rejected by the API. Prefer
+  // an explicit pick (and optionally seed the first catalog entry) instead of
+  // showing a fake "provider default" that submits blank.
+  required = false,
+  autoSelectFirst = false,
 }: {
   runtimeId: string | null;
   runtimeOnline: boolean;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  required?: boolean;
+  autoSelectFirst?: boolean;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   const modelsQuery = useQuery(
     runtimeModelsOptions(runtimeOnline ? runtimeId : null),
@@ -57,9 +66,19 @@ export function ModelDropdown({
   // persist a ghost configuration that never takes effect.
   useEffect(() => {
     if (!supported && value !== "") {
-      onChange("");
+      onChangeRef.current("");
     }
-  }, [supported, value, onChange]);
+  }, [supported, value]);
+
+  // Seed a concrete catalog model on create/hire so "Create" does not
+  // silently 400 with "model is required" while the trigger still reads
+  // like a default is already chosen.
+  useEffect(() => {
+    if (!autoSelectFirst || !supported || modelsQuery.isLoading) return;
+    if (value.trim()) return;
+    const first = models[0]?.id?.trim();
+    if (first) onChangeRef.current(first);
+  }, [autoSelectFirst, supported, modelsQuery.isLoading, models, value]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return grouped;
@@ -93,7 +112,9 @@ export function ModelDropdown({
     (disabled
       ? t(($) => $.model_dropdown.select_runtime_first)
       : runtimeOnline
-        ? t(($) => $.model_dropdown.default_provider)
+        ? required
+          ? t(($) => $.model_dropdown.select_required)
+          : t(($) => $.model_dropdown.default_provider)
         : t(($) => $.model_dropdown.runtime_offline_manual));
 
   if (!supported && !modelsQuery.isLoading) {
@@ -221,7 +242,7 @@ export function ModelDropdown({
               </button>
             )}
 
-            {value && (
+            {value && !required && (
               <button
                 type="button"
                 onClick={() => select("")}

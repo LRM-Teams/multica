@@ -265,7 +265,6 @@ type ChannelMessagesPageResponse struct {
 	Limit      int                            `json:"limit"`
 	HasMore    bool                           `json:"has_more"`
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
-	A2AControl *AgentDMControlResponse        `json:"a2a_control,omitempty"`
 
 	// around_seq mode only:
 	AnchorIndex  int                            `json:"anchor_index"`
@@ -283,7 +282,6 @@ type ChannelThreadMessagesCursorResponse struct {
 type ChannelThreadMessagesPageResponse struct {
 	Messages   []ChannelMessageResponse             `json:"messages"`
 	NextCursor *ChannelThreadMessagesCursorResponse `json:"next_cursor"`
-	A2AControl *AgentDMControlResponse              `json:"a2a_control,omitempty"`
 }
 
 type ChannelMessageReply struct {
@@ -1308,13 +1306,12 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 	qLower := strings.ToLower(q)
 	qLike := "%" + qLower + "%"
 	includeAll := qLower == ""
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike, actorType, parseUUID(actorID)}
+	args := []any{parseUUID(workspaceID), channelID, includeAll, qLike}
 	limitClause := ""
 	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
 		limit := boundedQueryInt(r, "limit", 200, 500)
 		args = append(args, limit)
-		limitClause = " LIMIT $7"
+		limitClause = " LIMIT $5"
 	}
 
 	query := `
@@ -1327,11 +1324,6 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 			  AND NOT EXISTS (
 				SELECT 1 FROM channel_member cm
 				WHERE cm.channel_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
-			  )
-			  AND (
-				$5::text = 'agent'
-				OR a.owner_id = $6::uuid
-				OR COALESCE(NULLIF(a.display_name, ''), a.name) NOT IN ('Wendy', 'Windy', 'Joe')
 			  )
 			  AND (
 				$3::boolean
@@ -2050,12 +2042,6 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, false) {
 		return
 	}
-	var a2aControl *AgentDMControlResponse
-	if supervisor {
-		a2aControl, _ = h.agentDMControlForOwner(
-			r.Context(), parseUUID(workspaceID), channelID, userUUID,
-		)
-	}
 	limit, beforeSeq, beforeCreatedAt, beforeID, aroundSeq, err := parseChannelMessagesPageParams(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -2063,7 +2049,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if aroundSeq > 0 {
-		h.listChannelMessagesAround(w, r, channelID, workspaceID, userID, limit, aroundSeq, a2aControl)
+		h.listChannelMessagesAround(w, r, channelID, workspaceID, userID, limit, aroundSeq)
 		return
 	}
 
@@ -2138,7 +2124,6 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		Limit:      limit,
 		HasMore:    hasMore,
 		NextCursor: nextCursor,
-		A2AControl: a2aControl,
 	})
 }
 
@@ -2184,7 +2169,7 @@ func (h *Handler) queryChannelMessages(ctx context.Context, channelID, workspace
 	return msgs, rows.Err()
 }
 
-func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Request, channelID pgtype.UUID, workspaceIDStr string, userIDStr string, limit int, aroundSeq int64, a2aControl *AgentDMControlResponse) {
+func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Request, channelID pgtype.UUID, workspaceIDStr string, userIDStr string, limit int, aroundSeq int64) {
 	workspaceID := parseUUID(workspaceIDStr)
 	userID := parseUUID(userIDStr)
 	limitBefore := limit / 2
@@ -2311,7 +2296,6 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		Limit:        limit,
 		HasMore:      hasMore,
 		NextCursor:   nextCursor,
-		A2AControl:   a2aControl,
 		AnchorIndex:  anchorIndex,
 		HasMoreAfter: hasMoreAfter,
 		AfterCursor:  afterCursor,
@@ -3926,12 +3910,6 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, false) {
 		return
 	}
-	var a2aControl *AgentDMControlResponse
-	if supervisor {
-		a2aControl, _ = h.agentDMControlForOwner(
-			r.Context(), parseUUID(workspaceID), channelID, userUUID,
-		)
-	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
 	if !ok {
 		return
@@ -4003,7 +3981,6 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, ChannelThreadMessagesPageResponse{
 		Messages:   out,
 		NextCursor: nextCursor,
-		A2AControl: a2aControl,
 	})
 }
 

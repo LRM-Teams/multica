@@ -35,7 +35,14 @@
     "loading": "리서치를 불러오는 중입니다",
     "load_failed": "리서치를 불러오지 못했습니다",
     "retry": "다시 시도",
-    "empty_cta": "첫 리서치 시작하기"
+    "empty_cta": "첫 리서치 시작하기",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "Research goal",
+    "goal_dialog_close": "Close",
+    "goal_dialog_open": "Open session",
+    "who_working": "{{name}} working",
+    "output_line": "Output · {{summary}}",
+    "no_output": "Output · none yet"
   },
   "filter": {
     "search_label": "세션 제목 검색",
@@ -92,6 +99,21 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
+  "step_card": {
+    "status": {
+      "done": "완료",
+      "running": "진행 중",
+      "waiting": "대기",
+      "failed": "실패"
+    },
+    "expand": "근거 펼치기",
+    "collapse": "접기",
+    "retry": "재시도",
+    "reassign": "재배정",
+    "standby": "대기 중",
+    "composer_hint": "Enter 전송 · Shift+Enter 줄바꿈",
+    "sending": "전송 중…"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -114,7 +136,10 @@
     "creating": "플릿 편성 중…",
     "create_failed": "리서치 세션을 만들지 못했습니다",
     "templates_label": "빠른 템플릿",
-    "templates_hint": "선택하면 목표와 추천 관점이 채워집니다(이후 수정 가능)"
+    "templates_hint": "선택하면 전문 프롬프트가 칩으로 붙고, 목표를 이어서 입력할 수 있습니다",
+    "template_chip": "{{title}} prompt added — keep typing your goal",
+    "template_chip_clear": "Remove template",
+    "goal_placeholder_with_template": "Add your specific goal…"
   },
   "ring": {
     "title": "노드 작업",
@@ -173,5 +198,18 @@
       "stop_enough": "Enough · close",
       "stop_budget": "Budget hit · close"
     }
+  },
+  "reader": {
+    "outline": "개요",
+    "copy_md": "MD 복사",
+    "copied": "복사됨",
+    "export": "내보내기",
+    "meta": "전달 · v{{revision}} · 출처 {{count}}",
+    "sources_heading": "가중 출처 지도",
+    "sources_hint": "신뢰도 순. 높은 가중치는 기준선, 낮은 가중치는 보조 근거입니다.",
+    "col_weight": "가중치",
+    "col_type": "유형",
+    "col_source": "출처",
+    "col_purpose": "용도"
   }
 }

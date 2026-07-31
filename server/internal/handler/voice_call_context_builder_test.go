@@ -9,7 +9,46 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestVoiceCallWelcomeMessageDefaultsUnsetMemberLanguageToChinese(t *testing.T) {
+	member := db.User{DisplayName: "调用者"}
+	agent := db.Agent{DisplayName: "贝克汉姆"}
+
+	got := voiceCallWelcomeMessage(member, agent)
+	want := "你好，调用者。我是贝克汉姆。你想聊什么？"
+	if got != want {
+		t.Fatalf("welcome message = %q, want %q", got, want)
+	}
+
+	behavior := voiceCallBehaviorBody(member)
+	for _, wantInstruction := range []string{
+		"Speak in Simplified Chinese throughout the call.",
+		"Do not switch to English unless the member explicitly asks you to.",
+	} {
+		if !strings.Contains(behavior, wantInstruction) {
+			t.Fatalf("voice call behavior missing %q: %q", wantInstruction, behavior)
+		}
+	}
+}
+
+func TestVoiceCallKeepsExplicitEnglishMemberLanguage(t *testing.T) {
+	member := db.User{
+		DisplayName: "Caller",
+		Language:    pgtype.Text{String: "en-US", Valid: true},
+	}
+	agent := db.Agent{DisplayName: "Beckham"}
+
+	got := voiceCallWelcomeMessage(member, agent)
+	want := "Hello, Caller. This is Beckham. What would you like to discuss?"
+	if got != want {
+		t.Fatalf("welcome message = %q, want %q", got, want)
+	}
+	if strings.Contains(voiceCallBehaviorBody(member), "Simplified Chinese") {
+		t.Fatalf("explicit English preference received Chinese voice behavior")
+	}
+}
 
 func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t *testing.T) {
 	if testHandler == nil || testPool == nil {
@@ -237,6 +276,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 		"上一轮我问了项目进度",
 		"我会先核对当前 issue",
 		"修复通话延迟",
+		"Speak in Simplified Chinese throughout the call",
 		"Never claim that code, files, issues, or external systems changed",
 	} {
 		if !strings.Contains(all, want) {

@@ -76,7 +76,6 @@ import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback"
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
-import { AgentDMControlStrip } from "./agent-dm-control-strip";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { ThreadFollowButton } from "./thread-follow-button";
@@ -85,6 +84,7 @@ import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 import { DmAgentWorkingCue } from "./dm-agent-working-cue";
+import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 
 // #692 finding 1: a supervised agent_pair owner is NOT a channel_member, so the
 // automatic member-only mark-read mutation 403s. Pass this no-op instead of the
@@ -624,6 +624,12 @@ function DmChannelConversation({
 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
+  const dmMessageAreaRef = useRef<HTMLDivElement>(null);
+  // LRM-695 — text-selection Quote/Copy over the DM message area (desktop).
+  const dmSelectionMenu = useSelectionQuoteMenu({
+    containerRef: dmMessageAreaRef,
+    onQuote: (md: string) => editorRef.current?.insertMarkdown(md),
+  });
   // #772 send-failure → composer-restore (main + thread composers). The failed
   // text is restored into the composer (or kept-back when the composer already
   // holds new text) and an inline bar is shown; the editor is remounted via a
@@ -1414,9 +1420,6 @@ function DmChannelConversation({
           <ChannelFilesPanel channelId={channelId} wide />
         </TabsContent>
         <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
-      {dm.mode === "agent_pair" && dm.a2a_control && (
-        <AgentDMControlStrip channelId={channelId} control={dm.a2a_control} />
-      )}
       {convSearch.open && (
         <div
           className={cn(
@@ -1491,6 +1494,7 @@ function DmChannelConversation({
           {t(($) => $.message_loading.jump_not_found)}
         </output>
       )}
+      <div ref={dmMessageAreaRef} className="contents">
       <ChannelMessageList
         key={channelId}
         messages={messages}
@@ -1528,6 +1532,8 @@ function DmChannelConversation({
         onEditMessage={readOnly ? undefined : handleEditMessage}
         onRetrySend={readOnly ? undefined : handleRetrySend}
       />
+      {!readOnly ? dmSelectionMenu.menu : null}
+      </div>
       <Composer
         surface="dm_channel"
         readOnly={readOnly}

@@ -167,6 +167,9 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 		resp.MissedWriteQueued = queued
 	}
 
+	if resp.Accepted > 0 {
+		h.refreshAgentHonor(r.Context(), wsUUID, agentID, "memory_updated")
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

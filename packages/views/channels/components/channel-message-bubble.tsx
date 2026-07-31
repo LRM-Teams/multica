@@ -58,7 +58,6 @@ import {
   parseProjectSystemEvent,
   parseReminderSystemEvent,
   parseThreadSystemEvent,
-  parseAgentDMPauseSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
@@ -67,7 +66,6 @@ import {
   ProjectSystemEventContent,
   ReminderSystemEventContent,
   ThreadSystemEventContent,
-  AgentDMPauseSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
@@ -152,10 +150,6 @@ function ChannelSystemMessageRow({
   // LRM-540: thread unfollow/follow — structured actor token (display_name),
   // never the BE `@handle unfollowed this thread` fallback content.
   const threadEvent = parseThreadSystemEvent(message);
-  // #692: A2A agent-pair DM gate rows (budget/frequency auto-pause, owner
-  // pause/resume pair or global). Owner-private history marker; localized copy
-  // from structured params, never the BE English fallback.
-  const agentDMPauseEvent = parseAgentDMPauseSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -200,8 +194,6 @@ function ChannelSystemMessageRow({
             <ReminderSystemEventContent event={reminderEvent} />
           ) : threadEvent ? (
             <ThreadSystemEventContent event={threadEvent} />
-          ) : agentDMPauseEvent ? (
-            <AgentDMPauseSystemEventContent event={agentDMPauseEvent} />
           ) : hasReferenceParts ? (
             // Spans are anchored to the RAW `message.content`; feeding the trimmed
             // `systemText` would shift every offset and misplace the tokens.
@@ -815,13 +807,17 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           shell fix (#1154). Soft wrap stays on `.message-surface`. */}
       <div className="min-w-0 max-w-full">
         {showAuthor && (
-          <div className="mb-0.5 flex select-none items-baseline gap-2 text-[13.5px] md:pr-24">
+          <div
+            data-testid="message-author-row"
+            className="mb-0.5 flex select-none items-center gap-1.5 text-[13.5px] md:pr-24"
+          >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
                 memberType={profileActorType}
                 memberId={profileActorId}
                 side="top"
                 sideOffset={8}
+                className="self-center"
                 onClickCapture={handleOpenProfileCapture}
               >
                 {nameLabel}
@@ -840,7 +836,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               </span>
             )}
             <span
-              className="shrink-0 text-[11px] text-muted-foreground/60"
+              data-testid="message-author-time"
+              className="inline-flex h-5 shrink-0 items-center text-[10px] leading-none tabular-nums text-muted-foreground/50"
               title={messageTime.full(message.created_at)}
             >
               <Time kind="message" value={message.created_at} title={false} />

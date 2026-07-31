@@ -34,6 +34,9 @@ vi.mock("./tabs/mcp-config-tab", () => ({
 vi.mock("./tabs/integrations-tab", () => ({
   IntegrationsTab: () => <div>integrations-tab</div>,
 }));
+vi.mock("./tabs/agent-honor-tab", () => ({
+  AgentHonorTab: () => <div data-testid="agent-honor-tab">agent-honor-tab</div>,
+}));
 vi.mock("../../common/actor-issues-panel", () => ({
   ActorIssuesPanel: () => <div>actor-issues-panel</div>,
 }));
@@ -104,7 +107,7 @@ function makeRuntime(provider: string): AgentRuntime {
   };
 }
 
-function renderPane(runtimes: AgentRuntime[]) {
+function renderPane(runtimes: AgentRuntime[], initialTab?: "honor") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -115,6 +118,8 @@ function renderPane(runtimes: AgentRuntime[]) {
           agent={baseAgent}
           runtimes={runtimes}
           onUpdate={vi.fn().mockResolvedValue(undefined)}
+          canManage
+          initialTab={initialTab}
         />
       </QueryClientProvider>
     </I18nProvider>,
@@ -159,6 +164,18 @@ describe("AgentOverviewPane MCP tab visibility", () => {
     // then back on, which reads as a bug.
     renderPane([]);
     expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
+  });
+});
+
+describe("AgentOverviewPane initial tab", () => {
+  it("opens the complete honor system when requested by the directory", () => {
+    renderPane([makeRuntime("claude")], "honor");
+
+    expect(screen.getByTestId("agent-honor-tab")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Honor" })).toHaveAttribute(
+      "data-active",
+      "true",
+    );
   });
 });
 

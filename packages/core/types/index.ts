@@ -6,6 +6,21 @@ export type {
   AgentFleetRulesDocument,
 } from "./agent-fleet";
 export type {
+  AgentAchievement,
+  AgentAchievementDefinition,
+  AgentAchievementProgress,
+  AgentFleetHistory,
+  AgentHonorAdminAudit,
+  AgentHonorClassThreshold,
+  AgentHonorDashboard,
+  AgentHonorEvent,
+  AgentHonorGrantRequest,
+  AgentHonorMetrics,
+  AgentHonorRules,
+  AgentHonorRulesView,
+  UpdateAgentHonorShowcaseRequest,
+} from "./agent-honor";
+export type {
   Agent,
   AgentMemoryGrowth,
   AgentMemoryGrowthTier,
@@ -31,6 +46,8 @@ export type {
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,
+  RuntimeAgentWorkspace,
+  RuntimeAgentWorkspacesResponse,
   AgentAvatarSelection,
   CreateAgentRequest,
   AgentCreationDraft,

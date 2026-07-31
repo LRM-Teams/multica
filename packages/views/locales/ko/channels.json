@@ -175,6 +175,15 @@
     "no_recent_activity": "최근 활동이 없습니다",
     "close_aria": "프로필 닫기",
     "no_permission_toast": "이 멤버의 프로필을 볼 권한이 없습니다",
+    "honor": {
+      "title": "개발자 명예",
+      "agent_title": "에이전트 명예",
+      "no_badge": "장착한 배지 없음",
+      "keep_building": "계속 개발하여 명예 잠금 해제",
+      "collection": "{{unlocked}} / {{total}} 수집",
+      "agent_collection": "{{unlocked}}개 잠금 해제",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "사용량",
@@ -536,13 +545,6 @@
       "thread": {
         "unfollowed": "{actor}님이 이 스레드 팔로우를 해제했습니다",
         "followed": "{actor}님이 이 스레드를 팔로우했습니다"
-      },
-      "agent_dm": {
-        "paused_budget": "「{matter}」에 대해 상한({round}/{roundLimit} 라운드)까지 주고받아 일시 중지되었습니다.",
-        "paused_frequency": "{agentA}와 {agentB}의 대화가 너무 잦아 이 쌍을 일시 중지했습니다.",
-        "paused_pair": "이 에이전트 쌍의 DM을 일시 중지했습니다 — 재개할 때까지 서로 DM을 보내지 않습니다.",
-        "paused_global": "회원님의 에이전트가 관련된 모든 DM을 일시 중지했습니다 — 재개할 때까지 어떤 에이전트에게도 메시지를 보내지 않습니다.",
-        "resumed": "재개됨 — 회원님의 에이전트가 다시 DM을 보낼 수 있습니다."
       }
     }
   },
@@ -579,23 +581,7 @@
     "bubble_replied_time": "방금",
     "agent_pair": {
       "pill": "에이전트 간 DM",
-      "action_view_dm": "보기",
-      "action_grant_rounds": "{{step}}라운드 더 허용",
-      "action_pause_pair": "이 쌍 중지",
-      "action_resume_pair": "이 쌍 재개",
-      "action_pause_global": "내 에이전트가 관련된 DM 일시 중지",
-      "global_toggle": "내 에이전트가 관련된 DM 일시 중지",
-      "global_paused_note": "일시 중지됨 — 재개할 때까지 회원님의 에이전트가 어떤 에이전트에게도 DM을 보내지 않습니다.",
-      "owner_readonly_note": "이 에이전트 쌍의 DM을 읽기 전용으로 감독하고 있습니다 — 여기에 글을 쓸 수 없습니다.",
-      "state_active": "진행 중 · {{round}}/{{roundLimit}} 라운드",
-      "state_paused_budget": "일시 중지 · 이 사안의 라운드 상한 도달",
-      "state_paused_frequency": "일시 중지 · 이 쌍의 대화가 너무 잦음",
-      "state_paused_pair": "일시 중지 · 회원님이 이 쌍을 중지함",
-      "state_paused_global": "일시 중지 · 내 에이전트가 관련된 DM",
-      "action_resume_global": "내 에이전트가 관련된 DM 재개",
-      "action_failed": "작업에 실패했습니다. 다시 시도해 주세요.",
-      "global_section_title": "에이전트 DM",
-      "global_section_desc": "내 에이전트가 다른 에이전트와 DM을 주고받을 수 있는지 제어합니다."
+      "owner_readonly_note": "이 에이전트 쌍의 DM을 읽기 전용으로 감독하고 있습니다 — 여기에 글을 쓸 수 없습니다."
     }
   },
   "voice_call": {

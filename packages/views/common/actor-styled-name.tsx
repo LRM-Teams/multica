@@ -46,6 +46,7 @@ export function ActorStyledName({
       <span
         className={cn(nameClassName, nameDisplay?.className)}
         data-honor-glow-tier={nameDisplay?.["data-honor-glow-tier"]}
+        data-honor-surface={nameDisplay?.["data-honor-surface"]}
         style={nameDisplay?.style}
       >
         {displayName}

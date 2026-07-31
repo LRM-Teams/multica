@@ -35,7 +35,14 @@
     "loading": "リサーチを読み込んでいます",
     "load_failed": "リサーチの読み込みに失敗しました",
     "retry": "再試行",
-    "empty_cta": "最初のリサーチを始める"
+    "empty_cta": "最初のリサーチを始める",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "Research goal",
+    "goal_dialog_close": "Close",
+    "goal_dialog_open": "Open session",
+    "who_working": "{{name}} working",
+    "output_line": "Output · {{summary}}",
+    "no_output": "Output · none yet"
   },
   "filter": {
     "search_label": "セッションタイトルを検索",
@@ -92,6 +99,21 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
+  "step_card": {
+    "status": {
+      "done": "完了",
+      "running": "進行中",
+      "waiting": "待機",
+      "failed": "失敗"
+    },
+    "expand": "根拠を展開",
+    "collapse": "閉じる",
+    "retry": "再試行",
+    "reassign": "再割当",
+    "standby": "待機中",
+    "composer_hint": "Enter で送信 · Shift+Enter で改行",
+    "sending": "送信中…"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -114,7 +136,10 @@
     "creating": "艦隊を編成中…",
     "create_failed": "調査セッションを作成できませんでした",
     "templates_label": "クイックテンプレート",
-    "templates_hint": "選択すると目標と推奨観点が入ります（あとから編集可）"
+    "templates_hint": "選択すると専門プロンプトがチップで付き、目標を続けて入力できます",
+    "template_chip": "{{title}} prompt added — keep typing your goal",
+    "template_chip_clear": "Remove template",
+    "goal_placeholder_with_template": "Add your specific goal…"
   },
   "ring": {
     "title": "ノード操作",
@@ -173,5 +198,18 @@
       "stop_enough": "Enough · close",
       "stop_budget": "Budget hit · close"
     }
+  },
+  "reader": {
+    "outline": "アウトライン",
+    "copy_md": "MD をコピー",
+    "copied": "コピー済み",
+    "export": "エクスポート",
+    "meta": "納品 · v{{revision}} · 出典 {{count}}",
+    "sources_heading": "重み付きソースマップ",
+    "sources_hint": "信頼度順。高スコアは基線、低スコアは傍証のみ。",
+    "col_weight": "重み",
+    "col_type": "種別",
+    "col_source": "ソース",
+    "col_purpose": "用途"
   }
 }

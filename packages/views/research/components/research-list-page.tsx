@@ -24,12 +24,18 @@ import {
   isSessionListFilterActive,
   type SessionStatusFilter,
 } from "../lib/session-list-filter";
+import {
+  composeTemplateGoal,
+  localizeTemplateField,
+  type ResearchTemplate,
+} from "../lib/research-templates";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
+import { ResearchTemplateCards } from "./research-template-cards";
 
 export function ResearchListPage() {
-  const { t } = useT("research");
+  const { t, i18n } = useT("research");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const nav = useNavigation();
@@ -37,6 +43,7 @@ export function ResearchListPage() {
   const [goal, setGoal] = useState("");
   const [titleQuery, setTitleQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
+  const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -49,7 +56,11 @@ export function ResearchListPage() {
   );
 
   const create = useMutation({
-    mutationFn: () => api.createResearchSession({ goal: goal.trim() }),
+    mutationFn: () =>
+      api.createResearchSession({
+        goal: goal.trim(),
+        ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
+      }),
     onSuccess: (res) => {
       // Seed snapshot from kickoff payload so the session page paints a busy graph
       // without waiting on the first GET / WS round-trip.
@@ -111,10 +122,19 @@ export function ResearchListPage() {
     el.focus({ preventScroll: true });
   };
 
-  const fillComposer = (text: string) => {
+  const fillComposer = (text: string, title?: string) => {
     setGoal(text);
+    setDraftTitle(title);
     // Defer focus so the controlled value paints before the caret moves.
     queueMicrotask(focusComposer);
+  };
+
+  const applyTemplate = (template: ResearchTemplate) => {
+    const language = i18n?.language;
+    fillComposer(
+      composeTemplateGoal(template, language),
+      localizeTemplateField(template.sessionTitle, language),
+    );
   };
 
   const submitCreate = () => {
@@ -227,6 +247,9 @@ export function ResearchListPage() {
           ) : null}
         </div>
       </section>
+
+      {/* LRM-817: quick template cards — always on homepage, fill composer + params. */}
+      <ResearchTemplateCards onSelect={applyTemplate} />
 
       {isLoading ? (
         <div className="space-y-2" aria-busy="true" aria-label={t(($) => $.list.loading)}>

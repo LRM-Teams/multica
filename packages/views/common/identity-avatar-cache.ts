@@ -1,9 +1,13 @@
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import {
+  isLegacyUploadsAvatarUrl,
+  resolvePublicFileUrl,
+} from "@multica/core/workspace/avatar-url";
 
 /**
  * LRM-224 / LRM-223 option B: identity-first sticky face cache.
  * Keyed by `actorType:actorId`. Message payload URLs only *seed* the cache;
  * null / undefined / missing must never clear an existing entry.
+ * LRM-855: a legacy `/uploads/` hint must not overwrite a sticky OSS/CDN URL.
  */
 
 export type IdentityActorType = "member" | "agent" | "squad" | "user";
@@ -27,6 +31,15 @@ export function identityActorKey(
   return `${normalized}:${actorId}`;
 }
 
+function shouldReplaceSticky(next: string, sticky: string | undefined): boolean {
+  if (!sticky) return true;
+  // Keep a non-legacy sticky face when a stale `/uploads/` row tries to reseed.
+  if (isLegacyUploadsAvatarUrl(next) && !isLegacyUploadsAvatarUrl(sticky)) {
+    return false;
+  }
+  return true;
+}
+
 /** Remember a good URL for this actor. No-ops on empty values. */
 export function rememberIdentityAvatarUrl(
   actorType: string,
@@ -36,6 +49,8 @@ export function rememberIdentityAvatarUrl(
   const key = identityActorKey(actorType, actorId);
   const resolved = resolvePublicFileUrl(url) ?? undefined;
   if (!key || !resolved) return;
+  const sticky = identityAvatarOkCache.get(key);
+  if (!shouldReplaceSticky(resolved, sticky)) return;
   identityAvatarOkCache.set(key, resolved);
 }
 
@@ -53,19 +68,26 @@ export function resolveIdentityAvatarUrl(options: {
 }): string | undefined {
   const { actorType, actorId, avatarUrlHint, directoryUrl } = options;
   const key = identityActorKey(actorType, actorId);
+  const sticky = key ? identityAvatarOkCache.get(key) : undefined;
 
   const fromHint = resolvePublicFileUrl(avatarUrlHint) ?? undefined;
   if (fromHint) {
-    if (key) identityAvatarOkCache.set(key, fromHint);
+    if (key && shouldReplaceSticky(fromHint, sticky)) {
+      identityAvatarOkCache.set(key, fromHint);
+      return fromHint;
+    }
+    // Stale `/uploads/` hint while sticky already holds OSS — keep sticky.
+    if (sticky && !shouldReplaceSticky(fromHint, sticky)) return sticky;
     return fromHint;
   }
 
-  const sticky = key ? identityAvatarOkCache.get(key) : undefined;
   if (sticky) return sticky;
 
   const fromDirectory = resolvePublicFileUrl(directoryUrl) ?? undefined;
   if (fromDirectory) {
-    if (key) identityAvatarOkCache.set(key, fromDirectory);
+    if (key && shouldReplaceSticky(fromDirectory, sticky)) {
+      identityAvatarOkCache.set(key, fromDirectory);
+    }
     return fromDirectory;
   }
   return undefined;

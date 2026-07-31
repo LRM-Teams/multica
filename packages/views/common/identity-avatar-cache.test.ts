@@ -8,6 +8,8 @@ import {
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+  isLegacyUploadsAvatarUrl: (url: string | null | undefined) =>
+    !!url && (url.startsWith("/uploads/") || /\/uploads\//.test(url)),
 }));
 
 describe("identity-avatar-cache (LRM-224)", () => {
@@ -64,5 +66,27 @@ describe("identity-avatar-cache (LRM-224)", () => {
         directoryUrl: null,
       }),
     ).toBe("/uploads/keep.png");
+  });
+
+  it("LRM-855: stale /uploads/ hint does not overwrite sticky OSS", () => {
+    rememberIdentityAvatarUrl("agent", "a-3", "https://cdn.example.com/avatars/a.png");
+    expect(
+      resolveIdentityAvatarUrl({
+        actorType: "agent",
+        actorId: "a-3",
+        avatarUrlHint: "/uploads/stale.png",
+      }),
+    ).toBe("https://cdn.example.com/avatars/a.png");
+  });
+
+  it("LRM-855: OSS hint replaces sticky /uploads/", () => {
+    rememberIdentityAvatarUrl("agent", "a-4", "/uploads/old.png");
+    expect(
+      resolveIdentityAvatarUrl({
+        actorType: "agent",
+        actorId: "a-4",
+        avatarUrlHint: "https://cdn.example.com/avatars/a.png",
+      }),
+    ).toBe("https://cdn.example.com/avatars/a.png");
   });
 });

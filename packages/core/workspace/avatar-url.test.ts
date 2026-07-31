@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AGENT_AVATAR_PRESETS,
+  isLegacyUploadsAvatarUrl,
+  preferAuthorAvatarUrl,
   resolvePublicFileUrl,
   resolvePublicFileUrlWithBase,
 } from "./avatar-url";
@@ -71,5 +73,36 @@ describe("AGENT_AVATAR_PRESETS", () => {
     expect(AGENT_AVATAR_PRESETS[0]).toBe("/agent-avatars/human-01.jpg");
     expect(AGENT_AVATAR_PRESETS[23]).toBe("/agent-avatars/human-24.jpg");
     expect(new Set(AGENT_AVATAR_PRESETS).size).toBe(24); // no dupes
+  });
+});
+
+describe("isLegacyUploadsAvatarUrl / preferAuthorAvatarUrl (LRM-855)", () => {
+  it("detects relative and absolute /uploads/ paths", () => {
+    expect(isLegacyUploadsAvatarUrl("/uploads/a.png")).toBe(true);
+    expect(isLegacyUploadsAvatarUrl("https://cdn.example.com/uploads/a.png")).toBe(true);
+    expect(isLegacyUploadsAvatarUrl("https://cdn.example.com/avatars/a.png")).toBe(false);
+    expect(isLegacyUploadsAvatarUrl("/agent-avatars/human-01.jpg")).toBe(false);
+  });
+
+  it("lets OSS incoming replace cached /uploads/", () => {
+    expect(
+      preferAuthorAvatarUrl(
+        "https://cdn.example.com/avatars/a.png",
+        "/uploads/old.png",
+      ),
+    ).toBe("https://cdn.example.com/avatars/a.png");
+  });
+
+  it("keeps cached OSS when incoming is stale /uploads/", () => {
+    expect(
+      preferAuthorAvatarUrl(
+        "/uploads/stale.png",
+        "https://cdn.example.com/avatars/a.png",
+      ),
+    ).toBe("https://cdn.example.com/avatars/a.png");
+  });
+
+  it("falls back to cache when incoming omits the URL", () => {
+    expect(preferAuthorAvatarUrl(null, "/uploads/keep.png")).toBe("/uploads/keep.png");
   });
 });

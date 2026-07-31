@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Copy, Download, List, X } from "lucide-react";
 import { normalizeReportStructured } from "@multica/core/research";
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
@@ -111,7 +112,7 @@ export function ReportReader({
     else dialog.setAttribute("open", "");
   }, []);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
   const scrollTo = (id: string) => {
     setActiveId(id);
@@ -145,14 +146,18 @@ export function ReportReader({
     URL.revokeObjectURL(url);
   };
 
-  return (
+  // Portaled to body so canvas `relative`/`overflow` cannot pin this into a
+  // corner float (LRM-880 / LRM-921 anti-example).
+  return createPortal(
     <dialog
       ref={bindDialog}
+      data-testid="research-delivery-modal"
       className={cn(
-        "fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-background/70 p-0 backdrop-blur-sm open:flex sm:items-center sm:p-6",
-        "backdrop:bg-transparent",
+        "fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-black/45 p-0 open:flex sm:items-center sm:p-6 md:p-8",
+        "backdrop:bg-black/45",
       )}
       aria-label={t(($) => $.panel.delivery)}
+      aria-modal="true"
       onCancel={(event) => {
         event.preventDefault();
         const dialog = dialogRef.current;
@@ -165,9 +170,11 @@ export function ReportReader({
       onClose={onClose}
     >
       <div
+        data-testid="research-delivery-modal-card"
         className={cn(
           "flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
-          "sm:h-[min(900px,calc(100vh-3rem))] sm:max-w-[1120px] sm:rounded-xl",
+          // Desktop: dominant reading region (not a 420px corner chip).
+          "sm:h-[min(920px,calc(100vh-4rem))] sm:max-w-[min(1120px,calc(100vw-4rem))] sm:rounded-xl",
         )}
       >
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
@@ -236,6 +243,7 @@ export function ReportReader({
           </div>
         </div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }

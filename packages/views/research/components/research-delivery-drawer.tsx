@@ -4,8 +4,8 @@ import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { ReportReader } from "../report/report-reader";
 
 /**
- * LRM-880: "查看交付 / 来源与报告" opens the HTML report reader (LRM-881 shell).
- * Kept as a named export so session page wiring stays stable.
+ * LRM-880 / LRM-921: "查看交付" opens a body-portaled centered HTML reader.
+ * Must not render as a canvas-corner float (anti-example: absolute bottom chip).
  */
 export function ResearchDeliveryDrawer({
   open,

@@ -332,6 +332,19 @@
       "timeout": "タイムアウト"
     }
   },
+  "restart": {
+    "action": "再起動",
+    "confirm_title": "このデーモンを再起動しますか？",
+    "confirm_description": "このマシンで現在作業中のエージェントが中断されます。デーモンは再起動後、自動的に再接続します。",
+    "confirm_cancel": "キャンセル",
+    "confirm_action": "今すぐ再起動",
+    "initiate_failed": "再起動のリクエストに失敗しました",
+    "status": {
+      "pending": "再起動をリクエスト中...",
+      "delivered": "再起動を配信しました。デーモンの再接続を待っています...",
+      "timeout": "再起動リクエストがタイムアウトしました"
+    }
+  },
   "charts": {
     "heatmap_less": "少ない",
     "heatmap_more": "多い",

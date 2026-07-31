@@ -332,6 +332,19 @@
       "timeout": "超时"
     }
   },
+  "restart": {
+    "action": "重启",
+    "confirm_title": "重启这个守护进程？",
+    "confirm_description": "这会中断该机器上正在运行的 agent。守护进程重启后会自动重新连接。",
+    "confirm_cancel": "取消",
+    "confirm_action": "立即重启",
+    "initiate_failed": "发起重启请求失败",
+    "status": {
+      "pending": "正在请求重启...",
+      "delivered": "重启请求已送达，等待守护进程重新连接...",
+      "timeout": "重启请求超时"
+    }
+  },
   "charts": {
     "heatmap_less": "少",
     "heatmap_more": "多",

@@ -108,6 +108,7 @@ import type {
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
   RuntimeUpdate,
+  RuntimeRestart,
   AgentLifecycleActionKind,
   AgentLifecyclePreflight,
   AgentLifecycleOperation,
@@ -1791,6 +1792,19 @@ export class ApiClient {
     updateId: string,
   ): Promise<RuntimeUpdate> {
     return this.fetch(`/api/runtimes/${runtimeId}/update/${updateId}`);
+  }
+
+  async initiateRestart(runtimeId: string): Promise<RuntimeRestart> {
+    return this.fetch(`/api/runtimes/${runtimeId}/restart`, {
+      method: "POST",
+    });
+  }
+
+  async getRestart(
+    runtimeId: string,
+    restartId: string,
+  ): Promise<RuntimeRestart> {
+    return this.fetch(`/api/runtimes/${runtimeId}/restart/${restartId}`);
   }
 
   async initiateListModels(runtimeId: string): Promise<RuntimeModelListRequest> {

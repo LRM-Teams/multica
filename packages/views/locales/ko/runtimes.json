@@ -340,6 +340,19 @@
       "timeout": "시간 초과"
     }
   },
+  "restart": {
+    "action": "재시작",
+    "confirm_title": "이 데몬을 재시작하시겠습니까?",
+    "confirm_description": "이 머신에서 현재 작업 중인 에이전트가 중단됩니다. 데몬은 재시작 후 자동으로 다시 연결됩니다.",
+    "confirm_cancel": "취소",
+    "confirm_action": "지금 재시작",
+    "initiate_failed": "재시작 요청에 실패했습니다",
+    "status": {
+      "pending": "재시작 요청 중...",
+      "delivered": "재시작이 전달되었습니다. 데몬 재연결을 기다리는 중...",
+      "timeout": "재시작 요청이 시간 초과되었습니다"
+    }
+  },
   "charts": {
     "heatmap_less": "적음",
     "heatmap_more": "많음",

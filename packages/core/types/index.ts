@@ -98,6 +98,8 @@ export type {
   DashboardRunTimeDaily,
   RuntimeUpdate,
   RuntimeUpdateStatus,
+  RuntimeRestart,
+  RuntimeRestartStatus,
   RuntimeModel,
   RuntimeModelThinking,
   RuntimeModelThinkingLevel,

@@ -138,7 +138,7 @@ describe("ThreadReplyPreview", () => {
     );
 
     expect(screen.getByTestId("thread-reply-preview-count")).toHaveTextContent(
-      "3 replies · 2 new",
+      "3 replies · 2 new >",
     );
     const times = screen.getAllByTestId("thread-reply-preview-time");
     expect(times).toHaveLength(3);

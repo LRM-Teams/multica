@@ -208,10 +208,16 @@ first (all three endpoints' shapes are frozen in this spec).
   exploit: confirming it requires being logged in as *some* Multica user,
   and the resulting PAT belongs to whoever clicks confirm, not whoever typed
   the code — same trust model RFC 8628 assumes (the code is a low-stakes
-  pairing token, not an auth credential). Still rate-limit `/api/device/confirm`
-  and `/api/device/pending` per user_code attempt count, mirroring
-  `IncrementVerificationCodeAttempts`, so brute-forcing the 8-char code
-  within the 10-minute window isn't cheap.
+  pairing token, not an auth credential). Unlike the email verification-code
+  flow (which compares a submitted guess against one known-email's stored
+  code, so a per-row attempt counter throttles guessing against that one
+  target), `user_code` **is** the lookup key here — there's no target to
+  guess against, only the whole keyspace. Protection is keyspace size (8
+  chars, ~32-letter disambiguated alphabet ≈ 10^12 combinations) against a
+  thin attack surface (at most a handful of rows are ever `pending`
+  simultaneously) within the 10-minute TTL — no separate attempt counter
+  needed; one wouldn't throttle a blind guesser trying a different code (and
+  therefore a different row) on every attempt anyway.
 - 10-minute TTL matches the existing verification-code precedent exactly —
   no new expiry policy to justify.
 

@@ -576,6 +576,20 @@ type DaemonUpdateStatus struct {
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DeviceAuthorization struct {
+	ID               pgtype.UUID        `json:"id"`
+	DeviceCodeHash   string             `json:"device_code_hash"`
+	UserCode         string             `json:"user_code"`
+	ClientHint       string             `json:"client_hint"`
+	Status           string             `json:"status"`
+	ApprovedByUserID pgtype.UUID        `json:"approved_by_user_id"`
+	IssuedTokenID    pgtype.UUID        `json:"issued_token_id"`
+	LastPolledAt     pgtype.Timestamptz `json:"last_polled_at"`
+	ClaimedAt        pgtype.Timestamptz `json:"claimed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+}
+
 type EnvCheckpoint struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

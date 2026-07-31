@@ -508,6 +508,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.With(authRL).Post("/auth/google", h.GoogleLogin)
 	r.Post("/auth/logout", h.Logout)
 
+	// Device authorization (RFC 8628) — task #36. Public: the CLI calling
+	// these two has no session yet (that's the point of the flow); the
+	// bearer secret is device_code itself, not a session/API token.
+	deviceCodeRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_DEVICE_CODE", 5), time.Minute, trustedProxies)
+	deviceTokenRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_DEVICE_TOKEN", 30), time.Minute, trustedProxies)
+	r.With(deviceCodeRL).Post("/api/device/code", h.RequestDeviceCode)
+	r.With(deviceTokenRL).Post("/api/device/token", h.IssueDeviceToken)
+
 	// Public API
 	r.Get("/api/config", h.GetConfig)
 	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
@@ -768,6 +776,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/current/renew", h.RenewCurrentPersonalAccessToken)
 			r.Delete("/{id}", h.RevokePersonalAccessToken)
 		})
+
+		// Device authorization (RFC 8628) confirmation — task #36. Any
+		// logged-in user may confirm/deny a device code for their own
+		// account; not workspace-scoped (a PAT isn't workspace-scoped).
+		r.Get("/api/device/pending", h.GetPendingDeviceAuthorization)
+		r.Post("/api/device/confirm", h.ConfirmDeviceAuthorization)
 
 		// Sandbox node administration. Node CRUD is authenticated + owner-scoped;
 		// workspace use requires an explicit membership-scoped binding (any

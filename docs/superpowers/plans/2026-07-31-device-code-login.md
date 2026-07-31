@@ -55,11 +55,10 @@ Task #36. Design doc: `docs/superpowers/specs/2026-07-31-device-code-login-desig
   where `/api/tokens`'s sibling unauthenticated routes like
   `/api/auth/send-code` live); `/api/device/pending` and
   `/api/device/confirm` go in the authenticated group.
-- [ ] Rate limiting: reuse whatever the codebase already does for
-  `/api/auth/verify-code`'s attempt counting (check
-  `IncrementVerificationCodeAttempts`'s call site for the exact throttle
-  shape before inventing a new one) — apply the same pattern to
-  `/api/device/confirm` keyed on `user_code`.
+- [ ] No per-row attempt counter (see spec's Security notes — `user_code`
+  is the lookup key itself here, not a guess compared against one known
+  target, so a counter wouldn't throttle a blind guesser trying a
+  different code/row each time; protection is keyspace size + TTL).
 
 ## Step 3 — CLI
 

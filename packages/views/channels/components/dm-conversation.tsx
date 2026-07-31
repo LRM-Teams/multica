@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
+import { Archive, ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   channelMessageThreadOptions,
@@ -705,6 +705,25 @@ function DmChannelConversation({
     </>
   );
 
+  // 2026-07-31 Wendy DM incident (B1) — the peer agent was archived (the
+  // product-facing "delete agent" action is a soft archive; history is never
+  // hidden). Same read-only contract as the agent_pair supervision surface
+  // above — reusing `readOnly` below for every write gate keeps this from
+  // needing its own copy of each handler guard — but the banner content and
+  // copy are distinct, and phrased from the user's action ("deleted"), never
+  // the internal "archived" term (Parker/Iris, product review).
+  const archivedPeerReadOnly = dm.peer.type === "agent" && !!dm.peer.archived;
+  const archivedPeerReadOnlyContent = (
+    <>
+      <Archive className="size-4 shrink-0" />
+      <span className="flex-1">{t(($) => $.dm.peer_deleted_notice)}</span>
+    </>
+  );
+  const readOnly = supervisedReadOnly || archivedPeerReadOnly;
+  const readOnlyContent = supervisedReadOnly
+    ? supervisedReadOnlyContent
+    : archivedPeerReadOnlyContent;
+
   const searchHitIds = useMemo(
     () =>
       convSearch.open && convSearch.results.length > 0
@@ -771,6 +790,10 @@ function DmChannelConversation({
   const dividerLastReadSeq = useEntryReadCursor(
     channelId,
     dm.last_read_seq,
+    // #692 finding 1: gated on `supervisedReadOnly` specifically, not the
+    // broader `readOnly` — this avoids a 403 for the agent_pair supervisor
+    // (not a channel_member), but an archived-peer DM's viewer is a normal
+    // member and mark-read works fine (and should still clear the badge).
     supervisedReadOnly ? noopMarkRead : markChannelRead,
   );
 
@@ -816,7 +839,9 @@ function DmChannelConversation({
 
   useEffect(() => {
     if (!threadRoot) return;
-    // #692 finding 1: supervisor isn't a channel_member — thread mark-read 403s.
+    // #692 finding 1: supervisor isn't a channel_member — thread mark-read
+    // 403s. Same as above: an archived-peer DM's viewer is a normal member,
+    // so this stays keyed on `supervisedReadOnly`, not the broader `readOnly`.
     if (supervisedReadOnly) return;
     markThreadRead({ channelId, messageId: threadRoot.id });
   }, [channelId, threadRoot, markThreadRead, supervisedReadOnly]);
@@ -841,6 +866,8 @@ function DmChannelConversation({
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     // #692 finding 1: don't auto-mark-read on new messages for the read-only
     // supervision surface — the supervisor isn't a member, so it would 403.
+    // An archived-peer DM's viewer is a normal member (no 403 risk), so this
+    // stays keyed on `supervisedReadOnly`, not the broader `readOnly`.
     if (!supervisedReadOnly) markChannelRead(channelId);
   });
 
@@ -863,6 +890,11 @@ function DmChannelConversation({
   // #692 finding 1: a read-only supervisor never types — and typing is a
   // member-only mutation that would 403 — so it's a no-op on that surface.
   const publishTyping = (isTyping: boolean) => {
+    // Same member-403 reasoning as the mark-read gates above — kept on
+    // `supervisedReadOnly` rather than `readOnly`. In practice unreachable
+    // for the archived-peer case anyway (Composer's readOnly banner replaces
+    // the editor, so no onUpdate ever fires), but the guard should still say
+    // what it means.
     if (supervisedReadOnly) return;
     setTyping.mutate({ channelId, isTyping });
   };
@@ -925,7 +957,7 @@ function DmChannelConversation({
     // — the composer's readOnly banner (editor not mounted) is defense-in-depth,
     // this handler gate is the contract-level enforcement. (Iris walkthrough
     // finding; Parker: 定性 fix, mandatory.)
-    if (supervisedReadOnly) return;
+    if (readOnly) return;
     // Empty-payload early-return before the send lock: after a send succeeds the
     // editor/tray are cleared, so a still-held Enter grabs empty content and stops here.
     if (dmPending.hasUploading) return;
@@ -982,7 +1014,7 @@ function DmChannelConversation({
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
-    if (supervisedReadOnly) return false; // read-only supervisor: no voice send
+    if (readOnly) return false; // read-only (supervisor or archived peer): no voice send
     if (!draftEmpty || dmPending.pending.length > 0) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
@@ -1013,7 +1045,7 @@ function DmChannelConversation({
   };
 
   const handleThreadSend = () => {
-    if (supervisedReadOnly) return; // read-only supervisor: no thread send
+    if (readOnly) return; // read-only (supervisor or archived peer): no thread send
     if (!threadRoot) return;
     if (threadPending.hasUploading) return;
     const content = threadEditorRef.current?.getMarkdown()?.trim() ?? "";
@@ -1061,7 +1093,7 @@ function DmChannelConversation({
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
-    if (supervisedReadOnly) return false; // read-only supervisor: no thread voice send
+    if (readOnly) return false; // read-only (supervisor or archived peer): no thread voice send
     if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
@@ -1094,7 +1126,7 @@ function DmChannelConversation({
 
   const handleRetrySend = useCallback(
     (message: ChannelMessage) => {
-      if (supervisedReadOnly) return; // read-only supervisor: no retry-send
+      if (readOnly) return; // read-only (supervisor or archived peer): no retry-send
       if (!message.client_message_id || message.local_send_status !== "failed") return;
       if (message.thread_root_message_id) {
         sendThreadMessage.mutate({
@@ -1115,7 +1147,7 @@ function DmChannelConversation({
         clientMessageId: message.client_message_id,
       });
     },
-    [channelId, sendMessage, sendThreadMessage, supervisedReadOnly],
+    [channelId, sendMessage, sendThreadMessage, readOnly],
   );
 
   const handleOpenThread = (message: ChannelMessage) => {
@@ -1185,7 +1217,7 @@ function DmChannelConversation({
             <>
               {/* #692 finding 1: thread-follow is a member-only mutation — hidden
                   for the read-only supervisor (it would 403). */}
-              {!supervisedReadOnly && (
+              {!readOnly && (
                 <ThreadFollowButton
                   followed={threadSurfaceRoot.thread_followed === true}
                   disabled={
@@ -1236,17 +1268,17 @@ function DmChannelConversation({
           // #692 finding 1: the read-only supervisor gets no message-mutation
           // affordances — omitting these handlers makes ChannelMessageBubble drop
           // its reaction / quote / edit / delete / retry controls entirely.
-          onReact={supervisedReadOnly ? undefined : handleReactToMessage}
-          onQuoteMessage={supervisedReadOnly ? undefined : setThreadQuoteTarget}
-          onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
-          onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
+          onReact={readOnly ? undefined : handleReactToMessage}
+          onQuoteMessage={readOnly ? undefined : setThreadQuoteTarget}
+          onEditMessage={readOnly ? undefined : handleEditMessage}
+          onRetrySend={readOnly ? undefined : handleRetrySend}
           onOpenAgent={handleOpenAgentPanel}
           onOpenMember={handleOpenMemberPanel}
         />
         <Composer
           surface="thread"
-          readOnly={supervisedReadOnly}
-          readOnlyContent={supervisedReadOnlyContent}
+          readOnly={readOnly}
+          readOnlyContent={readOnlyContent}
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={
             (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
@@ -1349,7 +1381,7 @@ function DmChannelConversation({
           // #692 finding 1: no voice call on the read-only supervision surface —
           // the supervisor owns neither end's session and the projected `peer`
           // is only one of the two agents.
-          supervisedReadOnly ? undefined : (
+          readOnly ? undefined : (
             <DmAgentVoiceCall
               workspaceId={wsId}
               channelId={channelId}
@@ -1485,21 +1517,21 @@ function DmChannelConversation({
         // too — the read-only supervisor gets no "reply in thread" affordance
         // (the thread's own composer is already read-only, so the button led
         // nowhere). Dropping the handler removes the bubble's thread-reply control.
-        onOpenThread={supervisedReadOnly ? undefined : handleOpenThread}
+        onOpenThread={readOnly ? undefined : handleOpenThread}
         onOpenAgent={handleOpenAgentPanel}
         onOpenMember={handleOpenMemberPanel}
         // #692 finding 1: read-only supervisor gets no message-mutation
         // affordances — dropping these handlers removes the bubble's
         // reaction / quote / edit / delete / retry controls.
-        onReact={supervisedReadOnly ? undefined : handleReactToMessage}
-        onQuoteMessage={supervisedReadOnly ? undefined : setQuoteTarget}
-        onEditMessage={supervisedReadOnly ? undefined : handleEditMessage}
-        onRetrySend={supervisedReadOnly ? undefined : handleRetrySend}
+        onReact={readOnly ? undefined : handleReactToMessage}
+        onQuoteMessage={readOnly ? undefined : setQuoteTarget}
+        onEditMessage={readOnly ? undefined : handleEditMessage}
+        onRetrySend={readOnly ? undefined : handleRetrySend}
       />
       <Composer
         surface="dm_channel"
-        readOnly={supervisedReadOnly}
-        readOnlyContent={supervisedReadOnlyContent}
+        readOnly={readOnly}
+        readOnlyContent={readOnlyContent}
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={
           (draftEmpty && dmPending.readyAttachmentParts.length === 0) ||
@@ -1593,10 +1625,13 @@ function DmChannelConversation({
           peer.type. An agent_pair's projected peer is also "agent", so the
           read-only supervision surface was mounting a live, editable editor
           beside the "can't post here" banner — a write surface the Composer
-          readOnly banner never covered. Gate it on !supervisedReadOnly: a
+          readOnly banner never covered. Gate it on !readOnly: a
           supervised agent_pair has no semantically-correct single peer, so no
-          single-agent bubble belongs here. (Composer/handler gates unchanged.) */}
-      {dm.peer.type === "agent" && !supervisedReadOnly ? (
+          single-agent bubble belongs here. Same reasoning covers an archived
+          peer (B1) — a second, independent chat session with an agent that
+          can no longer take new work is exactly as wrong as it is for a
+          supervised pair. (Composer/handler gates unchanged.) */}
+      {dm.peer.type === "agent" && !readOnly ? (
         <DmAgentBubble agentId={dm.peer.id} agentName={dm.peer.name} />
       ) : null}
         </TabsContent>

@@ -45,6 +45,13 @@
 // This tool never deletes the local file — the operator removes the
 // LOCAL_UPLOAD_DIR contents (or leaves them; they are inert once no
 // attachment.url references them) once satisfied with the migration.
+//
+// After attachment.url rows are rewritten, this tool also cascades a
+// denormalized avatar_url backfill (agent / user / workspace / channel) via
+// internal/avatarbackfill — migrate-uploads-to-s3 historically left those
+// fields on "/uploads/...", which broke author_avatar_url joins once the app
+// ran without a LocalStorage /uploads/* route. Standalone re-run:
+// scripts/run-backfill-avatar-urls.sh or go run ./cmd/backfill-avatar-urls.
 package main
 
 import (
@@ -60,6 +67,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/avatarbackfill"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/storage"
 )
@@ -135,72 +143,79 @@ func run() error {
 	}
 
 	slog.Info("found candidates", "count", len(candidates), "since", sinceTime, "dry_run", *dryRun)
-	if len(candidates) == 0 {
-		slog.Info("nothing to migrate")
-		return nil
-	}
 
 	var migrated, failed int
-	for _, c := range candidates {
-		key := local.KeyFromURL(c.url)
-		if *dryRun {
-			slog.Info("would migrate", "id", c.id, "key", key)
-			continue
-		}
+	if len(candidates) == 0 {
+		slog.Info("no attachment rows to migrate")
+	} else {
+		for _, c := range candidates {
+			key := local.KeyFromURL(c.url)
+			if *dryRun {
+				slog.Info("would migrate", "id", c.id, "key", key)
+				continue
+			}
 
-		reader, err := local.GetReader(ctx, key)
-		if err != nil {
-			slog.Error("read local file failed — leaving row unmigrated", "id", c.id, "key", key, "error", err)
-			failed++
-			continue
-		}
-		data, err := io.ReadAll(reader)
-		reader.Close()
-		if err != nil {
-			slog.Error("read local file body failed — leaving row unmigrated", "id", c.id, "key", key, "error", err)
-			failed++
-			continue
-		}
-		localSum := sha256.Sum256(data)
+			reader, err := local.GetReader(ctx, key)
+			if err != nil {
+				slog.Error("read local file failed — leaving row unmigrated", "id", c.id, "key", key, "error", err)
+				failed++
+				continue
+			}
+			data, err := io.ReadAll(reader)
+			reader.Close()
+			if err != nil {
+				slog.Error("read local file body failed — leaving row unmigrated", "id", c.id, "key", key, "error", err)
+				failed++
+				continue
+			}
+			localSum := sha256.Sum256(data)
 
-		newURL, err := s3.Upload(ctx, key, data, c.contentType, c.filename)
-		if err != nil {
-			slog.Error("s3 upload failed — leaving row unmigrated", "id", c.id, "key", key, "error", err)
-			failed++
-			continue
-		}
+			newURL, err := s3.Upload(ctx, key, data, c.contentType, c.filename)
+			if err != nil {
+				slog.Error("s3 upload failed — leaving row unmigrated", "id", c.id, "key", key, "error", err)
+				failed++
+				continue
+			}
 
-		verifyReader, err := s3.GetReader(ctx, key)
-		if err != nil {
-			slog.Error("post-upload verify read failed — row uploaded but NOT marked migrated, investigate before re-running", "id", c.id, "key", key, "error", err)
-			failed++
-			continue
-		}
-		verifyData, err := io.ReadAll(verifyReader)
-		verifyReader.Close()
-		if err != nil {
-			slog.Error("post-upload verify read body failed — row uploaded but NOT marked migrated, investigate before re-running", "id", c.id, "key", key, "error", err)
-			failed++
-			continue
-		}
-		verifySum := sha256.Sum256(verifyData)
-		if hex.EncodeToString(localSum[:]) != hex.EncodeToString(verifySum[:]) {
-			slog.Error("checksum mismatch after upload — row NOT marked migrated, investigate before re-running", "id", c.id, "key", key)
-			failed++
-			continue
-		}
+			verifyReader, err := s3.GetReader(ctx, key)
+			if err != nil {
+				slog.Error("post-upload verify read failed — row uploaded but NOT marked migrated, investigate before re-running", "id", c.id, "key", key, "error", err)
+				failed++
+				continue
+			}
+			verifyData, err := io.ReadAll(verifyReader)
+			verifyReader.Close()
+			if err != nil {
+				slog.Error("post-upload verify read body failed — row uploaded but NOT marked migrated, investigate before re-running", "id", c.id, "key", key, "error", err)
+				failed++
+				continue
+			}
+			verifySum := sha256.Sum256(verifyData)
+			if hex.EncodeToString(localSum[:]) != hex.EncodeToString(verifySum[:]) {
+				slog.Error("checksum mismatch after upload — row NOT marked migrated, investigate before re-running", "id", c.id, "key", key)
+				failed++
+				continue
+			}
 
-		if _, err := pool.Exec(ctx, `UPDATE attachment SET url = $1 WHERE id = $2`, newURL, c.id); err != nil {
-			slog.Error("bytes verified on S3 but DB url update failed — re-run will retry (bytes are already correct, safe to retry)", "id", c.id, "key", key, "error", err)
-			failed++
-			continue
-		}
+			if _, err := pool.Exec(ctx, `UPDATE attachment SET url = $1 WHERE id = $2`, newURL, c.id); err != nil {
+				slog.Error("bytes verified on S3 but DB url update failed — re-run will retry (bytes are already correct, safe to retry)", "id", c.id, "key", key, "error", err)
+				failed++
+				continue
+			}
 
-		slog.Info("migrated", "id", c.id, "key", key, "new_url", newURL)
-		migrated++
+			slog.Info("migrated", "id", c.id, "key", key, "new_url", newURL)
+			migrated++
+		}
 	}
 
-	slog.Info("done", "migrated", migrated, "failed", failed, "dry_run", *dryRun)
+	slog.Info("attachment migrate done", "migrated", migrated, "failed", failed, "dry_run", *dryRun)
+
+	// Cascade denormalized avatar_url refresh even when no attachment rows
+	// remain (avatars may still be stale). Dry-run reports counts only.
+	if _, err := avatarbackfill.Run(ctx, pool, avatarbackfill.PublicBaseURL(), *dryRun); err != nil {
+		return fmt.Errorf("avatar URL cascade after attachment migrate: %w", err)
+	}
+
 	if failed > 0 {
 		return fmt.Errorf("%d row(s) failed to migrate — see errors above, safe to re-run (already-migrated rows are skipped)", failed)
 	}

@@ -14,7 +14,7 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core";
-import { workspaceSearchOptions } from "@multica/core/search/queries";
+import { workspaceSearchOptions, channelAuthorMessageSearchOptions } from "@multica/core/search/queries";
 import type {
   WorkspaceSearchChannel,
   WorkspaceSearchDM,
@@ -22,7 +22,10 @@ import type {
   WorkspaceSearchPerson,
   WorkspaceSearchResponse,
   WorkspaceSearchScope,
+  ChannelMessageSearchResult,
 } from "@multica/core/types";
+import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
+import { resolveActorDisplayName, resolveActorHandle } from "@multica/core/identity";
 import { useNavigation } from "../navigation";
 import { useOpenDM } from "../common/use-open-dm";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -67,6 +70,14 @@ export function GlobalSearchDialog() {
   const setOpen = useGlobalSearchStore((s) => s.setOpen);
   const scope = useGlobalSearchStore((s) => s.scope);
   const setScope = useGlobalSearchStore((s) => s.setScope);
+  const fromAuthor = useGlobalSearchStore((s) => s.fromAuthor);
+  const setFromAuthor = useGlobalSearchStore((s) => s.setFromAuthor);
+  const includeThread = useGlobalSearchStore((s) => s.includeThread);
+  const setIncludeThread = useGlobalSearchStore((s) => s.setIncludeThread);
+  const channelId = useGlobalSearchStore((s) => s.channelId);
+  const messageRange = useGlobalSearchStore((s) => s.messageRange);
+  const setMessageRange = useGlobalSearchStore((s) => s.setMessageRange);
+  const setChannelId = useGlobalSearchStore((s) => s.setChannelId);
   const recordRecent = useGlobalSearchStore((s) => s.recordRecent);
   const forgetRecent = useGlobalSearchStore((s) => s.forgetRecent);
   const recentByWorkspace = useGlobalSearchStore((s) => s.recentByWorkspace);
@@ -80,16 +91,166 @@ export function GlobalSearchDialog() {
   const debouncedQuery = useDebounced(query, 250);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // When opened from a channel route, bind 本频道 scope (LRM-873).
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const match = window.location.pathname.match(/\/channels\/([^/?#]+)/);
+    if (match?.[1]) {
+      setChannelId(decodeURIComponent(match[1]));
+    }
+  }, [open, setChannelId]);
+
   const recent = recentByWorkspace[wsId] ?? [];
 
-  const { data, isFetching, isLoading, isError, refetch } = useQuery({
-    ...workspaceSearchOptions(wsId, debouncedQuery, scope, { limit: 20 }),
-    enabled: open && debouncedQuery.trim().length > 0,
+  const { data: members = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: open,
+  });
+  const { data: agents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: open,
   });
 
+  // Parse leading `from:@handle` / `/from @handle` into a chip on input
+  // (LRM-873) — runs in the change handler, not a query→setQuery effect.
+  const applyQueryInput = useCallback(
+    (raw: string) => {
+      const match = raw.match(/^(?:\/from\s+|from:)\s*@?([^\s]+)\s*(.*)$/i);
+      if (!match) {
+        setQuery(raw);
+        return;
+      }
+      const handle = match[1]!.toLowerCase();
+      const rest = match[2] ?? "";
+      const member = members.find((m) => {
+        const h = resolveActorHandle(m, "").toLowerCase();
+        const d = resolveActorDisplayName(m, "").toLowerCase();
+        return h === handle || d === handle;
+      });
+      if (member?.user_id) {
+        const label =
+          resolveActorHandle(member, "") ||
+          resolveActorDisplayName(member, member.user_id);
+        setFromAuthor({
+          author_type: "user",
+          author_id: member.user_id,
+          label: label.startsWith("@") ? label : `@${label}`,
+        });
+        setQuery(rest);
+        return;
+      }
+      const agent = agents.find((a) => {
+        const h = resolveActorHandle(a, "").toLowerCase();
+        const d = resolveActorDisplayName(a, "").toLowerCase();
+        return h === handle || d === handle;
+      });
+      if (agent) {
+        const label = resolveActorDisplayName(agent, agent.name || agent.id);
+        setFromAuthor({
+          author_type: "agent",
+          author_id: agent.id,
+          label: label.startsWith("@") ? label : `@${label}`,
+        });
+        setQuery(rest);
+        return;
+      }
+      setQuery(raw);
+    },
+    [members, agents, setFromAuthor],
+  );
+
+  const useChannelSearch =
+    !!fromAuthor &&
+    messageRange === "channel" &&
+    !!channelId &&
+    scope === "messages";
+
+  const {
+    data: workspaceSearchData,
+    isFetching: workspaceIsFetching,
+    isLoading: workspaceIsLoading,
+    isError: workspaceIsError,
+    refetch: refetchWorkspaceSearch,
+  } = useQuery({
+    ...workspaceSearchOptions(wsId, debouncedQuery, fromAuthor ? "messages" : scope, {
+      limit: 20,
+      author_type: fromAuthor?.author_type,
+      author_id: fromAuthor?.author_id,
+      include_thread: includeThread,
+      enabled: open && !useChannelSearch,
+    }),
+  });
+
+  const {
+    data: channelSearchData,
+    isFetching: channelIsFetching,
+    isLoading: channelIsLoading,
+    isError: channelIsError,
+    refetch: refetchChannelSearch,
+  } = useQuery({
+    ...channelAuthorMessageSearchOptions(channelId ?? "", {
+      q: debouncedQuery || undefined,
+      author_type: fromAuthor?.author_type,
+      author_id: fromAuthor?.author_id,
+      include_thread: includeThread,
+      limit: 20,
+    }),
+    enabled: open && useChannelSearch,
+  });
+
+  const isFetching = useChannelSearch ? channelIsFetching : workspaceIsFetching;
+  const isLoading = useChannelSearch ? channelIsLoading : workspaceIsLoading;
+  const isError = useChannelSearch ? channelIsError : workspaceIsError;
+  const refetch = useChannelSearch ? refetchChannelSearch : refetchWorkspaceSearch;
+
+  const data: WorkspaceSearchResponse | undefined = useMemo(() => {
+    if (useChannelSearch) {
+      const page = channelSearchData;
+      if (!page) return undefined;
+      return {
+        query: page.query || debouncedQuery,
+        scope: "messages",
+        counts: {
+          messages: page.total,
+          channels: 0,
+          dms: 0,
+          people: 0,
+        },
+        messages: page.results.map(
+          (r: ChannelMessageSearchResult): WorkspaceSearchMessage => ({
+            result_type: "message",
+            message_id: r.message_id,
+            channel_id: r.channel_id,
+            channel_name: "",
+            channel_kind: "group",
+            thread_root_message_id: r.thread_root_message_id,
+            hit_count: 1,
+            author_type: r.type === "user" || r.type === "agent" ? r.type : null,
+            author_id: r.author_id,
+            author_name: r.author_name,
+            content: r.content,
+            snippet: r.content,
+            created_at: r.created_at,
+          }),
+        ),
+        channels: [],
+        dms: [],
+        people: [],
+      };
+    }
+    return workspaceSearchData;
+  }, [useChannelSearch, channelSearchData, workspaceSearchData, debouncedQuery]);
+
   const status: GlobalSearchStatus = useMemo(
-    () => deriveGlobalSearchStatus({ query: debouncedQuery, isFetching, isLoading, isError, data }),
-    [debouncedQuery, isFetching, isLoading, isError, data],
+    () =>
+      deriveGlobalSearchStatus({
+        query: fromAuthor ? debouncedQuery || fromAuthor.label : debouncedQuery,
+        isFetching,
+        isLoading,
+        isError,
+        data,
+      }),
+    [debouncedQuery, fromAuthor, isFetching, isLoading, isError, data],
   );
 
   const scopeLabel = useMemo<Record<WorkspaceSearchScope, string>>(
@@ -198,11 +359,13 @@ export function GlobalSearchDialog() {
     [commitSearch, query, setOpen, openDM],
   );
 
-  const handleSubmitRecent = useCallback((q: string) => {
-    setQuery(q);
-    inputRef.current?.focus();
-  }, []);
-
+  const handleSubmitRecent = useCallback(
+    (q: string) => {
+      applyQueryInput(q);
+      inputRef.current?.focus();
+    },
+    [applyQueryInput],
+  );
   const countsFor = (s: WorkspaceSearchScope) => (data ? scopeCount(data, s) : 0);
 
   return (
@@ -224,39 +387,114 @@ export function GlobalSearchDialog() {
 
         <CommandPrimitive shouldFilter={false} className="flex size-full flex-col overflow-hidden" loop>
           {/* Search bar */}
-          <div className="flex items-center gap-2 border-b px-3 py-3 sm:px-4">
-            <button
-              type="button"
-              aria-label="Back"
-              className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground sm:hidden"
-              onClick={closeAndReset}
-            >
-              <ArrowLeft className="size-4" />
-            </button>
-            <SearchIcon className="size-5 shrink-0 text-muted-foreground" />
-            <CommandPrimitive.Input
-              ref={inputRef}
-              placeholder={t(($) => $.globalSearch.placeholder)}
-              value={query}
-              onValueChange={setQuery}
-              className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
-            />
-            {query ? (
+          <div className="flex flex-col gap-2 border-b px-3 py-3 sm:px-4">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label="Clear"
-                onClick={() => {
-                  setQuery("");
-                  inputRef.current?.focus();
-                }}
-                className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent"
+                aria-label="Back"
+                className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground sm:hidden"
+                onClick={closeAndReset}
               >
-                <X className="size-4" />
+                <ArrowLeft className="size-4" />
               </button>
+              <SearchIcon className="size-5 shrink-0 text-muted-foreground" />
+              {fromAuthor ? (
+                <span
+                  data-testid="search-from-chip"
+                  className="inline-flex max-w-[40%] shrink-0 items-center gap-1 rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand"
+                >
+                  {t(($) => $.globalSearch.from_chip, { label: fromAuthor.label })}
+                  <button
+                    type="button"
+                    aria-label={t(($) => $.globalSearch.remove_from_filter)}
+                    className="rounded p-0.5 hover:bg-brand/10"
+                    onClick={() => setFromAuthor(null)}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ) : null}
+              <CommandPrimitive.Input
+                ref={inputRef}
+                placeholder={
+                  fromAuthor
+                    ? t(($) => $.globalSearch.from_placeholder)
+                    : t(($) => $.globalSearch.placeholder)
+                }
+                value={query}
+                onValueChange={applyQueryInput}
+                className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
+              />
+              {query || fromAuthor ? (
+                <button
+                  type="button"
+                  aria-label="Clear"
+                  onClick={() => {
+                    setQuery("");
+                    setFromAuthor(null);
+                    inputRef.current?.focus();
+                  }}
+                  className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent"
+                >
+                  <X className="size-4" />
+                </button>
+              ) : null}
+              <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
+                ESC
+              </kbd>
+            </div>
+            {fromAuthor || scope === "messages" ? (
+              <div className="flex flex-wrap items-center gap-1.5 pl-7 sm:pl-9">
+                {channelId ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setMessageRange("channel")}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-xs font-medium",
+                        messageRange === "channel"
+                          ? "bg-brand-soft text-brand"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {t(($) => $.globalSearch.range_channel)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMessageRange("workspace")}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-xs font-medium",
+                        messageRange === "workspace"
+                          ? "bg-brand-soft text-brand"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {t(($) => $.globalSearch.range_workspace)}
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setIncludeThread(true)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-xs font-medium",
+                    includeThread ? "bg-brand-soft text-brand" : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {t(($) => $.globalSearch.include_thread)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIncludeThread(false)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-xs font-medium",
+                    !includeThread ? "bg-brand-soft text-brand" : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {t(($) => $.globalSearch.mainline_only)}
+                </button>
+              </div>
             ) : null}
-            <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
-              ESC
-            </kbd>
           </div>
 
           {/* Scope tabs */}
@@ -458,11 +696,17 @@ function DmRow({ dm, query, onOpen }: { dm: WorkspaceSearchDM; query: string; on
 
 function MessageRow({ message, query, onOpen }: { message: WorkspaceSearchMessage; query: string; onOpen: () => void }) {
   const { t } = useT("search");
-  const isThread = message.hit_count > 1;
+  const inThread = !!message.thread_root_message_id || message.hit_count > 1;
+  const actorType =
+    message.author_type === "agent"
+      ? "agent"
+      : message.author_type === "user"
+        ? "member"
+        : "member";
   return (
     <RowShell onSelect={onOpen}>
       <ActorAvatar
-        actorType={message.author_type ?? "user"}
+        actorType={actorType}
         actorId={message.author_id ?? ""}
         size={32}
         name={message.author_name}
@@ -471,14 +715,19 @@ function MessageRow({ message, query, onOpen }: { message: WorkspaceSearchMessag
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          {isThread ? (
+          <span className="shrink-0 rounded border border-border px-1 text-[10px] font-semibold text-muted-foreground">
+            {inThread
+              ? t(($) => $.globalSearch.row.in_thread)
+              : t(($) => $.globalSearch.row.mainline)}
+          </span>
+          {message.hit_count > 1 ? (
             <span className="shrink-0 rounded border border-primary/40 px-1 text-[10px] font-semibold text-primary">
               {t(($) => $.globalSearch.row.thread_hits, { count: message.hit_count })}
             </span>
           ) : null}
           <span className="truncate font-medium">{message.author_name}</span>
           <span className="truncate text-xs text-muted-foreground">
-            · {message.channel_kind === "dm" ? "DM" : `#${message.channel_name}`}
+            · {message.channel_kind === "dm" ? "DM" : message.channel_name ? `#${message.channel_name}` : ""}
           </span>
           <span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(message.created_at)}</span>
         </div>

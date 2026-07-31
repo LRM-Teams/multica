@@ -111,45 +111,53 @@ export function GlobalSearchDialog() {
     enabled: open,
   });
 
-  // Parse leading `from:@handle` / `/from @handle` into a chip (LRM-873).
-  useEffect(() => {
-    if (!open) return;
-    const match = query.match(/^(?:\/from\s+|from:)\s*@?([^\s]+)\s*(.*)$/i);
-    if (!match) return;
-    const handle = match[1]!.toLowerCase();
-    const rest = match[2] ?? "";
-    const member = members.find((m) => {
-      const h = resolveActorHandle(m, "").toLowerCase();
-      const d = resolveActorDisplayName(m, "").toLowerCase();
-      return h === handle || d === handle;
-    });
-    if (member?.user_id) {
-      const label =
-        resolveActorHandle(member, "") ||
-        resolveActorDisplayName(member, member.user_id);
-      setFromAuthor({
-        author_type: "user",
-        author_id: member.user_id,
-        label: label.startsWith("@") ? label : `@${label}`,
+  // Parse leading `from:@handle` / `/from @handle` into a chip on input
+  // (LRM-873) — runs in the change handler, not a query→setQuery effect.
+  const applyQueryInput = useCallback(
+    (raw: string) => {
+      const match = raw.match(/^(?:\/from\s+|from:)\s*@?([^\s]+)\s*(.*)$/i);
+      if (!match) {
+        setQuery(raw);
+        return;
+      }
+      const handle = match[1]!.toLowerCase();
+      const rest = match[2] ?? "";
+      const member = members.find((m) => {
+        const h = resolveActorHandle(m, "").toLowerCase();
+        const d = resolveActorDisplayName(m, "").toLowerCase();
+        return h === handle || d === handle;
       });
-      setQuery(rest);
-      return;
-    }
-    const agent = agents.find((a) => {
-      const h = resolveActorHandle(a, "").toLowerCase();
-      const d = resolveActorDisplayName(a, "").toLowerCase();
-      return h === handle || d === handle;
-    });
-    if (agent) {
-      const label = resolveActorDisplayName(agent, agent.name || agent.id);
-      setFromAuthor({
-        author_type: "agent",
-        author_id: agent.id,
-        label: label.startsWith("@") ? label : `@${label}`,
+      if (member?.user_id) {
+        const label =
+          resolveActorHandle(member, "") ||
+          resolveActorDisplayName(member, member.user_id);
+        setFromAuthor({
+          author_type: "user",
+          author_id: member.user_id,
+          label: label.startsWith("@") ? label : `@${label}`,
+        });
+        setQuery(rest);
+        return;
+      }
+      const agent = agents.find((a) => {
+        const h = resolveActorHandle(a, "").toLowerCase();
+        const d = resolveActorDisplayName(a, "").toLowerCase();
+        return h === handle || d === handle;
       });
-      setQuery(rest);
-    }
-  }, [open, query, members, agents, setFromAuthor]);
+      if (agent) {
+        const label = resolveActorDisplayName(agent, agent.name || agent.id);
+        setFromAuthor({
+          author_type: "agent",
+          author_id: agent.id,
+          label: label.startsWith("@") ? label : `@${label}`,
+        });
+        setQuery(rest);
+        return;
+      }
+      setQuery(raw);
+    },
+    [members, agents, setFromAuthor],
+  );
 
   const useChannelSearch =
     !!fromAuthor &&
@@ -157,7 +165,13 @@ export function GlobalSearchDialog() {
     !!channelId &&
     scope === "messages";
 
-  const workspaceQuery = useQuery({
+  const {
+    data: workspaceSearchData,
+    isFetching: workspaceIsFetching,
+    isLoading: workspaceIsLoading,
+    isError: workspaceIsError,
+    refetch: refetchWorkspaceSearch,
+  } = useQuery({
     ...workspaceSearchOptions(wsId, debouncedQuery, fromAuthor ? "messages" : scope, {
       limit: 20,
       author_type: fromAuthor?.author_type,
@@ -167,7 +181,13 @@ export function GlobalSearchDialog() {
     }),
   });
 
-  const channelQuery = useQuery({
+  const {
+    data: channelSearchData,
+    isFetching: channelIsFetching,
+    isLoading: channelIsLoading,
+    isError: channelIsError,
+    refetch: refetchChannelSearch,
+  } = useQuery({
     ...channelAuthorMessageSearchOptions(channelId ?? "", {
       q: debouncedQuery || undefined,
       author_type: fromAuthor?.author_type,
@@ -178,14 +198,14 @@ export function GlobalSearchDialog() {
     enabled: open && useChannelSearch,
   });
 
-  const isFetching = useChannelSearch ? channelQuery.isFetching : workspaceQuery.isFetching;
-  const isLoading = useChannelSearch ? channelQuery.isLoading : workspaceQuery.isLoading;
-  const isError = useChannelSearch ? channelQuery.isError : workspaceQuery.isError;
-  const refetch = useChannelSearch ? channelQuery.refetch : workspaceQuery.refetch;
+  const isFetching = useChannelSearch ? channelIsFetching : workspaceIsFetching;
+  const isLoading = useChannelSearch ? channelIsLoading : workspaceIsLoading;
+  const isError = useChannelSearch ? channelIsError : workspaceIsError;
+  const refetch = useChannelSearch ? refetchChannelSearch : refetchWorkspaceSearch;
 
   const data: WorkspaceSearchResponse | undefined = useMemo(() => {
     if (useChannelSearch) {
-      const page = channelQuery.data;
+      const page = channelSearchData;
       if (!page) return undefined;
       return {
         query: page.query || debouncedQuery,
@@ -218,8 +238,8 @@ export function GlobalSearchDialog() {
         people: [],
       };
     }
-    return workspaceQuery.data;
-  }, [useChannelSearch, channelQuery.data, workspaceQuery.data, debouncedQuery]);
+    return workspaceSearchData;
+  }, [useChannelSearch, channelSearchData, workspaceSearchData, debouncedQuery]);
 
   const status: GlobalSearchStatus = useMemo(
     () =>
@@ -339,11 +359,13 @@ export function GlobalSearchDialog() {
     [commitSearch, query, setOpen, openDM],
   );
 
-  const handleSubmitRecent = useCallback((q: string) => {
-    setQuery(q);
-    inputRef.current?.focus();
-  }, []);
-
+  const handleSubmitRecent = useCallback(
+    (q: string) => {
+      applyQueryInput(q);
+      inputRef.current?.focus();
+    },
+    [applyQueryInput],
+  );
   const countsFor = (s: WorkspaceSearchScope) => (data ? scopeCount(data, s) : 0);
 
   return (
@@ -400,7 +422,7 @@ export function GlobalSearchDialog() {
                     : t(($) => $.globalSearch.placeholder)
                 }
                 value={query}
-                onValueChange={setQuery}
+                onValueChange={applyQueryInput}
                 className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
               />
               {query || fromAuthor ? (

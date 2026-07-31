@@ -8,7 +8,7 @@ const FoundingMemberCutoff = "2026-08-01T00:00:00Z"
 var foundingMemberCutoffTime = mustParseHonorTime(FoundingMemberCutoff)
 
 // HonorRulesVersion is bumped when public scoring tables change.
-const HonorRulesVersion = "2026-07-31.1"
+const HonorRulesVersion = "2026-07-31.2"
 
 // MaxHonorLevel is the highest level the progression curve can award.
 const MaxHonorLevel = 60
@@ -129,6 +129,34 @@ type HonorBadgeCatalogEntry struct {
 	Rarity      int    `json:"rarity"`
 }
 
+var honorNameStyleRules = []HonorNameStyleRuleEntry{
+	{ID: "default", MinLevel: 1},
+	{ID: "ice", MinLevel: 3},
+	{ID: "member", MinLevel: 5},
+	{ID: "emerald", MinLevel: 7},
+	{ID: "sapphire", MinLevel: 9},
+	{ID: "gold", MinLevel: 12},
+	{ID: "coral", MinLevel: 15},
+	{ID: "amethyst", MinLevel: 18},
+	{ID: "prismatic", MinLevel: 21},
+	{ID: "aurora", MinLevel: 24},
+	{ID: "glow", MinLevel: 27},
+	{ID: "solar", MinLevel: 30},
+	{ID: "shimmer", MinLevel: 33},
+	{ID: "nebula", MinLevel: 36},
+	{ID: "cyber", MinLevel: 39},
+	{ID: "animated_prismatic", MinLevel: 42},
+	{ID: "plasma", MinLevel: 45},
+	{ID: "animated_glow", MinLevel: 48},
+	{ID: "eclipse", MinLevel: 51},
+	{ID: "nova", MinLevel: 53},
+	{ID: "quantum", MinLevel: 55},
+	{ID: "celestial", MinLevel: 57},
+	{ID: "mythic", MinLevel: 59},
+	{ID: "transcendent", MinLevel: 60},
+	{ID: "founding", MinLevel: 1},
+}
+
 func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument {
 	levels := make([]HonorLevelThresholdEntry, 0, MaxHonorLevel)
 	for l := 1; l <= MaxHonorLevel; l++ {
@@ -148,19 +176,10 @@ func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument
 		LevelThresholds:  levels,
 		PillarTierTables: pillars,
 		ActionRules:      actions,
-		NameStyleUnlocks: []HonorNameStyleRuleEntry{
-			{ID: "default", MinLevel: 1},
-			{ID: "member", MinLevel: 5},
-			{ID: "gold", MinLevel: 12},
-			{ID: "prismatic", MinLevel: 20},
-			{ID: "glow", MinLevel: 28},
-			{ID: "shimmer", MinLevel: 35},
-			{ID: "animated_prismatic", MinLevel: 42},
-			{ID: "animated_glow", MinLevel: 48},
-			{ID: "founding", MinLevel: 1},
-		},
-		BadgeCatalog: badges,
+		NameStyleUnlocks: append([]HonorNameStyleRuleEntry(nil), honorNameStyleRules...),
+		BadgeCatalog:     badges,
 		Changelog: []string{
+			"2026-07-31: expand to 24 visible name styles and 51 badges",
 			"2026-07-31: publish the complete level 1-60 progression table",
 			"2026-07-30: initial honor rules v1",
 		},

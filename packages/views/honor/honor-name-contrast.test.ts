@@ -45,33 +45,45 @@ function solidColor(rule: string): string {
 
 describe("honor name light-theme contrast", () => {
   it("keeps every light-theme gradient stop readable on white", () => {
-    const founding = ruleStartingAt(".honor-name--founding {");
-    const prismatic = ruleStartingAt(
+    const gradientSelectors = [
+      ".honor-name--founding {",
       ".honor-name--prismatic,\n.honor-name--animated-prismatic {\n  --honor-glow-color",
-    );
-    const shimmer = ruleStartingAt(".honor-name--shimmer {");
+      ".honor-name--aurora {",
+      ".honor-name--shimmer {",
+      ".honor-name--nebula {",
+      ".honor-name--plasma {",
+      ".honor-name--nova {",
+      ".honor-name--quantum {",
+      ".honor-name--celestial {",
+      ".honor-name--mythic {",
+      ".honor-name--transcendent {",
+    ];
 
-    for (const hex of [
-      ...gradientColors(founding),
-      ...gradientColors(prismatic),
-      ...gradientColors(shimmer),
-    ]) {
+    for (const hex of gradientSelectors.flatMap((selector) =>
+      gradientColors(ruleStartingAt(selector)),
+    )) {
       expect(contrastAgainstWhite(hex), `#${hex}`).toBeGreaterThanOrEqual(4.5);
     }
   });
 
   it("keeps solid earned colors readable on white", () => {
-    const member = ruleStartingAt(".honor-name--member {");
-    const gold = ruleStartingAt(".honor-name--gold {");
-    const glow = ruleStartingAt(
+    const solidSelectors = [
+      ".honor-name--ice {",
+      ".honor-name--member {",
+      ".honor-name--emerald {",
+      ".honor-name--sapphire {",
+      ".honor-name--gold {",
+      ".honor-name--coral {",
+      ".honor-name--amethyst {",
       ".honor-name--glow,\n.honor-name--animated-glow {",
-    );
+      ".honor-name--solar {",
+      ".honor-name--cyber {",
+      ".honor-name--eclipse {",
+    ];
 
-    for (const hex of [
-      solidColor(member),
-      solidColor(gold),
-      solidColor(glow),
-    ]) {
+    for (const hex of solidSelectors.map((selector) =>
+      solidColor(ruleStartingAt(selector)),
+    )) {
       expect(contrastAgainstWhite(hex), `#${hex}`).toBeGreaterThanOrEqual(4.5);
     }
   });

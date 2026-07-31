@@ -175,6 +175,15 @@
     "no_recent_activity": "暂无最近活动",
     "close_aria": "关闭资料卡",
     "no_permission_toast": "当前无权查看该成员资料",
+    "honor": {
+      "title": "开发者荣誉",
+      "agent_title": "智能体荣誉",
+      "no_badge": "尚未佩戴徽章",
+      "keep_building": "继续开发以解锁荣誉",
+      "collection": "已收集 {{unlocked}} / {{total}}",
+      "agent_collection": "已解锁 {{unlocked}} 项",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "用量",

@@ -175,6 +175,15 @@
     "no_recent_activity": "No recent activity",
     "close_aria": "Close profile",
     "no_permission_toast": "You don't have permission to view this member's profile",
+    "honor": {
+      "title": "Developer honor",
+      "agent_title": "Agent honor",
+      "no_badge": "No badge equipped",
+      "keep_building": "Keep building to unlock honors",
+      "collection": "{{unlocked}} / {{total}} collected",
+      "agent_collection": "{{unlocked}} unlocked",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "Usage",

@@ -81,6 +81,7 @@
     "group_all": "전체",
     "group_users": "사용자",
     "group_issues": "이슈",
+    "group_channels": "채널",
     "group_members": "멤버",
     "all_members": "모든 멤버",
     "all_members_hint": "이 대화의 모든 멤버에게 알림",

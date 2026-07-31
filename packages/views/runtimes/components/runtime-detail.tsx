@@ -168,6 +168,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             />
             <DiagnosticsCard
               runtime={runtime}
+              health={health}
               cliVersion={cliVersion}
               launchedBy={launchedBy}
               canManage={canManage}
@@ -441,6 +442,7 @@ function ServingAgentsCard({
 
 function DiagnosticsCard({
   runtime,
+  health,
   cliVersion,
   launchedBy,
   canManage,
@@ -448,6 +450,7 @@ function DiagnosticsCard({
   onDelete,
 }: {
   runtime: AgentRuntime;
+  health: ReturnType<typeof deriveRuntimeHealth>;
   cliVersion: string | null;
   launchedBy: string | null;
   canManage: boolean;
@@ -457,6 +460,13 @@ function DiagnosticsCard({
   const { t } = useT("runtimes");
   const isLocal = runtime.runtime_mode === "local";
   const isSandbox = isSandboxRuntime(runtime);
+  // The Hero card's badge already downgrades a stale-but-status="online"
+  // runtime to recently_lost/offline via the last_seen_at time window
+  // (deriveRuntimeHealth). Gating these actions on the raw `runtime.status`
+  // instead let the badge read "Offline" while the buttons right below it
+  // stayed clickable — the exact "displayed info contradicts itself" bug
+  // class Frank flagged on this page.
+  const isOnline = health === "online";
   return (
     <div className="rounded-lg border">
       <div className="border-b px-4 py-2.5">
@@ -485,7 +495,7 @@ function DiagnosticsCard({
               updateState={runtime.update_state}
               runtimeHealth={runtime.runtime_health}
               updateError={runtime.update_error}
-              isOnline={runtime.status === "online"}
+              isOnline={isOnline}
               launchedBy={launchedBy}
               canUpdate={canManage}
               isSandbox={isSandbox}
@@ -493,7 +503,7 @@ function DiagnosticsCard({
             <div className="mt-3">
               <RestartSection
                 runtimeId={runtime.id}
-                isOnline={runtime.status === "online"}
+                isOnline={isOnline}
                 canRestart={
                   canManage && launchedBy !== "desktop" && !isSandbox
                 }

@@ -21,7 +21,6 @@ import (
 
 const (
 	agentDMDefaultRoundLimit = 3
-	agentDMFrequencyLimit    = 12
 	agentDMFrequencyWindow   = 5 * time.Minute
 )
 
@@ -34,12 +33,11 @@ const (
 )
 
 type agentDMSendReservation struct {
-	ExchangeID     pgtype.UUID
-	Turn           int
-	Round          int
-	RoundLimit     int
-	Recipient      pgtype.UUID
-	PauseAfterSend bool
+	ExchangeID pgtype.UUID
+	Turn       int
+	Round      int
+	RoundLimit int
+	Recipient  pgtype.UUID
 }
 
 type agentDMPausedError struct {
@@ -284,84 +282,44 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 		return agentDMSendReservation{}, &agentDMTurnError{ExpectedSender: nextSenderAgentID}
 	}
 
+	// Round/frequency budgets are tracked (below) purely for display — task
+	// #813/#830 (Frank, 2026-07-28 & reaffirmed 2026-07-31, #prj-daemon):
+	// "把这个硬闸拆掉，改成只观测" (tear out the hard gate, make it
+	// observation-only). Agent-pair DMs are never auto-paused for hitting a
+	// round or frequency count; only a human (pause_pair/pause_global) can
+	// stop an exchange now.
 	now := time.Now()
 	if !windowStartedAt.Valid || now.Sub(windowStartedAt.Time) >= agentDMFrequencyWindow {
 		windowMessageCount = 0
 		windowStartedAt = pgtype.Timestamptz{Time: now, Valid: true}
 	}
-	if windowMessageCount >= agentDMFrequencyLimit {
-		if _, err := exec.Exec(ctx, `
-			UPDATE agent_dm_pair_control
-			SET state = 'paused_frequency',
-			    pause_reason = $4,
-			    updated_at = now()
-			WHERE workspace_id = $1 AND agent_low_id = $2 AND agent_high_id = $3`,
-			workspaceID, lowID, highID,
-			fmt.Sprintf("pair exceeded %d messages in %s", agentDMFrequencyLimit, agentDMFrequencyWindow),
-		); err != nil {
-			return agentDMSendReservation{}, fmt.Errorf("pause agent dm pair frequency: %w", err)
-		}
-		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, "paused_frequency", "agent pair message frequency limit reached")
-	}
-
-	maxTurns := (roundLimit + grantedRounds) * 2
-	if turnCount >= maxTurns {
-		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, "paused_budget", fmt.Sprintf("agent pair reached the %d-round limit", roundLimit+grantedRounds))
-	}
 
 	nextTurn := turnCount + 1
 	nextWindowMessageCount := windowMessageCount + 1
-	pauseAfterFrequency := nextWindowMessageCount >= agentDMFrequencyLimit
 	if _, err := exec.Exec(ctx, `
 		UPDATE agent_dm_pair_control
-		SET state = CASE WHEN $6 THEN 'paused_frequency' ELSE state END,
-		    pause_reason = CASE
-		      WHEN $6 THEN $7
-		      ELSE pause_reason
-		    END,
-		    window_started_at = $4,
+		SET window_started_at = $4,
 		    window_message_count = $5,
 		    updated_at = now()
 		WHERE workspace_id = $1 AND agent_low_id = $2 AND agent_high_id = $3`,
 		workspaceID, lowID, highID, windowStartedAt, nextWindowMessageCount,
-		pauseAfterFrequency,
-		fmt.Sprintf("pair reached %d messages in %s", agentDMFrequencyLimit, agentDMFrequencyWindow),
 	); err != nil {
 		return agentDMSendReservation{}, fmt.Errorf("account agent dm pair frequency: %w", err)
-	}
-	pauseAfterBudget := nextTurn >= maxTurns
-	pauseAfterSend := pauseAfterBudget || pauseAfterFrequency
-	nextState := "active"
-	var pauseReason any
-	if pauseAfterFrequency {
-		nextState = "paused_frequency"
-		pauseReason = "agent pair message frequency limit reached"
-	} else if pauseAfterBudget {
-		nextState = "paused_budget"
-		pauseReason = fmt.Sprintf("agent pair reached the %d-round limit", roundLimit+grantedRounds)
 	}
 	if _, err := exec.Exec(ctx, `
 		UPDATE agent_dm_exchange
 		SET turn_count = $2,
-		    state = $3,
-		    pause_reason = $4,
-		    next_sender_agent_id = $5,
-		    notification_epoch = CASE
-		      WHEN $3 = 'active' THEN notification_epoch
-		      ELSE notification_epoch + 1
-		    END,
-		    notified_at = CASE WHEN $3 = 'active' THEN notified_at ELSE COALESCE(notified_at, now()) END,
+		    next_sender_agent_id = $3,
 		    updated_at = now()
-		WHERE id = $1`, exchangeID, nextTurn, nextState, pauseReason, target.recipientID); err != nil {
+		WHERE id = $1`, exchangeID, nextTurn, target.recipientID); err != nil {
 		return agentDMSendReservation{}, fmt.Errorf("account agent dm exchange turn: %w", err)
 	}
 	return agentDMSendReservation{
-		ExchangeID:     exchangeID,
-		Turn:           nextTurn,
-		Round:          (nextTurn + 1) / 2,
-		RoundLimit:     roundLimit + grantedRounds,
-		Recipient:      target.recipientID,
-		PauseAfterSend: pauseAfterSend,
+		ExchangeID: exchangeID,
+		Turn:       nextTurn,
+		Round:      (nextTurn + 1) / 2,
+		RoundLimit: roundLimit + grantedRounds,
+		Recipient:  target.recipientID,
 	}, nil
 }
 
@@ -402,9 +360,6 @@ func (h *Handler) finishAgentDMSendTx(ctx context.Context, exec db.DBTX, reserva
 
 func (h *Handler) dispatchAgentDMAgentReply(ctx context.Context, source agentTransportSource, target agentTransportTarget, trigger ChannelMessageResponse, reservation agentDMSendReservation, initiatorUserID pgtype.UUID) {
 	if !reservation.ExchangeID.Valid || !reservation.Recipient.Valid {
-		return
-	}
-	if reservation.PauseAfterSend {
 		return
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
@@ -492,7 +447,7 @@ func (h *Handler) buildAgentDMPrompt(ctx context.Context, ch ChannelResponse, ag
 	b.WriteString(channelDirectedReplyInstruction)
 	b.WriteString("\nA2A discipline: add concrete information or action; do not send a pure acknowledgement. Stop when the matter is concluded. Use a reminder for future external state instead of polling the peer with messages.\n")
 	b.WriteString("Owner control: only when your owner explicitly asks in this task, use `multica message a2a-control --target dm:@<peer> --action <pause_pair|resume_pair|grant_rounds|pause_global|resume_global>`; add `--rounds N` for grant_rounds. The server rejects peer-only self-extension.\n")
-	fmt.Fprintf(&b, "This exchange is at round %d of %d. The server will pause it at the limit.\n", reservation.Round, reservation.RoundLimit)
+	fmt.Fprintf(&b, "This exchange is at round %d. There is no automatic round limit — only your owner can pause this pair or all your direct messages.\n", reservation.Round)
 	if senderHandle != "" {
 		fmt.Fprintf(&b, "Message target for chat transport: dm:@%s\n", senderHandle)
 	}

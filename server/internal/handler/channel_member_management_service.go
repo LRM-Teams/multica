@@ -423,8 +423,10 @@ func (h *Handler) removeChannelMemberService(
 		return memberManagementMutationResult{}, err
 	}
 
+	var addedByType pgtype.Text
+	var addedByID pgtype.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT role
+		SELECT role, added_by_type, added_by_id
 		FROM channel_member
 		WHERE channel_id = $1
 		  AND workspace_id = $2
@@ -435,13 +437,17 @@ func (h *Handler) removeChannelMemberService(
 		actor.WorkspaceID,
 		string(target.Kind),
 		target.ID,
-	).Scan((*string)(&target.Role))
+	).Scan((*string)(&target.Role), &addedByType, &addedByID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return memberManagementMutationResult{}, memberManagementError(http.StatusNotFound, "channel member not found")
 		}
 		return memberManagementMutationResult{}, err
 	}
+	if addedByType.Valid {
+		target.AddedByKind = PrincipalKind(addedByType.String)
+	}
+	target.AddedByID = addedByID
 
 	isSelf := locked.Principal.Kind == target.Kind &&
 		locked.Principal.ID.Bytes == target.ID.Bytes

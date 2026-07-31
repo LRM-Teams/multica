@@ -252,9 +252,65 @@ func TestNonMemberWorkspaceAdminCanManageOrdinaryMembers(t *testing.T) {
 	}
 }
 
+// LRM-869: plain channel member who added an Agent may remove that Agent
+// without channel manager / workspace admin authority.
+func TestInviterChannelMemberCanRemoveSelfAddedAgent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	inviterID := createChannelPlainMember(t)
+	otherMemberID := createChannelPlainMember(t)
+	agentID := createHandlerTestAgent(t, "lrm-869-inviter-remove-"+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "lrm-869-inviter-agent-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id, role,
+		  added_by_type, added_by_id, join_source
+		)
+		VALUES
+		  ($1, $2, 'user', $3, 'member', 'system', NULL, 'manual'),
+		  ($1, $2, 'user', $4, 'member', 'system', NULL, 'manual'),
+		  ($1, $2, 'agent', $5, 'member', 'user', $3, 'manual')`,
+		channelID, testWorkspaceID, inviterID, otherMemberID, agentID); err != nil {
+		t.Fatalf("seed inviter/other/agent members: %v", err)
+	}
+	assertChannelAgentMembershipCount(t, ctx, channelID, agentID, 1)
+
+	denyReq := newRequestAs(otherMemberID, http.MethodDelete,
+		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
+	denyReq = withChannelTestWorkspaceCtx(t, denyReq, otherMemberID)
+	denyReq = withRouteParams(denyReq,
+		"channelId", channelID,
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	denyRec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(denyRec, denyReq)
+	if denyRec.Code != http.StatusForbidden {
+		t.Fatalf("non-inviter remove agent: status=%d body=%s", denyRec.Code, denyRec.Body.String())
+	}
+	assertChannelAgentMembershipCount(t, ctx, channelID, agentID, 1)
+
+	req := newRequestAs(inviterID, http.MethodDelete,
+		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
+	req = withChannelTestWorkspaceCtx(t, req, inviterID)
+	req = withRouteParams(req,
+		"channelId", channelID,
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inviter remove self-added agent: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertChannelAgentMembershipCount(t, ctx, channelID, agentID, 0)
+}
+
 // LRM-868: Workspace admin who is only a plain channel member (not channel
-// owner/manager) may still remove an Agent — pure workspace-role path, no
-// inviter exception.
+// owner/manager) may still remove an Agent — pure workspace-role path.
 func TestWorkspaceAdminChannelMemberCanRemoveAgent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

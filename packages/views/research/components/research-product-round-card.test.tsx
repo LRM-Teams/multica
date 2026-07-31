@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchProductRoundCard } from "@multica/core/types";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 
@@ -29,6 +29,8 @@ vi.mock("../../i18n/use-t", () => ({
           agree: "Agree",
           reject_continue: "Reject continue",
           reject_stop: "Reject stop",
+          auto_adopt_countdown: `Auto-adopt in ${vars?.s ?? ""}s`,
+          auto_adopted: "Timed out — adopted",
           decision: {
             continue: "Continue",
             stop_enough: "Enough",
@@ -57,11 +59,52 @@ const card: ResearchProductRoundCard = {
 };
 
 describe("ResearchProductRoundCardView", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders open detail with gaps, focus, and goal patch", () => {
-    render(<ResearchProductRoundCardView card={card} currentGoal="旧目标" />);
+    render(
+      <ResearchProductRoundCardView card={card} currentGoal="旧目标" autoAdoptSeconds={0} />,
+    );
     expect(screen.getByText("缺口 A")).toBeTruthy();
     expect(screen.getByText("收窄到成本对比")).toBeTruthy();
     expect(screen.getByText("补成本证据")).toBeTruthy();
     expect(screen.getByText("Agree")).toBeTruthy();
+  });
+
+  it("auto-adopts Ronaldo decision after timeout without writing goal_patch", () => {
+    const onAgree = vi.fn();
+    const onConfirmGoalPatch = vi.fn();
+    render(
+      <ResearchProductRoundCardView
+        card={card}
+        onAgree={onAgree}
+        onConfirmGoalPatch={onConfirmGoalPatch}
+        autoAdoptSeconds={2}
+      />,
+    );
+    expect(screen.getByText(/Auto-adopt in/)).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(2500);
+    });
+    expect(onAgree).toHaveBeenCalledTimes(1);
+    expect(onConfirmGoalPatch).not.toHaveBeenCalled();
+  });
+
+  it("cancels auto-adopt when the user agrees early", () => {
+    const onAgree = vi.fn();
+    render(
+      <ResearchProductRoundCardView card={card} onAgree={onAgree} autoAdoptSeconds={5} />,
+    );
+    fireEvent.click(screen.getByText("Agree"));
+    expect(onAgree).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(onAgree).toHaveBeenCalledTimes(1);
   });
 });

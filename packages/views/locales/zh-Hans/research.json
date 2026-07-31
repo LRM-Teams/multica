@@ -166,6 +166,8 @@
     "agree": "同意裁定",
     "reject_continue": "驳回继续 · 要求停止",
     "reject_stop": "驳回停止 · 再开一轮",
+    "auto_adopt_countdown": "{{s}} 秒后超时自动采纳",
+    "auto_adopted": "已超时自动采纳罗纳尔多裁定（goal 改写仍需你确认）",
     "decision": {
       "continue": "继续加深",
       "stop_enough": "够了 · 收口",

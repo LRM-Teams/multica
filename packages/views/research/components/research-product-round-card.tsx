@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ResearchProductRoundCard } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -14,6 +14,9 @@ import {
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+
+/** Morgan freeze: 30s with no click → auto-adopt Ronaldo decision (not goal_patch). */
+export const ROUND_AUTO_ADOPT_SECONDS = 30;
 
 function asGapList(gaps: unknown): string[] {
   if (!Array.isArray(gaps)) return [];
@@ -64,6 +67,7 @@ export function ResearchProductRoundCardView({
   onRejectGoalPatch,
   onEditGoalPatch,
   pending,
+  autoAdoptSeconds = ROUND_AUTO_ADOPT_SECONDS,
 }: {
   card: ResearchProductRoundCard;
   currentGoal?: string;
@@ -75,11 +79,20 @@ export function ResearchProductRoundCardView({
   onRejectGoalPatch?: () => void;
   onEditGoalPatch?: (text: string) => void;
   pending?: boolean;
+  /** Override for tests; production default 30. */
+  autoAdoptSeconds?: number;
 }) {
   const { t } = useT("research");
   const [open, setOpen] = useState(!compact);
   const [goalOpen, setGoalOpen] = useState(false);
   const [goalDraft, setGoalDraft] = useState(card.goal_patch_proposal ?? "");
+  const [timer, setTimer] = useState({ left: autoAdoptSeconds, autoAdopted: false });
+  const interactedRef = useRef(false);
+  const onAgreeRef = useRef(onAgree);
+  onAgreeRef.current = onAgree;
+
+  const { left: secondsLeft, autoAdopted } = timer;
+
   const gaps = useMemo(() => asGapList(card.coverage_gaps), [card.coverage_gaps]);
   const isContinue = card.decision === "continue";
   const isStop = card.decision === "stop_enough" || card.decision === "stop_budget";
@@ -87,6 +100,38 @@ export function ResearchProductRoundCardView({
     ($) =>
       $.round.decision[card.decision as keyof typeof $.round.decision] ?? card.decision,
   );
+
+  // Countdown from first visible moment; any decision click cancels.
+  useEffect(() => {
+    if (pending || autoAdoptSeconds <= 0) return;
+    interactedRef.current = false;
+    setTimer({ left: autoAdoptSeconds, autoAdopted: false });
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      if (interactedRef.current) {
+        window.clearInterval(id);
+        return;
+      }
+      const left = Math.max(
+        0,
+        autoAdoptSeconds - Math.floor((Date.now() - started) / 1000),
+      );
+      if (left <= 0) {
+        window.clearInterval(id);
+        // Auto-adopt judgment only — never silent goal_patch write (LRM-898).
+        // Keep dialog open so the timeout state is visible (AC + review screenshots).
+        setTimer({ left: 0, autoAdopted: true });
+        onAgreeRef.current?.();
+      } else {
+        setTimer((prev) => ({ ...prev, left }));
+      }
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [card.id, pending, autoAdoptSeconds]);
+
+  const markInteracted = () => {
+    interactedRef.current = true;
+  };
 
   const summary = (
     <button
@@ -103,6 +148,11 @@ export function ResearchProductRoundCardView({
       <span className="min-w-0 flex-1 truncate text-[11px] opacity-80">
         {card.confidence_note || t(($) => $.round.open_detail)}
       </span>
+      {!autoAdopted && secondsLeft > 0 ? (
+        <span className="shrink-0 font-mono text-[10px] tabular-nums opacity-70">
+          {t(($) => $.round.auto_adopt_countdown, { s: secondsLeft })}
+        </span>
+      ) : null}
       <span className="shrink-0 font-mono text-[10px] opacity-70">
         {card.budget_used}/{card.budget_used + card.budget_remaining}
       </span>
@@ -136,6 +186,22 @@ export function ResearchProductRoundCardView({
                 </span>
               ) : null}
             </div>
+
+            {autoAdopted ? (
+              <p
+                role="status"
+                className="rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[11px] text-warning"
+              >
+                {t(($) => $.round.auto_adopted)}
+              </p>
+            ) : secondsLeft > 0 && !pending ? (
+              <p
+                role="status"
+                className="rounded-md border bg-muted/40 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground tabular-nums"
+              >
+                {t(($) => $.round.auto_adopt_countdown, { s: secondsLeft })}
+              </p>
+            ) : null}
 
             <section>
               <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
@@ -229,8 +295,9 @@ export function ResearchProductRoundCardView({
           <DialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
             <Button
               className="w-full"
-              disabled={pending}
+              disabled={pending || autoAdopted}
               onClick={() => {
+                markInteracted();
                 onAgree?.();
                 setOpen(false);
               }}
@@ -241,8 +308,9 @@ export function ResearchProductRoundCardView({
               <Button
                 className="w-full"
                 variant="outline"
-                disabled={pending || card.budget_remaining <= 0}
+                disabled={pending || autoAdopted || card.budget_remaining <= 0}
                 onClick={() => {
+                  markInteracted();
                   onRejectContinue?.();
                   setOpen(false);
                 }}
@@ -254,8 +322,9 @@ export function ResearchProductRoundCardView({
               <Button
                 className="w-full"
                 variant="outline"
-                disabled={pending || card.budget_remaining <= 0}
+                disabled={pending || autoAdopted || card.budget_remaining <= 0}
                 onClick={() => {
+                  markInteracted();
                   onRejectStop?.();
                   setOpen(false);
                 }}

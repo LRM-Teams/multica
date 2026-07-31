@@ -1342,6 +1342,55 @@ func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	}
 }
 
+// TestListChannelMessages_ArchivedPeerStaysReadable locks the fix for the
+// 2026-07-31 Wendy DM incident: a DM whose peer agent has since been
+// archived must stay readable (200, real messages), never 404 the whole
+// conversation out from under the user's message history.
+func TestListChannelMessages_ArchivedPeerStaysReadable(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "Archived Peer Bot", nil)
+	channelID := seedAgentDMChannel(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET archived_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("archive agent: %v", err)
+	}
+
+	req := newRequest("GET", "/api/channels/"+channelID+"/messages", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archived-peer DM should stay readable, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSendChannelMessage_RejectsArchivedPeer locks the other half: reads
+// stay open, but new sends to an archived peer must still be blocked (not
+// silently succeed into a dead agent).
+func TestSendChannelMessage_RejectsArchivedPeer(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "Archived Peer Bot Write", nil)
+	channelID := seedAgentDMChannel(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET archived_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("archive agent: %v", err)
+	}
+
+	req := newRequest("POST", "/api/channels/"+channelID+"/messages", map[string]string{"content": "hi"})
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("sending to an archived peer should be rejected, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

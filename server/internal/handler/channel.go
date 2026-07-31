@@ -2047,7 +2047,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, false) {
 		return
 	}
 	var a2aControl *AgentDMControlResponse
@@ -3923,7 +3923,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !supervisor && !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, false) {
 		return
 	}
 	var a2aControl *AgentDMControlResponse
@@ -4060,7 +4060,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
-	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, true) {
 		return
 	}
 	content, parts, err = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
@@ -4803,7 +4803,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
-	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch, true) {
 		return
 	}
 	content, parts, err = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)

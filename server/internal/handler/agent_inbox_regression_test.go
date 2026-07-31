@@ -237,13 +237,21 @@ func TestAgentInboxDrainPrioritizesPendingWakeAcrossRuntimes(t *testing.T) {
 	}
 
 	settleClaimedInboxEventForTest(t, uuidToString(newer.ID))
-	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, olderRuntime)
+
+	// LRM-927: the remaining event is still pinned to olderRuntime, but the
+	// agent lives on currentRuntime. Drain on the stale runtime heals that pin
+	// (moves event+session) and returns no lease — it must not 403 on ensure.
+	if delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, olderRuntime); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale runtime should heal then return no lease: delivery=%+v err=%v", delivery, err)
+	}
+
+	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, currentRuntime)
 	if err != nil {
-		t.Fatalf("lease older low-priority event after high-priority completion: %v", err)
+		t.Fatalf("lease healed low-priority event on current runtime: %v", err)
 	}
 	if delivery.InboxEventID != older.ID {
 		t.Fatalf(
-			"leased event %s, want remaining low-priority event %s",
+			"leased event %s, want remaining low-priority event %s (healed onto current runtime)",
 			uuidToString(delivery.InboxEventID),
 			uuidToString(older.ID),
 		)

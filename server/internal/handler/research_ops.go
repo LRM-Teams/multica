@@ -782,6 +782,7 @@ func (h *Handler) ConfirmResearchSession(w http.ResponseWriter, r *http.Request)
 	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
 		"session": researchSessionToResponse(updated),
 	})
+	h.awardHonorXP(r.Context(), parseUUID(userID), "research.session", uuidToString(sessionID))
 	writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
 }
 

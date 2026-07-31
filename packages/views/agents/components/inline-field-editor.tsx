@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Loader2, Pencil } from "lucide-react";
 import { isImeComposing } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
@@ -26,6 +27,7 @@ export function InlineFieldEditor({
   mapSaveError,
   maxLength,
   displayClassName,
+  displayContent,
   testId = "inline-field-editor",
 }: {
   value: string;
@@ -38,6 +40,7 @@ export function InlineFieldEditor({
   mapSaveError?: (e: unknown) => string | null;
   maxLength?: number;
   displayClassName?: string;
+  displayContent?: ReactNode;
   testId?: string;
 }) {
   const { t } = useT("agents");
@@ -144,7 +147,7 @@ export function InlineFieldEditor({
               displayClassName,
             )}
           >
-            {value}
+            {displayContent ?? value}
           </span>
         ) : (
           <span className="min-w-0 flex-1 italic text-muted-foreground/60">

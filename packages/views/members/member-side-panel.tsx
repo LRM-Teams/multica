@@ -29,6 +29,8 @@ import {
 } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
+import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
@@ -232,6 +234,22 @@ function MemberSidePanelReady({
     !!handle &&
     handleRaw !== null &&
     shouldShowActorHandleLabel(displayName, handleRaw);
+  const selfHonor =
+    member?.honor ??
+    (honorWall
+      ? {
+          level: honorWall.level,
+          name_style: honorWall.name_style,
+          equipped_badge: honorWall.equipped_badge,
+        }
+      : null);
+  const selfNameDisplay = selfHonor
+    ? honorNameDisplayProps({
+        nameStyle: selfHonor.name_style,
+        level: selfHonor.level,
+        surface: "profile",
+      })
+    : null;
 
   const description =
     (profile?.description ?? member?.profile_description ?? "").trim();
@@ -372,6 +390,26 @@ function MemberSidePanelReady({
                 maxLength={80}
                 validate={(draft) =>
                   draft.trim() ? null : t(($) => $.panel.name_required)
+                }
+                displayContent={
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <span
+                      className={selfNameDisplay?.className}
+                      data-honor-glow-tier={
+                        selfNameDisplay?.["data-honor-glow-tier"]
+                      }
+                      style={selfNameDisplay?.style}
+                    >
+                      {displayName}
+                    </span>
+                    {selfHonor?.equipped_badge ? (
+                      <HonorBadgeIcon
+                        svgKey={selfHonor.equipped_badge.svg_key}
+                        title={selfHonor.equipped_badge.title}
+                        medal
+                      />
+                    ) : null}
+                  </span>
                 }
                 displayClassName="truncate text-[15px] font-bold leading-tight"
                 testId="member-profile-name"

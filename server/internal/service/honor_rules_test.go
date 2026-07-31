@@ -3,6 +3,8 @@ package service
 import (
 	"testing"
 	"time"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestLevelFromTotalXP_IncreasesWithXP(t *testing.T) {
@@ -11,6 +13,18 @@ func TestLevelFromTotalXP_IncreasesWithXP(t *testing.T) {
 	}
 	if LevelFromTotalXP(100) < 2 {
 		t.Fatalf("expected level >= 2 at 100 xp")
+	}
+}
+
+func TestXPToNextLevelStopsAtMaximumLevel(t *testing.T) {
+	t.Parallel()
+
+	totalXP := honorLevelThresholdXP(MaxHonorLevel)
+	if got := LevelFromTotalXP(totalXP); got != MaxHonorLevel {
+		t.Fatalf("LevelFromTotalXP(max threshold) = %d, want %d", got, MaxHonorLevel)
+	}
+	if got := XPToNextLevel(totalXP, MaxHonorLevel); got != 0 {
+		t.Fatalf("XPToNextLevel(max level) = %d, want 0", got)
 	}
 }
 
@@ -31,5 +45,66 @@ func TestPillarTierFromCounter_SteepCurve(t *testing.T) {
 	}
 	if tier := PillarTierFromCounter(HonorPillarUsage, 50); tier < 2 {
 		t.Fatalf("expected tier >= 2 at 50 usage actions, got %d", tier)
+	}
+}
+
+func TestBuildHonorRulesDocumentPublishesEverySupportedLevel(t *testing.T) {
+	t.Parallel()
+
+	document := BuildHonorRulesDocument(nil)
+	if got, want := len(document.LevelThresholds), MaxHonorLevel; got != want {
+		t.Fatalf("len(LevelThresholds) = %d, want %d", got, want)
+	}
+
+	for index, threshold := range document.LevelThresholds {
+		wantLevel := index + 1
+		if threshold.Level != wantLevel {
+			t.Fatalf("LevelThresholds[%d].Level = %d, want %d", index, threshold.Level, wantLevel)
+		}
+		if threshold.TotalXP != honorLevelThresholdXP(wantLevel) {
+			t.Fatalf(
+				"LevelThresholds[%d].TotalXP = %d, want %d",
+				index,
+				threshold.TotalXP,
+				honorLevelThresholdXP(wantLevel),
+			)
+		}
+		if index > 0 && threshold.TotalXP <= document.LevelThresholds[index-1].TotalXP {
+			t.Fatalf("level thresholds must increase: %+v", document.LevelThresholds[index-1:index+1])
+		}
+	}
+}
+
+func TestMaskSecretBadgeHidesItsUnlockRuleUntilUnlocked(t *testing.T) {
+	t.Parallel()
+
+	definition := db.HonorBadgeDef{
+		Title:       "Hidden Architect",
+		Description: "Complete the hidden architecture challenge.",
+		SvgKey:      "architect",
+		Secret:      true,
+		UnlockRule:  "complete.secret_architecture_challenge",
+	}
+
+	title, description, svgKey, unlockRule := maskSecretBadge(definition, false)
+	if title != "Secret Badge" || description != "Unlock to reveal this badge." || svgKey != "stardust" {
+		t.Fatalf("locked secret presentation leaked metadata: %q %q %q", title, description, svgKey)
+	}
+	if unlockRule != "" {
+		t.Fatalf("locked secret unlock rule = %q, want empty", unlockRule)
+	}
+
+	title, description, svgKey, unlockRule = maskSecretBadge(definition, true)
+	if title != definition.Title ||
+		description != definition.Description ||
+		svgKey != definition.SvgKey ||
+		unlockRule != definition.UnlockRule {
+		t.Fatalf(
+			"unlocked secret presentation = %q %q %q %q, want original metadata",
+			title,
+			description,
+			svgKey,
+			unlockRule,
+		)
 	}
 }

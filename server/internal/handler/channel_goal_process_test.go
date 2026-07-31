@@ -36,11 +36,10 @@ func processRequest(t *testing.T, userID, method, channelID, agentID string, bod
 	}
 	req := newRequestAs(userID, method, path, body)
 	req = withChannelTestWorkspaceCtx(t, req, userID)
-	req = withURLParam(req, "channelId", channelID)
 	if agentID != "" {
-		req = withURLParam(req, "agentId", agentID)
+		return withRouteParams(req, "channelId", channelID, "agentId", agentID)
 	}
-	return req
+	return withURLParam(req, "channelId", channelID)
 }
 
 func createActiveGoalForProcessTests(t *testing.T, channelID string) *ChannelGoalResponse {
@@ -228,7 +227,8 @@ func TestAgentChannelGoalProcessOwnWriteAndCrossManagerGuard(t *testing.T) {
 		t, managerA, http.MethodPut, "/api/agent/channels/"+channel.ID+"/goal/process/"+managerB, channel.ID,
 		map[string]any{"content": "hijack", "expected_version": 0},
 	)
-	req = withURLParam(req, "agentId", managerB)
+	// withURLParam replaces the whole chi route ctx — set both params together.
+	req = withRouteParams(req, "channelId", channel.ID, "agentId", managerB)
 	testHandler.PutAgentChannelGoalProcess(cross, req)
 	if cross.Code != http.StatusForbidden {
 		t.Fatalf("cross-manager put = %d: %s", cross.Code, cross.Body.String())

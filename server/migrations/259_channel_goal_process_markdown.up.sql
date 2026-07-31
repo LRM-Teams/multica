@@ -22,3 +22,7 @@ CREATE INDEX channel_goal_process_markdown_goal_idx
 
 CREATE INDEX channel_goal_process_markdown_channel_idx
     ON channel_goal_process_markdown(workspace_id, channel_id);
+
+-- Supporting index for agent(id) ON DELETE CASCADE (agent hard-delete scans).
+CREATE INDEX channel_goal_process_markdown_manager_agent_idx
+    ON channel_goal_process_markdown(manager_agent_id);

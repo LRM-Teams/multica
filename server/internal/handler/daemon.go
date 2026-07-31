@@ -1143,6 +1143,25 @@ func (h *Handler) processHeartbeat(
 		}
 	}
 
+	probeRestartCtx, cancelProbeRestart := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasRestart, probeRestartErr := h.RestartStore.HasPending(probeRestartCtx, runtimeID)
+	cancelProbeRestart()
+	switch {
+	case probeRestartErr == nil && hasRestart:
+		pendingRestart, popRestartErr := h.RestartStore.PopPending(ctx, runtimeID)
+		if popRestartErr != nil {
+			slog.Warn("restart PopPending failed", "error", popRestartErr, "runtime_id", runtimeID)
+		} else if pendingRestart != nil {
+			ack.PendingRestart = &protocol.DaemonHeartbeatPendingRestart{ID: pendingRestart.ID}
+		}
+	case probeRestartErr != nil:
+		if errors.Is(probeRestartErr, context.DeadlineExceeded) || errors.Is(probeRestartErr, context.Canceled) {
+			slog.Warn("restart HasPending timed out", "runtime_id", runtimeID)
+		} else {
+			slog.Warn("restart HasPending failed", "error", probeRestartErr, "runtime_id", runtimeID)
+		}
+	}
+
 	// Probe then claim the model list queue. Same pattern as the local-skill
 	// queues below — a slow shared store cannot stall the heartbeat on
 	// empty-queue ticks, but the claim itself runs unbounded because its

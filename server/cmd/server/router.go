@@ -203,6 +203,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	}
 	if rdb != nil {
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
+		h.RestartStore = handler.NewRedisRestartStore(rdb)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
@@ -1170,6 +1171,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
 					r.Post("/update", h.InitiateUpdate)
 					r.Get("/update/{updateId}", h.GetUpdate)
+					r.Post("/restart", h.InitiateRestart)
+					r.Get("/restart/{restartId}", h.GetRestart)
 					r.Post("/models", h.InitiateListModels)
 					r.Get("/models/{requestId}", h.GetModelListRequest)
 					r.Post("/local-skills", h.InitiateListLocalSkills)

@@ -84,6 +84,7 @@ import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 import { DmAgentWorkingCue } from "./dm-agent-working-cue";
+import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 
 // #692 finding 1: a supervised agent_pair owner is NOT a channel_member, so the
 // automatic member-only mark-read mutation 403s. Pass this no-op instead of the
@@ -623,6 +624,12 @@ function DmChannelConversation({
 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
+  const dmMessageAreaRef = useRef<HTMLDivElement>(null);
+  // LRM-695 — text-selection Quote/Copy over the DM message area (desktop).
+  const dmSelectionMenu = useSelectionQuoteMenu({
+    containerRef: dmMessageAreaRef,
+    onQuote: (md: string) => editorRef.current?.insertMarkdown(md),
+  });
   // #772 send-failure → composer-restore (main + thread composers). The failed
   // text is restored into the composer (or kept-back when the composer already
   // holds new text) and an inline bar is shown; the editor is remounted via a
@@ -1487,6 +1494,7 @@ function DmChannelConversation({
           {t(($) => $.message_loading.jump_not_found)}
         </output>
       )}
+      <div ref={dmMessageAreaRef} className="contents">
       <ChannelMessageList
         key={channelId}
         messages={messages}
@@ -1524,6 +1532,8 @@ function DmChannelConversation({
         onEditMessage={readOnly ? undefined : handleEditMessage}
         onRetrySend={readOnly ? undefined : handleRetrySend}
       />
+      {!readOnly ? dmSelectionMenu.menu : null}
+      </div>
       <Composer
         surface="dm_channel"
         readOnly={readOnly}

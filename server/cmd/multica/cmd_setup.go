@@ -17,31 +17,36 @@ import (
 )
 
 var setupCmd = &cobra.Command{
-	Use:   "setup",
+	Use:   "setup [workspace]",
 	Short: "Configure the CLI, authenticate, and start the daemon",
 	Long: `Configures the CLI to connect to Multica Cloud (multica.ai), then
 authenticates via browser and starts the agent daemon.
 
 If a configuration already exists, you will be prompted before overwriting.
 
+Pass a workspace id or slug to set it as the default in this one step
+(equivalent to --workspace): multica setup my-workspace
+
 Use 'multica setup self-host' to connect to a self-hosted server instead.
 
 Use --profile to create an isolated configuration for a separate environment:
   multica setup self-host --profile staging --server-url https://api-staging.co`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runSetupCloud,
 }
 
 var setupCloudCmd = &cobra.Command{
-	Use:   "cloud",
+	Use:   "cloud [workspace]",
 	Short: "Configure the CLI for Multica Cloud (multica.ai)",
 	Long: `Explicitly configures the CLI to connect to Multica Cloud (multica.ai).
 
 This is equivalent to running 'multica setup' without a subcommand.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runSetupCloud,
 }
 
 var setupSelfHostCmd = &cobra.Command{
-	Use:   "self-host",
+	Use:   "self-host [workspace]",
 	Short: "Configure the CLI for a self-hosted Multica server",
 	Long: `Configures the CLI to connect to a self-hosted Multica server.
 
@@ -52,10 +57,15 @@ If you run this command from a different machine than the server, also pass
 --callback-host <FQDN-or-IP-the-browser-can-reach-back-to-this-machine-on> so
 the OAuth login flow can return the token to the CLI.
 
+Pass a workspace id or slug to set it as the default in this one step
+(equivalent to --workspace).
+
 Examples:
   multica setup self-host
+  multica setup self-host my-workspace
   multica setup self-host --server-url https://api.internal.co --app-url https://app.internal.co
   multica setup self-host --port 9090 --frontend-port 4000`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runSetupSelfHost,
 }
 
@@ -117,7 +127,22 @@ func confirmOverwrite(profile string) (bool, error) {
 	return true, nil
 }
 
+// applyWorkspacePositional wires `multica setup <workspace>` onto the same
+// --workspace flag autoWatchWorkspaces already reads, so there is exactly
+// one place that resolves the id-or-slug against the workspace list. Does
+// nothing if the flag was already set explicitly (flag wins) or no
+// positional was given.
+func applyWorkspacePositional(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 || cmd.Flags().Changed("workspace") {
+		return nil
+	}
+	return cmd.Flags().Set("workspace", args[0])
+}
+
 func runSetupCloud(cmd *cobra.Command, args []string) error {
+	if err := applyWorkspacePositional(cmd, args); err != nil {
+		return err
+	}
 	profile := resolveProfile(cmd)
 
 	ok, err := confirmOverwrite(profile)
@@ -157,6 +182,9 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 }
 
 func runSetupSelfHost(cmd *cobra.Command, args []string) error {
+	if err := applyWorkspacePositional(cmd, args); err != nil {
+		return err
+	}
 	profile := resolveProfile(cmd)
 
 	ok, err := confirmOverwrite(profile)

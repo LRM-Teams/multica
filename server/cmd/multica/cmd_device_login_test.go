@@ -26,6 +26,53 @@ func newAutoWatchTestCmd() *cobra.Command {
 	return cmd
 }
 
+// TestApplyWorkspacePositional locks the `multica setup <workspace>` /
+// `--workspace` interplay: the positional sets the same flag
+// autoWatchWorkspaces reads, but an explicitly-passed flag always wins over
+// the positional (flag is the more specific signal).
+func TestApplyWorkspacePositional(t *testing.T) {
+	newCmd := func() *cobra.Command {
+		cmd := &cobra.Command{Use: "setup"}
+		cmd.Flags().String("workspace", "", "")
+		return cmd
+	}
+
+	t.Run("positional sets the flag", func(t *testing.T) {
+		cmd := newCmd()
+		if err := applyWorkspacePositional(cmd, []string{"my-workspace"}); err != nil {
+			t.Fatalf("applyWorkspacePositional: %v", err)
+		}
+		got, _ := cmd.Flags().GetString("workspace")
+		if got != "my-workspace" {
+			t.Fatalf("workspace flag = %q, want %q", got, "my-workspace")
+		}
+	})
+
+	t.Run("no positional leaves the flag untouched", func(t *testing.T) {
+		cmd := newCmd()
+		if err := applyWorkspacePositional(cmd, nil); err != nil {
+			t.Fatalf("applyWorkspacePositional: %v", err)
+		}
+		if cmd.Flags().Changed("workspace") {
+			t.Fatal("workspace flag should not be marked changed when no positional was given")
+		}
+	})
+
+	t.Run("explicit flag wins over positional", func(t *testing.T) {
+		cmd := newCmd()
+		if err := cmd.Flags().Set("workspace", "explicit-flag-value"); err != nil {
+			t.Fatal(err)
+		}
+		if err := applyWorkspacePositional(cmd, []string{"positional-value"}); err != nil {
+			t.Fatalf("applyWorkspacePositional: %v", err)
+		}
+		got, _ := cmd.Flags().GetString("workspace")
+		if got != "explicit-flag-value" {
+			t.Fatalf("workspace flag = %q, want the explicitly-set flag value to win", got)
+		}
+	})
+}
+
 func TestAutoWatchWorkspaces_WorkspaceFlagPinsBySlugOrID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/workspaces" {

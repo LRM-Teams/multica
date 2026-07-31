@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -174,6 +175,55 @@ func TestEnsureTaskAgentCredentialValidatesCachedCredentialEveryRun(t *testing.T
 	}
 	if got, _ := body["credential_id"].(string); got != "credential-1" {
 		t.Fatalf("credential_id = %q, want credential-1", got)
+	}
+}
+
+// TestEnsureTaskAgentCredentialClearsCacheOnAgentReassigned reproduces the
+// 2026-07-31 production incident: an agent reassigned to a different
+// runtime (agent.runtime_id is user-editable — a normal operation), where
+// this daemon's cached credential is now for a binding that no longer
+// exists. ensureTaskAgentCredential must classify the resulting 403 as
+// errAgentReassignedElsewhere (not a generic credential error) and remove
+// the now-stale cache entry so a future reassignment back to this runtime
+// cannot reuse it.
+func TestEnsureTaskAgentCredentialClearsCacheOnAgentReassigned(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"agent is not bound to this runtime"}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: srv.URL}
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-old", "agent-1", AgentCredentialResponse{
+		ID:        "credential-1",
+		AgentID:   "agent-1",
+		Prefix:    "mat_stale",
+		ExpiresAt: &expiresAt,
+		Token:     "mat_stale_secret",
+	}, now); err != nil {
+		t.Fatalf("write stale cache: %v", err)
+	}
+	cachePath := agentCredentialCachePath(cfg, "workspace-1", "agent-1")
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("precondition: stale cache file should exist: %v", err)
+	}
+
+	d := &Daemon{cfg: cfg, client: NewClient(srv.URL)}
+	_, err := d.ensureTaskAgentCredential(
+		context.Background(),
+		Task{WorkspaceID: "workspace-1", RuntimeID: "runtime-old", AgentID: "agent-1"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if !errors.Is(err, errAgentReassignedElsewhere) {
+		t.Fatalf("ensureTaskAgentCredential error = %v, want errAgentReassignedElsewhere", err)
+	}
+	if _, statErr := os.Stat(cachePath); !os.IsNotExist(statErr) {
+		t.Fatalf("stale cache file should have been removed, stat err = %v", statErr)
 	}
 }
 

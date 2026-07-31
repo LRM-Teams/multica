@@ -93,7 +93,7 @@
   "archived": "已归档",
   "merged": "已合并",
   "curatorProfile": "策展配置",
-  "curatorProfileHint": "管理员选择运行时和策展智能体。自审和团队策展默认关闭，需显式启用。",
+  "curatorProfileHint": "智能体自审由系统自动调度，只覆盖前一天有可审素材的智能体。管理员只需要为工作区选择统一的策展运行时和策展智能体。",
   "curatorAgent": "策展智能体",
   "targetAgents": "目标智能体",
   "allMyAgents": "我的全部智能体",
@@ -109,11 +109,11 @@
   "catchUp": "补跑错过的计划",
   "saveProfile": "保存配置",
   "profileSaved": "策展配置已保存",
-  "configureProfile": "请先选择运行时和策展智能体，再启用自审或团队策展。",
+  "configureProfile": "请先选择运行时和策展智能体，再启用夜间团队策展。",
   "manualRun": "手动运行",
-  "manualRunHint": "为配置运行时上的在线活跃智能体排队自审或团队策展。",
+  "manualRunHint": "为已经产出自审素材的活跃智能体排队工作区团队策展。",
   "backfillRun": "回补未执行天数",
-  "backfillRunHint": "为近一个月内有活动、但自审或团队策展未成功的日期按天排队。无活动的日期会跳过。",
+  "backfillRunHint": "为近一个月内有活动、但团队策展未成功的日期排队回补。无活动日期和没有可审素材的智能体会跳过。",
   "backfillSince": "起始日期",
   "backfillUntil": "结束日期",
   "queueBackfill": "排队回补",
@@ -191,5 +191,8 @@
   "showingCount": "显示 {shown} / {total}",
   "untitled": "未命名",
   "noContent": "暂无正文。",
-  "issues": "Issue"
+  "issues": "Issue",
+  "automaticSelfReview": "自动智能体自审",
+  "automaticSelfReviewHint": "系统每天只给前一天有对话、任务、daily/memory 写入、候选项、memory sync 变化或 skill 建议的智能体发送自审任务。空闲智能体会跳过，避免为无内容审查消耗 token。",
+  "curatorConfigTitle": "工作区策展智能体"
 }

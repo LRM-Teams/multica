@@ -208,6 +208,12 @@ jobs:
   # investigation to resolve. This job never touches the Aliyun host or the
   # existing publish-downloads-feed job's output; a plain hosted runner is
   # enough since it never writes to `/data/multica`.
+  #
+  # Aliyun OSS compatibility gotchas: see the canonical list at the top of
+  # the "S3 / CloudFront" section in .env.example (bucket must pre-exist /
+  # addressing style / checksum trailers) before changing anything below —
+  # this job and migrate-uploads-to-s3 have each independently hit all
+  # three; don't make it a fourth rediscovery.
   publish-downloads-feed-oss:
     needs: [verify, release]
     if: github.repository == 'LRM-Teams/multica'

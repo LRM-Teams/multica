@@ -80,6 +80,11 @@ func NewS3StorageFromEnv() *S3Storage {
 	publicBaseURL := strings.TrimRight(os.Getenv("S3_PUBLIC_BASE_URL"), "/")
 
 	endpointURL := os.Getenv("AWS_ENDPOINT_URL")
+	// Defaults to path-style whenever a custom endpoint is set — wrong for
+	// Aliyun OSS, which needs virtual-hosted-style (S3_FORCE_PATH_STYLE=false)
+	// or every PutObject fails with "SecondLevelDomainForbidden". See the
+	// full Aliyun OSS gotcha list in .env.example's "S3 / CloudFront" section
+	// before touching this default.
 	forcePathStyle := endpointURL != ""
 	if raw := strings.TrimSpace(os.Getenv("S3_FORCE_PATH_STYLE")); raw != "" {
 		parsed, err := strconv.ParseBool(raw)

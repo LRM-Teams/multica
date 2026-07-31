@@ -47,6 +47,7 @@ export type WSEventType =
   | "member:updated"
   | "member:removed"
   | "member:presence"
+  | "honor:badge_unlocked"
   | "daemon:heartbeat"
   | "daemon:register"
   | "daemon:runtime_updated"
@@ -531,6 +532,17 @@ export interface MemberPresencePayload {
   workspace_id?: string;
 }
 
+export interface HonorBadgeUnlockedPayload {
+  user_id: string;
+  badge: {
+    id: string;
+    title: string;
+    description: string;
+    svg_key: string;
+  };
+  unlock_pct?: number;
+}
+
 /**
  * Maps every WSEventType to its payload interface. Events whose payload
  * shape isn't formally typed (server emits an object the client doesn't
@@ -586,6 +598,7 @@ export interface WSEventPayloadMap {
   "member:updated": MemberUpdatedPayload;
   "member:removed": MemberRemovedPayload;
   "member:presence": MemberPresencePayload;
+  "honor:badge_unlocked": HonorBadgeUnlockedPayload;
   "subscriber:added": SubscriberAddedPayload;
   "subscriber:removed": SubscriberRemovedPayload;
   "activity:created": ActivityCreatedPayload;

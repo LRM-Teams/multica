@@ -62,6 +62,9 @@ const (
 	EventMemberRemoved  = "member:removed"
 	EventMemberPresence = "member:presence" // LRM-462: human online/offline from WS sessions
 
+	// Honor events
+	EventHonorBadgeUnlocked = "honor:badge_unlocked"
+
 	// Subscriber events
 	EventSubscriberAdded   = "subscriber:added"
 	EventSubscriberRemoved = "subscriber:removed"

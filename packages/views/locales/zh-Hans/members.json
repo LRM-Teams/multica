@@ -31,7 +31,16 @@
     "avatar_upload_failed": "头像上传失败，请重试",
     "avatar_err_type": "仅支持 PNG 或 JPG 图片",
     "avatar_err_size": "图片不能超过 5 MB",
-    "avatar_err_dimensions": "图片尺寸至少 256×256"
+    "avatar_err_dimensions": "图片尺寸至少 256×256",
+    "honor_title": "荣誉",
+    "honor_completion": "{{unlocked}} / {{total}} 徽章",
+    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
+    "honor_showcase": "展示徽章",
+    "honor_recent": "最近解锁",
+    "honor_compare": "与你对比",
+    "honor_shared": "共同徽章",
+    "honor_you_only": "仅你有",
+    "honor_them_only": "仅对方有"
   },
   "detail": {
     "workspace_fallback": "工作区",

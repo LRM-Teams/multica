@@ -7,6 +7,34 @@ export const honorBadgeSchema = z.object({
   svg_key: z.string(),
 });
 
+const honorBadgeProgressSchema = z.object({
+  current: z.number(),
+  target: z.number(),
+  label: z.string(),
+});
+
+export const honorBadgeCatalogItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  svg_key: z.string(),
+  rarity: z.number(),
+  unlock_rule: z.string(),
+  secret: z.boolean(),
+  unlocked: z.boolean(),
+  unlocked_at: z.string().optional(),
+  unlock_pct: z.number().optional(),
+  progress: honorBadgeProgressSchema.optional(),
+});
+
+export const honorRecentUnlockSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  svg_key: z.string(),
+  unlocked_at: z.string(),
+});
+
 export const honorSnapshotSchema = z.object({
   level: z.number(),
   name_style: z.string(),
@@ -19,6 +47,12 @@ export const honorDashboardSchema = z.object({
   xp_to_next_level: z.number(),
   name_style: z.string(),
   equipped_badge_id: z.string().nullable(),
+  equipped_badge_manual: z.boolean().optional(),
+  showcase_badge_ids: z.array(z.string()).optional(),
+  badges_unlocked: z.number().optional(),
+  badges_total: z.number().optional(),
+  badge_catalog: z.array(honorBadgeCatalogItemSchema).optional(),
+  recent_unlocks: z.array(honorRecentUnlockSchema).optional(),
   pillars: z.array(
     z.object({
       pillar: z.string(),
@@ -44,7 +78,29 @@ export const honorPublicWallSchema = z.object({
   level: z.number(),
   name_style: z.string(),
   equipped_badge: honorBadgeSchema.optional(),
+  showcase_badges: z.array(honorBadgeSchema).optional(),
+  recent_unlocks: z.array(honorRecentUnlockSchema).optional(),
+  badges_unlocked: z.number().optional(),
+  badges_total: z.number().optional(),
   unlocked_badges: z.array(honorBadgeSchema),
+});
+
+export const honorCompareSchema = z.object({
+  self: z.object({
+    user_id: z.string(),
+    level: z.number(),
+    unlocked_count: z.number(),
+    total_badges: z.number(),
+  }),
+  other: z.object({
+    user_id: z.string(),
+    level: z.number(),
+    unlocked_count: z.number(),
+    total_badges: z.number(),
+  }),
+  shared_badges: z.array(honorBadgeSchema),
+  self_only_badges: z.array(honorBadgeSchema),
+  other_only_badges: z.array(honorBadgeSchema),
 });
 
 export const honorRulesSchema = z.object({
@@ -59,4 +115,10 @@ export const honorRulesSchema = z.object({
   name_style_unlocks: z.array(z.object({ id: z.string(), min_level: z.number() })),
   badge_catalog: z.array(honorBadgeSchema.extend({ rarity: z.number() })),
   changelog: z.array(z.string()),
+});
+
+export const honorBadgeUnlockedPayloadSchema = z.object({
+  user_id: z.string(),
+  badge: honorBadgeSchema,
+  unlock_pct: z.number().optional(),
 });

@@ -30,7 +30,7 @@ RETURNING *;
 
 -- name: UpdateUserHonorEquippedBadge :one
 UPDATE user_honor
-SET equipped_badge_id = $2, updated_at = now()
+SET equipped_badge_id = $2, equipped_badge_manual = $3, updated_at = now()
 WHERE user_id = $1
 RETURNING *;
 
@@ -101,3 +101,32 @@ WHERE user_id = ANY($1::uuid[]);
 -- name: ListUserHonorUnlocksByUserIDs :many
 SELECT u.* FROM user_honor_unlock u
 WHERE u.user_id = ANY($1::uuid[]);
+
+-- name: InsertUserHonorUnlockIfNew :one
+INSERT INTO user_honor_unlock (user_id, unlock_kind, def_id, source)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id, unlock_kind, def_id) DO NOTHING
+RETURNING *;
+
+-- name: CountHonorBadgeUnlocks :many
+SELECT def_id, COUNT(*)::bigint AS unlock_count
+FROM user_honor_unlock
+WHERE unlock_kind = 'badge'
+GROUP BY def_id;
+
+-- name: CountHonorUsers :one
+SELECT COUNT(*)::bigint AS total FROM user_honor;
+
+-- name: UpdateUserHonorShowcase :one
+UPDATE user_honor
+SET showcase_badge_ids = $2, updated_at = now()
+WHERE user_id = $1
+RETURNING *;
+
+-- name: ListRecentBadgeUnlocks :many
+SELECT u.def_id, u.granted_at, d.title, d.description, d.svg_key
+FROM user_honor_unlock u
+JOIN honor_badge_def d ON d.id = u.def_id
+WHERE u.user_id = $1 AND u.unlock_kind = 'badge'
+ORDER BY u.granted_at DESC
+LIMIT $2;

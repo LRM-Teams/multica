@@ -41,22 +41,32 @@ type HonorUnlockView struct {
 }
 
 type HonorDashboard struct {
-	Level           int                       `json:"level"`
-	TotalXP         int64                     `json:"total_xp"`
-	XpToNextLevel   int64                     `json:"xp_to_next_level"`
-	NameStyle       string                    `json:"name_style"`
-	EquippedBadgeID *string                   `json:"equipped_badge_id"`
-	Pillars         []HonorPillarProgressView `json:"pillars"`
-	UnlockedBadges  []HonorBadgeView          `json:"unlocked_badges"`
-	UnlockedStyles  []string                  `json:"unlocked_styles"`
-	RecentXP        []HonorXPEventView        `json:"recent_xp"`
+	Level               int                       `json:"level"`
+	TotalXP             int64                     `json:"total_xp"`
+	XpToNextLevel       int64                     `json:"xp_to_next_level"`
+	NameStyle           string                    `json:"name_style"`
+	EquippedBadgeID     *string                   `json:"equipped_badge_id"`
+	EquippedBadgeManual bool                      `json:"equipped_badge_manual"`
+	ShowcaseBadgeIDs    []string                  `json:"showcase_badge_ids"`
+	BadgesUnlocked      int                       `json:"badges_unlocked"`
+	BadgesTotal         int                       `json:"badges_total"`
+	BadgeCatalog        []HonorBadgeCatalogItem   `json:"badge_catalog"`
+	RecentUnlocks       []HonorRecentUnlock       `json:"recent_unlocks"`
+	Pillars             []HonorPillarProgressView `json:"pillars"`
+	UnlockedBadges      []HonorBadgeView          `json:"unlocked_badges"`
+	UnlockedStyles      []string                  `json:"unlocked_styles"`
+	RecentXP            []HonorXPEventView        `json:"recent_xp"`
 }
 
 type HonorPublicWall struct {
-	Level          int              `json:"level"`
-	NameStyle      string           `json:"name_style"`
-	EquippedBadge  *HonorBadgeView  `json:"equipped_badge,omitempty"`
-	UnlockedBadges []HonorBadgeView `json:"unlocked_badges"`
+	Level          int                 `json:"level"`
+	NameStyle      string              `json:"name_style"`
+	EquippedBadge  *HonorBadgeView     `json:"equipped_badge,omitempty"`
+	ShowcaseBadges []HonorBadgeView    `json:"showcase_badges,omitempty"`
+	RecentUnlocks  []HonorRecentUnlock `json:"recent_unlocks,omitempty"`
+	BadgesUnlocked int                 `json:"badges_unlocked"`
+	BadgesTotal    int                 `json:"badges_total"`
+	UnlockedBadges []HonorBadgeView    `json:"unlocked_badges"`
 }
 
 type HonorXPEventView struct {
@@ -68,7 +78,8 @@ type HonorXPEventView struct {
 }
 
 type HonorService struct {
-	Queries *db.Queries
+	Queries         *db.Queries
+	OnBadgeUnlocked func(ctx context.Context, evt HonorBadgeUnlockEvent)
 }
 
 func NewHonorService(queries *db.Queries) *HonorService {
@@ -92,6 +103,10 @@ func (s *HonorService) GetRules(ctx context.Context) (HonorRulesDocument, error)
 			SvgKey:      row.SvgKey,
 			Rarity:      int(row.Rarity),
 		}
+		if row.Secret {
+			catalog[i].Title = "Secret Badge"
+			catalog[i].Description = "Unlock to reveal."
+		}
 	}
 	return BuildHonorRulesDocument(catalog), nil
 }
@@ -104,14 +119,7 @@ func (s *HonorService) EnsureUserHonor(ctx context.Context, user db.User) error 
 		return err
 	}
 	if IsFoundingMember(user.CreatedAt.Time) {
-		if _, err := s.Queries.InsertUserHonorUnlock(ctx, db.InsertUserHonorUnlockParams{
-			UserID:     user.ID,
-			UnlockKind: "badge",
-			DefID:      "founding",
-			Source:     "founding",
-		}); err != nil {
-			return err
-		}
+		s.tryUnlockBadge(ctx, user.ID, "founding", "founding")
 		if _, err := s.Queries.InsertUserHonorUnlock(ctx, db.InsertUserHonorUnlockParams{
 			UserID:     user.ID,
 			UnlockKind: "style",
@@ -214,9 +222,7 @@ func (s *HonorService) unlockLevelBadges(ctx context.Context, userID pgtype.UUID
 	}
 	for _, u := range unlocks {
 		if level >= u.minLevel {
-			_, _ = s.Queries.InsertUserHonorUnlock(ctx, db.InsertUserHonorUnlockParams{
-				UserID: userID, UnlockKind: "badge", DefID: u.badgeID, Source: "auto",
-			})
+			s.tryUnlockBadge(ctx, userID, u.badgeID, "auto")
 		}
 	}
 }
@@ -224,13 +230,9 @@ func (s *HonorService) unlockLevelBadges(ctx context.Context, userID pgtype.UUID
 func (s *HonorService) unlockAchievementBadges(ctx context.Context, userID pgtype.UUID, pillar HonorPillar, tier int) {
 	switch {
 	case pillar == HonorPillarDelivery && tier >= 4:
-		_, _ = s.Queries.InsertUserHonorUnlock(ctx, db.InsertUserHonorUnlockParams{
-			UserID: userID, UnlockKind: "badge", DefID: "builder", Source: "auto",
-		})
+		s.tryUnlockBadge(ctx, userID, "builder", "auto")
 	case pillar == HonorPillarCommunity && tier >= 3:
-		_, _ = s.Queries.InsertUserHonorUnlock(ctx, db.InsertUserHonorUnlockParams{
-			UserID: userID, UnlockKind: "badge", DefID: "collaborator", Source: "auto",
-		})
+		s.tryUnlockBadge(ctx, userID, "collaborator", "auto")
 	}
 }
 
@@ -260,6 +262,76 @@ func (s *HonorService) reconcileUserHonor(ctx context.Context, userID pgtype.UUI
 		TotalXp: total,
 		Level:   int32(level),
 	})
+	if err != nil {
+		return err
+	}
+	return s.syncEquippedBadge(ctx, userID)
+}
+
+func badgeUnlocked(unlocks []db.UserHonorUnlock, badgeID string) bool {
+	for _, u := range unlocks {
+		if u.UnlockKind == "badge" && u.DefID == badgeID {
+			return true
+		}
+	}
+	return false
+}
+
+type equippedBadgeResolution struct {
+	BadgeID pgtype.Text
+	Manual  bool
+	Changed bool
+}
+
+func resolveEquippedBadge(honor db.UserHonor, unlocks []db.UserHonorUnlock, bestID string, hasBest bool) equippedBadgeResolution {
+	if honor.EquippedBadgeManual && honor.EquippedBadgeID.Valid && badgeUnlocked(unlocks, honor.EquippedBadgeID.String) {
+		return equippedBadgeResolution{
+			BadgeID: honor.EquippedBadgeID,
+			Manual:  true,
+			Changed: false,
+		}
+	}
+	var badge pgtype.Text
+	if hasBest {
+		badge = pgtype.Text{String: bestID, Valid: true}
+	}
+	changed := honor.EquippedBadgeManual ||
+		honor.EquippedBadgeID.Valid != badge.Valid ||
+		(honor.EquippedBadgeID.Valid && badge.Valid && honor.EquippedBadgeID.String != badge.String)
+	return equippedBadgeResolution{
+		BadgeID: badge,
+		Manual:  false,
+		Changed: changed,
+	}
+}
+
+func (s *HonorService) syncEquippedBadge(ctx context.Context, userID pgtype.UUID) error {
+	honor, err := s.Queries.GetUserHonor(ctx, userID)
+	if err != nil {
+		return err
+	}
+	unlocks, err := s.Queries.ListUserHonorUnlocks(ctx, userID)
+	if err != nil {
+		return err
+	}
+	best, err := s.bestUnlockedBadgeView(ctx, unlocks)
+	if err != nil {
+		return err
+	}
+	bestID := ""
+	hasBest := best != nil
+	if hasBest {
+		bestID = best.ID
+	}
+	res := resolveEquippedBadge(honor, unlocks, bestID, hasBest)
+	if !res.Changed {
+		return nil
+	}
+	_, err = s.Queries.UpdateUserHonorEquippedBadge(ctx, db.UpdateUserHonorEquippedBadgeParams{
+		UserID:              userID,
+		EquippedBadgeID:     res.BadgeID,
+		EquippedBadgeManual: res.Manual,
+	})
 	return err
 }
 
@@ -282,8 +354,9 @@ func (s *HonorService) SetEquippedBadge(ctx context.Context, userID pgtype.UUID,
 		return errors.New("badge not unlocked")
 	}
 	_, err = s.Queries.UpdateUserHonorEquippedBadge(ctx, db.UpdateUserHonorEquippedBadgeParams{
-		UserID:          userID,
-		EquippedBadgeID: pgtype.Text{String: badgeID, Valid: true},
+		UserID:              userID,
+		EquippedBadgeID:     pgtype.Text{String: badgeID, Valid: true},
+		EquippedBadgeManual: true,
 	})
 	return err
 }
@@ -292,11 +365,22 @@ func (s *HonorService) ClearEquippedBadge(ctx context.Context, userID pgtype.UUI
 	if s == nil || s.Queries == nil {
 		return nil
 	}
+	if err := s.syncEquippedBadgeAfterManualReset(ctx, userID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *HonorService) syncEquippedBadgeAfterManualReset(ctx context.Context, userID pgtype.UUID) error {
 	_, err := s.Queries.UpdateUserHonorEquippedBadge(ctx, db.UpdateUserHonorEquippedBadgeParams{
-		UserID:          userID,
-		EquippedBadgeID: pgtype.Text{},
+		UserID:              userID,
+		EquippedBadgeID:     pgtype.Text{},
+		EquippedBadgeManual: false,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return s.syncEquippedBadge(ctx, userID)
 }
 
 func (s *HonorService) GetDashboard(ctx context.Context, user db.User) (HonorDashboard, error) {
@@ -341,16 +425,38 @@ func (s *HonorService) GetDashboard(ctx context.Context, user db.User) (HonorDas
 		v := honor.EquippedBadgeID.String
 		equipped = &v
 	}
+	unlocks, err := s.Queries.ListUserHonorUnlocks(ctx, user.ID)
+	if err != nil {
+		return HonorDashboard{}, err
+	}
+	catalog, unlockedCount, totalBadges, err := s.buildBadgeCatalog(ctx, user, honor, unlocks, pillars)
+	if err != nil {
+		return HonorDashboard{}, err
+	}
+	recent, err := s.listRecentUnlocks(ctx, user.ID, 5)
+	if err != nil {
+		return HonorDashboard{}, err
+	}
+	showcase := honor.ShowcaseBadgeIds
+	if showcase == nil {
+		showcase = []string{}
+	}
 	return HonorDashboard{
-		Level:           snapshot.Level,
-		TotalXP:         honor.TotalXp,
-		XpToNextLevel:   XPToNextLevel(honor.TotalXp, snapshot.Level),
-		NameStyle:       snapshot.NameStyle,
-		EquippedBadgeID: equipped,
-		Pillars:         pillars,
-		UnlockedBadges:  badges,
-		UnlockedStyles:  styles,
-		RecentXP:        events,
+		Level:               snapshot.Level,
+		TotalXP:             honor.TotalXp,
+		XpToNextLevel:       XPToNextLevel(honor.TotalXp, snapshot.Level),
+		NameStyle:           snapshot.NameStyle,
+		EquippedBadgeID:     equipped,
+		EquippedBadgeManual: honor.EquippedBadgeManual,
+		ShowcaseBadgeIDs:    showcase,
+		BadgesUnlocked:      unlockedCount,
+		BadgesTotal:         totalBadges,
+		BadgeCatalog:        catalog,
+		RecentUnlocks:       recent,
+		Pillars:             pillars,
+		UnlockedBadges:      badges,
+		UnlockedStyles:      styles,
+		RecentXP:            events,
 	}, nil
 }
 
@@ -366,10 +472,34 @@ func (s *HonorService) GetPublicWall(ctx context.Context, user db.User) (HonorPu
 	if err != nil {
 		return HonorPublicWall{}, err
 	}
+	honor, err := s.Queries.GetUserHonor(ctx, user.ID)
+	if err != nil {
+		return HonorPublicWall{}, err
+	}
+	unlocks, err := s.Queries.ListUserHonorUnlocks(ctx, user.ID)
+	if err != nil {
+		return HonorPublicWall{}, err
+	}
+	showcase, err := s.listShowcaseBadges(ctx, honor, unlocks)
+	if err != nil {
+		return HonorPublicWall{}, err
+	}
+	recent, err := s.listRecentUnlocks(ctx, user.ID, 5)
+	if err != nil {
+		return HonorPublicWall{}, err
+	}
+	defs, err := s.Queries.ListHonorBadgeDefs(ctx)
+	if err != nil {
+		return HonorPublicWall{}, err
+	}
 	return HonorPublicWall{
 		Level:          snapshot.Level,
 		NameStyle:      snapshot.NameStyle,
 		EquippedBadge:  snapshot.Badge,
+		ShowcaseBadges: showcase,
+		RecentUnlocks:  recent,
+		BadgesUnlocked: len(badges),
+		BadgesTotal:    len(defs),
 		UnlockedBadges: badges,
 	}, nil
 }
@@ -396,6 +526,43 @@ func (s *HonorService) BuildSnapshots(ctx context.Context, userIDs []pgtype.UUID
 		out[util.UUIDToString(id)] = snap
 	}
 	return out, nil
+}
+
+func honorBadgeViewFromDef(def db.HonorBadgeDef) *HonorBadgeView {
+	return &HonorBadgeView{
+		ID:          def.ID,
+		Title:       def.Title,
+		Description: def.Description,
+		SvgKey:      def.SvgKey,
+	}
+}
+
+func (s *HonorService) bestUnlockedBadgeView(ctx context.Context, unlocks []db.UserHonorUnlock) (*HonorBadgeView, error) {
+	unlocked := map[string]struct{}{}
+	for _, u := range unlocks {
+		if u.UnlockKind == "badge" {
+			unlocked[u.DefID] = struct{}{}
+		}
+	}
+	if len(unlocked) == 0 {
+		return nil, nil
+	}
+	defs, err := s.Queries.ListHonorBadgeDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var best *HonorBadgeView
+	var bestRank int32 = -1
+	for _, def := range defs {
+		if _, ok := unlocked[def.ID]; !ok {
+			continue
+		}
+		if def.SortRank > bestRank {
+			bestRank = def.SortRank
+			best = honorBadgeViewFromDef(def)
+		}
+	}
+	return best, nil
 }
 
 func (s *HonorService) buildSnapshot(ctx context.Context, userID pgtype.UUID) (HonorSnapshot, error) {
@@ -434,13 +601,11 @@ func (s *HonorService) buildSnapshot(ctx context.Context, userID pgtype.UUID) (H
 	if honor.EquippedBadgeID.Valid {
 		def, err := s.Queries.GetHonorBadgeDef(ctx, honor.EquippedBadgeID.String)
 		if err == nil {
-			badge = &HonorBadgeView{
-				ID:          def.ID,
-				Title:       def.Title,
-				Description: def.Description,
-				SvgKey:      def.SvgKey,
-			}
+			badge = honorBadgeViewFromDef(def)
 		}
+	}
+	if badge == nil {
+		badge, _ = s.bestUnlockedBadgeView(ctx, unlocks)
 	}
 	return HonorSnapshot{
 		Level:     int(honor.Level),

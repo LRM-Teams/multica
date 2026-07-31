@@ -7,6 +7,7 @@ import type { LocaleResources, SupportedLocale } from "@multica/core/i18n";
 import { useWelcomeStore } from "@multica/core/onboarding";
 import packageJson from "../package.json";
 import { WebNavigationProvider } from "@/platform/navigation";
+import { HonorUnlockListener } from "@multica/views/honor";
 import {
   setLoggedInCookie,
   clearLoggedInCookie,
@@ -86,6 +87,7 @@ export function WebProviders({
           a client component mounted this high in the tree. */}
       <Suspense fallback={null}>
         <PageviewTracker />
+        <HonorUnlockListener />
       </Suspense>
       <WebNavigationProvider>{children}</WebNavigationProvider>
     </CoreProvider>

@@ -1576,6 +1576,8 @@ type HonorBadgeDef struct {
 	SvgKey      string `json:"svg_key"`
 	Rarity      int32  `json:"rarity"`
 	SortRank    int32  `json:"sort_rank"`
+	Secret      bool   `json:"secret"`
+	UnlockRule  string `json:"unlock_rule"`
 }
 
 type HonorNameStyleDef struct {
@@ -1594,6 +1596,8 @@ type UserHonor struct {
 	MembershipExpiresAt pgtype.Timestamptz `json:"membership_expires_at"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	EquippedBadgeManual bool               `json:"equipped_badge_manual"`
+	ShowcaseBadgeIds    []string           `json:"showcase_badge_ids"`
 }
 
 type UserHonorGrant struct {

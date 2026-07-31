@@ -32,7 +32,16 @@
     "avatar_upload_failed": "Avatar upload failed, please retry",
     "avatar_err_type": "Only PNG or JPG images are supported",
     "avatar_err_size": "Image must be 5 MB or smaller",
-    "avatar_err_dimensions": "Image must be at least 256×256"
+    "avatar_err_dimensions": "Image must be at least 256×256",
+    "honor_title": "Honor",
+    "honor_completion": "{{unlocked}} / {{total}} badges",
+    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
+    "honor_showcase": "Showcase",
+    "honor_recent": "Recent unlocks",
+    "honor_compare": "Compare with you",
+    "honor_shared": "Shared badges",
+    "honor_you_only": "Only you",
+    "honor_them_only": "Only them"
   },
   "detail": {
     "workspace_fallback": "Workspace",

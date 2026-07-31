@@ -11,11 +11,54 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countHonorBadgeUnlocks = `-- name: CountHonorBadgeUnlocks :many
+SELECT def_id, COUNT(*)::bigint AS unlock_count
+FROM user_honor_unlock
+WHERE unlock_kind = 'badge'
+GROUP BY def_id
+`
+
+type CountHonorBadgeUnlocksRow struct {
+	DefID       string `json:"def_id"`
+	UnlockCount int64  `json:"unlock_count"`
+}
+
+func (q *Queries) CountHonorBadgeUnlocks(ctx context.Context) ([]CountHonorBadgeUnlocksRow, error) {
+	rows, err := q.db.Query(ctx, countHonorBadgeUnlocks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountHonorBadgeUnlocksRow{}
+	for rows.Next() {
+		var i CountHonorBadgeUnlocksRow
+		if err := rows.Scan(&i.DefID, &i.UnlockCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countHonorUsers = `-- name: CountHonorUsers :one
+SELECT COUNT(*)::bigint AS total FROM user_honor
+`
+
+func (q *Queries) CountHonorUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countHonorUsers)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createUserHonorIfMissing = `-- name: CreateUserHonorIfMissing :one
 INSERT INTO user_honor (user_id)
 VALUES ($1)
 ON CONFLICT (user_id) DO UPDATE SET updated_at = user_honor.updated_at
-RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at
+RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids
 `
 
 func (q *Queries) CreateUserHonorIfMissing(ctx context.Context, userID pgtype.UUID) (UserHonor, error) {
@@ -30,12 +73,14 @@ func (q *Queries) CreateUserHonorIfMissing(ctx context.Context, userID pgtype.UU
 		&i.MembershipExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EquippedBadgeManual,
+		&i.ShowcaseBadgeIds,
 	)
 	return i, err
 }
 
 const getHonorBadgeDef = `-- name: GetHonorBadgeDef :one
-SELECT id, title, description, svg_key, rarity, sort_rank FROM honor_badge_def WHERE id = $1
+SELECT id, title, description, svg_key, rarity, sort_rank, secret, unlock_rule FROM honor_badge_def WHERE id = $1
 `
 
 func (q *Queries) GetHonorBadgeDef(ctx context.Context, id string) (HonorBadgeDef, error) {
@@ -48,12 +93,14 @@ func (q *Queries) GetHonorBadgeDef(ctx context.Context, id string) (HonorBadgeDe
 		&i.SvgKey,
 		&i.Rarity,
 		&i.SortRank,
+		&i.Secret,
+		&i.UnlockRule,
 	)
 	return i, err
 }
 
 const getUserHonor = `-- name: GetUserHonor :one
-SELECT user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at FROM user_honor WHERE user_id = $1
+SELECT user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids FROM user_honor WHERE user_id = $1
 `
 
 func (q *Queries) GetUserHonor(ctx context.Context, userID pgtype.UUID) (UserHonor, error) {
@@ -68,6 +115,8 @@ func (q *Queries) GetUserHonor(ctx context.Context, userID pgtype.UUID) (UserHon
 		&i.MembershipExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EquippedBadgeManual,
+		&i.ShowcaseBadgeIds,
 	)
 	return i, err
 }
@@ -127,6 +176,38 @@ func (q *Queries) InsertUserHonorUnlock(ctx context.Context, arg InsertUserHonor
 	return i, err
 }
 
+const insertUserHonorUnlockIfNew = `-- name: InsertUserHonorUnlockIfNew :one
+INSERT INTO user_honor_unlock (user_id, unlock_kind, def_id, source)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id, unlock_kind, def_id) DO NOTHING
+RETURNING user_id, unlock_kind, def_id, source, granted_at
+`
+
+type InsertUserHonorUnlockIfNewParams struct {
+	UserID     pgtype.UUID `json:"user_id"`
+	UnlockKind string      `json:"unlock_kind"`
+	DefID      string      `json:"def_id"`
+	Source     string      `json:"source"`
+}
+
+func (q *Queries) InsertUserHonorUnlockIfNew(ctx context.Context, arg InsertUserHonorUnlockIfNewParams) (UserHonorUnlock, error) {
+	row := q.db.QueryRow(ctx, insertUserHonorUnlockIfNew,
+		arg.UserID,
+		arg.UnlockKind,
+		arg.DefID,
+		arg.Source,
+	)
+	var i UserHonorUnlock
+	err := row.Scan(
+		&i.UserID,
+		&i.UnlockKind,
+		&i.DefID,
+		&i.Source,
+		&i.GrantedAt,
+	)
+	return i, err
+}
+
 const insertUserXpLedger = `-- name: InsertUserXpLedger :one
 INSERT INTO user_xp_ledger (user_id, pillar, action_type, xp_delta, ref_id)
 VALUES ($1, $2, $3, $4, $5)
@@ -163,7 +244,7 @@ func (q *Queries) InsertUserXpLedger(ctx context.Context, arg InsertUserXpLedger
 }
 
 const listHonorBadgeDefs = `-- name: ListHonorBadgeDefs :many
-SELECT id, title, description, svg_key, rarity, sort_rank FROM honor_badge_def ORDER BY sort_rank DESC
+SELECT id, title, description, svg_key, rarity, sort_rank, secret, unlock_rule FROM honor_badge_def ORDER BY sort_rank DESC
 `
 
 func (q *Queries) ListHonorBadgeDefs(ctx context.Context) ([]HonorBadgeDef, error) {
@@ -182,6 +263,8 @@ func (q *Queries) ListHonorBadgeDefs(ctx context.Context) ([]HonorBadgeDef, erro
 			&i.SvgKey,
 			&i.Rarity,
 			&i.SortRank,
+			&i.Secret,
+			&i.UnlockRule,
 		); err != nil {
 			return nil, err
 		}
@@ -222,8 +305,56 @@ func (q *Queries) ListHonorNameStyleDefs(ctx context.Context) ([]HonorNameStyleD
 	return items, nil
 }
 
+const listRecentBadgeUnlocks = `-- name: ListRecentBadgeUnlocks :many
+SELECT u.def_id, u.granted_at, d.title, d.description, d.svg_key
+FROM user_honor_unlock u
+JOIN honor_badge_def d ON d.id = u.def_id
+WHERE u.user_id = $1 AND u.unlock_kind = 'badge'
+ORDER BY u.granted_at DESC
+LIMIT $2
+`
+
+type ListRecentBadgeUnlocksParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Limit  int32       `json:"limit"`
+}
+
+type ListRecentBadgeUnlocksRow struct {
+	DefID       string             `json:"def_id"`
+	GrantedAt   pgtype.Timestamptz `json:"granted_at"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	SvgKey      string             `json:"svg_key"`
+}
+
+func (q *Queries) ListRecentBadgeUnlocks(ctx context.Context, arg ListRecentBadgeUnlocksParams) ([]ListRecentBadgeUnlocksRow, error) {
+	rows, err := q.db.Query(ctx, listRecentBadgeUnlocks, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentBadgeUnlocksRow{}
+	for rows.Next() {
+		var i ListRecentBadgeUnlocksRow
+		if err := rows.Scan(
+			&i.DefID,
+			&i.GrantedAt,
+			&i.Title,
+			&i.Description,
+			&i.SvgKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserHonorByUserIDs = `-- name: ListUserHonorByUserIDs :many
-SELECT user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at FROM user_honor
+SELECT user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids FROM user_honor
 WHERE user_id = ANY($1::uuid[])
 `
 
@@ -245,6 +376,8 @@ func (q *Queries) ListUserHonorByUserIDs(ctx context.Context, dollar_1 []pgtype.
 			&i.MembershipExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.EquippedBadgeManual,
+			&i.ShowcaseBadgeIds,
 		); err != nil {
 			return nil, err
 		}
@@ -456,18 +589,19 @@ func (q *Queries) SumUserXpLedgerTodayByAction(ctx context.Context, arg SumUserX
 
 const updateUserHonorEquippedBadge = `-- name: UpdateUserHonorEquippedBadge :one
 UPDATE user_honor
-SET equipped_badge_id = $2, updated_at = now()
+SET equipped_badge_id = $2, equipped_badge_manual = $3, updated_at = now()
 WHERE user_id = $1
-RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at
+RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids
 `
 
 type UpdateUserHonorEquippedBadgeParams struct {
-	UserID          pgtype.UUID `json:"user_id"`
-	EquippedBadgeID pgtype.Text `json:"equipped_badge_id"`
+	UserID              pgtype.UUID `json:"user_id"`
+	EquippedBadgeID     pgtype.Text `json:"equipped_badge_id"`
+	EquippedBadgeManual bool        `json:"equipped_badge_manual"`
 }
 
 func (q *Queries) UpdateUserHonorEquippedBadge(ctx context.Context, arg UpdateUserHonorEquippedBadgeParams) (UserHonor, error) {
-	row := q.db.QueryRow(ctx, updateUserHonorEquippedBadge, arg.UserID, arg.EquippedBadgeID)
+	row := q.db.QueryRow(ctx, updateUserHonorEquippedBadge, arg.UserID, arg.EquippedBadgeID, arg.EquippedBadgeManual)
 	var i UserHonor
 	err := row.Scan(
 		&i.UserID,
@@ -478,6 +612,38 @@ func (q *Queries) UpdateUserHonorEquippedBadge(ctx context.Context, arg UpdateUs
 		&i.MembershipExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EquippedBadgeManual,
+		&i.ShowcaseBadgeIds,
+	)
+	return i, err
+}
+
+const updateUserHonorShowcase = `-- name: UpdateUserHonorShowcase :one
+UPDATE user_honor
+SET showcase_badge_ids = $2, updated_at = now()
+WHERE user_id = $1
+RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids
+`
+
+type UpdateUserHonorShowcaseParams struct {
+	UserID           pgtype.UUID `json:"user_id"`
+	ShowcaseBadgeIds []string    `json:"showcase_badge_ids"`
+}
+
+func (q *Queries) UpdateUserHonorShowcase(ctx context.Context, arg UpdateUserHonorShowcaseParams) (UserHonor, error) {
+	row := q.db.QueryRow(ctx, updateUserHonorShowcase, arg.UserID, arg.ShowcaseBadgeIds)
+	var i UserHonor
+	err := row.Scan(
+		&i.UserID,
+		&i.TotalXp,
+		&i.Level,
+		&i.EquippedBadgeID,
+		&i.MembershipTier,
+		&i.MembershipExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.EquippedBadgeManual,
+		&i.ShowcaseBadgeIds,
 	)
 	return i, err
 }
@@ -486,7 +652,7 @@ const updateUserHonorStats = `-- name: UpdateUserHonorStats :one
 UPDATE user_honor
 SET total_xp = $2, level = $3, updated_at = now()
 WHERE user_id = $1
-RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at
+RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids
 `
 
 type UpdateUserHonorStatsParams struct {
@@ -507,6 +673,8 @@ func (q *Queries) UpdateUserHonorStats(ctx context.Context, arg UpdateUserHonorS
 		&i.MembershipExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EquippedBadgeManual,
+		&i.ShowcaseBadgeIds,
 	)
 	return i, err
 }
@@ -519,7 +687,7 @@ ON CONFLICT (user_id) DO UPDATE SET
     level = EXCLUDED.level,
     equipped_badge_id = COALESCE(user_honor.equipped_badge_id, EXCLUDED.equipped_badge_id),
     updated_at = now()
-RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at
+RETURNING user_id, total_xp, level, equipped_badge_id, membership_tier, membership_expires_at, created_at, updated_at, equipped_badge_manual, showcase_badge_ids
 `
 
 type UpsertUserHonorParams struct {
@@ -546,6 +714,8 @@ func (q *Queries) UpsertUserHonor(ctx context.Context, arg UpsertUserHonorParams
 		&i.MembershipExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EquippedBadgeManual,
+		&i.ShowcaseBadgeIds,
 	)
 	return i, err
 }

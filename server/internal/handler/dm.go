@@ -49,7 +49,6 @@ type DMItem struct {
 	Peer           DMPeer                      `json:"peer"`
 	Participants   []DMPeer                    `json:"participants,omitempty"`
 	Supervised     bool                        `json:"supervised,omitempty"`
-	AgentDMControl *AgentDMControlResponse     `json:"a2a_control,omitempty"`
 	LastMessage    *ChannelLastMessage         `json:"last_message,omitempty"`
 	Unread         int                         `json:"unread"`
 	RealUnread     int                         `json:"real_unread"`
@@ -956,12 +955,6 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 		if len(participants) != 2 {
 			continue
 		}
-		control, ok := h.agentDMControlForOwner(
-			ctx, parseUUID(workspaceID), channelID, uid,
-		)
-		if !ok {
-			continue
-		}
 		item := DMItem{
 			ID:             uuidToString(channelID),
 			Source:         dmSourceChannel,
@@ -969,7 +962,6 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 			Peer:           participants[0],
 			Participants:   participants,
 			Supervised:     true,
-			AgentDMControl: control,
 			ManuallyUnread: manualUnreadAt.Valid,
 			PinnedAt:       timestampToPtr(pinnedAt),
 			MutedAt:        timestampToPtr(mutedAt),

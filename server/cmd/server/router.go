@@ -1292,7 +1292,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
-			r.Post("/api/agent/messages/a2a-control", h.AgentTransportUpdateDMControl)
 			r.Post("/api/agent/threads/unfollow", h.AgentTransportUnfollowThread)
 			r.Post("/api/agent/reminders/schedule", h.AgentTransportScheduleReminder)
 			r.Post("/api/agent/reminders/list", h.AgentTransportListReminders)
@@ -1306,10 +1305,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// DM section; group channels stay on /api/channels.
 			r.Get("/api/dm", h.ListDirectMessages)
 			r.Post("/api/dm", h.CreateOrFindDirectMessage)
-			r.Get("/api/dm/a2a-control", h.GetAgentDMGlobalControl)
-			r.Post("/api/dm/a2a-control", h.UpdateAgentDMGlobalControl)
-			r.Get("/api/dm/channels/{channelId}/a2a-control", h.GetAgentDMControl)
-			r.Post("/api/dm/channels/{channelId}/a2a-control", h.UpdateAgentDMControl)
 			r.Put("/api/dm/channels/{channelId}/pin", h.PinDMChannel)
 			r.Delete("/api/dm/channels/{channelId}/pin", h.UnpinDMChannel)
 			r.Put("/api/dm/channels/{channelId}/mute", h.MuteDMChannel)

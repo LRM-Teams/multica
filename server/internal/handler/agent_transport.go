@@ -162,7 +162,6 @@ type agentTransportMessageResult struct {
 	FreshnessResolution      *AgentTransportFreshnessResolution
 	FreshnessActivityEventID pgtype.UUID
 	AgentDM                  agentDMSendReservation
-	AgentDMPause             *agentDMPauseNotificationResult
 }
 
 type agentTransportFreshnessResolutionPublication struct {
@@ -460,16 +459,6 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		}
 		if errors.Is(err, errChannelOnboardingExpired) {
 			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
-			return
-		}
-		var paused *agentDMPausedError
-		if errors.As(err, &paused) {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":       paused.Error(),
-				"state":       paused.State,
-				"exchange_id": uuidToString(paused.ExchangeID),
-				"channel_id":  uuidToString(paused.ChannelID),
-			})
 			return
 		}
 		var wrongTurn *agentDMTurnError
@@ -1335,16 +1324,12 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 		} else if target.channel.Kind == "dm" && target.recipientType == "agent" {
 			msg := result.Message
 			reservation := result.AgentDM
-			pauseNotification := result.AgentDMPause
 			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
 				lowID, highID, ok := normalizedAgentDMPair(source.origin.agentID, target.recipientID)
 				if ok {
 					h.publishAgentDMToOwners(
 						ctx, target.channel, lowID, highID, protocol.EventChannelMessage, msg,
 					)
-				}
-				if pauseNotification != nil {
-					h.publishAgentDMPauseNotification(ctx, *pauseNotification)
 				}
 				h.dispatchAgentDMAgentReply(ctx, source, target, msg, reservation, initiatorID)
 			})
@@ -1513,21 +1498,6 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	}
 	reservation, err := h.reserveAgentDMSendTx(ctx, tx, source, target)
 	if err != nil {
-		var paused *agentDMPausedError
-		if errors.As(err, &paused) && paused.Notify {
-			notification, notificationErr := h.persistAgentDMPauseNotificationTx(
-				ctx, tx, paused.ExchangeID,
-			)
-			if notificationErr != nil {
-				_ = tx.Rollback(ctx)
-				return agentTransportMessageResult{}, notificationErr
-			}
-			if commitErr := tx.Commit(ctx); commitErr != nil {
-				return agentTransportMessageResult{}, commitErr
-			}
-			h.publishAgentDMPauseNotification(ctx, notification)
-			return agentTransportMessageResult{}, err
-		}
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
 	}

@@ -1297,6 +1297,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)
 				r.Get("/agents", h.ListAgentDirectoryAgents)
 				// Squad retired (Frank 2026-07-28): no /api/agent/squads*.
+				// Research Fleet (LRM-904 / #801): mat_* must not hit /api/research/*.
+				r.Route("/research", func(r chi.Router) {
+					r.Get("/fleet", h.GetAgentResearchFleet)
+					r.Post("/fleet/members", h.HireAgentResearchFleetMember)
+					r.Post("/fleet/members/{memberId}/optimize", h.OptimizeAgentResearchFleetMember)
+					r.Post("/fleet/members/{memberId}/archive", h.ArchiveAgentResearchFleetMember)
+					r.Route("/sessions/{id}", func(r chi.Router) {
+						r.Get("/", h.GetAgentResearchSessionSnapshot)
+						r.Post("/messages", h.PostAgentResearchMessage)
+						r.Post("/graph/nodes", h.AppendAgentResearchGraphNode)
+						r.Post("/sources", h.UpsertAgentResearchSource)
+						r.Post("/report", h.PatchAgentResearchReport)
+						r.Post("/presence", h.PostAgentResearchPresence)
+						r.Post("/stage-eval", h.RequestAgentResearchStageEval)
+					})
+				})
 			})
 			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)

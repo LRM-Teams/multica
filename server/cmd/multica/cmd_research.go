@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -147,6 +148,18 @@ func init() {
 	researchCmd.AddCommand(researchArchiveCmd)
 }
 
+// researchAPIPath rewrites /api/research/... → /api/agent/research/... under mat_*.
+func researchAPIPath(cmd *cobra.Command, path string) string {
+	if !isAgentAPIToken(cmd) {
+		return path
+	}
+	const prefix = "/api/research"
+	if strings.HasPrefix(path, prefix) {
+		return "/api/agent/research" + path[len(prefix):]
+	}
+	return path
+}
+
 func runResearchSessionGet(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -155,7 +168,7 @@ func runResearchSessionGet(cmd *cobra.Command, args []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 	var out map[string]any
-	if err := client.GetJSON(ctx, "/api/research/sessions/"+args[0], &out); err != nil {
+	if err := client.GetJSON(ctx, researchAPIPath(cmd, "/api/research/sessions/"+args[0]), &out); err != nil {
 		return fmt.Errorf("get research session: %w", err)
 	}
 	return cli.PrintJSON(os.Stdout, out)
@@ -241,7 +254,7 @@ func runResearchReportToLead(cmd *cobra.Command, args []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 	var snap map[string]any
-	if err := client.GetJSON(ctx, "/api/research/sessions/"+args[0], &snap); err != nil {
+	if err := client.GetJSON(ctx, researchAPIPath(cmd, "/api/research/sessions/"+args[0]), &snap); err != nil {
 		return fmt.Errorf("get research session: %w", err)
 	}
 	fleet, _ := snap["fleet"].(map[string]any)
@@ -310,7 +323,7 @@ func researchPostJSON(cmd *cobra.Command, path string, body map[string]any) erro
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 	var out map[string]any
-	if err := client.PostJSON(ctx, path, body, &out); err != nil {
+	if err := client.PostJSON(ctx, researchAPIPath(cmd, path), body, &out); err != nil {
 		return err
 	}
 	return cli.PrintJSON(os.Stdout, out)

@@ -34,7 +34,6 @@ import (
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
 const (
-	agentCapacityBackoff                = 5 * time.Second
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
 	taskMessageTrajectoryMaxChars       = 2000
@@ -145,7 +144,7 @@ type Daemon struct {
 	restartBinary     string                        // non-empty after a successful update; path to the new binary
 	updating          atomic.Bool                   // prevents concurrent update attempts
 	activeTasks       atomic.Int64                  // number of tasks currently in handleTask; exposed via /health
-	taskSlotCounter   atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, not a bounded pool index — see activeAgentGate)
+	taskSlotCounter   atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
 	ready             atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
 	updateObservation *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
 
@@ -738,7 +737,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"heartbeat_interval", d.cfg.HeartbeatInterval,
 		"agent_timeout", d.cfg.AgentTimeout,
 		"idle_watchdog", d.cfg.AgentIdleWatchdog,
-		"max_concurrent_agents", d.cfg.MaxConcurrentAgents,
 		"gc_enabled", d.cfg.GCEnabled,
 		"auto_update", d.cfg.AutoUpdateEnabled,
 		"launched_by", d.cfg.LaunchedBy,
@@ -2431,7 +2429,6 @@ func (d *Daemon) restartBinaryPath() (string, error) {
 // longer delays claims on every other runtime — that was the cross-workspace
 // stall mode reported in MUL-1744.
 func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) error {
-	gate := newActiveAgentGate(d.cfg.MaxConcurrentAgents)
 	var taskWG sync.WaitGroup   // tracks in-flight handleTask goroutines
 	var pollerWG sync.WaitGroup // tracks runRuntimePoller goroutines
 
@@ -2465,7 +2462,7 @@ func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) er
 			pollerWG.Add(1)
 			go func(rid string, pctx context.Context, wakeup <-chan struct{}) {
 				defer pollerWG.Done()
-				d.runRuntimePoller(pctx, ctx, rid, gate, wakeup, &taskWG)
+				d.runRuntimePoller(pctx, ctx, rid, wakeup, &taskWG)
 			}(rid, pctx, wakeup)
 		}
 	}
@@ -2549,7 +2546,6 @@ func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) er
 func (d *Daemon) runRuntimePoller(
 	pollerCtx, parentCtx context.Context,
 	rid string,
-	gate *activeAgentGate,
 	wakeup <-chan struct{},
 	taskWG *sync.WaitGroup,
 ) {
@@ -2569,35 +2565,12 @@ func (d *Daemon) runRuntimePoller(
 			return
 		}
 
-		// Enter the active-agent gate before claiming. If this runtime isn't
-		// already active and there's no free slot for a new one, sleep
-		// without claiming so we don't push a task into `dispatched` and
-		// then race the 5-min server-side dispatch timeout while waiting.
-		// Once entered, this runtime may dispatch any number of concurrent
-		// tasks below with no further gating — see activeAgentGate.
-		if !gate.tryEnter(rid) {
-			d.logger.Debug("poll: at agent capacity", "runtime_id", rid, "max_concurrent_agents", d.cfg.MaxConcurrentAgents)
-			select {
-			case <-gate.freed:
-				// Another runtime just released; recheck immediately
-				// instead of idling out the full backoff window.
-				continue
-			case <-wakeup:
-				continue
-			case <-pollerCtx.Done():
-				return
-			case <-time.After(capacityBackoff(d.cfg.PollInterval)):
-				continue
-			}
-		}
-
 		// Refuse new claims while an auto-update is preparing to roll the
 		// process. The barrier is paired with a re-check of claimsInFlight +
 		// activeTasks inside tryAutoUpdate, so once we get past tryEnterClaim
 		// the auto-update path is guaranteed to defer until this poller has
 		// handed the task off (or given up).
 		if !d.tryEnterClaim() {
-			gate.exit(rid)
 			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
@@ -2607,7 +2580,6 @@ func (d *Daemon) runRuntimePoller(
 		task, err := d.drainInboxTask(pollerCtx, rid)
 		if err != nil {
 			d.exitClaim()
-			gate.exit(rid)
 			if pollerCtx.Err() == nil {
 				if isRuntimeNotFoundError(err) {
 					// Server says this runtime is gone — recover and exit
@@ -2626,7 +2598,6 @@ func (d *Daemon) runRuntimePoller(
 		}
 		if task == nil {
 			d.exitClaim()
-			gate.exit(rid)
 			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
@@ -2645,7 +2616,6 @@ func (d *Daemon) runRuntimePoller(
 			defer taskWG.Done()
 			defer d.exitClaim()
 			defer d.activeTasks.Add(-1)
-			defer gate.exit(rid)
 			d.handleTask(parentCtx, t, slot)
 		}(*task, slot)
 		// Loop immediately: more tasks may already be queued for this runtime.
@@ -2701,104 +2671,26 @@ func runtimePollOffset(runtimeID string, interval time.Duration) time.Duration {
 	return time.Duration(h.Sum64() % uint64(interval))
 }
 
-func capacityBackoff(pollInterval time.Duration) time.Duration {
-	if pollInterval <= 0 || pollInterval > agentCapacityBackoff {
-		return agentCapacityBackoff
-	}
-	return pollInterval
-}
-
-// activeAgentGate bounds how many distinct runtimes may have any in-flight
-// task at once — it does not bound the number of tasks. Per-agent execution
-// is already serialized to one in-flight task via acquireAgentWakeSlot, so
-// once a runtime is in the active set it may dispatch as many concurrent
-// tasks as its own work requires with no further gating here: the real
-// machine resource this protects is "one more live agent process", not "one
-// more task". A runtime leaves the active set only when its last in-flight
-// task completes, freeing the slot for a different runtime.
-//
-// This is keyed on runtime_id as a proxy for "distinct live agent
-// processes", not an exact count of them: capacity has to be checked before
-// ClaimTask (slot-before-claim — see runRuntimePoller), and at that point
-// the daemon knows which runtime it's polling but not yet which agent_id
-// the claimed task will carry. The schema doesn't enforce one agent per
-// runtime, so a runtime already in the active set could in principle be
-// running tasks for more than one agent process without that costing an
-// extra gate slot. Not a new gap — the prior task-count semaphore had no
-// agent- or runtime-awareness at all — but treat MaxConcurrentAgents as a
-// close proxy, not a literal process count.
-//
-// Neither Raft's own daemon nor Multica's per-task message queue has an
-// equivalent "N tasks total, machine-wide" limiter — Raft bounds live agent
-// processes (a billing/seat concept, not a runtime throttle) and per-task
-// message ordering is unrelated to inter-task concurrency. maxConcurrent<=0
-// means unlimited (used by tests only; production always has a positive
-// default — see DefaultMaxConcurrentAgents).
-type activeAgentGate struct {
-	mu       sync.Mutex
-	inFlight map[string]int
-	max      int
-	freed    chan struct{}
-}
-
-func newActiveAgentGate(maxConcurrentAgents int) *activeAgentGate {
-	return &activeAgentGate{
-		inFlight: make(map[string]int),
-		max:      maxConcurrentAgents,
-		freed:    make(chan struct{}, 1),
-	}
-}
-
-// tryEnter reports whether rid may proceed: true if rid already has an
-// in-flight task (this call just adds another) or if there is a free slot
-// for a new runtime; false if the daemon is at its distinct-runtime cap and
-// rid is not already one of the active ones.
-func (g *activeAgentGate) tryEnter(rid string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.inFlight[rid] > 0 {
-		g.inFlight[rid]++
-		return true
-	}
-	if g.max > 0 && len(g.inFlight) >= g.max {
-		return false
-	}
-	g.inFlight[rid] = 1
-	return true
-}
-
-// exit releases one in-flight task for rid, removing rid from the active
-// set once its count reaches zero. Non-blockingly pings freed so a poller
-// waiting on capacity can recheck immediately rather than idling out the
-// full backoff window.
-func (g *activeAgentGate) exit(rid string) {
-	g.mu.Lock()
-	if n := g.inFlight[rid]; n <= 1 {
-		delete(g.inFlight, rid)
-	} else {
-		g.inFlight[rid] = n - 1
-	}
-	g.mu.Unlock()
-	select {
-	case g.freed <- struct{}{}:
-	default:
-	}
-}
-
-// activeCount reports the number of distinct runtimes currently counted as
-// active — see the activeAgentGate doc comment for why this is a proxy for
-// concurrent agent processes, not an exact count (test/observability use).
-func (g *activeAgentGate) activeCount() int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return len(g.inFlight)
-}
-
 // nextTaskSlot returns a unique, ever-increasing sequence number for
-// MULTICA_TASK_SLOT. Tasks are no longer capacity-limited (see
-// activeAgentGate), so there is no fixed-size pool to index into; this
-// value exists only so spawned tasks/logs can distinguish concurrently
-// running tasks from each other, not to select a bounded resource.
+// MULTICA_TASK_SLOT. Tasks are not capacity-limited — a daemon-wide
+// concurrent-agent-count gate (activeAgentGate) existed briefly on
+// 2026-07-30 (PR #1528) and was deleted the same week (see git history for
+// the removal PR): it was added to fix a real, observed problem — a
+// task-count semaphore hard-capping the whole daemon at 20 concurrent tasks,
+// which stalled 12+ distinct runtimes under D6-1b's always-resident
+// sessions — but nobody could say what resource the number 20 itself was
+// meant to protect (Raft's own daemon has no equivalent limiter, only a
+// billing-seat live-process cap; the real constraint, OS memory pressure,
+// already fails closed on its own). A gate whose threshold nobody can
+// justify is not a safety mechanism, so rather than keep an unjustified
+// number (however "harmless" as a high default) or replace it with a
+// differently-shaped guess, this daemon simply doesn't gate concurrency: a
+// claimed task always runs immediately. If a real resource-exhaustion
+// symptom shows up in production, design the limiter around that specific
+// symptom (measured memory ceiling? provider-side rate limit?) rather than
+// resurrecting this one — this value exists only so spawned tasks/logs can
+// distinguish concurrently running tasks from each other, not to select a
+// bounded resource.
 func (d *Daemon) nextTaskSlot() int {
 	return int(d.taskSlotCounter.Add(1))
 }

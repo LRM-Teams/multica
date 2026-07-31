@@ -4,6 +4,7 @@ import { channelKeys } from "@multica/core/channels/queries";
 import type { Channel } from "@multica/core/types";
 import type { MentionItem } from "./mention-suggestion";
 import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
+import { ChannelReferenceExtension } from "./channel-reference";
 
 vi.mock("@multica/core/platform", () => ({
   getCurrentWsId: () => "ws-1",
@@ -85,5 +86,24 @@ describe("createChannelReferenceSuggestion", () => {
       { from: 0, to: 1 },
       { type: "channelReference", attrs: { id: "c1", label: "general" } },
     );
+  });
+
+  // Real production bug (Wren, real-device verification on leagent.me): the #
+  // picker never opened for any user. Root cause: ChannelReferenceExtension's
+  // addOptions() default suggestion is `{ allow: () => false, ... }` (the
+  // permanently-disabled fallback for when `enableChannelReferences` is off).
+  // Tiptap's `.configure()` DEEP-merges the passed suggestion object against
+  // that default (@tiptap/core Extendable.configure -> mergeDeep) — every
+  // OTHER call site test above bypasses this entirely by calling
+  // `config.items!()`/`config.command!()` directly on the object this
+  // function returns, never exercising the actual `.configure()` merge that
+  // happens in extensions/index.ts. This test goes through that real path.
+  it("survives ChannelReferenceExtension.configure()'s deep-merge with an allow that actually permits the suggestion (regression)", () => {
+    const qc = fakeQc([fakeChannel({ id: "c1", name: "general" })]);
+    const configured = ChannelReferenceExtension.configure({
+      suggestion: createChannelReferenceSuggestion(qc),
+    });
+    const mergedSuggestion = configured.options.suggestion;
+    expect(mergedSuggestion.allow({} as never)).toBe(true);
   });
 });

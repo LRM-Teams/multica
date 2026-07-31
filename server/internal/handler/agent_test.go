@@ -1117,6 +1117,53 @@ func TestListAgents_ResponseHasNoCustomEnv(t *testing.T) {
 	}
 }
 
+// TestListAgents_ExcludesResearchFleetMembers locks task #903's redirect:
+// exclusion from the workspace agent directory keys off research_fleet_member
+// table membership, not the retired agent.managed_role='research_fleet' value.
+func TestListAgents_ExcludesResearchFleetMembers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	suffix := uuid.NewString()
+
+	fleetAgentID := createHandlerTestAgent(t, "fleet-member-"+suffix, nil)
+	var fleetID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO research_fleet (workspace_id) VALUES ($1)
+		ON CONFLICT (workspace_id) DO UPDATE SET workspace_id = EXCLUDED.workspace_id
+		RETURNING id
+	`, testWorkspaceID).Scan(&fleetID); err != nil {
+		t.Fatalf("create research fleet: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status)
+		VALUES ($1, $2, $3, 'scout-'||$4, 'active')
+	`, testWorkspaceID, fleetID, fleetAgentID, suffix); err != nil {
+		t.Fatalf("create research fleet member: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM research_fleet_member WHERE agent_id = $1`, fleetAgentID)
+	})
+
+	req := newRequest("GET", "/agents", nil)
+	w := httptest.NewRecorder()
+	testHandler.ListAgents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var rawAgents []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rawAgents); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	for _, a := range rawAgents {
+		if id, _ := a["id"].(string); id == fleetAgentID {
+			t.Fatalf("research fleet member %s leaked into workspace agent directory", fleetAgentID)
+		}
+	}
+}
+
 func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

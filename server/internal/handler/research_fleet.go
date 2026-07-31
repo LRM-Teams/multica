@@ -165,12 +165,6 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 		if err != nil {
 			return db.ResearchFleet{}, nil, fmt.Errorf("create fleet agent %s: %w", seed.Name, err)
 		}
-		if err := h.Queries.SetAgentManagedRoleResearchFleet(ctx, db.SetAgentManagedRoleResearchFleetParams{
-			ID:          agent.ID,
-			WorkspaceID: workspaceID,
-		}); err != nil {
-			return db.ResearchFleet{}, nil, err
-		}
 		member, err := h.Queries.CreateResearchFleetMember(ctx, db.CreateResearchFleetMemberParams{
 			WorkspaceID: workspaceID,
 			FleetID:     fleet.ID,

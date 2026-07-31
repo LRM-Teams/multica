@@ -94,17 +94,30 @@ func (h *Handler) validateRadarIssueCreateAssigneeForChannel(
 	if !assigneeType.Valid || assigneeType.String != "agent" || !assigneeID.Valid {
 		return nil
 	}
-	var managedRole pgtype.Text
 	var archivedAt pgtype.Timestamptz
 	var runtimeID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
-		SELECT managed_role, archived_at, runtime_id
+		SELECT archived_at, runtime_id
 		FROM agent
 		WHERE id = $1 AND workspace_id = $2
-	`, assigneeID, run.WorkspaceID).Scan(&managedRole, &archivedAt, &runtimeID); err != nil {
+	`, assigneeID, run.WorkspaceID).Scan(&archivedAt, &runtimeID); err != nil {
 		return errors.New("assignee agent does not belong to the radar workspace")
 	}
-	if managedRole.Valid {
+	// This gate is specific to Research Fleet agents (task #903: the prior
+	// `managed_role IS NOT NULL` check was an accidental generalization —
+	// research_fleet was the only value ever written, so it happened to
+	// behave as a blanket "any managed role" gate. If a future managed
+	// agent class needs to be excluded from delivery-work assignment, that
+	// exclusion must be added here explicitly — it does not inherit from
+	// this check.
+	fleetMember, err := h.Queries.GetResearchFleetMemberByAgent(ctx, db.GetResearchFleetMemberByAgentParams{
+		WorkspaceID: run.WorkspaceID,
+		AgentID:     assigneeID,
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("failed to check research fleet membership")
+	}
+	if err == nil && fleetMember.Status != "archived" {
 		if radarUUIDsMatch(assigneeID, supervisor.ID) {
 			return errors.New("group manager cannot assign delivery work to itself")
 		}

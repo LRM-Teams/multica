@@ -933,7 +933,6 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to hire agent: "+err.Error())
 		return
 	}
-	_ = h.Queries.SetAgentManagedRoleResearchFleet(r.Context(), db.SetAgentManagedRoleResearchFleetParams{ID: agent.ID, WorkspaceID: wsUUID})
 	member, err := h.Queries.CreateResearchFleetMember(r.Context(), db.CreateResearchFleetMemberParams{
 		WorkspaceID: wsUUID,
 		FleetID:     lead.FleetID,

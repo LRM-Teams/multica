@@ -724,6 +724,19 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Batch-load research-fleet membership to avoid N+1 (task #903: the
+	// research_fleet_member table is the single source of truth for "is
+	// this agent a research-fleet member" — agent.managed_role is retired).
+	fleetMemberIDs, err := h.Queries.ListActiveResearchFleetMemberAgentIDsByWorkspace(r.Context(), parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research fleet membership")
+		return
+	}
+	researchFleetAgentIDs := make(map[string]bool, len(fleetMemberIDs))
+	for _, id := range fleetMemberIDs {
+		researchFleetAgentIDs[uuidToString(id)] = true
+	}
+
 	// mcp_config still uses the workspace-level always-redact setting and
 	// the per-row owner/admin gate — secrets in MCP server configs follow
 	// the same exposure rules as custom_env used to. custom_env itself is
@@ -745,7 +758,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	// agent directory / issue assignee picker.
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
-		if a.ManagedRole.Valid && a.ManagedRole.String == managedRoleResearchFleet {
+		if researchFleetAgentIDs[uuidToString(a.ID)] {
 			continue
 		}
 		resp := agentToResponse(a)

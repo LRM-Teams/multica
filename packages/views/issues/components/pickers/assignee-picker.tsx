@@ -107,7 +107,6 @@ export function AssigneePicker({
     .filter(
       (a) =>
         !a.archived_at &&
-        a.managed_role !== "research_fleet" &&
         matchesActorIdentitySearch(
           resolveActorDisplayName(a, a.name),
           a.name,

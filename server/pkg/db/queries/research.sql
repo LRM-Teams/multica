@@ -22,6 +22,10 @@ ORDER BY is_lead DESC, created_at ASC;
 SELECT * FROM research_fleet_member
 WHERE workspace_id = $1 AND agent_id = $2;
 
+-- name: ListActiveResearchFleetMemberAgentIDsByWorkspace :many
+SELECT agent_id FROM research_fleet_member
+WHERE workspace_id = $1 AND status != 'archived';
+
 -- name: CreateResearchFleetMember :one
 INSERT INTO research_fleet_member (
   workspace_id, fleet_id, agent_id, role, status, is_lead
@@ -39,11 +43,6 @@ UPDATE research_fleet_member
 SET status = 'archived', updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
-
--- name: SetAgentManagedRoleResearchFleet :exec
-UPDATE agent
-SET managed_role = 'research_fleet', updated_at = now()
-WHERE id = $1 AND workspace_id = $2;
 
 -- name: ListResearchSessions :many
 SELECT * FROM research_session

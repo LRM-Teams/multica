@@ -660,6 +660,28 @@ func (q *Queries) GetResearchFleetMemberByAgent(ctx context.Context, arg GetRese
 	return i, err
 }
 
+const listActiveResearchFleetMemberAgentIDsByWorkspace = `-- name: ListActiveResearchFleetMemberAgentIDsByWorkspace :many
+SELECT agent_id FROM research_fleet_member
+WHERE workspace_id = $1 AND status != 'archived'
+`
+
+func (q *Queries) ListActiveResearchFleetMemberAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listActiveResearchFleetMemberAgentIDsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var agentID pgtype.UUID
+		if err := rows.Scan(&agentID); err != nil {
+			return nil, err
+		}
+		items = append(items, agentID)
+	}
+	return items, rows.Err()
+}
+
 const getResearchGraphNode = `-- name: GetResearchGraphNode :one
 SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at FROM research_graph_node
 WHERE id = $1 AND workspace_id = $2
@@ -1052,21 +1074,6 @@ func (q *Queries) ListResearchStageEvals(ctx context.Context, arg ListResearchSt
 	return items, nil
 }
 
-const setAgentManagedRoleResearchFleet = `-- name: SetAgentManagedRoleResearchFleet :exec
-UPDATE agent
-SET managed_role = 'research_fleet', updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-`
-
-type SetAgentManagedRoleResearchFleetParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) SetAgentManagedRoleResearchFleet(ctx context.Context, arg SetAgentManagedRoleResearchFleetParams) error {
-	_, err := q.db.Exec(ctx, setAgentManagedRoleResearchFleet, arg.ID, arg.WorkspaceID)
-	return err
-}
 
 const setResearchFleetLead = `-- name: SetResearchFleetLead :one
 UPDATE research_fleet

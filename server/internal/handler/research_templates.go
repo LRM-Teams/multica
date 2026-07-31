@@ -57,8 +57,6 @@ func researchDomainPlaybooks() map[string]string {
 }
 
 const (
-	managedRoleResearchFleet = "research_fleet"
-
 	ronaldoAgentName   = "罗纳尔多"
 	ronaldoDescription = "调研团负责人：对用户唯一默认接口，协调寻源/深读/交叉验证/报告，拥有编制与 prompt 优化最高权限。"
 

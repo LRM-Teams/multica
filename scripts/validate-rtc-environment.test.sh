@@ -10,6 +10,7 @@ required_names=(
   VOLCENGINE_RTC_SECRET_ACCESS_KEY
   VOLCENGINE_RTC_ASR_APP_ID
   VOLCENGINE_RTC_TTS_APP_ID
+  VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN
   VOLCENGINE_RTC_CALLBACK_SIGNATURE
 )
 optional_names=(
@@ -68,6 +69,29 @@ if [[ "$partial_output" == *"must-not-be-printed"* ]]; then
 fi
 
 set +e
+api_key_only_output="$(
+  "${clean_environment[@]}" \
+    VOLCENGINE_RTC_APP_ID=test-value \
+    VOLCENGINE_RTC_APP_KEY=test-value \
+    VOLCENGINE_RTC_ACCESS_KEY_ID=test-value \
+    VOLCENGINE_RTC_SECRET_ACCESS_KEY=test-value \
+    VOLCENGINE_RTC_ASR_APP_ID=test-value \
+    VOLCENGINE_RTC_TTS_APP_ID=test-value \
+    VOLCENGINE_RTC_CALLBACK_SIGNATURE=test-value \
+    VOLCENGINE_RTC_ARK_ENDPOINT_ID=ep-test \
+    DOUBAO_SPEECH_API_KEY=new-console-api-key-must-not-be-reused \
+    bash "$validator" 2>&1
+)"
+api_key_only_status=$?
+set -e
+if [[ "$api_key_only_status" -eq 0 ]] ||
+  [[ "$api_key_only_output" != *"VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN"* ]] ||
+  [[ "$api_key_only_output" == *"new-console-api-key-must-not-be-reused"* ]]; then
+  echo "Doubao API key was accepted in place of the RTC speech access token."
+  exit 1
+fi
+
+set +e
 optional_only_output="$(
   "${clean_environment[@]}" \
     VOLCENGINE_RTC_ARK_ENDPOINT_ID=must-not-be-printed \
@@ -95,6 +119,7 @@ missing_ark_output="$(
     "${required_names[4]}=test-value" \
     "${required_names[5]}=test-value" \
     "${required_names[6]}=test-value" \
+    "${required_names[7]}=test-value" \
     bash "$validator" 2>&1
 )"
 missing_ark_status=$?
@@ -115,6 +140,7 @@ display_model_output="$(
     "${required_names[4]}=test-value" \
     "${required_names[5]}=test-value" \
     "${required_names[6]}=test-value" \
+    "${required_names[7]}=test-value" \
     VOLCENGINE_RTC_ARK_MODEL_NAME=Doubao-Seed \
     bash "$validator" 2>&1
 )"

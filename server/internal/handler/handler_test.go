@@ -3791,12 +3791,6 @@ func TestBatchBacklogToTodoByAgentTriggersAssignee(t *testing.T) {
 	}
 }
 
-// TestBacklogToTodoByAgentTriggersSquadLeader covers the squad branch of
-// the backlog→active trigger when the actor is an agent: the leader agent
-// of a squad must wake when one of its squad-assigned backlog issues is
-// promoted by another agent (or by the leader itself acting from a task
-// on a different issue). The task-issue self-loop guard must allow this —
-
 func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/daemon/register", bytes.NewBufferString(`{

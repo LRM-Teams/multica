@@ -3682,7 +3682,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AutopilotTriggerPayload:          strings.TrimSpace(string(task.AutopilotTriggerPayload)),
 		QuickCreatePrompt:                task.QuickCreatePrompt,
 		QuickCreateSource:                task.QuickCreateSource,
-		IsSquadLeader:                    strings.Contains(instructions, "## Squad Operating Protocol"),
+		AgentRadarPrompt:                 task.AgentRadarPrompt,
 		RequestingUserName:               task.RequestingUserName,
 		RequestingUserProfileDescription: task.RequestingUserProfileDescription,
 		InitiatorType:                    task.InitiatorType,

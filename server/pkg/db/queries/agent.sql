@@ -244,9 +244,8 @@ SET summary = EXCLUDED.summary,
 -- conversation. Keep the CASE WHEN predicates in sync with
 -- resumeUnsafeFailureReason and the resume lookup blacklists. attempt is
 -- incremented; max_attempts, trigger_comment_id, and is_leader_task are
--- inherited so the retried task keeps the same squad-role provenance as its
--- parent and the self-trigger guard in shouldEnqueueSquadLeaderOnComment
--- continues to recognise it as a leader task.
+-- inherited so the retried task keeps the same historical provenance as its
+-- parent.
 INSERT INTO agent_inbox_event (
     workspace_id, agent_session_id, conversation_id, channel_id,
     agent_id, runtime_id, execution_config, issue_id, chat_session_id,
@@ -511,7 +510,7 @@ WHERE id = $1;
 -- name: MergeTaskArealProxyContext :exec
 -- Merges the training RL proxy config into the task's context JSONB via a
 -- single read-modify-write. COALESCE handles a NULL/empty context; the `||`
--- operator preserves every existing top-level key (e.g. squad_id) and
+-- operator preserves every existing top-level key and
 -- overwrites only the areal_proxy sub-object. Used by the session-open hook.
 -- This intentionally does NOT touch agent_inbox_event.session_id, which is the
 -- runtime/chat session pointer, not the RL session.
@@ -524,8 +523,8 @@ WHERE id = sqlc.arg('id');
 -- retry path (D9): CreateRetryTask copies the parent's context verbatim, so the
 -- child would inherit the parent's (now-closed) RL session; stripping forces the
 -- child to open a fresh session at its own session-open chokepoint. The `-`
--- operator drops only areal_proxy, preserving every other top-level key (e.g.
--- squad_id) and the chat session_id/work_dir resume pointers (separate columns).
+-- operator drops only areal_proxy, preserving every other top-level key
+-- and the chat session_id/work_dir resume pointers (separate columns).
 -- No-op when the key is absent. Propagates errors (the strip is load-bearing for
 -- D9, not best-effort).
 UPDATE agent_inbox_event
@@ -762,18 +761,6 @@ WHERE issue_id = $1 AND status IN ('pending', 'failed');
 -- for the given issue. Used by @mention trigger dedup.
 SELECT count(*) > 0 AS has_pending FROM agent_inbox_event
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('pending', 'failed');
-
--- name: GetLatestTaskIsLeaderForIssueAndAgent :one
--- Returns the is_leader_task flag of the agent's most recent task on this
--- issue, or NULL if the agent has never had a task on this issue. Used by
--- the squad-leader self-trigger guard to tell whether the agent's last
--- activity on the issue was in the leader role or the worker role (an
--- agent that holds both roles in a squad would otherwise be skipped by
--- the role-blind authorID == leaderID check).
-SELECT is_leader_task FROM agent_inbox_event
-WHERE issue_id = $1 AND agent_id = $2
-ORDER BY created_at DESC
-LIMIT 1;
 
 -- name: ListPendingTasksByRuntime :many
 SELECT * FROM agent_inbox_event

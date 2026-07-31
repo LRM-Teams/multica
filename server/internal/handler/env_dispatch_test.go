@@ -174,14 +174,6 @@ func TestDeleteEnvDispatchProject_RequiresProjectID(t *testing.T) {
 	}
 }
 
-func TestEnvDispatch_RejectsBothAgentAndSquad(t *testing.T) {
-	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","squad_id":"` + validUUID + `","message":{"content":"hi"}}`
-	rr := doEnvDispatch(t, body)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("both agent+squad: want 400, got %d %s", rr.Code, rr.Body.String())
-	}
-}
-
 func TestEnvDispatch_AcceptsEmptyEnvIDShape(t *testing.T) {
 	// empty env_id must not be rejected by the handler's UUID-shape gate
 	// (which would emit "invalid env_id"); the service decides whether an
@@ -228,7 +220,7 @@ func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
 
 func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 	// 400 on malformed UUID
-	body := `{"training_mode":true,"squad_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"train_agent_id":"` + validUUID + `","critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
+	body := `{"training_mode":true,"agent_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"train_agent_id":"` + validUUID + `","critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
 	req := httptest.NewRequest("POST", "/api/v1/env-dispatch", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h := newTestHandler(Config{})
@@ -249,7 +241,7 @@ func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 // A spec with neither template nor base_env_id triggers the service's shape
 // validation error, proving the field reached the service layer.
 func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
-	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
 	w := doEnvDispatch(t, body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (shape validation); body=%s", w.Code, w.Body.String())
@@ -262,7 +254,7 @@ func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
 	// shape error: the runtime is a valid scratch policy, so synchronous shape
 	// validation passes and the dispatch proceeds. The synthetic API key must
 	// not surface in the response.
-	runtimeBody := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
+	runtimeBody := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
 	w2 := doEnvDispatch(t, runtimeBody)
 	if strings.Contains(w2.Body.String(), "needs a template") {
 		t.Fatalf("runtime-only spec must advance past the shape error; got %s", w2.Body.String())

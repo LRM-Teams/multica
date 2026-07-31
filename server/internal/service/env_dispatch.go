@@ -59,8 +59,7 @@ type EnvDispatchInput struct {
 	DispatchType    EnvDispatchType
 	GroupSize       int
 	AgentID         string
-	SquadID         string // team dispatch; mutually exclusive with AgentID (leader resolved server-side)
-	TrainAgentID    string // optional training target (spec §4.1): a squad member or the single agent; empty ⇒ no training session
+	TrainAgentID    string // optional training target (spec §4.1); empty ⇒ no training session
 	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
 
@@ -272,7 +271,7 @@ type EnvDispatchDeps interface {
 	// target the copied issue (branch+swe_lego) or copied session (branch+self_play).
 	CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (newProjectID string, issueIDMap, chatSessionIDMap map[string]string, err error)
 	DeleteProject(ctx context.Context, projectID, workspaceID string) error
-	ResolveMessageRoster(ctx context.Context, workspaceID, agentID, squadID string) (MessageRoster, error)
+	ResolveMessageRoster(ctx context.Context, workspaceID, agentID string) (MessageRoster, error)
 	CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster MessageRoster, specs map[string]ResolvedPerAgentSandboxPolicy) (channelID string, err error)
 	DeleteChannel(ctx context.Context, workspaceID, channelID string) error
 	ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error)
@@ -304,7 +303,7 @@ type EnvDispatchDeps interface {
 	// runtimeID, when non-empty, overrides the task's runtime_id: routes the
 	// task to a pre-created sandbox runtime R' (Phase 2) instead of the
 	// agent/session/leader runtime. Empty preserves the current behavior.
-	EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (runID string, err error)
+	EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (runID string, err error)
 
 	// GetDefaultSelfPlayEnv resolves the per-workspace default self_play base
 	// env used when a scratch+self_play dispatch is called with an empty
@@ -372,12 +371,12 @@ type EnvDispatchDeps interface {
 	// root task.
 	GetEnvDispatchRootTaskStatus(ctx context.Context, projectID, workspaceID string) (string, error)
 
-	// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of
-	// the workspace, or — when squadID is non-empty — a member of that squad.
-	// Returns a typed error when the agent is unknown or unauthorized; nil when
-	// the agent is a member. Used by per-agent env spec validation (§5) to
-	// reject unknown agents before any rollout state is created.
-	ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error
+	// ValidateAgentInWorkspace reports whether agentID is a member of the
+	// workspace. Returns a typed error when the agent is unknown or
+	// unauthorized; nil when the agent is a member. Used by per-agent env
+	// spec validation (§5) to reject unknown agents before any rollout state
+	// is created.
+	ValidateAgentInWorkspace(ctx context.Context, workspaceID, agentID string) error
 
 	// ResolvePerAgentEnvSpec validates that the spec's template or base_env_id
 	// is known and authorized for the workspace, and returns the resolved
@@ -539,7 +538,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	var messageRoster MessageRoster
 	if in.DispatchType == EnvDispatchMessage {
 		var err error
-		messageRoster, err = s.deps.ResolveMessageRoster(ctx, in.WorkspaceID, in.AgentID, in.SquadID)
+		messageRoster, err = s.deps.ResolveMessageRoster(ctx, in.WorkspaceID, in.AgentID)
 		if err != nil {
 			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve message roster: %w", err)
 		}
@@ -829,11 +828,8 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	if in.GroupSize < 1 || in.GroupSize > 64 {
 		return fmt.Errorf("validation_failed: group_size must be in [1, 64]")
 	}
-	switch {
-	case in.AgentID == "" && in.SquadID == "":
-		return fmt.Errorf("validation_failed: agent_id or squad_id is required")
-	case in.AgentID != "" && in.SquadID != "":
-		return fmt.Errorf("validation_failed: agent_id and squad_id are mutually exclusive")
+	if in.AgentID == "" {
+		return fmt.Errorf("validation_failed: agent_id is required")
 	}
 	// training_mode (Task 1): false forbids training IDs; true requires
 	// train_agent_id. The handler rejects an omitted training_mode before
@@ -845,12 +841,12 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	if in.TrainingMode && in.TrainAgentID == "" {
 		return fmt.Errorf("validation_failed: training_mode=true requires train_agent_id")
 	}
-	// train_agent_id (spec §4.1): the training target. Allowed when a squad_id
-	// is set (a team member) OR when it equals agent_id (single-agent
-	// training). Empty ⇒ today's behavior exactly (no new error). DB membership
-	// resolution is enforced later, not here.
-	if in.TrainAgentID != "" && in.SquadID == "" && in.TrainAgentID != in.AgentID {
-		return fmt.Errorf("validation_failed: train_agent_id must accompany a squad_id (team member) or equal agent_id (single-agent training)")
+	// train_agent_id (spec §4.1): the training target. Allowed only when it
+	// equals agent_id (single-agent training). Empty ⇒ today's behavior
+	// exactly (no new error). DB membership resolution is enforced later,
+	// not here.
+	if in.TrainAgentID != "" && in.TrainAgentID != in.AgentID {
+		return fmt.Errorf("validation_failed: train_agent_id must equal agent_id (single-agent training)")
 	}
 	// critic_agent_id (sub-project E): the critic that evaluates the trained agent.
 	// Requires train_agent_id. Must differ from train_agent_id and agent_id.
@@ -952,7 +948,7 @@ func (s *EnvDispatchService) validatePerAgentEnvSpecsDB(ctx context.Context, in 
 		return nil
 	}
 	for _, spec := range in.PerAgentEnvSpecs {
-		if err := s.deps.ValidateAgentInWorkspaceOrSquad(ctx, in.WorkspaceID, in.SquadID, spec.AgentID); err != nil {
+		if err := s.deps.ValidateAgentInWorkspace(ctx, in.WorkspaceID, spec.AgentID); err != nil {
 			return fmt.Errorf("validation_failed: per_agent_env agent %s: %w", spec.AgentID, err)
 		}
 		if _, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec); err != nil {
@@ -1193,9 +1189,7 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 	// keyed by a fresh daemon_id and inject it as MULTICA_DAEMON_ID into the
 	// sandbox runtime_env. The in-sandbox daemon adopts R' on register, and the
 	// task is routed to R' (see dispatchOne) - runtime_id is deterministic at
-	// dispatch time, no deferred binding. Squad dispatch (no single agent)
-	// defers R' routing: the sandbox boots a daemon that registers its own
-	// runtime and the task stays on the leader's runtime.
+	// dispatch time, no deferred binding.
 	runtimeEnv := map[string]string{}
 	var runtimeID, daemonID string
 	if runtimeAgentID != "" {
@@ -1228,10 +1222,10 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 // rolloutRuntimeID resolves the pre-created sandbox runtime R' (Phase 2) for a
 // single-agent rollout, so the task is routed to the in-sandbox daemon's runtime
 // instead of the agent/session/leader runtime. Returns "" when the rollout is
-// not R'-bound (Fleet path, squad, per-agent specs, or no sandbox ref), which
+// not R'-bound (Fleet path, per-agent specs, or no sandbox ref), which
 // preserves the current runtime routing in EnqueueAgentRun.
 func rolloutRuntimeID(in EnvDispatchInput, r EnvRollout) string {
-	if in.DispatchType != EnvDispatchMessage && (in.AgentID == "" || in.SquadID != "") {
+	if in.DispatchType != EnvDispatchMessage && in.AgentID == "" {
 		return ""
 	}
 	if len(r.SandboxRefs) > 0 {
@@ -1249,7 +1243,7 @@ func rolloutRuntimeID(in EnvDispatchInput, r EnvRollout) string {
 // to reclaim the sandbox. Same single-agent gating as rolloutRuntimeID; returns
 // "" when the rollout is not R'-bound.
 func rolloutSandboxInstanceID(in EnvDispatchInput, r EnvRollout) string {
-	if in.DispatchType != EnvDispatchMessage && (in.AgentID == "" || in.SquadID != "") {
+	if in.DispatchType != EnvDispatchMessage && in.AgentID == "" {
 		return ""
 	}
 	if len(r.SandboxRefs) > 0 {
@@ -1304,7 +1298,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			issueID = newID
 			r.IssueID = newID
 		}
-		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.UserID, in.AgentID, in.SquadID, issueID, "", sandboxInstanceID, r.EnvID, runtimeID, idx)
+		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.UserID, in.AgentID, issueID, "", sandboxInstanceID, r.EnvID, runtimeID, idx)
 		if err != nil {
 			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 			r.Stack = stackerr.StackOf(err)
@@ -1332,7 +1326,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
-	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.UserID, in.AgentID, in.SquadID, "", sessionID, sandboxInstanceID, r.EnvID, runtimeID, idx)
+	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.UserID, in.AgentID, "", sessionID, sandboxInstanceID, r.EnvID, runtimeID, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 		r.Stack = stackerr.StackOf(err)

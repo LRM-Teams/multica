@@ -1857,7 +1857,6 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the selected agent that will run the quick-create task.
 	var agentUUID pgtype.UUID
-	var squadUUID pgtype.UUID
 	agentUUID, ok = parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
 	if !ok {
 		return
@@ -1960,7 +1959,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		parentIssueUUID = pid
 	}
 
-	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs, source)
+	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs, source)
 	if err != nil {
 		slog.Warn("quick-create enqueue failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue quick-create task")
@@ -2608,12 +2607,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 		}
-
-		// Squad assign: trigger the squad leader, respecting the backlog
-		// parking-lot rule used by agent assignment.
-		if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
-		}
 	}
 
 	// Trigger the assigned agent when an issue moves out of backlog. Backlog
@@ -2631,9 +2624,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		!h.isAgentRunningOnIssue(r, actorType, issue) {
 		if h.isAgentAssigneeReady(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
-		if h.isSquadLeaderReady(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
 		}
 	}
 
@@ -3105,9 +3095,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 			}
-			if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
-			}
 		}
 
 		// Trigger agent when moving out of backlog (batch). Mirrors the
@@ -3119,9 +3106,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			!h.isAgentRunningOnIssue(r, actorType, issue) {
 			if h.isAgentAssigneeReady(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-			}
-			if h.isSquadLeaderReady(r.Context(), issue) {
-				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
 			}
 		}
 

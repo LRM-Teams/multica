@@ -352,9 +352,8 @@ func TestIsNoteComment(t *testing.T) {
 }
 
 // TestTriggerTasksForComment_NoteShortCircuits proves a /note comment returns
-// before any of the three trigger paths run. shouldEnqueueOnComment,
-// computeAssignedSquadLeaderCommentTrigger, and
-// computeMentionedAgentCommentTriggers all dereference h.Queries, so a
+// before either trigger path runs. shouldEnqueueOnComment and
+// computeMentionedAgentCommentTriggers both dereference h.Queries, so a
 // nil-Queries Handler would panic if the /note guard were missing or moved
 // below them. The comment also @mentions an agent to exercise the mention
 // path specifically.

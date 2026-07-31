@@ -195,10 +195,9 @@ func sanitizeMentionLabel(name string) string {
 // dispatchParentAssigneeTrigger fires the explicit side effect that pairs
 // with the @mention link in the system comment body — an agent task for
 // agent assignees only. Member assignees never reach this path
-// (notifyParentOfChildDone skips them). Historical assignee_type=squad is
-// read-only: no mention token, no EnqueueTaskForSquadLeader / trigger
-// (squad product retired). The generic comment listener short-circuits on
-// author_type='system', so this is the single place for child-done wake.
+// (notifyParentOfChildDone skips them). The generic comment listener
+// short-circuits on author_type='system', so this is the single place for
+// child-done wake.
 //
 // Side-effect semantics:
 //   - agent parent: one EnqueueTaskForMention on the parent assignee

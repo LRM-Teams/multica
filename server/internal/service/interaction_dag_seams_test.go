@@ -101,17 +101,6 @@ func TestDelegation_LinksGrandparentEdge(t *testing.T) {
 	assert.Equal(t, "delegation", store.edges[0].Type)
 }
 
-// TestSquadContextDelegation_ClosesProducerWithSquadBriefingAndDelegationEdge
-// verifies the squad-context handoff semantics: close the producer/parent
-// session with closing_event="squad_briefing" while preserving the structural
-// edge as type="delegation" when the child later closes. The receiver/child
-// session is not closed at handoff time.
-func TestSquadContextHandoffSignal(t *testing.T) {
-	assert.False(t, isSquadContextHandoff(db.AgentInboxEvent{}, false), "plain mention is normal delegation")
-	assert.True(t, isSquadContextHandoff(db.AgentInboxEvent{}, true), "new squad-leader task is squad context")
-	assert.True(t, isSquadContextHandoff(db.AgentInboxEvent{IsLeaderTask: true}, false), "squad leader delegating onward remains squad context")
-}
-
 func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 	pool := interactionDAGTestPool(t)
 	defer pool.Close()
@@ -164,37 +153,6 @@ func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 	got, ok := svc.discoverDelegationParent(ctx, issue.ID, comment.ID, child.ID)
 	require.True(t, ok)
 	assert.Equal(t, parent.ID, got.ID, "must not select the just-created receiver task as its own producer")
-}
-
-func TestSquadContextDelegation_ClosesProducerWithSquadBriefingAndDelegationEdge(t *testing.T) {
-	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{exportPayload: json.RawMessage(shardExport)}
-	svc := newSeamTaskService(store, client)
-
-	parentID, childID := testUUID(1), testUUID(2)
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
-	client.closeSegmentID = 11
-	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-p", "key-p")}
-	svc.closeSegmentForSquadContextDelegation(context.Background(), parent, "proj-1", leanSnap())
-
-	require.Len(t, store.segmentSnapshots, 1)
-	parentSeg := store.segmentSnapshots[0]
-	assert.Equal(t, "sess-p-11", parentSeg.SegmentID)
-	assert.True(t, parentSeg.ClosingEvent.Valid)
-	assert.Equal(t, "squad_briefing", parentSeg.ClosingEvent.String)
-	require.Equal(t, []string{"key-p"}, client.closeCalls, "handoff must close only the producer session")
-
-	client.closeSegmentID = 12
-	child := db.AgentInboxEvent{ID: childID, ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
-	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-c", util.UUIDToString(childID), "issue-1"))
-	svc.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
-
-	require.Len(t, store.segmentSnapshots, 2)
-	require.Equal(t, []string{"key-p", "key-c"}, client.closeCalls)
-	require.Len(t, store.edges, 1)
-	assert.Equal(t, "sess-p-11", store.edges[0].SrcSegmentID)
-	assert.Equal(t, "sess-c-12", store.edges[0].DstSegmentID)
-	assert.Equal(t, "delegation", store.edges[0].Type)
 }
 
 // TestCompletion_ClosesChildSegmentAndRecordsDelegationEdge: a child (with a

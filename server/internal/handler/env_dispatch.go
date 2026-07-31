@@ -30,7 +30,6 @@ type EnvDispatchRequest struct {
 	DispatchType   string `json:"dispatch_type"`
 	GroupSize      int    `json:"group_size"`
 	AgentID        string `json:"agent_id"`
-	SquadID        string `json:"squad_id,omitempty"`
 	TrainAgentID   string `json:"train_agent_id,omitempty"`
 	CriticAgentID  string `json:"critic_agent_id,omitempty"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
@@ -134,9 +133,8 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	// UUID-shape validation (spec §6.3). Do it here so malformed IDs return a
 	// 400 instead of panicking deep in the adapter (parseUUID is MustParseUUID).
 	// env_id/agent_id may be empty now (empty env_id resolves a per-workspace
-	// default for scratch self_play; agent_id is optional when squad_id is set),
-	// so only shape-check them when present. The service enforces the
-	// conditional-required rules.
+	// default for scratch self_play), so only shape-check them when present.
+	// The service enforces the conditional-required rules.
 	if req.EnvID != "" {
 		if _, ok := parseUUIDOrBadRequest(w, req.EnvID, "env_id"); !ok {
 			return
@@ -144,11 +142,6 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AgentID != "" {
 		if _, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id"); !ok {
-			return
-		}
-	}
-	if req.SquadID != "" {
-		if _, ok := parseUUIDOrBadRequest(w, req.SquadID, "squad_id"); !ok {
 			return
 		}
 	}
@@ -191,7 +184,6 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
-		SquadID:             req.SquadID,
 		TrainAgentID:        req.TrainAgentID,
 		CriticAgentID:       req.CriticAgentID,
 		IdempotencyKey:      req.IdempotencyKey,
@@ -754,39 +746,12 @@ func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, projectID, w
 	return stackerr.Wrap(err, "delete project")
 }
 
-func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, workspaceID, agentID, squadID string) (service.MessageRoster, error) {
+func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, workspaceID, agentID string) (service.MessageRoster, error) {
 	wsID := parseUUID(workspaceID)
-	if squadID == "" {
-		if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: parseUUID(agentID), WorkspaceID: wsID}); err != nil {
-			return service.MessageRoster{}, err
-		}
-		return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
-	}
-	squad, err := a.h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: parseUUID(squadID), WorkspaceID: wsID})
-	if err != nil {
+	if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: parseUUID(agentID), WorkspaceID: wsID}); err != nil {
 		return service.MessageRoster{}, err
 	}
-	ids := []string{util.UUIDToString(squad.LeaderID)}
-	seen := map[string]bool{ids[0]: true}
-	members, err := a.h.Queries.ListSquadMembers(ctx, squad.ID)
-	if err != nil {
-		return service.MessageRoster{}, err
-	}
-	for _, member := range members {
-		if member.MemberType != "agent" {
-			continue
-		}
-		id := util.UUIDToString(member.MemberID)
-		if seen[id] {
-			continue
-		}
-		if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: member.MemberID, WorkspaceID: wsID}); err != nil {
-			return service.MessageRoster{}, err
-		}
-		seen[id] = true
-		ids = append(ids, id)
-	}
-	return service.MessageRoster{LeaderID: ids[0], AgentIDs: ids}, nil
+	return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
 }
 
 const envDispatchChannelJoinSource = "env_dispatch"
@@ -1320,41 +1285,10 @@ func (a *envDispatchDepsAdapter) SetDefaultSelfPlayEnv(ctx context.Context, work
 // via agent_id + chat_session_id, so NULL is a safe intermediate state.
 // A follow-up task should extend the interface to pass UserID explicitly.
 //
-// squadID threads through for team dispatch. The issue-path squad branch
-// (assignee=squad + leader task) and the chat-path squad branch (leader
-// resolution + {"squad_id"} context hint) are implemented below. When
-// squadID == "" both paths behave exactly as the current single-agent path.
-func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (string, error) {
+func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (string, error) {
 	switch {
 	case issueID != "":
-		var agentUUID pgtype.UUID
-		if agentID != "" {
-			agentUUID = parseUUID(agentID)
-		}
-		isLeaderTask := pgtype.Bool{}
-		if squadID != "" {
-			// Squad dispatch: stamp the issue with assignee_type='squad' and
-			// enqueue the squad LEADER's task with is_leader_task=true so the
-			// leader-task ownership rules apply. The agent_id is resolved to
-			// the squad leader (agentID is empty for squad dispatch).
-			squad, err := a.h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-				ID:          parseUUID(squadID),
-				WorkspaceID: parseUUID(workspaceID),
-			})
-			if err != nil {
-				return "", stackerr.Wrap(err, "get squad")
-			}
-			if err := a.h.Queries.SetIssueAssignee(ctx, db.SetIssueAssigneeParams{
-				ID:           parseUUID(issueID),
-				AssigneeType: pgtype.Text{String: "squad", Valid: true},
-				AssigneeID:   parseUUID(squadID),
-				WorkspaceID:  parseUUID(workspaceID),
-			}); err != nil {
-				return "", stackerr.Wrap(err, "set issue assignee to squad")
-			}
-			agentUUID = squad.LeaderID
-			isLeaderTask = pgtype.Bool{Bool: true, Valid: true}
-		}
+		agentUUID := parseUUID(agentID)
 		agent, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 			ID:          agentUUID,
 			WorkspaceID: parseUUID(workspaceID),
@@ -1375,12 +1309,11 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 			return "", stackerr.Wrap(err, "snapshot agent task execution config")
 		}
 		task, err := a.h.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-			AgentID:      agentUUID,
-			RuntimeID:    taskRuntimeID,
-			IssueID:      parseUUID(issueID),
-			Priority:     envDispatchTaskPriority,
-			IsLeaderTask: isLeaderTask,
-			Context:      taskContext,
+			AgentID:   agentUUID,
+			RuntimeID: taskRuntimeID,
+			IssueID:   parseUUID(issueID),
+			Priority:  envDispatchTaskPriority,
+			Context:   taskContext,
 		})
 		if err != nil {
 			return "", stackerr.Wrap(err, "create agent task")
@@ -1399,50 +1332,16 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 			RuntimeID:     session.RuntimeID,
 			Priority:      envDispatchTaskPriority,
 			ChatSessionID: session.ID,
+			AgentID:       parseUUID(agentID),
 		}
 		// Phase 2: route to the pre-created sandbox runtime R' when supplied
 		// (single-agent daemon-enabled rollout), instead of the session's
-		// runtime. squadID dispatch always has runtimeID="" (see
-		// rolloutRuntimeID), so the squad branch below still sets the leader's
-		// runtime and is unaffected.
+		// runtime.
 		if runtimeID != "" {
 			params.RuntimeID = parseUUID(runtimeID)
 		}
-		if squadID != "" {
-			// Squad dispatch: run the chat task on the squad LEADER and stamp
-			// the task context with a {"squad_id": ...} hint. The daemon claim
-			// path consumes that hint to inject the squad-leader briefing when
-			// the leader claims the task. The leader's runtime_id (not the
-			// session's) is used so the task is delivered to the leader.
-			squad, err := a.h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-				ID:          parseUUID(squadID),
-				WorkspaceID: parseUUID(workspaceID),
-			})
-			if err != nil {
-				return "", stackerr.Wrap(err, "get squad")
-			}
-			leader, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-				ID:          squad.LeaderID,
-				WorkspaceID: parseUUID(workspaceID),
-			})
-			if err != nil {
-				return "", stackerr.Wrap(err, "get squad leader")
-			}
-			contextJSON, err := json.Marshal(map[string]string{"squad_id": squadID})
-			if err != nil {
-				return "", stackerr.Wrap(err, "marshal squad chat context")
-			}
-			params.AgentID = squad.LeaderID
-			if runtimeID == "" {
-				params.RuntimeID = leader.RuntimeID
-			}
-			params.Context = contextJSON
-		} else {
-			params.AgentID = parseUUID(agentID)
-		}
-		// Phase 5: stamp the ephemeral_sandbox marker (sandbox_instance_id) so the
-		// terminal cleanup hook can reclaim the sandbox. No-op for squad dispatch
-		// (sandboxInstanceID is empty); merges alongside any squad_id context.
+		// Phase 5: stamp the ephemeral_sandbox marker (sandbox_instance_id) so
+		// the terminal cleanup hook can reclaim the sandbox.
 		params.Context = mergeEphemeralSandboxContext(params.Context, sandboxInstanceID, actorUserID)
 		targetAgent, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 			ID:          params.AgentID,
@@ -1824,33 +1723,13 @@ func (a *envDispatchDepsAdapter) GetEnvDispatchRootTaskStatus(ctx context.Contex
 	})
 }
 
-// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of the
-// squad (when squadID is set) or the workspace. Returns a typed error when the
-// agent is unknown or unauthorized.
-func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error {
+// ValidateAgentInWorkspace reports whether agentID is a member of the
+// workspace. Returns a typed error when the agent is unknown or unauthorized.
+func (a *envDispatchDepsAdapter) ValidateAgentInWorkspace(ctx context.Context, workspaceID, agentID string) error {
 	agentUUID, err := util.ParseUUID(agentID)
 	if err != nil {
 		return stackerr.Wrap(err, "parse agent_id")
 	}
-	if squadID != "" {
-		squadUUID, err := util.ParseUUID(squadID)
-		if err != nil {
-			return stackerr.Wrap(err, "parse squad_id")
-		}
-		ok, err := a.h.Queries.IsSquadMember(ctx, db.IsSquadMemberParams{
-			SquadID:    squadUUID,
-			MemberType: "agent",
-			MemberID:   agentUUID,
-		})
-		if err != nil {
-			return stackerr.Wrap(err, "check squad membership")
-		}
-		if !ok {
-			return stackerr.New(fmt.Sprintf("agent %s is not a member of squad %s", agentID, squadID))
-		}
-		return nil
-	}
-	// No squad: validate the agent belongs to the workspace.
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
 		return stackerr.Wrap(err, "parse workspace_id")
@@ -1977,7 +1856,7 @@ func (s *stubEnvDispatchDeps) SaveIdempotentResponse(context.Context, string, st
 	return nil
 }
 func (s *stubEnvDispatchDeps) DeleteProject(context.Context, string, string) error { return nil }
-func (s *stubEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (service.MessageRoster, error) {
+func (s *stubEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID string) (service.MessageRoster, error) {
 	return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
 }
 func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, string, string, string, service.MessageRoster, map[string]service.ResolvedPerAgentSandboxPolicy) (string, error) {
@@ -2017,7 +1896,7 @@ func (s *stubEnvDispatchDeps) CreateChatSession(context.Context, string, string,
 func (s *stubEnvDispatchDeps) CreateChatMessage(context.Context, string, string, string) (string, error) {
 	return "stub-msg", nil
 }
-func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, string, string, string, int) (string, error) {
+func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, string, string, int) (string, error) {
 	return "stub-run", nil
 }
 func (s *stubEnvDispatchDeps) LinkEnvDispatchTrainingSession(context.Context, string, string, string, string, string) error {
@@ -2047,7 +1926,7 @@ func (s *stubEnvDispatchDeps) BindEnvDispatchRootTask(context.Context, string, s
 func (s *stubEnvDispatchDeps) GetEnvDispatchRootTaskStatus(context.Context, string, string) (string, error) {
 	return "", pgx.ErrNoRows
 }
-func (s *stubEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(context.Context, string, string, string) error {
+func (s *stubEnvDispatchDeps) ValidateAgentInWorkspace(context.Context, string, string) error {
 	return nil
 }
 func (s *stubEnvDispatchDeps) ResolvePerAgentEnvSpec(context.Context, string, service.PerAgentEnvSpec) (service.ResolvedPerAgentSandboxPolicy, error) {

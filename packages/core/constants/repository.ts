@@ -2,10 +2,17 @@ export const MULTICA_REPOSITORY = "LRM-Teams/multica";
 export const MULTICA_GITHUB_URL = `https://github.com/${MULTICA_REPOSITORY}`;
 export const MULTICA_ISSUES_URL = `${MULTICA_GITHUB_URL}/issues`;
 export const MULTICA_RELEASES_URL = `${MULTICA_GITHUB_URL}/releases`;
-// Served from our own CDN, not the private GitHub repo (task #11, #1475):
-// raw.githubusercontent.com 404s unauthenticated on a private repo, so a
-// brand-new user's first command failed. No relation to MULTICA_REPOSITORY.
-const MULTICA_RELEASE_CDN_BASE_URL = "https://cdn.leagent.me/computer";
+// Served from our own release host, not the private GitHub repo (task #11,
+// #1475): raw.githubusercontent.com 404s unauthenticated on a private repo,
+// so a brand-new user's first command failed. No relation to
+// MULTICA_REPOSITORY.
+//
+// Temporarily pointed at the OSS mirror instead of cdn.leagent.me/computer
+// (cdn.leagent.me is currently blocked for some users) — mirrors the same
+// switch in scripts/install.sh's MANIFEST_BASE_URL. Flip this one constant
+// back to "https://cdn.leagent.me/computer" once the domain is unblocked.
+const MULTICA_RELEASE_CDN_BASE_URL =
+  "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases";
 export const MULTICA_INSTALL_SCRIPT_URL =
   `${MULTICA_RELEASE_CDN_BASE_URL}/install.sh`;
 export const MULTICA_INSTALL_COMMAND =

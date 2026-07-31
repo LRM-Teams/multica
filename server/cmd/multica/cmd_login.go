@@ -51,6 +51,7 @@ func init() {
 	// consume the value normally.
 	loginCmd.Flags().Lookup("token").NoOptDefVal = tokenPromptSentinel
 	loginCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected from the server's route when empty). Use this for Windows WSL / reverse-proxy / FQDN setups where auto-detection picks the wrong interface.")
+	loginCmd.Flags().String("workspace", "", "Set the default workspace by id or slug after login, instead of auto-picking the first one (env: MULTICA_WORKSPACE).")
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
@@ -84,6 +85,7 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 	var workspaces []struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Slug string `json:"slug"`
 	}
 	if err := client.GetJSON(ctx, "/api/workspaces", &workspaces); err != nil {
 		return fmt.Errorf("list workspaces: %w", err)
@@ -105,6 +107,24 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 	cfg, err := cli.LoadCLIConfigForProfile(profile)
 	if err != nil {
 		return err
+	}
+
+	// --workspace pins the default to a specific workspace by id or slug
+	// instead of auto-picking the first one — task #36 (`multica setup
+	// --workspace <id-or-slug>`, one step instead of setup then `workspace
+	// switch`).
+	if want := strings.TrimSpace(cli.FlagOrEnv(cmd, "workspace", "MULTICA_WORKSPACE", "")); want != "" {
+		matched := false
+		for _, ws := range workspaces {
+			if ws.ID == want || ws.Slug == want {
+				cfg.WorkspaceID = ws.ID
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("workspace %q not found among your workspaces — run `multica workspace list` to see available ids/slugs", want)
+		}
 	}
 
 	// Set default workspace if not set.
@@ -136,6 +156,7 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 func waitForWorkspaceCreation(cmd *cobra.Command, client *cli.APIClient) ([]struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Slug string `json:"slug"`
 }, error) {
 	appURL := tryResolveAppURL(cmd)
 	if appURL == "" {
@@ -174,6 +195,7 @@ func waitForWorkspaceCreation(cmd *cobra.Command, client *cli.APIClient) ([]stru
 		var workspaces []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
+			Slug string `json:"slug"`
 		}
 		err := client.GetJSON(ctx, "/api/workspaces", &workspaces)
 		cancel()

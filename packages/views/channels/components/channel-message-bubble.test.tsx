@@ -9,6 +9,12 @@ import { stickerCatalogKeys } from "@multica/core/stickers";
 import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 
+vi.mock("./thread-reply-preview", () => ({
+  ThreadReplyPreview: ({ message }: { message: ChannelMessage }) => (
+    <div data-testid="thread-reply-preview">preview:{message.thread_reply_count}</div>
+  ),
+}));
+
 const copyTextMock = vi.fn();
 
 vi.mock("../lib/voice-playback", () => ({
@@ -1488,7 +1494,7 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: "React with ❤️" })).not.toBeInTheDocument();
   });
 
-  it("renders the thread chip before reaction chips in the footer", () => {
+  it("renders thread reply preview when the message has replies (LRM-873)", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -1511,9 +1517,8 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    const footer = screen.getByRole("button", { name: /2 replies/ }).parentElement;
-    expect(footer?.children[0]).toHaveTextContent("2 replies");
-    expect(footer?.children[1]).toHaveTextContent("👍1");
+    expect(screen.getByTestId("thread-reply-preview")).toHaveTextContent("preview:2");
+    expect(screen.getByRole("button", { name: "👍1" })).toBeInTheDocument();
   });
 
   it("labels the current user as You in reaction attribution via HoverCard only", async () => {

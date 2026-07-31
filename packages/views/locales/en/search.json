@@ -49,6 +49,11 @@
     "title": "Global Search",
     "description": "Search channels, DMs, messages, and people",
     "placeholder": "Search channels, DMs and messages…",
+    "from_placeholder": "Add a keyword (optional)…",
+    "range_channel": "This channel",
+    "range_workspace": "Workspace",
+    "include_thread": "Include threads",
+    "mainline_only": "Mainline only",
     "scope": {
       "all": "All",
       "messages": "Messages",
@@ -74,6 +79,8 @@
     },
     "row": {
       "thread_hits": "THREAD · {{count}} hits",
+      "mainline": "Mainline",
+      "in_thread": "Thread",
       "members": "{{count}} members",
       "joined": "you're in",
       "dm_placeholder": "Direct message"

@@ -92,6 +92,7 @@ vi.mock("./research-session-row", () => ({
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: typeof enResearch) => unknown) => fn(enResearch),
+    i18n: { language: "en" },
   }),
 }));
 
@@ -378,6 +379,31 @@ describe("ResearchListPage search & status filter (LRM-818)", () => {
     expect(screen.getByText("Alpha research")).toBeInTheDocument();
     expect(screen.getByText("Beta report")).toBeInTheDocument();
     expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+  });
+});
+
+describe("ResearchListPage quick templates (LRM-817)", () => {
+  beforeEach(() => {
+    setQuery({ data: { sessions: [] } });
+  });
+
+  it("renders at least 3 template cards", () => {
+    render(<ResearchListPage />);
+    expect(screen.getByText(enResearch.home.templates_label)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Industry research/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Competitor analysis/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Tech selection/i })).toBeInTheDocument();
+  });
+
+  it("clicking a template prefills composer with goal + params and stays editable", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Industry research/i }));
+    const textarea = screen.getByPlaceholderText(enResearch.goal_placeholder) as HTMLTextAreaElement;
+    expect(textarea.value.length).toBeGreaterThan(20);
+    expect(textarea.value).toMatch(/Focus：|Focus:/);
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
+    fireEvent.change(textarea, { target: { value: `${textarea.value} (edited)` } });
+    expect(textarea.value.endsWith("(edited)")).toBe(true);
   });
 });
 

@@ -111,7 +111,9 @@
     "hero_desc": "목표만 적으면 — 리서치 플릿이 소스를 탐색하고 발견을 정리해 보고서로 전달합니다.",
     "composer_hint": "⌘⏎ 로 시작",
     "creating": "플릿 편성 중…",
-    "create_failed": "리서치 세션을 만들지 못했습니다"
+    "create_failed": "리서치 세션을 만들지 못했습니다",
+    "templates_label": "빠른 템플릿",
+    "templates_hint": "선택하면 목표와 추천 관점이 채워집니다(이후 수정 가능)"
   },
   "ring": {
     "title": "노드 작업",

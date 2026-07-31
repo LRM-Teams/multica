@@ -55,8 +55,9 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateResearchSession :one
 INSERT INTO research_session (
-  workspace_id, fleet_id, created_by, title, goal, status, current_stage
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+  workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+  depth_tier, product_round, product_round_budget
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: UpdateResearchSession :one
@@ -68,9 +69,29 @@ UPDATE research_session SET
   project_id = COALESCE(sqlc.narg('project_id'), project_id),
   channel_id = COALESCE(sqlc.narg('channel_id'), channel_id),
   handoff_summary = COALESCE(sqlc.narg('handoff_summary'), handoff_summary),
+  depth_tier = COALESCE(sqlc.narg('depth_tier'), depth_tier),
+  product_round = COALESCE(sqlc.narg('product_round'), product_round),
+  product_round_budget = COALESCE(sqlc.narg('product_round_budget'), product_round_budget),
   updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
+
+-- name: CreateResearchProductRoundCard :one
+INSERT INTO research_product_round_card (
+  workspace_id, session_id, round_number, decision, coverage_gaps,
+  confidence_note, budget_used, budget_remaining,
+  goal_patch_proposal, next_round_focus, decided_by_agent_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING *;
+
+-- name: ListResearchProductRoundCards :many
+SELECT * FROM research_product_round_card
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY round_number ASC;
+
+-- name: GetResearchProductRoundCard :one
+SELECT * FROM research_product_round_card
+WHERE session_id = $1 AND workspace_id = $2 AND round_number = $3;
 
 -- name: DeleteResearchSession :exec
 DELETE FROM research_session

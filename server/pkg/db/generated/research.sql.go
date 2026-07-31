@@ -338,7 +338,7 @@ const createResearchMessage = `-- name: CreateResearchMessage :one
 INSERT INTO research_message (
   workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta, created_at
+RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta
 `
 
 type CreateResearchMessageParams struct {
@@ -372,9 +372,9 @@ func (q *Queries) CreateResearchMessage(ctx context.Context, arg CreateResearchM
 		&i.SenderID,
 		&i.TargetAgentID,
 		&i.Body,
+		&i.CreatedAt,
 		&i.CardKind,
 		&i.Meta,
-		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -413,6 +413,62 @@ func (q *Queries) CreateResearchPlaybook(ctx context.Context, arg CreateResearch
 		&i.ResearchFleetOnly,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createResearchProductRoundCard = `-- name: CreateResearchProductRoundCard :one
+INSERT INTO research_product_round_card (
+  workspace_id, session_id, round_number, decision, coverage_gaps,
+  confidence_note, budget_used, budget_remaining,
+  goal_patch_proposal, next_round_focus, decided_by_agent_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at
+`
+
+type CreateResearchProductRoundCardParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	RoundNumber       int32       `json:"round_number"`
+	Decision          string      `json:"decision"`
+	CoverageGaps      []byte      `json:"coverage_gaps"`
+	ConfidenceNote    string      `json:"confidence_note"`
+	BudgetUsed        int32       `json:"budget_used"`
+	BudgetRemaining   int32       `json:"budget_remaining"`
+	GoalPatchProposal pgtype.Text `json:"goal_patch_proposal"`
+	NextRoundFocus    pgtype.Text `json:"next_round_focus"`
+	DecidedByAgentID  pgtype.UUID `json:"decided_by_agent_id"`
+}
+
+func (q *Queries) CreateResearchProductRoundCard(ctx context.Context, arg CreateResearchProductRoundCardParams) (ResearchProductRoundCard, error) {
+	row := q.db.QueryRow(ctx, createResearchProductRoundCard,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.RoundNumber,
+		arg.Decision,
+		arg.CoverageGaps,
+		arg.ConfidenceNote,
+		arg.BudgetUsed,
+		arg.BudgetRemaining,
+		arg.GoalPatchProposal,
+		arg.NextRoundFocus,
+		arg.DecidedByAgentID,
+	)
+	var i ResearchProductRoundCard
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.RoundNumber,
+		&i.Decision,
+		&i.CoverageGaps,
+		&i.ConfidenceNote,
+		&i.BudgetUsed,
+		&i.BudgetRemaining,
+		&i.GoalPatchProposal,
+		&i.NextRoundFocus,
+		&i.DecidedByAgentID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -456,19 +512,23 @@ func (q *Queries) CreateResearchReport(ctx context.Context, arg CreateResearchRe
 
 const createResearchSession = `-- name: CreateResearchSession :one
 INSERT INTO research_session (
-  workspace_id, fleet_id, created_by, title, goal, status, current_stage
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at
+  workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+  depth_tier, product_round, product_round_budget
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget
 `
 
 type CreateResearchSessionParams struct {
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	FleetID      pgtype.UUID `json:"fleet_id"`
-	CreatedBy    pgtype.UUID `json:"created_by"`
-	Title        string      `json:"title"`
-	Goal         string      `json:"goal"`
-	Status       string      `json:"status"`
-	CurrentStage string      `json:"current_stage"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	FleetID            pgtype.UUID `json:"fleet_id"`
+	CreatedBy          pgtype.UUID `json:"created_by"`
+	Title              string      `json:"title"`
+	Goal               string      `json:"goal"`
+	Status             string      `json:"status"`
+	CurrentStage       string      `json:"current_stage"`
+	DepthTier          string      `json:"depth_tier"`
+	ProductRound       int32       `json:"product_round"`
+	ProductRoundBudget int32       `json:"product_round_budget"`
 }
 
 func (q *Queries) CreateResearchSession(ctx context.Context, arg CreateResearchSessionParams) (ResearchSession, error) {
@@ -480,6 +540,9 @@ func (q *Queries) CreateResearchSession(ctx context.Context, arg CreateResearchS
 		arg.Goal,
 		arg.Status,
 		arg.CurrentStage,
+		arg.DepthTier,
+		arg.ProductRound,
+		arg.ProductRoundBudget,
 	)
 	var i ResearchSession
 	err := row.Scan(
@@ -496,23 +559,11 @@ func (q *Queries) CreateResearchSession(ctx context.Context, arg CreateResearchS
 		&i.HandoffSummary,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
 	)
 	return i, err
-}
-
-const deleteResearchSession = `-- name: DeleteResearchSession :exec
-DELETE FROM research_session
-WHERE id = $1 AND workspace_id = $2
-`
-
-type DeleteResearchSessionParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) DeleteResearchSession(ctx context.Context, arg DeleteResearchSessionParams) error {
-	_, err := q.db.Exec(ctx, deleteResearchSession, arg.ID, arg.WorkspaceID)
-	return err
 }
 
 const createResearchStageEval = `-- name: CreateResearchStageEval :one
@@ -555,6 +606,21 @@ func (q *Queries) CreateResearchStageEval(ctx context.Context, arg CreateResearc
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const deleteResearchSession = `-- name: DeleteResearchSession :exec
+DELETE FROM research_session
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteResearchSessionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteResearchSession(ctx context.Context, arg DeleteResearchSessionParams) error {
+	_, err := q.db.Exec(ctx, deleteResearchSession, arg.ID, arg.WorkspaceID)
+	return err
 }
 
 const getLatestResearchPlaybook = `-- name: GetLatestResearchPlaybook :one
@@ -660,28 +726,6 @@ func (q *Queries) GetResearchFleetMemberByAgent(ctx context.Context, arg GetRese
 	return i, err
 }
 
-const listActiveResearchFleetMemberAgentIDsByWorkspace = `-- name: ListActiveResearchFleetMemberAgentIDsByWorkspace :many
-SELECT agent_id FROM research_fleet_member
-WHERE workspace_id = $1 AND status != 'archived'
-`
-
-func (q *Queries) ListActiveResearchFleetMemberAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listActiveResearchFleetMemberAgentIDsByWorkspace, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []pgtype.UUID
-	for rows.Next() {
-		var agentID pgtype.UUID
-		if err := rows.Scan(&agentID); err != nil {
-			return nil, err
-		}
-		items = append(items, agentID)
-	}
-	return items, rows.Err()
-}
-
 const getResearchGraphNode = `-- name: GetResearchGraphNode :one
 SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at FROM research_graph_node
 WHERE id = $1 AND workspace_id = $2
@@ -711,8 +755,40 @@ func (q *Queries) GetResearchGraphNode(ctx context.Context, arg GetResearchGraph
 	return i, err
 }
 
+const getResearchProductRoundCard = `-- name: GetResearchProductRoundCard :one
+SELECT id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at FROM research_product_round_card
+WHERE session_id = $1 AND workspace_id = $2 AND round_number = $3
+`
+
+type GetResearchProductRoundCardParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RoundNumber int32       `json:"round_number"`
+}
+
+func (q *Queries) GetResearchProductRoundCard(ctx context.Context, arg GetResearchProductRoundCardParams) (ResearchProductRoundCard, error) {
+	row := q.db.QueryRow(ctx, getResearchProductRoundCard, arg.SessionID, arg.WorkspaceID, arg.RoundNumber)
+	var i ResearchProductRoundCard
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.RoundNumber,
+		&i.Decision,
+		&i.CoverageGaps,
+		&i.ConfidenceNote,
+		&i.BudgetUsed,
+		&i.BudgetRemaining,
+		&i.GoalPatchProposal,
+		&i.NextRoundFocus,
+		&i.DecidedByAgentID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getResearchSession = `-- name: GetResearchSession :one
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at FROM research_session
+SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget FROM research_session
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -738,8 +814,36 @@ func (q *Queries) GetResearchSession(ctx context.Context, arg GetResearchSession
 		&i.HandoffSummary,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
 	)
 	return i, err
+}
+
+const listActiveResearchFleetMemberAgentIDsByWorkspace = `-- name: ListActiveResearchFleetMemberAgentIDsByWorkspace :many
+SELECT agent_id FROM research_fleet_member
+WHERE workspace_id = $1 AND status != 'archived'
+`
+
+func (q *Queries) ListActiveResearchFleetMemberAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listActiveResearchFleetMemberAgentIDsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var agent_id pgtype.UUID
+		if err := rows.Scan(&agent_id); err != nil {
+			return nil, err
+		}
+		items = append(items, agent_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listResearchFleetMembers = `-- name: ListResearchFleetMembers :many
@@ -866,7 +970,7 @@ func (q *Queries) ListResearchGraphNodes(ctx context.Context, arg ListResearchGr
 }
 
 const listResearchMessages = `-- name: ListResearchMessages :many
-SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta, created_at FROM research_message
+SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta FROM research_message
 WHERE session_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -893,8 +997,53 @@ func (q *Queries) ListResearchMessages(ctx context.Context, arg ListResearchMess
 			&i.SenderID,
 			&i.TargetAgentID,
 			&i.Body,
+			&i.CreatedAt,
 			&i.CardKind,
 			&i.Meta,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchProductRoundCards = `-- name: ListResearchProductRoundCards :many
+SELECT id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at FROM research_product_round_card
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY round_number ASC
+`
+
+type ListResearchProductRoundCardsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchProductRoundCards(ctx context.Context, arg ListResearchProductRoundCardsParams) ([]ResearchProductRoundCard, error) {
+	rows, err := q.db.Query(ctx, listResearchProductRoundCards, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchProductRoundCard{}
+	for rows.Next() {
+		var i ResearchProductRoundCard
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.RoundNumber,
+			&i.Decision,
+			&i.CoverageGaps,
+			&i.ConfidenceNote,
+			&i.BudgetUsed,
+			&i.BudgetRemaining,
+			&i.GoalPatchProposal,
+			&i.NextRoundFocus,
+			&i.DecidedByAgentID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -948,7 +1097,7 @@ func (q *Queries) ListResearchReports(ctx context.Context, arg ListResearchRepor
 }
 
 const listResearchSessions = `-- name: ListResearchSessions :many
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at FROM research_session
+SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget FROM research_session
 WHERE workspace_id = $1
 ORDER BY updated_at DESC
 `
@@ -976,6 +1125,9 @@ func (q *Queries) ListResearchSessions(ctx context.Context, workspaceID pgtype.U
 			&i.HandoffSummary,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DepthTier,
+			&i.ProductRound,
+			&i.ProductRoundBudget,
 		); err != nil {
 			return nil, err
 		}
@@ -1073,7 +1225,6 @@ func (q *Queries) ListResearchStageEvals(ctx context.Context, arg ListResearchSt
 	}
 	return items, nil
 }
-
 
 const setResearchFleetLead = `-- name: SetResearchFleetLead :one
 UPDATE research_fleet
@@ -1186,21 +1337,27 @@ UPDATE research_session SET
   project_id = COALESCE($7, project_id),
   channel_id = COALESCE($8, channel_id),
   handoff_summary = COALESCE($9, handoff_summary),
+  depth_tier = COALESCE($10, depth_tier),
+  product_round = COALESCE($11, product_round),
+  product_round_budget = COALESCE($12, product_round_budget),
   updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget
 `
 
 type UpdateResearchSessionParams struct {
-	ID             pgtype.UUID `json:"id"`
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	Title          pgtype.Text `json:"title"`
-	Goal           pgtype.Text `json:"goal"`
-	Status         pgtype.Text `json:"status"`
-	CurrentStage   pgtype.Text `json:"current_stage"`
-	ProjectID      pgtype.UUID `json:"project_id"`
-	ChannelID      pgtype.UUID `json:"channel_id"`
-	HandoffSummary pgtype.Text `json:"handoff_summary"`
+	ID                 pgtype.UUID `json:"id"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	Title              pgtype.Text `json:"title"`
+	Goal               pgtype.Text `json:"goal"`
+	Status             pgtype.Text `json:"status"`
+	CurrentStage       pgtype.Text `json:"current_stage"`
+	ProjectID          pgtype.UUID `json:"project_id"`
+	ChannelID          pgtype.UUID `json:"channel_id"`
+	HandoffSummary     pgtype.Text `json:"handoff_summary"`
+	DepthTier          pgtype.Text `json:"depth_tier"`
+	ProductRound       pgtype.Int4 `json:"product_round"`
+	ProductRoundBudget pgtype.Int4 `json:"product_round_budget"`
 }
 
 func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchSessionParams) (ResearchSession, error) {
@@ -1214,6 +1371,9 @@ func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchS
 		arg.ProjectID,
 		arg.ChannelID,
 		arg.HandoffSummary,
+		arg.DepthTier,
+		arg.ProductRound,
+		arg.ProductRoundBudget,
 	)
 	var i ResearchSession
 	err := row.Scan(
@@ -1230,6 +1390,9 @@ func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchS
 		&i.HandoffSummary,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
 	)
 	return i, err
 }

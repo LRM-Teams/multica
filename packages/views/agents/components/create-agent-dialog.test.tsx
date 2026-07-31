@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import type { Agent, MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
@@ -25,10 +25,23 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-// ModelDropdown talks to the api; the create dialog only needs it as a
-// stand-in here, so swap it out.
+// ModelDropdown talks to the api; seed a concrete model so Create stays
+// enabled under LRM-808 (empty model is rejected server-side).
 vi.mock("./model-dropdown", () => ({
-  ModelDropdown: () => null,
+  ModelDropdown: ({
+    onChange,
+    value,
+    autoSelectFirst,
+  }: {
+    onChange: (value: string) => void;
+    value: string;
+    autoSelectFirst?: boolean;
+  }) => {
+    if (autoSelectFirst && !value.trim()) {
+      queueMicrotask(() => onChange("composer-1.5"));
+    }
+    return null;
+  },
 }));
 
 vi.mock("./thinking-dropdown", () => ({
@@ -267,10 +280,16 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     ).toBeNull();
 
     // Sanity check: with a usable selection seeded, Create should submit.
+    await waitFor(() => {
+      const createBtn = screen
+        .getAllByRole("button")
+        .find((b) => b.textContent === "Create") as HTMLButtonElement | undefined;
+      expect(createBtn?.disabled).toBe(false);
+    });
     fireEvent.click(screen.getByText("Create"));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(onCreate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0].runtime_id).toBe("rt-mine");
+    expect(onCreate.mock.calls[0]?.[0].model).toBe("composer-1.5");
   });
 
   it("disables Create when the selected runtime is locked (template + no usable fallback)", () => {

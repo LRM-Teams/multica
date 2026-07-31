@@ -200,6 +200,7 @@
   "model_dropdown": {
     "label": "模型",
     "select_runtime_first": "请先选择运行时",
+    "select_required": "请选择模型",
     "default_provider": "默认（提供方）",
     "runtime_offline_manual": "运行时离线 —— 请手动输入",
     "managed_by_runtime_title": "模型选择由该运行时管理。",

@@ -185,6 +185,77 @@ func TestUpdateAndStopVoiceChatUseExactActions(t *testing.T) {
 	}
 }
 
+func TestUpdateVoiceChatReturnsFunctionResultToExactToolCall(t *testing.T) {
+	var body string
+	httpClient := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		body = string(payload)
+		return jsonResponse(http.StatusOK, `{"ResponseMetadata":{"RequestId":"request-ok"}}`), nil
+	})}
+	client, err := New(Config{
+		AccessKeyID:     "access",
+		SecretAccessKey: "secret",
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.UpdateVoiceChat(context.Background(), UpdateVoiceChatRequest{
+		AppID:   "app-1",
+		RoomID:  "room-1",
+		TaskID:  "task-1",
+		Command: UpdateCommandFunction,
+		Message: `{"ToolCallID":"call-1","Content":"已创建 issue MUL-42。"}`,
+	})
+	if err != nil {
+		t.Fatalf("return function result: %v", err)
+	}
+	const want = `{"AppId":"app-1","RoomId":"room-1","TaskId":"task-1","Command":"function","Message":"{\"ToolCallID\":\"call-1\",\"Content\":\"已创建 issue MUL-42。\"}"}`
+	if body != want {
+		t.Fatalf("body = %s, want %s", body, want)
+	}
+}
+
+func TestUpdateVoiceChatSendsImmediateChineseProgressSpeech(t *testing.T) {
+	var body string
+	httpClient := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		body = string(payload)
+		return jsonResponse(http.StatusOK, `{"ResponseMetadata":{"RequestId":"request-ok"}}`), nil
+	})}
+	client, err := New(Config{
+		AccessKeyID:     "access",
+		SecretAccessKey: "secret",
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.UpdateVoiceChat(context.Background(), UpdateVoiceChatRequest{
+		AppID:         "app-1",
+		RoomID:        "room-1",
+		TaskID:        "task-1",
+		Command:       UpdateCommandExternalTextToSpeech,
+		Message:       "我已经开始处理，请稍等。",
+		InterruptMode: 2,
+	})
+	if err != nil {
+		t.Fatalf("send progress speech: %v", err)
+	}
+	const want = `{"AppId":"app-1","RoomId":"room-1","TaskId":"task-1","Command":"ExternalTextToSpeech","Message":"我已经开始处理，请稍等。","InterruptMode":2}`
+	if body != want {
+		t.Fatalf("body = %s, want %s", body, want)
+	}
+}
+
 func TestVoiceChatProviderErrorPreservesRequestMetadata(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, `{

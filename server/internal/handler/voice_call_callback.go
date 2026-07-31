@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/integrations/volcenginertc"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
@@ -29,6 +30,14 @@ type VoiceCallCallbackProcessor interface {
 		ctx context.Context,
 		event volcenginertc.VoiceChatTaskEvent,
 	) (voicecall.Session, bool, error)
+}
+
+type VoiceCallFunctionProcessor interface {
+	HandleFunctionCalls(
+		ctx context.Context,
+		roomID string,
+		message volcenginertc.FunctionCallMessage,
+	) error
 }
 
 type voiceCallCallbackEnvelope struct {
@@ -105,7 +114,11 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid voice call callback payload")
 		return
 	}
-	if err := h.processVoiceCallServerCallback(r.Context(), callback); err != nil {
+	if err := h.processVoiceCallServerCallback(
+		r.Context(),
+		callback,
+		r.URL.Query().Get(volcenginertc.FunctionCallbackRoomIDQuery),
+	); err != nil {
 		slog.Error(
 			"process voice call callback",
 			"callback_kind", callback.Kind,
@@ -159,6 +172,7 @@ func (h *Handler) handleVoiceChatTaskEvent(
 func (h *Handler) processVoiceCallServerCallback(
 	ctx context.Context,
 	callback volcenginertc.ServerCallback,
+	roomID string,
 ) error {
 	switch callback.Kind {
 	case volcenginertc.ServerCallbackConversationStatus:
@@ -181,6 +195,22 @@ func (h *Handler) processVoiceCallServerCallback(
 		return h.VoiceCallCallbackProcessor.HandleConversationSubtitle(
 			ctx,
 			*callback.Subtitle,
+		)
+	case volcenginertc.ServerCallbackFunctionCall:
+		if callback.FunctionCall == nil {
+			return errors.New("voice call function callback is missing its payload")
+		}
+		if h.VoiceCallFunctionProcessor == nil {
+			return errors.New("voice call function processor is not configured")
+		}
+		roomID = strings.TrimSpace(roomID)
+		if roomID == "" {
+			return errors.New("voice call function callback is missing its room scope")
+		}
+		return h.VoiceCallFunctionProcessor.HandleFunctionCalls(
+			ctx,
+			roomID,
+			*callback.FunctionCall,
 		)
 	default:
 		return fmt.Errorf("unsupported voice call callback kind %q", callback.Kind)

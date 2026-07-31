@@ -132,6 +132,75 @@ func TestDecodeServerCallbackUsesDocumentedSubtitleTLV(t *testing.T) {
 	}
 }
 
+func TestDecodeServerCallbackUsesDocumentedFunctionToolTLV(t *testing.T) {
+	encoded := encodeCallbackTLVForTest(
+		"tool",
+		`{"subscriber_user_id":"voice-member-nonce-1","tool_calls":[{"function":{"arguments":"{\"request\":\"创建一个 issue，修复登录页报错。\"}","name":"delegate_work_to_multica_agent"},"id":"call_py400kek0e3pczrqdxgnb3lo","type":"function"}]}`,
+	)
+
+	callback, err := DecodeServerCallback(encoded)
+	if err != nil {
+		t.Fatalf("decode function callback: %v", err)
+	}
+	if callback.Kind != ServerCallbackFunctionCall ||
+		callback.FunctionCall == nil ||
+		callback.ConversationStatus != nil ||
+		callback.Subtitle != nil {
+		t.Fatalf("callback = %#v", callback)
+	}
+	message := callback.FunctionCall
+	if message.SubscriberUserID != "voice-member-nonce-1" ||
+		len(message.ToolCalls) != 1 {
+		t.Fatalf("function message = %#v", message)
+	}
+	tool := message.ToolCalls[0]
+	if tool.ID != "call_py400kek0e3pczrqdxgnb3lo" ||
+		tool.Type != "function" ||
+		tool.Function.Name != "delegate_work_to_multica_agent" ||
+		tool.Function.Arguments != `{"request":"创建一个 issue，修复登录页报错。"}` {
+		t.Fatalf("tool call = %#v", tool)
+	}
+}
+
+func TestDecodeServerCallbackRejectsInvalidFunctionTools(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "empty tools",
+			payload: `{"tool_calls":[]}`,
+			want:    "tool_calls",
+		},
+		{
+			name:    "blank tool ID",
+			payload: `{"tool_calls":[{"id":" ","type":"function","function":{"name":"delegate_work_to_multica_agent","arguments":"{}"}}]}`,
+			want:    ".id",
+		},
+		{
+			name:    "unsupported type",
+			payload: `{"tool_calls":[{"id":"call-1","type":"plugin","function":{"name":"delegate_work_to_multica_agent","arguments":"{}"}}]}`,
+			want:    ".type",
+		},
+		{
+			name:    "non-object arguments",
+			payload: `{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"delegate_work_to_multica_agent","arguments":"[]"}}]}`,
+			want:    "arguments",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := DecodeServerCallback(
+				encodeCallbackTLVForTest("tool", testCase.payload),
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error = %v, want %q", err, testCase.want)
+			}
+		})
+	}
+}
+
 func TestDecodeConversationSubtitleCallbackAcceptsEmptyFinalMarker(t *testing.T) {
 	encoded := encodeCallbackTLVForTest(
 		"subv",

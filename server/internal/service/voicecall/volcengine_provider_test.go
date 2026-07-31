@@ -75,6 +75,7 @@ func TestVolcengineProviderConnectStartsTaskWithWelcomeMessage(t *testing.T) {
 		!strings.Contains(string(request.Config), `"SystemMessages":["You are Beckham."]`) ||
 		!strings.Contains(string(request.Config), `"Mode":"ArkV3"`) ||
 		!strings.Contains(string(request.Config), `"EndPointId":"ep-20260723"`) ||
+		!strings.Contains(string(request.Config), `"ServerMessageUrl":"https://multica.example.com/api/voice-calls/callback?voice_call_room_id=voice-call-1"`) ||
 		!strings.Contains(string(request.Config), `"MaxTokens":256`) {
 		t.Fatalf("Config = %s", request.Config)
 	}

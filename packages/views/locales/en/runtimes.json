@@ -340,6 +340,19 @@
       "timeout": "Timeout"
     }
   },
+  "restart": {
+    "action": "Restart",
+    "confirm_title": "Restart this daemon?",
+    "confirm_description": "This interrupts any agents currently working on this machine. The daemon reconnects automatically once it comes back up.",
+    "confirm_cancel": "Cancel",
+    "confirm_action": "Restart now",
+    "initiate_failed": "Failed to request restart",
+    "status": {
+      "pending": "Restart requested...",
+      "delivered": "Restart delivered. Waiting for the daemon to reconnect...",
+      "timeout": "Restart request timed out"
+    }
+  },
   "charts": {
     "heatmap_less": "Less",
     "heatmap_more": "More",

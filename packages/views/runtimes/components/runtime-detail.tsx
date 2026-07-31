@@ -47,6 +47,7 @@ import { formatLastSeen } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
+import { RestartSection } from "./restart-section";
 import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { useT } from "../../i18n/use-t";
@@ -455,6 +456,7 @@ function DiagnosticsCard({
 }) {
   const { t } = useT("runtimes");
   const isLocal = runtime.runtime_mode === "local";
+  const isSandbox = isSandboxRuntime(runtime);
   return (
     <div className="rounded-lg border">
       <div className="border-b px-4 py-2.5">
@@ -486,8 +488,17 @@ function DiagnosticsCard({
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
               canUpdate={canManage}
-              isSandbox={isSandboxRuntime(runtime)}
+              isSandbox={isSandbox}
             />
+            <div className="mt-3">
+              <RestartSection
+                runtimeId={runtime.id}
+                isOnline={runtime.status === "online"}
+                canRestart={
+                  canManage && launchedBy !== "desktop" && !isSandbox
+                }
+              />
+            </div>
           </div>
         )}
         {canDelete && (

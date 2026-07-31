@@ -1036,6 +1036,25 @@ export interface RuntimeUpdate {
   updated_at: string;
 }
 
+// Task #8/#43 (2026-07-31) — remote daemon restart via heartbeat pickup.
+// Simpler lifecycle than RuntimeUpdate: there's no "did the restart
+// succeed" terminal confirmation from this API itself — `delivered` means
+// the daemon's heartbeat claimed the request and called its own
+// triggerRestart(), not that the process has come back up. The runtime's
+// own presence (existing runtime-list query) is what shows the daemon is
+// back online, same as how UpdateSection hands off to the global surfaces
+// once a request is airborne.
+export type RuntimeRestartStatus = "pending" | "delivered" | "timeout";
+
+export interface RuntimeRestart {
+  id: string;
+  runtime_id: string;
+  status: RuntimeRestartStatus;
+  created_at: string;
+  updated_at: string;
+  delivered_at?: string;
+}
+
 export interface RuntimeModel {
   id: string;
   label: string;

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,9 +43,33 @@ var goalUpdateCmd = &cobra.Command{
 	RunE:  runGoalUpdate,
 }
 
+var goalProcessCmd = &cobra.Command{
+	Use:   "process",
+	Short: "Read and write per-manager process Markdown under the current goal",
+}
+
+var goalProcessListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List process Markdown documents for the current channel goal",
+	RunE:  runGoalProcessList,
+}
+
+var goalProcessGetCmd = &cobra.Command{
+	Use:   "get",
+	Short: "Get one manager's process Markdown",
+	RunE:  runGoalProcessGet,
+}
+
+var goalProcessPutCmd = &cobra.Command{
+	Use:   "put",
+	Short: "Create or update process Markdown (expected_version=0 creates)",
+	RunE:  runGoalProcessPut,
+}
+
 func init() {
-	goalCmd.AddCommand(goalGetCmd, goalCreateCmd, goalCheckpointCmd, goalUpdateCmd)
-	for _, cmd := range []*cobra.Command{goalGetCmd, goalCreateCmd, goalCheckpointCmd, goalUpdateCmd} {
+	goalCmd.AddCommand(goalGetCmd, goalCreateCmd, goalCheckpointCmd, goalUpdateCmd, goalProcessCmd)
+	goalProcessCmd.AddCommand(goalProcessListCmd, goalProcessGetCmd, goalProcessPutCmd)
+	for _, cmd := range []*cobra.Command{goalGetCmd, goalCreateCmd, goalCheckpointCmd, goalUpdateCmd, goalProcessListCmd, goalProcessGetCmd, goalProcessPutCmd} {
 		cmd.Flags().String("channel", "", "Channel id or #name")
 		cmd.Flags().String("output", "json", "Output format (json)")
 		_ = cmd.MarkFlagRequired("channel")
@@ -66,6 +92,12 @@ func init() {
 	goalUpdateCmd.Flags().StringSlice("criterion", nil, "Replacement success criteria (repeatable)")
 	goalUpdateCmd.Flags().String("status", "", "Lifecycle status: active, paused, completed, or cancelled")
 	_ = goalUpdateCmd.MarkFlagRequired("expected-version")
+	goalProcessGetCmd.Flags().String("agent", "", "Manager agent id")
+	_ = goalProcessGetCmd.MarkFlagRequired("agent")
+	goalProcessPutCmd.Flags().String("agent", "", "Manager agent id (required for human tokens; agents default to self)")
+	goalProcessPutCmd.Flags().Int64("expected-version", 0, "0 creates; otherwise current process version")
+	goalProcessPutCmd.Flags().String("content", "", "Markdown body")
+	goalProcessPutCmd.Flags().String("content-file", "", "Read Markdown body from file (- for stdin)")
 }
 
 func goalRequestContext(cmd *cobra.Command) (*cli.APIClient, context.Context, context.CancelFunc, string, error) {
@@ -205,4 +237,96 @@ func goalUpdateBody(cmd *cobra.Command) (map[string]any, error) {
 		return nil, fmt.Errorf("provide at least one of --title, --objective, --criterion, or --status")
 	}
 	return body, nil
+}
+
+func goalProcessAPIPath(cmd *cobra.Command, channelID, agentID string) string {
+	base := "/api/channels/" + url.PathEscape(channelID) + "/goal/process"
+	if isAgentAPIToken(cmd) {
+		base = "/api/agent/channels/" + url.PathEscape(channelID) + "/goal/process"
+	}
+	if agentID == "" {
+		return base
+	}
+	return base + "/" + url.PathEscape(agentID)
+}
+
+func runGoalProcessList(cmd *cobra.Command, _ []string) error {
+	client, ctx, cancel, channelID, err := goalRequestContext(cmd)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	var out map[string]any
+	if err := client.GetJSON(ctx, goalProcessAPIPath(cmd, channelID, ""), &out); err != nil {
+		return fmt.Errorf("list goal process markdown: %w", err)
+	}
+	return printGoalResponse(out)
+}
+
+func runGoalProcessGet(cmd *cobra.Command, _ []string) error {
+	client, ctx, cancel, channelID, err := goalRequestContext(cmd)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	agentID, _ := cmd.Flags().GetString("agent")
+	var out map[string]any
+	if err := client.GetJSON(ctx, goalProcessAPIPath(cmd, channelID, agentID), &out); err != nil {
+		return fmt.Errorf("get goal process markdown: %w", err)
+	}
+	return printGoalResponse(out)
+}
+
+func runGoalProcessPut(cmd *cobra.Command, _ []string) error {
+	client, ctx, cancel, channelID, err := goalRequestContext(cmd)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	agentID, _ := cmd.Flags().GetString("agent")
+	if !isAgentAPIToken(cmd) && strings.TrimSpace(agentID) == "" {
+		return fmt.Errorf("--agent is required for human tokens")
+	}
+	content, err := goalProcessContent(cmd)
+	if err != nil {
+		return err
+	}
+	version, _ := cmd.Flags().GetInt64("expected-version")
+	path := goalProcessAPIPath(cmd, channelID, agentID)
+	if isAgentAPIToken(cmd) && strings.TrimSpace(agentID) == "" {
+		path = goalProcessAPIPath(cmd, channelID, "")
+	}
+	var out map[string]any
+	if err := client.PutJSON(ctx, path, map[string]any{
+		"content": content, "expected_version": version,
+	}, &out); err != nil {
+		return fmt.Errorf("put goal process markdown: %w", err)
+	}
+	return printGoalResponse(out)
+}
+
+func goalProcessContent(cmd *cobra.Command) (string, error) {
+	contentFile, _ := cmd.Flags().GetString("content-file")
+	content, _ := cmd.Flags().GetString("content")
+	if contentFile != "" && cmd.Flags().Changed("content") {
+		return "", fmt.Errorf("provide either --content or --content-file, not both")
+	}
+	if contentFile != "" {
+		data, err := readGoalProcessFile(contentFile)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	if !cmd.Flags().Changed("content") {
+		return "", fmt.Errorf("--content or --content-file is required")
+	}
+	return content, nil
+}
+
+func readGoalProcessFile(path string) ([]byte, error) {
+	if path == "-" {
+		return io.ReadAll(os.Stdin)
+	}
+	return os.ReadFile(path)
 }

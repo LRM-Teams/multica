@@ -26,6 +26,24 @@ func TestGoalCommandsAreRegisteredWithRequiredSafetyFlags(t *testing.T) {
 			}
 		}
 	}
+	for _, tc := range []struct {
+		path  []string
+		flags []string
+	}{
+		{path: []string{"process", "list"}, flags: []string{"channel"}},
+		{path: []string{"process", "get"}, flags: []string{"channel", "agent"}},
+		{path: []string{"process", "put"}, flags: []string{"channel", "agent", "expected-version", "content", "content-file"}},
+	} {
+		command, _, err := goalCmd.Find(tc.path)
+		if err != nil || command == nil {
+			t.Fatalf("goal %v not registered: %v", tc.path, err)
+		}
+		for _, flag := range tc.flags {
+			if command.Flags().Lookup(flag) == nil {
+				t.Errorf("goal %v missing --%s", tc.path, flag)
+			}
+		}
+	}
 }
 
 func TestGoalUpdateRejectsEmptyMutation(t *testing.T) {

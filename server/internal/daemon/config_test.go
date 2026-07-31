@@ -199,6 +199,16 @@ func lookPathInPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
+// TestOfficialCloudHostMatchesSharedConstant guards against the daemon-side
+// officialCloudHost and cmd_setup.go's ServerURL default silently drifting
+// apart — both must derive from cli.OfficialCloudAPIHost, the single source
+// of truth (task #29, domain unification).
+func TestOfficialCloudHostMatchesSharedConstant(t *testing.T) {
+	if officialCloudHost != cli.OfficialCloudAPIHost {
+		t.Fatalf("officialCloudHost = %q, want cli.OfficialCloudAPIHost (%q)", officialCloudHost, cli.OfficialCloudAPIHost)
+	}
+}
+
 func TestIsOfficialCloudServer(t *testing.T) {
 	for _, tc := range []struct {
 		name string

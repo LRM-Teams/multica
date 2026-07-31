@@ -447,7 +447,7 @@ func (h *Handler) buildAgentDMPrompt(ctx context.Context, ch ChannelResponse, ag
 	b.WriteString(channelDirectedReplyInstruction)
 	b.WriteString("\nA2A discipline: add concrete information or action; do not send a pure acknowledgement. Stop when the matter is concluded. Use a reminder for future external state instead of polling the peer with messages.\n")
 	b.WriteString("Owner control: only when your owner explicitly asks in this task, use `multica message a2a-control --target dm:@<peer> --action <pause_pair|resume_pair|grant_rounds|pause_global|resume_global>`; add `--rounds N` for grant_rounds. The server rejects peer-only self-extension.\n")
-	fmt.Fprintf(&b, "This exchange is at round %d of %d. The server will pause it at the limit.\n", reservation.Round, reservation.RoundLimit)
+	fmt.Fprintf(&b, "This exchange is at round %d. There is no automatic round limit — only your owner can pause this pair or all your direct messages.\n", reservation.Round)
 	if senderHandle != "" {
 		fmt.Fprintf(&b, "Message target for chat transport: dm:@%s\n", senderHandle)
 	}

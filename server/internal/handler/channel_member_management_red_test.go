@@ -252,6 +252,80 @@ func TestNonMemberWorkspaceAdminCanManageOrdinaryMembers(t *testing.T) {
 	}
 }
 
+// LRM-868: Workspace admin who is only a plain channel member (not channel
+// owner/manager) may still remove an Agent — pure workspace-role path, no
+// inviter exception.
+func TestWorkspaceAdminChannelMemberCanRemoveAgent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	adminID := createChannelWorkspaceAdmin(t)
+	agentID := createHandlerTestAgent(t, "lrm-868-ws-admin-remove-"+uuid.NewString(), nil)
+	// Owner is testUserID; WS admin joins as ordinary channel member only.
+	channelID := seedChannelForTest(t, "lrm-868-ws-admin-agent-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES
+		  ($1, $2, 'user', $3, 'member'),
+		  ($1, $2, 'agent', $4, 'member')`,
+		channelID, testWorkspaceID, adminID, agentID); err != nil {
+		t.Fatalf("seed admin+agent members: %v", err)
+	}
+	assertChannelAgentMembershipCount(t, ctx, channelID, agentID, 1)
+
+	var adminChannelRole string
+	if err := testPool.QueryRow(ctx, `
+		SELECT role FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'user' AND member_id = $3`,
+		channelID, testWorkspaceID, adminID,
+	).Scan(&adminChannelRole); err != nil {
+		t.Fatalf("load admin channel role: %v", err)
+	}
+	if adminChannelRole != "member" {
+		t.Fatalf("admin channel role=%q, want member (plain member + WS admin)", adminChannelRole)
+	}
+
+	plainMemberID := createChannelPlainMember(t)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'user', $3, 'member')`,
+		channelID, testWorkspaceID, plainMemberID); err != nil {
+		t.Fatalf("seed plain member: %v", err)
+	}
+	denyReq := newRequestAs(plainMemberID, http.MethodDelete,
+		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
+	denyReq = withChannelTestWorkspaceCtx(t, denyReq, plainMemberID)
+	denyReq = withRouteParams(denyReq,
+		"channelId", channelID,
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	denyRec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(denyRec, denyReq)
+	if denyRec.Code != http.StatusForbidden {
+		t.Fatalf("plain channel member remove agent: status=%d body=%s", denyRec.Code, denyRec.Body.String())
+	}
+	assertChannelAgentMembershipCount(t, ctx, channelID, agentID, 1)
+
+	req := newRequestAs(adminID, http.MethodDelete,
+		"/api/channels/"+channelID+"/members/agent/"+agentID+"?expected_remove_effect=none", nil)
+	req = withChannelTestWorkspaceCtx(t, req, adminID)
+	req = withRouteParams(req,
+		"channelId", channelID,
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("WS admin (channel member) remove agent: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertChannelAgentMembershipCount(t, ctx, channelID, agentID, 0)
+}
+
 func TestRemoveChannelMemberRequiresExpectedEffect(t *testing.T) {
 	t.Skip("retired singleton manager confirmation contract")
 	if testHandler == nil || testPool == nil {

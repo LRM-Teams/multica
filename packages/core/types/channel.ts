@@ -283,6 +283,8 @@ export interface ChannelMessageSearchResult {
   message_id: string;
   channel_id: string;
   thread_root_message_id?: string | null;
+  /** True when the hit is a thread reply (thread_root_message_id set). */
+  in_thread?: boolean;
   type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
@@ -292,9 +294,24 @@ export interface ChannelMessageSearchResult {
   created_at: string;
 }
 
+export interface ChannelMessageSearchParams {
+  q?: string;
+  /** Filter to a member or agent author (from:@). Requires author_type. */
+  author_id?: string;
+  author_type?: "user" | "agent";
+  /** Default true: include thread replies. false = mainline only. */
+  include_thread?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ChannelMessageSearchResponse {
   query: string;
   total: number;
+  include_thread?: boolean;
+  author_type?: string;
+  author_id?: string;
+  scope?: string;
   results: ChannelMessageSearchResult[];
 }
 

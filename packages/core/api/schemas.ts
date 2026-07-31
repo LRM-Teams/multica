@@ -1050,6 +1050,7 @@ const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),
   thread_root_message_id: z.string().nullable().optional(),
+  in_thread: z.boolean().optional(),
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),

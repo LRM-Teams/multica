@@ -134,5 +134,12 @@
     "zoom_out": "Zoom out",
     "fit": "Fit view",
     "toggle_detail": "Toggle detail panel"
+  },
+  "timeline": {
+    "label": "Research stages",
+    "done": "Done",
+    "current": "Current",
+    "upcoming": "Upcoming",
+    "done_feedback": "Stage completed"
   }
 }

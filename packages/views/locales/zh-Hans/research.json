@@ -111,7 +111,9 @@
     "hero_desc": "说清目标——调研团去多源取证、梳理发现，并把报告交到你手上。",
     "composer_hint": "按 ⌘⏎ 开始",
     "creating": "组建舰队中…",
-    "create_failed": "调研会话创建失败"
+    "create_failed": "调研会话创建失败",
+    "templates_label": "快捷模板",
+    "templates_hint": "点选预填目标与推荐关注维度，可再改"
   },
   "ring": {
     "title": "节点操作",

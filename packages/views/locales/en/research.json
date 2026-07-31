@@ -111,7 +111,9 @@
     "hero_desc": "Describe the goal — the research fleet explores sources, maps findings, and hands you a report.",
     "composer_hint": "Press ⌘⏎ to start",
     "creating": "Assembling fleet…",
-    "create_failed": "Couldn't create the research session"
+    "create_failed": "Couldn't create the research session",
+    "templates_label": "Quick templates",
+    "templates_hint": "Pick one to prefill the goal and focus params — editable after"
   },
   "ring": {
     "title": "Node actions",

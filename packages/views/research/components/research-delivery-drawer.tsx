@@ -4,8 +4,8 @@ import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { ReportReader } from "../report/report-reader";
 
 /**
- * LRM-921 / LRM-880: 「查看交付」opens a centered delivery modal (not a corner float).
- * Alias kept for session-page wiring stability.
+ * LRM-880 / LRM-921: 「查看交付」opens a body-portaled centered HTML reader modal
+ * (not a canvas-corner float). Alias kept for session-page wiring stability.
  */
 export function ResearchDeliveryDrawer(props: {
   open: boolean;

@@ -3,9 +3,11 @@ package handler
 import (
 	"errors"
 	"testing"
+	"time"
 
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/researchwake"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestResearchRosterCap(t *testing.T) {
@@ -72,5 +74,83 @@ func TestRosterChangePayloadShape(t *testing.T) {
 	raw := marshalJSONRaw(payload)
 	if len(raw) < 10 {
 		t.Fatal("expected serialized roster payload")
+	}
+}
+
+func TestValidateResearchHireGap(t *testing.T) {
+	members := []db.ResearchFleetMember{
+		{Role: "scout", Status: "active"},
+		{Role: "reader", Status: "archived"},
+	}
+	if err := validateResearchHireGap("ok", "patent_scout", "missing patent/IP coverage for filings", members, false); err != nil {
+		t.Fatalf("valid gap: %v", err)
+	}
+	if err := validateResearchHireGap("ok", "scout", "duplicate specialty should fail", members, false); err == nil {
+		t.Fatal("expected duplicate role rejection")
+	}
+	if err := validateResearchHireGap("ok", "patent_scout", "", members, false); err == nil {
+		t.Fatal("expected missing reason rejection")
+	}
+	if err := validateResearchHireGap("ok", "patent_scout", "too short", members, false); err == nil {
+		t.Fatal("expected vague reason rejection")
+	}
+	if err := validateResearchHireGap("lrm904-cap-pad-1", "cap_pad_904_1", "capacity", members, false); err == nil {
+		t.Fatal("expected shell pad rejection on user path")
+	}
+	if err := validateResearchHireGap("lrm904-cap-pad-1", "cap_pad_904_1", "capacity fixture", members, true); err != nil {
+		t.Fatalf("fixture pad should pass: %v", err)
+	}
+}
+
+func TestValidateResearchArchiveAntiChurn(t *testing.T) {
+	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	member := db.ResearchFleetMember{Status: "active", IsLead: false}
+	hired := now.Add(-5 * time.Minute)
+	if err := validateResearchArchiveAntiChurn(member, hired, false, false, now); err == nil {
+		t.Fatal("expected shell archive rejection")
+	}
+	if err := validateResearchArchiveAntiChurn(member, hired, true, false, now); err != nil {
+		t.Fatalf("work should allow archive: %v", err)
+	}
+	if err := validateResearchArchiveAntiChurn(member, hired, false, true, now); err != nil {
+		t.Fatalf("fixture should allow archive: %v", err)
+	}
+	old := now.Add(-2 * time.Hour)
+	if err := validateResearchArchiveAntiChurn(member, old, false, false, now); err != nil {
+		t.Fatalf("old idle should allow archive: %v", err)
+	}
+}
+
+func TestResearchRosterGraphStatus(t *testing.T) {
+	if got := researchRosterGraphStatus("archive"); got != "archived" {
+		t.Fatalf("archive status = %q", got)
+	}
+	if got := researchRosterGraphStatus("hire"); got != "pending" {
+		t.Fatalf("hire status = %q", got)
+	}
+}
+
+func TestResearchMemberHasObservableWork(t *testing.T) {
+	var agent pgtype.UUID
+	_ = agent.Scan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	nodes := []db.ResearchGraphNode{
+		{NodeType: "roster_change", ActorAgentID: agent},
+		{NodeType: "probe", ActorAgentID: agent},
+	}
+	if !researchMemberHasObservableWork(nodes, agent) {
+		t.Fatal("probe should count as work")
+	}
+	nodes = []db.ResearchGraphNode{{NodeType: "roster_change", ActorAgentID: agent}}
+	if researchMemberHasObservableWork(nodes, agent) {
+		t.Fatal("roster_change alone is not observable work")
+	}
+}
+
+func TestResearchRosterFixtureRequested(t *testing.T) {
+	if !researchRosterFixtureRequested("1", false) || !researchRosterFixtureRequested("", true) {
+		t.Fatal("expected fixture true")
+	}
+	if researchRosterFixtureRequested("", false) {
+		t.Fatal("expected fixture false")
 	}
 }

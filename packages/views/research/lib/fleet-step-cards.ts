@@ -182,6 +182,11 @@ export function buildFleetChatFeed(
     }
 
     const op = metaString(message.meta, "op");
+    // Interactive product-round judgment stays a chat/process card (LRM-913).
+    if (op === "product_round_judgment") {
+      out.push({ kind: "chat", message });
+      continue;
+    }
     if (op === "wake_failed") {
       const key = wakeMergeKey(message);
       const existing = wakeBuckets.get(key);

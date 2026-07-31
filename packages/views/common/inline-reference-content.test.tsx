@@ -76,6 +76,9 @@ vi.mock("@multica/core/projects/queries", () => ({
   projectDetailOptions: () => ({ queryKey: ["project"] }),
 }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multica/core/channels/queries", () => ({
+  channelsOptions: () => ({ queryKey: ["channels"] }),
+}));
 
 vi.mock("../projects/components/project-icon", () => ({
   ProjectIcon: () => <span data-testid="project-icon" />,
@@ -187,6 +190,16 @@ function issueRef(start: number, end: number): MessagePart {
     content_end_utf16: end,
   } as MessagePart;
 }
+function channelRef(start: number, end: number, label = "team-a"): MessagePart {
+  return {
+    type: "reference",
+    ref_type: "channel-ref",
+    ref_id: "channel-uuid",
+    label,
+    content_start_utf16: start,
+    content_end_utf16: end,
+  } as MessagePart;
+}
 
 describe("InlineReferenceContent (#463 projector consumer)", () => {
   beforeEach(() => {
@@ -215,6 +228,40 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     render(<InlineReferenceContent content="fix MUL-123 now" parts={[issueRef(4, 11)]} />);
     expect(screen.getByText("MUL-123")).toBeInTheDocument();
     expect(screen.queryByText("#MUL-123")).toBeNull();
+  });
+
+  it("renders a channel-ref as a ChannelChip link, never the raw markdown link syntax (task #912)", () => {
+    // The composer always anchors the WHOLE `[team-a](mention://channel/channel-uuid)`
+    // markdown link, not a bare identifier — the chip must show the resolved
+    // label, never leak the markdown source.
+    const raw = "[team-a](mention://channel/channel-uuid)";
+    const content = `see ${raw} for context`;
+    render(<InlineReferenceContent content={content} parts={[channelRef(4, 4 + raw.length)]} />);
+    const chip = screen.getByTestId("channel-chip");
+    expect(chip).toHaveTextContent("team-a");
+    expect(screen.queryByText(raw, { exact: false })).toBeNull();
+    expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
+    const link = chip.closest("a");
+    expect(link).toHaveAttribute("href", expect.stringContaining("channels/channel-uuid"));
+  });
+
+  it("on a non-interactive surface, renders a channel-ref's resolved label, never the raw markdown link (Wren, PR review)", () => {
+    // Same leak class as the interactive test above, but through the OTHER
+    // branch: `interactive={false}` skips ChannelRefLink and used to render
+    // `text` (the span substring) directly — which for channel-ref is always
+    // the whole `[Label](mention://channel/<uuid>)` string, not a bare id.
+    const raw = "[team-a](mention://channel/channel-uuid)";
+    const content = `see ${raw} for context`;
+    render(
+      <InlineReferenceContent
+        content={content}
+        parts={[channelRef(4, 4 + raw.length)]}
+        interactive={false}
+      />,
+    );
+    expect(screen.getByText("team-a")).toBeInTheDocument();
+    expect(screen.queryByText(raw, { exact: false })).toBeNull();
+    expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
   });
 
   it("renders a **bold**-wrapped issue ref as actual bold, not literal asterisks (#635)", () => {

@@ -105,6 +105,28 @@ export function ResearchSessionChrome({
           {statusLabel}
         </span>
         <StageChip label={stageLabel} className="hidden sm:inline-flex" />
+        {typeof session.product_round === "number" &&
+        typeof session.product_round_budget === "number" &&
+        session.product_round_budget > 0 ? (
+          <span
+            className={cn(
+              "hidden shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wide sm:inline-flex",
+              session.product_round >= session.product_round_budget
+                ? "border-warning/40 text-warning"
+                : "text-muted-foreground",
+            )}
+            title={t(($) => $.round.subtitle)}
+          >
+            {t(($) => $.round.budget_chip, {
+              used: session.product_round,
+              budget: session.product_round_budget,
+            })}
+            {session.status === "completed" &&
+            session.product_round >= session.product_round_budget
+              ? ` · ${t(($) => $.round.budget_capped)}`
+              : ""}
+          </span>
+        ) : null}
       </div>
       <div className="flex items-center justify-between gap-3 px-4 pb-2.5">
         <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">

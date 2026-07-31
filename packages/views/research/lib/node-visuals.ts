@@ -52,6 +52,11 @@ const NODE_VISUALS: Record<string, NodeVisual> = {
     accentBarClass: "bg-primary/80",
     labelTone: "default",
   },
+  product_round_gate: {
+    ringClass: "ring-1 ring-brand/45",
+    accentBarClass: "bg-brand",
+    labelTone: "info",
+  },
   roster_change: {
     ringClass: "ring-1 ring-muted-foreground/35",
     accentBarClass: "bg-muted-foreground/60",

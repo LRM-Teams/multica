@@ -24,7 +24,7 @@ import type {
   MemberWithUser,
   Agent,
 } from "@multica/core/types";
-import { ListTodo } from "lucide-react";
+import { Hash, ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
@@ -58,7 +58,7 @@ import { createSuggestionPopupRender } from "./suggestion-popup";
 export interface MentionItem {
   id: string;
   label: string;
-  type: "member" | "agent" | "squad" | "issue" | "project" | "all";
+  type: "member" | "agent" | "squad" | "issue" | "project" | "channel" | "all";
   /** Stable handle for actor mentions. Shown only as weak identity help. */
   handle?: string;
   /** Optional grouping hint for injected context items. */
@@ -95,7 +95,7 @@ export interface MentionListRef {
 // ---------------------------------------------------------------------------
 
 interface MentionGroup {
-  label: "Broadcast" | "Current" | "Recent" | "Search" | "Members" | "Issues";
+  label: "Broadcast" | "Current" | "Recent" | "Search" | "Members" | "Issues" | "Channels";
   items: MentionItem[];
 }
 
@@ -106,6 +106,7 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const search: MentionItem[] = [];
   const members: MentionItem[] = [];
   const issues: MentionItem[] = [];
+  const channels: MentionItem[] = [];
 
   for (const item of items) {
     if (item.type === "all") {
@@ -118,6 +119,8 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
       search.push(item);
     } else if (item.type === "issue" || item.type === "project") {
       issues.push(item);
+    } else if (item.type === "channel") {
+      channels.push(item);
     } else {
       members.push(item);
     }
@@ -130,6 +133,7 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   if (search.length > 0) groups.push({ label: "Search", items: search });
   if (members.length > 0) groups.push({ label: "Members", items: members });
   if (issues.length > 0) groups.push({ label: "Issues", items: issues });
+  if (channels.length > 0) groups.push({ label: "Channels", items: channels });
   return groups;
 }
 
@@ -334,6 +338,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       if (label === "Search") return t(($) => $.mention.group_search);
       if (label === "Members") return t(($) => $.mention.group_members);
       if (label === "Issues") return t(($) => $.mention.group_issues);
+      if (label === "Channels") return t(($) => $.mention.group_channels);
       return label;
     };
 
@@ -430,6 +435,31 @@ function MentionRow({
   buttonRef: (el: HTMLButtonElement | null) => void;
 }) {
   const { t } = useT("editor");
+  if (item.type === "channel") {
+    return (
+      <button
+        type="button"
+        ref={buttonRef}
+        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+          selected ? "bg-accent" : "hover:bg-accent/50"
+        }`}
+        onClick={onSelect}
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+          <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium text-foreground">{item.label}</span>
+          {item.description && (
+            <span className="block truncate text-muted-foreground">
+              {item.description}
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  }
+
   if (item.type === "issue") {
     // Visually dim closed issues (done/cancelled) so they're distinguishable
     // from active ones in the suggestion list — they're still selectable.

@@ -981,8 +981,10 @@ export function ChannelsPage({
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
   // LRM-622/623 — single invite-candidates fetch while Add people is open
-  // (server filters existing members / private agents). Search stays on this
-  // in-memory pool with debounce — no second full ListMembers+ListAgents.
+  // (server omits existing channel members + archived agents only; every
+  // non-archived WS agent is inviteable — no private/Wendy silent filter,
+  // LRM-915 / #1613). Search stays on this in-memory pool with debounce —
+  // no second full ListMembers+ListAgents.
   const inviteDiscoverChannelId =
     active?.kind === "group" && !active.archived_at ? active.id : null;
   const {
@@ -4054,7 +4056,7 @@ export function ChannelsPage({
                         onExternalFiles={channelPending.addFiles}
                         submitOnEnter
                         showBubbleMenu={false}
-                        enableIssueReferences
+                        enableChannelReferences
                         mentionAllowedActorIds={channelMemberIds}
                         scopedMentionAgents={channelAgentCandidates}
                       />

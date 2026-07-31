@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Copy, Download, List, X } from "lucide-react";
 import { normalizeReportStructured } from "@multica/core/research";
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
@@ -111,7 +112,7 @@ export function ReportReader({
     else dialog.setAttribute("open", "");
   }, []);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
   const scrollTo = (id: string) => {
     setActiveId(id);
@@ -145,12 +146,14 @@ export function ReportReader({
     URL.revokeObjectURL(url);
   };
 
-  return (
+  // Portaled to body so canvas `relative`/`overflow` cannot pin this into a
+  // corner float (LRM-880 / LRM-921 anti-example).
+  return createPortal(
     <dialog
       ref={bindDialog}
       data-testid="research-delivery-modal"
       className={cn(
-        "fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-transparent p-0 open:flex sm:items-center sm:p-6 md:p-8",
+        "fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none items-stretch justify-center border-0 bg-transparent p-0 open:flex sm:items-center sm:p-6 md:p-8",
         "backdrop:bg-black/55 backdrop:backdrop-blur-[2px]",
       )}
       aria-label={t(($) => $.panel.delivery)}
@@ -174,9 +177,10 @@ export function ReportReader({
       />
       <div
         role="document"
+        data-testid="research-delivery-modal-card"
         className={cn(
           "relative z-10 flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
-          // Centered reading card on desktop; near-fullscreen on narrow.
+          // Desktop: dominant reading region (not a 420px corner chip).
           "sm:h-[min(920px,calc(100vh-4rem))] sm:w-full sm:max-w-[min(1120px,calc(100vw-4rem))] sm:rounded-2xl",
         )}
       >
@@ -246,6 +250,7 @@ export function ReportReader({
           </div>
         </div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }

@@ -63,6 +63,21 @@ const sources: ResearchSource[] = [
 ];
 
 describe("ReportReader", () => {
+  it("opens as a centered body portal modal, not a canvas-corner float", () => {
+    render(
+      <ReportReader open onClose={vi.fn()} report={report} sources={sources} />,
+    );
+    const modal = screen.getByTestId("research-delivery-modal");
+    const card = screen.getByTestId("research-delivery-modal-card");
+    expect(modal).toBeInTheDocument();
+    expect(modal.tagName).toBe("DIALOG");
+    expect(modal.parentElement).toBe(document.body);
+    // Anti-example used absolute bottom-4 + md:w-[420px] corner chip — ban that.
+    expect(modal.className).not.toMatch(/absolute/);
+    expect(card.className).not.toMatch(/md:w-\[420px\]/);
+    expect(document.querySelector("pre.whitespace-pre-wrap")).toBeNull();
+  });
+
   it("opens as an HTML reading shell, not a raw pre/whitespace dump", () => {
     render(
       <ReportReader open onClose={vi.fn()} report={report} sources={sources} />,

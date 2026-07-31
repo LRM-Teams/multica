@@ -23,7 +23,38 @@ export type ResearchGraphNodeType =
   | "pivot"
   | "roster_change"
   | "stage_gate"
+  | "product_round_gate"
   | "agent_activity";
+
+/** LRM-676 depth tier → product-round hard cap (LRM-905 / LRM-911). */
+export type ResearchDepthTier = "shallow" | "standard" | "deep" | string;
+
+/** End-of-round judgment from Ronaldo (LRM-905 / LRM-911 / LRM-913). */
+export type ResearchProductRoundDecision =
+  | "continue"
+  | "stop_enough"
+  | "stop_budget"
+  | string;
+
+export interface ResearchProductRoundCard {
+  id: string;
+  session_id: string;
+  round_number: number;
+  decision: ResearchProductRoundDecision;
+  /** JSON array of uncovered items (strings or objects). */
+  coverage_gaps: unknown;
+  confidence_note: string;
+  budget_used: number;
+  budget_remaining: number;
+  goal_patch_proposal: string | null;
+  next_round_focus: string | null;
+  decided_by_agent_id: string | null;
+  created_at: string;
+}
+
+export interface ListResearchProductRoundCardsResponse {
+  rounds: ResearchProductRoundCard[];
+}
 
 export type ResearchGraphEdgeType =
   | "leads_to"
@@ -82,8 +113,11 @@ export interface ResearchSession {
   updated_at: string;
   /** Present on list responses (LRM-805). */
   fleet_preview?: ResearchFleetPreviewMember[];
+  /** LRM-911 product-round fields (optional until migration 255). */
+  depth_tier?: ResearchDepthTier;
+  product_round?: number;
+  product_round_budget?: number;
 }
-
 export interface ResearchGraphNode {
   id: string;
   session_id: string;

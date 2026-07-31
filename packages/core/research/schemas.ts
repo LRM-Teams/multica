@@ -56,9 +56,38 @@ const ResearchSessionSchema = z
     created_at: z.string().optional().default(""),
     updated_at: z.string().optional().default(""),
     fleet_preview: z.array(ResearchFleetPreviewMemberSchema).optional(),
+    depth_tier: z.string().optional(),
+    product_round: z.number().optional(),
+    product_round_budget: z.number().optional(),
   })
   .passthrough();
 
+export const ResearchProductRoundCardSchema = z
+  .object({
+    id: z.string(),
+    session_id: z.string().optional().default(""),
+    round_number: z.number(),
+    decision: z.string(),
+    coverage_gaps: z.unknown().optional().default([]),
+    confidence_note: z.string().optional().default(""),
+    budget_used: z.number().optional().default(0),
+    budget_remaining: z.number().optional().default(0),
+    goal_patch_proposal: z.string().nullable().optional().default(null),
+    next_round_focus: z.string().nullable().optional().default(null),
+    decided_by_agent_id: z.string().nullable().optional().default(null),
+    created_at: z.string().optional().default(""),
+  })
+  .passthrough();
+
+export const ListResearchProductRoundCardsResponseSchema = z
+  .object({
+    rounds: z.array(ResearchProductRoundCardSchema).optional().default([]),
+  })
+  .passthrough();
+
+export const EMPTY_RESEARCH_PRODUCT_ROUNDS: {
+  rounds: import("../types/research").ResearchProductRoundCard[];
+} = { rounds: [] };
 const ResearchGraphNodeSchema = z
   .object({
     id: z.string(),

@@ -124,7 +124,8 @@ func init() {
 	researchHireCmd.Flags().String("description", "", "description")
 	researchHireCmd.Flags().String("instructions", "", "initial instructions (rewritten on optimize)")
 	researchHireCmd.Flags().String("model", "", "specialty model (defaults to runtime explicit model)")
-	researchHireCmd.Flags().String("reason", "", "specialty gap / why hire (audit + canvas)")
+	researchHireCmd.Flags().String("reason", "", "specialty gap / why hire (required unless --fixture)")
+	researchHireCmd.Flags().Bool("fixture", false, "capacity/409 fixture hire (skips canvas projection; set X-Research-Roster-Fixture)")
 	_ = researchHireCmd.MarkFlagRequired("name")
 	_ = researchHireCmd.MarkFlagRequired("role")
 	researchOptimizeCmd.Flags().String("instructions", "", "new instructions")
@@ -133,6 +134,7 @@ func init() {
 	researchOptimizeCmd.Flags().Bool("activate", true, "activate after optimize")
 	_ = researchOptimizeCmd.MarkFlagRequired("instructions")
 	researchArchiveCmd.Flags().String("reason", "", "why archive / 减员 (audit + canvas)")
+	researchArchiveCmd.Flags().Bool("fixture", false, "capacity fixture cleanup (bypasses shell anti-churn)")
 
 	researchSessionCmd.AddCommand(researchSessionGetCmd)
 	researchCmd.AddCommand(researchSessionCmd)
@@ -273,6 +275,7 @@ func runResearchHire(cmd *cobra.Command, args []string) error {
 	instructions, _ := cmd.Flags().GetString("instructions")
 	model, _ := cmd.Flags().GetString("model")
 	reason, _ := cmd.Flags().GetString("reason")
+	fixture, _ := cmd.Flags().GetBool("fixture")
 	body := map[string]any{
 		"name": name, "role": role, "description": desc,
 	}
@@ -284,6 +287,9 @@ func runResearchHire(cmd *cobra.Command, args []string) error {
 	}
 	if reason != "" {
 		body["reason"] = reason
+	}
+	if fixture {
+		body["fixture"] = true
 	}
 	return researchPostJSON(cmd, "/api/research/fleet/members", body)
 }
@@ -308,9 +314,13 @@ func runResearchOptimize(cmd *cobra.Command, args []string) error {
 
 func runResearchArchive(cmd *cobra.Command, args []string) error {
 	reason, _ := cmd.Flags().GetString("reason")
+	fixture, _ := cmd.Flags().GetBool("fixture")
 	body := map[string]any{}
 	if reason != "" {
 		body["reason"] = reason
+	}
+	if fixture {
+		body["fixture"] = true
 	}
 	return researchPostJSON(cmd, "/api/research/fleet/members/"+args[0]+"/archive", body)
 }

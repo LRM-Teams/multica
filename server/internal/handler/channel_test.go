@@ -7908,8 +7908,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 // TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents
 // supersedes the old "excludes private agents" contract (task #908: agent
 // usage — including channel invites — is unconditional for every workspace
-// member; only the Windy/Wendy owner-only carve-out remains, and this fixture
-// doesn't use that name).
+// member; the Wendy-name owner-only SQL carve-out was removed in #1613).
 func TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -7986,6 +7985,39 @@ func TestListChannelInviteCandidatesIncludesNonOwnerWendy(t *testing.T) {
 	}
 	if !channelInviteCandidatesContain(resp.Candidates, "agent", agentID) {
 		t.Fatalf("non-owner member's shared Wendy %s missing from invite candidates: %+v", agentID, resp.Candidates)
+	}
+}
+
+// TestListChannelInviteCandidatesSearchFindsWendy covers LRM-915 AC: from a
+// channel that does not yet include Wendy, searching q=Wendy must return her
+// for a non-owner plain member (server-side filter path, not only the empty-q
+// full pool that the FE usually caches client-side).
+func TestListChannelInviteCandidatesSearchFindsWendy(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, _, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy', name = 'wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename agent to Wendy: %v", err)
+	}
+	channelID := seedChannelForTest(t, "invite-search-wendy-"+uuid.NewString(), memberID)
+
+	req := newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/invite-candidates?q=Wendy", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelInviteCandidates(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListChannelInviteCandidates q=Wendy: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp ChannelInviteCandidatesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode invite candidates: %v", err)
+	}
+	if !channelInviteCandidatesContain(resp.Candidates, "agent", agentID) {
+		t.Fatalf("q=Wendy did not return non-owner Wendy %s: %+v", agentID, resp.Candidates)
 	}
 }
 

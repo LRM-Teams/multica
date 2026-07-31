@@ -11,7 +11,6 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  Loader2,
   Search,
   Settings,
   Square,

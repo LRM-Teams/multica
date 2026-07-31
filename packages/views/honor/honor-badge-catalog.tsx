@@ -6,6 +6,8 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Progress } from "@multica/ui/components/ui/progress";
 import { cn } from "@multica/ui/lib/utils";
 
+const EMPTY_SHOWCASE_BADGE_IDS: string[] = [];
+
 export interface HonorBadgeCatalogProps {
   items: HonorBadgeCatalogItem[];
   equippedBadgeId?: string | null;
@@ -26,7 +28,7 @@ export interface HonorBadgeCatalogProps {
 export function HonorBadgeCatalog({
   items,
   equippedBadgeId,
-  showcaseBadgeIds = [],
+  showcaseBadgeIds = EMPTY_SHOWCASE_BADGE_IDS,
   completionLabel,
   equipLabel,
   showcaseLabel,

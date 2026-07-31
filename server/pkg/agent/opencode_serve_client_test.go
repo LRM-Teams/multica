@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -357,5 +358,56 @@ func TestRunTurnIgnoresMessageUpdatedEvent(t *testing.T) {
 	}
 	if result.errMsg != "" {
 		t.Fatalf("unexpected error result: %v", result.errMsg)
+	}
+}
+
+// TestWaitReadySurvivesOneHungProbe reproduces the production incident this
+// PR fixes: a /doc probe whose connection succeeds but which never writes a
+// response never returns from c.http.Do, and with no per-probe deadline that
+// single call swallows the entire outer readiness budget — even though the
+// server recovers and responds normally moments later. Before
+// waitReadyProbeTimeout existed, this test would time out waiting on
+// waitReady to return at all (it would block for the full outer context,
+// here 5s, then return ctx.Err() — never observing the server's later
+// healthy responses). With the per-probe timeout, the hung first probe is
+// abandoned after ~waitReadyProbeTimeout and a later retry succeeds well
+// within the outer deadline.
+func TestWaitReadySurvivesOneHungProbe(t *testing.T) {
+	var hits atomic.Int32
+	block := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/doc", func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			// First probe: accept the connection but never write a response,
+			// simulating the hang observed in production. Held open until
+			// the test itself unblocks it during cleanup, matching how the
+			// real incident's hung request was only ever resolved by an
+			// external timeout/cancellation, not a server-side response.
+			<-block
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		close(block)
+		srv.Close()
+	})
+
+	client := newOpenCodeServeClient(srv.URL, "opencode", "test-password", slog.Default())
+	t.Cleanup(client.close)
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.waitReady(ctx); err != nil {
+		t.Fatalf("waitReady: %v (a hung first probe must not prevent a later successful retry)", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed >= 5*time.Second {
+		t.Fatalf("waitReady took %s — the hung first probe consumed the entire outer deadline instead of being abandoned by the per-probe timeout", elapsed)
+	}
+	if got := hits.Load(); got < 2 {
+		t.Fatalf("expected at least 2 probe attempts (one hung, one that succeeds), got %d", got)
 	}
 }

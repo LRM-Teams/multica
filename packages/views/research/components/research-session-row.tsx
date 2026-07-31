@@ -43,8 +43,8 @@ interface ResearchSessionRowProps {
 
 function leadName(session: ResearchSession): string | null {
   const preview = session.fleet_preview ?? [];
-  if (preview.length === 0) return null;
   const lead = preview.find((m) => m.is_lead) ?? preview[0];
+  if (!lead) return null;
   const name = (lead.display_name || lead.name || "").trim();
   return name || null;
 }

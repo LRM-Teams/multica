@@ -131,8 +131,9 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
       <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
     );
     const titleLink = screen.getAllByRole("link")[0];
-    expect(titleLink.textContent?.includes("…")).toBe(true);
-    expect(titleLink.textContent?.length ?? 0).toBeLessThan(longGoal.length);
+    expect(titleLink).toBeDefined();
+    expect(titleLink?.textContent?.includes("…")).toBe(true);
+    expect(titleLink?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
   });
 
   it("opens a goal dialog from the colored chip", () => {

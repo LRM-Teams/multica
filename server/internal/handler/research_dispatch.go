@@ -80,6 +80,17 @@ func (h *Handler) enqueueResearchAgentWake(
 	if !agent.RuntimeID.Valid {
 		return fmt.Errorf("agent has no runtime")
 	}
+	// LRM-808 fail-closed on empty model. Legacy fleet seeds may still have
+	// blank model after runtime rematch — auto-heal before enqueue so kickoff
+	// / chat wake do not mute the whole session.
+	provider := ""
+	if rt, rerr := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID); rerr == nil {
+		provider = rt.Provider
+	}
+	agent, err = ensureAgentHasExplicitModel(ctx, h.Queries, agent, provider)
+	if err != nil {
+		return fmt.Errorf("ensure agent model: %w", err)
+	}
 
 	chatSession, err := h.ensureResearchAgentChatSession(ctx, workspaceID, session, targetAgentID, initiatorUserID)
 	if err != nil {

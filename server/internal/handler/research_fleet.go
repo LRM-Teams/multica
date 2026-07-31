@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -83,6 +85,7 @@ func (h *Handler) ensureResearchFleet(ctx context.Context, workspaceID, userID p
 			return db.ResearchFleet{}, nil, merr
 		}
 		if len(members) > 0 && fleet.LeadAgentID.Valid {
+			h.healResearchFleetAgentModels(ctx, members)
 			h.seedResearchFleetPlaybooks(ctx, workspaceID, fleet.ID)
 			return fleet, members, nil
 		}
@@ -225,6 +228,32 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 	}
 	h.seedResearchFleetPlaybooks(ctx, workspaceID, fleet.ID)
 	return fleet, members, nil
+}
+
+// healResearchFleetAgentModels backfills blank agent.model for active fleet
+// members (LRM-858). Best-effort: failures are logged and do not block ensure.
+func (h *Handler) healResearchFleetAgentModels(ctx context.Context, members []db.ResearchFleetMember) {
+	for _, m := range members {
+		if m.Status == "archived" || !m.AgentID.Valid {
+			continue
+		}
+		agent, err := h.Queries.GetAgent(ctx, m.AgentID)
+		if err != nil || strings.TrimSpace(agent.Model.String) != "" {
+			continue
+		}
+		provider := ""
+		if agent.RuntimeID.Valid {
+			if rt, rerr := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID); rerr == nil {
+				provider = rt.Provider
+			}
+		}
+		if _, err := ensureAgentHasExplicitModel(ctx, h.Queries, agent, provider); err != nil {
+			slog.Warn("research fleet model heal failed",
+				"agent_id", uuidToString(m.AgentID),
+				"error", err,
+			)
+		}
+	}
 }
 
 func (h *Handler) seedResearchFleetPlaybooks(ctx context.Context, workspaceID, fleetID pgtype.UUID) {

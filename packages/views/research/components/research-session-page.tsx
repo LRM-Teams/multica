@@ -18,6 +18,12 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useT } from "../../i18n/use-t";
 import {
+  buildFleetChatFeed,
+  nextStageWaitingCard,
+  presenceRunningCards,
+  type FleetStepCardModel,
+} from "../lib/fleet-step-cards";
+import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
   stageAnchorId,
@@ -25,6 +31,7 @@ import {
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
+import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchSessionChrome } from "./research-session-chrome";
 import {
   ResearchStageChatMarker,
@@ -130,6 +137,31 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
   );
 
+  const chatFeed = buildFleetChatFeed(messages);
+  const runningCards = presenceRunningCards(presence, fleet.members);
+  const waitingCard = nextStageWaitingCard(session.current_stage, session.status);
+
+  const postFleetAction = (body: string) => {
+    void api
+      .postResearchMessage(sessionId, { body })
+      .then(() =>
+        qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      );
+  };
+
+  const onStepRetry = (card: FleetStepCardModel) => {
+    const reason = card.reason ? `（reason=${card.reason}）` : "";
+    postFleetAction(
+      `请重试刚才失败的唤醒${reason}：${card.summaryHeadline}。配置根因仍走运维/LRM-858；本条只请求再试一次。`,
+    );
+  };
+
+  const onStepReassign = (card: FleetStepCardModel) => {
+    postFleetAction(
+      `请将唤醒失败的任务改派给其他活跃成员：${card.title} · ${card.summaryHeadline}`,
+    );
+  };
+
   const scrollToStage = (stage: string) => {
     setChatOpen(true);
     // Wait a frame so the chat pane mounts before scrolling.
@@ -212,9 +244,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         </section>
 
         {chatOpen ? (
-          <aside className="flex w-[340px] shrink-0 flex-col border-l bg-background">
-            <div className="flex items-center justify-between border-b px-3 py-2">
-              <div className="text-xs font-medium text-muted-foreground">{t(($) => $.panel.chat)}</div>
+          <aside className="flex w-[min(100%,380px)] shrink-0 flex-col border-l bg-background">
+            <div className="flex items-center justify-between border-b px-3 py-2.5">
+              <div className="text-sm font-semibold text-foreground">{t(($) => $.panel.chat)}</div>
               <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
                 {t(($) => $.panel.hide_chat)}
               </Button>
@@ -227,18 +259,35 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 .join(" · ")}
             </div>
             {Object.keys(presence).length > 0 ? (
-              <div className="space-y-1 border-b px-3 py-2 text-[11px]">
-                <div className="font-medium text-muted-foreground">{t(($) => $.panel.presence)}</div>
+              <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
                 {fleet.members
                   .filter((m) => presence[m.agent_id]?.activity)
                   .map((m) => (
-                    <div key={m.agent_id} className="truncate text-muted-foreground">
-                      <span className="text-foreground">
-                        {m.display_name || m.name || m.role}
-                      </span>
+                    <span
+                      key={m.agent_id}
+                      className="rounded-full border border-transparent bg-primary/10 px-2 py-0.5 text-[10.5px] font-medium text-primary"
+                    >
+                      {m.display_name || m.name || m.role}
                       {" · "}
                       {presence[m.agent_id]?.activity}
-                    </div>
+                    </span>
+                  ))}
+                {fleet.members
+                  .filter(
+                    (m) =>
+                      m.status === "active" &&
+                      !presence[m.agent_id]?.activity,
+                  )
+                  .slice(0, 4)
+                  .map((m) => (
+                    <span
+                      key={`idle-${m.agent_id}`}
+                      className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] text-muted-foreground"
+                    >
+                      {m.display_name || m.name || m.role}
+                      {" · "}
+                      {t(($) => $.step_card.standby)}
+                    </span>
                   ))}
               </div>
             ) : null}
@@ -250,28 +299,67 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   label={t(($) => $.stage[stage])}
                 />
               ))}
-              {messages.length === 0 ? (
+              {messages.length === 0 && runningCards.length === 0 ? (
                 <p className="px-1 text-xs text-muted-foreground">{t(($) => $.chat.empty)}</p>
               ) : (
-                messages.map((m) => (
-                  <ResearchChatCard key={m.id} message={m} members={fleet.members} />
-                ))
+                <>
+                  {chatFeed.map((item) =>
+                    item.kind === "chat" ? (
+                      <ResearchChatCard
+                        key={item.message.id}
+                        message={item.message}
+                        members={fleet.members}
+                      />
+                    ) : (
+                      <ResearchFleetStepCard
+                        key={item.id}
+                        card={item}
+                        onRetry={onStepRetry}
+                        onReassign={onStepReassign}
+                      />
+                    ),
+                  )}
+                  {runningCards.map((card) => (
+                    <ResearchFleetStepCard key={card.id} card={card} />
+                  ))}
+                  {waitingCard ? (
+                    <ResearchFleetStepCard key={waitingCard.id} card={waitingCard} />
+                  ) : null}
+                </>
               )}
             </div>
-            <div className="space-y-2 border-t p-3">
-              <Textarea
-                rows={3}
-                value={ui.body}
-                onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
-                placeholder={t(($) => $.panel.chat_placeholder)}
-              />
-              <Button
-                size="sm"
-                disabled={!ui.body.trim() || send.isPending}
-                onClick={() => send.mutate()}
-              >
-                {t(($) => $.panel.send)}
-              </Button>
+            <div className="border-t bg-card p-3">
+              <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                <Textarea
+                  rows={2}
+                  value={ui.body}
+                  onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    if (!ui.body.trim() || send.isPending) return;
+                    send.mutate();
+                  }}
+                  placeholder={t(($) => $.panel.chat_placeholder)}
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-1 py-1 text-[13px] shadow-none focus-visible:ring-0"
+                />
+                <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
+                  <span className="text-[10px] text-muted-foreground">
+                    {t(($) => $.step_card.composer_hint)}
+                  </span>
+                  <Button
+                    type="button"
+                    size="default"
+                    className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
+                    disabled={!ui.body.trim() || send.isPending}
+                    onClick={() => send.mutate()}
+                  >
+                    {send.isPending
+                      ? t(($) => $.step_card.sending)
+                      : t(($) => $.panel.send)}
+                  </Button>
+                </div>
+              </div>
             </div>
           </aside>
         ) : null}

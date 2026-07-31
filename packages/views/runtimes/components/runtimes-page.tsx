@@ -479,7 +479,7 @@ function MachineListView({
               <div
                 key={machine.id}
                 className={cn(
-                  "flex items-center gap-3",
+                  "relative flex items-center gap-3",
                   layout === "full"
                     ? "border-b px-4 py-3.5"
                     : cn(
@@ -490,23 +490,23 @@ function MachineListView({
               >
                 <button
                   type="button"
-                  onClick={() => onSelect(machine.id)}
-                  className="shrink-0"
+                  aria-pressed={selected}
                   aria-label={machine.title}
-                >
+                  onClick={() => onSelect(machine.id)}
+                  className="absolute inset-0 z-0 rounded-[inherit]"
+                />
+                <span className="relative z-10 shrink-0 pointer-events-none" aria-hidden>
                   <HealthDot health={machine.health} />
-                </button>
-                <div className="min-w-0 flex-1">
-                  <MachineNameEditor
-                    machine={machine}
-                    wsId={wsId}
-                    variant="list"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onSelect(machine.id)}
-                    className="mt-0.5 block w-full truncate text-left text-xs text-muted-foreground"
-                  >
+                </span>
+                <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
+                  <div className="pointer-events-auto">
+                    <MachineNameEditor
+                      machine={machine}
+                      wsId={wsId}
+                      variant="list"
+                    />
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
                     {labelOf(machine.health)}
                     {count > 0 && (
                       <>
@@ -522,17 +522,13 @@ function MachineListView({
                         {lastSeen}
                       </>
                     )}
-                  </button>
+                  </div>
                 </div>
                 {showChevron ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelect(machine.id)}
-                    className="shrink-0"
-                    aria-label={t(($) => $.machine.select_machine)}
-                  >
-                    <ChevronRight className="h-4 w-4 text-muted-foreground/45" />
-                  </button>
+                  <ChevronRight
+                    className="relative z-10 h-4 w-4 shrink-0 pointer-events-none text-muted-foreground/45"
+                    aria-hidden
+                  />
                 ) : null}
               </div>
             );

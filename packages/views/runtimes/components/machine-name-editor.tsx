@@ -153,6 +153,41 @@ export function MachineNameEditor({
   }
 
   const saving = updateRuntime.isPending;
+  const nameClass = cn(
+    "truncate",
+    isPlaceholder && "text-muted-foreground",
+    variant === "title" ? "text-lg font-semibold" : "text-sm font-medium",
+  );
+  const editAria = `${t(($) => $.machine.basics_display_name)}: ${visibleName}`;
+
+  // List rows select on row click (LRM-923). Only the pencil starts rename so
+  // the title no longer swallows the select hit target.
+  if (variant === "list") {
+    return (
+      <span
+        className={cn(
+          "group/name inline-flex min-w-0 items-center gap-1.5",
+          className,
+        )}
+      >
+        <span className={nameClass} title={visibleName}>
+          {visibleName}
+        </span>
+        {saving ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+        ) : (
+          <button
+            type="button"
+            onClick={beginEdit}
+            aria-label={editAria}
+            className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground/55 hover:bg-accent hover:text-muted-foreground"
+          >
+            <Pencil className="h-3 w-3" aria-hidden />
+          </button>
+        )}
+      </span>
+    );
+  }
 
   return (
     <span
@@ -164,7 +199,7 @@ export function MachineNameEditor({
       <button
         type="button"
         onClick={beginEdit}
-        aria-label={`${t(($) => $.machine.basics_display_name)}: ${visibleName}`}
+        aria-label={editAria}
         className={cn(
           "inline-flex min-w-0 items-center gap-1.5 text-left",
           variant === "title" ? "text-lg font-semibold" : "text-sm font-medium",
@@ -180,10 +215,7 @@ export function MachineNameEditor({
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
         ) : (
           <Pencil
-            className={cn(
-              "h-3 w-3 shrink-0 text-muted-foreground/55",
-              variant === "list" && "opacity-55",
-            )}
+            className="h-3 w-3 shrink-0 text-muted-foreground/55"
             aria-hidden
           />
         )}

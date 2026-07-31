@@ -308,7 +308,7 @@ vi.mock("@multica/core/hooks/use-file-upload", () => ({
 }));
 
 // Mutable so the DM-open-never-resolves suite can simulate a DM disappearing
-// from the list after selection (the real #{DM blank-page incident} shape:
+// from the list after selection (the real 2026-07-31 Wendy DM incident shape:
 // createOrFind's optimistic setQueryData is overwritten by an
 // invalidate-triggered refetch that comes back empty). Every other suite
 // never touches this and sees the same `[]` the old static mock returned.

@@ -946,7 +946,7 @@ export function ChannelsPage({
     () => (activeDmId ? dms.find((d) => d.id === activeDmId) ?? null : null),
     [dms, activeDmId],
   );
-  // #{DM blank-page incident} — a selected DM that never shows up in the list
+  // 2026-07-31 Wendy DM incident — a selected DM that never shows up in the list
   // (backend `GET /api/dm` gap, or any other never-resolving cause) used to
   // leave ConversationSwitchSkeleton spinning forever, which reads as a blank
   // page. After DM_RESOLVE_TIMEOUT_MS without resolving, swap to an explicit

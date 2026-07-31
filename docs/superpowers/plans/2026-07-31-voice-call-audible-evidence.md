@@ -50,7 +50,9 @@ started.
 ## Verification
 
 - Focused voice-call tests: 34 passed.
-- Full `@multica/views` suite: 3,051 passed, 5 skipped.
+- Full `@multica/views` suite: 3,052 passed, 5 skipped after rebasing onto
+  `dev`; the rebase exposed and this branch repairs two pre-existing locale
+  parity failures from missing Japanese and Korean Honor labels.
 - TypeScript: passed.
 - ESLint: zero errors; five pre-existing warnings outside changed files.
 - React Doctor: zero issues in changed React source.

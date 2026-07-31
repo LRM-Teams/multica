@@ -39,7 +39,7 @@ export function ActorStyledName({
     : null;
 
   return (
-    <span className={cn("inline-flex min-w-0 max-w-full items-center gap-1", className)}>
+    <span className={cn("inline-flex min-w-0 max-w-full items-center gap-1.5", className)}>
       <span
         className={cn(nameClassName, nameDisplay?.className)}
         data-honor-glow-tier={nameDisplay?.["data-honor-glow-tier"]}
@@ -53,9 +53,17 @@ export function ActorStyledName({
             <HonorBadgeIcon
               svgKey={honor.equipped_badge.svg_key}
               title={honor.equipped_badge.title}
+              medal
             />
           </TooltipTrigger>
           <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
+        </Tooltip>
+      ) : honor && honor.level > 1 ? (
+        <Tooltip>
+          <TooltipTrigger className="inline-flex shrink-0">
+            <HonorBadgeIcon svgKey="stardust" title={`Lv.${honor.level}`} medal />
+          </TooltipTrigger>
+          <TooltipContent side="top">{`Honor Lv.${honor.level}`}</TooltipContent>
         </Tooltip>
       ) : null}
       {fleet ? (
@@ -64,7 +72,7 @@ export function ActorStyledName({
           classLabel={fleet.class_label}
           fleetRank={fleet.fleet_rank}
           frozen={fleet.frozen}
-          compact
+          medal
         />
       ) : null}
     </span>

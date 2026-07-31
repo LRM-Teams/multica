@@ -556,7 +556,7 @@ function CreatedAgentRow({
               classLabel={fleet.class_label}
               fleetRank={fleet.fleet_rank}
               frozen={fleet.frozen}
-              compact
+              medal
             />
           ) : null}
         </div>

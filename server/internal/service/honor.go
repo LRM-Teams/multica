@@ -398,6 +398,43 @@ func (s *HonorService) BuildSnapshots(ctx context.Context, userIDs []pgtype.UUID
 	return out, nil
 }
 
+func honorBadgeViewFromDef(def db.HonorBadgeDef) *HonorBadgeView {
+	return &HonorBadgeView{
+		ID:          def.ID,
+		Title:       def.Title,
+		Description: def.Description,
+		SvgKey:      def.SvgKey,
+	}
+}
+
+func (s *HonorService) bestUnlockedBadgeView(ctx context.Context, unlocks []db.UserHonorUnlock) (*HonorBadgeView, error) {
+	unlocked := map[string]struct{}{}
+	for _, u := range unlocks {
+		if u.UnlockKind == "badge" {
+			unlocked[u.DefID] = struct{}{}
+		}
+	}
+	if len(unlocked) == 0 {
+		return nil, nil
+	}
+	defs, err := s.Queries.ListHonorBadgeDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var best *HonorBadgeView
+	var bestRank int32 = -1
+	for _, def := range defs {
+		if _, ok := unlocked[def.ID]; !ok {
+			continue
+		}
+		if def.SortRank > bestRank {
+			bestRank = def.SortRank
+			best = honorBadgeViewFromDef(def)
+		}
+	}
+	return best, nil
+}
+
 func (s *HonorService) buildSnapshot(ctx context.Context, userID pgtype.UUID) (HonorSnapshot, error) {
 	honor, err := s.Queries.GetUserHonor(ctx, userID)
 	if err != nil {
@@ -434,13 +471,11 @@ func (s *HonorService) buildSnapshot(ctx context.Context, userID pgtype.UUID) (H
 	if honor.EquippedBadgeID.Valid {
 		def, err := s.Queries.GetHonorBadgeDef(ctx, honor.EquippedBadgeID.String)
 		if err == nil {
-			badge = &HonorBadgeView{
-				ID:          def.ID,
-				Title:       def.Title,
-				Description: def.Description,
-				SvgKey:      def.SvgKey,
-			}
+			badge = honorBadgeViewFromDef(def)
 		}
+	}
+	if badge == nil {
+		badge, _ = s.bestUnlockedBadgeView(ctx, unlocks)
 	}
 	return HonorSnapshot{
 		Level:     int(honor.Level),

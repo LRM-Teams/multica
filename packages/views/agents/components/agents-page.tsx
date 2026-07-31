@@ -1138,12 +1138,12 @@ function AgentRailRow({
             </p>
             {fleet ? (
               <FleetRankBadge
-                classId={fleet.class_id}
-                classLabel={fleet.class_label}
-                fleetRank={fleet.fleet_rank}
-                frozen={fleet.frozen || isArchived}
-                compact
-              />
+              classId={fleet.class_id}
+              classLabel={fleet.class_label}
+              fleetRank={fleet.fleet_rank}
+              frozen={fleet.frozen || isArchived}
+              medal
+            />
             ) : null}
           </div>
           <p className="truncate text-xs text-muted-foreground">

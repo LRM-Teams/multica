@@ -1544,17 +1544,6 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
 	}
-	var pauseNotification *agentDMPauseNotificationResult
-	if reservation.PauseAfterSend {
-		notification, err := h.persistAgentDMPauseNotificationTx(
-			ctx, tx, reservation.ExchangeID,
-		)
-		if err != nil {
-			_ = tx.Rollback(ctx)
-			return agentTransportMessageResult{}, err
-		}
-		pauseNotification = &notification
-	}
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
 		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), source.origin.workspaceID, "agent", source.origin.agentID, attachmentIDs); err != nil {
@@ -1621,7 +1610,6 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		FreshnessResolution:      freshnessResolution,
 		FreshnessActivityEventID: freshnessActivityEventID,
 		AgentDM:                  reservation,
-		AgentDMPause:             pauseNotification,
 	}, nil
 }
 

@@ -69,8 +69,6 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_wendy_nudge_ladder_agent", `CREATE INDEX CONCURRENTLY idx_wendy_nudge_ladder_agent ON wendy_nudge_ladder (agent_id)`},
 		{"idx_voice_call_session_agent", `CREATE INDEX CONCURRENTLY idx_voice_call_session_agent ON voice_call_session (agent_id)`},
 		{"idx_agent_inbox_token_agent", `CREATE INDEX CONCURRENTLY idx_agent_inbox_token_agent ON agent_inbox_token (agent_id)`},
-		{"idx_agent_radar_action_agent", `CREATE INDEX CONCURRENTLY idx_agent_radar_action_agent ON agent_radar_action (agent_id)`},
-		{"idx_agent_radar_run_agent", `CREATE INDEX CONCURRENTLY idx_agent_radar_run_agent ON agent_radar_run (agent_id)`},
 		{"idx_agent_session_agent", `CREATE INDEX CONCURRENTLY idx_agent_session_agent ON agent_session (agent_id)`},
 		{"idx_agent_transport_draft_agent", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_agent ON agent_transport_draft (agent_id)`},
 		{"idx_agent_task_transport_audit_agent", `CREATE INDEX CONCURRENTLY idx_agent_task_transport_audit_agent ON agent_task_transport_audit (agent_id)`},
@@ -87,7 +85,6 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_squad_leader", `CREATE INDEX CONCURRENTLY idx_squad_leader ON squad (leader_id)`},
 		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
-		{"idx_workspace_radar_state_supervisor_agent", `CREATE INDEX CONCURRENTLY idx_workspace_radar_state_supervisor_agent ON workspace_radar_state (workspace_id, supervisor_agent_id) WHERE supervisor_agent_id IS NOT NULL`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)
@@ -145,7 +142,6 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		{"idx_lark_user_binding_installation_workspace", `CREATE INDEX CONCURRENTLY idx_lark_user_binding_installation_workspace ON lark_user_binding (installation_id, workspace_id)`},
 		{"idx_memory_curation_watermark_last_run", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_last_run ON memory_curation_watermark (last_run_id) WHERE last_run_id IS NOT NULL`},
 		{"idx_work_node_linked_task", `CREATE INDEX CONCURRENTLY idx_work_node_linked_task ON work_node (linked_task_id) WHERE linked_task_id IS NOT NULL`},
-		{"idx_workspace_radar_directive_artifact_action", `CREATE INDEX CONCURRENTLY idx_workspace_radar_directive_artifact_action ON workspace_radar_directive_artifact (radar_action_id) WHERE radar_action_id IS NOT NULL`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

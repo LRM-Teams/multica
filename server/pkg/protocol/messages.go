@@ -673,6 +673,10 @@ type DaemonHeartbeatAckPayload struct {
 	// and fall back to the singular PendingLocalSkillImport above.
 	PendingLocalSkillImports []DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_imports,omitempty"`
 	PendingMemoryCuration    *DaemonHeartbeatPendingMemoryCuration    `json:"pending_memory_curation,omitempty"`
+	// PendingRestart is a human-initiated "restart this daemon" request
+	// (task #43), independent of any CLI update — e.g. a stuck/unresponsive
+	// daemon a workspace admin restarts remotely from the web UI.
+	PendingRestart *DaemonHeartbeatPendingRestart `json:"pending_restart,omitempty"`
 	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
 	// of where the daemon should download CLI update artifacts from. It takes
 	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
@@ -693,6 +697,12 @@ type DaemonHeartbeatPendingUpdate struct {
 	ID                   string `json:"id"`
 	TargetVersion        string `json:"target_version"`
 	SupportsReadyToApply bool   `json:"supports_ready_to_apply,omitempty"`
+}
+
+// DaemonHeartbeatPendingRestart describes a human-initiated remote restart
+// request the daemon should act on for this runtime.
+type DaemonHeartbeatPendingRestart struct {
+	ID string `json:"id"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to

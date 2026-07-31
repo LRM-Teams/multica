@@ -566,6 +566,7 @@ type (
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
 	PendingMemoryCuration   = protocol.DaemonHeartbeatPendingMemoryCuration
+	PendingRestart          = protocol.DaemonHeartbeatPendingRestart
 )
 
 func (c *Client) SendHeartbeat(

@@ -1,5 +1,5 @@
 import {
-  isLegacyUploadsAvatarUrl,
+  isLegacyUploadsAvatarUrl as isLegacyUploadsAvatarUrlFn,
   resolvePublicFileUrl,
 } from "@multica/core/workspace/avatar-url";
 
@@ -9,6 +9,20 @@ import {
  * null / undefined / missing must never clear an existing entry.
  * LRM-855: a legacy `/uploads/` hint must not overwrite a sticky OSS/CDN URL.
  */
+
+/** Fallback when unit tests mock only `resolvePublicFileUrl`. */
+function isLegacyUploadsAvatarUrl(url: string | null | undefined): boolean {
+  if (typeof isLegacyUploadsAvatarUrlFn === "function") {
+    return isLegacyUploadsAvatarUrlFn(url);
+  }
+  if (!url) return false;
+  if (url.startsWith("/uploads/")) return true;
+  try {
+    return new URL(url).pathname.startsWith("/uploads/");
+  } catch {
+    return false;
+  }
+}
 
 export type IdentityActorType = "member" | "agent" | "squad" | "user";
 

@@ -32,7 +32,16 @@
     "avatar_upload_failed": "아바타 업로드에 실패했습니다. 다시 시도하세요",
     "avatar_err_type": "PNG 또는 JPG 이미지만 지원합니다",
     "avatar_err_size": "이미지는 5MB 이하여야 합니다",
-    "avatar_err_dimensions": "이미지는 최소 256×256 이상이어야 합니다"
+    "avatar_err_dimensions": "이미지는 최소 256×256 이상이어야 합니다",
+    "honor_title": "명예",
+    "honor_completion": "{{unlocked}} / {{total}} 배지",
+    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
+    "honor_showcase": "쇼케이스",
+    "honor_recent": "최근 획득",
+    "honor_compare": "나와 비교",
+    "honor_shared": "공통 배지",
+    "honor_you_only": "나만",
+    "honor_them_only": "상대만"
   },
   "detail": {
     "workspace_fallback": "워크스페이스",

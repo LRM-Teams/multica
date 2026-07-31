@@ -309,6 +309,8 @@
     "version_unknown": "unknown",
     "managed_by_desktop": "Managed by Desktop",
     "managed_by_desktop_title": "The CLI binary is managed by Multica Desktop — update Desktop to upgrade the CLI.",
+    "managed_by_sandbox": "Managed by sandbox",
+    "managed_by_sandbox_title": "This machine is managed by its sandbox environment — it can't self-update from here.",
     "latest": "Latest",
     "available": "available",
     "action": "Update",

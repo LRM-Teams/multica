@@ -19,6 +19,7 @@ import { memberListOptions, agentListOptions } from "@multica/core/workspace/que
 import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
 import {
   deriveRuntimeHealth,
+  isSandboxRuntime,
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   runtimeTargetVersion,
@@ -485,6 +486,7 @@ function DiagnosticsCard({
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
               canUpdate={canManage}
+              isSandbox={isSandboxRuntime(runtime)}
             />
           </div>
         )}

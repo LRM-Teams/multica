@@ -334,10 +334,10 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	// not just keep running whatever binary happened to be at that path. No
 	// task has been claimed yet at this point, so handing off here is always
 	// safe: nothing to drain.
-	if handedOff, err := handoffToActiveVersionIfNeeded(cmd, profile); err != nil {
+	if target, err := resolveVersionHandoffTarget(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: version handoff check failed, continuing on running binary: %v\n", err)
-	} else if handedOff {
-		return nil
+	} else if target != "" {
+		return handoffAndWait(target, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile), daemonPIDPathForProfile(profile))
 	}
 
 	serverURL := cli.FlagOrEnv(cmd, "server-url", "MULTICA_SERVER_URL", "")
@@ -402,58 +402,19 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if the daemon needs to restart after a CLI update.
+	// Check if the daemon needs to restart after a CLI update. Waits for the
+	// new binary's own run rather than spawning-and-exiting immediately —
+	// see handoffAndWait's doc comment for why (task #815, Barry's PR #1584
+	// review finding).
 	if restartBin := d.RestartBinary(); restartBin != "" {
 		logger.Info("restarting daemon with updated binary", "path", restartBin)
 
 		// Runtimes were already deregistered by triggerRestart() before handoff.
 		// The successor re-registers on startup; do not duplicate cleanup here.
-		pid, err := spawnDetachedDaemonBinary(restartBin, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile))
-		if err != nil {
-			logger.Error("failed to start new daemon", "error", err)
-			return err
-		}
-
-		os.WriteFile(daemonPIDPathForProfile(profile), []byte(strconv.Itoa(pid)), 0o644)
-		logger.Info("new daemon started", "pid", pid)
+		return handoffAndWait(restartBin, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile), daemonPIDPathForProfile(profile))
 	}
 
 	return nil
-}
-
-// spawnDetachedDaemonBinary starts binPath as a detached daemon process with
-// the given args, logging its stdout/stderr to logPath. On Windows it first
-// tries to break the child out of the parent's Job Object so the daemon
-// survives parent-process exit; if that's denied (ERROR_ACCESS_DENIED), it
-// retries without breakaway. Returns the new process's PID.
-func spawnDetachedDaemonBinary(binPath string, args []string, logPath string) (int, error) {
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return 0, fmt.Errorf("open daemon log file %s: %w", logPath, err)
-	}
-	defer logFile.Close()
-
-	child := exec.Command(binPath, args...)
-	child.Stdout = logFile
-	child.Stderr = logFile
-	child.SysProcAttr = daemonSysProcAttr(true)
-
-	if err := child.Start(); err != nil {
-		if !isAccessDeniedSpawnErr(err) {
-			return 0, fmt.Errorf("start daemon at %s: %w", binPath, err)
-		}
-		child = exec.Command(binPath, args...)
-		child.Stdout = logFile
-		child.Stderr = logFile
-		child.SysProcAttr = daemonSysProcAttr(false)
-		if err := child.Start(); err != nil {
-			return 0, fmt.Errorf("start daemon at %s without breakaway: %w", binPath, err)
-		}
-	}
-
-	pid := child.Process.Pid
-	child.Process.Release()
-	return pid, nil
 }
 
 // --- daemon restart ---

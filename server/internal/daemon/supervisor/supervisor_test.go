@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -23,6 +24,7 @@ const (
 	workerHelperTermEnv   = "MULTICA_SUPERVISOR_TEST_TERM_DELAY_MS"
 	workerHelperReadyEnv  = "MULTICA_SUPERVISOR_TEST_READY_PATH"
 	workerHelperClaimEnv  = "MULTICA_SUPERVISOR_TEST_CLAIM_PATH"
+	workerHelperRelayEnv  = "MULTICA_SUPERVISOR_TEST_RELAY_MARK_PATH"
 )
 
 func TestSupervisorWorkerProcess(t *testing.T) {
@@ -72,6 +74,45 @@ func TestSupervisorWorkerProcess(t *testing.T) {
 		for {
 			time.Sleep(time.Hour)
 		}
+	case "handoff-relay-wait":
+		// Simulates the FIXED handoff behavior (task #815): instead of
+		// spawning a sibling and exiting immediately, this worker spawns
+		// the real long-running work as its own plain child, blocks on it,
+		// and only then exits — mirroring the child's real outcome. The
+		// supervisor's tracked PID (this process) never reports "done"
+		// while the actual daemon work is still alive under it.
+		grandchild := exec.Command(os.Args[0], "-test.run=^TestSupervisorWorkerProcess$")
+		grandchild.Env = replaceEnv(os.Environ(), workerHelperActionEnv, "block")
+		if err := grandchild.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(92)
+		}
+		if err := os.WriteFile(os.Getenv(workerHelperRelayEnv), []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(92)
+		}
+		waitErr := grandchild.Wait()
+		if waitErr != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	case "handoff-relay-detach-buggy":
+		// Simulates the ORIGINAL buggy handoff behavior this fix replaces:
+		// spawn the real work as a sibling and exit immediately without
+		// waiting for it — a negative control proving the test below would
+		// actually have caught the bug Barry found in review.
+		grandchild := exec.Command(os.Args[0], "-test.run=^TestSupervisorWorkerProcess$")
+		grandchild.Env = replaceEnv(os.Environ(), workerHelperActionEnv, "block")
+		if err := grandchild.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(92)
+		}
+		if err := os.WriteFile(os.Getenv(workerHelperRelayEnv), []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(92)
+		}
+		grandchild.Process.Release()
+		os.Exit(0)
 	case "term-delay":
 		delay, err := time.ParseDuration(os.Getenv(workerHelperTermEnv) + "ms")
 		if err != nil {
@@ -648,6 +689,22 @@ func newTestSupervisorWithLock(
 		t.Fatalf("New: %v", err)
 	}
 	return s
+}
+
+// replaceEnv returns env with every existing key=value entry matching key
+// removed and key=value appended once, so a re-exec'd child can override a
+// single inherited setting (e.g. which action a relayed grandchild runs)
+// without duplicating or losing the rest of the parent's environment.
+func replaceEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, prefix+value)
 }
 
 func incrementWorkerCount(path string) (int, error) {

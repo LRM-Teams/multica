@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -285,35 +286,55 @@ func resolveVersionHandoffBinary(store *cli.VersionStore, runningVersion string)
 	return staged.BinaryPath, nil
 }
 
-// handoffToActiveVersionIfNeeded opens the default VersionStore and, if the
-// committed Active version differs from this running binary, spawns that
-// version's staged binary as a detached replacement daemon process and
-// returns true. The caller must return immediately without doing any daemon
-// work when this returns true.
-//
-// A VersionStore open failure is reported to the caller rather than treated
-// as "no handoff needed" — the caller decides whether to warn-and-continue
-// (this must never block a daemon from starting).
-func handoffToActiveVersionIfNeeded(cmd *cobra.Command, profile string) (bool, error) {
+// resolveVersionHandoffTarget opens the default VersionStore and resolves
+// whether this running binary needs to hand off to a different, already-
+// staged Active version. Returns "" when no handoff is needed. A VersionStore
+// open failure is reported to the caller rather than treated as "no handoff
+// needed" — the caller decides whether to warn-and-continue (this must never
+// block a daemon from starting).
+func resolveVersionHandoffTarget() (string, error) {
 	store, err := cli.OpenVersionStore("")
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	target, err := resolveVersionHandoffBinary(store, version)
-	if err != nil {
-		return false, err
-	}
-	if target == "" {
-		return false, nil
-	}
+	return resolveVersionHandoffBinary(store, version)
+}
 
-	pid, err := spawnDetachedDaemonBinary(target, buildDaemonStartArgs(cmd), daemonLogPathForProfile(profile))
+// handoffAndWait spawns binPath as a plain child of this process — sharing
+// this process's process group (unix) / console process group (windows)
+// rather than detaching — and blocks until it exits, propagating its exact
+// outcome (nil for a clean exit, an error otherwise) as its own return
+// value.
+//
+// This is deliberately NOT "spawn detached + exit immediately". Under an
+// external supervisor (task #815), the supervisor tracks THIS process as
+// the worker. If it exited immediately after merely kicking off a sibling,
+// the supervisor would see an ordinary clean exit and conclude the worker
+// stopped for good (see TestSupervisorCleanExitDoesNotRestart) — on a busy
+// machine, that means the very first version handoff permanently kills the
+// supervisor's restart loop, leaving the new daemon completely unmanaged
+// (found in review by Barry on PR #1584). Blocking here instead keeps the
+// supervisor's tracked PID alive — and, by staying in its process group,
+// still directly receiving the supervisor's own stop signal — for as long
+// as the real daemon work (potentially several handoffs deep) keeps
+// running, so the supervisor only ever observes the work's true final fate.
+func handoffAndWait(binPath string, args []string, logPath, pidPath string) error {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return false, fmt.Errorf("hand off to Active version binary %s: %w", target, err)
+		return fmt.Errorf("open daemon log file %s: %w", logPath, err)
 	}
-	if dir := daemonDirForProfile(profile); dir != "" {
-		os.MkdirAll(dir, 0o755)
+	defer logFile.Close()
+
+	child := exec.Command(binPath, args...)
+	child.Stdout = logFile
+	child.Stderr = logFile
+	// No SysProcAttr override: the child deliberately stays in this
+	// process's group rather than detaching — see doc comment above.
+	if err := child.Start(); err != nil {
+		return fmt.Errorf("start daemon at %s: %w", binPath, err)
 	}
-	os.WriteFile(daemonPIDPathForProfile(profile), []byte(strconv.Itoa(pid)), 0o644)
-	return true, nil
+	if pidPath != "" {
+		os.WriteFile(pidPath, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+	}
+	return child.Wait()
 }

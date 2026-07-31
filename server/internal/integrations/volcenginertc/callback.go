@@ -12,9 +12,11 @@ import (
 const (
 	conversationStatusMagic   = "conv"
 	conversationSubtitleMagic = "subv"
+	functionToolMagic         = "tool"
 	callbackHeaderBytes       = 8
 	maxCallbackEncodedBytes   = 128 << 10
 	maxCallbackPayloadBytes   = 64 << 10
+	maxFunctionToolCalls      = 8
 )
 
 type ServerCallbackKind string
@@ -22,12 +24,14 @@ type ServerCallbackKind string
 const (
 	ServerCallbackConversationStatus ServerCallbackKind = "conversation_status"
 	ServerCallbackSubtitle           ServerCallbackKind = "subtitle"
+	ServerCallbackFunctionCall       ServerCallbackKind = "function_call"
 )
 
 type ServerCallback struct {
 	Kind               ServerCallbackKind
 	ConversationStatus *ConversationStatus
 	Subtitle           *ConversationSubtitle
+	FunctionCall       *FunctionCallMessage
 }
 
 type ConversationStageCode int
@@ -77,6 +81,22 @@ type ConversationSubtitleSegment struct {
 	LastCharPos  int64  `json:"lastCharPos"`
 }
 
+type FunctionCallMessage struct {
+	SubscriberUserID string             `json:"subscriber_user_id"`
+	ToolCalls        []FunctionToolCall `json:"tool_calls"`
+}
+
+type FunctionToolCall struct {
+	ID       string                   `json:"id"`
+	Type     string                   `json:"type"`
+	Function FunctionToolCallFunction `json:"function"`
+}
+
+type FunctionToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
 func DecodeServerCallback(encoded string) (ServerCallback, error) {
 	magic, payload, err := decodeCallbackFrame(encoded)
 	if err != nil {
@@ -101,12 +121,43 @@ func DecodeServerCallback(encoded string) (ServerCallback, error) {
 			Kind:     ServerCallbackSubtitle,
 			Subtitle: &subtitle,
 		}, nil
+	case functionToolMagic:
+		functionCall, err := decodeFunctionCallMessage(payload)
+		if err != nil {
+			return ServerCallback{}, err
+		}
+		return ServerCallback{
+			Kind:         ServerCallbackFunctionCall,
+			FunctionCall: &functionCall,
+		}, nil
 	default:
 		return ServerCallback{}, fmt.Errorf(
 			"Volcengine RTC callback magic %q is unsupported",
 			magic,
 		)
 	}
+}
+
+func decodeFunctionCallMessage(payload []byte) (FunctionCallMessage, error) {
+	var message FunctionCallMessage
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return FunctionCallMessage{}, fmt.Errorf(
+			"decode Volcengine RTC function call: %w",
+			err,
+		)
+	}
+	message.SubscriberUserID = strings.TrimSpace(message.SubscriberUserID)
+	for index := range message.ToolCalls {
+		tool := &message.ToolCalls[index]
+		tool.ID = strings.TrimSpace(tool.ID)
+		tool.Type = strings.TrimSpace(tool.Type)
+		tool.Function.Name = strings.TrimSpace(tool.Function.Name)
+		tool.Function.Arguments = strings.TrimSpace(tool.Function.Arguments)
+	}
+	if err := validateFunctionCallMessage(message); err != nil {
+		return FunctionCallMessage{}, err
+	}
+	return message, nil
 }
 
 func DecodeConversationStatusCallback(encoded string) (ConversationStatus, error) {
@@ -257,6 +308,55 @@ func validateConversationSubtitle(subtitle ConversationSubtitle) error {
 			return fmt.Errorf(
 				"Volcengine RTC subtitle callback data[%d].roundId must not be negative",
 				index,
+			)
+		}
+	}
+	return nil
+}
+
+func validateFunctionCallMessage(message FunctionCallMessage) error {
+	if len(message.ToolCalls) == 0 {
+		return errors.New("Volcengine RTC function callback tool_calls is required")
+	}
+	if len(message.ToolCalls) > maxFunctionToolCalls {
+		return fmt.Errorf(
+			"Volcengine RTC function callback exceeds %d tool calls",
+			maxFunctionToolCalls,
+		)
+	}
+	for index, tool := range message.ToolCalls {
+		if tool.ID == "" || len(tool.ID) > 256 {
+			return fmt.Errorf(
+				"Volcengine RTC function callback tool_calls[%d].id is invalid",
+				index,
+			)
+		}
+		if tool.Type != "function" {
+			return fmt.Errorf(
+				"Volcengine RTC function callback tool_calls[%d].type is unsupported",
+				index,
+			)
+		}
+		if tool.Function.Name == "" || len(tool.Function.Name) > 256 {
+			return fmt.Errorf(
+				"Volcengine RTC function callback tool_calls[%d].function.name is invalid",
+				index,
+			)
+		}
+		if len(tool.Function.Arguments) > maxCallbackPayloadBytes {
+			return fmt.Errorf(
+				"Volcengine RTC function callback tool_calls[%d].function.arguments is too large",
+				index,
+			)
+		}
+		if err := requireJSONObject(
+			"function arguments",
+			json.RawMessage(tool.Function.Arguments),
+		); err != nil {
+			return fmt.Errorf(
+				"Volcengine RTC function callback tool_calls[%d]: %w",
+				index,
+				err,
 			)
 		}
 	}

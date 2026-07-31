@@ -19,6 +19,7 @@ const (
 	defaultVoiceCallTTSVoiceID    = "zh_male_m191_uranus_bigtts"
 	defaultVoiceCallTokenTTL      = 30 * time.Minute
 	defaultVoiceCallOperationWait = 10 * time.Second
+	defaultVoiceCallAgentWait     = 90 * time.Second
 )
 
 var voiceCallOptInEnvironmentNames = []string{
@@ -44,6 +45,7 @@ var voiceCallEnvironmentNames = append([]string{
 	"VOLCENGINE_RTC_TOKEN_TTL",
 	"VOLCENGINE_RTC_COMPENSATION_TIMEOUT",
 	"VOLCENGINE_RTC_CLEANUP_TIMEOUT",
+	"VOLCENGINE_RTC_AGENT_TIMEOUT",
 }, voiceCallOptInEnvironmentNames...)
 
 type voiceCallRuntimeConfig struct {
@@ -65,6 +67,7 @@ type voiceCallRuntimeConfig struct {
 	TokenTTL            time.Duration
 	CompensationTimeout time.Duration
 	CleanupTimeout      time.Duration
+	AgentTimeout        time.Duration
 }
 
 func loadVoiceCallRuntimeConfig(
@@ -184,6 +187,14 @@ func loadVoiceCallRuntimeConfig(
 	if err != nil {
 		return voiceCallRuntimeConfig{}, true, err
 	}
+	config.AgentTimeout, err = voiceCallDuration(
+		getenv,
+		"VOLCENGINE_RTC_AGENT_TIMEOUT",
+		defaultVoiceCallAgentWait,
+	)
+	if err != nil {
+		return voiceCallRuntimeConfig{}, true, err
+	}
 	return config, true, nil
 }
 
@@ -285,8 +296,22 @@ func configureVoiceCallService(
 	if err != nil {
 		return fmt.Errorf("initialize voice call callback service: %w", err)
 	}
+	agentBridge, err := handler.NewVoiceCallAgentBridge(h, config.AgentTimeout)
+	if err != nil {
+		return fmt.Errorf("initialize voice call agent bridge: %w", err)
+	}
+	functionBridge, err := handler.NewVoiceCallFunctionBridge(
+		h,
+		agentBridge,
+		client,
+		config.AppID,
+	)
+	if err != nil {
+		return fmt.Errorf("initialize voice call function bridge: %w", err)
+	}
 	h.VoiceCallService = callService
 	h.VoiceCallCallbackProcessor = callbackService
+	h.VoiceCallFunctionProcessor = functionBridge
 	h.VoiceCallCallbackSignature = config.CallbackSignature
 	return nil
 }

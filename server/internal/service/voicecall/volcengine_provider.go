@@ -128,19 +128,27 @@ func (provider *VolcengineProvider) Connect(
 	ctx context.Context,
 	input ProviderConnectInput,
 ) error {
+	functionCallbackURL, err := volcenginertc.BuildFunctionCallbackURL(
+		provider.callbackURL,
+		input.RoomID,
+	)
+	if err != nil {
+		return fmt.Errorf("build Volcengine function callback URL: %w", err)
+	}
 	configuration, err := volcenginertc.BuildStartConfiguration(
 		volcenginertc.StartConfigurationInput{
-			TargetUserID:      input.TargetUserID,
-			AgentUserID:       input.AgentUserID,
-			WelcomeMessage:    input.WelcomeMessage,
-			SystemMessages:    input.SystemMessages,
-			ArkEndpointID:     provider.arkEndpointID,
-			ASRAppID:          provider.asrAppID,
-			TTSAppID:          provider.ttsAppID,
-			SpeechAccessToken: provider.speechAccessToken,
-			TTSVoiceID:        provider.ttsVoiceID,
-			CallbackURL:       provider.callbackURL,
-			CallbackSignature: provider.callbackSignature,
+			TargetUserID:        input.TargetUserID,
+			AgentUserID:         input.AgentUserID,
+			WelcomeMessage:      input.WelcomeMessage,
+			SystemMessages:      input.SystemMessages,
+			ArkEndpointID:       provider.arkEndpointID,
+			ASRAppID:            provider.asrAppID,
+			TTSAppID:            provider.ttsAppID,
+			SpeechAccessToken:   provider.speechAccessToken,
+			TTSVoiceID:          provider.ttsVoiceID,
+			CallbackURL:         provider.callbackURL,
+			FunctionCallbackURL: functionCallbackURL,
+			CallbackSignature:   provider.callbackSignature,
 		},
 	)
 	if err != nil {

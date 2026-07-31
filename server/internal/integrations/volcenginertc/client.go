@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	volcbase "github.com/volcengine/volcengine-go-sdk/volcengine/base"
 )
@@ -57,14 +58,18 @@ type StartVoiceChatRequest struct {
 type UpdateCommand string
 
 const (
-	UpdateCommandInterrupt UpdateCommand = "interrupt"
+	UpdateCommandInterrupt            UpdateCommand = "interrupt"
+	UpdateCommandFunction             UpdateCommand = "function"
+	UpdateCommandExternalTextToSpeech UpdateCommand = "ExternalTextToSpeech"
 )
 
 type UpdateVoiceChatRequest struct {
-	AppID   string        `json:"AppId"`
-	RoomID  string        `json:"RoomId"`
-	TaskID  string        `json:"TaskId"`
-	Command UpdateCommand `json:"Command"`
+	AppID         string        `json:"AppId"`
+	RoomID        string        `json:"RoomId"`
+	TaskID        string        `json:"TaskId"`
+	Command       UpdateCommand `json:"Command"`
+	Message       string        `json:"Message,omitempty"`
+	InterruptMode int           `json:"InterruptMode,omitempty"`
 }
 
 type StopVoiceChatRequest struct {
@@ -208,10 +213,83 @@ func (c *Client) UpdateVoiceChat(ctx context.Context, request UpdateVoiceChatReq
 	if strings.TrimSpace(string(request.Command)) == "" {
 		return Response{}, errors.New("volcengine RTC Command is required")
 	}
-	if request.Command != UpdateCommandInterrupt {
+	switch request.Command {
+	case UpdateCommandInterrupt:
+		if strings.TrimSpace(request.Message) != "" || request.InterruptMode != 0 {
+			return Response{}, errors.New(
+				"volcengine RTC interrupt command must not include Message or InterruptMode",
+			)
+		}
+	case UpdateCommandFunction:
+		if request.InterruptMode != 0 {
+			return Response{}, errors.New(
+				"volcengine RTC function command must not include InterruptMode",
+			)
+		}
+		if err := validateFunctionResultMessage(request.Message); err != nil {
+			return Response{}, err
+		}
+	case UpdateCommandExternalTextToSpeech:
+		message := strings.TrimSpace(request.Message)
+		if message == "" {
+			return Response{}, errors.New(
+				"volcengine RTC ExternalTextToSpeech Message is required",
+			)
+		}
+		if !utf8.ValidString(message) || len([]rune(message)) > 200 {
+			return Response{}, errors.New(
+				"volcengine RTC ExternalTextToSpeech Message exceeds 200 characters",
+			)
+		}
+		if request.InterruptMode < 1 || request.InterruptMode > 3 {
+			return Response{}, errors.New(
+				"volcengine RTC ExternalTextToSpeech InterruptMode must be 1, 2, or 3",
+			)
+		}
+	default:
 		return Response{}, fmt.Errorf("volcengine RTC Command %q is not supported", request.Command)
 	}
 	return c.call(ctx, "UpdateVoiceChat", request)
+}
+
+func validateFunctionResultMessage(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return errors.New("volcengine RTC function command Message is required")
+	}
+	if len(message) > maxRequestBytes {
+		return fmt.Errorf(
+			"volcengine RTC function command Message exceeds %d bytes",
+			maxRequestBytes,
+		)
+	}
+	var result struct {
+		ToolCallID string `json:"ToolCallID"`
+		Content    string `json:"Content"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(message))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return fmt.Errorf("decode volcengine RTC function command Message: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return fmt.Errorf("decode volcengine RTC function command Message: %w", err)
+	}
+	if strings.TrimSpace(result.ToolCallID) == "" {
+		return errors.New(
+			"volcengine RTC function command Message ToolCallID is required",
+		)
+	}
+	if strings.TrimSpace(result.Content) == "" {
+		return errors.New(
+			"volcengine RTC function command Message Content is required",
+		)
+	}
+	return nil
 }
 
 func (c *Client) StopVoiceChat(ctx context.Context, request StopVoiceChatRequest) (Response, error) {

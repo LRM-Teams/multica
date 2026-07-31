@@ -199,6 +199,9 @@ type Handler struct {
 	// or empty unless the RTC integration is configured.
 	VoiceCallCallbackProcessor VoiceCallCallbackProcessor
 	VoiceCallCallbackSignature string
+	// VoiceCallFunctionProcessor dispatches authenticated RTC function calls
+	// into the durable Multica Agent runtime and returns their results to RTC.
+	VoiceCallFunctionProcessor VoiceCallFunctionProcessor
 	// VoiceCallLLMProcessor is the server-side bridge from Volcengine's
 	// CustomLLM request to the durable Multica agent runtime. The API key is a
 	// dedicated provider-to-server bearer credential, not an RTC AppKey or a

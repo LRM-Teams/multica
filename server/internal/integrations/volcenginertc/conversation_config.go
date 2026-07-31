@@ -9,22 +9,49 @@ import (
 )
 
 const (
-	volcengineASRResourceID = "volc.seedasr.sauc.duration"
-	volcengineTTSResourceID = "seed-tts-2.0"
+	volcengineASRResourceID     = "volc.seedasr.sauc.duration"
+	volcengineTTSResourceID     = "seed-tts-2.0"
+	FunctionCallbackRoomIDQuery = "voice_call_room_id"
+	VoiceAgentToolName          = "delegate_work_to_multica_agent"
+	voiceAgentToolDescription   = "" +
+		"当用户要求创建或修改 issue、执行开发工作、安排或推进任务、检查项目状态，" +
+		"或做任何需要 Multica 真实工具和权限的操作时调用。" +
+		"普通闲聊、解释和无需改变项目状态的回答不要调用。"
+	voiceAgentRequestDescription = "完整保留用户要执行的任务、对象、约束和验收要求，使用中文。"
 )
 
+func BuildFunctionCallbackURL(callbackURL, roomID string) (string, error) {
+	callbackURL = strings.TrimSpace(callbackURL)
+	if err := validatePublicHTTPSURL(callbackURL); err != nil {
+		return "", fmt.Errorf("volcengine RTC callback URL: %w", err)
+	}
+	roomID = strings.TrimSpace(roomID)
+	if err := validateRoomTokenID("RoomId", roomID); err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(callbackURL)
+	if err != nil {
+		return "", fmt.Errorf("parse volcengine RTC callback URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set(FunctionCallbackRoomIDQuery, roomID)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
 type StartConfigurationInput struct {
-	TargetUserID      string
-	AgentUserID       string
-	WelcomeMessage    string
-	SystemMessages    []string
-	ArkEndpointID     string
-	ASRAppID          string
-	TTSAppID          string
-	SpeechAccessToken string
-	TTSVoiceID        string
-	CallbackURL       string
-	CallbackSignature string
+	TargetUserID        string
+	AgentUserID         string
+	WelcomeMessage      string
+	SystemMessages      []string
+	ArkEndpointID       string
+	ASRAppID            string
+	TTSAppID            string
+	SpeechAccessToken   string
+	TTSVoiceID          string
+	CallbackURL         string
+	FunctionCallbackURL string
+	CallbackSignature   string
 }
 
 type StartConfiguration struct {
@@ -54,13 +81,41 @@ type startVADConfig struct {
 }
 
 type startLLMConfig struct {
-	Mode           string   `json:"Mode"`
-	EndpointID     string   `json:"EndPointId"`
-	SystemMessages []string `json:"SystemMessages"`
-	HistoryLength  int      `json:"HistoryLength"`
-	MaxTokens      int      `json:"MaxTokens"`
-	ThinkingType   string   `json:"ThinkingType"`
-	Prefill        bool     `json:"Prefill"`
+	Mode           string         `json:"Mode"`
+	EndpointID     string         `json:"EndPointId"`
+	SystemMessages []string       `json:"SystemMessages"`
+	HistoryLength  int            `json:"HistoryLength"`
+	MaxTokens      int            `json:"MaxTokens"`
+	ThinkingType   string         `json:"ThinkingType"`
+	Prefill        bool           `json:"Prefill"`
+	Tools          []startLLMTool `json:"Tools"`
+}
+
+type startLLMTool struct {
+	Type     string               `json:"type"`
+	Function startLLMToolFunction `json:"function"`
+}
+
+type startLLMToolFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  startLLMToolParameters `json:"parameters"`
+}
+
+type startLLMToolParameters struct {
+	Type                 string                          `json:"type"`
+	Properties           startLLMToolParameterProperties `json:"properties"`
+	Required             []string                        `json:"required"`
+	AdditionalProperties bool                            `json:"additionalProperties"`
+}
+
+type startLLMToolParameterProperties struct {
+	Request startLLMToolStringParameter `json:"request"`
+}
+
+type startLLMToolStringParameter struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
 }
 
 type startTTSConfig struct {
@@ -96,6 +151,11 @@ type startSubtitleConfig struct {
 	SubtitleMode           int    `json:"SubtitleMode"`
 }
 
+type startFunctionCallingConfig struct {
+	ServerMessageURL       string `json:"ServerMessageUrl"`
+	ServerMessageSignature string `json:"ServerMessageSignature"`
+}
+
 type startAgentConfig struct {
 	TargetUserIDs                   []string `json:"TargetUserId"`
 	UserID                          string   `json:"UserId"`
@@ -106,11 +166,12 @@ type startAgentConfig struct {
 }
 
 type startConversationConfig struct {
-	ASRConfig      startASRConfig      `json:"ASRConfig"`
-	LLMConfig      startLLMConfig      `json:"LLMConfig"`
-	TTSConfig      startTTSConfig      `json:"TTSConfig"`
-	SubtitleConfig startSubtitleConfig `json:"SubtitleConfig"`
-	InterruptMode  int                 `json:"InterruptMode"`
+	ASRConfig             startASRConfig             `json:"ASRConfig"`
+	LLMConfig             startLLMConfig             `json:"LLMConfig"`
+	TTSConfig             startTTSConfig             `json:"TTSConfig"`
+	SubtitleConfig        startSubtitleConfig        `json:"SubtitleConfig"`
+	FunctionCallingConfig startFunctionCallingConfig `json:"FunctionCallingConfig"`
+	InterruptMode         int                        `json:"InterruptMode"`
 }
 
 func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration, error) {
@@ -160,6 +221,16 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 	if err := validatePublicHTTPSURL(callbackURL); err != nil {
 		return StartConfiguration{}, fmt.Errorf("volcengine RTC callback URL: %w", err)
 	}
+	functionCallbackURL := strings.TrimSpace(input.FunctionCallbackURL)
+	if functionCallbackURL == "" {
+		functionCallbackURL = callbackURL
+	}
+	if err := validatePublicHTTPSURL(functionCallbackURL); err != nil {
+		return StartConfiguration{}, fmt.Errorf(
+			"volcengine RTC function callback URL: %w",
+			err,
+		)
+	}
 	callbackSignature := strings.TrimSpace(input.CallbackSignature)
 	if callbackSignature == "" {
 		return StartConfiguration{}, errors.New("volcengine RTC callback signature is required")
@@ -196,6 +267,24 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 			MaxTokens:      256,
 			ThinkingType:   "disabled",
 			Prefill:        false,
+			Tools: []startLLMTool{{
+				Type: "function",
+				Function: startLLMToolFunction{
+					Name:        VoiceAgentToolName,
+					Description: voiceAgentToolDescription,
+					Parameters: startLLMToolParameters{
+						Type: "object",
+						Properties: startLLMToolParameterProperties{
+							Request: startLLMToolStringParameter{
+								Type:        "string",
+								Description: voiceAgentRequestDescription,
+							},
+						},
+						Required:             []string{"request"},
+						AdditionalProperties: false,
+					},
+				},
+			}},
 		},
 		TTSConfig: startTTSConfig{
 			AutoActive: true,
@@ -215,6 +304,10 @@ func BuildStartConfiguration(input StartConfigurationInput) (StartConfiguration,
 			ServerMessageSignature: callbackSignature,
 			DisableRTSSubtitle:     false,
 			SubtitleMode:           0,
+		},
+		FunctionCallingConfig: startFunctionCallingConfig{
+			ServerMessageURL:       functionCallbackURL,
+			ServerMessageSignature: callbackSignature,
 		},
 		InterruptMode: 0,
 	})

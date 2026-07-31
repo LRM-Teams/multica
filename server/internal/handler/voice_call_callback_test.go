@@ -101,6 +101,72 @@ func TestVoiceCallCallbackAuthenticatesAndProcessesSubtitleWithoutContentType(t 
 	}
 }
 
+func TestVoiceCallCallbackAuthenticatesAndDispatchesFunctionToolCall(t *testing.T) {
+	callbackProcessor := &fakeVoiceCallCallbackProcessor{}
+	functionProcessor := &fakeVoiceCallFunctionProcessor{}
+	handler := &Handler{
+		VoiceCallCallbackProcessor: callbackProcessor,
+		VoiceCallFunctionProcessor: functionProcessor,
+		VoiceCallCallbackSignature: "expected-signature",
+	}
+	body := `{"message":"` + voiceCallCallbackPayloadForTest(
+		"tool",
+		`{"subscriber_user_id":"voice-member-nonce-1","tool_calls":[{"function":{"arguments":"{\"request\":\"创建 issue 修复登录失败。\"}","name":"delegate_work_to_multica_agent"},"id":"call-1","type":"function"}]}`,
+	) + `","binary":true,"signature":"expected-signature"}`
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/voice-calls/callback?voice_call_room_id=voice-call-nonce-1",
+		strings.NewReader(body),
+	)
+	response := httptest.NewRecorder()
+
+	handler.HandleVoiceCallCallback(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "ok" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if functionProcessor.calls != 1 ||
+		functionProcessor.roomID != "voice-call-nonce-1" ||
+		len(functionProcessor.message.ToolCalls) != 1 ||
+		functionProcessor.message.ToolCalls[0].ID != "call-1" {
+		t.Fatalf("function processor = %#v", functionProcessor)
+	}
+	if callbackProcessor.statusCalls != 0 ||
+		callbackProcessor.subtitleCalls != 0 ||
+		callbackProcessor.taskEventCalls != 0 {
+		t.Fatalf("lifecycle processor = %#v", callbackProcessor)
+	}
+}
+
+func TestVoiceCallCallbackRejectsFunctionCallWithoutScopedRoom(t *testing.T) {
+	callbackProcessor := &fakeVoiceCallCallbackProcessor{}
+	functionProcessor := &fakeVoiceCallFunctionProcessor{}
+	handler := &Handler{
+		VoiceCallCallbackProcessor: callbackProcessor,
+		VoiceCallFunctionProcessor: functionProcessor,
+		VoiceCallCallbackSignature: "expected-signature",
+	}
+	body := `{"message":"` + voiceCallCallbackPayloadForTest(
+		"tool",
+		`{"subscriber_user_id":"voice-member-nonce-1","tool_calls":[{"function":{"arguments":"{\"request\":\"创建 issue。\"}","name":"delegate_work_to_multica_agent"},"id":"call-1","type":"function"}]}`,
+	) + `","binary":true,"signature":"expected-signature"}`
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/voice-calls/callback",
+		strings.NewReader(body),
+	)
+	response := httptest.NewRecorder()
+
+	handler.HandleVoiceCallCallback(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", response.Code)
+	}
+	if functionProcessor.calls != 0 {
+		t.Fatalf("unscoped function processor called %d times", functionProcessor.calls)
+	}
+}
+
 func TestVoiceCallCallbackAuthenticatesAndProcessesVoiceChatTaskStart(t *testing.T) {
 	processor := &fakeVoiceCallCallbackProcessor{
 		taskEventResult: voicecall.Session{
@@ -287,6 +353,24 @@ func TestVoiceCallCallbackReturnsUnavailableUntilConfigured(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", response.Code)
 	}
+}
+
+type fakeVoiceCallFunctionProcessor struct {
+	calls   int
+	roomID  string
+	message volcenginertc.FunctionCallMessage
+	err     error
+}
+
+func (processor *fakeVoiceCallFunctionProcessor) HandleFunctionCalls(
+	_ context.Context,
+	roomID string,
+	message volcenginertc.FunctionCallMessage,
+) error {
+	processor.calls++
+	processor.roomID = roomID
+	processor.message = message
+	return processor.err
 }
 
 type fakeVoiceCallCallbackProcessor struct {

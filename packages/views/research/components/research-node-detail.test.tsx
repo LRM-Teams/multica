@@ -1,0 +1,108 @@
+import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import type { ResearchGraphNode, ResearchSource } from "@multica/core/types";
+import { ResearchNodeDetail } from "./research-node-detail";
+
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (fn: (dict: Record<string, unknown>) => unknown) =>
+      fn({
+        panel: { weight: "Weight" },
+        node: {
+          goal: "Goal",
+          subquestion: "Sub",
+          probe: "Probe",
+          finding: "Finding",
+          conflict: "Conflict",
+          dead_end: "Dead end",
+          refuted: "Refuted",
+          pivot: "Pivot",
+          roster_change: "Roster",
+          stage_gate: "Gate",
+          product_round_gate: "Round",
+          agent_activity: "Activity",
+          confidence: "Confidence",
+          detail_hint: "Detail",
+          summary: "Summary",
+          summary_empty: "No summary",
+          dead_end_reason: "Why blocked",
+          evidence: "Evidence",
+          evidence_empty: "No evidence",
+        },
+      }),
+  }),
+}));
+
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
+}));
+
+vi.mock("@multica/ui/components/ui/sheet", async () => {
+  const React = await import("react");
+  return {
+    Sheet: ({
+      open,
+      children,
+    }: {
+      open?: boolean;
+      children?: React.ReactNode;
+    }) => (open ? <div>{children}</div> : null),
+    SheetContent: ({
+      children,
+      ...rest
+    }: {
+      children?: React.ReactNode;
+      "data-testid"?: string;
+    }) => (
+      <div data-testid={rest["data-testid"] ?? "sheet-content"}>{children}</div>
+    ),
+    SheetHeader: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    SheetTitle: ({ children }: { children?: React.ReactNode }) => <h2>{children}</h2>,
+    SheetDescription: ({ children }: { children?: React.ReactNode }) => <p>{children}</p>,
+  };
+});
+
+const node: ResearchGraphNode = {
+  id: "n1",
+  session_id: "s1",
+  node_type: "finding",
+  title: "价格区间已交叉验证",
+  summary: "挂牌中位价与成交价差约 8%。",
+  status: "done",
+  position: { x: 0, y: 0 },
+  payload: { confidence: 0.82, source_id: "src1" },
+} as ResearchGraphNode;
+
+const sources: ResearchSource[] = [
+  {
+    id: "src1",
+    url: "https://docs.example/a",
+    title: "成交样本",
+    credibility_weight: 0.88,
+    excerpt: "样本 n=120",
+  } as ResearchSource,
+];
+
+describe("ResearchNodeDetail (LRM-826)", () => {
+  it("renders as a sheet detail surface, not a corner float chip", () => {
+    render(<ResearchNodeDetail node={node} sources={sources} open />);
+    expect(screen.getByTestId("research-node-detail")).toBeInTheDocument();
+    expect(screen.getByText("价格区间已交叉验证")).toBeInTheDocument();
+    expect(screen.getByText("挂牌中位价与成交价差约 8%。")).toBeInTheDocument();
+    expect(screen.getByText("成交样本")).toBeInTheDocument();
+    expect(document.querySelector(".absolute.bottom-4.left-4")).toBeNull();
+  });
+
+  it("shows dead-end reason when node is blocked", () => {
+    const dead: ResearchGraphNode = {
+      ...node,
+      node_type: "dead_end",
+      title: "法规路径不通",
+      summary: "缺少本地条例全文。",
+      payload: { reason: "权威源不可达" },
+    } as ResearchGraphNode;
+    render(<ResearchNodeDetail node={dead} sources={[]} open />);
+    expect(screen.getByText("Why blocked")).toBeInTheDocument();
+    expect(screen.getByText("权威源不可达")).toBeInTheDocument();
+  });
+});

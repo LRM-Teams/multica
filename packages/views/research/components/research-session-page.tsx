@@ -200,6 +200,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         selectedSummary={
           ui.selected ? `${ui.selected.title} — ${ui.selected.summary}` : null
         }
+        members={fleet.members}
+        sources={sources}
       />
 
       <ResearchStageTimeline

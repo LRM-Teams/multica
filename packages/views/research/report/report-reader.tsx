@@ -155,10 +155,6 @@ export function ReportReader({
       )}
       aria-label={t(($) => $.panel.delivery)}
       aria-modal="true"
-      onClick={(event) => {
-        // Click the dimmed backdrop (dialog element itself) to dismiss — not the card.
-        if (event.target === event.currentTarget) onClose();
-      }}
       onCancel={(event) => {
         event.preventDefault();
         const dialog = dialogRef.current;
@@ -170,14 +166,19 @@ export function ReportReader({
       }}
       onClose={onClose}
     >
+      <button
+        type="button"
+        className="absolute inset-0 z-0 cursor-default bg-transparent"
+        aria-label={t(($) => $.panel.hide_chat)}
+        onClick={onClose}
+      />
       <div
         role="document"
         className={cn(
-          "flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
+          "relative z-10 flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
           // Centered reading card on desktop; near-fullscreen on narrow.
           "sm:h-[min(920px,calc(100vh-4rem))] sm:w-full sm:max-w-[min(1120px,calc(100vw-4rem))] sm:rounded-2xl",
         )}
-        onClick={(event) => event.stopPropagation()}
       >
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
           <Button

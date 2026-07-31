@@ -41,8 +41,8 @@ export function spokenMessagePreviewText(
     if (kind === "sticker") return labels.sticker;
     if (kind === "image" || kind === "media") return labels.image;
   }
-  if ((message.attachments?.length ?? 0) > 0) {
-    const first = message.attachments![0];
+  const first = message.attachments?.[0];
+  if (first) {
     const ct = (first.content_type ?? "").toLowerCase();
     if (ct.startsWith("image/")) return labels.image;
     return labels.attachment;

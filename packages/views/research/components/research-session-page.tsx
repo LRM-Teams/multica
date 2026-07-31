@@ -223,13 +223,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 );
             }}
           />
-          <ResearchDeliveryDrawer
-            open={ui.deliveryOpen}
-            onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
-            report={report}
-            sources={sources}
-            titleFallback={session.title}
-          />
           {!chatOpen ? (
             <Button
               type="button"
@@ -364,6 +357,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           </aside>
         ) : null}
       </div>
+
+      {/* Portal-friendly mount: keep delivery modal outside the canvas
+          `relative`/`overflow` section so it cannot collapse into a corner float. */}
+      <ResearchDeliveryDrawer
+        open={ui.deliveryOpen}
+        onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
+        report={report}
+        sources={sources}
+        titleFallback={session.title}
+      />
     </div>
   );
 }

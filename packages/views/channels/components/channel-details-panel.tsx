@@ -3,15 +3,12 @@
 import { type ChangeEvent, type ReactNode, type RefObject, useRef, useState } from "react";
 import {
   Bell,
-  Camera,
   ChevronLeft,
   ChevronRight,
-  ImageIcon,
   Loader2,
   Search,
   Settings,
   Square,
-  Tag,
   Trash2,
   VolumeX,
 } from "lucide-react";
@@ -38,13 +35,14 @@ import { ChannelNotifyPrefsOptions } from "./channel-notify-prefs";
 /**
  * LRM-494 — Slack-style channel details surface.
  * Home is a single overview (hero + section cards + danger). Drill-down
- * reuses the prior About/Members/Settings bodies as sub-views.
- * `initialTab` still remounts into a drill-down when the opener requests it.
+ * reuses Members/Settings bodies as sub-views.
+ * LRM-860 — About sub-views removed; hero name/description/avatar edit in place.
  * LRM-675 — the Files drill-down is removed: the main-area 「文件」 tab is
  * the single Files entry (no dual-track entry, LRM-238).
  */
 export type ChannelDetailsTab = "about" | "members" | "settings";
-type DetailsView = "home" | ChannelDetailsTab | "about-edit" | "avatar" | "notify-prefs";
+type DetailsView = "home" | ChannelDetailsTab | "notify-prefs";
+type HeroEditField = "name" | "description" | null;
 
 /** Caps capability / pending flags so the panel avoids many boolean props (react-doctor). */
 export type ChannelDetailsAccess = {
@@ -185,9 +183,10 @@ export function ChannelDetailsPanel({
   const [descriptionDraft, setDescriptionDraft] = useState(channel.description ?? "");
   // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
   const [larkDraft, setLarkDraft] = useState(channel.lark_chat_id ?? "");
+  const [heroEdit, setHeroEdit] = useState<HeroEditField>(null);
+  const skipHeroBlurRef = useRef(false);
 
-  // LRM-724 — channel icon upload: pick → upload → parent persists the link
-  // via the channel-update mutation (toasts mirror rename/description).
+  // LRM-724 / LRM-860 — channel icon upload from hero (no avatar sub-view).
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const { upload: uploadAvatarFile, uploading: avatarUploading } = useFileUpload(api);
   const avatarBusy = avatarUploading || !!avatarPending;
@@ -210,11 +209,45 @@ export function ChannelDetailsPanel({
   };
 
   const muted = isConversationMuted(channel);
-  const nameDirty = nameDraft.trim() !== channel.name;
-  const descriptionDirty =
-    (descriptionDraft.trim() || null) !== (channel.description?.trim() || null);
   const larkDirty = (larkDraft.trim() || null) !== (channel.lark_chat_id || null);
   const settingsEditable = canManage && !isArchived;
+
+  const commitName = () => {
+    if (skipHeroBlurRef.current) {
+      skipHeroBlurRef.current = false;
+      return;
+    }
+    const next = nameDraft.trim();
+    if (!next) {
+      showErrorToast(t(($) => $.details.rename_empty));
+      return;
+    }
+    if (next !== channel.name) onRename(next);
+    setHeroEdit(null);
+  };
+
+  const cancelName = () => {
+    skipHeroBlurRef.current = true;
+    setNameDraft(channel.name);
+    setHeroEdit(null);
+  };
+
+  const commitDescription = () => {
+    if (skipHeroBlurRef.current) {
+      skipHeroBlurRef.current = false;
+      return;
+    }
+    const next = descriptionDraft.trim() || null;
+    const prev = channel.description?.trim() || null;
+    if (next !== prev) onUpdateDescription?.(next);
+    setHeroEdit(null);
+  };
+
+  const cancelDescription = () => {
+    skipHeroBlurRef.current = true;
+    setDescriptionDraft(channel.description ?? "");
+    setHeroEdit(null);
+  };
 
   const userCount = members.filter((m) => m.member_type === "user").length;
   const agentCount = members.filter((m) => m.member_type === "agent").length;
@@ -225,14 +258,10 @@ export function ChannelDetailsPanel({
     view === "members"
       ? t(($) => $.details.tab_members)
       : view === "settings"
-          ? t(($) => $.details.section_settings)
-          : view === "about-edit"
-            ? t(($) => $.details.row_name_description)
-            : view === "avatar"
-              ? t(($) => $.details.row_avatar)
-              : view === "notify-prefs"
-                ? t(($) => $.notify_prefs.title)
-                : t(($) => $.details.title);
+        ? t(($) => $.details.section_settings)
+        : view === "notify-prefs"
+          ? t(($) => $.notify_prefs.title)
+          : t(($) => $.details.title);
 
   const leading =
     view === "home" ? (
@@ -274,23 +303,131 @@ export function ChannelDetailsPanel({
         >
           <section className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-start gap-3">
-              <ChannelDetailsHeroAvatar name={channel.name} avatarUrl={channel.avatar_url} />
+              <ChannelDetailsHeroAvatar
+                name={channel.name}
+                avatarUrl={channel.avatar_url}
+                editable={settingsEditable && !!onUpdateAvatar}
+                busy={avatarBusy}
+                onClick={() => avatarInputRef.current?.click()}
+                changeAriaLabel={t(($) => $.details.avatar_change_aria)}
+              />
+              {settingsEditable && onUpdateAvatar ? (
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  aria-label={t(($) => $.details.avatar_change_aria)}
+                  onChange={handleAvatarFile}
+                />
+              ) : null}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-bold tracking-tight">
-                  <span className="text-muted-foreground">#</span>
-                  {channel.name}
-                </p>
+                {heroEdit === "name" && settingsEditable ? (
+                  <div>
+                    <Input
+                      value={nameDraft}
+                      onChange={(e) => setNameDraft(e.target.value)}
+                      disabled={renamePending}
+                      autoFocus
+                      aria-label={t(($) => $.details.rename_label)}
+                      data-testid="channel-details-hero-name-input"
+                      className="h-9 text-base font-bold tracking-tight"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitName();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelName();
+                        }
+                      }}
+                      onBlur={commitName}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {t(($) => $.details.hero_name_hint)}
+                    </p>
+                  </div>
+                ) : settingsEditable ? (
+                  <button
+                    type="button"
+                    data-testid="channel-details-hero-name"
+                    className="-mx-1 truncate rounded-md px-1 text-left text-base font-bold tracking-tight hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+                    onClick={() => {
+                      setNameDraft(channel.name);
+                      setHeroEdit("name");
+                    }}
+                  >
+                    <span className="text-muted-foreground">#</span>
+                    {channel.name}
+                  </button>
+                ) : (
+                  <p
+                    data-testid="channel-details-hero-name"
+                    className="truncate text-base font-bold tracking-tight"
+                  >
+                    <span className="text-muted-foreground">#</span>
+                    {channel.name}
+                  </p>
+                )}
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {t(($) => $.details.hero_meta, {
                     members: userCount,
                     agents: agentCount,
                   })}
                 </p>
-                <p className="mt-2 text-sm leading-5 text-muted-foreground">
-                  {channel.description?.trim()
-                    ? channel.description
-                    : t(($) => $.details.add_description)}
-                </p>
+                {heroEdit === "description" && settingsEditable && onUpdateDescription ? (
+                  <div className="mt-2">
+                    <Textarea
+                      value={descriptionDraft}
+                      onChange={(e) => setDescriptionDraft(e.target.value)}
+                      disabled={descriptionPending}
+                      autoFocus
+                      rows={3}
+                      aria-label={t(($) => $.details.description_label)}
+                      data-testid="channel-details-hero-description-input"
+                      placeholder={t(($) => $.details.add_description)}
+                      className="resize-none text-sm"
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelDescription();
+                        }
+                      }}
+                      onBlur={commitDescription}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {t(($) => $.details.hero_desc_hint)}
+                    </p>
+                  </div>
+                ) : settingsEditable && onUpdateDescription ? (
+                  <button
+                    type="button"
+                    data-testid="channel-details-hero-description"
+                    className="-mx-1.5 mt-2 w-[calc(100%+0.75rem)] rounded-md px-1.5 py-0.5 text-left text-sm leading-5 text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => {
+                      setDescriptionDraft(channel.description ?? "");
+                      setHeroEdit("description");
+                    }}
+                  >
+                    {channel.description?.trim()
+                      ? channel.description
+                      : t(($) => $.details.add_description)}
+                  </button>
+                ) : (
+                  <p
+                    data-testid="channel-details-hero-description"
+                    className="mt-2 text-sm leading-5 text-muted-foreground"
+                  >
+                    {channel.description?.trim()
+                      ? channel.description
+                      : t(($) => $.details.add_description)}
+                  </p>
+                )}
+                {settingsEditable ? (
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {t(($) => $.details.hero_manage_hint)}
+                  </p>
+                ) : null}
               </div>
             </div>
           </section>
@@ -322,23 +459,6 @@ export function ChannelDetailsPanel({
               onOpenMembers={() => setView("members")}
             />
           ) : null}
-
-          <ChannelDetailsSectionCard title={t(($) => $.details.section_about)}>
-            <ChannelDetailsDetailRow
-              icon={<Tag className="size-4" />}
-              label={t(($) => $.details.row_name_description)}
-              onClick={() => setView("about-edit")}
-              disabled={!settingsEditable}
-              testId="channel-details-about-name"
-            />
-            <ChannelDetailsDetailRow
-              icon={<ImageIcon className="size-4" />}
-              label={t(($) => $.details.row_avatar)}
-              onClick={() => setView("avatar")}
-              disabled={!settingsEditable}
-              testId="channel-details-about-avatar"
-            />
-          </ChannelDetailsSectionCard>
 
           <ChannelDetailsSectionCard title={t(($) => $.details.section_notifications)}>
             <ChannelDetailsDetailRow
@@ -449,117 +569,6 @@ export function ChannelDetailsPanel({
         </div>
       ) : null}
 
-      {view === "about-edit" ? (
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-          <div>
-            <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {t(($) => $.details.rename_label)}
-            </label>
-            <div className="flex gap-2">
-              <Input
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                disabled={!settingsEditable || renamePending}
-                aria-label={t(($) => $.details.rename_label)}
-                className="h-9"
-              />
-              <Button
-                type="button"
-                size="sm"
-                disabled={!settingsEditable || !nameDirty || !nameDraft.trim() || renamePending}
-                onClick={() => onRename(nameDraft.trim())}
-              >
-                {t(($) => $.details.save)}
-              </Button>
-            </div>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {t(($) => $.details.description_label)}
-            </label>
-            <Textarea
-              value={descriptionDraft}
-              onChange={(e) => setDescriptionDraft(e.target.value)}
-              disabled={!settingsEditable || descriptionPending || !onUpdateDescription}
-              aria-label={t(($) => $.details.description_label)}
-              rows={4}
-              placeholder={t(($) => $.details.add_description)}
-              className="resize-none text-sm"
-            />
-            <div className="mt-2 flex justify-end">
-              <Button
-                type="button"
-                size="sm"
-                disabled={
-                  !settingsEditable ||
-                  !onUpdateDescription ||
-                  !descriptionDirty ||
-                  descriptionPending
-                }
-                onClick={() =>
-                  onUpdateDescription?.(descriptionDraft.trim() || null)
-                }
-              >
-                {t(($) => $.details.save)}
-              </Button>
-            </div>
-          </div>
-          {!settingsEditable && manageDisabledReason ? (
-            <p className="text-xs text-muted-foreground">{manageDisabledReason}</p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {view === "avatar" ? (
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-          <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-card p-6">
-            <button
-              type="button"
-              onClick={() => avatarInputRef.current?.click()}
-              disabled={!settingsEditable || avatarBusy}
-              aria-label={t(($) => $.details.avatar_change_aria)}
-              data-testid="channel-details-avatar-change"
-              className="group relative rounded-full outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <ChannelDetailsHeroAvatar name={channel.name} avatarUrl={channel.avatar_url} />
-              <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 group-disabled:opacity-0">
-                {avatarBusy ? (
-                  <Loader2 className="size-5 animate-spin text-white" />
-                ) : (
-                  <Camera className="size-5 text-white" />
-                )}
-              </span>
-            </button>
-            <p className="text-center text-xs text-muted-foreground">
-              {t(($) => $.details.avatar_hint)}
-            </p>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={!settingsEditable || avatarBusy}
-              onClick={() => avatarInputRef.current?.click()}
-              data-testid="channel-details-avatar-upload"
-            >
-              {avatarBusy ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : null}
-              {t(($) => $.details.avatar_change)}
-            </Button>
-            <input
-              ref={avatarInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              aria-label={t(($) => $.details.avatar_change_aria)}
-              onChange={handleAvatarFile}
-            />
-          </div>
-          {!settingsEditable && manageDisabledReason ? (
-            <p className="text-xs text-muted-foreground">{manageDisabledReason}</p>
-          ) : null}
-        </div>
-      ) : null}
       {view === "notify-prefs" && notifyLevel && onSelectNotifyLevel ? (
         <div
           className="min-h-0 flex-1 overflow-y-auto"
@@ -581,8 +590,7 @@ export function ChannelDetailsPanel({
         // load-bearing for the mobile `variant="page"` Drawer case.
         <div ref={portalContainer} className="min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-4 border-b p-3 md:p-4">
-            {/* #821 — Settings rename removed; About edit is the single
-                name/description editor (avoids two edit entrances). */}
+            {/* #821 / LRM-860 — rename lives on the hero (click-to-edit). */}
             <div>
               <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 {t(($) => $.details.lark_label)}

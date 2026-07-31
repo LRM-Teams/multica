@@ -291,7 +291,11 @@
     "menu_about": "概要",
     "menu_members": "メンバー",
     "menu_files": "ファイル",
-    "menu_settings": "設定"
+    "menu_settings": "設定",
+    "rename_empty": "チャンネル名は空にできません",
+    "hero_manage_hint": "管理者：フィールドをクリックして編集 · 専用ボタンなし",
+    "hero_name_hint": "Enter で保存 · Esc で取消 · 空名は拒否",
+    "hero_desc_hint": "フォーカス外しで保存 · Esc で取消 · 空で説明を消去"
   },
   "stats": {
     "title": "アクティビティ",

@@ -291,7 +291,11 @@
     "menu_about": "About",
     "menu_members": "Members",
     "menu_files": "Files",
-    "menu_settings": "Settings"
+    "menu_settings": "Settings",
+    "rename_empty": "Channel name cannot be empty",
+    "hero_manage_hint": "Managers: click a field to edit · no separate edit buttons",
+    "hero_name_hint": "Enter to save · Esc to cancel · empty rejected",
+    "hero_desc_hint": "Blur to save · Esc to cancel · empty clears description"
   },
   "stats": {
     "title": "Activity",

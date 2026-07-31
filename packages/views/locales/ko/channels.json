@@ -291,7 +291,11 @@
     "menu_about": "정보",
     "menu_members": "멤버",
     "menu_files": "파일",
-    "menu_settings": "설정"
+    "menu_settings": "설정",
+    "rename_empty": "채널 이름은 비울 수 없습니다",
+    "hero_manage_hint": "관리자: 필드를 클릭해 수정 · 별도 편집 버튼 없음",
+    "hero_name_hint": "Enter 저장 · Esc 취소 · 빈 이름 거부",
+    "hero_desc_hint": "포커스 해제 시 저장 · Esc 취소 · 빈 값이면 설명 삭제"
   },
   "stats": {
     "title": "활동",

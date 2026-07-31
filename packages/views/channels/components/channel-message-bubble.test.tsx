@@ -277,7 +277,6 @@ vi.mock("../../i18n/use-t", () => ({
           more_emojis: string;
           more_actions: string;
           agent_badge: string;
-          radar_badge: string;
           feishu_badge: string;
           copy_action: string;
           expand_action: string;
@@ -365,7 +364,6 @@ vi.mock("../../i18n/use-t", () => ({
           more_emojis: "More emojis",
           more_actions: "More actions",
           agent_badge: "Agent",
-          radar_badge: "Project Radar",
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
@@ -785,17 +783,6 @@ describe("ChannelMessageBubble", () => {
       "src",
       "/agent-avatars/human-02.jpg",
     );
-  });
-
-  it("marks proactive radar messages with a Project Radar pill", () => {
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({ content: "主动发现：CI has failed twice." })}
-        currentUserId="user-1"
-      />,
-    );
-
-    expect(screen.getByText("Project Radar")).toBeInTheDocument();
   });
 
   it("scopes the message body as message-surface for Slack-aligned image caps", () => {

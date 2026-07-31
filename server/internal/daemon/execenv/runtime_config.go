@@ -892,8 +892,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Run exactly one `multica issue create` invocation, then exit.\n")
 		b.WriteString("- Do NOT call `multica issue get`, `multica issue status`, or `multica issue comment add` for this task — there is no issue to query, transition, or comment on. The platform writes the user's success/failure inbox notification automatically based on whether `multica issue create` succeeded.\n")
 		b.WriteString("- If the CLI returns an error, exit with that error as the only output. Do not retry.\n\n")
-	} else if ctx.AgentRadarPrompt != "" {
-		b.WriteString("**This task was triggered by Agent Radar.** Return only the structured JSON action plan requested in the radar prompt. Do not call platform mutating commands directly; the server-side policy executor applies approved actions after the run.\n\n")
 	} else if ctx.AutopilotRunID != "" {
 		// Autopilot run_only task: no issue exists, so the agent must not
 		// follow the assignment/comment workflow.
@@ -1009,8 +1007,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Do NOT call `multica issue comment add` — the issue you just created has no conversation context for this run.\n")
 		b.WriteString("- Print exactly one final line: `Created <identifier-or-id>: <title>` after a successful `multica issue create`. Use the created issue's `identifier` from JSON output when available; otherwise use its `id`. Do not assume any workspace issue prefix such as `MUL-`; workspaces can use custom prefixes.\n")
 		b.WriteString("- On CLI failure, exit with the CLI error as the only output. The platform translates that into a `quick_create_failed` inbox item carrying the original prompt for the user.\n")
-	case ctx.AgentRadarPrompt != "":
-		b.WriteString("This is an Agent Radar task. Return only the JSON action plan requested by the prompt. Do not add prose outside the JSON.\n")
 	case terminalAssignment:
 		b.WriteString("This assignment wake is stale because the issue is already terminal. Return one concise line with the current terminal status; do not call issue read or write commands.\n")
 	default:
@@ -1243,8 +1239,6 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.ChatSessionID != "":
 			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
-		case ctx.AgentRadarPrompt != "":
-			fmt.Fprintf(b, "This proactive review is scoped to **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.QuickCreatePrompt != "":
 			fmt.Fprintf(b, "The requested issue will be created in **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.AutopilotRunID != "":

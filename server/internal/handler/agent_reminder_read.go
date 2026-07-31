@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 type humanReminderAnchor struct {
@@ -352,7 +354,7 @@ func parseHumanReminderCursor(raw string) (any, pgtype.UUID, bool) {
 	if err != nil {
 		return nil, pgtype.UUID{}, false
 	}
-	id, err := parseUUIDString(cursor.ID)
+	id, err := util.ParseUUID(cursor.ID)
 	if err != nil || !id.Valid {
 		return nil, pgtype.UUID{}, false
 	}

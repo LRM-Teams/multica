@@ -26,7 +26,7 @@ vi.mock("../../common/actor-avatar", () => ({
 }));
 
 vi.mock("../../common/actor-identity-row", () => ({
-  ActorIdentityRow: () => <span>Radar agent</span>,
+  ActorIdentityRow: () => <span>Agent</span>,
 }));
 
 import { AgentDetailOverview } from "./agent-detail-overview";
@@ -36,8 +36,8 @@ const agent: Agent = {
   workspace_id: "workspace-1",
   workspace_role: "member",
   runtime_id: "runtime-1",
-  name: "radar-agent",
-  display_name: "Radar agent",
+  name: "agent-1",
+  display_name: "Agent",
   description: "",
   instructions: "",
   avatar_url: null,
@@ -55,9 +55,9 @@ const agent: Agent = {
   archived_by: null,
 };
 
-function radarTask(status: AgentTask["status"]): AgentTask {
+function makeTask(status: AgentTask["status"]): AgentTask {
   return {
-    id: `radar-${status}`,
+    id: `task-${status}`,
     agent_id: agent.id,
     runtime_id: agent.runtime_id,
     issue_id: "",
@@ -69,7 +69,8 @@ function radarTask(status: AgentTask["status"]): AgentTask {
     result: null,
     error: null,
     created_at: "2026-07-13T00:00:00Z",
-    kind: "agent_radar",
+    kind: "direct",
+    trigger_summary: "Review the API change",
   };
 }
 
@@ -98,72 +99,19 @@ afterEach(() => {
   mockTasks.current = [];
 });
 
-describe("AgentDetailOverview radar execution log", () => {
+describe("AgentDetailOverview", () => {
   it("opens the complete honor view from the list detail", () => {
     const onHonor = vi.fn();
-    renderOverview(radarTask("queued"), onHonor);
+    renderOverview(makeTask("queued"), onHonor);
 
     fireEvent.click(screen.getByRole("button", { name: "Honor" }));
 
     expect(onHonor).toHaveBeenCalledOnce();
   });
 
-  it("labels a queued radar scan without a spinning icon", () => {
-    renderOverview(radarTask("queued"));
-
-    const row = screen.getByText("Proactive scan · Queued").closest("li");
-    expect(row).not.toBeNull();
-    expect(row?.querySelector("svg")).not.toHaveClass("animate-spin");
-    expect(screen.queryByText("Task run")).not.toBeInTheDocument();
-  });
-
-  it("labels a running radar scan with a spinning icon", () => {
-    renderOverview(radarTask("running"));
-
-    const row = screen.getByText("Proactive scan · In progress").closest("li");
-    expect(row).not.toBeNull();
-    expect(row?.querySelector("svg")).toHaveClass("animate-spin");
-  });
-
-  it("labels a dispatched radar scan as in progress", () => {
-    renderOverview(radarTask("dispatched"));
-
-    expect(screen.getByText("Proactive scan · In progress")).toBeInTheDocument();
-  });
-
-  it("keeps a radar scan waiting on a local directory in the queued state", () => {
-    renderOverview(radarTask("waiting_local_directory"));
-
-    const row = screen.getByText("Proactive scan · Queued").closest("li");
-    expect(row?.querySelector("svg")).not.toHaveClass("animate-spin");
-  });
-
-  it("labels a completed radar scan", () => {
-    renderOverview(radarTask("completed"));
-
-    expect(screen.getByText("Proactive scan · Completed")).toBeInTheDocument();
-  });
-
-  it("labels a failed radar scan", () => {
-    renderOverview(radarTask("failed"));
-
-    expect(screen.getByText("Proactive scan · Failed")).toBeInTheDocument();
-  });
-
-  it("labels a cancelled radar scan", () => {
-    renderOverview(radarTask("cancelled"));
-
-    expect(screen.getByText("Proactive scan · Cancelled")).toBeInTheDocument();
-  });
-
   it("keeps the existing title rules for ordinary tasks", () => {
-    renderOverview({
-      ...radarTask("queued"),
-      kind: "direct",
-      trigger_summary: "Review the API change",
-    });
+    renderOverview(makeTask("queued"));
 
     expect(screen.getByText("Review the API change")).toBeInTheDocument();
-    expect(screen.queryByText(/Proactive scan/)).not.toBeInTheDocument();
   });
 });

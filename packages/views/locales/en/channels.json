@@ -531,7 +531,6 @@
     "voice_preview": "Voice message",
     "voice_preview_duration": "Voice message · {{seconds}}s",
     "agent_badge": "Agent",
-    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "Edit",
     "delete_action": "Delete",

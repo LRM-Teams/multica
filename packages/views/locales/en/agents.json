@@ -789,13 +789,6 @@
     "running_for": "In progress · {{min}}min elapsed",
     "duration_min": "{{min}}min",
     "task_fallback": "Task run",
-    "radar_task": {
-      "queued": "Proactive scan · Queued",
-      "running": "Proactive scan · In progress",
-      "completed": "Proactive scan · Completed",
-      "failed": "Proactive scan · Failed",
-      "cancelled": "Proactive scan · Cancelled"
-    },
     "empty_select": "Select an agent on the left to see details",
     "delete_success": "Agent deleted",
     "delete_failed": "Failed to delete agent"

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -885,7 +886,7 @@ func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, 
 		writeError(w, http.StatusBadRequest, "id is required")
 		return pgtype.UUID{}, false
 	}
-	if parsed, err := parseUUIDString(raw); err == nil && parsed.Valid {
+	if parsed, err := util.ParseUUID(raw); err == nil && parsed.Valid {
 		var found pgtype.UUID
 		if err := h.DB.QueryRow(ctx, `SELECT id FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3`, parsed, workspaceID, agentID).Scan(&found); err != nil {
 			writeError(w, http.StatusNotFound, "reminder not found")
@@ -1099,11 +1100,11 @@ func daemonIdentityOwnsWorkspace(identity daemonws.ClientIdentity, workspaceID p
 }
 
 func (h *Handler) HandleDaemonReminderSnapshot(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error) {
-	agentID, err := parseUUIDString(strings.TrimSpace(payload.AgentID))
+	agentID, err := util.ParseUUID(strings.TrimSpace(payload.AgentID))
 	if err != nil || !agentID.Valid {
 		return nil, fmt.Errorf("invalid reminder snapshot agent_id")
 	}
-	requestRuntimeID, err := parseUUIDString(strings.TrimSpace(payload.RuntimeID))
+	requestRuntimeID, err := util.ParseUUID(strings.TrimSpace(payload.RuntimeID))
 	if err != nil || !requestRuntimeID.Valid || payload.PlacementGeneration < 0 || !daemonIdentityOwnsRuntime(identity, requestRuntimeID) {
 		return nil, fmt.Errorf("invalid reminder snapshot placement")
 	}
@@ -1385,7 +1386,7 @@ func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemon
 			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset residency")
 		}
 		seen[residency.AgentID] = true
-		agentID, err := parseUUIDString(residency.AgentID)
+		agentID, err := util.ParseUUID(residency.AgentID)
 		if err != nil || !agentID.Valid {
 			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset agent")
 		}
@@ -1513,15 +1514,15 @@ func (h *Handler) enqueueReminderFireResultTx(ctx context.Context, tx pgx.Tx, ru
 }
 
 func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
-	agentID, err := parseUUIDString(strings.TrimSpace(payload.AgentID))
+	agentID, err := util.ParseUUID(strings.TrimSpace(payload.AgentID))
 	if err != nil || !agentID.Valid {
 		return nil, fmt.Errorf("invalid reminder fire agent_id")
 	}
-	requestRuntimeID, err := parseUUIDString(strings.TrimSpace(payload.RuntimeID))
+	requestRuntimeID, err := util.ParseUUID(strings.TrimSpace(payload.RuntimeID))
 	if err != nil || !requestRuntimeID.Valid || payload.PlacementGeneration < 1 || !daemonIdentityOwnsRuntime(identity, requestRuntimeID) {
 		return nil, fmt.Errorf("invalid reminder fire placement")
 	}
-	reminderID, err := parseUUIDString(strings.TrimSpace(payload.ReminderID))
+	reminderID, err := util.ParseUUID(strings.TrimSpace(payload.ReminderID))
 	if err != nil || !reminderID.Valid || payload.Version < 1 {
 		return nil, fmt.Errorf("invalid reminder fire payload")
 	}

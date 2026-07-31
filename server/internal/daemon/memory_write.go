@@ -246,7 +246,7 @@ func taskHasSubstantiveCloseoutSignal(task Task, result TaskResult) bool {
 	if resultHasSubstantiveSignal(result) {
 		return true
 	}
-	if strings.TrimSpace(task.IssueID) != "" || strings.TrimSpace(task.AutopilotRunID) != "" || strings.TrimSpace(task.AutopilotID) != "" || strings.TrimSpace(task.QuickCreatePrompt) != "" || strings.TrimSpace(task.TriggerCommentID) != "" || strings.TrimSpace(task.AgentRadarPrompt) != "" {
+	if strings.TrimSpace(task.IssueID) != "" || strings.TrimSpace(task.AutopilotRunID) != "" || strings.TrimSpace(task.AutopilotID) != "" || strings.TrimSpace(task.QuickCreatePrompt) != "" || strings.TrimSpace(task.TriggerCommentID) != "" {
 		return true
 	}
 	msg := strings.TrimSpace(task.ChatMessage)
@@ -303,8 +303,6 @@ func closeoutTaskKind(task Task) string {
 		return "autopilot"
 	case strings.TrimSpace(task.QuickCreatePrompt) != "":
 		return "quick_create"
-	case strings.TrimSpace(task.AgentRadarPrompt) != "":
-		return "radar"
 	case strings.TrimSpace(task.ChatSessionID) != "":
 		return "chat"
 	default:

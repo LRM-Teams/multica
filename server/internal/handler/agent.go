@@ -362,7 +362,6 @@ type AgentTaskResponse struct {
 	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
 	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachment ids uploaded in the quick-create prompt and bound on issue create
 	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
-	AgentRadarPrompt         string                             `json:"agent_radar_prompt,omitempty"`          // full prompt for platform-scheduled proactive radar tasks
 	SquadID                  string                             `json:"squad_id,omitempty"`                    // for quick-create tasks where the picker was a squad; Agent is still the resolved leader
 	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad
 	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
@@ -392,7 +391,7 @@ type AgentTaskResponse struct {
 	InitiatorID    string `json:"initiator_id,omitempty"`    // user UUID (member) or agent UUID
 	InitiatorName  string `json:"initiator_name,omitempty"`  // display name of the initiator
 	InitiatorEmail string `json:"initiator_email,omitempty"` // member email; empty for agent initiators
-	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "agent_radar" | "direct" — used by the activity row to label tasks that have no linked issue
+	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 	// AuthToken is the `mat_` bearer the daemon writes into the per-run
 	// MULTICA_TOKEN_FILE wrapper. Canonical inbox runs bind it to a single
 	// delivery. Credential-transport-capable runs leave this empty so the daemon
@@ -662,18 +661,11 @@ func basename(p string) string {
 
 // computeTaskKind picks the source-discriminator string the activity UI uses
 // to choose how to render a task row. Computed from the existing FK shape so
-// no extra DB lookup is needed: agent_radar (identified by context type) /
-// chat / autopilot / comment-on-issue (any triggered task with both an issue_id
-// and trigger_comment_id) / quick_create (no linked source — the agent is
-// creating the issue itself) / direct (assignee-driven task on an existing
-// issue).
+// no extra DB lookup is needed: chat / autopilot / comment-on-issue (any
+// triggered task with both an issue_id and trigger_comment_id) / quick_create
+// (no linked source — the agent is creating the issue itself) / direct
+// (assignee-driven task on an existing issue).
 func computeTaskKind(t db.AgentInboxEvent) string {
-	var source struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(t.Context, &source) == nil && source.Type == "agent_radar" {
-		return "agent_radar"
-	}
 	if uuidToString(t.ChatSessionID) != "" {
 		return "chat"
 	}

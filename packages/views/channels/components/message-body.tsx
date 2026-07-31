@@ -123,7 +123,7 @@ function MessageBodyInner({
       const hasReferenceParts = bodyParts.some((part) => part.type === "reference");
       // Reference parts (#463 structured mentions / issue-refs) are overlays on
       // the canonical `content`, so a message can have reference-only `parts` yet
-      // carry its full text in `content` (e.g. agent/radar @mentions). Treat that
+      // carry its full text in `content` (e.g. agent @mentions). Treat that
       // as body content so it renders through InlineReferenceContent below instead
       // of collapsing to an empty bubble.
       const hasBodyContent =

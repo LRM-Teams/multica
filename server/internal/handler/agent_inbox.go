@@ -778,7 +778,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	if workCompletion != nil && workCompletion.CompletedNow {
 		h.emitIssueExecutedOnFirstCompletion(r, &workCompletion.Task)
-		h.handleClaimedAgentRadarTask(r.Context(), workCompletion.Task, workCompletion.RadarRun)
 	}
 	for _, wake := range collaborationWakes {
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
@@ -2434,30 +2433,6 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 		resp.ParentIssueID = quickCreate.ParentIssueID
 		loadWorkspaceRepos()
 		return strings.TrimSpace(resp.QuickCreatePrompt) != ""
-	}
-
-	var radar service.AgentRadarContext
-	if json.Unmarshal(event.Context, &radar) == nil && radar.Type == service.AgentRadarContextType {
-		resp.Kind = "agent_radar"
-		resp.AgentRadarPrompt = radar.Prompt
-		resp.ThreadName = "agent radar"
-		if channelID, err := util.ParseUUID(radar.ChannelID); err == nil {
-			if channel, found := h.getChannel(ctx, resp.WorkspaceID, channelID); found {
-				resp.ChannelID = channel.ID
-				if channel.ProjectID != nil {
-					if projectID, err := util.ParseUUID(*channel.ProjectID); err == nil {
-						loadProject(projectID)
-					}
-				}
-			}
-		}
-		if resp.ProjectID == "" {
-			if projectID, err := util.ParseUUID(radar.ProjectID); err == nil {
-				loadProject(projectID)
-			}
-		}
-		loadWorkspaceRepos()
-		return strings.TrimSpace(resp.AgentRadarPrompt) != ""
 	}
 
 	// Environment dispatch, memory curation, Reminder, and other internal

@@ -14,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -296,7 +297,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if ensureReq.CredentialID != "" {
-		credentialID, parseErr := parseUUIDString(ensureReq.CredentialID)
+		credentialID, parseErr := util.ParseUUID(ensureReq.CredentialID)
 		if parseErr != nil {
 			rotationReason = "invalid_credential_id"
 		} else {

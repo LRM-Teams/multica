@@ -10,7 +10,7 @@ import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 // LRM-560 — Activity unified design language: node colors are full tokens
 // (command=running, in-progress=brand, waiting=warning, failure=destructive,
 // idle/neutral=muted). Live presence still uses the avatar pulse separately.
-export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure" | "radar";
+export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure";
 
 // SINGLE source for the tone → dot-color map. Both the Activity timeline and the
 // name-row live-status header project the SAME latest Activity row, so the dot
@@ -21,7 +21,6 @@ export const ACTIVITY_TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
   running: "bg-running",
   waiting: "bg-warning",
   failure: "bg-destructive",
-  radar: "bg-muted-foreground/40",
 };
 
 /**
@@ -54,7 +53,6 @@ export type ActivityLabelKey =
   | "thinking"
   | "output"
   | "completed"
-  | "radar_executed"
   | "working"
   | "idle"
   | "failed"
@@ -119,7 +117,6 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   thinking: "Thinking",
   output: "Output",
   completed: "Completed",
-  radar_executed: "Radar",
   working: "Working",
   idle: "Idle",
   failed: "Failed",
@@ -257,32 +254,13 @@ function narrativeText(text: string | null | undefined): string | undefined {
   return trimmed === undefined ? undefined : stripMentionMarkdown(trimmed);
 }
 
-// Mainline vs diagnostic is driven by the raft `activity_kind` semantics (#389),
-// NOT a `visibility` flag (that field was removed in the raft-alignment cutover).
-// The BE already prefilters the default page to mainline narrative; this predicate
-// is the FE-side guard that keeps the split identical (shared table, Iris keeper).
-function isRadarActionEvent(event: ActivityEvent): boolean {
-  if (event.reason_code?.trim() === "radar_untrusted_target") {
-    return false;
-  }
-  if (
-    event.detail_kind === "radar_action_executed" &&
-    event.reason_code?.trim() === "no_action"
-  ) {
-    return false;
-  }
-  return (
-    event.detail_kind === "radar_action_executed" || event.detail_kind === "radar_action_failed"
-  );
-}
-
 export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
   // A `message_sent` event is the RESULT of an agent sending a message: the sent
   // content lives in the chat stream, and the `multica message send` CLI already
   // shows as its own "Running command" row — so an "Output · <sent content>" row
   // here is a redundant duplicate (Frank/#404, raft parity: a send produces no
   // separate Output row). Keep it diagnostic. Field-driven (`detail_kind`), never
-  // string-sniffed. Non-send `text`/Output (e.g. a radar decision) is NOT
+  // string-sniffed. Non-send `text`/Output (e.g. a scheduled-task decision) is NOT
   // `message_sent` and stays mainline (Frank: observability is fine).
   if (event.detail_kind === "message_sent") return false;
   switch (event.activity_kind) {
@@ -317,8 +295,7 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
         // exists in the stream for the header/hover latest-state projection; we
         // just don't give it its own timeline row.
         (event.detail_kind === "agent_status_changed" && event.status !== "working") ||
-        event.detail_kind.includes("subagent") ||
-        isRadarActionEvent(event)
+        event.detail_kind.includes("subagent")
       );
     default:
       return true;
@@ -714,19 +691,6 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
         return event.status === "idle"
           ? { labelKey: "idle", tone: "neutral" }
           : { labelKey: "working", tone: "active" };
-      }
-      if (event.detail_kind === "radar_action_failed") {
-        return {
-          labelKey: "failed",
-          subtext: narrativeText(event.text) ?? reasonText(event),
-          tone: "failure",
-        };
-      }
-      if (event.detail_kind === "radar_action_executed") {
-        // Radar runs are the group manager's proactive sweeps, not task
-        // completions — give them their own label/tone so they don't read as a
-        // generic "Completed" row (#user-request).
-        return { labelKey: "radar_executed", subtext: narrativeText(event.text), tone: "radar" };
       }
       if (event.detail_kind.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.

@@ -531,7 +531,6 @@
     "voice_preview": "语音消息",
     "voice_preview_duration": "语音消息 · {{seconds}} 秒",
     "agent_badge": "Agent",
-    "radar_badge": "主动发现",
     "feishu_badge": "飞书",
     "edit_action": "编辑",
     "delete_action": "删除",

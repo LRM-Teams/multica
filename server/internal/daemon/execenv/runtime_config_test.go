@@ -1106,7 +1106,6 @@ func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
 	}{
 		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}, want: "This issue belongs to **Project A**."},
 		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}, want: "This conversation is associated with **Project A**."},
-		{name: "radar", ctx: TaskContextForEnv{AgentRadarPrompt: "review"}, want: "This proactive review is scoped to **Project A**."},
 		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create"}, want: "The requested issue will be created in **Project A**."},
 		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}, want: "This automation run is associated with **Project A**."},
 	}

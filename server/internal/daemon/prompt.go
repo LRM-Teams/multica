@@ -63,9 +63,6 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 	if task.QuickCreatePrompt != "" {
 		return withCurrentStateOverlay(buildQuickCreatePrompt(task))
 	}
-	if task.AgentRadarPrompt != "" {
-		return withCurrentStateOverlay(task.AgentRadarPrompt)
-	}
 	if task.AssignmentSnapshot != nil {
 		return withCurrentStateOverlay(buildAssignmentPrompt(task))
 	}

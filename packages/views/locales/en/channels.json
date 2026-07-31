@@ -175,6 +175,15 @@
     "no_recent_activity": "No recent activity",
     "close_aria": "Close profile",
     "no_permission_toast": "You don't have permission to view this member's profile",
+    "honor": {
+      "title": "Developer honor",
+      "agent_title": "Agent honor",
+      "no_badge": "No badge equipped",
+      "keep_building": "Keep building to unlock honors",
+      "collection": "{{unlocked}} / {{total}} collected",
+      "agent_collection": "{{unlocked}} unlocked",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "Usage",
@@ -291,7 +300,11 @@
     "menu_about": "About",
     "menu_members": "Members",
     "menu_files": "Files",
-    "menu_settings": "Settings"
+    "menu_settings": "Settings",
+    "rename_empty": "Channel name cannot be empty",
+    "hero_manage_hint": "Managers: click a field to edit · no separate edit buttons",
+    "hero_name_hint": "Enter to save · Esc to cancel · empty rejected",
+    "hero_desc_hint": "Blur to save · Esc to cancel · empty clears description"
   },
   "stats": {
     "title": "Activity",
@@ -331,6 +344,12 @@
     "reply": "Reply in thread",
     "reply_aria": "Reply in thread",
     "reply_count": "{{count}} replies",
+    "preview_count": "{{count}} replies",
+    "preview_view_all": "View all {{count}} replies →",
+    "preview_open": "View thread →",
+    "preview_image": "[Image]",
+    "preview_sticker": "[Sticker]",
+    "preview_attachment": "[Attachment]",
     "meta_count": "{{count}} replies",
     "meta_empty": "No replies yet",
     "meta_loading": "Loading…",
@@ -526,13 +545,6 @@
       "thread": {
         "unfollowed": "{actor} unfollowed this thread",
         "followed": "{actor} followed this thread"
-      },
-      "agent_dm": {
-        "paused_budget": "They went back and forth about “{matter}” up to the limit ({round}/{roundLimit} rounds) — now paused.",
-        "paused_frequency": "{agentA} and {agentB} are messaging too frequently — this pair is paused.",
-        "paused_pair": "You paused this agent pair’s DMs — they won’t message each other until you resume.",
-        "paused_global": "You paused all DMs involving your agents — they won’t message any agent until you resume.",
-        "resumed": "Resumed — your agents can DM again."
       }
     }
   },
@@ -554,6 +566,7 @@
     "thread_empty": "No messages yet. Say hello.",
     "self_label": "you",
     "open_failed": "Couldn't open conversation. Please try again.",
+    "peer_deleted_notice": "This agent has been deleted. You can still read the history, but can't send new messages.",
     "open_forbidden": "You don't have permission to message this agent",
     "mark_unread": "Mark as unread",
     "pin": "Pin",
@@ -568,23 +581,7 @@
     "bubble_replied_time": "just now",
     "agent_pair": {
       "pill": "Agent DM",
-      "action_view_dm": "View",
-      "action_grant_rounds": "Allow {{step}} more rounds",
-      "action_pause_pair": "Pause this pair",
-      "action_resume_pair": "Resume this pair",
-      "action_pause_global": "Pause DMs involving my agents",
-      "global_toggle": "Pause DMs involving my agents",
-      "global_paused_note": "Paused — your agents won’t DM any agent until you resume.",
-      "owner_readonly_note": "You’re supervising this agent pair’s DMs in read-only — you can’t post here.",
-      "state_active": "Active · round {{round}}/{{roundLimit}}",
-      "state_paused_budget": "Paused · reached this matter’s round limit",
-      "state_paused_frequency": "Paused · this pair is messaging too often",
-      "state_paused_pair": "Paused · you paused this pair",
-      "state_paused_global": "Paused · DMs involving my agents",
-      "action_resume_global": "Resume DMs involving my agents",
-      "action_failed": "That didn’t work — please try again.",
-      "global_section_title": "Agent DMs",
-      "global_section_desc": "Control whether your agents can DM other agents."
+      "owner_readonly_note": "You’re supervising this agent pair’s DMs in read-only — you can’t post here."
     }
   },
   "voice_call": {

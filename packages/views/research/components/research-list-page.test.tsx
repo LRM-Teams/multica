@@ -91,7 +91,12 @@ vi.mock("./research-session-row", () => ({
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: typeof enResearch) => unknown) => fn(enResearch),
+    t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = fn(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
+    i18n: { language: "en" },
   }),
 }));
 
@@ -275,19 +280,20 @@ describe("ResearchListPage first-visit empty state (LRM-816)", () => {
   });
 });
 
-describe("ResearchListPage composer hero (LRM-787)", () => {
+describe("ResearchListPage composer hero (LRM-787 / LRM-906)", () => {
   beforeEach(() => {
     setQuery({ data: { sessions: [] } });
   });
 
-  it("renders hero title, description, and start CTA inside a card", () => {
+  it("renders compact hero title and start CTA inside a card", () => {
     render(<ResearchListPage />);
     expect(screen.getByText(enResearch.home.hero_title)).toBeInTheDocument();
+    // Description stays for a11y but is visually collapsed (sr-only).
     expect(screen.getByText(enResearch.home.hero_desc)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
   });
 
-  it("disables start until the goal is non-empty", () => {
+  it("disables start until the goal is non-empty or a template chip is attached", () => {
     render(<ResearchListPage />);
     const start = screen.getByRole("button", { name: enResearch.start });
     expect(start).toBeDisabled();
@@ -331,6 +337,90 @@ describe("ResearchListPage composer hero (LRM-787)", () => {
     expect(screen.getByText("network down")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: enResearch.list.retry }));
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ResearchListPage search & status filter (LRM-818)", () => {
+  beforeEach(() => {
+    setQuery({
+      data: {
+        sessions: [
+          session({ id: "s-run", status: "running", title: "Alpha research" }),
+          session({ id: "s-done", status: "completed", title: "Beta report" }),
+          session({ id: "s-fail", status: "failed", title: "Alpha failed" }),
+        ],
+      },
+    });
+  });
+
+  it("filters titles in real time", () => {
+    render(<ResearchListPage />);
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "Alpha" },
+    });
+    expect(screen.getByText("Alpha research")).toBeInTheDocument();
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+    expect(screen.queryByText("Beta report")).not.toBeInTheDocument();
+  });
+
+  it("status chips are single-select and show empty copy when nothing matches", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("radio", { name: enResearch.filter.status_failed }));
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+    expect(screen.queryByText("Alpha research")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "zzz" },
+    });
+    expect(screen.getByText(enResearch.filter.no_results)).toBeInTheDocument();
+  });
+
+  it("clear restores the full list", () => {
+    render(<ResearchListPage />);
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "Beta" },
+    });
+    expect(screen.queryByText("Alpha research")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: enResearch.filter.clear }));
+    expect(screen.getByText("Alpha research")).toBeInTheDocument();
+    expect(screen.getByText("Beta report")).toBeInTheDocument();
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+  });
+});
+
+describe("ResearchListPage quick templates (LRM-817 / LRM-906 T2)", () => {
+  beforeEach(() => {
+    setQuery({ data: { sessions: [] } });
+  });
+
+  it("renders at least 3 template cards", () => {
+    render(<ResearchListPage />);
+    expect(screen.getByText(enResearch.home.templates_label)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Industry research/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Competitor analysis/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Tech selection/i })).toBeInTheDocument();
+  });
+
+  it("clicking a template shows a chip and does not dump the long prompt into the textarea", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Industry research/i }));
+    const chip = screen.getByText(/Industry research prompt added/i);
+    expect(chip).toBeInTheDocument();
+    const textarea = screen.getByPlaceholderText(
+      enResearch.home.goal_placeholder_with_template,
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("");
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
+    fireEvent.change(textarea, { target: { value: "Vector DB for RAG" } });
+    expect(textarea.value).toBe("Vector DB for RAG");
+  });
+
+  it("clearing the template chip disables start when the box is empty", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Competitor analysis/i }));
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: enResearch.home.template_chip_clear }));
+    expect(screen.queryByText(/prompt added/i)).toBeNull();
+    expect(screen.getByRole("button", { name: enResearch.start })).toBeDisabled();
   });
 });
 

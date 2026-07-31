@@ -195,6 +195,8 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
             copyAria={t(($) => $.connect.copy_aria)}
           />
 
+          <InstallFailureDetails />
+
           <div>
             <CommandStep
               n={2}
@@ -260,6 +262,32 @@ function SetupModeSelector({
         {t(($) => $.connect.mode_hints[mode])}
       </p>
     </div>
+  );
+}
+
+// Distinct from TroubleshootingDetails below: that one covers "the CLI is
+// installed but I can't open a browser to sign in" (step 2). This one covers
+// step 1 itself failing — the install command couldn't reach its script host
+// at all. Deliberately host-agnostic: naming a specific domain here would go
+// stale the next time the install source moves (task #11), and per Parker
+// this is generic self-service guidance, not a notice about any one
+// incident.
+function InstallFailureDetails() {
+  const { t } = useT("runtimes");
+  return (
+    <details className="group rounded-lg border border-dashed">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <ChevronRight
+          className="h-3 w-3 transition-transform group-open:rotate-90"
+          aria-hidden
+        />
+        {t(($) => $.connect.install_trouble_summary)}
+      </summary>
+      <ul className="space-y-1.5 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
+        <li>{t(($) => $.connect.install_trouble_retry)}</li>
+        <li>{t(($) => $.connect.install_trouble_network)}</li>
+      </ul>
+    </details>
   );
 }
 

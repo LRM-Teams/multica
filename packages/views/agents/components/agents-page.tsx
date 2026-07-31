@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   ArrowUpDown,
   Bot,
-  Loader2,
   Plus,
   Search,
 } from "lucide-react";
@@ -62,10 +61,9 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown";
 import { AgentDetailOverview, type AgentMetric } from "./agent-detail-overview";
+import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useOpenDM } from "../../common/use-open-dm";
-import { WindySetupModal } from "../../workspace/windy-setup-modal";
-import { useWindyEntryAction } from "../../workspace/use-wendy-entry-action";
 import { estimateCost } from "../../runtimes/utils";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { cn } from "@multica/ui/lib/utils";
@@ -176,7 +174,6 @@ export function AgentsPage({
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [showWindySetup, setShowWindySetup] = useState(false);
   const [createDraft, setCreateDraft] = useState<AgentCreationDraft | null>(null);
   // When set, the Create dialog opens pre-populated with this agent's
   // config — driven by the row-level "Duplicate" action. We keep this
@@ -190,16 +187,6 @@ export function AgentsPage({
     setDuplicateTemplate(null);
     setShowCreate(true);
   }, []);
-
-  const windyEntry = useWindyEntryAction(wsId, agents);
-  const { openDM: openWindyDM } = useOpenDM();
-  const handleWindyEntry = useCallback(() => {
-    if (windyEntry.hasConfiguredWendy) {
-      void windyEntry.openWindy();
-      return;
-    }
-    setShowWindySetup(true);
-  }, [windyEntry]);
 
   useEffect(() => {
     const draftId = navigation.searchParams.get("draft");
@@ -534,6 +521,8 @@ export function AgentsPage({
   // the chosen one drops out of the filtered list (filter/search change), so
   // the detail pane is never blank while agents exist.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false);
+  const [deletingSelected, setDeletingSelected] = useState(false);
   const selectedAgent = useMemo(() => {
     if (selectedId) {
       const found = sortedAgents.find((a) => a.id === selectedId);
@@ -557,16 +546,22 @@ export function AgentsPage({
     return isWorkspaceAdmin || isOwner;
   }, [selectedAgent, currentUser?.id, isWorkspaceAdmin]);
 
+  // LRM-865: never call archiveAgent from the overview Delete button —
+  // open ConfirmDeleteAgent first; only confirm submits.
   const handleArchiveSelected = useCallback(async () => {
     if (!selectedAgent) return;
+    setDeletingSelected(true);
     try {
       await api.archiveAgent(selectedAgent.id);
       toast.success(t(($) => $.dashboard.delete_success));
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      setConfirmDeleteSelected(false);
     } catch (err) {
       showErrorToast(
         err instanceof Error && err.message ? err.message : t(($) => $.dashboard.delete_failed),
       );
+    } finally {
+      setDeletingSelected(false);
     }
   }, [selectedAgent, qc, wsId, t]);
 
@@ -614,10 +609,6 @@ export function AgentsPage({
         <PageHeaderBar
           totalCount={0}
           onCreate={openBlankCreate}
-          onOpenWindy={handleWindyEntry}
-          openingWendy={windyEntry.isPending}
-          hasConfiguredWendy={windyEntry.hasConfiguredWendy}
-          windyDisabled
         />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border">
@@ -648,10 +639,6 @@ export function AgentsPage({
         onCreate={openBlankCreate}
         listError={listError}
         onRetry={refetchList}
-        onOpenWindy={handleWindyEntry}
-        openingWendy={windyEntry.isPending}
-        hasConfiguredWendy={windyEntry.hasConfiguredWendy}
-        windyDisabled
       />
     );
   }
@@ -663,10 +650,6 @@ export function AgentsPage({
       <PageHeaderBar
         totalCount={totalActiveCount}
         onCreate={openBlankCreate}
-        onOpenWindy={handleWindyEntry}
-        openingWendy={windyEntry.isPending}
-        hasConfiguredWendy={windyEntry.hasConfiguredWendy}
-        windyDisabled={false}
       />
 
       {showEmpty ? (
@@ -787,8 +770,13 @@ export function AgentsPage({
               metric={selectedMetric}
               fleet={fleetByAgentId.get(selectedAgent.id)}
               canManage={selectedCanManage}
+              onHonor={() =>
+                navigation.push(
+                  `${paths.agentDetail(selectedAgent.id)}?tab=honor`,
+                )
+              }
               onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}
-              onDelete={handleArchiveSelected}
+              onDelete={() => setConfirmDeleteSelected(true)}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -798,13 +786,15 @@ export function AgentsPage({
         </div>
       )}
 
-      <WindySetupModal
-        open={showWindySetup}
-        onOpenChange={setShowWindySetup}
-        onConfigured={(agent) => {
-          void openWindyDM({ peer_type: "agent", peer_id: agent.id });
-        }}
-      />
+      {selectedAgent ? (
+        <ConfirmDeleteAgent
+          open={confirmDeleteSelected}
+          displayName={resolveActorDisplayName(selectedAgent, selectedAgent.id)}
+          pending={deletingSelected}
+          onConfirm={() => void handleArchiveSelected()}
+          onOpenChange={setConfirmDeleteSelected}
+        />
+      ) : null}
 
       {showCreate && (
         <CreateAgentDialog
@@ -833,17 +823,9 @@ export function AgentsPage({
 function PageHeaderBar({
   totalCount,
   onCreate,
-  onOpenWindy,
-  openingWendy,
-  hasConfiguredWendy,
-  windyDisabled,
 }: {
   totalCount: number;
   onCreate: () => void;
-  onOpenWindy: () => void;
-  openingWendy: boolean;
-  hasConfiguredWendy: boolean;
-  windyDisabled: boolean;
 }) {
   const { t } = useT("agents");
   return (
@@ -870,10 +852,6 @@ function PageHeaderBar({
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={onOpenWindy} disabled={windyDisabled || openingWendy}>
-          {openingWendy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
-          {hasConfiguredWendy ? t(($) => $.windy.ask_windy) : t(($) => $.windy.set_up_windy)}
-        </Button>
         <Button type="button" size="sm" onClick={onCreate}>
           <Plus className="h-3 w-3" />
           {t(($) => $.page.new_agent)}
@@ -887,18 +865,10 @@ function ListError({
   onCreate,
   listError,
   onRetry,
-  onOpenWindy,
-  openingWendy,
-  hasConfiguredWendy,
-  windyDisabled,
 }: {
   onCreate: () => void;
   listError: unknown;
   onRetry: () => void;
-  onOpenWindy: () => void;
-  openingWendy: boolean;
-  hasConfiguredWendy: boolean;
-  windyDisabled: boolean;
 }) {
   const { t } = useT("agents");
   return (
@@ -906,10 +876,6 @@ function ListError({
       <PageHeaderBar
         totalCount={0}
         onCreate={onCreate}
-        onOpenWindy={onOpenWindy}
-        openingWendy={openingWendy}
-        hasConfiguredWendy={hasConfiguredWendy}
-        windyDisabled={windyDisabled}
       />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <AlertCircle className="h-8 w-8 text-destructive" />

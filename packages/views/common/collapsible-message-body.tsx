@@ -110,8 +110,10 @@ function CollapsibleMessageBodyInner({
           >
             <button
               type="button"
-              className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => {
+              className="pointer-events-auto inline-flex min-h-8 touch-manipulation items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
                 setExpanded(true);
                 onExpandedChange?.(true);
               }}
@@ -125,8 +127,10 @@ function CollapsibleMessageBodyInner({
         <div className="mt-1 flex justify-start" data-testid="message-collapse-less">
           <button
             type="button"
-            className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            onClick={() => {
+            className="inline-flex min-h-8 touch-manipulation items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
               setExpanded(false);
               onExpandedChange?.(false);
             }}

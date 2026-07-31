@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   VolcengineVoiceMediaSession,
   VoiceCallMediaError,
+  type VoiceCallRemoteAudioOutput,
   type VoiceCallRTCDriver,
   type VoiceCallRTCEngine,
 } from "./volcengine-media-session";
@@ -18,6 +19,7 @@ const media: VoiceCallMedia = {
 
 function createHarness(overrides: Partial<VoiceCallRTCEngine> = {}) {
   const calls: string[] = [];
+  const remoteTrack = { id: "agent-audio-track" } as MediaStreamTrack;
   let callbacks:
     | Parameters<VoiceCallRTCDriver["createEngine"]>[1]
     | undefined;
@@ -40,9 +42,7 @@ function createHarness(overrides: Partial<VoiceCallRTCEngine> = {}) {
     unpublishAudio: vi.fn(async () => {
       calls.push("unpublish");
     }),
-    playRemoteAudio: vi.fn(async () => {
-      calls.push("play");
-    }),
+    getRemoteAudioTrack: vi.fn(() => remoteTrack),
     destroy: vi.fn(() => {
       calls.push("destroy");
     }),
@@ -59,6 +59,7 @@ function createHarness(overrides: Partial<VoiceCallRTCEngine> = {}) {
   return {
     calls,
     engine,
+    remoteTrack,
     driver,
     getCallbacks: () => callbacks,
   };
@@ -220,31 +221,53 @@ describe("VolcengineVoiceMediaSession", () => {
   it("resumes browser-blocked remote audio only after an explicit call", async () => {
     const harness = createHarness();
     const onAutoplayBlocked = vi.fn();
+    const output: VoiceCallRemoteAudioOutput = {
+      play: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(),
+    };
     const session = new VolcengineVoiceMediaSession(
       { onAutoplayBlocked },
       async () => harness.driver,
+      () => output,
     );
     await session.connect(media);
 
     harness.getCallbacks()?.onAutoplayBlocked("voice-agent-call-1");
     expect(onAutoplayBlocked).toHaveBeenCalledWith("voice-agent-call-1");
-    expect(harness.engine.playRemoteAudio).not.toHaveBeenCalled();
+    expect(output.play).not.toHaveBeenCalled();
 
     await session.resumeRemoteAudio("voice-agent-call-1");
-    expect(harness.engine.playRemoteAudio).toHaveBeenCalledWith(
+    expect(harness.engine.getRemoteAudioTrack).toHaveBeenCalledWith(
       "voice-agent-call-1",
     );
+    expect(output.play).toHaveBeenCalledWith(harness.remoteTrack);
   });
 
   it("starts remote playback before reporting decoded audio as audible", async () => {
+    const harness = createHarness();
     let resolvePlayback: (() => void) | undefined;
-    const harness = createHarness({
-      playRemoteAudio: vi.fn(() =>
-        new Promise<void>((resolve) => {
-          resolvePlayback = resolve;
-        })
-      ),
+    const play = vi.fn(() =>
+      new Promise<void>((resolve) => {
+        resolvePlayback = resolve;
+      })
+    );
+    const audio = {
+      autoplay: false,
+      muted: true,
+      volume: 0,
+      srcObject: null,
+      play,
+      pause: vi.fn(),
+    };
+    const mediaStream = { id: "agent-audio-stream" };
+    const AudioConstructor = vi.fn(function FakeAudio() {
+      return audio;
     });
+    const MediaStreamConstructor = vi.fn(function FakeMediaStream() {
+      return mediaStream;
+    });
+    vi.stubGlobal("Audio", AudioConstructor);
+    vi.stubGlobal("MediaStream", MediaStreamConstructor);
     const onRemoteAudioStarted = vi.fn();
     const session = new VolcengineVoiceMediaSession(
       { onRemoteAudioStarted },
@@ -254,7 +277,20 @@ describe("VolcengineVoiceMediaSession", () => {
 
     harness.getCallbacks()?.onRemoteAudioStarted("voice-agent-call-1");
 
-    expect(harness.engine.playRemoteAudio).toHaveBeenCalledWith(
+    await vi.waitFor(() => {
+      expect(AudioConstructor).toHaveBeenCalledOnce();
+    });
+    expect(MediaStreamConstructor).toHaveBeenCalledWith([
+      harness.remoteTrack,
+    ]);
+    expect(audio).toMatchObject({
+      autoplay: true,
+      muted: false,
+      volume: 1,
+      srcObject: mediaStream,
+    });
+    expect(play).toHaveBeenCalledOnce();
+    expect(harness.engine.getRemoteAudioTrack).toHaveBeenCalledWith(
       "voice-agent-call-1",
     );
     expect(onRemoteAudioStarted).not.toHaveBeenCalled();
@@ -263,19 +299,45 @@ describe("VolcengineVoiceMediaSession", () => {
     await vi.waitFor(() => {
       expect(onRemoteAudioStarted).toHaveBeenCalledWith("voice-agent-call-1");
     });
+
+    await session.disconnect();
+    expect(audio.pause).toHaveBeenCalledOnce();
+    expect(audio.srcObject).toBeNull();
   });
 
-  it("requests a user gesture when explicit remote playback is rejected", async () => {
-    const harness = createHarness({
-      playRemoteAudio: vi.fn(async () => {
-        throw new DOMException("Autoplay blocked", "NotAllowedError");
-      }),
-    });
+  it("ignores decoded audio from a user other than the call-scoped agent", async () => {
+    const harness = createHarness();
     const onRemoteAudioStarted = vi.fn();
     const onAutoplayBlocked = vi.fn();
     const session = new VolcengineVoiceMediaSession(
       { onRemoteAudioStarted, onAutoplayBlocked },
       async () => harness.driver,
+    );
+    await session.connect(media);
+
+    harness.getCallbacks()?.onRemoteAudioStarted("unexpected-remote-user");
+    harness.getCallbacks()?.onAutoplayBlocked("unexpected-remote-user");
+
+    await Promise.resolve();
+    expect(harness.engine.getRemoteAudioTrack).not.toHaveBeenCalled();
+    expect(onRemoteAudioStarted).not.toHaveBeenCalled();
+    expect(onAutoplayBlocked).not.toHaveBeenCalled();
+  });
+
+  it("requests a user gesture when explicit remote playback is rejected", async () => {
+    const harness = createHarness();
+    const output: VoiceCallRemoteAudioOutput = {
+      play: vi.fn(async () => {
+        throw new DOMException("Autoplay blocked", "NotAllowedError");
+      }),
+      stop: vi.fn(),
+    };
+    const onRemoteAudioStarted = vi.fn();
+    const onAutoplayBlocked = vi.fn();
+    const session = new VolcengineVoiceMediaSession(
+      { onRemoteAudioStarted, onAutoplayBlocked },
+      async () => harness.driver,
+      () => output,
     );
     await session.connect(media);
 
@@ -286,7 +348,7 @@ describe("VolcengineVoiceMediaSession", () => {
     });
     expect(onRemoteAudioStarted).not.toHaveBeenCalled();
 
-    harness.engine.playRemoteAudio = vi.fn(async () => undefined);
+    output.play = vi.fn().mockResolvedValue(undefined);
     await session.resumeRemoteAudio("voice-agent-call-1");
 
     expect(onRemoteAudioStarted).toHaveBeenCalledWith("voice-agent-call-1");

@@ -8,22 +8,31 @@ import {
 
 export function honorNameClassName(nameStyle: string | undefined): string {
   switch (nameStyle) {
+    case "ice":
     case "member":
-      return "honor-name honor-name--member";
+    case "emerald":
+    case "sapphire":
     case "gold":
-      return "honor-name honor-name--gold";
+    case "coral":
+    case "amethyst":
     case "founding":
-      return "honor-name honor-name--founding";
     case "prismatic":
-      return "honor-name honor-name--prismatic";
+    case "aurora":
     case "glow":
-      return "honor-name honor-name--glow";
+    case "solar":
     case "shimmer":
-      return "honor-name honor-name--shimmer";
+    case "nebula":
+    case "cyber":
     case "animated_prismatic":
-      return "honor-name honor-name--animated-prismatic";
+    case "plasma":
     case "animated_glow":
-      return "honor-name honor-name--animated-glow";
+    case "eclipse":
+    case "nova":
+    case "quantum":
+    case "celestial":
+    case "mythic":
+    case "transcendent":
+      return `honor-name honor-name--${nameStyle.replaceAll("_", "-")}`;
     default:
       return "honor-name honor-name--default";
   }
@@ -36,6 +45,7 @@ export function honorNameDisplayProps(opts: {
 }): {
   className: string;
   "data-honor-glow-tier"?: string;
+  "data-honor-surface": HonorDisplaySurface;
   style?: CSSProperties;
 } {
   const surface = opts.surface ?? "inline";
@@ -45,12 +55,13 @@ export function honorNameDisplayProps(opts: {
   const baseClass = honorNameClassName(resolvedStyle);
 
   if (glowTier <= 0) {
-    return { className: baseClass };
+    return { className: baseClass, "data-honor-surface": surface };
   }
 
   return {
     className: `${baseClass} honor-name-glow`.trim(),
     "data-honor-glow-tier": String(glowTier),
+    "data-honor-surface": surface,
     style: {
       "--honor-pulse-duration": `${honorPulseDurationSeconds(glowTier)}s`,
     } as CSSProperties,

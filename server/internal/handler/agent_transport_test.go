@@ -289,7 +289,14 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	assertNoChannelMessageContent(t, channelID, finalText)
 }
 
-func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
+// TestAgentTransportAgentDMExchangeNeverAutoPausesAndMustReplyChain replaces
+// the old "...ThreeRoundBudgetAndMustReplyChain" test: task #813/#830
+// (Frank, 2026-07-28, reaffirmed 2026-07-31 #prj-daemon) tore out the
+// automatic round/frequency pause gates — "把这个硬闸拆掉，改成只观测". This
+// runs the exchange past the old 3-round/6-turn budget boundary and proves
+// it keeps going: state stays active, no system pause message, no owner
+// pause inbox item, and a send past the old boundary still succeeds.
+func TestAgentTransportAgentDMExchangeNeverAutoPausesAndMustReplyChain(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -345,8 +352,11 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 
 	currentRecipient := secondAgentID
 	currentTarget := "dm:@" + firstHandle + ":" + firstBody.Message.ID
-	lastEventID := ""
-	for turn := 1; turn <= 5; turn++ {
+	// The old round_limit=3 default paused the exchange at turn_count=6
+	// (3 rounds * 2). Run to turn 9 (10 total turns) to prove there's no
+	// boundary effect left anywhere near the old budget.
+	const replyTurns = 9
+	for turn := 1; turn <= replyTurns; turn++ {
 		var eventID, responseMode string
 		var requiresWake bool
 		var eventTurn int
@@ -373,7 +383,6 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 			WHERE id = $1`, eventID); err != nil {
 			t.Fatalf("activate turn %d inbox event: %v", turn, err)
 		}
-		lastEventID = eventID
 		reply := send(eventID, currentRecipient, currentTarget, turn+1)
 		if reply.Code != http.StatusCreated {
 			t.Fatalf("turn %d send: status=%d body=%s", turn+1, reply.Code, reply.Body.String())
@@ -400,6 +409,8 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 		}
 	}
 
+	// 1 initial send + replyTurns replies = total turn count.
+	wantTurns := replyTurns + 1
 	var turnCount int
 	var state string
 	if err := testPool.QueryRow(ctx, `
@@ -408,8 +419,8 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 		WHERE id = $1`, exchangeID).Scan(&turnCount, &state); err != nil {
 		t.Fatalf("load final A2A exchange: %v", err)
 	}
-	if turnCount != 6 || state != "paused_budget" {
-		t.Fatalf("final exchange turn_count=%d state=%q, want 6 paused_budget", turnCount, state)
+	if turnCount != wantTurns || state != "active" {
+		t.Fatalf("final exchange turn_count=%d state=%q, want %d active (no auto-pause)", turnCount, state, wantTurns)
 	}
 	var agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount int
 	if err := testPool.QueryRow(ctx, `
@@ -440,180 +451,54 @@ func TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain(t *testing.T) {
 		testWorkspaceID, testUserID, exchangeID).Scan(&ownerInboxCount); err != nil {
 		t.Fatalf("count owner A2A inbox items: %v", err)
 	}
-	if agentMessageCount != 6 || wakeCount != 5 || systemMessageCount != 1 || ownerInboxCount != 1 {
+	// No auto-pause ever fires: no system pause message, no owner pause
+	// inbox item — every turn (including the last) produced a real agent
+	// message and woke the next recipient, since nothing ever pauses.
+	if agentMessageCount != wantTurns || wakeCount != wantTurns || systemMessageCount != 0 || ownerInboxCount != 0 {
 		t.Fatalf(
-			"messages=%d wakes=%d system=%d owner_inbox=%d, want 6/5/1/1",
-			agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount,
+			"messages=%d wakes=%d system=%d owner_inbox=%d, want %d/%d/0/0",
+			agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount, wantTurns, wantTurns,
 		)
 	}
-	pausedThread := send(
-		lastEventID,
-		secondAgentID,
-		"dm:@"+firstHandle+":"+firstBody.Message.ID,
-		7,
+	// A send well past the old 3-round/6-turn budget boundary still succeeds
+	// (from whichever agent the strict must-reply alternation now expects —
+	// that check is untouched by #813/#830 and still applies).
+	var finalEventID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id
+		FROM agent_inbox_event
+		WHERE agent_dm_exchange_id = $1
+		  AND agent_dm_turn = $2
+		  AND agent_id = $3`,
+		exchangeID, wantTurns, currentRecipient).Scan(&finalEventID); err != nil {
+		t.Fatalf("load final-turn recipient inbox event: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'draining', started_at = now(), updated_at = now()
+		WHERE id = $1`, finalEventID); err != nil {
+		t.Fatalf("activate final-turn inbox event: %v", err)
+	}
+	pastOldBudget := send(
+		finalEventID,
+		currentRecipient,
+		currentTarget,
+		wantTurns+1,
 	)
-	if pausedThread.Code == http.StatusCreated {
-		t.Fatalf("paused A2A thread send unexpectedly created: body=%s", pausedThread.Body.String())
-	}
-	var agentMessageCountAfterPausedThread int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent'`,
-		channelID,
-	).Scan(&agentMessageCountAfterPausedThread); err != nil {
-		t.Fatalf("count A2A messages after paused thread send: %v", err)
-	}
-	if agentMessageCountAfterPausedThread != 6 {
-		t.Fatalf(
-			"paused A2A thread send persisted visible row: messages=%d, want 6",
-			agentMessageCountAfterPausedThread,
-		)
-	}
-	var systemPartsRaw, inboxDetailsRaw []byte
-	if err := testPool.QueryRow(ctx, `
-		SELECT parts
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'system'
-		ORDER BY seq DESC
-		LIMIT 1`, channelID).Scan(&systemPartsRaw); err != nil {
-		t.Fatalf("load A2A system event parts: %v", err)
-	}
-	var systemParts []protocol.MessagePart
-	if err := json.Unmarshal(systemPartsRaw, &systemParts); err != nil {
-		t.Fatalf("decode A2A system event parts: %v", err)
-	}
-	if len(systemParts) != 1 ||
-		systemParts[0].Type != protocol.MessagePartTypeSystemEvent ||
-		systemParts[0].Event != agentDMSystemEventPausedBudget {
-		t.Fatalf("A2A system event parts=%+v", systemParts)
-	}
-	var params agentDMSystemEventParams
-	if err := json.Unmarshal(systemParts[0].EventParams, &params); err != nil {
-		t.Fatalf("decode A2A system event params: %v", err)
-	}
-	if params.ExchangeID != exchangeID || params.Round != 3 || params.RoundLimit != 3 ||
-		params.AgentAID == "" || params.AgentBID == "" || len(params.Actions) != 4 {
-		t.Fatalf("A2A system event params=%+v", params)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT details
-		FROM inbox_item
-		WHERE workspace_id = $1
-		  AND recipient_id = $2
-		  AND type = 'agent_dm_paused'
-		  AND details->>'exchange_id' = $3`,
-		testWorkspaceID, testUserID, exchangeID).Scan(&inboxDetailsRaw); err != nil {
-		t.Fatalf("load owner A2A inbox details: %v", err)
-	}
-	var inboxDetails agentDMPauseInboxDetails
-	if err := json.Unmarshal(inboxDetailsRaw, &inboxDetails); err != nil {
-		t.Fatalf("decode owner A2A inbox details: %v", err)
-	}
-	if inboxDetails.SystemEvent != agentDMSystemEventPausedBudget ||
-		inboxDetails.ExchangeID != exchangeID ||
-		inboxDetails.RoundLimit != 3 {
-		t.Fatalf("owner A2A inbox details=%+v", inboxDetails)
+	if pastOldBudget.Code != http.StatusCreated {
+		t.Fatalf("send past old budget boundary should succeed: status=%d body=%s", pastOldBudget.Code, pastOldBudget.Body.String())
 	}
 }
 
-func TestAgentDMPauseNotificationFailureRetriesAtomicallyWithoutDuplicates(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	firstAgentID := createHandlerTestAgent(t, "Pause Retry A "+uuid.NewString(), []byte("[]"))
-	secondAgentID := createHandlerTestAgent(t, "Pause Retry B "+uuid.NewString(), []byte("[]"))
-	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
-	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
-	if !ok {
-		t.Fatal("normalize pause retry pair failed")
-	}
-	var exchangeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_dm_exchange (
-		  workspace_id, channel_id, agent_low_id, agent_high_id,
-		  matter_id, turn_count, state, pause_reason, notification_epoch
-		)
-		VALUES (
-		  $1, $2, $3, $4,
-		  gen_random_uuid(), 6, 'paused_budget', 'forced retry test', 1
-		)
-		RETURNING id`,
-		testWorkspaceID, channel.ID, lowID, highID,
-	).Scan(&exchangeID); err != nil {
-		t.Fatalf("seed pause retry exchange: %v", err)
-	}
-
-	tx, err := testHandler.TxStarter.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin forced pause notification failure: %v", err)
-	}
-	failing := &agentDMPauseFailOnceDBTX{DBTX: tx}
-	if _, err := testHandler.persistAgentDMPauseNotificationTx(
-		ctx, failing, parseUUID(exchangeID),
-	); err == nil || !strings.Contains(err.Error(), "forced owner inbox write failure") {
-		tx.Rollback(ctx)
-		t.Fatalf("forced pause notification failure=%v", err)
-	}
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("rollback forced pause notification failure: %v", err)
-	}
-
-	assertDurableCounts := func(wantMarker bool, wantMessages, wantInbox int) {
-		t.Helper()
-		var marker bool
-		if err := testPool.QueryRow(ctx, `
-			SELECT notification_sent_at IS NOT NULL
-			FROM agent_dm_exchange
-			WHERE id = $1`, exchangeID).Scan(&marker); err != nil {
-			t.Fatalf("load pause notification marker: %v", err)
-		}
-		if marker != wantMarker {
-			t.Fatalf("pause notification marker=%v, want %v", marker, wantMarker)
-		}
-		var messages, inboxItems int
-		if err := testPool.QueryRow(ctx, `
-			SELECT count(*)
-			FROM agent_dm_pause_notification receipt
-			JOIN channel_message message ON message.id = receipt.channel_message_id
-			WHERE receipt.exchange_id = $1
-			  AND receipt.notification_epoch = 1
-			  AND message.workspace_id = $2
-			  AND message.channel_id = $3
-			  AND message.author_type = 'system'`,
-			exchangeID, testWorkspaceID, channel.ID,
-		).Scan(&messages); err != nil {
-			t.Fatalf("count durable pause DM rows: %v", err)
-		}
-		if err := testPool.QueryRow(ctx, `
-			SELECT count(*)
-			FROM inbox_item
-			WHERE workspace_id = $1
-			  AND recipient_id = $2
-			  AND type = 'agent_dm_paused'
-			  AND details->>'exchange_id' = $3`,
-			testWorkspaceID, testUserID, exchangeID,
-		).Scan(&inboxItems); err != nil {
-			t.Fatalf("count durable pause owner inbox rows: %v", err)
-		}
-		if messages != wantMessages || inboxItems != wantInbox {
-			t.Fatalf(
-				"durable pause rows messages=%d inbox=%d, want %d/%d",
-				messages, inboxItems, wantMessages, wantInbox,
-			)
-		}
-	}
-	assertDurableCounts(false, 0, 0)
-
-	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
-	assertDurableCounts(true, 1, 1)
-	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
-	assertDurableCounts(true, 1, 1)
-}
-
-func TestAgentDMConcurrentFinalTurnCannotOverrunBudget(t *testing.T) {
+// TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget replaces
+// "...ConcurrentFinalTurnCannotOverrunBudget". The budget gate is gone
+// (#813/#830), but the must-reply turn-alternation lock this test exercises
+// (12 concurrent sends racing to claim the SAME turn as the SAME sender) is
+// untouched — exactly one still wins that race, the rest still lose via
+// agentDMTurnError (not agentDMPausedError, which no longer exists on this
+// path). What changed is the exchange's resulting state: it stays "active"
+// at turn_count=6 instead of auto-pausing to "paused_budget".
+func TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -695,13 +580,16 @@ func TestAgentDMConcurrentFinalTurnCannotOverrunBudget(t *testing.T) {
 			successes++
 			continue
 		}
-		var paused *agentDMPausedError
-		if !errors.As(err, &paused) {
+		// Losers now fail turn-alternation (this test's real subject — all
+		// 12 contenders share one sender/recipient pair for the same turn),
+		// not the removed budget-pause path.
+		var turnErr *agentDMTurnError
+		if !errors.As(err, &turnErr) {
 			t.Fatalf("unexpected concurrent reservation error: %v", err)
 		}
 	}
 	if successes != 1 {
-		t.Fatalf("concurrent final-turn successes=%d, want exactly 1", successes)
+		t.Fatalf("concurrent duplicate-turn successes=%d, want exactly 1", successes)
 	}
 	var turnCount int
 	var state string
@@ -711,12 +599,19 @@ func TestAgentDMConcurrentFinalTurnCannotOverrunBudget(t *testing.T) {
 		WHERE id = $1`, exchangeID).Scan(&turnCount, &state); err != nil {
 		t.Fatalf("load concurrent final exchange: %v", err)
 	}
-	if turnCount != 6 || state != "paused_budget" {
-		t.Fatalf("concurrent final exchange turn_count=%d state=%q", turnCount, state)
+	if turnCount != 6 || state != "active" {
+		t.Fatalf("concurrent final exchange turn_count=%d state=%q, want 6 active (no auto-pause)", turnCount, state)
 	}
 }
 
-func TestAgentDMFrequencyGateSpansMatters(t *testing.T) {
+// TestAgentDMFrequencyAndBudgetNeverPauseAcrossMatters replaces
+// "...FrequencyGateSpansMatters": #813/#830 tore out both the round-budget
+// and frequency auto-pause gates. Running two separate matters back to
+// back in the same agent pair — 12 total messages, past both the old
+// 6-turn budget and the old 12-message/5min frequency limit — proves
+// neither exchange ever auto-pauses. Turn/window counters are still
+// tracked (kept for display), just never enforced.
+func TestAgentDMFrequencyAndBudgetNeverPauseAcrossMatters(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -778,8 +673,8 @@ func TestAgentDMFrequencyGateSpansMatters(t *testing.T) {
 		WHERE id = $1`, firstExchangeID).Scan(&firstState); err != nil {
 		t.Fatalf("load first frequency exchange: %v", err)
 	}
-	if firstState != "paused_budget" {
-		t.Fatalf("first exchange state=%q, want paused_budget", firstState)
+	if firstState != "active" {
+		t.Fatalf("first exchange state=%q, want active (no auto-pause past old 6-turn budget)", firstState)
 	}
 
 	secondExchangeID := runMatter(uuid.NewString())
@@ -797,73 +692,14 @@ func TestAgentDMFrequencyGateSpansMatters(t *testing.T) {
 	); err != nil {
 		t.Fatalf("load second frequency exchange: %v", err)
 	}
-	if secondState != "paused_frequency" || pairState != "paused_frequency" || windowCount != 12 {
+	// window_message_count still accumulates (kept for display/telemetry —
+	// see the "account agent dm pair frequency" update), it just never
+	// triggers a pause anymore.
+	if secondState != "active" || pairState != "active" || windowCount != 12 {
 		t.Fatalf(
-			"frequency states exchange=%q pair=%q count=%d, want paused_frequency/paused_frequency/12",
+			"frequency states exchange=%q pair=%q count=%d, want active/active/12 (no auto-pause)",
 			secondState, pairState, windowCount,
 		)
-	}
-}
-
-func TestAgentTransportA2AControlRequiresSourceAgentOwnerTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, _ := createChannelCompletionTask(t, "group")
-	sourceAgentID := agentIDForTask(t, taskID)
-	peerAgentID := createHandlerTestAgent(t, "Control Peer "+uuid.NewString(), []byte("[]"))
-	peerHandle := agentHandleForTransportTest(t, peerAgentID)
-	canonical := dmCanonicalName("agent", sourceAgentID, "agent", peerAgentID)
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `
-			DELETE FROM channel
-			WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, canonical)
-	})
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET initiator_user_id = $2
-		WHERE id = $1`, taskID, testUserID); err != nil {
-		t.Fatalf("seed owner-initiated task: %v", err)
-	}
-	first := agentTransportSendForTest(t, taskID, sourceAgentID, map[string]any{
-		"target":            "dm:@" + peerHandle,
-		"content":           "start controlled A2A",
-		"client_message_id": "a2a-control-" + uuid.NewString(),
-	})
-	if first.Code != http.StatusCreated {
-		t.Fatalf("start controlled A2A: status=%d body=%s", first.Code, first.Body.String())
-	}
-
-	pause := agentTransportA2AControlForTest(t, taskID, sourceAgentID, map[string]any{
-		"target": "dm:@" + peerHandle,
-		"action": "pause_pair",
-	})
-	if pause.Code != http.StatusOK {
-		t.Fatalf("owner-task A2A pause: status=%d body=%s", pause.Code, pause.Body.String())
-	}
-	var body agentTransportDMControlResponse
-	if err := json.Unmarshal(pause.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode owner-task A2A control: %v", err)
-	}
-	if body.Control == nil || body.Control.State != "paused_pair" {
-		t.Fatalf("owner-task A2A control=%+v", body)
-	}
-
-	nonOwnerID := seedWorkspaceUserForTransportTargetTest(t, "a2a-control-nonowner-"+uuid.NewString()[:8])
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET initiator_user_id = $2
-		WHERE id = $1`, taskID, nonOwnerID); err != nil {
-		t.Fatalf("seed non-owner initiated task: %v", err)
-	}
-	resume := agentTransportA2AControlForTest(t, taskID, sourceAgentID, map[string]any{
-		"target": "dm:@" + peerHandle,
-		"action": "resume_pair",
-	})
-	if resume.Code != http.StatusForbidden {
-		t.Fatalf("non-owner task A2A control: status=%d body=%s", resume.Code, resume.Body.String())
 	}
 }
 
@@ -3471,14 +3307,6 @@ func agentTransportSearchForTest(t *testing.T, taskID, agentID string, body map[
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/search", taskID, agentID, body)
 	rec := httptest.NewRecorder()
 	testHandler.AgentTransportSearchMessages(rec, req)
-	return rec
-}
-
-func agentTransportA2AControlForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
-	t.Helper()
-	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/a2a-control", taskID, agentID, body)
-	rec := httptest.NewRecorder()
-	testHandler.AgentTransportUpdateDMControl(rec, req)
 	return rec
 }
 

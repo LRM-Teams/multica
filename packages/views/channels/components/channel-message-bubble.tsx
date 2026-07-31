@@ -48,6 +48,7 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
+import { ThreadReplyPreview } from "./thread-reply-preview";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import {
@@ -57,7 +58,6 @@ import {
   parseProjectSystemEvent,
   parseReminderSystemEvent,
   parseThreadSystemEvent,
-  parseAgentDMPauseSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
@@ -66,7 +66,6 @@ import {
   ProjectSystemEventContent,
   ReminderSystemEventContent,
   ThreadSystemEventContent,
-  AgentDMPauseSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
@@ -151,10 +150,6 @@ function ChannelSystemMessageRow({
   // LRM-540: thread unfollow/follow — structured actor token (display_name),
   // never the BE `@handle unfollowed this thread` fallback content.
   const threadEvent = parseThreadSystemEvent(message);
-  // #692: A2A agent-pair DM gate rows (budget/frequency auto-pause, owner
-  // pause/resume pair or global). Owner-private history marker; localized copy
-  // from structured params, never the BE English fallback.
-  const agentDMPauseEvent = parseAgentDMPauseSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -199,8 +194,6 @@ function ChannelSystemMessageRow({
             <ReminderSystemEventContent event={reminderEvent} />
           ) : threadEvent ? (
             <ThreadSystemEventContent event={threadEvent} />
-          ) : agentDMPauseEvent ? (
-            <AgentDMPauseSystemEventContent event={agentDMPauseEvent} />
           ) : hasReferenceParts ? (
             // Spans are anchored to the RAW `message.content`; feeding the trimmed
             // `systemText` would shift every offset and misplace the tokens.
@@ -546,7 +539,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const threadReplyCount = message.thread_reply_count ?? 0;
   const threadUnreadCount = message.thread_unread_count ?? 0;
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
-  const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
+  const hasReactions = (message.reactions?.length ?? 0) > 0;
+  const hasFeedback = hasReactions;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
   // Resolved once here for copy; `MessageBody` resolves the same way to render
   // the body (see resolveMessageParts for the envelope-unwrap rationale).
@@ -813,13 +807,17 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           shell fix (#1154). Soft wrap stays on `.message-surface`. */}
       <div className="min-w-0 max-w-full">
         {showAuthor && (
-          <div className="mb-0.5 flex select-none items-baseline gap-2 text-[13.5px] md:pr-24">
+          <div
+            data-testid="message-author-row"
+            className="mb-0.5 flex select-none items-center gap-1.5 text-[13.5px] md:pr-24"
+          >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
                 memberType={profileActorType}
                 memberId={profileActorId}
                 side="top"
                 sideOffset={8}
+                className="self-center"
                 onClickCapture={handleOpenProfileCapture}
               >
                 {nameLabel}
@@ -838,7 +836,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               </span>
             )}
             <span
-              className="shrink-0 text-[11px] text-muted-foreground/60"
+              data-testid="message-author-time"
+              className="inline-flex h-5 shrink-0 items-center text-[10px] leading-none tabular-nums text-muted-foreground/50"
               title={messageTime.full(message.created_at)}
             >
               <Time kind="message" value={message.created_at} title={false} />
@@ -1011,8 +1010,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 {/* LRM-302: text link, not centered pill — must not cover body. */}
                 <button
                   type="button"
-                  className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => setExpandedForIdentity(collapseIdentity)}
+                  className="pointer-events-auto inline-flex min-h-8 touch-manipulation items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setExpandedForIdentity(collapseIdentity);
+                  }}
                 >
                   {t(($) => $.message.expand_action)}
                 </button>
@@ -1022,8 +1025,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <div className="mt-1 flex justify-start" data-testid="message-collapse-less">
                 <button
                   type="button"
-                  className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => setExpandedForIdentity(null)}
+                  className="inline-flex min-h-8 touch-manipulation items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setExpandedForIdentity(null);
+                  }}
                 >
                   {t(($) => $.message.collapse_action)}
                 </button>
@@ -1160,24 +1167,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         )}
         {!isEditing && hasFeedback && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {hasThreadActivity && onOpenThread && (
-              <button
-                type="button"
-                onClick={() => onOpenThread(message)}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-muted/45 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:h-6",
-                  threadUnreadCount > 0 && "border-primary/35 bg-primary/10 text-primary",
-                )}
-              >
-                <MessageSquare className="size-3.5" />
-                <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
-                {threadUnreadCount > 0 && (
-                  <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-                    {threadUnreadCount}
-                  </span>
-                )}
-              </button>
-            )}
+            {/* LRM-873: reply count chip replaced by ThreadReplyPreview below. */}
             {onReact && (message.reactions?.length ?? 0) > 0 && (
               <ReactionBar
                 reactions={message.reactions ?? []}
@@ -1190,6 +1180,9 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             )}
           </div>
         )}
+        {!isEditing && hasThreadActivity && onOpenThread ? (
+          <ThreadReplyPreview message={message} onOpenThread={onOpenThread} />
+        ) : null}
       </div>
     </div>
   );

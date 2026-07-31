@@ -44,6 +44,15 @@ const (
 	ExitStartFailed ExitKind = "start_failed"
 	ExitRestarted   ExitKind = "restart_requested"
 	ExitStopped     ExitKind = "stopped"
+	// ExitHandoff marks a worker exit that the worker itself deliberately
+	// requested (by exiting with Config.HandoffExitCode) to hand control to
+	// a possibly-different WorkerPath — e.g. a self-update. Unlike
+	// ExitClean, it is not a permanent stop: the supervisor restarts
+	// immediately, re-resolving the path via Config.ResolveWorkerPath if
+	// set. Unlike ExitCrashed, it never enters backoff and never counts as
+	// a failure — it is a first-class, expected exit reason, not a bolt-on
+	// special case of either clean-stop or crash-restart.
+	ExitHandoff ExitKind = "handoff"
 )
 
 type Snapshot struct {
@@ -67,6 +76,30 @@ type Config struct {
 	WorkerDir  string
 	Stdout     io.Writer
 	Stderr     io.Writer
+
+	// ResolveWorkerPath, when set, is called fresh immediately before every
+	// worker generation is started — the very first one, a crash-triggered
+	// restart, a RequestRestart()-triggered restart, and a handoff-triggered
+	// restart alike — and its return value is used instead of the static
+	// WorkerPath/WorkerArgs for that generation. This lets a caller keep
+	// "what should actually run right now" logic (e.g. resolving a version
+	// store's active binary) outside this package without the worker
+	// process needing to communicate a path across the process boundary:
+	// it only needs to signal *that* a handoff happened (via
+	// HandoffExitCode), and the supervisor re-derives *where* to go via
+	// this callback. If nil, WorkerPath/WorkerArgs are used unchanged, so
+	// this is fully backward compatible.
+	ResolveWorkerPath func() (path string, args []string, err error)
+
+	// HandoffExitCode, when nonzero, is a worker exit code the supervisor
+	// treats as a deliberate, expected request to restart onto a
+	// (possibly different, per ResolveWorkerPath) worker — not a permanent
+	// stop (like a zero exit) and not a failure (like any other nonzero
+	// exit). A handoff exit restarts immediately, without backoff, and is
+	// reported as ExitHandoff rather than ExitClean or ExitCrashed. Zero
+	// (the default) disables this: every nonzero exit is treated as a
+	// crash, matching prior behavior exactly.
+	HandoffExitCode int
 
 	InitialBackoff   time.Duration
 	MaxBackoff       time.Duration
@@ -98,7 +131,7 @@ func New(config Config) (*Supervisor, error) {
 	if config.LockPath == "" {
 		return nil, errors.New("supervisor lock path is required")
 	}
-	if config.WorkerPath == "" {
+	if config.WorkerPath == "" && config.ResolveWorkerPath == nil {
 		return nil, errors.New("supervisor worker path is required")
 	}
 	if config.InitialBackoff < 0 ||
@@ -197,7 +230,30 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			snapshot.WorkerPID = 0
 			snapshot.NextBackoff = 0
 		})
-		cmd := s.workerCommand()
+		cmd, err := s.workerCommand()
+		if err != nil {
+			s.updateSnapshot(func(snapshot *Snapshot) {
+				snapshot.State = StateBackingOff
+				snapshot.LastExit = ExitStartFailed
+				snapshot.NextBackoff = backoff
+			})
+			restartRequested, err := s.waitBeforeRestart(ctx, backoff)
+			if err != nil {
+				if ctx.Err() != nil {
+					s.transitionStopped(ExitStopped)
+					return nil
+				}
+				return err
+			}
+			s.incrementRestartCount()
+			if restartRequested {
+				s.markRestartRequested()
+				backoff = s.config.InitialBackoff
+			} else {
+				backoff = nextBackoff(backoff, s.config.MaxBackoff)
+			}
+			continue
+		}
 		configureWorkerProcess(cmd)
 		if err := cmd.Start(); err != nil {
 			s.updateSnapshot(func(snapshot *Snapshot) {
@@ -237,11 +293,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				s.transitionStopped(ExitStopped)
 				return nil
 			}
-			if s.commitWorkerExit(waitErr == nil) {
+			kind := classifyWorkerExit(waitErr, s.config.HandoffExitCode)
+			if s.commitWorkerExit(kind) {
 				backoff = s.config.InitialBackoff
 				continue
 			}
-			if waitErr == nil {
+			if kind == ExitClean {
 				return nil
 			}
 			if time.Since(startedAt) >= s.config.StableRunWindow {
@@ -292,15 +349,45 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Supervisor) workerCommand() *exec.Cmd {
-	cmd := exec.Command(s.config.WorkerPath, s.config.WorkerArgs...)
+// workerCommand builds the command for the next worker generation. When
+// Config.ResolveWorkerPath is set, it is called fresh here — i.e. on every
+// generation, whatever ended the previous one — so a caller's "what should
+// actually be running" logic (e.g. resolving a version store) never goes
+// stale across restarts.
+func (s *Supervisor) workerCommand() (*exec.Cmd, error) {
+	path, args := s.config.WorkerPath, s.config.WorkerArgs
+	if s.config.ResolveWorkerPath != nil {
+		resolvedPath, resolvedArgs, err := s.config.ResolveWorkerPath()
+		if err != nil {
+			return nil, fmt.Errorf("resolve worker path: %w", err)
+		}
+		path, args = resolvedPath, resolvedArgs
+	}
+	cmd := exec.Command(path, args...)
 	if s.config.WorkerEnv != nil {
 		cmd.Env = s.config.WorkerEnv
 	}
 	cmd.Dir = s.config.WorkerDir
 	cmd.Stdout = s.config.Stdout
 	cmd.Stderr = s.config.Stderr
-	return cmd
+	return cmd, nil
+}
+
+// classifyWorkerExit maps a worker's Wait() error to the ExitKind the
+// supervisor should act on. A nil error is always ExitClean. A non-nil error
+// matching Config.HandoffExitCode (when set) is ExitHandoff — a deliberate,
+// expected request to restart, not a failure. Anything else is ExitCrashed.
+func classifyWorkerExit(waitErr error, handoffExitCode int) ExitKind {
+	if waitErr == nil {
+		return ExitClean
+	}
+	if handoffExitCode != 0 {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == handoffExitCode {
+			return ExitHandoff
+		}
+	}
+	return ExitCrashed
 }
 
 func (s *Supervisor) beginRun() error {
@@ -362,7 +449,19 @@ func (s *Supervisor) establishGeneration(pid int, startedAt time.Time) {
 	s.mu.Unlock()
 }
 
-func (s *Supervisor) commitWorkerExit(clean bool) bool {
+// commitWorkerExit records how a worker generation ended and reports
+// whether the caller should restart immediately (true — no backoff) or
+// fall through to the caller's own handling of the exit kind (false).
+//
+// Priority order matters: an explicit RequestRestart() (restartPending)
+// always wins over the exit's own kind, since a caller-requested restart is
+// unconditional. Next, ExitHandoff — the worker's own deliberate request to
+// restart onto a possibly-different path — also restarts immediately,
+// exactly like a requested restart, but is recorded as its own ExitKind so
+// it's distinguishable in the Snapshot from both a manual RequestRestart and
+// a crash. Only ExitClean is terminal; ExitCrashed falls through for the
+// caller's existing backoff handling.
+func (s *Supervisor) commitWorkerExit(kind ExitKind) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.restartPending {
@@ -377,7 +476,19 @@ func (s *Supervisor) commitWorkerExit(clean bool) bool {
 		}
 		return true
 	}
-	if !clean {
+	if kind == ExitHandoff {
+		previousState := s.snapshot.State
+		s.snapshot.State = StateStarting
+		s.snapshot.WorkerPID = 0
+		s.snapshot.LastExit = ExitHandoff
+		s.snapshot.NextBackoff = 0
+		s.snapshot.RestartCount++
+		if s.snapshot.State != previousState {
+			s.snapshot.StateChangedAt = time.Now()
+		}
+		return true
+	}
+	if kind != ExitClean {
 		return false
 	}
 

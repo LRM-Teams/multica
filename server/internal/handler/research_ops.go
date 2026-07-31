@@ -53,6 +53,13 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Agents must not rewrite the user's session goal (LRM-898 / LRM-904).
+	// Exploration may add subquestions/pivots; the authoritative goal stays on
+	// research_session.goal and is user-owned.
+	if strings.EqualFold(strings.TrimSpace(req.NodeType), "goal") && !researchAgentMayMutateSessionGoal() {
+		writeError(w, http.StatusForbidden, "fleet agents cannot rewrite the user goal; only the user may change it mid-flight")
+		return
+	}
 	if req.Status == "" {
 		req.Status = "active"
 	}
@@ -126,6 +133,8 @@ type upsertSourceRequest struct {
 	Relevance         *float64        `json:"relevance"`
 	Summary           string          `json:"summary"`
 	Excerpt           string          `json:"excerpt"`
+	Why               string          `json:"why"`
+	DimensionFamily   string          `json:"dimension_family"`
 	Payload           json.RawMessage `json:"payload"`
 }
 
@@ -162,6 +171,9 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 	payload := req.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
+	}
+	if req.Why != "" || req.DimensionFamily != "" {
+		payload = mergeSourceWhyPayload(payload, req.Why, req.DimensionFamily)
 	}
 	var source db.ResearchSource
 	var err error
@@ -782,6 +794,7 @@ func (h *Handler) ConfirmResearchSession(w http.ResponseWriter, r *http.Request)
 	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
 		"session": researchSessionToResponse(updated),
 	})
+	h.awardHonorXP(r.Context(), parseUUID(userID), "research.session", uuidToString(sessionID))
 	writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
 }
 
@@ -888,6 +901,21 @@ type hireFleetMemberRequest struct {
 	Role         string `json:"role"`
 	Description  string `json:"description"`
 	Instructions string `json:"instructions"`
+	Model        string `json:"model"`
+	Reason       string `json:"reason"`  // specialty gap / why hire (audit + canvas)
+	Fixture      bool   `json:"fixture"` // capacity/409 test only; skips canvas projection
+}
+
+type optimizeFleetMemberRequest struct {
+	Instructions string `json:"instructions"`
+	Model        string `json:"model"`
+	Activate     bool   `json:"activate"`
+	Reason       string `json:"reason"`
+}
+
+type archiveFleetMemberRequest struct {
+	Reason  string `json:"reason"`
+	Fixture bool   `json:"fixture"` // capacity fixture cleanup only
 }
 
 func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request) {
@@ -906,15 +934,49 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "name and role are required")
 		return
 	}
+	role := strings.TrimSpace(req.Role)
+	if strings.EqualFold(role, "lead") {
+		writeError(w, http.StatusBadRequest, "cannot hire another lead; use existing 罗纳尔多")
+		return
+	}
+
+	members, err := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
+		FleetID:     lead.FleetID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list members")
+		return
+	}
+	fixture := researchRosterFixtureRequested(r.Header.Get(researchRosterFixtureHeader), req.Fixture)
+	if gapErr := validateResearchHireGap(req.Name, role, req.Reason, members, fixture); gapErr != nil {
+		writeError(w, http.StatusBadRequest, gapErr.Error())
+		return
+	}
+	activeCount := countNonArchivedFleetMembers(members)
+	if researchRosterAtCap(activeCount) {
+		writeError(w, http.StatusConflict, fmt.Sprintf(
+			"fleet roster at cap (%d active members); archive idle members before hiring (depth budget)",
+			researchFleetMaxActiveMembers,
+		))
+		return
+	}
+
 	runtime, okRuntime := h.pickVisibleAgentRuntime(r.Context(), wsUUID, parseUUID(userID))
 	if !okRuntime {
 		writeError(w, http.StatusBadRequest, "no runtime available for hire")
 		return
 	}
-	instructions := req.Instructions
+	instructions := strings.TrimSpace(req.Instructions)
 	if instructions == "" {
 		instructions = "Pending prompt optimization by 罗纳尔多. Do not accept tasks until activated."
 	}
+	model := resolveResearchHireModel(req.Model, runtime.Provider)
+	reason := strings.TrimSpace(req.Reason)
+	if fixture && reason == "" {
+		reason = "capacity fixture hire"
+	}
+
 	agent, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
@@ -928,6 +990,8 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		OwnerID:            parseUUID(userID),
 		CustomEnv:          []byte("{}"),
 		CustomArgs:         []byte("[]"),
+		Model:              model,
+		ThinkingLevel:      pgtype.Text{},
 	}, req.Name, req.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to hire agent: "+err.Error())
@@ -937,7 +1001,7 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		WorkspaceID: wsUUID,
 		FleetID:     lead.FleetID,
 		AgentID:     agent.ID,
-		Role:        req.Role,
+		Role:        role,
 		Status:      "pending_prompt_review",
 		IsLead:      false,
 	})
@@ -945,40 +1009,26 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to add fleet member")
 		return
 	}
-	// Project roster change onto every active session so canvases stay current.
-	sessions, _ := h.Queries.ListResearchSessions(r.Context(), wsUUID)
-	for _, s := range sessions {
-		if s.FleetID != lead.FleetID {
-			continue
-		}
-		if s.Status != "running" && s.Status != "awaiting_user_confirm" {
-			continue
-		}
-		_, _, _ = h.createResearchGraphNodePublished(r.Context(), workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), db.CreateResearchGraphNodeParams{
-			WorkspaceID:  wsUUID,
-			SessionID:    s.ID,
-			NodeType:     "roster_change",
-			Title:        fmt.Sprintf("新成员 · %s", agent.DisplayName),
-			Summary:      fmt.Sprintf("角色 %s 待提示词优化后激活", req.Role),
-			Status:       "active",
-			ActorAgentID: agent.ID,
-			Payload: marshalJSONRaw(map[string]any{
-				"member_id": uuidToString(member.ID),
-				"role":      req.Role,
-				"status":    member.Status,
-			}),
-		}, pgtype.UUID{}, "leads_to")
-		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), researchProcessEvent{
-			Op:      "roster_hire",
-			Title:   agent.DisplayName,
-			Body:    fmt.Sprintf("编制变更 · 雇佣 %s（%s），待提示词优化", firstNonEmpty(agent.DisplayName, agent.Name), req.Role),
-			ActorID: agent.ID,
-			Meta: map[string]any{
-				"member_id": uuidToString(member.ID),
-				"role":      req.Role,
+
+	// Fixture hires intentionally skip canvas/process projection (LRM-918 H3).
+	if !fixture {
+		h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
+			Action:    "hire",
+			Member:    member,
+			AgentName: firstNonEmpty(agent.DisplayName, agent.Name),
+			Title:     fmt.Sprintf("新成员 · %s", firstNonEmpty(agent.DisplayName, agent.Name)),
+			Summary:   fmt.Sprintf("角色 %s 待提示词优化后激活 · %s", role, reason),
+			Op:        "roster_hire",
+			CardBody:  fmt.Sprintf("编制变更 · 雇佣 %s（%s），待提示词优化。原因：%s", firstNonEmpty(agent.DisplayName, agent.Name), role, reason),
+			Reason:    reason,
+			Model:     model.String,
+			ExtraPayload: map[string]any{
+				"status":        member.Status,
+				"member_status": member.Status,
 			},
 		})
 	}
+
 	writeJSON(w, http.StatusCreated, ResearchFleetMemberResp{
 		ID:          uuidToString(member.ID),
 		AgentID:     uuidToString(member.AgentID),
@@ -990,18 +1040,14 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 	})
 }
 
-type optimizeFleetMemberRequest struct {
-	Instructions string `json:"instructions"`
-	Activate     bool   `json:"activate"`
-}
-
 func (h *Handler) OptimizeResearchFleetMember(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
 	if !ok {
 		return
 	}
-	if _, ok := h.requireResearchLeadActor(w, r, wsUUID); !ok {
+	lead, ok := h.requireResearchLeadActor(w, r, wsUUID)
+	if !ok {
 		return
 	}
 	memberID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "memberId"), "memberId")
@@ -1037,21 +1083,30 @@ func (h *Handler) OptimizeResearchFleetMember(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "member not found")
 		return
 	}
-	_, err = h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
+	if target.Status == "archived" {
+		writeError(w, http.StatusConflict, "cannot optimize archived member")
+		return
+	}
+
+	updateParams := db.UpdateAgentParams{
 		ID:                 target.AgentID,
 		Instructions:       pgtype.Text{String: req.Instructions, Valid: true},
 		AvatarSelectionSet: false,
 		AvatarSource:       agentAvatarSourceAssigned,
-	})
+	}
+	if model := strings.TrimSpace(req.Model); model != "" {
+		updateParams.Model = pgtype.Text{String: model, Valid: true}
+	}
+	updatedAgent, err := h.Queries.UpdateAgent(r.Context(), updateParams)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update instructions")
 		return
 	}
+
+	prevStatus := target.Status
 	status := target.Status
 	if req.Activate {
 		status = "active"
-	} else if status == "pending_prompt_review" {
-		status = "pending_prompt_review"
 	}
 	updated, err := h.Queries.UpdateResearchFleetMemberStatus(r.Context(), db.UpdateResearchFleetMemberStatusParams{
 		ID:          target.ID,
@@ -1062,12 +1117,55 @@ func (h *Handler) OptimizeResearchFleetMember(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to update member status")
 		return
 	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		if req.Activate {
+			reason = "optimize + activate"
+		} else {
+			reason = "optimize instructions"
+		}
+	}
+	agentName := firstNonEmpty(updatedAgent.DisplayName, updatedAgent.Name, updated.Role)
+	h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
+		Action:    "optimize",
+		Member:    updated,
+		AgentName: agentName,
+		Title:     fmt.Sprintf("优化 · %s", agentName),
+		Summary:   fmt.Sprintf("%s → %s · %s", prevStatus, updated.Status, reason),
+		Op:        "roster_optimize",
+		CardBody:  fmt.Sprintf("编制变更 · 优化 %s（%s→%s）。原因：%s", agentName, prevStatus, updated.Status, reason),
+		Reason:    reason,
+		Model:     updatedAgent.Model.String,
+		ExtraPayload: map[string]any{
+			"prev_status":   prevStatus,
+			"status":        updated.Status,
+			"member_status": updated.Status,
+			"activated":     req.Activate,
+		},
+	})
+
+	// H2: activation must kick off observable work (activity node + wake).
+	if req.Activate && updated.Status == "active" {
+		h.assignWorkAfterRosterActivate(
+			r.Context(),
+			workspaceID,
+			wsUUID,
+			lead,
+			updated,
+			agentName,
+			parseUUID(requestUserID(r)),
+		)
+	}
+
 	writeJSON(w, http.StatusOK, ResearchFleetMemberResp{
-		ID:      uuidToString(updated.ID),
-		AgentID: uuidToString(updated.AgentID),
-		Role:    updated.Role,
-		Status:  updated.Status,
-		IsLead:  updated.IsLead,
+		ID:          uuidToString(updated.ID),
+		AgentID:     uuidToString(updated.AgentID),
+		Role:        updated.Role,
+		Status:      updated.Status,
+		IsLead:      updated.IsLead,
+		Name:        updatedAgent.Name,
+		DisplayName: updatedAgent.DisplayName,
 	})
 }
 
@@ -1085,6 +1183,64 @@ func (h *Handler) ArchiveResearchFleetMemberHandler(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
+	var req archiveFleetMemberRequest
+	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
+
+	fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "fleet missing")
+		return
+	}
+	members, err := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
+		FleetID:     fleet.ID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list members")
+		return
+	}
+	var target *db.ResearchFleetMember
+	for i := range members {
+		if members[i].ID == memberID {
+			target = &members[i]
+			break
+		}
+	}
+	if target == nil {
+		writeError(w, http.StatusNotFound, "member not found")
+		return
+	}
+	if target.IsLead {
+		writeError(w, http.StatusBadRequest, "cannot archive research lead")
+		return
+	}
+	if target.Status == "archived" {
+		writeJSON(w, http.StatusOK, ResearchFleetMemberResp{
+			ID:      uuidToString(target.ID),
+			AgentID: uuidToString(target.AgentID),
+			Role:    target.Role,
+			Status:  target.Status,
+			IsLead:  target.IsLead,
+		})
+		return
+	}
+
+	fixture := researchRosterFixtureRequested(r.Header.Get(researchRosterFixtureHeader), req.Fixture)
+	hasWork := h.researchAgentHasObservableWork(r.Context(), wsUUID, fleet.ID, target.AgentID)
+	var hiredAt time.Time
+	if target.CreatedAt.Valid {
+		hiredAt = target.CreatedAt.Time
+	}
+	if churnErr := validateResearchArchiveAntiChurn(*target, hiredAt, hasWork, fixture, time.Now().UTC()); churnErr != nil {
+		writeError(w, http.StatusConflict, churnErr.Error())
+		return
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "idle or low effectiveness"
+	}
+
 	updated, err := h.Queries.ArchiveResearchFleetMember(r.Context(), db.ArchiveResearchFleetMemberParams{
 		ID:          memberID,
 		WorkspaceID: wsUUID,
@@ -1093,14 +1249,45 @@ func (h *Handler) ArchiveResearchFleetMemberHandler(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusNotFound, "member not found")
 		return
 	}
-	if updated.IsLead {
-		writeError(w, http.StatusBadRequest, "cannot archive research lead")
-		return
+
+	agentName := updated.Role
+	if agent, aerr := h.Queries.GetAgent(r.Context(), updated.AgentID); aerr == nil {
+		agentName = firstNonEmpty(agent.DisplayName, agent.Name, updated.Role)
 	}
+
 	_, _ = h.Queries.ArchiveAgent(r.Context(), db.ArchiveAgentParams{
 		ID:         updated.AgentID,
 		ArchivedBy: lead.AgentID,
 	})
+	// Stop further wakes: cancel in-flight inbox tasks for this agent.
+	if cancelled, cerr := h.Queries.CancelAgentTasksByAgent(r.Context(), updated.AgentID); cerr != nil {
+		slog.Warn("research archive: cancel wakes failed",
+			"agent_id", uuidToString(updated.AgentID),
+			"error", cerr,
+		)
+	} else if h.TaskService != nil {
+		h.TaskService.CaptureCancelledTasks(r.Context(), cancelled)
+		h.TaskService.ReconcileAgentStatus(r.Context(), updated.AgentID)
+	}
+
+	if !fixture {
+		h.projectRosterChangeToActiveSessions(r.Context(), workspaceID, wsUUID, lead, rosterChangeProjection{
+			Action:    "archive",
+			Member:    updated,
+			AgentName: agentName,
+			Title:     fmt.Sprintf("减员 · %s", agentName),
+			Summary:   fmt.Sprintf("已归档 · 角色 %s · %s", updated.Role, reason),
+			Op:        "roster_archive",
+			CardBody:  fmt.Sprintf("编制变更 · 已归档 %s（%s）。原因：%s；已停止唤醒", agentName, updated.Role, reason),
+			Reason:    reason,
+			ExtraPayload: map[string]any{
+				"status":         updated.Status,
+				"member_status":  "archived",
+				"display_status": "已归档",
+			},
+		})
+	}
+
 	writeJSON(w, http.StatusOK, ResearchFleetMemberResp{
 		ID:      uuidToString(updated.ID),
 		AgentID: uuidToString(updated.AgentID),
@@ -1108,4 +1295,79 @@ func (h *Handler) ArchiveResearchFleetMemberHandler(w http.ResponseWriter, r *ht
 		Status:  updated.Status,
 		IsLead:  updated.IsLead,
 	})
+}
+
+type rosterChangeProjection struct {
+	Action       string
+	Member       db.ResearchFleetMember
+	AgentName    string
+	Title        string
+	Summary      string
+	Op           string
+	CardBody     string
+	Reason       string
+	Model        string
+	ExtraPayload map[string]any
+}
+
+// projectRosterChangeToActiveSessions writes roster_change graph nodes + process
+// cards onto every running / awaiting_user_confirm session for this fleet.
+func (h *Handler) projectRosterChangeToActiveSessions(
+	ctx context.Context,
+	workspaceID string,
+	wsUUID pgtype.UUID,
+	lead db.ResearchFleetMember,
+	p rosterChangeProjection,
+) {
+	sessions, _ := h.Queries.ListResearchSessions(ctx, wsUUID)
+	for _, s := range sessions {
+		if s.FleetID != lead.FleetID {
+			continue
+		}
+		if s.Status != "running" && s.Status != "awaiting_user_confirm" {
+			continue
+		}
+		payload := map[string]any{
+			"action":    p.Action,
+			"member_id": uuidToString(p.Member.ID),
+			"agent_id":  uuidToString(p.Member.AgentID),
+			"role":      p.Member.Role,
+			"reason":    p.Reason,
+		}
+		if p.Model != "" {
+			payload["model"] = p.Model
+		}
+		for k, v := range p.ExtraPayload {
+			payload[k] = v
+		}
+		nodeStatus := researchRosterGraphStatus(p.Action)
+		_, _, _ = h.createResearchGraphNodePublished(ctx, workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), db.CreateResearchGraphNodeParams{
+			WorkspaceID:  wsUUID,
+			SessionID:    s.ID,
+			NodeType:     "roster_change",
+			Title:        p.Title,
+			Summary:      p.Summary,
+			Status:       nodeStatus,
+			ActorAgentID: lead.AgentID,
+			Payload:      marshalJSONRaw(payload),
+		}, pgtype.UUID{}, "leads_to")
+		cardMeta := map[string]any{
+			"action":        p.Action,
+			"member_id":     uuidToString(p.Member.ID),
+			"role":          p.Member.Role,
+			"reason":        p.Reason,
+			"member_status": p.Member.Status,
+			"node_status":   nodeStatus,
+		}
+		if p.Action == "archive" {
+			cardMeta["display_status"] = "已归档"
+		}
+		h.emitResearchProcessCard(ctx, workspaceID, wsUUID, s.ID, "agent", uuidToString(lead.AgentID), researchProcessEvent{
+			Op:      p.Op,
+			Title:   p.AgentName,
+			Body:    p.CardBody,
+			ActorID: lead.AgentID,
+			Meta:    cardMeta,
+		})
+	}
 }

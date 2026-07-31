@@ -124,6 +124,24 @@ export interface RuntimeDevice {
 
 export type AgentRuntime = RuntimeDevice;
 
+/** LRM-810 — one on-disk agent root under `{workspace}/.multica/agents/`. */
+export interface RuntimeAgentWorkspace {
+  dir_name: string;
+  rel_path: string;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  orphan: boolean;
+  size_bytes?: number;
+}
+
+export interface RuntimeAgentWorkspacesResponse {
+  runtime_id: string;
+  /** ok | offline | missing | error */
+  status: string;
+  items: RuntimeAgentWorkspace[];
+  truncated?: boolean;
+}
+
 // Coarse classifier set by the backend when a task transitions to "failed".
 // Mirrors the migration-055 enum in agent_task_queue.failure_reason. Used by
 // the agent presence derivation and the UI failure-message lookup.

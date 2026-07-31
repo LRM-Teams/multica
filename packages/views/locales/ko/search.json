@@ -49,6 +49,13 @@
     "title": "전역 검색",
     "description": "채널·DM·메시지·멤버를 검색합니다",
     "placeholder": "채널·DM·메시지를 검색…",
+    "from_placeholder": "키워드 추가（선택）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "작성자 필터 제거",
+    "range_channel": "이 채널",
+    "range_workspace": "워크스페이스",
+    "include_thread": "스레드 포함",
+    "mainline_only": "메인만",
     "scope": {
       "all": "전체",
       "messages": "메시지",
@@ -74,6 +81,8 @@
     },
     "row": {
       "thread_hits": "THREAD · {{count}}건 일치",
+      "mainline": "메인",
+      "in_thread": "스레드",
       "members": "{{count}}명",
       "joined": "참여 중",
       "dm_placeholder": "다이렉트 메시지"

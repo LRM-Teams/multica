@@ -15,13 +15,15 @@ import (
 )
 
 const (
-	workerHelperEnv       = "MULTICA_SUPERVISOR_TEST_WORKER"
-	workerHelperActionEnv = "MULTICA_SUPERVISOR_TEST_ACTION"
-	workerHelperCountEnv  = "MULTICA_SUPERVISOR_TEST_COUNT_PATH"
-	workerHelperCrashEnv  = "MULTICA_SUPERVISOR_TEST_CRASH_COUNT"
-	workerHelperSleepEnv  = "MULTICA_SUPERVISOR_TEST_SLEEP_SEQUENCE_MS"
-	workerHelperTermEnv   = "MULTICA_SUPERVISOR_TEST_TERM_DELAY_MS"
-	workerHelperReadyEnv  = "MULTICA_SUPERVISOR_TEST_READY_PATH"
+	workerHelperEnv         = "MULTICA_SUPERVISOR_TEST_WORKER"
+	workerHelperActionEnv   = "MULTICA_SUPERVISOR_TEST_ACTION"
+	workerHelperCountEnv    = "MULTICA_SUPERVISOR_TEST_COUNT_PATH"
+	workerHelperCrashEnv    = "MULTICA_SUPERVISOR_TEST_CRASH_COUNT"
+	workerHelperSleepEnv    = "MULTICA_SUPERVISOR_TEST_SLEEP_SEQUENCE_MS"
+	workerHelperTermEnv     = "MULTICA_SUPERVISOR_TEST_TERM_DELAY_MS"
+	workerHelperReadyEnv    = "MULTICA_SUPERVISOR_TEST_READY_PATH"
+	workerHelperClaimEnv    = "MULTICA_SUPERVISOR_TEST_CLAIM_PATH"
+	workerHelperExitCodeEnv = "MULTICA_SUPERVISOR_TEST_EXIT_CODE"
 )
 
 func TestSupervisorWorkerProcess(t *testing.T) {
@@ -57,6 +59,40 @@ func TestSupervisorWorkerProcess(t *testing.T) {
 		for {
 			time.Sleep(time.Hour)
 		}
+	case "claim-then-block":
+		// Simulates a daemon that has claimed a task (written proof of the
+		// claim somewhere durable — a delivery lease, in the real daemon)
+		// and is now mid-execution. It never writes anything else and never
+		// exits cleanly, matching a real in-flight task: no "done" signal is
+		// sent until work completes, and this worker is killed before that
+		// ever happens.
+		if err := os.WriteFile(os.Getenv(workerHelperClaimEnv), []byte("claimed"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(93)
+		}
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "handoff-then-clean":
+		// Simulates a worker that deliberately hands off to a new version:
+		// the first workerHelperCrashEnv generations exit with the
+		// configured handoff code (workerHelperExitCodeEnv), then it exits
+		// cleanly so a test can observe a bounded number of handoff
+		// restarts before the run ends.
+		handoffGenerations, err := strconv.Atoi(os.Getenv(workerHelperCrashEnv))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(98)
+		}
+		exitCode, err := strconv.Atoi(os.Getenv(workerHelperExitCodeEnv))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(98)
+		}
+		if count <= handoffGenerations {
+			os.Exit(exitCode)
+		}
+		os.Exit(0)
 	case "term-delay":
 		delay, err := time.ParseDuration(os.Getenv(workerHelperTermEnv) + "ms")
 		if err != nil {

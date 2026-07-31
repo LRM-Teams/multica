@@ -50,7 +50,11 @@ export function WindyCreateAgentLink({
 
   const handleClick = async () => {
     const url = parseWindyCreateAgentURL(href);
-    if (!url || creatingDraft || createdAgentName) return;
+    if (creatingDraft || createdAgentName) return;
+    if (!url) {
+      showErrorToast("Invalid Create Agent link");
+      return;
+    }
     const draftId = url.searchParams.get("draft_id")?.trim();
     const name = url.searchParams.get("name")?.trim() || "New Agent";
     setCreatingDraft(true);
@@ -173,6 +177,11 @@ function InlineCreateAgentDialog({
 
   const handleCreate = async () => {
     if (!selectedRuntime || creating) return;
+    const trimmedModel = model.trim();
+    if (!trimmedModel) {
+      showErrorToast(t(($) => $.model_dropdown.select_required));
+      return;
+    }
     setCreating(true);
     try {
       const payload: CreateAgentRequest = {
@@ -185,7 +194,7 @@ function InlineCreateAgentDialog({
         // trigger assigns a random human preset when the draft has none.
         avatar_selection: avatarSelectionRef.current ?? undefined,
         runtime_id: selectedRuntime.id,
-        model: model.trim() || undefined,
+        model: trimmedModel,
         thinking_level: thinkingLevel || undefined,
         max_concurrent_tasks: 6,
         draft_id: draft.id,
@@ -285,6 +294,8 @@ function InlineCreateAgentDialog({
                 value={model}
                 onChange={setModel}
                 disabled={!effectiveRuntimeId}
+                required
+                autoSelectFirst
               />
               <ThinkingDropdown
                 runtimeId={effectiveRuntimeId || null}
@@ -301,7 +312,7 @@ function InlineCreateAgentDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={creating} className="w-full sm:w-auto">
             {t(($) => $.windy.cancel)}
           </Button>
-          <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime} className="w-full sm:w-auto">
+          <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime || !model.trim()} className="w-full sm:w-auto">
             {creating ? <Loader2 className="size-4 animate-spin" /> : null}
             {t(($) => $.windy.create_agent)}
           </Button>

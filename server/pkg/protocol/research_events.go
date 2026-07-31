@@ -8,4 +8,5 @@ const (
 	EventResearchSessionMessage         = "research_session:message"
 	EventResearchSessionStageEval       = "research_session:stage_eval"
 	EventResearchSessionStatusChanged   = "research_session:status_changed"
+	EventResearchSessionProductRound    = "research_session:product_round"
 )

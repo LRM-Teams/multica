@@ -1,13 +1,29 @@
 export type HonorNameStyleKey =
   | "default"
+  | "ice"
   | "member"
+  | "emerald"
+  | "sapphire"
   | "gold"
+  | "coral"
+  | "amethyst"
   | "founding"
   | "prismatic"
+  | "aurora"
   | "glow"
+  | "solar"
   | "shimmer"
+  | "nebula"
+  | "cyber"
   | "animated_prismatic"
-  | "animated_glow";
+  | "plasma"
+  | "animated_glow"
+  | "eclipse"
+  | "nova"
+  | "quantum"
+  | "celestial"
+  | "mythic"
+  | "transcendent";
 
 export interface HonorBadge {
   id: string;

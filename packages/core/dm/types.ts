@@ -10,89 +10,13 @@ export interface DMPeer {
   id: string;
   name: string;
   avatar_url?: string;
-}
-
-/**
- * Owner control actions on a supervised agent_pair DM (#692). Sent as the
- * `action` to `POST /api/dm/channels/{id}/a2a-control`, except `view_dm` which
- * is a client-only navigation affordance and is never sent to the endpoint.
- * Mirrors the backend (`server/internal/handler/agent_dm_a2a.go`).
- */
-export type AgentDMControlAction =
-  | "view_dm"
-  | "grant_rounds"
-  | "pause_pair"
-  | "resume_pair"
-  | "pause_global"
-  | "resume_global";
-
-/** Live gate/round state of a supervised agent↔agent DM. Mirrors the server
- *  `AgentDMControlResponse`. The viewer is always a read-only owner supervisor. */
-export interface AgentDMControl {
-  state:
-    | "active"
-    | "paused_budget"
-    | "paused_frequency"
-    | "paused_pair"
-    | "paused_global";
-  exchange_id?: string;
-  matter_id?: string;
-  round: number;
-  round_limit: number;
-  pause_reason?: string;
-  can_grant_rounds: boolean;
-  can_pause_pair: boolean;
-  can_pause_global: boolean;
-  actions: AgentDMControlAction[];
-}
-
-/**
- * Workspace-level agent↔agent DM control (#692). Read/written at the
- * independent `/api/dm/a2a-control` endpoint (NOT derived from any single DM
- * channel — a per-channel control's `can_pause_global`/`actions` are only a
- * hint, this is the source of truth). Mirrors the server
- * `AgentDMGlobalControlResponse`. Manageable only by a workspace user who owns
- * at least one non-archived agent.
- */
-export interface AgentDMGlobalControl {
-  state: "active" | "paused_global";
-  paused: boolean;
-  can_pause_global: boolean;
-  actions: Array<"pause_global" | "resume_global">;
-}
-
-/** The five A2A pause/resume system-event kinds — the `event` on a message's
- *  `system_event` part and the owner `agent_dm_paused` inbox item. */
-export type AgentDMSystemEvent =
-  | "agent_dm_paused_budget"
-  | "agent_dm_paused_frequency"
-  | "agent_dm_paused_pair"
-  | "agent_dm_paused_global"
-  | "agent_dm_resumed";
-
-/**
- * Params carried by an A2A pause/resume `system_event` message part (FE-5 DM
- * row) and the owner-private `agent_dm_paused` inbox item (FE-6 Activity).
- * Mirrors the server `agentDMSystemEventParams`. `matter` is a ≤120-rune source
- * summary (fallback「当前事项」); `round_limit` already includes any granted rounds.
- */
-export interface AgentDMPauseEventParams {
-  exchange_id: string;
-  dm_channel_id: string;
-  source_channel_id?: string;
-  matter_id: string;
-  matter: string;
-  state: string;
-  pause_reason?: string;
-  round: number;
-  round_limit: number;
-  agent_a_id: string;
-  agent_a_handle: string;
-  agent_a_name: string;
-  agent_b_id: string;
-  agent_b_handle: string;
-  agent_b_name: string;
-  actions: AgentDMControlAction[];
+  /**
+   * True when the peer agent has been archived (the product-facing "delete
+   * agent" action is a soft archive — history is never hidden). The DM stays
+   * fully readable; the client shows a read-only banner and blocks new sends
+   * instead of losing the conversation (2026-07-31 Wendy DM incident, B1).
+   */
+  archived?: boolean;
 }
 
 /**
@@ -117,8 +41,6 @@ export interface DMItem {
   /** True when the viewer is a read-only owner supervisor (owns one end), not a
    *  channel member — drives the read-only + supervision affordances. */
   supervised?: boolean;
-  /** Live gate/round control for a supervised `agent_pair` DM (owner surface). */
-  a2a_control?: AgentDMControl;
   last_message?: ChannelLastMessage;
   unread: number;
   updated_at: string;

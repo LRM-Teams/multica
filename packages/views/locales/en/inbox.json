@@ -44,8 +44,7 @@
     "agent_completed": "Agent completed",
     "reaction_added": "Reacted",
     "quick_create_done": "Created with agent",
-    "quick_create_failed": "Create with agent failed",
-    "agent_dm_paused": "Agent DM paused"
+    "quick_create_failed": "Create with agent failed"
   },
   "labels": {
     "set_status_to": "Set status to",

@@ -108,8 +108,8 @@ interface ContentEditorProps {
   /** Chat can surface current/recent issue/project suggestions. Other editors use default mention behavior. */
   mentionMode?: "default" | "context";
   mentionContextItems?: MentionItem[];
-  /** Enable an issue reference `#` inline picker. */
-  enableIssueReferences?: boolean;
+  /** Enable a channel reference `#` inline picker. */
+  enableChannelReferences?: boolean;
   /** Restrict the @ picker's member/agent candidates to these actor ids
    *  (e.g. a channel's members). Omit for the full workspace. */
   mentionAllowedActorIds?: ReadonlySet<string> | null;
@@ -201,7 +201,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       disableMentions = false,
       mentionMode = "default",
       mentionContextItems,
-      enableIssueReferences = false,
+      enableChannelReferences = false,
       mentionAllowedActorIds,
       scopedMentionAgents,
       enableSlashCommands = false,
@@ -355,7 +355,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionContextItems: () => mentionContextItemsRef.current,
           getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
-          enableIssueReferences,
+          enableChannelReferences,
           enableSlashCommands,
         slashCommandMode,
       }),

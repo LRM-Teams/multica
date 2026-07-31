@@ -176,6 +176,12 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	h.awardHonorXP(
+		r.Context(),
+		requester.UserID,
+		"member.invite",
+		uuidToString(inv.ID),
+	)
 	writeJSON(w, http.StatusCreated, resp)
 }
 

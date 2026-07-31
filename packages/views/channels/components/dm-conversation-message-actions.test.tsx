@@ -285,15 +285,6 @@ const supervisedDm: DMItem = {
     { type: "agent", id: "agent-b", name: "Agent B" },
   ],
   supervised: true,
-  a2a_control: {
-    state: "active",
-    round: 0,
-    round_limit: 3,
-    can_grant_rounds: false,
-    can_pause_pair: true,
-    can_pause_global: true,
-    actions: ["view_dm", "pause_pair", "pause_global"],
-  },
   unread: 0,
   updated_at: "2026-06-17T09:00:00Z",
 };
@@ -526,5 +517,54 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     renderDm();
     await screen.findByTestId("message-bubble");
     await waitFor(() => expect(markReadSpy).toHaveBeenCalled());
+  });
+});
+
+// 2026-07-31 Wendy DM incident (B1) — a normal single-agent DM whose peer
+// agent has since been archived (the product-facing "delete agent" action is
+// a soft archive; history is never hidden). Same write-read-only contract as
+// the agent_pair supervision surface above, but the viewer here IS a normal
+// channel member (unlike an agent_pair supervisor, who isn't a member at
+// all) — so mark-read must still fire; only the write surface is gated.
+const archivedPeerDm: DMItem = {
+  ...agentDirectDm,
+  peer: { type: "agent", id: "agent-a", name: "Agent A", archived: true },
+};
+
+describe.sequential("DmConversation archived peer read-only surface (B1)", () => {
+  beforeEach(() => {
+    currentPageMessages = [peerMessage()];
+    markReadSpy.mockClear();
+  });
+
+  it("read-only surface: no editable composer, no DmAgentBubble, no reply-in-thread, shows the user-facing deleted notice (never the internal 'archived' term)", async () => {
+    renderSupervisedDm(archivedPeerDm);
+    await screen.findByTestId("message-bubble");
+
+    // composer=0, same criterion as the agent_pair surface above.
+    expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    // No second, independent live-chat surface with an agent that can't take
+    // new work.
+    expect(screen.queryByTestId("dm-agent-bubble")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
+
+    // Parker/Iris product review: the copy is user-facing ("deleted" — what
+    // the user actually clicked), never the internal "archived" term.
+    expect(screen.getByText(/this agent has been deleted/i)).toBeInTheDocument();
+    expect(screen.queryByText(/\barchived\b/i)).not.toBeInTheDocument();
+  });
+
+  it("unlike the agent_pair supervisor, the viewer IS a normal channel member here — mark-read still fires", async () => {
+    renderSupervisedDm(archivedPeerDm);
+    await screen.findByTestId("message-bubble");
+    await waitFor(() => expect(markReadSpy).toHaveBeenCalled());
+  });
+
+  it("does not treat a normal (non-archived) single-agent DM as read-only (gate must not regress legit chat)", async () => {
+    renderSupervisedDm(agentDirectDm);
+    await screen.findByTestId("message-bubble");
+    expect(screen.getByTestId("dm-agent-bubble")).toBeInTheDocument();
+    expect(screen.getByTestId("content-editor")).toBeInTheDocument();
   });
 });

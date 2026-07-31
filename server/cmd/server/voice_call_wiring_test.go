@@ -78,7 +78,7 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 		)
 	}
 	if config.SpeechAccessToken != "speech-access-token" {
-		t.Fatal("voice call runtime did not reuse the configured speech credential")
+		t.Fatal("voice call runtime did not load the dedicated RTC speech access token")
 	}
 	if config.TTSVoiceID != "shared-tts-voice" {
 		t.Fatalf("TTS voice = %q, want shared speech voice", config.TTSVoiceID)
@@ -95,6 +95,25 @@ func TestLoadVoiceCallRuntimeConfigDerivesCallbackAndReusesSpeechVoice(t *testin
 			config.CompensationTimeout,
 			config.CleanupTimeout,
 		)
+	}
+}
+
+func TestLoadVoiceCallRuntimeConfigNeverUsesDoubaoAPIKeyAsRTCAccessToken(t *testing.T) {
+	values := completeVoiceCallEnvironment()
+	delete(values, "VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN")
+	values["DOUBAO_SPEECH_API_KEY"] = "new-console-api-key-must-not-be-reused"
+
+	_, enabled, err := loadVoiceCallRuntimeConfig(func(name string) string {
+		return values[name]
+	})
+	if !enabled {
+		t.Fatal("complete RTC settings did not opt in to voice calling")
+	}
+	if err == nil || !strings.Contains(err.Error(), "VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN") {
+		t.Fatalf("missing dedicated RTC speech access token error = %v", err)
+	}
+	if strings.Contains(err.Error(), values["DOUBAO_SPEECH_API_KEY"]) {
+		t.Fatalf("configuration error leaked the Doubao API key: %v", err)
 	}
 }
 
@@ -229,8 +248,9 @@ func completeVoiceCallEnvironment() map[string]string {
 		"VOLCENGINE_RTC_ARK_ENDPOINT_ID":      "ep-voice-call",
 		"VOLCENGINE_RTC_ASR_APP_ID":           "speech-asr-app",
 		"VOLCENGINE_RTC_TTS_APP_ID":           "speech-tts-app",
+		"VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN":  "speech-access-token",
 		"VOLCENGINE_RTC_TTS_VOICE_ID":         "voice-id",
-		"DOUBAO_SPEECH_API_KEY":               "speech-access-token",
+		"DOUBAO_SPEECH_API_KEY":               "new-console-api-key",
 		"VOLCENGINE_RTC_CALLBACK_URL":         "https://multica.example.com/api/voice-calls/callback",
 		"VOLCENGINE_RTC_CALLBACK_SIGNATURE":   "callback-signature",
 		"VOLCENGINE_RTC_TOKEN_TTL":            "30m",

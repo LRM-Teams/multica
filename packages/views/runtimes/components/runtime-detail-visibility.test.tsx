@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -95,6 +95,14 @@ vi.mock("@multica/core/runtimes/mutations", () => ({
     isPending: false,
     mutateAsync: vi.fn(),
   }),
+  useRuntimeAgentWorkspaces: () => ({
+    data: undefined,
+    isFetching: false,
+  }),
+  useDeleteRuntimeAgentWorkspace: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 // Stubbing ProviderLogo / UsageSection / UpdateSection avoids dragging in
@@ -141,13 +149,22 @@ function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
 
 function renderDetail(runtime: AgentRuntime) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         <RuntimeDetail runtime={runtime} />
       </QueryClientProvider>
     </I18nProvider>,
   );
+  return { ...view, unmount: () => view.unmount() };
+}
+
+function privateChoice(root: HTMLElement = document.body) {
+  return within(root).getAllByRole("button", { name: "Private" })[0]!;
+}
+
+function publicChoice(root: HTMLElement = document.body) {
+  return within(root).getAllByRole("button", { name: "Public" })[0]!;
 }
 
 describe("RuntimeDetail visibility section", () => {
@@ -157,37 +174,48 @@ describe("RuntimeDetail visibility section", () => {
   });
 
   it("shows owner-editable visibility choices when the caller owns the runtime", () => {
-    renderDetail(makeRuntime({ owner_id: "user-me" }));
-    expect(screen.getByText("Visibility")).toBeInTheDocument();
-    expect(screen.getByText("Private")).toBeInTheDocument();
-    expect(screen.getByText("Public")).toBeInTheDocument();
+    const { container, unmount } = renderDetail(makeRuntime({ owner_id: "user-me" }));
+    expect(within(container).queryByText("Visibility")).not.toBeNull();
+    expect(privateChoice(container)).toBeTruthy();
+    expect(publicChoice(container)).toBeTruthy();
+    unmount();
   });
 
   it("flips visibility to public when the owner clicks the Public choice", async () => {
-    renderDetail(makeRuntime({ owner_id: "user-me", visibility: "private" }));
-    fireEvent.click(screen.getByText("Public"));
+    const { container, unmount } = renderDetail(
+      makeRuntime({ owner_id: "user-me", visibility: "private" }),
+    );
+    fireEvent.click(publicChoice(container));
     await waitFor(() =>
       expect(mockUpdateRuntime).toHaveBeenCalledWith("rt-1", { visibility: "public" }),
     );
+    unmount();
   });
 
   it("renders a read-only visibility chip when the caller cannot edit", () => {
-    renderDetail(makeRuntime({ owner_id: "someone-else", visibility: "public" }));
-    expect(screen.getByText("Public")).toBeInTheDocument();
-    // The editor's "Private" choice button must not render in read-only mode.
-    expect(screen.queryByText("Private")).not.toBeInTheDocument();
+    const { container, unmount } = renderDetail(
+      makeRuntime({ owner_id: "someone-else", visibility: "public" }),
+    );
+    expect(within(container).getAllByText("Public").length).toBeGreaterThan(0);
+    expect(
+      within(container).queryAllByRole("button", { name: "Private" }),
+    ).toHaveLength(0);
+    unmount();
   });
 
   it("lets an admin manage another runtime but hides its delete action", () => {
     mockQueryData.value = [
       { user_id: "user-me", role: "admin", display_name: "Admin" },
     ];
-    renderDetail(makeRuntime({ owner_id: "someone-else", visibility: "private" }));
+    const { container, unmount } = renderDetail(
+      makeRuntime({ owner_id: "someone-else", visibility: "private" }),
+    );
 
-    expect(screen.getByText("Private")).toBeInTheDocument();
-    expect(screen.getByText("Public")).toBeInTheDocument();
+    expect(privateChoice(container)).toBeTruthy();
+    expect(publicChoice(container)).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /delete runtime/i }),
     ).toBeNull();
+    unmount();
   });
 });

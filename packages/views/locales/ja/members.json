@@ -32,7 +32,7 @@
     "avatar_err_type": "PNG または JPG 画像のみ対応しています",
     "avatar_err_size": "画像は 5 MB 以下にしてください",
     "avatar_err_dimensions": "画像は 256×256 以上にしてください",
-    "honor_title": "栄誉",
+    "honor_title": "称号",
     "honor_completion": "{{unlocked}} / {{total}} バッジ",
     "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
     "honor_showcase": "ショーケース",

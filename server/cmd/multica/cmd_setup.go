@@ -126,7 +126,7 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg := cli.CLIConfig{
-		ServerURL: "https://api.multica.ai",
+		ServerURL: cli.OfficialCloudAPIURL,
 		AppURL:    "https://multica.ai",
 	}
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {

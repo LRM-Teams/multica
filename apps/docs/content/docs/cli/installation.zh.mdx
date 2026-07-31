@@ -8,7 +8,7 @@ description: Install the Multica CLI and start the agent daemon.
 ### 安装脚本 (macOS/Linux)
 
 ```bash
-curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
+curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
 ```
 
 ### Build from Source
@@ -39,7 +39,7 @@ fi
 PLATFORM="${OS}-${ARCH}"
 
 # Fetch the release manifest
-curl -fsSL https://cdn.leagent.me/computer/latest.json -o /tmp/latest.json
+curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/latest.json -o /tmp/latest.json
 LATEST=$(jq -r '.tag' /tmp/latest.json)
 URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
 SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)

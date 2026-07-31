@@ -86,6 +86,7 @@ func (h *Handler) ensureResearchFleet(ctx context.Context, workspaceID, userID p
 		}
 		if len(members) > 0 && fleet.LeadAgentID.Valid {
 			h.healResearchFleetAgentModels(ctx, members)
+			h.seedResearchFleetPlaybooks(ctx, workspaceID, fleet.ID)
 			return fleet, members, nil
 		}
 		// Repair incomplete fleet.

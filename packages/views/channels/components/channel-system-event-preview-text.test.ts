@@ -56,13 +56,6 @@ const TEMPLATES = {
         unfollowed: "{actor} 取消关注了此话题",
         followed: "{actor} 关注了此话题",
       },
-      agent_dm: {
-        paused_budget: "他们就「{matter}」来回到了上限（{round}/{roundLimit} 轮），已暂停。",
-        paused_frequency: "{agentA} 和 {agentB} 私聊太频繁、已暂停这对。",
-        paused_pair: "你已暂停这对智能体的私聊——他们不再互发，直到你恢复。",
-        paused_global: "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。",
-        resumed: "已恢复，你的智能体可以继续私聊了。",
-      },
     },
   },
 };
@@ -263,77 +256,4 @@ describe("formatSystemEventPreviewText", () => {
     );
   });
 
-  // #692 A2A gate rows — the DM-list sidebar preview must draw the same
-  // localized copy the in-DM row composes, never the BE English fallback.
-  const a2aParams = {
-    exchange_id: "ex-1",
-    dm_channel_id: "dm-1",
-    matter_id: "m-1",
-    matter: "定位登录超时",
-    state: "paused_budget",
-    round: 3,
-    round_limit: 3,
-    agent_a_id: "a1",
-    agent_a_handle: "felix",
-    agent_a_name: "Felix",
-    agent_b_id: "a2",
-    agent_b_handle: "barry",
-    agent_b_name: "Barry",
-    actions: ["view_dm", "grant_rounds", "pause_pair", "pause_global"],
-  };
-
-  it("localizes an A2A budget-exhaustion row with matter + rounds", () => {
-    const message = systemMessage({ event: "agent_dm_paused_budget", params: a2aParams });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "他们就「定位登录超时」来回到了上限（3/3 轮），已暂停。",
-    );
-  });
-
-  it("falls back to the BE「当前事项」matter verbatim when it is the only summary", () => {
-    const message = systemMessage({
-      event: "agent_dm_paused_budget",
-      params: { ...a2aParams, matter: "当前事项" },
-    });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "他们就「当前事项」来回到了上限（3/3 轮），已暂停。",
-    );
-  });
-
-  it("localizes an A2A frequency-pause row with both agent display names", () => {
-    const message = systemMessage({ event: "agent_dm_paused_frequency", params: a2aParams });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "Felix 和 Barry 私聊太频繁、已暂停这对。",
-    );
-  });
-
-  it("falls back to the @handle when an agent display name is absent", () => {
-    const message = systemMessage({
-      event: "agent_dm_paused_frequency",
-      params: { ...a2aParams, agent_a_name: "", agent_b_name: "" },
-    });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "felix 和 barry 私聊太频繁、已暂停这对。",
-    );
-  });
-
-  it("localizes an owner pair-pause row (static copy)", () => {
-    const message = systemMessage({ event: "agent_dm_paused_pair", params: a2aParams });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "你已暂停这对智能体的私聊——他们不再互发，直到你恢复。",
-    );
-  });
-
-  it("localizes an owner global-pause row (static copy)", () => {
-    const message = systemMessage({ event: "agent_dm_paused_global", params: a2aParams });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。",
-    );
-  });
-
-  it("localizes a resume row (static copy)", () => {
-    const message = systemMessage({ event: "agent_dm_resumed", params: a2aParams });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "已恢复，你的智能体可以继续私聊了。",
-    );
-  });
 });

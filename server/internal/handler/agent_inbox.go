@@ -797,6 +797,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		lifecycleStatus = terminalOutcome
 	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, lifecycleStatus)
+	if terminalOutcome == "completed" {
+		h.refreshAgentHonor(r.Context(), event.WorkspaceID, event.AgentID, "task_completed")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"acked_seq":        ackedSeq,
@@ -1000,6 +1003,7 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 		targetID = event.ChatSessionID
 	}
 	h.TaskService.RecordEvolutionSkillOutcome(ctx, event.ID, "failure", "failure")
+	h.refreshAgentHonor(ctx, event.WorkspaceID, event.AgentID, "task_failed")
 	h.recordAgentActivityEvent(ctx, h.DB,
 		event.WorkspaceID, event.AgentID, delivery.RuntimeID, pgtype.UUID{},
 		activityKindError, "agent_inbox_failed", "error",

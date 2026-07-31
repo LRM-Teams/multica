@@ -11,19 +11,22 @@ import (
 )
 
 type ResearchSessionResponse struct {
-	ID             string  `json:"id"`
-	WorkspaceID    string  `json:"workspace_id"`
-	FleetID        string  `json:"fleet_id"`
-	CreatedBy      string  `json:"created_by"`
-	Title          string  `json:"title"`
-	Goal           string  `json:"goal"`
-	Status         string  `json:"status"`
-	CurrentStage   string  `json:"current_stage"`
-	ProjectID      *string `json:"project_id"`
-	ChannelID      *string `json:"channel_id"`
-	HandoffSummary *string `json:"handoff_summary"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID                 string  `json:"id"`
+	WorkspaceID        string  `json:"workspace_id"`
+	FleetID            string  `json:"fleet_id"`
+	CreatedBy          string  `json:"created_by"`
+	Title              string  `json:"title"`
+	Goal               string  `json:"goal"`
+	Status             string  `json:"status"`
+	CurrentStage       string  `json:"current_stage"`
+	DepthTier           string  `json:"depth_tier"`
+	ProductRound       int32   `json:"product_round"`
+	ProductRoundBudget int32   `json:"product_round_budget"`
+	ProjectID          *string `json:"project_id"`
+	ChannelID          *string `json:"channel_id"`
+	HandoffSummary     *string `json:"handoff_summary"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 // ResearchFleetPreviewMember is a list-row avatar stack item (LRM-805).
@@ -49,14 +52,15 @@ type ResearchPresenceEntry struct {
 }
 
 type ResearchSessionSnapshot struct {
-	Session  ResearchSessionResponse `json:"session"`
-	Fleet    ResearchFleetResponse   `json:"fleet"`
-	Nodes    []ResearchGraphNodeResp `json:"nodes"`
-	Edges    []ResearchGraphEdgeResp `json:"edges"`
-	Sources  []ResearchSourceResp    `json:"sources"`
-	Report   *ResearchReportResp     `json:"report"`
-	Evals    []ResearchStageEvalResp `json:"evals"`
-	Messages []ResearchMessageResp   `json:"messages"`
+	Session       ResearchSessionResponse      `json:"session"`
+	Fleet         ResearchFleetResponse        `json:"fleet"`
+	Nodes         []ResearchGraphNodeResp      `json:"nodes"`
+	Edges         []ResearchGraphEdgeResp      `json:"edges"`
+	Sources       []ResearchSourceResp         `json:"sources"`
+	Report        *ResearchReportResp          `json:"report"`
+	Evals         []ResearchStageEvalResp      `json:"evals"`
+	Messages      []ResearchMessageResp        `json:"messages"`
+	ProductRounds []ResearchProductRoundCardResp `json:"product_rounds"`
 }
 
 type ResearchGraphNodeResp struct {
@@ -134,19 +138,22 @@ type ResearchMessageResp struct {
 
 func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
 	return ResearchSessionResponse{
-		ID:             uuidToString(s.ID),
-		WorkspaceID:    uuidToString(s.WorkspaceID),
-		FleetID:        uuidToString(s.FleetID),
-		CreatedBy:      uuidToString(s.CreatedBy),
-		Title:          s.Title,
-		Goal:           s.Goal,
-		Status:         s.Status,
-		CurrentStage:   s.CurrentStage,
-		ProjectID:      uuidToPtr(s.ProjectID),
-		ChannelID:      uuidToPtr(s.ChannelID),
-		HandoffSummary: textToPtr(s.HandoffSummary),
-		CreatedAt:      timestampToString(s.CreatedAt),
-		UpdatedAt:      timestampToString(s.UpdatedAt),
+		ID:                 uuidToString(s.ID),
+		WorkspaceID:        uuidToString(s.WorkspaceID),
+		FleetID:            uuidToString(s.FleetID),
+		CreatedBy:          uuidToString(s.CreatedBy),
+		Title:              s.Title,
+		Goal:               s.Goal,
+		Status:             s.Status,
+		CurrentStage:       s.CurrentStage,
+		DepthTier:           s.DepthTier,
+		ProductRound:       s.ProductRound,
+		ProductRoundBudget: s.ProductRoundBudget,
+		ProjectID:          uuidToPtr(s.ProjectID),
+		ChannelID:          uuidToPtr(s.ChannelID),
+		HandoffSummary:     textToPtr(s.HandoffSummary),
+		CreatedAt:          timestampToString(s.CreatedAt),
+		UpdatedAt:          timestampToString(s.UpdatedAt),
 	}
 }
 
@@ -188,8 +195,9 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createResearchSessionRequest struct {
-	Goal  string `json:"goal"`
-	Title string `json:"title"`
+	Goal      string `json:"goal"`
+	Title     string `json:"title"`
+	DepthTier string `json:"depth_tier"` // shallow|standard|deep — LRM-676 product-round caps
 }
 
 func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) {
@@ -221,14 +229,18 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	depthTier := normalizeResearchDepthTier(req.DepthTier)
 	session, err := h.Queries.CreateResearchSession(r.Context(), db.CreateResearchSessionParams{
-		WorkspaceID:  wsUUID,
-		FleetID:      fleet.ID,
-		CreatedBy:    parseUUID(userID),
-		Title:        title,
-		Goal:         req.Goal,
-		Status:       "running",
-		CurrentStage: "s1_plan",
+		WorkspaceID:        wsUUID,
+		FleetID:            fleet.ID,
+		CreatedBy:          parseUUID(userID),
+		Title:              title,
+		Goal:               req.Goal,
+		Status:             "running",
+		CurrentStage:       "s1_plan",
+		DepthTier:           depthTier,
+		ProductRound:       1,
+		ProductRoundBudget: productRoundBudgetForTier(depthTier),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create research session")
@@ -293,6 +305,7 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	sources, _ := h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
 	evals, _ := h.Queries.ListResearchStageEvals(r.Context(), db.ListResearchStageEvalsParams{SessionID: sessionID, WorkspaceID: wsUUID})
 	messages, _ := h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+	productRounds, _ := h.Queries.ListResearchProductRoundCards(r.Context(), db.ListResearchProductRoundCardsParams{SessionID: sessionID, WorkspaceID: wsUUID})
 
 	var report *ResearchReportResp
 	if rep, err := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); err == nil {
@@ -301,14 +314,15 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
-		Session:  researchSessionToResponse(session),
-		Fleet:    h.researchFleetToResponse(r.Context(), fleet, members),
-		Nodes:    mapNodes(nodes),
-		Edges:    mapEdges(edges),
-		Sources:  mapSources(sources),
-		Report:   report,
-		Evals:    mapEvals(evals),
-		Messages: mapMessages(messages),
+		Session:       researchSessionToResponse(session),
+		Fleet:         h.researchFleetToResponse(r.Context(), fleet, members),
+		Nodes:         mapNodes(nodes),
+		Edges:         mapEdges(edges),
+		Sources:       mapSources(sources),
+		Report:        report,
+		Evals:         mapEvals(evals),
+		Messages:      mapMessages(messages),
+		ProductRounds: mapProductRoundCards(productRounds),
 	})
 }
 

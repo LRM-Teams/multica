@@ -7,6 +7,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { mentionTokenClassName } from "./mention-token";
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import { IssueRefLink } from "../issues/components/issue-ref-link";
+import { ChannelRefLink } from "../channels/components/channel-ref-link";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
 /**
@@ -189,6 +190,22 @@ function renderReferenceToken({
         highlightQuery={highlightQuery}
       />
     );
+  }
+
+  if (reference.ref_type === "channel-ref") {
+    // Non-interactive surfaces (the excerpt) render styled text only, no live
+    // query — same discipline as issue-ref below. Unlike issue-ref, a
+    // channel-ref's `text` (span substring) is NEVER a bare identifier — the
+    // composer always authors the full `[Label](mention://channel/<uuid>)`
+    // markdown link, so `text` here is that whole string. Rendering it
+    // verbatim (Wren, PR review) would leak the raw markdown + internal UUID
+    // the moment any future caller passes `interactive={false}` — same class
+    // of bug as message-preview.ts's channel-ref branch above. Use the
+    // resolved label instead, matching the interactive branch below.
+    if (!interactive) {
+      return <span className="text-brand">{reference.label ?? reference.ref_id}</span>;
+    }
+    return <ChannelRefLink channelId={reference.ref_id} label={reference.label ?? text} />;
   }
 
   // issue-ref (#469): raft-style lightweight inline link — uniform link color,

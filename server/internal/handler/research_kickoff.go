@@ -38,25 +38,27 @@ func (h *Handler) seedResearchSessionKickoff(
 	}
 	h.publishResearchGraph(workspaceID, "user", userID, session.ID, goal, nil)
 
-	subquestions := []struct {
-		Title   string
-		Summary string
-	}{
-		{"市场与竞品切入点", "谁在做同类产品？差异化与定价信号在哪里？"},
-		{"技术栈与架构路径", "可行技术路线、关键依赖与环境约束是什么？"},
-		{"人力与节奏风险", "需要哪些角色？常见坑与死胡同有哪些？"},
-		{"交付边界与验收", "第一版可交付范围与验证标准是什么？"},
-	}
-	for i, sq := range subquestions {
+	plan := buildResearchAdaptivePlan(session.Goal)
+	for i, dim := range plan.Dimensions {
 		node, _, nerr := h.createResearchGraphNodePublished(ctx, workspaceID, wsUUID, session.ID, "user", userID, db.CreateResearchGraphNodeParams{
 			WorkspaceID:  wsUUID,
 			SessionID:    session.ID,
 			NodeType:     "subquestion",
-			Title:        sq.Title,
-			Summary:      sq.Summary,
+			Title:        dim.Title,
+			Summary:      dim.Summary,
 			Status:       "active",
 			ActorAgentID: leadID,
-			Payload:      marshalJSONRaw(map[string]any{"seed": true, "index": i, "phase": "s1_plan"}),
+			Payload: marshalJSONRaw(map[string]any{
+				"seed":              true,
+				"index":             i,
+				"phase":             "s1_plan",
+				"dimension_family":  dim.Family,
+				"required":          dim.Required,
+				"source_hints":      dim.SourceHints,
+				"fine_domain":       plan.FineDomain,
+				"coarse_domains":    plan.CoarseDomains,
+				"delivery_like":     plan.DeliveryLike,
+			}),
 		}, goal.ID, "leads_to")
 		if nerr != nil {
 			slog.Warn("research kickoff subquestion failed", "error", nerr)
@@ -114,23 +116,24 @@ func (h *Handler) seedResearchSessionKickoff(
 	h.emitResearchProcessCard(ctx, workspaceID, wsUUID, session.ID, "user", userID, researchProcessEvent{
 		Op:    "session_kickoff",
 		Title: "调研团已就位",
-		Body:  fmt.Sprintf("「%s」开题：%d 名成员已上画布，罗纳尔多开始 S1 作战规划。", session.Title, activeCount),
+		Body: fmt.Sprintf(
+			"「%s」开题：%d 名成员已上画布；领域=%s，已按自适应维度树播种（非固定题库）。罗纳尔多开始 S1。",
+			session.Title, activeCount, plan.FineDomain,
+		),
 		Meta: map[string]any{
-			"member_count": activeCount,
-			"stage":        "s1_plan",
+			"member_count":   activeCount,
+			"stage":          "s1_plan",
+			"fine_domain":    plan.FineDomain,
+			"coarse_domains": plan.CoarseDomains,
+			"delivery_like":  plan.DeliveryLike,
+			"dimensions":     len(plan.Dimensions),
 		},
 	})
 
-	// Wake lead with explicit fan-out instructions; wake other active members to stand by.
+	// Wake lead with adaptive-depth fan-out; wake other active members to stand by.
 	initiator := parseUUID(userID)
 	if leadID.Valid {
-		leadPrompt := fmt.Sprintf(
-			"New research session ready on the exploration canvas.\nGoal: %s\n"+
-				"Seeded subquestions and agent_activity nodes are already visible — refine them, "+
-				"dispatch probes via multica research graph-append / message --target, "+
-				"and keep the user updated through 罗纳尔多 voice only.",
-			session.Goal,
-		)
+		leadPrompt := adaptiveKickoffLeadPrompt(session.Goal, plan)
 		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, leadID, initiator, leadPrompt, "user"); err != nil {
 			slog.Warn("research kickoff lead wake failed", "error", err)
 			h.emitResearchProcessCard(ctx, workspaceID, wsUUID, session.ID, "user", userID, researchWakeFailureEvent(leadID, err))

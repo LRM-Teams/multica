@@ -843,6 +843,32 @@ func TestCreateAgent_RejectsNonASCIIExplicitUsername(t *testing.T) {
 	}
 }
 
+func TestCreateAgent_RejectsEmptyModel(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// LRM-808 / LRM-914: hire-card Create used to omit model while the UI
+	// still showed a fake "provider default". Fail closed with a visible 400.
+	for _, model := range []any{nil, "", "   "} {
+		body := map[string]any{
+			"display_name":         "No Model Agent",
+			"runtime_id":           testRuntimeID,
+			"max_concurrent_tasks": 1,
+		}
+		if model != nil {
+			body["model"] = model
+		}
+		w := httptest.NewRecorder()
+		testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("empty model %#v: expected 400, got %d: %s", model, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "model is required") {
+			t.Fatalf("empty model %#v: expected model-is-required body, got %s", model, w.Body.String())
+		}
+	}
+}
+
 func TestCreateAgent_GeneratesASCIIUsernamesFromDisplayNames(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

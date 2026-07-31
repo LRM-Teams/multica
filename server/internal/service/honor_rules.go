@@ -8,7 +8,10 @@ const FoundingMemberCutoff = "2026-08-01T00:00:00Z"
 var foundingMemberCutoffTime = mustParseHonorTime(FoundingMemberCutoff)
 
 // HonorRulesVersion is bumped when public scoring tables change.
-const HonorRulesVersion = "2026-07-30.1"
+const HonorRulesVersion = "2026-07-31.2"
+
+// MaxHonorLevel is the highest level the progression curve can award.
+const MaxHonorLevel = 60
 
 type HonorPillar string
 
@@ -50,7 +53,7 @@ func pow115(exp int) float64 {
 // LevelFromTotalXP maps cumulative XP to display level.
 func LevelFromTotalXP(totalXP int64) int {
 	level := 1
-	for l := 2; l <= 60; l++ {
+	for l := 2; l <= MaxHonorLevel; l++ {
 		if totalXP >= honorLevelThresholdXP(l) {
 			level = l
 			continue
@@ -62,6 +65,9 @@ func LevelFromTotalXP(totalXP int64) int {
 
 // XPToNextLevel returns xp needed to reach next level from current total.
 func XPToNextLevel(totalXP int64, level int) int64 {
+	if level >= MaxHonorLevel {
+		return 0
+	}
 	next := honorLevelThresholdXP(level + 1)
 	if next <= totalXP {
 		return 0
@@ -123,9 +129,37 @@ type HonorBadgeCatalogEntry struct {
 	Rarity      int    `json:"rarity"`
 }
 
+var honorNameStyleRules = []HonorNameStyleRuleEntry{
+	{ID: "default", MinLevel: 1},
+	{ID: "ice", MinLevel: 3},
+	{ID: "member", MinLevel: 5},
+	{ID: "emerald", MinLevel: 7},
+	{ID: "sapphire", MinLevel: 9},
+	{ID: "gold", MinLevel: 12},
+	{ID: "coral", MinLevel: 15},
+	{ID: "amethyst", MinLevel: 18},
+	{ID: "prismatic", MinLevel: 21},
+	{ID: "aurora", MinLevel: 24},
+	{ID: "glow", MinLevel: 27},
+	{ID: "solar", MinLevel: 30},
+	{ID: "shimmer", MinLevel: 33},
+	{ID: "nebula", MinLevel: 36},
+	{ID: "cyber", MinLevel: 39},
+	{ID: "animated_prismatic", MinLevel: 42},
+	{ID: "plasma", MinLevel: 45},
+	{ID: "animated_glow", MinLevel: 48},
+	{ID: "eclipse", MinLevel: 51},
+	{ID: "nova", MinLevel: 53},
+	{ID: "quantum", MinLevel: 55},
+	{ID: "celestial", MinLevel: 57},
+	{ID: "mythic", MinLevel: 59},
+	{ID: "transcendent", MinLevel: 60},
+	{ID: "founding", MinLevel: 1},
+}
+
 func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument {
-	levels := make([]HonorLevelThresholdEntry, 0, 30)
-	for l := 1; l <= 30; l++ {
+	levels := make([]HonorLevelThresholdEntry, 0, MaxHonorLevel)
+	for l := 1; l <= MaxHonorLevel; l++ {
 		levels = append(levels, HonorLevelThresholdEntry{Level: l, TotalXP: honorLevelThresholdXP(l)})
 	}
 	actions := make(map[string]HonorActionRuleEntry, len(honorActionRules))
@@ -137,24 +171,18 @@ func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument
 		pillars[string(p)] = thresholds
 	}
 	return HonorRulesDocument{
-		Version:         HonorRulesVersion,
-		FoundingCutoff:  FoundingMemberCutoff,
-		LevelThresholds: levels,
+		Version:          HonorRulesVersion,
+		FoundingCutoff:   FoundingMemberCutoff,
+		LevelThresholds:  levels,
 		PillarTierTables: pillars,
-		ActionRules:     actions,
-		NameStyleUnlocks: []HonorNameStyleRuleEntry{
-			{ID: "default", MinLevel: 1},
-			{ID: "member", MinLevel: 5},
-			{ID: "gold", MinLevel: 12},
-			{ID: "prismatic", MinLevel: 20},
-			{ID: "glow", MinLevel: 28},
-			{ID: "shimmer", MinLevel: 35},
-			{ID: "animated_prismatic", MinLevel: 42},
-			{ID: "animated_glow", MinLevel: 48},
-			{ID: "founding", MinLevel: 1},
+		ActionRules:      actions,
+		NameStyleUnlocks: append([]HonorNameStyleRuleEntry(nil), honorNameStyleRules...),
+		BadgeCatalog:     badges,
+		Changelog: []string{
+			"2026-07-31: expand to 24 visible name styles and 51 badges",
+			"2026-07-31: publish the complete level 1-60 progression table",
+			"2026-07-30: initial honor rules v1",
 		},
-		BadgeCatalog: badges,
-		Changelog:    []string{"2026-07-30: initial honor rules v1"},
 	}
 }
 

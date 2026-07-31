@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { runtimeKeys } from "./queries";
 import { workspaceKeys } from "../workspace/queries";
@@ -82,7 +82,7 @@ export function useArchiveAgentsAndDeleteRuntime(wsId: string) {
   });
 }
 
-// useUpdateRuntime patches editable fields on a runtime (visibility).
+// useUpdateRuntime patches editable fields on a runtime (visibility, display_name).
 // Invalidates the runtime list so the picker disabled-state recomputes.
 export function useUpdateRuntime(wsId: string) {
   const qc = useQueryClient();
@@ -92,10 +92,38 @@ export function useUpdateRuntime(wsId: string) {
       patch,
     }: {
       runtimeId: string;
-      patch: { visibility?: "private" | "public" };
+      patch: {
+        visibility?: "private" | "public";
+        display_name?: string | null;
+      };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    },
+  });
+}
+
+/** LRM-810 — on-demand scan of agent workspace directories on a runtime host. */
+export function useRuntimeAgentWorkspaces(
+  runtimeId: string | null | undefined,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["runtimes", runtimeId, "agent-workspaces"],
+    queryFn: () => api.listRuntimeAgentWorkspaces(runtimeId!),
+    enabled: enabled && !!runtimeId,
+  });
+}
+
+export function useDeleteRuntimeAgentWorkspace(runtimeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dirName: string) =>
+      api.deleteRuntimeAgentWorkspace(runtimeId, dirName),
+    onSettled: () => {
+      qc.invalidateQueries({
+        queryKey: ["runtimes", runtimeId, "agent-workspaces"],
+      });
     },
   });
 }

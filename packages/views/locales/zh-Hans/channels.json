@@ -175,6 +175,15 @@
     "no_recent_activity": "暂无最近活动",
     "close_aria": "关闭资料卡",
     "no_permission_toast": "当前无权查看该成员资料",
+    "honor": {
+      "title": "开发者荣誉",
+      "agent_title": "智能体荣誉",
+      "no_badge": "尚未佩戴徽章",
+      "keep_building": "继续开发以解锁荣誉",
+      "collection": "已收集 {{unlocked}} / {{total}}",
+      "agent_collection": "已解锁 {{unlocked}} 项",
+      "level_value": "LV.{{level}}"
+    },
     "restricted": {
       "runtime": "Runtime",
       "usage": "用量",
@@ -291,7 +300,11 @@
     "menu_about": "关于",
     "menu_members": "成员",
     "menu_files": "文件",
-    "menu_settings": "设置"
+    "menu_settings": "设置",
+    "rename_empty": "频道名称不能为空",
+    "hero_manage_hint": "可管理：点字段即改 · 无独立编辑按钮",
+    "hero_name_hint": "Enter 保存 · Esc 取消 · 空名拒收",
+    "hero_desc_hint": "失焦保存 · Esc 取消 · 空串清描述"
   },
   "stats": {
     "title": "活跃度",
@@ -331,6 +344,12 @@
     "reply": "在线程中回复",
     "reply_aria": "在线程中回复",
     "reply_count": "{{count}} 条回复",
+    "preview_count": "{{count}} 条回复",
+    "preview_view_all": "查看全部 {{count}} 条回复 →",
+    "preview_open": "查看 thread →",
+    "preview_image": "[图片]",
+    "preview_sticker": "[表情]",
+    "preview_attachment": "[附件]",
     "meta_count": "{{count}} 条回复",
     "meta_empty": "还没有回复",
     "meta_loading": "加载中…",
@@ -526,13 +545,6 @@
       "thread": {
         "unfollowed": "{actor} 取消关注了此话题",
         "followed": "{actor} 关注了此话题"
-      },
-      "agent_dm": {
-        "paused_budget": "他们就「{matter}」来回到了上限（{round}/{roundLimit} 轮），已暂停。",
-        "paused_frequency": "{agentA} 和 {agentB} 私聊太频繁、已暂停这对。",
-        "paused_pair": "你已暂停这对智能体的私聊——他们不再互发，直到你恢复。",
-        "paused_global": "你暂停了涉及你智能体的所有私聊——它们暂时不再和任何智能体互发，直到你恢复。",
-        "resumed": "已恢复，你的智能体可以继续私聊了。"
       }
     }
   },
@@ -554,6 +566,7 @@
     "thread_empty": "还没有消息，打个招呼吧。",
     "self_label": "你",
     "open_failed": "无法打开私聊，请重试",
+    "peer_deleted_notice": "该 agent 已删除。历史消息仍可查看，但无法再发送新消息。",
     "open_forbidden": "无权限与该 Agent 私聊",
     "mark_unread": "标为未读",
     "pin": "置顶",
@@ -568,23 +581,7 @@
     "bubble_replied_time": "刚刚",
     "agent_pair": {
       "pill": "智能体私聊",
-      "action_view_dm": "查看",
-      "action_grant_rounds": "再放行{{step}}轮",
-      "action_pause_pair": "停止这对",
-      "action_resume_pair": "恢复这对",
-      "action_pause_global": "暂停涉及我智能体的私聊",
-      "global_toggle": "暂停涉及我智能体的私聊",
-      "global_paused_note": "已暂停——你的智能体暂时不再和任何智能体互发私聊，直到你恢复。",
-      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。",
-      "state_active": "进行中 · 第 {{round}}/{{roundLimit}} 轮",
-      "state_paused_budget": "已暂停 · 达到本事项轮次上限",
-      "state_paused_frequency": "已暂停 · 这对私聊太频繁",
-      "state_paused_pair": "已暂停 · 你停了这对",
-      "state_paused_global": "已暂停 · 涉及我智能体的私聊",
-      "action_resume_global": "恢复涉及我智能体的私聊",
-      "action_failed": "操作失败，请重试。",
-      "global_section_title": "智能体私聊",
-      "global_section_desc": "控制你名下的智能体能否和其他智能体互发私聊。"
+      "owner_readonly_note": "你在只读监督这对智能体的私聊——不能在这里发言。"
     }
   },
   "voice_call": {

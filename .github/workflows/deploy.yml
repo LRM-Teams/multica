@@ -251,6 +251,7 @@ jobs:
       VOLCENGINE_RTC_ARK_ENDPOINT_ID: ${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}
       VOLCENGINE_RTC_ASR_APP_ID: ${{ vars.VOLCENGINE_RTC_ASR_APP_ID }}
       VOLCENGINE_RTC_TTS_APP_ID: ${{ vars.VOLCENGINE_RTC_TTS_APP_ID }}
+      VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN: ${{ secrets.VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN }}
       VOLCENGINE_RTC_CALLBACK_SIGNATURE: ${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}
       # The tag to deploy: a rollback input if given, otherwise the freshly built one.
       IMAGE_TAG: >-
@@ -355,6 +356,7 @@ jobs:
           db_name="$(compose_env_value POSTGRES_DB multica)"
           db_password="$(compose_env_value POSTGRES_PASSWORD)"
           voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"
+          rtc_speech_access_token="$(compose_env_value VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN)"
           # Fail closed before any runtime mutation when OSS lacks AWS keys (LRM-766).
           # Must run while compose_environment is still set (or re-render via compose).
           printf '%s\n' "$compose_environment" |
@@ -366,6 +368,10 @@ jobs:
           fi
           if [ -z "$voice_api_key" ]; then
             echo "::error::DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment. Aborting before runtime changes."
+            exit 1
+          fi
+          if [ -z "$rtc_speech_access_token" ]; then
+            echo "::error::VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN must be configured in the aliyun-dev Environment. Aborting before runtime changes."
             exit 1
           fi
           postgres_id="$(compose ps -q postgres)"
@@ -387,7 +393,7 @@ jobs:
             echo "::error::Host PostgreSQL user/database/password failed an authenticated TCP query. Aborting before runtime changes."
             exit 1
           fi
-          unset db_user db_name db_password voice_api_key
+          unset db_user db_name db_password voice_api_key rtc_speech_access_token
           echo "Host-local database identity and protected speech/RTC configuration preflight passed."
           # Validate the immutable artifact source before touching the runtime
           # file. A bad config must not be left behind for the next host restart.
@@ -547,8 +553,12 @@ jobs:
               (docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend_id" 2>/dev/null || true) |
                 awk -F= '$1 == "DOUBAO_SPEECH_API_KEY" && length($2) > 0 { print "true"; exit }'
             )"
+            backend_rtc_speech_configured="$(
+              (docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend_id" 2>/dev/null || true) |
+                awk -F= '$1 == "VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN" && length($2) > 0 { print "true"; exit }'
+            )"
             caddy_status="$(docker inspect --format '{{.State.Status}}' "$caddy_id" 2>/dev/null || true)"
-            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$backend_voice_configured" = true ] && [ "$caddy_status" = running ] && \
+            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$backend_voice_configured" = true ] && [ "$backend_rtc_speech_configured" = true ] && [ "$caddy_status" = running ] && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \

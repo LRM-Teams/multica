@@ -1,15 +1,58 @@
 "use client";
 
-import type { ResearchFleetMember, ResearchMessage } from "@multica/core/types";
+import type {
+  ResearchFleetMember,
+  ResearchMessage,
+  ResearchProductRoundCard,
+} from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 import { speakerMemberForMessage } from "../lib/research-chat-speaker";
+import { ResearchProductRoundCardView } from "./research-product-round-card";
 
 function metaString(meta: unknown, key: string): string | null {
   if (!meta || typeof meta !== "object") return null;
   const value = (meta as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function metaNumber(meta: unknown, key: string): number | null {
+  if (!meta || typeof meta !== "object") return null;
+  const value = (meta as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function metaBool(meta: unknown, key: string): boolean {
+  if (!meta || typeof meta !== "object") return false;
+  return (meta as Record<string, unknown>)[key] === true;
+}
+
+function cardFromProcessMeta(message: ResearchMessage): ResearchProductRoundCard | null {
+  const op = metaString(message.meta, "op");
+  if (op !== "product_round_judgment") return null;
+  const round = metaNumber(message.meta, "round") ?? 1;
+  const decision = metaString(message.meta, "decision") ?? "continue";
+  const gaps =
+    message.meta && typeof message.meta === "object"
+      ? (message.meta as Record<string, unknown>).coverage_gaps
+      : [];
+  return {
+    id: `process-${message.id}`,
+    session_id: message.session_id,
+    round_number: round,
+    decision,
+    coverage_gaps: gaps ?? [],
+    confidence_note: message.body || "",
+    budget_used: metaNumber(message.meta, "budget_used") ?? round,
+    budget_remaining: metaNumber(message.meta, "budget_remaining") ?? 0,
+    goal_patch_proposal: metaBool(message.meta, "has_goal_patch")
+      ? metaString(message.meta, "goal_patch_proposal")
+      : metaString(message.meta, "goal_patch_proposal"),
+    next_round_focus: metaString(message.meta, "next_round_focus"),
+    decided_by_agent_id: message.sender_id,
+    created_at: message.created_at,
+  };
 }
 
 function formatTime(iso: string): string {
@@ -22,9 +65,25 @@ function formatTime(iso: string): string {
 export function ResearchChatCard({
   message,
   members,
+  currentGoal,
+  onRoundAgree,
+  onRoundRejectContinue,
+  onRoundRejectStop,
+  onConfirmGoalPatch,
+  onRejectGoalPatch,
+  onEditGoalPatch,
+  roundPending,
 }: {
   message: ResearchMessage;
   members: ResearchFleetMember[];
+  currentGoal?: string;
+  onRoundAgree?: (card: ResearchProductRoundCard) => void;
+  onRoundRejectContinue?: (card: ResearchProductRoundCard) => void;
+  onRoundRejectStop?: (card: ResearchProductRoundCard) => void;
+  onConfirmGoalPatch?: (card: ResearchProductRoundCard, text: string) => void;
+  onRejectGoalPatch?: (card: ResearchProductRoundCard) => void;
+  onEditGoalPatch?: (card: ResearchProductRoundCard, text: string) => void;
+  roundPending?: boolean;
 }) {
   const { t } = useT("research");
   const isProcess = message.card_kind === "process";
@@ -47,6 +106,7 @@ export function ResearchChatCard({
     isUser && message.target_agent_id
       ? target?.display_name || target?.name || t(($) => $.chat.to_lead)
       : null;
+  const roundCard = isProcess ? cardFromProcessMeta(message) : null;
 
   return (
     <article
@@ -87,7 +147,29 @@ export function ResearchChatCard({
           </div>
         </div>
       </header>
-      <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">{message.body}</p>
+      {roundCard ? (
+        <div className="space-y-2">
+          <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+            {message.body}
+          </p>
+          <ResearchProductRoundCardView
+            card={roundCard}
+            currentGoal={currentGoal}
+            compact
+            pending={roundPending}
+            onAgree={() => onRoundAgree?.(roundCard)}
+            onRejectContinue={() => onRoundRejectContinue?.(roundCard)}
+            onRejectStop={() => onRoundRejectStop?.(roundCard)}
+            onConfirmGoalPatch={(text) => onConfirmGoalPatch?.(roundCard, text)}
+            onRejectGoalPatch={() => onRejectGoalPatch?.(roundCard)}
+            onEditGoalPatch={(text) => onEditGoalPatch?.(roundCard, text)}
+          />
+        </div>
+      ) : (
+        <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+          {message.body}
+        </p>
+      )}
     </article>
   );
 }

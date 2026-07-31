@@ -338,6 +338,23 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
+// A selected DM that never resolves (see DM_RESOLVE_TIMEOUT_MS above) — an
+// explicit "couldn't open, retry" state so this never reads as a blank page.
+function DmOpenFailedState({ onRetry }: { onRetry: () => void }) {
+  const { t } = useT("channels");
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background">
+      <button
+        type="button"
+        className="rounded-md px-3 py-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={onRetry}
+      >
+        {t(($) => $.dm.open_failed)}
+      </button>
+    </div>
+  );
+}
+
 function ConversationSwitchSkeleton({ isMobile }: { isMobile: boolean }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -856,7 +873,7 @@ export function ChannelsPage({
   // Mobile is list-first: `active` resolves only from an explicit selection
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
-  const { data: dms = [] } = useQuery(dmListOptions(wsId));
+  const { data: dms = [], refetch: refetchDms } = useQuery(dmListOptions(wsId));
   const bubbleUnreadByAgent = useAgentBubbleUnreadByAgent(wsId);
   const lastSelectedChannelId = useLastSelectedChannelStore(
     (state) => state.lastSelectedChannelId,
@@ -929,6 +946,22 @@ export function ChannelsPage({
     () => (activeDmId ? dms.find((d) => d.id === activeDmId) ?? null : null),
     [dms, activeDmId],
   );
+  // 2026-07-31 Wendy DM incident — a selected DM that never shows up in the list
+  // (backend `GET /api/dm` gap, or any other never-resolving cause) used to
+  // leave ConversationSwitchSkeleton spinning forever, which reads as a blank
+  // page. After DM_RESOLVE_TIMEOUT_MS without resolving, swap to an explicit
+  // failed state with a retry (refetches the DM list — cheap, since the list
+  // query's staleTime is Infinity and would otherwise never retry on its own).
+  const DM_RESOLVE_TIMEOUT_MS = 8000;
+  const [dmResolveTimedOut, setDmResolveTimedOut] = useState(false);
+  useEffect(() => {
+    if (!activeDmId || activeDm) {
+      setDmResolveTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setDmResolveTimedOut(true), DM_RESOLVE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [activeDmId, activeDm]);
   // Desktop auto-selects the first channel only when nothing else is open —
   // never override an active DM selection. Mobile is list-first (no auto-open).
   // Embedded Activity (LRM-388) is also list-first: never fall back to #general
@@ -948,8 +981,10 @@ export function ChannelsPage({
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
   // LRM-622/623 — single invite-candidates fetch while Add people is open
-  // (server filters existing members / private agents). Search stays on this
-  // in-memory pool with debounce — no second full ListMembers+ListAgents.
+  // (server omits existing channel members + archived agents only; every
+  // non-archived WS agent is inviteable — no private/Wendy silent filter,
+  // LRM-915 / #1613). Search stays on this in-memory pool with debounce —
+  // no second full ListMembers+ListAgents.
   const inviteDiscoverChannelId =
     active?.kind === "group" && !active.archived_at ? active.id : null;
   const {
@@ -4021,7 +4056,7 @@ export function ChannelsPage({
                         onExternalFiles={channelPending.addFiles}
                         submitOnEnter
                         showBubbleMenu={false}
-                        enableIssueReferences
+                        enableChannelReferences
                         mentionAllowedActorIds={channelMemberIds}
                         scopedMentionAgents={channelAgentCandidates}
                       />
@@ -4129,6 +4164,13 @@ export function ChannelsPage({
       // consumption guard.
       threadDeepLinkId={threadDeepLinkId}
       deepLinkMessageId={highlightMessageId}
+    />
+  ) : dmResolveTimedOut ? (
+    <DmOpenFailedState
+      onRetry={() => {
+        setDmResolveTimedOut(false);
+        void refetchDms();
+      }}
     />
   ) : (
     <ConversationSwitchSkeleton isMobile={isMobile} />

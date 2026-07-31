@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   CircleSlash,
   Loader2,
+  Medal,
   Pencil,
   Sparkles,
   Trash2,
@@ -154,6 +155,7 @@ export function AgentDetailOverview({
   metric,
   fleet,
   canManage,
+  onHonor,
   onEdit,
   onDelete,
 }: {
@@ -162,6 +164,7 @@ export function AgentDetailOverview({
   metric: AgentMetric;
   fleet?: AgentFleetRank;
   canManage: boolean;
+  onHonor: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -207,7 +210,11 @@ export function AgentDetailOverview({
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onHonor}>
+            <Medal className="size-3.5" />
+            {t(($) => $.tabs.honor)}
+          </Button>
           <Button variant="outline" size="sm" onClick={onEdit}>
             <Pencil className="size-3.5" />
             {t(($) => $.dashboard.edit_config)}

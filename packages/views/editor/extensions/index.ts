@@ -40,7 +40,8 @@ import { escapeMarkdownLabel } from "../utils/escape-markdown-label";
 import { BaseMentionExtension } from "./mention-extension";
 import { createMentionSuggestion, type MentionAgentCandidate, type MentionItem } from "./mention-suggestion";
 import { IssueReferenceExtension } from "./issue-reference";
-import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
+import { ChannelReferenceExtension } from "./channel-reference";
+import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
 import { SlashCommandExtension } from "./slash-command-extension";
 import { createSlashCommandSuggestion, createBuiltinCommandSuggestion } from "./slash-command-suggestion";
 import { CodeBlockView } from "./code-block-view";
@@ -161,8 +162,19 @@ export interface EditorExtensionsOptions {
   getMentionScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
-  /** When true, attach an issue reference `#` picker. Default false. */
-  enableIssueReferences?: boolean;
+  /**
+   * When true, attach a channel reference `#` picker (search channels,
+   * insert as a clickable chip). Default false.
+   *
+   * The `#` trigger previously belonged to an issue-reference picker
+   * (issue-reference-suggestion.tsx) — removed 2026-07-31 per Frank: it
+   * never actually surfaced anything when tested live, and `#` is now
+   * spoken for by channel references instead. `IssueReferenceExtension`
+   * stays registered below (unconfigured, suggestion permanently disabled)
+   * so any historical `mention://issue/` content still parses; only the
+   * picker itself is gone.
+   */
+  enableChannelReferences?: boolean;
   /**
    * Which `/` menu to attach when enableSlashCommands is true:
    * - "skill" (default) — the chat picker listing the active agent's skills.
@@ -231,9 +243,11 @@ export function createEditorExtensions(
           ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents }) }
           : {}),
     }),
-    IssueReferenceExtension.configure({
-      suggestion: options.enableIssueReferences && options.queryClient
-        ? createIssueReferenceSuggestion(options.queryClient)
+    // Bare, unconfigured — parsing-only, see enableChannelReferences above.
+    IssueReferenceExtension,
+    ChannelReferenceExtension.configure({
+      suggestion: options.enableChannelReferences && options.queryClient
+        ? createChannelReferenceSuggestion(options.queryClient)
         : { char: "#", allow: () => false },
     }),
     SlashCommandExtension.configure({

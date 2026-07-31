@@ -13,53 +13,6 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// TestMemberAllowedForPrivateAgent_Pure exercises the pure predicate that
-// drives the private-agent gate. The gate must allow normal private agents to
-// workspace owner/admins or the agent owner, while Wendy stays owner-only so
-// each user has a personal HR. This test runs without a database.
-func TestMemberAllowedForPrivateAgent_Pure(t *testing.T) {
-	ownerUserID := "11111111-1111-1111-1111-111111111111"
-	otherUserID := "22222222-2222-2222-2222-222222222222"
-
-	agent := db.Agent{
-		OwnerID: util.MustParseUUID(ownerUserID),
-	}
-	wendy := db.Agent{
-		OwnerID:     util.MustParseUUID(ownerUserID),
-		DisplayName: "Wendy",
-	}
-
-	cases := []struct {
-		name   string
-		userID string
-		role   string
-		want   bool
-	}{
-		{"workspace owner, not agent owner", otherUserID, "owner", true},
-		{"workspace admin, not agent owner", otherUserID, "admin", true},
-		{"agent owner with member role", ownerUserID, "member", true},
-		{"agent owner with admin role", ownerUserID, "admin", true},
-		{"plain member, not agent owner", otherUserID, "member", false},
-		{"plain member with no role string", otherUserID, "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := memberAllowedForPrivateAgent(agent, tc.userID, tc.role)
-			if got != tc.want {
-				t.Fatalf("memberAllowedForPrivateAgent(userID=%s, role=%s) = %v; want %v",
-					tc.userID, tc.role, got, tc.want)
-			}
-		})
-	}
-
-	if memberAllowedForPrivateAgent(wendy, otherUserID, "admin") {
-		t.Fatal("workspace admin should not see another user's private Wendy")
-	}
-	if !memberAllowedForPrivateAgent(wendy, ownerUserID, "member") {
-		t.Fatal("Wendy owner should see their private Wendy")
-	}
-}
-
 // privateAgentTestFixture sets up a private agent owned by a freshly created
 // user, plus a second non-admin member in the workspace. Returns the agent
 // id, the owner's user id, and the unrelated member's user id. The caller's
@@ -251,31 +204,6 @@ func TestListAgents_IncludesPrivateAgentsForAllMembers(t *testing.T) {
 	}
 }
 
-func TestPublishAgentVisibilityEventScopesWendyToOwner(t *testing.T) {
-	ownerUserID := "11111111-1111-1111-1111-111111111111"
-	workspaceID := "33333333-3333-3333-3333-333333333333"
-	bus := events.New()
-	h := &Handler{Bus: bus}
-	var got []events.Event
-	bus.SubscribeAll(func(e events.Event) {
-		got = append(got, e)
-	})
-
-	h.publishAgentVisibilityEvent("agent:status", workspaceID, "member", ownerUserID, db.Agent{
-		OwnerID:     util.MustParseUUID(ownerUserID),
-		DisplayName: "Wendy",
-	}, map[string]any{"ok": true})
-	if len(got) != 1 {
-		t.Fatalf("published events = %d, want 1", len(got))
-	}
-	if got[0].WorkspaceID != workspaceID {
-		t.Fatalf("workspace id = %q, want %q", got[0].WorkspaceID, workspaceID)
-	}
-	if len(got[0].RecipientUserIDs) != 1 || got[0].RecipientUserIDs[0] != ownerUserID {
-		t.Fatalf("recipient user ids = %#v, want owner only", got[0].RecipientUserIDs)
-	}
-}
-
 func TestPublishAgentVisibilityEventBroadcastsNormalAgent(t *testing.T) {
 	workspaceID := "33333333-3333-3333-3333-333333333333"
 	bus := events.New()
@@ -294,6 +222,31 @@ func TestPublishAgentVisibilityEventBroadcastsNormalAgent(t *testing.T) {
 	}
 	if got[0].RecipientUserIDs != nil {
 		t.Fatalf("recipient user ids = %#v, want nil workspace broadcast", got[0].RecipientUserIDs)
+	}
+}
+
+// TestPublishAgentVisibilityEventBroadcastsWendy proves the 2026-07-31 Wendy
+// DM incident fix: a Wendy-named agent is no longer a special case here
+// either — it broadcasts workspace-wide exactly like any other agent.
+func TestPublishAgentVisibilityEventBroadcastsWendy(t *testing.T) {
+	ownerUserID := "11111111-1111-1111-1111-111111111111"
+	workspaceID := "33333333-3333-3333-3333-333333333333"
+	bus := events.New()
+	h := &Handler{Bus: bus}
+	var got []events.Event
+	bus.SubscribeAll(func(e events.Event) {
+		got = append(got, e)
+	})
+
+	h.publishAgentVisibilityEvent("agent:status", workspaceID, "member", "actor", db.Agent{
+		OwnerID:     util.MustParseUUID(ownerUserID),
+		DisplayName: "Wendy",
+	}, map[string]any{"ok": true})
+	if len(got) != 1 {
+		t.Fatalf("published events = %d, want 1", len(got))
+	}
+	if got[0].RecipientUserIDs != nil {
+		t.Fatalf("recipient user ids = %#v, want nil workspace broadcast (no owner-only scoping for Wendy)", got[0].RecipientUserIDs)
 	}
 }
 
@@ -365,34 +318,25 @@ func TestWendyListedAndDetailFollowsGenericInternalsRule(t *testing.T) {
 	}
 }
 
-// TestPublishAgentReminderChangedScopesByOnboardingBinding verifies the
-// task #908 fix to publishAgentReminderChanged: recipient scoping for the
-// workspace's onboarding agent must come from workspace.onboarding_agent_id
-// (task #902's binding), never from display name. Before this fix, an
-// ordinary private agent that a user happened to rename "Wendy" (or any
-// isWindyAgentName match) would incorrectly get the owner-only treatment
-// meant only for the actual bound onboarding agent.
-// TestPublishAgentReminderChangedScopesByOnboardingBinding proves task #908's
-// simplified two-tier scoping: the bound onboarding agent (Wendy) publishes
-// owner-only; every other agent — private or not, Wendy-named or not —
-// broadcasts workspace-wide like any other usage surface, since
-// agent.visibility no longer exists to scope on.
-func TestPublishAgentReminderChangedScopesByOnboardingBinding(t *testing.T) {
+// TestPublishAgentReminderChangedAlwaysBroadcastsWorkspaceWide proves the
+// 2026-07-31 Wendy DM incident fix: no agent, including the workspace's
+// bound onboarding agent (Wendy), gets owner-only recipient scoping.
+// Frank, #prj-daemon: "不要有特殊逻辑" — every agent's reminder-changed
+// event broadcasts workspace-wide, whether or not it is Wendy-named or
+// bound as workspace.onboarding_agent_id.
+func TestPublishAgentReminderChangedAlwaysBroadcastsWorkspaceWide(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 
-	agentID, ownerID, _ := privateAgentTestFixture(t)
+	agentID, _, _ := privateAgentTestFixture(t)
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("rename agent to Wendy: %v", err)
 	}
 	wsUUID := util.MustParseUUID(testWorkspaceID)
 	agentUUID := util.MustParseUUID(agentID)
 
-	// Not bound as the onboarding agent yet: a Wendy-named agent that isn't
-	// the canonical binding broadcasts workspace-wide (no explicit recipient
-	// list) like any other agent.
 	events1 := captureReminderChangedEvents(t, testHandler, agentID)
 	testHandler.publishAgentReminderChanged(ctx, wsUUID, agentUUID)
 	if len(*events1) != 1 {
@@ -402,8 +346,8 @@ func TestPublishAgentReminderChangedScopesByOnboardingBinding(t *testing.T) {
 		t.Fatalf("unbound Wendy-named agent: expected a workspace-wide broadcast (no explicit recipients), got %v", (*events1)[0].RecipientUserIDs)
 	}
 
-	// Bind it as the workspace's onboarding agent — now it must scope
-	// owner-only, driven by the binding, not the name.
+	// Bind it as the workspace's onboarding agent — the binding no longer
+	// changes the scoping at all; it must still broadcast workspace-wide.
 	if err := testHandler.Queries.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{
 		ID: wsUUID, OnboardingAgentID: agentUUID,
 	}); err != nil {
@@ -418,22 +362,9 @@ func TestPublishAgentReminderChangedScopesByOnboardingBinding(t *testing.T) {
 	if len(*events2) != 1 {
 		t.Fatalf("bound onboarding agent: got %d events, want 1", len(*events2))
 	}
-	if !recipientsInclude(t, (*events2)[0], ownerID) {
-		t.Fatalf("bound onboarding agent: recipients must include owner")
+	if len((*events2)[0].RecipientUserIDs) != 0 {
+		t.Fatalf("bound onboarding agent: expected a workspace-wide broadcast (no owner-only scoping), got %v", (*events2)[0].RecipientUserIDs)
 	}
-	if recipientsInclude(t, (*events2)[0], testUserID) {
-		t.Fatalf("bound onboarding agent: recipients must be owner-only, got workspace owner/admin included")
-	}
-}
-
-func recipientsInclude(t *testing.T, e events.Event, userID string) bool {
-	t.Helper()
-	for _, id := range e.RecipientUserIDs {
-		if id == userID {
-			return true
-		}
-	}
-	return false
 }
 
 func listContainsAgent(t *testing.T, body []byte, agentID string) bool {

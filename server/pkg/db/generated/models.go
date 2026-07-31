@@ -1513,6 +1513,22 @@ type ResearchMessage struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type ResearchProductRoundCard struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	RoundNumber       int32              `json:"round_number"`
+	Decision          string             `json:"decision"`
+	CoverageGaps      []byte             `json:"coverage_gaps"`
+	ConfidenceNote    string             `json:"confidence_note"`
+	BudgetUsed        int32              `json:"budget_used"`
+	BudgetRemaining   int32              `json:"budget_remaining"`
+	GoalPatchProposal pgtype.Text        `json:"goal_patch_proposal"`
+	NextRoundFocus    pgtype.Text        `json:"next_round_focus"`
+	DecidedByAgentID  pgtype.UUID        `json:"decided_by_agent_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
 type ResearchReport struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -1525,19 +1541,22 @@ type ResearchReport struct {
 }
 
 type ResearchSession struct {
-	ID             pgtype.UUID        `json:"id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	FleetID        pgtype.UUID        `json:"fleet_id"`
-	CreatedBy      pgtype.UUID        `json:"created_by"`
-	Title          string             `json:"title"`
-	Goal           string             `json:"goal"`
-	Status         string             `json:"status"`
-	CurrentStage   string             `json:"current_stage"`
-	ProjectID      pgtype.UUID        `json:"project_id"`
-	ChannelID      pgtype.UUID        `json:"channel_id"`
-	HandoffSummary pgtype.Text        `json:"handoff_summary"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	FleetID            pgtype.UUID        `json:"fleet_id"`
+	CreatedBy          pgtype.UUID        `json:"created_by"`
+	Title              string             `json:"title"`
+	Goal               string             `json:"goal"`
+	Status             string             `json:"status"`
+	CurrentStage       string             `json:"current_stage"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	ChannelID          pgtype.UUID        `json:"channel_id"`
+	HandoffSummary     pgtype.Text        `json:"handoff_summary"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	DepthTier          string             `json:"depth_tier"`
+	ProductRound       int32              `json:"product_round"`
+	ProductRoundBudget int32              `json:"product_round_budget"`
 }
 
 type ResearchSource struct {

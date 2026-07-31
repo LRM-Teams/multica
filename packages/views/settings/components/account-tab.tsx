@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Camera, Loader2, Save } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Camera, Loader2, Save } from "lucide-react";
+import { HonorBadgeCrest } from "@multica/ui/components/honor/honor-badge";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { Progress } from "@multica/ui/components/ui/progress";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -18,6 +20,8 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
+import { ActorStyledName } from "../../common/actor-styled-name";
+import { honorLevelProgress } from "../../honor/honor-progress";
 
 // Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
 // JS String.length (UTF-16 code units) here while the server counts runes,
@@ -26,12 +30,16 @@ import { useT } from "../../i18n";
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
 
 export function AccountTab() {
-  const { t } = useT("settings");
+  const { t, i18n } = useT("settings");
   const navigation = useNavigation();
   const user = useAuthStore((s) => s.user);
   const { data: honor } = useQuery({
     queryKey: ["honor", "me"],
     queryFn: () => api.getMyHonor(),
+  });
+  const { data: honorRules } = useQuery({
+    queryKey: ["honor", "rules"],
+    queryFn: () => api.getHonorRules(),
   });
   const setUser = useAuthStore((s) => s.setUser);
   const qc = useQueryClient();
@@ -65,6 +73,24 @@ export function AccountTab() {
 
   const displayName = user ? resolveActorDisplayName(user, user.name) : "";
   const handle = user?.name ?? "";
+  const equippedBadge =
+    honor?.badge_catalog?.find((badge) => badge.id === honor.equipped_badge_id) ??
+    null;
+  const levelProgress = honor
+    ? honorLevelProgress(
+        honor.total_xp,
+        honor.level,
+        honorRules?.level_thresholds ?? [],
+        honor.xp_to_next_level,
+      )
+    : 0;
+  const numberFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(i18n.resolvedLanguage || i18n.language, {
+        maximumFractionDigits: 0,
+      }),
+    [i18n.language, i18n.resolvedLanguage],
+  );
 
   const initials = displayName
     .split(" ")
@@ -111,12 +137,76 @@ export function AccountTab() {
   return (
     <div className="space-y-8">
       {honor ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-          <span>{t(($) => $.honor.account_level, { level: honor.level })}</span>
+        <div className="relative isolate overflow-hidden rounded-2xl border border-cyan-300/20 bg-slate-950 px-4 py-4 text-slate-100 shadow-[0_18px_50px_-34px_rgba(34,211,238,0.7)] sm:px-5">
+          <div
+            aria-hidden="true"
+            className="absolute -right-12 -top-20 size-56 rounded-full bg-cyan-400/10 blur-3xl"
+          />
+          <div
+            aria-hidden="true"
+            className="absolute -bottom-24 left-1/3 size-48 rounded-full bg-violet-500/10 blur-3xl"
+          />
+          <div className="relative flex items-center gap-4">
+            <HonorBadgeCrest
+              svgKey={equippedBadge?.svg_key ?? "stardust"}
+              title={equippedBadge?.title}
+              locked={!equippedBadge}
+              animated={Boolean(equippedBadge)}
+              className="size-14"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <ActorStyledName
+                  displayName={displayName}
+                  honor={{
+                    level: honor.level,
+                    name_style: honor.name_style,
+                    equipped_badge: equippedBadge
+                      ? {
+                          id: equippedBadge.id,
+                          title: equippedBadge.title,
+                          description: equippedBadge.description,
+                          svg_key: equippedBadge.svg_key,
+                        }
+                      : undefined,
+                  }}
+                  honorSurface="profile"
+                  className="font-semibold"
+                />
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200">
+                  {t(($) => $.honor.account_level, { level: honor.level })}
+                </span>
+              </div>
+              <div className="mt-2 flex items-center gap-3">
+                <Progress
+                  value={levelProgress}
+                  aria-label={t(($) => $.honor.next_level)}
+                  className="flex-1 [&_[data-slot=progress-indicator]]:bg-gradient-to-r [&_[data-slot=progress-indicator]]:from-cyan-300 [&_[data-slot=progress-indicator]]:to-violet-400 [&_[data-slot=progress-track]]:h-1.5 [&_[data-slot=progress-track]]:bg-white/10"
+                />
+                <span className="shrink-0 text-xs tabular-nums text-slate-400">
+                  {numberFormatter.format(honor.total_xp)}{" "}
+                  {t(($) => $.honor.total_xp)}
+                </span>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              className="relative hidden shrink-0 text-cyan-100 hover:bg-white/10 hover:text-white sm:inline-flex"
+              onClick={() => {
+                const params = new URLSearchParams(navigation.searchParams);
+                params.set("tab", "honor");
+                navigation.replace(`${navigation.pathname}?${params.toString()}`);
+              }}
+            >
+              {t(($) => $.honor.account_link)}
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Button>
+          </div>
           <Button
             type="button"
-            variant="link"
-            className="h-auto p-0"
+            variant="ghost"
+            className="relative mt-3 w-full text-cyan-100 hover:bg-white/10 hover:text-white sm:hidden"
             onClick={() => {
               const params = new URLSearchParams(navigation.searchParams);
               params.set("tab", "honor");
@@ -124,6 +214,7 @@ export function AccountTab() {
             }}
           >
             {t(($) => $.honor.account_link)}
+            <ArrowRight className="size-4" aria-hidden="true" />
           </Button>
         </div>
       ) : null}

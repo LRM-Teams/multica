@@ -35,7 +35,25 @@
     "loading": "リサーチを読み込んでいます",
     "load_failed": "リサーチの読み込みに失敗しました",
     "retry": "再試行",
-    "empty_cta": "最初のリサーチを始める"
+    "empty_cta": "最初のリサーチを始める",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "Research goal",
+    "goal_dialog_close": "Close",
+    "goal_dialog_open": "Open session",
+    "who_working": "{{name}} working",
+    "output_line": "Output · {{summary}}",
+    "no_output": "Output · none yet"
+  },
+  "filter": {
+    "search_label": "セッションタイトルを検索",
+    "search_placeholder": "タイトルを検索…",
+    "status_label": "ステータスで絞り込み",
+    "status_in_progress": "進行中",
+    "status_completed": "完了",
+    "status_failed": "失敗",
+    "clear": "条件をクリア",
+    "no_results": "一致するセッションがありません",
+    "no_results_hint": "別のキーワードを試すか、条件をクリアしてすべて表示"
   },
   "actions": {
     "menu": "Research actions",
@@ -81,6 +99,21 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
+  "step_card": {
+    "status": {
+      "done": "完了",
+      "running": "進行中",
+      "waiting": "待機",
+      "failed": "失敗"
+    },
+    "expand": "根拠を展開",
+    "collapse": "閉じる",
+    "retry": "再試行",
+    "reassign": "再割当",
+    "standby": "待機中",
+    "composer_hint": "Enter で送信 · Shift+Enter で改行",
+    "sending": "送信中…"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -92,7 +125,8 @@
     "pivot": "Pivot",
     "roster_change": "Roster change",
     "stage_gate": "Stage gate",
-    "agent_activity": "Activity"
+    "agent_activity": "Activity",
+    "product_round_gate": "Product round"
   },
   "home": {
     "composer_label": "調査セッションを作成",
@@ -100,6 +134,82 @@
     "hero_desc": "ゴールを書くだけ——調査団がソースを探索し、発見を整理し、レポートまで届けます。",
     "composer_hint": "⌘⏎ で開始",
     "creating": "艦隊を編成中…",
-    "create_failed": "調査セッションを作成できませんでした"
+    "create_failed": "調査セッションを作成できませんでした",
+    "templates_label": "クイックテンプレート",
+    "templates_hint": "選択すると専門プロンプトがチップで付き、目標を続けて入力できます",
+    "template_chip": "{{title}} prompt added — keep typing your goal",
+    "template_chip_clear": "Remove template",
+    "goal_placeholder_with_template": "Add your specific goal…"
+  },
+  "ring": {
+    "title": "ノード操作",
+    "detail": "詳細",
+    "locate_source": "ソース",
+    "copy_prompt": "コピー",
+    "retry": "再試行",
+    "dig_deeper": "深掘り",
+    "more": "その他",
+    "soon": "近日",
+    "esc_hint": "Esc で閉じる",
+    "retry_message": "行き止まりノード「{{title}}」（{{id}}）から再探索してください。"
+  },
+  "dock": {
+    "label": "キャンバス操作",
+    "north_star": "ノーススター",
+    "zoom_in": "拡大",
+    "zoom_out": "縮小",
+    "fit": "全体表示",
+    "toggle_detail": "詳細パネル切替"
+  },
+  "timeline": {
+    "label": "リサーチ段階",
+    "done": "完了",
+    "current": "進行中",
+    "upcoming": "未着手",
+    "done_feedback": "段階完了"
+  },
+  "round": {
+    "round_n": "Round {{n}}",
+    "subtitle": "Ronaldo end-of-round judgment (gaps · confidence · budget)",
+    "open_detail": "Open judgment details",
+    "confidence": "Confidence",
+    "empty_confidence": "No confidence note",
+    "gaps": "Coverage gaps",
+    "gaps_empty": "Key criteria covered",
+    "budget_used": "Rounds used",
+    "budget_remaining": "Rounds left",
+    "budget_chip": "Round {{used}}/{{budget}}",
+    "budget_capped": "Budget capped",
+    "next_focus": "Next-round focus",
+    "goal_patch": "Goal patch proposal",
+    "goal_patch_hint": "Does not write authoritative goal until you confirm via Goal Card (LRM-898)",
+    "goal_dialog_title": "Confirm goal patch",
+    "goal_confirm": "Confirm patch",
+    "goal_edit": "Edit then confirm",
+    "goal_edit_send": "Send edited text",
+    "goal_reject": "Reject proposal",
+    "agree": "Agree with judgment",
+    "reject_continue": "Reject continue · stop instead",
+    "reject_stop": "Reject stop · open another round",
+    "auto_adopt_countdown": "Auto-adopt in {{s}}s",
+    "auto_adopted": "Timed out — adopted Ronaldo’s judgment (goal patch still needs your confirm)",
+    "decision": {
+      "continue": "Continue deeper",
+      "stop_enough": "Enough · close",
+      "stop_budget": "Budget hit · close"
+    }
+  },
+  "reader": {
+    "outline": "アウトライン",
+    "copy_md": "MD をコピー",
+    "copied": "コピー済み",
+    "export": "エクスポート",
+    "meta": "納品 · v{{revision}} · 出典 {{count}}",
+    "sources_heading": "重み付きソースマップ",
+    "sources_hint": "信頼度順。高スコアは基線、低スコアは傍証のみ。",
+    "col_weight": "重み",
+    "col_type": "種別",
+    "col_source": "ソース",
+    "col_purpose": "用途"
   }
 }

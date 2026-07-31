@@ -35,7 +35,25 @@
     "loading": "리서치를 불러오는 중입니다",
     "load_failed": "리서치를 불러오지 못했습니다",
     "retry": "다시 시도",
-    "empty_cta": "첫 리서치 시작하기"
+    "empty_cta": "첫 리서치 시작하기",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "Research goal",
+    "goal_dialog_close": "Close",
+    "goal_dialog_open": "Open session",
+    "who_working": "{{name}} working",
+    "output_line": "Output · {{summary}}",
+    "no_output": "Output · none yet"
+  },
+  "filter": {
+    "search_label": "세션 제목 검색",
+    "search_placeholder": "제목 검색…",
+    "status_label": "상태로 필터",
+    "status_in_progress": "진행 중",
+    "status_completed": "완료",
+    "status_failed": "실패",
+    "clear": "필터 지우기",
+    "no_results": "일치하는 세션이 없습니다",
+    "no_results_hint": "다른 키워드를 시도하거나 필터를 지워 전체를 보세요"
   },
   "actions": {
     "menu": "Research actions",
@@ -81,6 +99,21 @@
     "process_tag": "Process",
     "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
   },
+  "step_card": {
+    "status": {
+      "done": "완료",
+      "running": "진행 중",
+      "waiting": "대기",
+      "failed": "실패"
+    },
+    "expand": "근거 펼치기",
+    "collapse": "접기",
+    "retry": "재시도",
+    "reassign": "재배정",
+    "standby": "대기 중",
+    "composer_hint": "Enter 전송 · Shift+Enter 줄바꿈",
+    "sending": "전송 중…"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -92,7 +125,8 @@
     "pivot": "Pivot",
     "roster_change": "Roster change",
     "stage_gate": "Stage gate",
-    "agent_activity": "Activity"
+    "agent_activity": "Activity",
+    "product_round_gate": "Product round"
   },
   "home": {
     "composer_label": "리서치 세션 만들기",
@@ -100,6 +134,82 @@
     "hero_desc": "목표만 적으면 — 리서치 플릿이 소스를 탐색하고 발견을 정리해 보고서로 전달합니다.",
     "composer_hint": "⌘⏎ 로 시작",
     "creating": "플릿 편성 중…",
-    "create_failed": "리서치 세션을 만들지 못했습니다"
+    "create_failed": "리서치 세션을 만들지 못했습니다",
+    "templates_label": "빠른 템플릿",
+    "templates_hint": "선택하면 전문 프롬프트가 칩으로 붙고, 목표를 이어서 입력할 수 있습니다",
+    "template_chip": "{{title}} prompt added — keep typing your goal",
+    "template_chip_clear": "Remove template",
+    "goal_placeholder_with_template": "Add your specific goal…"
+  },
+  "ring": {
+    "title": "노드 작업",
+    "detail": "상세",
+    "locate_source": "출처",
+    "copy_prompt": "복사",
+    "retry": "재시도",
+    "dig_deeper": "심층",
+    "more": "더보기",
+    "soon": "예정",
+    "esc_hint": "Esc로 닫기",
+    "retry_message": "막다른 노드 「{{title}}」({{id}})에서 다시 탐색해 주세요."
+  },
+  "dock": {
+    "label": "캔버스 컨트롤",
+    "north_star": "북극성",
+    "zoom_in": "확대",
+    "zoom_out": "축소",
+    "fit": "화면 맞추기",
+    "toggle_detail": "상세 패널 토글"
+  },
+  "timeline": {
+    "label": "리서치 단계",
+    "done": "완료",
+    "current": "진행 중",
+    "upcoming": "대기",
+    "done_feedback": "단계 완료"
+  },
+  "round": {
+    "round_n": "Round {{n}}",
+    "subtitle": "Ronaldo end-of-round judgment (gaps · confidence · budget)",
+    "open_detail": "Open judgment details",
+    "confidence": "Confidence",
+    "empty_confidence": "No confidence note",
+    "gaps": "Coverage gaps",
+    "gaps_empty": "Key criteria covered",
+    "budget_used": "Rounds used",
+    "budget_remaining": "Rounds left",
+    "budget_chip": "Round {{used}}/{{budget}}",
+    "budget_capped": "Budget capped",
+    "next_focus": "Next-round focus",
+    "goal_patch": "Goal patch proposal",
+    "goal_patch_hint": "Does not write authoritative goal until you confirm via Goal Card (LRM-898)",
+    "goal_dialog_title": "Confirm goal patch",
+    "goal_confirm": "Confirm patch",
+    "goal_edit": "Edit then confirm",
+    "goal_edit_send": "Send edited text",
+    "goal_reject": "Reject proposal",
+    "agree": "Agree with judgment",
+    "reject_continue": "Reject continue · stop instead",
+    "reject_stop": "Reject stop · open another round",
+    "auto_adopt_countdown": "Auto-adopt in {{s}}s",
+    "auto_adopted": "Timed out — adopted Ronaldo’s judgment (goal patch still needs your confirm)",
+    "decision": {
+      "continue": "Continue deeper",
+      "stop_enough": "Enough · close",
+      "stop_budget": "Budget hit · close"
+    }
+  },
+  "reader": {
+    "outline": "개요",
+    "copy_md": "MD 복사",
+    "copied": "복사됨",
+    "export": "내보내기",
+    "meta": "전달 · v{{revision}} · 출처 {{count}}",
+    "sources_heading": "가중 출처 지도",
+    "sources_hint": "신뢰도 순. 높은 가중치는 기준선, 낮은 가중치는 보조 근거입니다.",
+    "col_weight": "가중치",
+    "col_type": "유형",
+    "col_source": "출처",
+    "col_purpose": "용도"
   }
 }

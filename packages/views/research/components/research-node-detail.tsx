@@ -50,6 +50,8 @@ export function ResearchNodeDetail({
         return t(($) => $.node.roster_change);
       case "stage_gate":
         return t(($) => $.node.stage_gate);
+      case "product_round_gate":
+        return t(($) => $.node.product_round_gate);
       case "agent_activity":
         return t(($) => $.node.agent_activity);
       default:

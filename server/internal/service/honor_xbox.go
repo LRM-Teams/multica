@@ -73,23 +73,57 @@ type badgeUnlockRequirement struct {
 }
 
 var honorBadgeRequirements = map[string]badgeUnlockRequirement{
-	"founding":     {founding: true},
-	"stardust":     {minLevel: 3},
-	"mercury":      {minLevel: 5},
-	"venus":        {minLevel: 8},
-	"earth":        {minLevel: 10},
-	"mars":         {minLevel: 12},
-	"jupiter":      {minLevel: 15},
-	"saturn":       {minLevel: 18},
-	"veteran":      {minLevel: 20},
-	"uranus":       {minLevel: 22},
-	"neptune":      {minLevel: 26},
-	"pluto":        {minLevel: 30},
-	"red_dwarf":    {minLevel: 35},
-	"blue_giant":   {minLevel: 40},
-	"quasar":       {minLevel: 50},
-	"builder":      {pillar: HonorPillarDelivery, minTier: 4},
-	"collaborator": {pillar: HonorPillarCommunity, minTier: 3},
+	"founding":              {founding: true},
+	"stardust":              {minLevel: 3},
+	"mercury":               {minLevel: 5},
+	"venus":                 {minLevel: 8},
+	"earth":                 {minLevel: 10},
+	"mars":                  {minLevel: 12},
+	"jupiter":               {minLevel: 15},
+	"saturn":                {minLevel: 18},
+	"veteran":               {minLevel: 20},
+	"uranus":                {minLevel: 22},
+	"neptune":               {minLevel: 26},
+	"pluto":                 {minLevel: 30},
+	"red_dwarf":             {minLevel: 35},
+	"blue_giant":            {minLevel: 40},
+	"quasar":                {minLevel: 50},
+	"builder":               {pillar: HonorPillarDelivery, minTier: 4},
+	"collaborator":          {pillar: HonorPillarCommunity, minTier: 3},
+	"lunar_spark":           {minLevel: 2},
+	"comet_trail":           {minLevel: 4},
+	"asteroid_scout":        {minLevel: 6},
+	"eclipse_watcher":       {minLevel: 7},
+	"pulsar_ping":           {minLevel: 9},
+	"solar_sailor":          {minLevel: 11},
+	"orbital_cadet":         {minLevel: 13},
+	"lunar_architect":       {minLevel: 14},
+	"pathfinder":            {minLevel: 16},
+	"voyager":               {minLevel: 17},
+	"beacon_keeper":         {minLevel: 19},
+	"relay_master":          {minLevel: 21},
+	"archive_seed":          {minLevel: 23},
+	"constellation_map":     {minLevel: 24},
+	"aurora_weaver":         {minLevel: 25},
+	"galaxy_roamer":         {minLevel: 27},
+	"wormhole_cartographer": {minLevel: 28},
+	"terraformer":           {minLevel: 29},
+	"foundry_heart":         {minLevel: 32},
+	"nexus_link":            {minLevel: 34},
+	"helix_mind":            {minLevel: 37},
+	"prism_core":            {minLevel: 42},
+	"plasma_orb":            {minLevel: 45},
+	"quantum_gate":          {minLevel: 48},
+	"singularity":           {minLevel: 52},
+	"celestial_crown":       {minLevel: 54},
+	"event_horizon":         {minLevel: 56},
+	"cosmic_tree":           {minLevel: 58},
+	"infinity_engine":       {minLevel: 60},
+	"signal_architect":      {pillar: HonorPillarUsage, minTier: 3},
+	"chronicle_engine":      {pillar: HonorPillarUsage, minTier: 6},
+	"steady_light":          {pillar: HonorPillarPresence, minTier: 4},
+	"everpresent":           {pillar: HonorPillarPresence, minTier: 8},
+	"delivery_singularity":  {pillar: HonorPillarDelivery, minTier: 8},
 }
 
 // tryUnlockBadge inserts a badge unlock when new and fires OnBadgeUnlocked.
@@ -117,8 +151,8 @@ func (s *HonorService) tryUnlockBadge(ctx context.Context, userID pgtype.UUID, b
 	pct, _ := s.unlockPctForBadge(ctx, badgeID)
 	if s.OnBadgeUnlocked != nil {
 		s.OnBadgeUnlocked(ctx, HonorBadgeUnlockEvent{
-			UserID: userID,
-			Badge:  *honorBadgeViewFromDef(def),
+			UserID:    userID,
+			Badge:     *honorBadgeViewFromDef(def),
 			UnlockPct: pct,
 		})
 	}
@@ -148,11 +182,14 @@ func (s *HonorService) unlockPctForBadge(ctx context.Context, badgeID string) (f
 	return m[badgeID], nil
 }
 
-func maskSecretBadge(def db.HonorBadgeDef, unlocked bool) (title, description, svgKey string) {
+func maskSecretBadge(
+	def db.HonorBadgeDef,
+	unlocked bool,
+) (title, description, svgKey, unlockRule string) {
 	if def.Secret && !unlocked {
-		return "Secret Badge", "Unlock to reveal this badge.", "stardust"
+		return "Secret Badge", "Unlock to reveal this badge.", "stardust", ""
 	}
-	return def.Title, def.Description, def.SvgKey
+	return def.Title, def.Description, def.SvgKey, def.UnlockRule
 }
 
 func (s *HonorService) buildBadgeCatalog(
@@ -185,14 +222,14 @@ func (s *HonorService) buildBadgeCatalog(
 		if unlocked {
 			unlockedCount++
 		}
-		title, desc, svgKey := maskSecretBadge(def, unlocked)
+		title, desc, svgKey, unlockRule := maskSecretBadge(def, unlocked)
 		item := HonorBadgeCatalogItem{
 			ID:          def.ID,
 			Title:       title,
 			Description: desc,
 			SvgKey:      svgKey,
 			Rarity:      int(def.Rarity),
-			UnlockRule:  def.UnlockRule,
+			UnlockRule:  unlockRule,
 			Secret:      def.Secret,
 			Unlocked:    unlocked,
 			UnlockPct:   pctMap[def.ID],

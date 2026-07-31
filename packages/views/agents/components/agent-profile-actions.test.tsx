@@ -99,6 +99,13 @@ vi.mock("../../i18n/use-t", () => ({
 }));
 
 const RESOURCES = {
+  delete_confirm: {
+    title: "Delete agent?",
+    description: "Delete {{name}}",
+    cancel: "Cancel",
+    confirm: "Confirm delete",
+    confirming: "Deleting…",
+  },
   side_panel: {
     actions_section: "Actions",
     message_button: "Message",
@@ -108,10 +115,6 @@ const RESOURCES = {
     actions_stop_success: "Stopped {{name}}",
     actions_stop_failed: "Failed to stop agent task",
     actions_delete: "Delete",
-    delete_dialog_title: "Delete agent?",
-    delete_dialog_description: "Delete {{name}}",
-    delete_dialog_cancel: "Cancel",
-    delete_dialog_confirm: "Confirm delete",
     agent_deleted_toast: "Deleted",
     delete_failed_toast: "Delete failed",
   },
@@ -252,7 +255,7 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
     expect(screen.getByTestId("agent-profile-action-delete")).toHaveTextContent("Delete");
     expect(screen.queryByText("Archive agent")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("agent-profile-action-delete"));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    fireEvent.click(screen.getByTestId("confirm-delete-agent-confirm"));
     await waitFor(() => {
       expect(mocks.archiveAgent).toHaveBeenCalledWith("agent-1");
     });

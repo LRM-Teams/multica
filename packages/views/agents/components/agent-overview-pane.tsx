@@ -8,6 +8,7 @@ import {
   FileText,
   KeyRound,
   ListTodo,
+  Medal,
   Plug,
   Terminal,
   Webhook,
@@ -35,6 +36,7 @@ import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
+import { AgentHonorTab } from "./tabs/agent-honor-tab";
 import { ActorIssuesPanel } from "../../common/actor-issues-panel";
 import { useT } from "../../i18n";
 
@@ -44,17 +46,19 @@ export type DetailTab =
   | "instructions"
   | "skills"
   | "memory"
+  | "honor"
   | "env"
   | "custom_args"
   | "mcp_config"
   | "integrations";
 
-const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "memory" | "environment" | "custom_args" | "mcp_config" | "integrations"> = {
+const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "memory" | "honor" | "environment" | "custom_args" | "mcp_config" | "integrations"> = {
   activity: "activity",
   tasks: "tasks",
   instructions: "instructions",
   skills: "skills",
   memory: "memory",
+  honor: "honor",
   env: "environment",
   custom_args: "custom_args",
   mcp_config: "mcp_config",
@@ -70,6 +74,7 @@ const detailTabs: {
   { id: "instructions", icon: FileText },
   { id: "skills", icon: BookOpenText },
   { id: "memory", icon: Brain },
+  { id: "honor", icon: Medal },
   { id: "env", icon: KeyRound },
   { id: "custom_args", icon: Terminal },
   { id: "mcp_config", icon: Plug },
@@ -80,6 +85,8 @@ interface AgentOverviewPaneProps {
   agent: Agent;
   runtimes: AgentRuntime[];
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
+  canManage: boolean;
+  initialTab?: DetailTab;
   /**
    * One-shot request from a sibling (the inspector's compact Lark status
    * row) to focus a specific tab. Routed through the same `requestTabChange`
@@ -117,12 +124,16 @@ export function AgentOverviewPane({
   agent,
   runtimes,
   onUpdate,
+  canManage,
+  initialTab,
   navIntent,
   onNavIntentHandled,
 }: AgentOverviewPaneProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
-  const [activeTab, setActiveTab] = useState<DetailTab>("activity");
+  const [activeTab, setActiveTab] = useState<DetailTab>(
+    initialTab ?? "activity",
+  );
   const [activeDirty, setActiveDirty] = useState(false);
   // Holds the destination when a tab change is intercepted by the dirty
   // guard. Null means no pending change. The AlertDialog reads non-null as
@@ -210,6 +221,7 @@ export function AgentOverviewPane({
           <button
             key={tab.id}
             type="button"
+            data-active={effectiveTab === tab.id ? "true" : undefined}
             onClick={() => requestTabChange(tab.id)}
             className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
               effectiveTab === tab.id
@@ -248,6 +260,9 @@ export function AgentOverviewPane({
           <TabContent>
             <MemoryTab agent={agent} />
           </TabContent>
+        )}
+        {effectiveTab === "honor" && (
+          <AgentHonorTab agent={agent} canManage={canManage} />
         )}
         {effectiveTab === "env" && (
           <TabContent>

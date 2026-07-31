@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { Agent, AgentTask } from "@multica/core/types";
@@ -73,7 +73,7 @@ function radarTask(status: AgentTask["status"]): AgentTask {
   };
 }
 
-function renderOverview(task: AgentTask) {
+function renderOverview(task: AgentTask, onHonor = vi.fn()) {
   mockTasks.current = [task];
   return render(
     <I18nProvider
@@ -85,6 +85,7 @@ function renderOverview(task: AgentTask) {
         runtime={null}
         metric={{ runCount: 1, successRate: null, cost: null }}
         canManage={false}
+        onHonor={onHonor}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />
@@ -98,6 +99,15 @@ afterEach(() => {
 });
 
 describe("AgentDetailOverview radar execution log", () => {
+  it("opens the complete honor view from the list detail", () => {
+    const onHonor = vi.fn();
+    renderOverview(radarTask("queued"), onHonor);
+
+    fireEvent.click(screen.getByRole("button", { name: "Honor" }));
+
+    expect(onHonor).toHaveBeenCalledOnce();
+  });
+
   it("labels a queued radar scan without a spinning icon", () => {
     renderOverview(radarTask("queued"));
 

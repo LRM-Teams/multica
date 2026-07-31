@@ -70,12 +70,18 @@ vi.mock("../agents/components/inline-field-editor", () => ({
   InlineFieldEditor: ({
     value,
     emptyLabel,
+    displayContent,
     testId = "inline-field-editor",
   }: {
     value: string;
     emptyLabel?: string;
+    displayContent?: React.ReactNode;
     testId?: string;
-  }) => <div data-testid={`${testId}-trigger`}>{value || emptyLabel}</div>,
+  }) => (
+    <div data-testid={`${testId}-trigger`}>
+      {value ? (displayContent ?? value) : emptyLabel}
+    </div>
+  ),
 }));
 
 vi.mock("../i18n/use-t", () => ({

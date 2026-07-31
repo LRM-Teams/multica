@@ -1587,6 +1587,63 @@ func TestIsTaskNotFoundError(t *testing.T) {
 	}
 }
 
+func TestIsAgentNotBoundToRuntimeError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "403 with agent-not-bound body",
+			err: &requestError{
+				Method:     http.MethodPost,
+				Path:       "/api/daemon/runtimes/rt-1/agents/agent-1/credential",
+				StatusCode: http.StatusForbidden,
+				Body:       `{"error":"agent is not bound to this runtime"}`,
+			},
+			want: true,
+		},
+		{
+			name: "mixed-case body still matches",
+			err: &requestError{
+				StatusCode: http.StatusForbidden,
+				Body:       `{"error":"Agent Is Not Bound To This Runtime"}`,
+			},
+			want: true,
+		},
+		{
+			name: "404 with same body must NOT match (wrong status)",
+			err: &requestError{
+				StatusCode: http.StatusNotFound,
+				Body:       `{"error":"agent is not bound to this runtime"}`,
+			},
+			want: false,
+		},
+		{
+			name: "403 with unrelated body is not a match",
+			err: &requestError{
+				StatusCode: http.StatusForbidden,
+				Body:       `{"error":"daemon token is not bound to this runtime"}`,
+			},
+			want: false,
+		},
+		{
+			name: "non-requestError is never a match",
+			err:  errors.New("boom"),
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAgentNotBoundToRuntimeError(tc.err); got != tc.want {
+				t.Fatalf("isAgentNotBoundToRuntimeError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsRuntimeNotFoundError(t *testing.T) {
 	t.Parallel()
 

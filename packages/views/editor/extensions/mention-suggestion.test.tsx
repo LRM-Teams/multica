@@ -69,7 +69,6 @@ import {
   type MentionListRef,
   type MentionItem,
 } from "./mention-suggestion";
-import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 
 function fakeQc(data: {
   members?: Array<{ user_id: string; name: string; display_name?: string; role?: string }>;
@@ -534,37 +533,6 @@ describe("createMentionSuggestion", () => {
 
     const items = result as MentionItem[];
     expect(items.some((i) => i.type === "issue")).toBe(false);
-  });
-
-  it("returns only cached issue items from the # issue reference suggestion", () => {
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        {
-          id: "a1",
-          name: "Roadie",
-          archived_at: null,
-          visibility: "workspace",
-          owner_id: null,
-        },
-      ],
-      issues: [
-        { id: "i1", identifier: "LRM-36", title: "Roadmap blocker", status: "todo" },
-        { id: "i2", identifier: "LRM-40", title: "Other", status: "done" },
-      ],
-    });
-
-    const config = createIssueReferenceSuggestion(qc);
-    const items = config.items!({ query: "road", editor: {} as never }) as MentionItem[];
-
-    expect(items).toEqual([
-      expect.objectContaining({
-        id: "i1",
-        label: "LRM-36",
-        type: "issue",
-        description: "Roadmap blocker",
-      }),
-    ]);
   });
 
   it("does not inject current/recent chat context into the normal @ results", () => {

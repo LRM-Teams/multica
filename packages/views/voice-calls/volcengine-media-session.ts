@@ -52,9 +52,17 @@ export interface VoiceCallRTCEngine {
   stopAudioCapture(): Promise<void>;
   publishAudio(): Promise<void>;
   unpublishAudio(): Promise<void>;
-  playRemoteAudio(userId: string): Promise<void>;
+  getRemoteAudioTrack(userId: string): MediaStreamTrack | undefined;
   destroy(): void;
 }
+
+export interface VoiceCallRemoteAudioOutput {
+  play(track: MediaStreamTrack): Promise<void>;
+  stop(): void;
+}
+
+export type VoiceCallRemoteAudioOutputFactory =
+  () => VoiceCallRemoteAudioOutput;
 
 export interface VoiceCallRTCDriver {
   isSupported(): Promise<boolean>;
@@ -78,7 +86,7 @@ async function loadVolcengineRTCDriver(): Promise<VoiceCallRTCDriver> {
     isSupported: () => rtc.default.isSupported(),
     createEngine: (appId, callbacks) => {
       const engine = rtc.default.createEngine(appId, {
-        autoPlayPolicy: rtc.RTCAutoPlayPolicy.AUTO_PLAY,
+        autoPlayPolicy: rtc.RTCAutoPlayPolicy.PLAY_MANUALLY,
       });
 
       engine.on(rtc.default.events.onConnectionStateChanged, ({ state }) => {
@@ -127,11 +135,11 @@ async function loadVolcengineRTCDriver(): Promise<VoiceCallRTCDriver> {
         stopAudioCapture: () => engine.stopAudioCapture(),
         publishAudio: () => engine.publishStream(rtc.MediaType.AUDIO),
         unpublishAudio: () => engine.unpublishStream(rtc.MediaType.AUDIO),
-        playRemoteAudio: (userId) =>
-          engine.play(
+        getRemoteAudioTrack: (userId) =>
+          engine.getRemoteStreamTrack(
             userId,
-            rtc.MediaType.AUDIO,
             rtc.StreamIndex.STREAM_INDEX_MAIN,
+            "audio",
           ),
         destroy: () => {
           engine.removeAllListeners();
@@ -140,6 +148,43 @@ async function loadVolcengineRTCDriver(): Promise<VoiceCallRTCDriver> {
       };
     },
   };
+}
+
+class BrowserVoiceCallRemoteAudioOutput
+  implements VoiceCallRemoteAudioOutput {
+  private audio: HTMLAudioElement | null = null;
+
+  async play(track: MediaStreamTrack): Promise<void> {
+    if (
+      typeof Audio === "undefined" ||
+      typeof MediaStream === "undefined"
+    ) {
+      throw new VoiceCallMediaError(
+        "playback_failed",
+        "Browser audio output is unavailable",
+      );
+    }
+    const audio = this.audio ?? new Audio();
+    this.audio = audio;
+    audio.autoplay = true;
+    audio.muted = false;
+    audio.volume = 1;
+    audio.srcObject = new MediaStream([track]);
+    await audio.play();
+  }
+
+  stop(): void {
+    const audio = this.audio;
+    this.audio = null;
+    if (!audio) return;
+    audio.pause();
+    audio.srcObject = null;
+  }
+}
+
+function createBrowserVoiceCallRemoteAudioOutput():
+  VoiceCallRemoteAudioOutput {
+  return new BrowserVoiceCallRemoteAudioOutput();
 }
 
 function mediaError(
@@ -188,6 +233,8 @@ export class VolcengineVoiceMediaSession {
   private fatalError: VoiceCallMediaError | null = null;
   private connectPromise: Promise<void> | null = null;
   private cleanupPromise: Promise<void> | null = null;
+  private expectedRemoteUserId = "";
+  private remoteAudioOutput: VoiceCallRemoteAudioOutput | null = null;
   private readonly remoteAudioFirstFrameUsers = new Set<string>();
   private readonly remoteAudioPlaybackConfirmedUsers = new Set<string>();
   private readonly remoteAudioAnswerReportedUsers = new Set<string>();
@@ -200,6 +247,9 @@ export class VolcengineVoiceMediaSession {
     private readonly events: VoiceCallMediaEvents = {},
     private readonly loadDriver: VoiceCallRTCDriverLoader =
       loadVolcengineRTCDriver,
+    private readonly createRemoteAudioOutput:
+      VoiceCallRemoteAudioOutputFactory =
+      createBrowserVoiceCallRemoteAudioOutput,
   ) {}
 
   getState(): VoiceCallMediaState {
@@ -233,6 +283,7 @@ export class VolcengineVoiceMediaSession {
           "Voice calls require a secure HTTPS context",
         );
       }
+      this.expectedRemoteUserId = expectedVoiceAgentUserId(media.user_id);
 
       let driver: VoiceCallRTCDriver;
       try {
@@ -282,12 +333,20 @@ export class VolcengineVoiceMediaSession {
             );
           },
           onAutoplayBlocked: (remoteUserId) => {
-            this.events.onAutoplayBlocked?.(remoteUserId);
+            const normalizedUserId = remoteUserId.trim();
+            if (normalizedUserId === this.expectedRemoteUserId) {
+              this.events.onAutoplayBlocked?.(normalizedUserId);
+            }
           },
           onRemoteAudioStarted: (remoteUserId) => {
             if (this.state === "closed" || this.state === "failed") return;
             const normalizedUserId = remoteUserId.trim();
-            if (!normalizedUserId) return;
+            if (
+              !normalizedUserId ||
+              normalizedUserId !== this.expectedRemoteUserId
+            ) {
+              return;
+            }
             this.remoteAudioFirstFrameUsers.add(normalizedUserId);
             if (
               this.remoteAudioPlaybackConfirmedUsers.has(normalizedUserId)
@@ -454,7 +513,11 @@ export class VolcengineVoiceMediaSession {
 
   async resumeRemoteAudio(remoteUserId: string): Promise<void> {
     const normalizedUserId = remoteUserId.trim();
-    if (!this.engine || !normalizedUserId) {
+    if (
+      !this.engine ||
+      !normalizedUserId ||
+      normalizedUserId !== this.expectedRemoteUserId
+    ) {
       throw new VoiceCallMediaError(
         "playback_failed",
         "Remote voice stream is not available",
@@ -488,8 +551,19 @@ export class VolcengineVoiceMediaSession {
         ),
       );
     }
+    const track = engine.getRemoteAudioTrack(remoteUserId);
+    if (!track) {
+      return Promise.reject(
+        new VoiceCallMediaError(
+          "playback_failed",
+          "Remote voice stream is not available",
+        ),
+      );
+    }
+    const output = this.remoteAudioOutput ?? this.createRemoteAudioOutput();
+    this.remoteAudioOutput = output;
 
-    const attempt = engine.playRemoteAudio(remoteUserId)
+    const attempt = output.play(track)
       .then(() => {
         if (
           this.engine !== engine ||
@@ -579,11 +653,18 @@ export class VolcengineVoiceMediaSession {
     }
 
     try {
+      this.remoteAudioOutput?.stop();
+    } catch (error) {
+      firstError ??= error;
+    }
+    try {
       engine.destroy();
     } catch (error) {
       firstError ??= error;
     }
     this.engine = null;
+    this.remoteAudioOutput = null;
+    this.expectedRemoteUserId = "";
     this.ready = false;
     this.remoteAudioFirstFrameUsers.clear();
     this.remoteAudioPlaybackConfirmedUsers.clear();
@@ -607,6 +688,21 @@ export class VolcengineVoiceMediaSession {
     this.state = state;
     this.events.onStateChange?.(state);
   }
+}
+
+function expectedVoiceAgentUserId(memberUserId: string): string {
+  const normalized = memberUserId.trim();
+  const memberPrefix = "voice-member-";
+  if (
+    !normalized.startsWith(memberPrefix) ||
+    normalized.length === memberPrefix.length
+  ) {
+    throw new VoiceCallMediaError(
+      "join_failed",
+      "Voice call media has an invalid member identity",
+    );
+  }
+  return `voice-agent-${normalized.slice(memberPrefix.length)}`;
 }
 
 export function createVolcengineVoiceMediaSession(

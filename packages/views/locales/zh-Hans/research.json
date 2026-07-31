@@ -35,7 +35,25 @@
     "loading": "正在加载调研会话",
     "load_failed": "调研会话加载失败",
     "retry": "重试",
-    "empty_cta": "开始你的第一个调研"
+    "empty_cta": "开始你的第一个调研",
+    "goal_chip": "goal · {{summary}}",
+    "goal_dialog_title": "调研目标",
+    "goal_dialog_close": "关闭",
+    "goal_dialog_open": "打开会话",
+    "who_working": "{{name}} 进行中",
+    "output_line": "产出 · {{summary}}",
+    "no_output": "产出 · 暂无产出"
+  },
+  "filter": {
+    "search_label": "搜索会话标题",
+    "search_placeholder": "搜索标题…",
+    "status_label": "按状态筛选",
+    "status_in_progress": "进行中",
+    "status_completed": "已完成",
+    "status_failed": "失败",
+    "clear": "清除筛选",
+    "no_results": "没有匹配的会话",
+    "no_results_hint": "试试别的关键词，或清除筛选查看全部"
   },
   "actions": {
     "menu": "调研操作",
@@ -81,6 +99,21 @@
     "process_tag": "过程事件",
     "empty": "画布推进时，舰队对话与过程事件会出现在这里。"
   },
+  "step_card": {
+    "status": {
+      "done": "完成",
+      "running": "进行中",
+      "waiting": "等待",
+      "failed": "失败"
+    },
+    "expand": "展开证据",
+    "collapse": "收起",
+    "retry": "重试",
+    "reassign": "改派",
+    "standby": "已就位",
+    "composer_hint": "Enter 发送 · Shift+Enter 换行",
+    "sending": "发送中…"
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",
@@ -92,14 +125,91 @@
     "pivot": "转折",
     "roster_change": "编制变更",
     "stage_gate": "阶段门",
+    "product_round_gate": "产品轮判定",
     "agent_activity": "活动"
   },
   "home": {
     "composer_label": "创建调研会话",
-    "hero_title": "调研，不再靠几十个标签页",
+    "hero_title": "说清目标——调研团多源取证并交付报告",
     "hero_desc": "说清目标——调研团去多源取证、梳理发现，并把报告交到你手上。",
     "composer_hint": "按 ⌘⏎ 开始",
     "creating": "组建舰队中…",
-    "create_failed": "调研会话创建失败"
+    "create_failed": "调研会话创建失败",
+    "templates_label": "快捷模板",
+    "templates_hint": "点选后以彩色 chip 加入专业提示词，继续输入你的具体目标",
+    "template_chip": "{{title}} 提示词已加入，继续输入开发目标即可",
+    "template_chip_clear": "移除模板",
+    "goal_placeholder_with_template": "补充你的具体目标…"
+  },
+  "ring": {
+    "title": "节点操作",
+    "detail": "详情",
+    "locate_source": "来源",
+    "copy_prompt": "复制",
+    "retry": "重试",
+    "dig_deeper": "深挖",
+    "more": "更多",
+    "soon": "待定",
+    "esc_hint": "Esc 关闭",
+    "retry_message": "请从死胡同节点「{{title}}」（{{id}}）重新探索。"
+  },
+  "dock": {
+    "label": "画布控件",
+    "north_star": "北极星",
+    "zoom_in": "放大",
+    "zoom_out": "缩小",
+    "fit": "适应画布",
+    "toggle_detail": "开关详情面板"
+  },
+  "timeline": {
+    "label": "调研阶段",
+    "done": "已完成",
+    "current": "进行中",
+    "upcoming": "未开始",
+    "done_feedback": "阶段已完成"
+  },
+  "round": {
+    "round_n": "产品轮 {{n}}",
+    "subtitle": "罗纳尔多轮末判定（覆盖缺口 · 置信 · 预算）",
+    "open_detail": "查看判定依据",
+    "confidence": "置信",
+    "empty_confidence": "暂无置信说明",
+    "gaps": "覆盖缺口",
+    "gaps_empty": "关键标准已覆盖",
+    "budget_used": "已用轮",
+    "budget_remaining": "剩余轮",
+    "budget_chip": "轮 {{used}}/{{budget}}",
+    "budget_capped": "预算到顶",
+    "next_focus": "下一轮焦点",
+    "goal_patch": "目标回灌提案",
+    "goal_patch_hint": "未确认前不写权威目标；确认走 Goal Card 用户管线（LRM-898）",
+    "goal_dialog_title": "确认目标回灌",
+    "goal_confirm": "确认回灌",
+    "goal_edit": "编辑后确认",
+    "goal_edit_send": "按编辑稿发送",
+    "goal_reject": "拒绝提案",
+    "agree": "同意裁定",
+    "reject_continue": "驳回继续 · 要求停止",
+    "reject_stop": "驳回停止 · 再开一轮",
+    "auto_adopt_countdown": "{{s}} 秒后超时自动采纳",
+    "auto_adopted": "已超时自动采纳罗纳尔多裁定（goal 改写仍需你确认）",
+    "decision": {
+      "continue": "继续加深",
+      "stop_enough": "够了 · 收口",
+      "stop_budget": "预算到顶 · 收口"
+    }
+  },
+  "reader": {
+    "outline": "大纲",
+    "copy_md": "复制 MD",
+    "copied": "已复制",
+    "export": "导出",
+    "meta": "交付完成 · schema v{{revision}} · {{count}} 来源",
+    "sources_heading": "加权源地图",
+    "sources_hint": "按可信度排序。权重高的为权威基线，低权重仅作旁证。",
+    "col_weight": "权重",
+    "col_type": "类型",
+    "col_source": "来源",
+    "col_purpose": "用途"
   }
 }

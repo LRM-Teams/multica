@@ -9,7 +9,9 @@
 // carries a react-doctor-disable-next-line for react-doctor/no-multi-comp.
 
 import { useQuery } from "@tanstack/react-query";
+import { Sparkles } from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import {
   HoverCard,
   HoverCardContent,
@@ -18,7 +20,11 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
-import { memberProfileOptions } from "@multica/core/agents";
+import {
+  agentHonorOptions,
+  memberProfileOptions,
+} from "@multica/core/agents";
+import { api } from "@multica/core/api";
 import type { MemberProfile } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -292,6 +298,12 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
               {handleLabel}
             </span>
           ) : null}
+          {profile.member_type === "user" ? (
+            <MemberHonorSummary userId={profile.member_id} />
+          ) : null}
+          {isAgent && !isIdentityOnly ? (
+            <AgentHonorSummary agentId={profile.member_id} />
+          ) : null}
         </div>
       </div>
 
@@ -319,6 +331,103 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           </ProfileSection>
         )
       ) : null}
+    </div>
+  );
+}
+
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
+function AgentHonorSummary({ agentId }: { agentId: string }) {
+  const { t } = useT("channels");
+  const workspaceId = useWorkspaceId();
+  const { data: honor, isPending, isError } = useQuery(
+    agentHonorOptions(workspaceId, agentId),
+  );
+
+  if (isError) return null;
+  if (isPending || !honor) {
+    return (
+      <div
+        className="mt-1.5 h-4 w-24 animate-pulse rounded bg-muted"
+        data-testid="agent-honor-showcase-loading"
+      />
+    );
+  }
+
+  const equipped = honor.achievements.find(
+    (item) => item.id === honor.equipped_achievement_id && item.unlocked,
+  );
+  return (
+    <div
+      className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
+      data-testid="agent-honor-showcase"
+    >
+      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border/60 bg-muted/60">
+        {equipped ? (
+          <HonorBadgeIcon
+            svgKey={equipped.svg_key}
+            title={equipped.title}
+            className="size-3.5"
+          />
+        ) : (
+          <Sparkles className="size-3" aria-hidden />
+        )}
+      </span>
+      <span className="shrink-0 font-medium tabular-nums text-foreground/80">
+        {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
+      </span>
+      <span aria-hidden>·</span>
+      <span className="truncate">{equipped?.title ?? honor.fleet.class_label}</span>
+    </div>
+  );
+}
+
+// Honor stays on one compact identity line. Dense message/member lists keep the
+// readable styled name without another badge.
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
+function MemberHonorSummary({ userId }: { userId: string }) {
+  const { t } = useT("channels");
+  const { data: honor, isPending, isError } = useQuery({
+    queryKey: ["honor", "wall", userId],
+    queryFn: () => api.getUserHonor(userId),
+    staleTime: 60_000,
+  });
+
+  if (isError) return null;
+
+  if (isPending || !honor) {
+    return (
+      <div
+        className="mt-1.5 h-4 w-24 animate-pulse rounded bg-muted"
+        data-testid="member-honor-showcase-loading"
+      />
+    );
+  }
+
+  const equipped = honor.equipped_badge;
+
+  return (
+    <div
+      className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
+      data-testid="member-honor-showcase"
+    >
+      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border/60 bg-muted/60">
+        {equipped ? (
+          <HonorBadgeIcon
+            svgKey={equipped.svg_key}
+            title={equipped.title}
+            className="size-3.5"
+          />
+        ) : (
+          <Sparkles className="size-3" aria-hidden />
+        )}
+      </span>
+      <span className="shrink-0 font-medium tabular-nums text-foreground/80">
+        {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
+      </span>
+      <span aria-hidden>·</span>
+      <span className="truncate">
+        {equipped?.title ?? t(($) => $.profile_popover.honor.no_badge)}
+      </span>
     </div>
   );
 }

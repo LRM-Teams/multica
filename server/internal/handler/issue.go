@@ -2646,6 +2646,20 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if statusChanged && issue.Status == "done" && actorType == "member" {
 		h.awardHonorXP(r.Context(), parseUUID(actorID), "issue.close", uuidToString(issue.ID))
 	}
+	issueAdvancedForHonor := (assigneeChanged ||
+		statusChanged ||
+		priorityChanged ||
+		descriptionChanged ||
+		titleChanged ||
+		startDateChanged ||
+		dueDateChanged ||
+		req.ParentIssueID != nil ||
+		req.ProjectID != nil ||
+		req.AcceptanceCriteria != nil) &&
+		!(statusChanged && (issue.Status == "done" || issue.Status == "cancelled"))
+	if shouldAwardIssueUpdate(actorType, issueAdvancedForHonor) {
+		h.awardHonorXP(r.Context(), parseUUID(actorID), "issue.update", uuidToString(issue.ID))
+	}
 
 	// Platform-driven parent notification: when this issue transitions into
 	// `done` and has a parent, post a top-level system comment on the parent

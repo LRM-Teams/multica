@@ -103,6 +103,20 @@ func writeCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID stri
 	return cached, nil
 }
 
+// removeCachedAgentCredential deletes the on-disk cached credential for
+// (workspaceID, agentID). Called when the server reports this agent no
+// longer belongs to this daemon's runtime (isAgentNotBoundToRuntimeError) —
+// the cached token is for a binding that no longer exists, and must not be
+// reused if this agent is later reassigned back to this runtime. Missing
+// file is not an error (nothing to remove).
+func removeCachedAgentCredential(cfg Config, workspaceID, agentID string) error {
+	path := agentCredentialCachePath(cfg, workspaceID, agentID)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove agent credential cache: %w", err)
+	}
+	return nil
+}
+
 func (c cachedAgentCredential) validFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) bool {
 	if strings.TrimSpace(c.Token) == "" {
 		return false

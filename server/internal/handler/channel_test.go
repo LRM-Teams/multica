@@ -3577,6 +3577,85 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 	}
 }
 
+// TestChannelReferenceLinksBecomeStructuredMessageParts is task #912's
+// backend half of Felix's PR #1607 (FE-only, ChannelReferenceExtension):
+// the composer emits an already-resolved [Label](mention://channel/<id>)
+// link, and the server's job is to verify + anchor it, not fuzzy-match text.
+func TestChannelReferenceLinksBecomeStructuredMessageParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	targetChannelID := seedChannelForTest(t, "channel-ref-target-"+uuid.NewString()[:8], testUserID)
+	sourceChannelID := seedChannelForTest(t, "channel-ref-source-"+uuid.NewString()[:8], testUserID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(sourceChannelID))
+	if !found {
+		t.Fatal("source channel not found after seed")
+	}
+
+	label := "team-a\\[eu\\]" // an escaped literal bracket in the label
+	content := "see [" + label + "](mention://channel/" + targetChannelID + ") for context"
+	gotContent, gotParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	if err != nil {
+		t.Fatalf("enrich channel reference: %v", err)
+	}
+	if gotContent != content {
+		t.Fatalf("content = %q, want markdown link text unchanged %q", gotContent, content)
+	}
+
+	var refs []protocol.MessagePart
+	for _, part := range gotParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			refs = append(refs, part)
+		}
+	}
+	if len(refs) != 1 {
+		t.Fatalf("channel references = %+v, want exactly 1", refs)
+	}
+	ref := refs[0]
+	if ref.RefID != targetChannelID || ref.Label != "team-a[eu]" {
+		t.Fatalf("channel reference = %+v, want ref_id=%s label=%q (unescaped)", ref, targetChannelID, "team-a[eu]")
+	}
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+		t.Fatalf("channel reference is missing a content UTF-16 span: %+v", ref)
+	}
+	wantStart, wantEnd := contentUTF16Span(content, strings.Index(content, "["), strings.Index(content, ")")+1)
+	if *ref.ContentStartUTF16 != wantStart || *ref.ContentEndUTF16 != wantEnd {
+		t.Fatalf("channel reference span = [%d,%d), want the whole markdown link [%d,%d)", *ref.ContentStartUTF16, *ref.ContentEndUTF16, wantStart, wantEnd)
+	}
+
+	// A reference to a channel ID that doesn't exist in this workspace is
+	// dropped, not an error — the composer shouldn't be able to author one,
+	// but a dangling/foreign ID must never surface as a broken structured ref.
+	danglingContent := "see [ghost](mention://channel/" + uuid.NewString() + ")"
+	_, danglingParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, danglingContent, nil)
+	if err != nil {
+		t.Fatalf("enrich dangling channel reference: %v", err)
+	}
+	for _, part := range danglingParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			t.Fatalf("dangling channel id unexpectedly produced a channel-ref: %+v", part)
+		}
+	}
+
+	// A reference to a real channel ID that is a DM (not a linkable group
+	// channel) is dropped too — DMs are private 1:1s, not the shareable
+	// channel-ref target the composer's own suggestion list excludes them for.
+	dmAgentID := createHandlerTestAgent(t, "Channel Ref DM Peer "+uuid.NewString(), []byte("[]"))
+	dmChannelID := seedAgentDMChannel(t, dmAgentID)
+	dmContent := "see [dm](mention://channel/" + dmChannelID + ")"
+	_, dmParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, dmContent, nil)
+	if err != nil {
+		t.Fatalf("enrich dm channel reference: %v", err)
+	}
+	for _, part := range dmParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			t.Fatalf("dm channel id unexpectedly produced a channel-ref: %+v", part)
+		}
+	}
+}
+
 func TestChannelLegacyActorMentionMarkdownIsRejected(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -5545,6 +5624,111 @@ func TestSearchChannelMessagesReturnsStableResults(t *testing.T) {
 	}
 }
 
+// LRM-874: author filter (user|agent) + include_thread + system exclusion.
+func TestSearchChannelMessagesAuthorFilterAndIncludeThread(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	otherUserID := createChannelPlainMember(t)
+	agentID := createHandlerTestAgent(t, "search-author-"+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "author-search-"+uuid.NewString(), testUserID, otherUserID)
+
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root by me", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("a1"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherUserID), "Other", "by other user", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("a2"), 0); err != nil {
+		t.Fatalf("insert other user: %v", err)
+	}
+	agentMsg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "SearchBot", "agent says hello", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("a3"), 0)
+	if err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	threadReply, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "thread by me", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("a1"), 0)
+	if err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", "system noise", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert system: %v", err)
+	}
+
+	// Author=me includes mainline + thread by default.
+	req := newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/search?author_type=user&author_id="+testUserID+"&limit=20", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SearchChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("author search: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp ChannelMessageSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.IncludeThread || resp.AuthorType != "user" || resp.AuthorID != testUserID || resp.Scope != "channel" {
+		t.Fatalf("echo fields = %+v", resp)
+	}
+	if resp.Total != 2 || len(resp.Results) != 2 {
+		t.Fatalf("author=me want 2 hits, got total=%d results=%d (%+v)", resp.Total, len(resp.Results), resp.Results)
+	}
+	ids := map[string]bool{}
+	for _, hit := range resp.Results {
+		ids[hit.MessageID] = true
+		if hit.Type != "user" {
+			t.Fatalf("unexpected type %q", hit.Type)
+		}
+	}
+	if !ids[root.ID] || !ids[threadReply.ID] {
+		t.Fatalf("missing root/thread hits: %+v", ids)
+	}
+	for _, hit := range resp.Results {
+		if hit.MessageID == threadReply.ID && !hit.InThread {
+			t.Fatalf("thread reply should set in_thread")
+		}
+		if hit.MessageID == root.ID && hit.InThread {
+			t.Fatalf("mainline should not set in_thread")
+		}
+	}
+
+	// include_thread=false → only mainline by me.
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/search?author_type=user&author_id="+testUserID+"&include_thread=false&limit=20", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.SearchChannelMessages(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode mainline: %v", err)
+	}
+	if resp.IncludeThread || resp.Total != 1 || len(resp.Results) != 1 || resp.Results[0].MessageID != root.ID {
+		t.Fatalf("mainline-only response = %+v", resp)
+	}
+
+	// Agent author filter.
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/search?author_type=agent&author_id="+agentID+"&limit=20", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.SearchChannelMessages(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode agent: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Results) != 1 || resp.Results[0].MessageID != agentMsg.ID || resp.Results[0].Type != "agent" {
+		t.Fatalf("agent author response = %+v", resp)
+	}
+
+	// Incomplete author filter → 400.
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/search?author_type=agent&limit=20", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.SearchChannelMessages(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("incomplete author filter want 400 got %d", rec.Code)
+	}
+}
+
 func TestSearchGlobalScopesAndPermissions(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -5617,6 +5801,44 @@ func TestSearchGlobalScopesAndPermissions(t *testing.T) {
 	testHandler.SearchGlobal(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_search_scope") {
 		t.Fatalf("invalid scope response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// LRM-874: workspace-scoped from:@ via GET /api/search?scope=messages&author_*.
+func TestSearchGlobalMessagesByAuthor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "ws-author-"+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "ws-author-ch-"+uuid.NewString(), testUserID)
+	hiddenChannelID := seedChannelForTest(t, "ws-author-hidden-"+uuid.NewString(), createChannelPlainMember(t))
+
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Bot", "visible agent line", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ws-a1"), 0); err != nil {
+		t.Fatalf("seed visible agent msg: %v", err)
+	}
+	// Agent message in a channel the viewer cannot see must not leak.
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(hiddenChannelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Bot", "hidden agent line", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ws-a2"), 0); err != nil {
+		t.Fatalf("seed hidden agent msg: %v", err)
+	}
+
+	req := newRequest(http.MethodGet, "/api/search?scope=messages&author_type=agent&author_id="+agentID+"&limit=20", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.SearchGlobal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("workspace author search: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp GlobalSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Counts.Messages != 1 || len(resp.Messages) != 1 {
+		t.Fatalf("want 1 visible agent hit, got counts=%+v messages=%+v", resp.Counts, resp.Messages)
+	}
+	if resp.Messages[0].AuthorType != "agent" || resp.Messages[0].ChannelID != channelID {
+		t.Fatalf("unexpected hit: %+v", resp.Messages[0])
 	}
 }
 
@@ -7686,8 +7908,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 // TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents
 // supersedes the old "excludes private agents" contract (task #908: agent
 // usage — including channel invites — is unconditional for every workspace
-// member; only the Windy/Wendy owner-only carve-out remains, and this fixture
-// doesn't use that name).
+// member; the Wendy-name owner-only SQL carve-out was removed in #1613).
 func TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -7727,6 +7948,76 @@ func TestListChannelInviteCandidatesExcludesExistingMembersButIncludesAllAgents(
 	}
 	if len(resp.Candidates) == 0 && fullMemberCount > 1 {
 		t.Fatalf("invite candidates came back empty despite workspace members being available")
+	}
+}
+
+// TestListChannelInviteCandidatesIncludesNonOwnerWendy is the end-to-end
+// regression test for the 2026-07-31 Wendy DM incident's second bug (found
+// after B2 merged): ListChannelInviteCandidates had its own independent
+// hardcoded exclusion for display_name IN ('Wendy', 'Windy', 'Joe'), missed
+// by the agent_access.go cleanup because it was a raw SQL string literal,
+// not a call to the retired predicate functions. Frank: "不要有特殊逻辑" —
+// a non-owner member must be able to invite the workspace's shared Wendy
+// into a channel just like any other agent.
+func TestListChannelInviteCandidatesIncludesNonOwnerWendy(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, _, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename agent to Wendy: %v", err)
+	}
+	channelID := seedChannelForTest(t, "invite-candidates-wendy-"+uuid.NewString(), memberID)
+
+	req := newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/invite-candidates", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelInviteCandidates(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListChannelInviteCandidates: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp ChannelInviteCandidatesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode invite candidates: %v", err)
+	}
+	if !channelInviteCandidatesContain(resp.Candidates, "agent", agentID) {
+		t.Fatalf("non-owner member's shared Wendy %s missing from invite candidates: %+v", agentID, resp.Candidates)
+	}
+}
+
+// TestListChannelInviteCandidatesSearchFindsWendy covers LRM-915 AC: from a
+// channel that does not yet include Wendy, searching q=Wendy must return her
+// for a non-owner plain member (server-side filter path, not only the empty-q
+// full pool that the FE usually caches client-side).
+func TestListChannelInviteCandidatesSearchFindsWendy(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, _, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy', name = 'wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename agent to Wendy: %v", err)
+	}
+	channelID := seedChannelForTest(t, "invite-search-wendy-"+uuid.NewString(), memberID)
+
+	req := newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/invite-candidates?q=Wendy", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelInviteCandidates(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListChannelInviteCandidates q=Wendy: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp ChannelInviteCandidatesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode invite candidates: %v", err)
+	}
+	if !channelInviteCandidatesContain(resp.Candidates, "agent", agentID) {
+		t.Fatalf("q=Wendy did not return non-owner Wendy %s: %+v", agentID, resp.Candidates)
 	}
 }
 

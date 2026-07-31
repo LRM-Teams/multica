@@ -17,6 +17,8 @@ export interface ActorStyledNameProps {
   honor?: HonorSnapshot | null;
   fleet?: AgentFleetRank | null;
   honorSurface?: "inline" | "profile";
+  /** Dense lists can keep earned name styling while omitting space-consuming badges. */
+  showBadges?: boolean;
   className?: string;
   nameClassName?: string;
 }
@@ -27,6 +29,7 @@ export function ActorStyledName({
   honor,
   fleet,
   honorSurface = "inline",
+  showBadges = true,
   className,
   nameClassName = "truncate",
 }: ActorStyledNameProps) {
@@ -43,11 +46,12 @@ export function ActorStyledName({
       <span
         className={cn(nameClassName, nameDisplay?.className)}
         data-honor-glow-tier={nameDisplay?.["data-honor-glow-tier"]}
+        data-honor-surface={nameDisplay?.["data-honor-surface"]}
         style={nameDisplay?.style}
       >
         {displayName}
       </span>
-      {honor?.equipped_badge ? (
+      {showBadges && honor?.equipped_badge ? (
         <Tooltip>
           <TooltipTrigger className="inline-flex shrink-0">
             <HonorBadgeIcon
@@ -59,7 +63,7 @@ export function ActorStyledName({
           <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
         </Tooltip>
       ) : null}
-      {fleet ? (
+      {showBadges && fleet ? (
         <FleetRankBadge
           classId={fleet.class_id}
           classLabel={fleet.class_label}

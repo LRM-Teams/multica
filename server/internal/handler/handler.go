@@ -128,6 +128,7 @@ type Handler struct {
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
 	AgentFleetRankService *service.AgentFleetRankService
+	AgentHonorService     *service.AgentHonorService
 	IssueService          *service.IssueService
 	HonorService          *service.HonorService
 	AutopilotService      *service.AutopilotService
@@ -279,6 +280,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 			},
 		)
 	}
+	agentFleetRankService := service.NewAgentFleetRankService(queries)
 	h := &Handler{
 		Queries:               queries,
 		DB:                    executor,
@@ -287,7 +289,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:             daemonHub,
 		Bus:                   bus,
 		TaskService:           taskSvc,
-		AgentFleetRankService: service.NewAgentFleetRankService(queries),
+		AgentFleetRankService: agentFleetRankService,
+		AgentHonorService:     service.NewAgentHonorService(queries, agentFleetRankService),
 		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		HonorService:          service.NewHonorService(queries),
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
@@ -317,6 +320,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
 	h.wireHonorUnlockEvents()
+	h.wireAgentHonorEvents()
 	return h
 }
 

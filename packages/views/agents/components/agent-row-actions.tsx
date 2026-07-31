@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  AlertCircle,
   Copy,
   MoreHorizontal,
   RotateCcw,
@@ -37,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useT } from "../../i18n";
+import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 interface AgentRowActionsProps {
   agent: Agent;
@@ -74,6 +74,7 @@ export function AgentRowActions({
 
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const runningCount = presence?.runningCount ?? 0;
@@ -95,12 +96,16 @@ export function AgentRowActions({
   };
 
   const handleArchive = async () => {
+    setArchiving(true);
     try {
       await api.archiveAgent(agent.id);
       invalidateAgents();
       toast.success(t(($) => $.row_actions.agent_archived_toast));
+      setConfirmArchive(false);
     } catch (e) {
       showErrorToast(e instanceof Error ? e.message : t(($) => $.row_actions.archive_failed_toast));
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -227,44 +232,14 @@ export function AgentRowActions({
         </AlertDialog>
       )}
 
-      {confirmArchive && (
-        <AlertDialog
-          open
-          onOpenChange={(v) => {
-            if (!v) setConfirmArchive(false);
-          }}
-        >
-          <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-            <AlertDialogHeader>
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-                  <AlertCircle className="h-5 w-5 text-destructive" />
-                </div>
-                <div className="flex-1">
-                  <AlertDialogTitle>
-                    {t(($) => $.row_actions.archive_dialog_title, { name: displayName })}
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {t(($) => $.row_actions.archive_dialog_description)}
-                  </AlertDialogDescription>
-                </div>
-              </div>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t(($) => $.row_actions.archive_dialog_cancel)}</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                onClick={() => {
-                  setConfirmArchive(false);
-                  void handleArchive();
-                }}
-              >
-                {t(($) => $.row_actions.archive_dialog_confirm)}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
+      <ConfirmDeleteAgent
+        open={confirmArchive}
+        displayName={displayName}
+        pending={archiving}
+        onConfirm={() => void handleArchive()}
+        onOpenChange={setConfirmArchive}
+        contentProps={{ onClick: (e) => e.stopPropagation() }}
+      />
     </>
   );
 }

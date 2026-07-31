@@ -431,6 +431,7 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 showHandle={item.presentation.showHandleLabel}
                 honor={item.kind === "user" ? getMemberHonor(item.id) : undefined}
                 fleet={item.kind === "agent" ? getAgentFleetRank(item.id) : undefined}
+                showBadges={false}
                 primaryClassName="truncate text-sm font-medium text-foreground"
               />
               <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -611,6 +612,7 @@ export function DmConversationRow({
                       displayName={title}
                       honor={peerHonor}
                       fleet={peerFleet}
+                      showBadges={false}
                       className={cn("text-sm text-foreground", titleWeightClass)}
                     />
                     {dupHandleLabel && (
@@ -664,47 +666,43 @@ export function DmConversationRow({
             </div>
           </div>
         </button>
-        {/* #692 finding 1: a supervised agent_pair DM is read-only for the owner
-            — pin/unread/mute/close are member-conversation mutations that 403, so
-            the row exposes neither the ⋯ menu nor the right-click menu. */}
-        {!agentPair && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={t(($) => $.dm.menu_aria)}
-                  className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
-                >
-                  <MoreHorizontal className="size-4" />
-                </button>
-              }
-            />
-            <DropdownMenuContent align="end">
-              <DmDropdownMenuItems
-                pinned={pinned}
-                isMuted={isMuted}
-                onMarkUnread={onMarkUnread}
-                onTogglePin={onTogglePin}
-                onToggleMute={onToggleMute}
-                onClose={onClose}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </ContextMenuTrigger>
-      {!agentPair && (
-        <ContextMenuContent>
-          <DmContextMenuItems
-            pinned={pinned}
-            isMuted={isMuted}
-            onMarkUnread={onMarkUnread}
-            onTogglePin={onTogglePin}
-            onToggleMute={onToggleMute}
-            onClose={onClose}
+        {/* LRM-752/LRM-722: pin/unread/mute/close are viewer-side list
+            preferences, not message mutations — agent_pair rows get the same
+            ⋯ menu and right-click menu as regular DMs (BE 放行后不再 403). */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label={t(($) => $.dm.menu_aria)}
+                className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+              >
+                <MoreHorizontal className="size-4" />
+              </button>
+            }
           />
-        </ContextMenuContent>
-      )}
+          <DropdownMenuContent align="end">
+            <DmDropdownMenuItems
+              pinned={pinned}
+              isMuted={isMuted}
+              onMarkUnread={onMarkUnread}
+              onTogglePin={onTogglePin}
+              onToggleMute={onToggleMute}
+              onClose={onClose}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <DmContextMenuItems
+          pinned={pinned}
+          isMuted={isMuted}
+          onMarkUnread={onMarkUnread}
+          onTogglePin={onTogglePin}
+          onToggleMute={onToggleMute}
+          onClose={onClose}
+        />
+      </ContextMenuContent>
     </ContextMenu>
   );
 }

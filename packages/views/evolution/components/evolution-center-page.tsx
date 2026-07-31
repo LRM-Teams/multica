@@ -55,7 +55,6 @@ import type {
   MemoryCurationStageStatus,
   MemoryCuratorMode,
   MemoryCuratorProfile,
-  MemoryCuratorTargetScope,
   WorkspaceMemoryCurationStatus,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -188,7 +187,7 @@ const COPY = {
   archived: "archived",
   merged: "merged",
   curatorProfile: "Curator profile",
-  curatorProfileHint: "Admins choose the runtime and curator agent. Self-review and team curation stay off until explicitly enabled.",
+  curatorProfileHint: "Agent self-review is system scheduled for agents with prior-day material. Admins only choose the workspace curator runtime and agent for shared governance.",
   curatorAgent: "Curator agent",
   targetAgents: "Target agents",
   allMyAgents: "All my agents",
@@ -204,16 +203,19 @@ const COPY = {
   catchUp: "Catch up missed schedules",
   saveProfile: "Save profile",
   profileSaved: "Curator profile saved",
-  configureProfile: "Select a runtime and curator agent first, then enable self-review or team curation.",
+  configureProfile: "Select a runtime and curator agent first, then enable nightly team curation.",
   manualRun: "Manual run",
-  manualRunHint: "Queue agent self-review or team curation for active online agents on the configured runtime.",
+  manualRunHint: "Queue workspace team curation for active agents that already produced self-review material.",
   backfillRun: "Backfill missed days",
-  backfillRunHint: "Queue self-review and team curation for active days in the last month that never succeeded. Idle days are skipped.",
+  backfillRunHint: "Queue missed team curation for active days in the last month. Idle days and agents with no reviewable material are skipped.",
   backfillSince: "From",
   backfillUntil: "To",
   queueBackfill: "Queue backfill",
   backfillQueued: "Backfill queued",
   allStages: "Self-review + team curation",
+  automaticSelfReview: "Automatic self-review",
+  automaticSelfReviewHint: "Every day the system sends self-review work only to agents with prior-day conversations, tasks, daily/memory writes, candidates, memory sync changes, or skill suggestions. Idle agents are skipped so the workspace does not spend tokens on empty reviews.",
+  curatorConfigTitle: "Workspace curator",
   stage: "Stage",
   dryRun: "Dry run",
   queueRun: "Queue run",
@@ -972,14 +974,10 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
 }
 
 type CuratorProfileDraft = {
-  enabled: boolean;
-  selfReviewEnabled: boolean;
   teamCurationEnabled: boolean;
   mode: MemoryCuratorMode;
   runtimeId: string;
   curatorAgentId: string;
-  targetScope: MemoryCuratorTargetScope;
-  targetAgentIds: string[];
   timezone: string;
   scheduleHour: number;
   modelOverride: string;
@@ -989,16 +987,12 @@ type CuratorProfileDraft = {
 
 function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorProfileDraft {
   return {
-    enabled: profile?.enabled === true,
-    selfReviewEnabled: profile?.self_review_enabled === true,
     teamCurationEnabled: profile?.team_curation_enabled === true,
     mode: profile?.mode ?? "review",
     runtimeId: profile?.runtime_id ?? "",
     curatorAgentId: profile?.curator_agent_id ?? "",
-    targetScope: profile?.target_scope ?? "owned_all",
-    targetAgentIds: profile?.target_agent_ids ?? [],
     timezone: profile?.timezone || "Asia/Shanghai",
-    scheduleHour: profile?.schedule_hour ?? 1,
+    scheduleHour: profile?.schedule_hour ?? 2,
     modelOverride: profile?.model_override ?? "",
     catchUpEnabled: profile?.catch_up_enabled ?? true,
     confidenceThreshold: profile?.confidence_threshold ?? 0.8,
@@ -1021,7 +1015,6 @@ function CuratorProfileCard({
   const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
-  const [runStage, setRunStage] = useState<"agent_self_review" | "team_curation" | "all">("agent_self_review");
   const [dryRun, setDryRun] = useState(false);
   const [backfillRange, setBackfillRange] = useState(() => ({
     since: defaultBackfillSince(),
@@ -1034,30 +1027,19 @@ function CuratorProfileCard({
   const ownedAgents = agents.filter((agent) => agent.owner_id === userId);
   const curatorAgents = ownedAgents.filter((agent) => agent.runtime_id === draft.runtimeId);
   const configured = !!profile?.id && !!profile.runtime_id && !!profile.curator_agent_id;
-  const draftTargetsValid = draft.targetScope !== "selected" || draft.targetAgentIds.length > 0;
-  const configuredTargetsValid = profile?.target_scope !== "selected" || (profile.target_agent_ids?.length ?? 0) > 0;
-  const selfReviewRunnable = profile?.self_review_enabled === true;
-  const teamCurationRunnable = profile?.team_curation_enabled === true;
-  const effectiveRunStage = runStage === "all" && !(selfReviewRunnable && teamCurationRunnable)
-    ? selfReviewRunnable ? "agent_self_review" : teamCurationRunnable ? "team_curation" : runStage
-    : runStage === "team_curation" && !teamCurationRunnable && selfReviewRunnable
-      ? "agent_self_review"
-      : runStage === "agent_self_review" && !selfReviewRunnable && teamCurationRunnable
-        ? "team_curation"
-        : runStage;
-  const runStageEnabled = effectiveRunStage === "agent_self_review" ? selfReviewRunnable : effectiveRunStage === "team_curation" ? teamCurationRunnable : selfReviewRunnable && teamCurationRunnable;
+  const teamCurationRunnable = configured && profile?.team_curation_enabled === true;
 
   const save = useMutation({
     mutationFn: () => api.updateMemoryCuratorProfile(wsId, {
       enabled: draft.teamCurationEnabled,
-      self_review_enabled: draft.selfReviewEnabled,
+      self_review_enabled: false,
       team_curation_enabled: draft.teamCurationEnabled,
       mode: draft.mode,
       runtime_id: draft.runtimeId,
       curator_agent_id: draft.curatorAgentId,
-      target_scope: draft.targetScope,
+      target_scope: "owned_all",
       model_override: draft.modelOverride,
-      target_agent_ids: draft.targetScope === "selected" ? draft.targetAgentIds : [],
+      target_agent_ids: [],
       timezone: draft.timezone,
       schedule_hour: draft.scheduleHour,
       catch_up_enabled: draft.catchUpEnabled,
@@ -1074,9 +1056,8 @@ function CuratorProfileCard({
   });
   const run = useMutation({
     mutationFn: () => api.startMemoryCurationRun(wsId, {
-      all_agents: profile?.target_scope !== "selected",
-      agent_ids: profile?.target_scope === "selected" ? profile.target_agent_ids : undefined,
-      stage: effectiveRunStage,
+      all_agents: true,
+      stage: "team_curation",
       dry_run: dryRun,
     }),
     onSuccess: async () => {
@@ -1104,15 +1085,6 @@ function CuratorProfileCard({
     onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("configureProfile")),
   });
 
-  const toggleTarget = (agentId: string, checked: boolean) => {
-    setDraft((current) => ({
-      ...current,
-      targetAgentIds: checked
-        ? [...new Set([...current.targetAgentIds, agentId])]
-        : current.targetAgentIds.filter((id) => id !== agentId),
-    }));
-  };
-
   return (
     <Card className="overflow-hidden border-brand/20 bg-background/90 backdrop-blur">
       <div className="h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-amber-400" />
@@ -1124,12 +1096,22 @@ function CuratorProfileCard({
           </div>
           <div className="flex items-center gap-2">
             <Label htmlFor="curator-enabled" className="text-xs">{copy("automatic")}</Label>
-            <Switch id="curator-enabled" checked={draft.teamCurationEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, teamCurationEnabled: checked, enabled: checked }))} />
+            <Switch id="curator-enabled" checked={draft.teamCurationEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, teamCurationEnabled: checked }))} />
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        <div className="rounded-lg border bg-muted/20 p-4">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+            <div>
+              <div className="text-sm font-medium">{copy("automaticSelfReview")}</div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{copy("automaticSelfReviewHint")}</p>
+            </div>
+          </div>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2 text-sm font-medium">{copy("curatorConfigTitle")}</div>
           <Field label={copy("runtime")}>
             <Select value={draft.runtimeId} onValueChange={(value) => setDraft((current) => ({ ...current, runtimeId: value ?? "", curatorAgentId: "" }))}>
               <SelectTrigger className="w-full"><SelectValue placeholder={copy("selectRuntime")} /></SelectTrigger>
@@ -1150,39 +1132,22 @@ function CuratorProfileCard({
               </SelectContent>
             </Select>
           </Field>
-          <Field label={copy("targetAgents")}>
-            <Select value={draft.targetScope} onValueChange={(value) => value && setDraft((current) => ({ ...current, targetScope: value as MemoryCuratorTargetScope }))}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent><SelectItem value="owned_all">{copy("allMyAgents")}</SelectItem><SelectItem value="selected">{copy("selectedAgents")}</SelectItem></SelectContent>
-            </Select>
-          </Field>
           <Field label={copy("timezone")}><Input value={draft.timezone} onChange={(event) => setDraft((current) => ({ ...current, timezone: event.target.value }))} /></Field>
           <Field label={copy("schedule")}><Input type="number" min={0} max={23} value={draft.scheduleHour} onChange={(event) => setDraft((current) => ({ ...current, scheduleHour: Number(event.target.value) }))} /></Field>
           <Field label={copy("modelOverride")}><Input value={draft.modelOverride} placeholder={copy("runtimeDefault")} onChange={(event) => setDraft((current) => ({ ...current, modelOverride: event.target.value }))} /></Field>
           <Field label={copy("confidenceThresholdLabel")}><Input type="number" min={0} max={1} step={0.05} value={draft.confidenceThreshold} onChange={(event) => setDraft((current) => ({ ...current, confidenceThreshold: Number(event.target.value) }))} /></Field>
         </div>
-        {draft.targetScope === "selected" && (
-          <div className="grid gap-2 rounded-2xl border bg-muted/20 p-3 sm:grid-cols-2">
-            {ownedAgents.map((agent) => (
-              <label key={agent.id} className="flex items-center gap-2 text-sm">
-                <Checkbox checked={draft.targetAgentIds.includes(agent.id)} onCheckedChange={(checked) => toggleTarget(agent.id, checked === true)} />
-                <span className="truncate">{agent.display_name || agent.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
         <div className="flex flex-wrap items-center gap-4">
-          <Label htmlFor="self-review-enabled" className="flex items-center gap-2 text-xs"><Checkbox id="self-review-enabled" checked={draft.selfReviewEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, selfReviewEnabled: checked === true }))} />{copy("selfReviewLabel")}</Label>
           <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{copy("catchUp")}</Label>
-          <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{copy("saveProfile")}</Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId} className="gap-2"><Save className="h-4 w-4" />{copy("saveProfile")}</Button>
         </div>
         <div className="rounded-2xl border bg-muted/20 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div><div className="text-sm font-medium">{copy("manualRun")}</div><p className="mt-1 text-xs text-muted-foreground">{copy("manualRunHint")}</p></div>
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={effectiveRunStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review" disabled={!selfReviewRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.selfReview)}</SelectItem><SelectItem value="team_curation" disabled={!teamCurationRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.teamCuration)}</SelectItem><SelectItem value="all" disabled={!selfReviewRunnable || !teamCurationRunnable}>{copy("allStages")}</SelectItem></SelectContent></Select>
+              <Badge variant="secondary">{copy(MEMORY_CURATION_STAGE_LABELS.teamCuration)}</Badge>
               <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{copy("dryRun")}</label>
-              <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || !runStageEnabled || run.isPending || save.isPending || backfill.isPending} title={runStageEnabled ? undefined : copy("saveProfileForStage")} className="gap-2"><Play className="h-4 w-4" />{copy("queueRun")}</Button>
+              <Button variant="outline" onClick={() => run.mutate()} disabled={!teamCurationRunnable || run.isPending || save.isPending || backfill.isPending} title={teamCurationRunnable ? undefined : copy("saveProfileForStage")} className="gap-2"><Play className="h-4 w-4" />{copy("queueRun")}</Button>
             </div>
           </div>
         </div>
@@ -1192,7 +1157,7 @@ function CuratorProfileCard({
             <div className="flex flex-wrap items-end gap-2">
               <Field label={copy("backfillSince")}><Input type="date" value={backfillRange.since} onChange={(event) => setBackfillRange((current) => ({ ...current, since: event.target.value }))} /></Field>
               <Field label={copy("backfillUntil")}><Input type="date" value={backfillRange.until} onChange={(event) => setBackfillRange((current) => ({ ...current, until: event.target.value }))} /></Field>
-              <Button variant="outline" onClick={() => backfill.mutate()} disabled={!configured || !configuredTargetsValid || (!selfReviewRunnable && !teamCurationRunnable) || backfill.isPending || run.isPending || save.isPending || !backfillRange.since || !backfillRange.until} className="gap-2"><RefreshCw className={cn("h-4 w-4", backfill.isPending && "animate-spin")} />{copy("queueBackfill")}</Button>
+              <Button variant="outline" onClick={() => backfill.mutate()} disabled={!teamCurationRunnable || backfill.isPending || run.isPending || save.isPending || !backfillRange.since || !backfillRange.until} className="gap-2"><RefreshCw className={cn("h-4 w-4", backfill.isPending && "animate-spin")} />{copy("queueBackfill")}</Button>
             </div>
           </div>
         </div>

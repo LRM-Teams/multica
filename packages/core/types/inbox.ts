@@ -19,9 +19,7 @@ export type InboxItemType =
   | "agent_completed"
   | "reaction_added"
   | "quick_create_done"
-  | "quick_create_failed"
-  // #692 owner-private A2A DM gate alert (agent↔agent DM paused/resumed).
-  | "agent_dm_paused";
+  | "quick_create_failed";
 
 export interface InboxItem {
   id: string;

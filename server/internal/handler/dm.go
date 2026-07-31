@@ -33,6 +33,11 @@ type DMPeer struct {
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
 	AvatarURL *string `json:"avatar_url,omitempty"`
+	// Archived is true when the peer agent has been archived. The DM stays
+	// visible and readable (history is never hidden by archiving the peer),
+	// but the client should show a read-only/"archived" state and block new
+	// sends rather than 404 the whole conversation.
+	Archived bool `json:"archived,omitempty"`
 }
 
 // DMItem is one row in the unified DM list and the create-or-find response.
@@ -44,7 +49,6 @@ type DMItem struct {
 	Peer           DMPeer                      `json:"peer"`
 	Participants   []DMPeer                    `json:"participants,omitempty"`
 	Supervised     bool                        `json:"supervised,omitempty"`
-	AgentDMControl *AgentDMControlResponse     `json:"a2a_control,omitempty"`
 	LastMessage    *ChannelLastMessage         `json:"last_message,omitempty"`
 	Unread         int                         `json:"unread"`
 	RealUnread     int                         `json:"real_unread"`
@@ -289,7 +293,38 @@ func (h *Handler) resolveDMChannelPeer(w http.ResponseWriter, ctx context.Contex
 	return peer, true
 }
 
-func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Request, workspaceID, userID string, ch ChannelResponse) bool {
+// resolveDMChannelPeerForPreference resolves the dm_peer_state key for list
+// preference writes (pin/mute/unread/close). Channel members keep the existing
+// 1:1 peer key. Supervised agent_pair owners are not channel members; their
+// viewer prefs are keyed by the channel itself so they never collide with a
+// personal 1:1 DM against one of the pair participants.
+func (h *Handler) resolveDMChannelPeerForPreference(w http.ResponseWriter, ctx context.Context, workspaceID, userID string, channelID pgtype.UUID) (dmPeerRef, bool) {
+	ch, found := h.getChannel(ctx, workspaceID, channelID)
+	if !found || ch.Kind != "dm" {
+		writeError(w, http.StatusNotFound, "direct message not found")
+		return dmPeerRef{}, false
+	}
+	userUUID := parseUUID(userID)
+	if h.channelUserIsMember(ctx, workspaceID, channelID, userUUID) {
+		peer, ok := h.resolveDMChannelPeerOnly(ctx, workspaceID, userID, channelID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "direct message peer not found")
+			return dmPeerRef{}, false
+		}
+		return peer, true
+	}
+	if h.channelUserIsAgentDMSupervisor(ctx, workspaceID, channelID, userUUID) {
+		return dmPeerRef{Type: "channel", ID: channelID}, true
+	}
+	writeError(w, http.StatusForbidden, "not a direct message member")
+	return dmPeerRef{}, false
+}
+
+// requireDMChannelAgentAccess gates access to a DM channel whose peer is an
+// agent. An archived peer never 404s the conversation — history stays
+// readable — but write operations (send/reply/choose-option) must pass
+// requireWrite=true so an archived peer still blocks new activity.
+func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Request, workspaceID, userID string, ch ChannelResponse, requireWrite bool) bool {
 	if ch.Kind != "dm" {
 		return true
 	}
@@ -304,8 +339,12 @@ func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Req
 		ID:          peer.ID,
 		WorkspaceID: parseUUID(workspaceID),
 	})
-	if err != nil || agent.ArchivedAt.Valid {
+	if err != nil {
 		writeError(w, http.StatusNotFound, "direct message peer not found")
+		return false
+	}
+	if agent.ArchivedAt.Valid && requireWrite {
+		writeError(w, http.StatusForbidden, "direct message peer has been archived and can no longer receive messages")
 		return false
 	}
 	return true
@@ -473,6 +512,10 @@ func (h *Handler) clearDMPeerManualUnreadForChannel(ctx context.Context, workspa
 	peer, ok := h.resolveDMChannelPeerOnly(ctx, workspaceID, userID, channelID)
 	if ok {
 		h.clearDMPeerManualUnread(ctx, workspaceID, userID, peer)
+		return
+	}
+	if h.channelUserIsAgentDMSupervisor(ctx, workspaceID, channelID, parseUUID(userID)) {
+		h.clearDMPeerManualUnread(ctx, workspaceID, userID, dmPeerRef{Type: "channel", ID: channelID})
 	}
 }
 
@@ -521,6 +564,16 @@ func (h *Handler) clearDMHiddenForChannelMembers(ctx context.Context, workspaceI
 		  AND cm.closed_at IS NOT NULL`, channelID, parseUUID(workspaceID)); err != nil {
 		slog.Warn("dm: clear channel hidden state failed", "workspace", workspaceID, "channel", uuidToString(channelID), "error", err)
 	}
+	// Supervised agent_pair owners key prefs by channel, not a peer agent.
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE dm_peer_state
+		SET hidden_at = NULL, updated_at = now()
+		WHERE workspace_id = $2
+		  AND peer_type = 'channel'
+		  AND peer_id = $1
+		  AND hidden_at IS NOT NULL`, channelID, parseUUID(workspaceID)); err != nil {
+		slog.Warn("dm: clear supervised channel hidden state failed", "workspace", workspaceID, "channel", uuidToString(channelID), "error", err)
+	}
 }
 
 func (h *Handler) mutateDMChannelPeer(w http.ResponseWriter, r *http.Request, action func(context.Context, string, string, dmPeerRef) error) {
@@ -533,7 +586,7 @@ func (h *Handler) mutateDMChannelPeer(w http.ResponseWriter, r *http.Request, ac
 	if !ok {
 		return
 	}
-	peer, ok := h.resolveDMChannelPeer(w, r.Context(), workspaceID, userID, channelID)
+	peer, ok := h.resolveDMChannelPeerForPreference(w, r.Context(), workspaceID, userID, channelID)
 	if !ok {
 		return
 	}
@@ -712,6 +765,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       peer.member_type, peer.member_id,
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
+		       a.archived_at AS peer_archived_at,
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0) AS real_unread,
 		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
@@ -776,14 +830,14 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 	out := []DMItem{}
 	for rows.Next() {
 		var id, peerID pgtype.UUID
-		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt, peerArchivedAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
 		var lastParts, runtimeStatsRaw []byte
 		var unread int
 		var hasMention bool
 		var lastReadSeq *int64
-		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
+		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar, &peerArchivedAt,
 			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq, &runtimeStatsRaw); err != nil {
 			continue
 		}
@@ -796,7 +850,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			ID:             uuidToString(id),
 			Source:         dmSourceChannel,
 			Mode:           "direct",
-			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar)},
+			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar), Archived: peerArchivedAt.Valid},
 			Unread:         unread,
 			RealUnread:     unread,
 			ManuallyUnread: manualUnreadAt.Valid,
@@ -827,11 +881,14 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 // listSupervisedAgentDMChannels returns agent-to-agent DMs for which the caller
 // owns at least one participant. The owner deliberately is not a channel
 // member: this is a read-only supervision projection, not an invitation to
-// speak as a third participant.
+// speak as a third participant. Viewer list prefs (pin/mute/unread/close) are
+// keyed by channel in dm_peer_state (peer_type='channel').
 func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID, userID string) []DMItem {
+	uid := parseUUID(userID)
 	rows, err := h.DB.Query(ctx, `
 		SELECT ch.id, ch.updated_at,
-		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at
+		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
+		       state.pinned_at, state.manual_unread_at, state.muted_at
 		FROM channel ch
 		LEFT JOIN LATERAL (
 			SELECT author_type, author_name, content, parts, created_at
@@ -840,8 +897,14 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 			ORDER BY message.seq DESC
 			LIMIT 1
 		) lm ON true
+		LEFT JOIN dm_peer_state state
+		  ON state.workspace_id = ch.workspace_id
+		 AND state.user_id = $2
+		 AND state.peer_type = 'channel'
+		 AND state.peer_id = ch.id
 		WHERE ch.workspace_id = $1
 		  AND ch.kind = 'dm'
+		  AND state.hidden_at IS NULL
 		  AND (
 		    SELECT count(*)
 		    FROM channel_member member
@@ -868,7 +931,7 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 		      AND owned.owner_id = $2
 		  )
 		ORDER BY ch.updated_at DESC`,
-		parseUUID(workspaceID), parseUUID(userID))
+		parseUUID(workspaceID), uid)
 	if err != nil {
 		slog.Warn("list supervised agent dm channels failed", "workspace", workspaceID, "user", userID, "error", err)
 		return nil
@@ -878,23 +941,18 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 	out := []DMItem{}
 	for rows.Next() {
 		var channelID pgtype.UUID
-		var updatedAt, lastAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		var lastType, lastName, lastContent pgtype.Text
 		var lastParts []byte
 		if err := rows.Scan(
 			&channelID, &updatedAt,
 			&lastType, &lastName, &lastContent, &lastParts, &lastAt,
+			&pinnedAt, &manualUnreadAt, &mutedAt,
 		); err != nil {
 			continue
 		}
 		participants := h.agentDMParticipants(ctx, parseUUID(workspaceID), channelID)
 		if len(participants) != 2 {
-			continue
-		}
-		control, ok := h.agentDMControlForOwner(
-			ctx, parseUUID(workspaceID), channelID, parseUUID(userID),
-		)
-		if !ok {
 			continue
 		}
 		item := DMItem{
@@ -904,8 +962,14 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 			Peer:           participants[0],
 			Participants:   participants,
 			Supervised:     true,
-			AgentDMControl: control,
+			ManuallyUnread: manualUnreadAt.Valid,
+			PinnedAt:       timestampToPtr(pinnedAt),
+			MutedAt:        timestampToPtr(mutedAt),
+			Muted:          mutedAt.Valid,
 			UpdatedAt:      timestampToString(updatedAt),
+		}
+		if item.ManuallyUnread && item.Unread == 0 {
+			item.Unread = 1
 		}
 		if lastContent.Valid {
 			item.LastMessage = channelLastMessage(

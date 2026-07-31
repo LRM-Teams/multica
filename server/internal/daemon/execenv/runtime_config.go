@@ -196,13 +196,6 @@ func CanonicalTurnLedgerRoot(agentRootDir string) string {
 	return filepath.Join(strings.TrimSpace(agentRootDir), "daemon", "canonical_turn_ledger")
 }
 
-// MaterializeCanonicalTurnContext is the create-time entry (option A / Barry B).
-// See MaterializeCanonicalTurnContextB for the full contract.
-func MaterializeCanonicalTurnContext(workDir, ledgerRoot, provider string, ctx TaskContextForEnv) (string, error) {
-	brief, _, err := MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider, ctx)
-	return brief, err
-}
-
 // validatePathUnderWorkDirNoSymlink requires target under workDir with no
 // symlink components. Missing leaf is OK if ancestors are clean.
 func validatePathUnderWorkDirNoSymlink(workDir, target string) error {

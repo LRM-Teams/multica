@@ -37,9 +37,9 @@
     "honor_completion": "{{unlocked}} / {{total}} 배지",
     "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
     "honor_showcase": "쇼케이스",
-    "honor_recent": "최근 해금",
+    "honor_recent": "최근 획득",
     "honor_compare": "나와 비교",
-    "honor_shared": "공유 배지",
+    "honor_shared": "공통 배지",
     "honor_you_only": "나만",
     "honor_them_only": "상대만"
   },

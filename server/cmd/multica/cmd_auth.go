@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -194,7 +196,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		}
 		return runAuthLoginToken(cmd, tokenFlag)
 	}
-	return runAuthLoginBrowser(cmd)
+	return runAuthLoginDevice(cmd)
 }
 
 // resolveCallbackBinding picks the host that goes into the `cli_callback`
@@ -416,6 +418,139 @@ func runAuthLoginBrowser(cmd *cobra.Command) error {
 
 	fmt.Fprintf(os.Stderr, "Authenticated as %s (%s)\nToken saved to config.\n", me.Name, me.Email)
 	return nil
+}
+
+// deviceCodeResponse mirrors the server's RFC 8628 §3.2 response shape
+// (server/internal/handler/device_auth.go's deviceCodeResponse) — field
+// names are the contract between the two, kept in sync manually since the
+// CLI has no generated client.
+type deviceCodeResponse struct {
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"`
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+}
+
+type issueDeviceTokenResponse struct {
+	Token         string `json:"token"`
+	ExpiresInDays int    `json:"expires_in_days"`
+}
+
+// runAuthLoginDevice implements the RFC 8628 Device Authorization Grant —
+// the default `multica login` path (GitHub CLI / gcloud / az use the same
+// shape). Unlike runAuthLoginBrowser, this does not require the browser and
+// the CLI process to be on the same machine: the CLI only needs outbound
+// HTTPS to the server, and confirmation happens wherever the user opens the
+// printed link.
+func runAuthLoginDevice(cmd *cobra.Command) error {
+	serverURL := resolveServerURL(cmd)
+	client := cli.NewAPIClient(serverURL, "", "")
+
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown"
+	}
+
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var code deviceCodeResponse
+	if err := client.PostJSON(ctx, "/api/device/code", map[string]string{"client_hint": hostname}, &code); err != nil {
+		return cli.WithUserMessage("Could not start sign-in — the server did not accept the device-code request.", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Confirm this sign-in in your browser:\n\n  %s\n\n", code.VerificationURIComplete)
+	fmt.Fprintf(os.Stderr, "(Code: %s — if the link doesn't open, visit %s and enter it manually.)\n", code.UserCode, code.VerificationURI)
+	if err := openBrowser(code.VerificationURIComplete); err != nil {
+		fmt.Fprintln(os.Stderr, "Could not open browser automatically.")
+	}
+	fmt.Fprintln(os.Stderr, "\nWaiting for confirmation...")
+
+	rawToken, expiresInDays, err := pollDeviceToken(cmd, client, code)
+	if err != nil {
+		return err
+	}
+
+	// Verify the PAT works, same tail as runAuthLoginBrowser.
+	patClient := cli.NewAPIClient(serverURL, "", rawToken)
+	verifyCtx, verifyCancel := cli.APIContext(context.Background())
+	defer verifyCancel()
+	var me struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	if err := patClient.GetJSON(verifyCtx, "/api/me", &me); err != nil {
+		return cli.WithUserMessage("Sign-in did not complete: the server did not accept the new credential. Run `multica login` again.", err)
+	}
+
+	profile := resolveProfile(cmd)
+	cfg, _ := cli.LoadCLIConfigForProfile(profile)
+	cfg.WorkspaceID = ""
+	cfg.Token = rawToken
+	cfg.ServerURL = serverURL
+	cfg.AppURL = resolveAppURL(cmd)
+	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	_ = expiresInDays
+	fmt.Fprintf(os.Stderr, "Authenticated as %s (%s)\nToken saved to config.\n", me.Name, me.Email)
+	return nil
+}
+
+// pollDeviceToken polls /api/device/token on the server-advertised interval
+// (backing off on slow_down) until the flow resolves or the device code's
+// own expiry elapses. Mirrors waitForWorkspaceCreation's poll-with-deadline
+// shape (cmd_login.go).
+func pollDeviceToken(cmd *cobra.Command, client *cli.APIClient, code deviceCodeResponse) (token string, expiresInDays int, err error) {
+	interval := time.Duration(code.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	deadline := time.Now().Add(time.Duration(code.ExpiresIn) * time.Second)
+
+	for {
+		if time.Now().After(deadline) {
+			return "", 0, fmt.Errorf("timed out waiting for confirmation — run `multica login` again")
+		}
+		time.Sleep(interval)
+
+		pollCtx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(10*time.Second))
+		var resp issueDeviceTokenResponse
+		pollErr := client.PostJSON(pollCtx, "/api/device/token", map[string]string{"device_code": code.DeviceCode}, &resp)
+		cancel()
+
+		if pollErr == nil {
+			return resp.Token, resp.ExpiresInDays, nil
+		}
+
+		var httpErr *cli.HTTPError
+		if !errors.As(pollErr, &httpErr) {
+			continue // transient network error, keep polling
+		}
+		switch deviceTokenErrorCode(httpErr.Body) {
+		case "authorization_pending":
+			continue
+		case "slow_down":
+			interval += 5 * time.Second
+			continue
+		case "access_denied":
+			return "", 0, fmt.Errorf("sign-in was denied")
+		case "expired_token":
+			return "", 0, fmt.Errorf("the device code expired — run `multica login` again")
+		default:
+			continue // unrecognized 4xx body, keep polling until deadline
+		}
+	}
+}
+
+func deviceTokenErrorCode(body string) string {
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal([]byte(body), &parsed)
+	return parsed.Error
 }
 
 func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {

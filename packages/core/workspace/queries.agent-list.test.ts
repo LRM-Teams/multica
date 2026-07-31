@@ -35,19 +35,4 @@ describe("agentListOptions (LRM-410)", () => {
       include_archived: true,
     });
   });
-
-  it("keeps channel-scoped discovery on a separate key without include_archived by default", async () => {
-    const opts = agentListOptions("ws-1", { channelId: "ch-1" });
-    expect(opts.queryKey).toEqual([
-      ...workspaceKeys.agents("ws-1"),
-      "channel",
-      "ch-1",
-    ]);
-    await opts.queryFn!({} as never);
-    expect(listAgents).toHaveBeenCalledWith({
-      workspace_id: "ws-1",
-      channel_id: "ch-1",
-    });
-    expect(listAgents.mock.calls[0]?.[0]).not.toHaveProperty("include_archived");
-  });
 });

@@ -1045,13 +1045,10 @@ export class ApiClient {
   async listAgents(params?: {
     workspace_id?: string;
     include_archived?: boolean;
-    /** When set, channel-visibility agents are filtered to this home channel (LRM-370). */
-    channel_id?: string;
   }): Promise<Agent[]> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.include_archived) search.set("include_archived", "true");
-    if (params?.channel_id) search.set("channel_id", params.channel_id);
     return this.fetch(`/api/agents?${search}`);
   }
 

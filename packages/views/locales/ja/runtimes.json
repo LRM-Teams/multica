@@ -82,20 +82,6 @@
     "rename_failed": "名前を保存できませんでした — 元に戻しました",
     "no_runtimes_hint": "このマシンにはまだランタイムがありません。",
     "back_to_list": "マシン一覧に戻る",
-    "metrics": {
-      "runtimes": "ランタイム",
-      "runtimes_hint_other": "オンライン {{count}} 個",
-      "health": "状態",
-      "health_clear": "問題なし",
-      "health_issues_other": "問題 {{count}} 件",
-      "workload": "作業量",
-      "workload_value_idle": "アイドル",
-      "workload_idle": "すべてアイドル",
-      "workload_hint": "実行中 {{running}} 件 · キュー待ち {{queued}} 件",
-      "cli": "CLI",
-      "cloud_worker": "クラウドワーカー",
-      "local_daemon": "ローカルデーモン"
-    },
     "delete_computer": {
       "button": "コンピューターを削除",
       "toast_deleted": "「{{name}}」を完全に削除しました。",

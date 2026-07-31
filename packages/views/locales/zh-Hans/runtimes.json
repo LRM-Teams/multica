@@ -82,20 +82,6 @@
     "rename_failed": "保存失败，已还原",
     "no_runtimes_hint": "这台机器上还没有运行时。",
     "back_to_list": "返回机器列表",
-    "metrics": {
-      "runtimes": "运行时",
-      "runtimes_hint_other": "{{count}} 个在线",
-      "health": "健康度",
-      "health_clear": "无异常",
-      "health_issues_other": "{{count}} 个异常",
-      "workload": "工作负载",
-      "workload_value_idle": "空闲",
-      "workload_idle": "全部空闲",
-      "workload_hint": "{{running}} 个运行中 · {{queued}} 个排队中",
-      "cli": "CLI",
-      "cloud_worker": "云端 worker",
-      "local_daemon": "本地守护进程"
-    },
     "delete_computer": {
       "button": "永久删除此电脑",
       "toast_deleted": "已永久删除「{{name}}」。",

@@ -301,6 +301,8 @@
     "version_unknown": "不明",
     "managed_by_desktop": "デスクトップで管理",
     "managed_by_desktop_title": "CLI バイナリは Multica Desktop で管理されています。CLI をアップグレードするには Desktop を更新してください。",
+    "managed_by_sandbox": "サンドボックスで管理",
+    "managed_by_sandbox_title": "このマシンはサンドボックス環境によって管理されているため、ここからは自己更新できません。",
     "latest": "最新",
     "available": "利用可能",
     "action": "更新",

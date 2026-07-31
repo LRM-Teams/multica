@@ -62,6 +62,7 @@ vi.mock("@multica/core/auth", () => ({
 
 vi.mock("@multica/core/runtimes", () => ({
   deriveRuntimeHealth: () => "online",
+  isSandboxRuntime: () => false,
   runtimeCurrentVersion: () => "0.3.0",
   runtimeLaunchedBy: () => null,
   runtimeTargetVersion: () => null,

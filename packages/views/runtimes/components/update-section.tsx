@@ -74,6 +74,21 @@ interface UpdateSectionProps {
    */
   launchedBy?: string | null;
   canUpdate?: boolean;
+  /**
+   * True for a daemon-enabled env-dispatch sandbox (isSandboxRuntime,
+   * `metadata.sandbox_instance_id` set). Task #8 (2026-07-31): the sidebar
+   * update-attention badge/popover already excludes sandboxes via the
+   * canonical `runtimeCanStartSelfUpdate` gate (#1643) — this component's
+   * own start/retry eligibility was a separate, hand-rolled boolean that
+   * never checked sandbox status, so the same runtime could show "disabled"
+   * in the sidebar and a live, clickable button here. Adding just this one
+   * missing condition (not swapping the whole gate to
+   * `runtimeCanStartSelfUpdate`, which requires `runtime_health ===
+   * "update_available"` and would incorrectly block retrying after a
+   * failure, when health has already flipped to "failed") closes that
+   * specific gap without touching the retry-after-failure path.
+   */
+  isSandbox?: boolean;
 }
 
 export function UpdateSection({
@@ -86,6 +101,7 @@ export function UpdateSection({
   isOnline,
   launchedBy,
   canUpdate = true,
+  isSandbox = false,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const qc = useQueryClient();
@@ -216,12 +232,14 @@ export function UpdateSection({
     isOnline &&
     canUpdate &&
     !isManaged &&
+    !isSandbox &&
     !isActive;
   const canRetry =
     !!targetVersion &&
     isOnline &&
     canUpdate &&
     !isManaged &&
+    !isSandbox &&
     !isActive &&
     (derivedStatus === "failed" || derivedStatus === "timeout");
 
@@ -239,6 +257,16 @@ export function UpdateSection({
             title={t(($) => $.update.managed_by_desktop_title)}
           >
             {t(($) => $.update.managed_by_desktop)}
+          </span>
+        ) : isSandbox ? (
+          // Task #8 (2026-07-31, Parker): a disabled state with a reason,
+          // never a silently-missing button — the user shouldn't have to
+          // guess whether this is broken or intentional.
+          <span
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+            title={t(($) => $.update.managed_by_sandbox_title)}
+          >
+            {t(($) => $.update.managed_by_sandbox)}
           </span>
         ) : (
           <>

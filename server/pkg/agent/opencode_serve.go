@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -355,6 +356,13 @@ type opencodeServeClient struct {
 type opencodeServeWaiter struct {
 	signal    chan opencodeServeSessionSignal
 	onMessage func(Message)
+	// sawText is set by deliverText the first time this turn receives a
+	// non-empty SSE text delta. reconcileFinalMessage runs unconditionally
+	// after every turn (not only when SSE delivery fails), so it checks
+	// this before reporting its own polled text via onMessage — otherwise
+	// a turn where SSE worked normally would have its assistant reply
+	// reported twice (once streamed, once again from the reconcile poll).
+	sawText atomic.Bool
 }
 
 // opencodeServeSessionSignal is delivered to executeTurn's waiter when the
@@ -593,6 +601,10 @@ func (c *opencodeServeClient) reconcileFinalMessage(ctx context.Context, session
 	if len(messages) == 0 {
 		return opencodeServeTurnResult{}, nil
 	}
+	c.mu.Lock()
+	waiter := c.waiters[sessionID]
+	c.mu.Unlock()
+
 	last := messages[len(messages)-1]
 	result := opencodeServeTurnResult{}
 	var text strings.Builder
@@ -625,6 +637,26 @@ func (c *opencodeServeClient) reconcileFinalMessage(ctx context.Context, session
 		}
 	}
 	result.output = text.String()
+	// The tool parts above are forwarded via onMessage (so the daemon's
+	// message-reporting drain loop persists them as a chat_message), but
+	// text was only ever accumulated into the local builder above — never
+	// forwarded. reconcileFinalMessage runs unconditionally after every
+	// turn (not only when SSE delivery fails), so report the reconciled
+	// text via onMessage ONLY when this turn's SSE stream never delivered
+	// any text delta (waiter.sawText false) — otherwise a turn where SSE
+	// worked normally would have its assistant reply persisted twice.
+	//
+	// Known gap, deliberately not handled here (see task #49): if SSE
+	// delivers a PARTIAL reply and then silently stops mid-turn, sawText
+	// is already true, so this fallback does not fire — the user sees a
+	// truncated reply with no indication anything was cut off. Full SSE
+	// loss (the incident this fix addresses) and full SSE success are the
+	// dominant cases and both are handled correctly; partial loss needs a
+	// content/length comparison to fix properly and is out of scope for a
+	// same-night fix on the core message-reporting path.
+	if result.output != "" && (waiter == nil || !waiter.sawText.Load()) {
+		onMessage(Message{Type: MessageText, Content: result.output})
+	}
 	return result, nil
 }
 
@@ -658,6 +690,9 @@ func (c *opencodeServeClient) deliverText(sessionID, text string) {
 	waiter, ok := c.waiters[sessionID]
 	c.mu.Unlock()
 	if ok && waiter.onMessage != nil {
+		if text != "" {
+			waiter.sawText.Store(true)
+		}
 		waiter.onMessage(Message{Type: MessageText, Content: text})
 	}
 }

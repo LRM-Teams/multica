@@ -233,6 +233,14 @@ func TestRunTurnCompletesViaSessionIdleWithoutMessageUpdated(t *testing.T) {
 // poll's final message DOES carry the full text. If result.output were
 // still derived from accumulated SSE deltas, this would produce an empty
 // string; deriving it from the reconciled poll produces the real text.
+//
+// It also covers the incident this same commit fixes: when SSE delivers no
+// text at all, reconcileFinalMessage must report that text via onMessage
+// (not just via result.output) — otherwise the daemon's message-reporting
+// drain loop never sees it and the reply never gets persisted as a
+// chat_message, even though the turn "succeeds." Before that fix, onMessage
+// was never called for text on this path at all — this test used to assert
+// the callback saw *nothing*, which was actually the bug, not a guarantee.
 func TestRunTurnOutputComesFromReconcilePollNotSSEDeltas(t *testing.T) {
 	const fullText = "The answer, reconciled from the poll, not the stream."
 	fake := newFakeOpenCodeServeServer()
@@ -257,10 +265,10 @@ func TestRunTurnOutputComesFromReconcilePollNotSSEDeltas(t *testing.T) {
 		t.Fatalf("createSession: %v", err)
 	}
 
-	var streamed strings.Builder
+	var reported strings.Builder
 	result, err := client.runTurn(ctx, sessionID, "hi", ExecOptions{}, func(msg Message) {
 		if msg.Type == MessageText {
-			streamed.WriteString(msg.Content)
+			reported.WriteString(msg.Content)
 		}
 	})
 	if err != nil {
@@ -269,11 +277,67 @@ func TestRunTurnOutputComesFromReconcilePollNotSSEDeltas(t *testing.T) {
 	if result.errMsg != "" {
 		t.Fatalf("runTurn returned error result: %v", result.errMsg)
 	}
-	if streamed.String() != "" {
-		t.Fatalf("streamed (SSE delta) text = %q, want empty — no deltas were scripted", streamed.String())
+	if reported.String() != fullText {
+		t.Fatalf("onMessage-reported text = %q, want %q — the reconcile fallback must report text via onMessage when SSE delivered none, or the reply never gets persisted", reported.String(), fullText)
 	}
 	if result.output != fullText {
 		t.Fatalf("result.output = %q, want %q — final text must come from the reconcile poll even when SSE deltas never arrived", result.output, fullText)
+	}
+}
+
+// TestRunTurnReconcileDoesNotDuplicateTextAlreadySeenViaSSE is the dedup
+// side of the same fix: reconcileFinalMessage runs unconditionally after
+// every turn, not only when SSE delivery fails. When SSE already delivered
+// the text (the normal, working case), the reconcile fallback must NOT
+// report it again via onMessage — otherwise every ordinary reply would be
+// persisted twice.
+func TestRunTurnReconcileDoesNotDuplicateTextAlreadySeenViaSSE(t *testing.T) {
+	const fullText = "Delivered once, live, over SSE."
+	fake := newFakeOpenCodeServeServer()
+	fake.scriptEvents = func(sessionID string) []string {
+		return []string{
+			messagePartDeltaEvent(sessionID, fullText),
+			sessionIdleEvent(sessionID),
+		}
+	}
+	fake.scriptMessages = func(sessionID string) []opencodeServeMessage {
+		// The reconcile poll sees the same final message SSE already
+		// streamed — this is the normal case, not a delivery failure.
+		return []opencodeServeMessage{{
+			ID:    "msg_1",
+			Parts: []opencodeServeMessagePart{{Type: "text", Text: fullText}},
+		}}
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	client := newTestOpenCodeServeClient(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessionID, err := client.createSession(ctx, "")
+	if err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	var textCalls int
+	var reported strings.Builder
+	result, err := client.runTurn(ctx, sessionID, "hi", ExecOptions{}, func(msg Message) {
+		if msg.Type == MessageText {
+			textCalls++
+			reported.WriteString(msg.Content)
+		}
+	})
+	if err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+	if result.errMsg != "" {
+		t.Fatalf("runTurn returned error result: %v", result.errMsg)
+	}
+	if textCalls != 1 {
+		t.Fatalf("onMessage called with MessageText %d times, want exactly 1 — reconcile must not duplicate text SSE already delivered", textCalls)
+	}
+	if reported.String() != fullText {
+		t.Fatalf("onMessage-reported text = %q, want %q", reported.String(), fullText)
 	}
 }
 

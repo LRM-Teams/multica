@@ -13,10 +13,11 @@ const (
 	ReasonPendingReview  = "fleet_member_pending_review"
 	ReasonArchived       = "fleet_member_archived"
 	ReasonNotActive      = "fleet_member_not_active"
-	ReasonAgentArchived  = "agent_archived"
-	ReasonAgentNoRuntime = "agent_no_runtime"
-	ReasonRuntimeOffline = "runtime_offline"
-	ReasonInternal       = "wake_internal_error"
+	ReasonAgentArchived      = "agent_archived"
+	ReasonAgentNoRuntime     = "agent_no_runtime"
+	ReasonAgentModelRequired = "agent_model_required"
+	ReasonRuntimeOffline     = "runtime_offline"
+	ReasonInternal           = "wake_internal_error"
 )
 
 type Error struct {
@@ -83,6 +84,8 @@ func FailurePresentation(err error) (reason, title, body, hint string) {
 		return ReasonAgentArchived, "唤醒失败", "目标 agent 已归档", "请改派给其他活跃成员。"
 	case strings.Contains(lower, "no runtime") || strings.Contains(lower, "agent has no runtime"):
 		return ReasonAgentNoRuntime, "唤醒失败", "目标 agent 未绑定 runtime", "请为该 agent 配置 runtime 后重试。"
+	case strings.Contains(lower, "agent model is required"):
+		return ReasonAgentModelRequired, "唤醒失败", "目标 agent 未配置模型", "请为该成员设置 model 后重试；系统会在下次 wake 自动补默认模型。"
 	case strings.Contains(lower, "runtime") || strings.Contains(lower, "daemon") || strings.Contains(lower, "offline"):
 		return ReasonRuntimeOffline, "唤醒失败", "目标 agent 的 runtime/daemon 可能离线", "请确认 daemon 在线后重试，或改派给其他在线成员。"
 	default:

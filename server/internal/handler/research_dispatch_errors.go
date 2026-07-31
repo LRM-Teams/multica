@@ -47,6 +47,11 @@ func classifyResearchWakeFailure(err error) (reason, title, body, hint string) {
 			"唤醒失败",
 			"目标 agent 未绑定 runtime",
 			"请为该 agent 配置 runtime 后重试。"
+	case errors.Is(err, service.ErrAgentModelRequired):
+		return researchwake.ReasonAgentModelRequired,
+			"唤醒失败",
+			"目标 agent 未配置模型",
+			"请为该成员设置 model 后重试；系统会在下次 wake 自动补默认模型。"
 	default:
 		return researchwake.FailurePresentation(err)
 	}

@@ -59,6 +59,21 @@ func TestFailurePresentation_NotMemberDoesNotMentionDaemon(t *testing.T) {
 	}
 }
 
+func TestFailurePresentation_ModelRequired(t *testing.T) {
+	err := errors.New("enqueue research wake: snapshot chat task execution config: agent model is required")
+	reason, title, body, hint := FailurePresentation(err)
+	if reason != ReasonAgentModelRequired {
+		t.Fatalf("reason = %q, want %q", reason, ReasonAgentModelRequired)
+	}
+	if title == "" || body == "" || hint == "" {
+		t.Fatalf("expected title/body/hint, got title=%q body=%q hint=%q", title, body, hint)
+	}
+	lower := strings.ToLower(body + " " + hint)
+	if strings.Contains(lower, "daemon") {
+		t.Fatalf("model-required should not blame daemon: %q", body+" "+hint)
+	}
+}
+
 func assertWakeError(t *testing.T, err error, wantReason string) {
 	t.Helper()
 	var wakeErr *Error

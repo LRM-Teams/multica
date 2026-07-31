@@ -2,11 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ResearchGraphNode } from "@multica/core/types";
-import {
-  ResearchNodeActionRing,
-  ringActionsForNode,
-  SYSTEM_NODE_TYPES,
-} from "./research-node-action-ring";
+import { ringActionsForNode, SYSTEM_NODE_TYPES } from "../lib/node-action-ring";
+import { ResearchNodeActionRing } from "./research-node-action-ring";
 
 import enResearch from "../../locales/en/research.json";
 
@@ -73,8 +70,9 @@ describe("ResearchNodeActionRing", () => {
         onClose={onClose}
       />,
     );
-    expect(screen.getByRole("dialog", { name: "Node actions" })).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Escape" });
+    const dialog = screen.getByRole("dialog", { name: "Node actions" });
+    expect(dialog).toBeInTheDocument();
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
     expect(onClose).toHaveBeenCalled();
   });
 });

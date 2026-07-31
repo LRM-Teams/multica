@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef } from "react";
 import {
   Copy,
   Eye,
@@ -12,44 +12,10 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
-
-/** System nodes open detail directly — no action ring (LRM-848). */
-export const SYSTEM_NODE_TYPES = new Set([
-  "roster_change",
-  "stage_gate",
-  "agent_activity",
-]);
-
-export type NodeRingAction =
-  | "detail"
-  | "locate_source"
-  | "copy_prompt"
-  | "retry"
-  | "dig_deeper"
-  | "more";
-
-export function ringActionsForNode(node: ResearchGraphNode): {
-  id: NodeRingAction;
-  primary?: boolean;
-  disabled?: boolean;
-  candidate?: boolean;
-}[] {
-  const isDeadEnd = node.node_type === "dead_end";
-  const hasSource =
-    node.node_type === "finding" &&
-    !!node.payload &&
-    typeof node.payload === "object" &&
-    "source_id" in (node.payload as object);
-
-  return [
-    { id: isDeadEnd ? "retry" : "detail", primary: true },
-    { id: "locate_source", disabled: !hasSource },
-    { id: "copy_prompt" },
-    { id: isDeadEnd ? "detail" : "retry", disabled: !isDeadEnd },
-    { id: "dig_deeper", candidate: true, disabled: true },
-    { id: "more" },
-  ];
-}
+import {
+  ringActionsForNode,
+  type NodeRingAction,
+} from "../lib/node-action-ring";
 
 function ActionIcon({ id }: { id: NodeRingAction }) {
   switch (id) {
@@ -82,17 +48,30 @@ export function ResearchNodeActionRing({
 }) {
   const { t } = useT("research");
   const actions = ringActionsForNode(node);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+
+  const bindDialog = useCallback((dialog: HTMLDialogElement | null) => {
+    dialogRef.current = dialog;
+    if (!dialog || dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
+
+  const onEscapeClose = useEffectEvent(() => {
+    onClose();
+  });
 
   useEffect(() => {
+    if (mode === "sheet") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onEscapeClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [mode]);
 
   const labelFor = (id: NodeRingAction) => {
     switch (id) {
@@ -113,11 +92,20 @@ export function ResearchNodeActionRing({
 
   if (mode === "sheet") {
     return (
-      <div
-        role="dialog"
+      <dialog
+        ref={bindDialog}
         aria-label={t(($) => $.ring.title)}
-        className="absolute inset-x-0 bottom-0 z-20 rounded-t-2xl border-t bg-card px-4 pb-5 pt-2 shadow-[0_-12px_32px_oklch(0_0_0_/_0.35)]"
-        style={{ maxHeight: "38%" }}
+        className="fixed inset-x-0 bottom-0 z-20 m-0 max-h-[38%] w-full max-w-none rounded-t-2xl border-0 border-t bg-card p-0 px-4 pb-5 pt-2 shadow-[0_-12px_32px_oklch(0_0_0_/_0.35)] open:block"
+        onCancel={(event) => {
+          event.preventDefault();
+          const dialog = dialogRef.current;
+          if (dialog?.open) {
+            if (typeof dialog.close === "function") dialog.close();
+            else dialog.removeAttribute("open");
+          }
+          onClose();
+        }}
+        onClose={onClose}
       >
         <div className="mx-auto mb-2.5 mt-1 h-1 w-9 rounded-full bg-muted-foreground/40" />
         <p className="mb-2 text-[11px] font-bold tracking-wide text-muted-foreground uppercase">
@@ -144,7 +132,8 @@ export function ResearchNodeActionRing({
               <span
                 className={cn(
                   "flex size-8 shrink-0 items-center justify-center rounded-full bg-muted",
-                  a.primary && "bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
+                  a.primary &&
+                    "bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
                   a.candidate &&
                     "border border-dashed border-warning/75 bg-transparent text-warning",
                 )}
@@ -160,7 +149,7 @@ export function ResearchNodeActionRing({
             </button>
           ))}
         </div>
-      </div>
+      </dialog>
     );
   }
 
@@ -168,9 +157,9 @@ export function ResearchNodeActionRing({
     <div
       role="menu"
       aria-label={t(($) => $.ring.title)}
-      className="absolute z-20 grid animate-in fade-in zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md duration-150"
+      className="relative z-20 grid animate-in fade-in zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md duration-150"
       style={{
-        // Default: to the right of the focused node card; parent positions via left/top.
+        // NodeToolbar owns placement; size stays fixed 2×3 grid.
         width: 3 * 52 + 2 * 6 + 20,
       }}
     >

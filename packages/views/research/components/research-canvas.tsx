@@ -5,7 +5,9 @@ import {
   Background,
   BackgroundVariant,
   MiniMap,
+  NodeToolbar,
   Panel,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
@@ -28,11 +30,8 @@ import { visualForEdgeType } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
 import { ResearchFleetStrip } from "./research-fleet-strip";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
-import {
-  ResearchNodeActionRing,
-  SYSTEM_NODE_TYPES,
-  type NodeRingAction,
-} from "./research-node-action-ring";
+import { SYSTEM_NODE_TYPES, type NodeRingAction } from "../lib/node-action-ring";
+import { ResearchNodeActionRing } from "./research-node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSourceBadges } from "./research-source-badges";
 
@@ -74,7 +73,6 @@ function ResearchCanvasInner({
   const [ringNodeId, setRingNodeId] = useState<string | null>(null);
   const [detailPinned, setDetailPinned] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
-  const [ringAnchor, setRingAnchor] = useState<{ left: number; top: number } | null>(null);
   // Opacity-only enter motion (never touch transform — RF uses it for position).
   const enterClassById = useRef<Map<string, string> | null>(null);
   if (enterClassById.current === null) {
@@ -86,7 +84,6 @@ function ResearchCanvasInner({
     userPositions.current = new Map();
   }
   const laidIdsKey = useMemo(() => laid.nodes.map((n) => n.id).join("|"), [laid.nodes]);
-  const hostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const reduceMotion = prefersReducedMotion();
@@ -163,39 +160,8 @@ function ResearchCanvasInner({
     return () => window.clearTimeout(id);
   }, [laidIdsKey, fitView, getZoom]);
 
-  const syncRingAnchor = useCallback(() => {
-    if (!ringNodeId || !hostRef.current) {
-      setRingAnchor(null);
-      return;
-    }
-    const el = hostRef.current.querySelector(
-      `.react-flow__node[data-id="${CSS.escape(ringNodeId)}"]`,
-    ) as HTMLElement | null;
-    if (!el) {
-      setRingAnchor(null);
-      return;
-    }
-    const host = hostRef.current.getBoundingClientRect();
-    const box = el.getBoundingClientRect();
-    const left = box.right - host.left + 12;
-    let top = box.top - host.top + 8;
-    // Flip above if near bottom of viewport.
-    if (host.height - (box.bottom - host.top) < 200) {
-      top = Math.max(8, box.top - host.top - 140);
-    }
-    // Flip left if near right edge.
-    const ringW = 190;
-    const adjLeft = left + ringW > host.width - 8 ? Math.max(8, box.left - host.left - ringW - 12) : left;
-    setRingAnchor({ left: adjLeft, top: Math.max(8, top) });
-  }, [ringNodeId]);
-
-  useEffect(() => {
-    syncRingAnchor();
-  }, [syncRingAnchor, rfNodes, isMobile]);
-
   const closeRing = useCallback(() => {
     setRingNodeId(null);
-    setRingAnchor(null);
   }, []);
 
   const selectedNode = selectedId ? nodes.find((n) => n.id === selectedId) : null;
@@ -241,7 +207,7 @@ function ResearchCanvasInner({
   );
 
   return (
-    <div ref={hostRef} className="relative h-full w-full bg-canvas-bg text-foreground">
+    <div className="relative h-full w-full bg-canvas-bg text-foreground">
       <style>{`
         .research-node-enter {
           animation: research-node-enter 520ms ease both;
@@ -279,12 +245,10 @@ function ResearchCanvasInner({
             }
           }
           onNodesChange(changes);
-          if (ringNodeId) syncRingAnchor();
         }}
         onEdgesChange={onEdgesChange}
         onMoveEnd={() => {
           setZoomPct(Math.round(getZoom() * 100));
-          if (ringNodeId) syncRingAnchor();
         }}
         nodeTypes={nodeTypes}
         fitView
@@ -354,6 +318,23 @@ function ResearchCanvasInner({
             }}
           />
         </Panel>
+        {/* Desktop: NodeToolbar tracks the node — no DOM-measure sync effect. */}
+        {ringNode && !isMobile ? (
+          <NodeToolbar
+            nodeId={ringNode.id}
+            isVisible
+            position={Position.Right}
+            offset={12}
+            className="!border-0 !bg-transparent !p-0 !shadow-none"
+          >
+            <ResearchNodeActionRing
+              node={ringNode}
+              mode="ring"
+              onAction={handleRingAction}
+              onClose={closeRing}
+            />
+          </NodeToolbar>
+        ) : null}
       </ReactFlow>
       {members && members.length > 0 ? <ResearchFleetStrip members={members} /> : null}
       {sourceList.length > 0 ? <ResearchSourceBadges sources={sourceList} /> : null}
@@ -367,16 +348,6 @@ function ResearchCanvasInner({
           onAction={handleRingAction}
           onClose={closeRing}
         />
-      ) : null}
-      {ringNode && !isMobile && ringAnchor ? (
-        <div className="pointer-events-auto absolute" style={{ left: ringAnchor.left, top: ringAnchor.top }}>
-          <ResearchNodeActionRing
-            node={ringNode}
-            mode="ring"
-            onAction={handleRingAction}
-            onClose={closeRing}
-          />
-        </div>
       ) : null}
     </div>
   );

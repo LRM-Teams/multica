@@ -136,16 +136,46 @@ func TestBuildSuperviseConfigDefaultProfile(t *testing.T) {
 	if cfg.LockPath != filepath.Join(wantDir, "supervisor.lock") {
 		t.Errorf("LockPath = %q, want under %q", cfg.LockPath, wantDir)
 	}
-	if cfg.WorkerPath != "/usr/local/bin/multica" {
-		t.Errorf("WorkerPath = %q, want the resolved executable path", cfg.WorkerPath)
+	if cfg.ResolveWorkerPath == nil {
+		t.Fatal("ResolveWorkerPath is nil, want a resolver so every generation re-checks the Active version")
 	}
-	if got := strings.Join(cfg.WorkerArgs, " "); got != "daemon start --foreground" {
-		t.Errorf("WorkerArgs = %q, want %q", got, "daemon start --foreground")
+	// No VersionStore has been staged/activated under this fresh HOME, so the
+	// resolver must fall back to the given exePath/workerArgs unchanged.
+	gotPath, gotArgs, err := cfg.ResolveWorkerPath()
+	if err != nil {
+		t.Fatalf("ResolveWorkerPath(): %v", err)
+	}
+	if gotPath != "/usr/local/bin/multica" {
+		t.Errorf("resolved path = %q, want fallback exePath", gotPath)
+	}
+	if got := strings.Join(gotArgs, " "); got != "daemon start --foreground" {
+		t.Errorf("resolved args = %q, want %q", got, "daemon start --foreground")
+	}
+	if cfg.HandoffExitCode != daemonHandoffExitCode {
+		t.Errorf("HandoffExitCode = %d, want %d", cfg.HandoffExitCode, daemonHandoffExitCode)
+	}
+	found := false
+	for _, kv := range cfg.WorkerEnv {
+		if kv == superviseEnvVar+"=1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("WorkerEnv = %v, want it to mark generations as supervised (%s=1)", cfg.WorkerEnv, superviseEnvVar)
 	}
 	if cfg.Stdout != &stdout || cfg.Stderr != &stderr {
 		t.Errorf("Stdout/Stderr not wired to the given writers")
 	}
 }
+
+// resolveSupervisedWorkerPath's "successfully resolves to a staged Active
+// binary" behavior is covered directly by
+// TestResolveVersionHandoffBinaryHandsOffToStagedActive (via the shared
+// resolveActiveStagedBinary helper, using a controllable verifier) — not
+// duplicated here through buildSuperviseConfig, which would otherwise need
+// a real executable satisfying cli.VerifyStagedBinaryVersion's `--version`
+// check just to exercise a thin wrapper around already-tested logic.
 
 func TestBuildSuperviseConfigNamedProfileIsIsolatedFromDefault(t *testing.T) {
 	home := t.TempDir()

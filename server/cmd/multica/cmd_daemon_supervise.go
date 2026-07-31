@@ -6,9 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +16,26 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/supervisor"
 	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
 )
+
+// superviseEnvVar marks a worker process as running under external
+// supervision (task #815), inherited by every generation the supervisor
+// spawns. runDaemonForeground checks it to decide how to complete a version
+// handoff: exit with daemonHandoffExitCode and let the supervisor resolve
+// and start the next generation (supervised), or fall back to spawning the
+// target itself as a detached background daemon (standalone — see
+// spawnDetachedDaemonBinary).
+const superviseEnvVar = "MULTICA_DAEMON_SUPERVISED"
+
+// daemonHandoffExitCode is the sentinel exit code a supervised worker uses
+// to signal "restart me, possibly onto a different binary" — a deliberate,
+// expected exit, not a crash and not a permanent stop. 75 is sysexits.h's
+// EX_TEMPFAIL ("temporary failure, please retry"), which matches the
+// intent closely enough to reuse rather than inventing an arbitrary number.
+const daemonHandoffExitCode = 75
+
+func runningUnderSupervision() bool {
+	return os.Getenv(superviseEnvVar) == "1"
+}
 
 // versionEscalationGraceWindow is the supervisor-level backstop: how long the
 // running daemon may stay on a version other than the VersionStore's
@@ -62,19 +80,51 @@ func init() {
 // a supervised worker under the given profile. workerArgs is normally
 // buildDaemonStartArgs(cmd) — the same "daemon start --foreground ..."
 // invocation the background-start path already uses, so the supervised
-// worker behaves identically to a normal foreground daemon.
+// worker behaves identically to a normal foreground daemon, whichever binary
+// ends up running it.
+//
+// ResolveWorkerPath (not a static WorkerPath) is what makes this land a busy
+// machine onto a newly staged version: it's called fresh before every
+// generation — the first one, a crash-restart, a force-restart, and a
+// handoff-restart alike — so the supervisor never has to be told a path
+// across the process boundary; it just re-derives "what's Active right now"
+// itself. WorkerEnv marks every spawned generation as supervised, so
+// runDaemonForeground's handoff sites know to exit with HandoffExitCode
+// rather than spawning a sibling themselves.
 func buildSuperviseConfig(profile, exePath string, workerArgs []string, stdout, stderr io.Writer) (supervisor.Config, error) {
 	dir := daemonDirForProfile(profile)
 	if dir == "" {
 		return supervisor.Config{}, fmt.Errorf("resolve daemon directory for profile %q", profile)
 	}
 	return supervisor.Config{
-		LockPath:   filepath.Join(dir, "supervisor.lock"),
-		WorkerPath: exePath,
-		WorkerArgs: workerArgs,
-		Stdout:     stdout,
-		Stderr:     stderr,
+		LockPath: filepath.Join(dir, "supervisor.lock"),
+		ResolveWorkerPath: func() (string, []string, error) {
+			return resolveSupervisedWorkerPath(exePath, workerArgs)
+		},
+		WorkerEnv:       append(append([]string(nil), os.Environ()...), superviseEnvVar+"=1"),
+		HandoffExitCode: daemonHandoffExitCode,
+		Stdout:          stdout,
+		Stderr:          stderr,
 	}, nil
+}
+
+// resolveSupervisedWorkerPath resolves the VersionStore's committed Active
+// version to its staged binary, falling back to fallbackPath (the
+// supervise process's own executable) whenever there's nothing valid to
+// hand off to yet — no committed Active version, an unreadable store, or a
+// staged binary missing from disk (e.g. GC'd). None of those are errors:
+// they just mean "run the bootstrap binary for now", which itself re-checks
+// on every one of its own generations via resolveVersionHandoffTarget.
+func resolveSupervisedWorkerPath(fallbackPath string, workerArgs []string) (string, []string, error) {
+	store, err := cli.OpenVersionStore("")
+	if err != nil {
+		return fallbackPath, workerArgs, nil
+	}
+	target, err := resolveActiveStagedBinary(store)
+	if err != nil || target == "" {
+		return fallbackPath, workerArgs, nil
+	}
+	return target, workerArgs, nil
 }
 
 // versionWatcherState tracks how long the running worker's reported version
@@ -245,23 +295,12 @@ func handoffVersionsMatch(a, b string) bool {
 	return a != "" && a == b
 }
 
-// resolveVersionHandoffBinary compares the VersionStore's committed Active
-// version against the currently running binary's version. If they differ and
-// the Active version's staged binary is actually present on disk, it returns
-// that binary's path so the caller can hand off to it before doing any
-// daemon work (claiming tasks, holding leases, etc.) — always safe, since a
-// process that hasn't started working yet has nothing to drain.
-//
-// Returns "" (no error) when no handoff is needed or possible: no committed
-// Active version yet, Active already matches the running binary, or the
-// staged binary is missing (e.g. GC'd) and cannot be handed off to safely.
-//
-// This is what makes a fixed-WorkerPath external supervisor (task #815)
-// actually land a busy machine onto a newly staged version: the supervisor
-// force-restarts the worker using the same path every time, and it's this
-// preflight — run by every freshly started worker generation, whatever
-// restarted it — that redirects onto whatever is actually Active.
-func resolveVersionHandoffBinary(store *cli.VersionStore, runningVersion string) (string, error) {
+// resolveActiveStagedBinary resolves the VersionStore's committed Active
+// version to its staged binary path, verifying the binary actually exists
+// on disk. Returns "" (no error) when there's nothing valid to hand off to:
+// no committed Active version, an unresolvable tag, or a staged binary
+// missing from disk (e.g. GC'd) — none of these are error conditions.
+func resolveActiveStagedBinary(store *cli.VersionStore) (string, error) {
 	if store == nil {
 		return "", nil
 	}
@@ -270,9 +309,6 @@ func resolveVersionHandoffBinary(store *cli.VersionStore, runningVersion string)
 		return "", err
 	}
 	if state.ActiveVersion == "" {
-		return "", nil
-	}
-	if handoffVersionsMatch(state.ActiveVersion, runningVersion) {
 		return "", nil
 	}
 	staged, err := store.ResolveStagedVersion(state.ActiveVersion)
@@ -284,6 +320,35 @@ func resolveVersionHandoffBinary(store *cli.VersionStore, runningVersion string)
 		return "", nil
 	}
 	return staged.BinaryPath, nil
+}
+
+// resolveVersionHandoffBinary compares the VersionStore's committed Active
+// version against the currently running binary's version. If they differ and
+// the Active version's staged binary is actually present on disk, it returns
+// that binary's path so the caller can hand off to it before doing any
+// daemon work (claiming tasks, holding leases, etc.) — always safe, since a
+// process that hasn't started working yet has nothing to drain.
+//
+// Returns "" (no error) when no handoff is needed or possible: no committed
+// Active version yet, Active already matches the running binary, or the
+// staged binary is missing (e.g. GC'd) and cannot be handed off to safely.
+//
+// Used by the standalone (non-supervised) preflight, where "already on
+// Active" must be checked explicitly — there's no supervisor re-resolving a
+// path on every generation, so this process only wants to actually hand off
+// when it needs to.
+func resolveVersionHandoffBinary(store *cli.VersionStore, runningVersion string) (string, error) {
+	if store == nil {
+		return "", nil
+	}
+	state, err := store.ReadActivationState()
+	if err != nil {
+		return "", err
+	}
+	if state.ActiveVersion == "" || handoffVersionsMatch(state.ActiveVersion, runningVersion) {
+		return "", nil
+	}
+	return resolveActiveStagedBinary(store)
 }
 
 // resolveVersionHandoffTarget opens the default VersionStore and resolves
@@ -300,41 +365,3 @@ func resolveVersionHandoffTarget() (string, error) {
 	return resolveVersionHandoffBinary(store, version)
 }
 
-// handoffAndWait spawns binPath as a plain child of this process — sharing
-// this process's process group (unix) / console process group (windows)
-// rather than detaching — and blocks until it exits, propagating its exact
-// outcome (nil for a clean exit, an error otherwise) as its own return
-// value.
-//
-// This is deliberately NOT "spawn detached + exit immediately". Under an
-// external supervisor (task #815), the supervisor tracks THIS process as
-// the worker. If it exited immediately after merely kicking off a sibling,
-// the supervisor would see an ordinary clean exit and conclude the worker
-// stopped for good (see TestSupervisorCleanExitDoesNotRestart) — on a busy
-// machine, that means the very first version handoff permanently kills the
-// supervisor's restart loop, leaving the new daemon completely unmanaged
-// (found in review by Barry on PR #1584). Blocking here instead keeps the
-// supervisor's tracked PID alive — and, by staying in its process group,
-// still directly receiving the supervisor's own stop signal — for as long
-// as the real daemon work (potentially several handoffs deep) keeps
-// running, so the supervisor only ever observes the work's true final fate.
-func handoffAndWait(binPath string, args []string, logPath, pidPath string) error {
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("open daemon log file %s: %w", logPath, err)
-	}
-	defer logFile.Close()
-
-	child := exec.Command(binPath, args...)
-	child.Stdout = logFile
-	child.Stderr = logFile
-	// No SysProcAttr override: the child deliberately stays in this
-	// process's group rather than detaching — see doc comment above.
-	if err := child.Start(); err != nil {
-		return fmt.Errorf("start daemon at %s: %w", binPath, err)
-	}
-	if pidPath != "" {
-		os.WriteFile(pidPath, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
-	}
-	return child.Wait()
-}

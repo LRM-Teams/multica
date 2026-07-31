@@ -61,6 +61,17 @@ export function createChannelReferenceSuggestion(
     pluginKey,
     char: "#",
     allowedPrefixes: null,
+    // Tiptap's `Extension.configure()` DEEP-merges the passed suggestion
+    // object with ChannelReferenceExtension's addOptions() default
+    // (`{ allow: () => false, ... }`, the permanently-disabled fallback for
+    // when this suggestion isn't wired up) — see @tiptap/core's
+    // Extendable.configure()/mergeDeep. Omitting `allow` here does NOT fall
+    // back to @tiptap/suggestion's own `allow = () => true` default; it
+    // falls back to the EXTENSION's disabled default instead, silently
+    // keeping the picker dead. Must be explicit, not omitted (found live:
+    // the composer's # picker never opened in production — Wren, real-device
+    // verification).
+    allow: () => true,
     items: ({ query }) => buildItems(query),
     command: ({ editor, range, props }) => {
       editor

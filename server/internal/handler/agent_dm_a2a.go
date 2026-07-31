@@ -175,16 +175,14 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 		return agentDMSendReservation{}, fmt.Errorf("ensure agent dm pair control: %w", err)
 	}
 
-	var pairState string
-	var pairPauseReason pgtype.Text
 	var windowStartedAt pgtype.Timestamptz
 	var windowMessageCount int
 	if err := exec.QueryRow(ctx, `
-		SELECT state, pause_reason, window_started_at, window_message_count
+		SELECT window_started_at, window_message_count
 		FROM agent_dm_pair_control
 		WHERE workspace_id = $1 AND agent_low_id = $2 AND agent_high_id = $3
 		FOR UPDATE`, workspaceID, lowID, highID).Scan(
-		&pairState, &pairPauseReason, &windowStartedAt, &windowMessageCount,
+		&windowStartedAt, &windowMessageCount,
 	); err != nil {
 		return agentDMSendReservation{}, fmt.Errorf("lock agent dm pair control: %w", err)
 	}
@@ -249,35 +247,6 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 		return agentDMSendReservation{}, fmt.Errorf("load agent dm exchange state: %w", err)
 	}
 
-	var globalPaused bool
-	var globalPauseReason pgtype.Text
-	err := exec.QueryRow(ctx, `
-		SELECT true, string_agg(DISTINCT COALESCE(control.pause_reason, ''), '; ')
-		FROM agent_dm_owner_control control
-		JOIN agent owned
-		  ON owned.workspace_id = control.workspace_id
-		 AND owned.owner_id = control.owner_id
-		 AND owned.id = ANY($2::uuid[])
-		WHERE control.workspace_id = $1
-		  AND control.paused = true
-		HAVING count(*) > 0`, workspaceID, []pgtype.UUID{lowID, highID}).Scan(&globalPaused, &globalPauseReason)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return agentDMSendReservation{}, fmt.Errorf("load workspace agent dm control: %w", err)
-	}
-	if globalPaused {
-		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, "paused_global", firstNonEmpty(globalPauseReason.String, "an owner paused direct messages involving their agent"))
-	}
-	if pairState != "active" {
-		return h.pauseAgentDMExchangeTx(ctx, exec, exchangeID, channelID, pairState, firstNonEmpty(pairPauseReason.String, "this agent pair is paused"))
-	}
-	if exchangeState != "active" {
-		return agentDMSendReservation{}, &agentDMPausedError{
-			ExchangeID: exchangeID,
-			ChannelID:  channelID,
-			State:      exchangeState,
-			Reason:     "this agent direct-message exchange is paused",
-		}
-	}
 	if nextSenderAgentID.Valid && nextSenderAgentID != source.origin.agentID {
 		return agentDMSendReservation{}, &agentDMTurnError{ExpectedSender: nextSenderAgentID}
 	}
@@ -321,29 +290,6 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 		RoundLimit: roundLimit + grantedRounds,
 		Recipient:  target.recipientID,
 	}, nil
-}
-
-func (h *Handler) pauseAgentDMExchangeTx(ctx context.Context, exec db.DBTX, exchangeID, channelID pgtype.UUID, state, reason string) (agentDMSendReservation, error) {
-	tag, err := exec.Exec(ctx, `
-		UPDATE agent_dm_exchange
-		SET state = $2,
-		    pause_reason = $3,
-		    notification_epoch = notification_epoch + 1,
-		    notified_at = COALESCE(notified_at, now()),
-		    updated_at = now()
-		WHERE id = $1 AND state = 'active'`,
-		exchangeID, state, reason,
-	)
-	if err != nil {
-		return agentDMSendReservation{}, fmt.Errorf("pause agent dm exchange: %w", err)
-	}
-	return agentDMSendReservation{}, &agentDMPausedError{
-		ExchangeID: exchangeID,
-		ChannelID:  channelID,
-		State:      state,
-		Reason:     reason,
-		Notify:     tag.RowsAffected() == 1,
-	}
 }
 
 func (h *Handler) finishAgentDMSendTx(ctx context.Context, exec db.DBTX, reservation agentDMSendReservation, messageID pgtype.UUID) error {

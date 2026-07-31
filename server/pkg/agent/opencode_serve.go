@@ -365,20 +365,25 @@ type opencodeServeSessionSignal struct {
 }
 
 func newOpenCodeServeClient(baseURL, username, password string, logger *slog.Logger) *opencodeServeClient {
+	// This client only ever talks to an opencode serve process we just
+	// spawned on 127.0.0.1 — a same-machine control channel, never a
+	// destination reachable through a proxy. Clone http.DefaultTransport
+	// (keeping its tuned connection-pool/timeout defaults intact) and only
+	// override Proxy, rather than relying on a host's HTTP_PROXY/NO_PROXY
+	// config correctly exempting 127.0.0.1, or constructing a bare
+	// &http.Transport{} that would silently drop those defaults. If this
+	// disable-proxy pattern gets copied to a different client (higher
+	// concurrency, non-localhost), re-check the cloned defaults still fit —
+	// this Clone() is scoped to this low-traffic localhost-only use case.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	return &opencodeServeClient{
 		baseURL:  baseURL,
 		username: username,
 		password: password,
 		logger:   logger,
-		// This client only ever talks to an opencode serve process we just
-		// spawned on 127.0.0.1 — a same-machine control channel, never a
-		// destination reachable through a proxy. Explicitly disabling the
-		// default env-proxy lookup (http.Client{}'s zero value inherits
-		// http.DefaultTransport, which consults HTTP_PROXY/NO_PROXY on every
-		// request) removes any dependence on a host's proxy config correctly
-		// exempting 127.0.0.1, rather than relying on NO_PROXY matching.
-		http:    &http.Client{Transport: &http.Transport{Proxy: nil}},
-		waiters: make(map[string]*opencodeServeWaiter),
+		http:     &http.Client{Transport: transport},
+		waiters:  make(map[string]*opencodeServeWaiter),
 		closeCh: make(chan struct{}),
 	}
 }

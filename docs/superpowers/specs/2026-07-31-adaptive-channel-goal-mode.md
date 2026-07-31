@@ -169,6 +169,39 @@ same implementation in `packages/views`.
 - Replacing Issues, reminders, or the group-manager patrol.
 - Full goal-history UI.
 
+## 9b. Goal Mode v2 — per-manager process Markdown (LRM-931)
+
+Still one channel-level primary Goal. Each channel-manager agent may keep a
+separate long-form process Markdown under that Goal. This is **not** a second
+channel Goal.
+
+Field split (locked):
+
+- `progress_summary` / `current_step` / `blocker` remain the authoritative short
+  status (checkpoint / goal patch).
+- Process Markdown is readable long-form prose. The two stores never silently
+  overwrite each other.
+
+Storage: `channel_goal_process_markdown` unique on `(goal_id, manager_agent_id)`.
+
+Human API (channel-member read; channel owner / workspace owner|admin write):
+
+- `GET /api/channels/{channelId}/goal/process`
+- `GET /api/channels/{channelId}/goal/process/{agentId}`
+- `PUT /api/channels/{channelId}/goal/process/{agentId}`
+
+Agent API (surface read; manager may write only own roster identity):
+
+- `GET /api/agent/channels/{channelId}/goal/process`
+- `GET /api/agent/channels/{channelId}/goal/process/{agentId}`
+- `PUT /api/agent/channels/{channelId}/goal/process`
+- `PUT /api/agent/channels/{channelId}/goal/process/{agentId}` (must match self)
+
+`expected_version=0` creates; otherwise CAS update. Missing current Goal or
+missing document returns explicit 404 (no silent fallback).
+
+CLI: `multica goal process list|get|put --channel ...`.
+
 ## 10. Acceptance criteria
 
 1. A group channel with no goal behaves exactly as before.

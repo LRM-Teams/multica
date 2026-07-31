@@ -410,23 +410,33 @@ func (c *opencodeServeClient) newRequest(ctx context.Context, method, path strin
 	return req, nil
 }
 
-// waitReady polls a lightweight endpoint until the server accepts
-// connections or ctx is done.
-// waitReadyProbeTimeout bounds a single /doc probe. c.http has no client-wide
-// Timeout (long-lived requests like the SSE event stream must not be cut
-// off), so without a per-probe deadline here, a connection that succeeds but
-// never gets a response header blocks c.http.Do for however long ctx has
-// left — consuming the *entire* remaining readiness budget on one attempt
-// instead of the intended 100ms retry cadence. This bit us in production:
-// opencode's port was listening and the process was healthy for the whole
-// 15s window, but waitReady still reported "did not become ready" because
-// exactly one Do call never returned.
+// waitReadyProbeTimeout bounds a single readiness probe. c.http has no
+// client-wide Timeout (long-lived requests like the SSE event stream must
+// not be cut off), so without a per-probe deadline here, a connection that
+// succeeds but never gets a response header blocks c.http.Do for however
+// long ctx has left — consuming the *entire* remaining readiness budget on
+// one attempt instead of the intended 100ms retry cadence. Kept as a
+// defense-in-depth bound even after fixing the actual root cause below.
 const waitReadyProbeTimeout = 2 * time.Second
 
+// waitReady polls /global/health — opencode's documented lightweight
+// health-check endpoint — until the server responds or ctx is done.
+//
+// This used to probe /doc, which looks like a natural "is anything there"
+// check but is actually the full OpenAPI 3.1 spec renderer: authenticated,
+// it took ~1.9s to respond even with zero other load on the machine (vs.
+// ~4ms for /global/health), confirmed via manual curl. Unauthenticated it
+// fails fast (~45ms, auth middleware short-circuits before ever reaching the
+// spec generator), which is why an earlier no-auth-only investigation missed
+// this — this client always sends real Basic Auth, so it always paid the
+// slow path. Under production load (a dozen+ other resident agent processes
+// competing for CPU on the same machine), that ~1.9s stretched past our 15s
+// readiness deadline and opencode chat failed with "did not become ready"
+// even though the process and port were completely healthy the whole time.
 func (c *opencodeServeClient) waitReady(ctx context.Context) error {
 	for {
 		probeCtx, cancel := context.WithTimeout(ctx, waitReadyProbeTimeout)
-		req, err := c.newRequest(probeCtx, http.MethodGet, "/doc", nil)
+		req, err := c.newRequest(probeCtx, http.MethodGet, "/global/health", nil)
 		if err == nil {
 			resp, err := c.http.Do(req)
 			if err == nil {

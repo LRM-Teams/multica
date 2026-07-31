@@ -38,7 +38,7 @@ func newFakeOpenCodeServeServer() *fakeOpenCodeServeServer {
 
 func (f *fakeOpenCodeServeServer) handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/doc", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/session", func(w http.ResponseWriter, r *http.Request) {
@@ -362,7 +362,7 @@ func TestRunTurnIgnoresMessageUpdatedEvent(t *testing.T) {
 }
 
 // TestWaitReadySurvivesOneHungProbe reproduces the production incident this
-// PR fixes: a /doc probe whose connection succeeds but which never writes a
+// PR fixes: a probe whose connection succeeds but which never writes a
 // response never returns from c.http.Do, and with no per-probe deadline that
 // single call swallows the entire outer readiness budget — even though the
 // server recovers and responds normally moments later. Before
@@ -376,7 +376,7 @@ func TestWaitReadySurvivesOneHungProbe(t *testing.T) {
 	var hits atomic.Int32
 	block := make(chan struct{})
 	mux := http.NewServeMux()
-	mux.HandleFunc("/doc", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
 		if hits.Add(1) == 1 {
 			// First probe: accept the connection but never write a response,
 			// simulating the hang observed in production. Held open until

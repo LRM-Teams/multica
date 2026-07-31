@@ -1,6 +1,12 @@
 "use client";
 
-import { type ChangeEvent, type ReactNode, type RefObject, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type ReactNode,
+  type RefObject,
+  useReducer,
+  useRef,
+} from "react";
 import {
   Bell,
   ChevronLeft,
@@ -43,6 +49,51 @@ import { ChannelNotifyPrefsOptions } from "./channel-notify-prefs";
 export type ChannelDetailsTab = "about" | "members" | "settings";
 type DetailsView = "home" | ChannelDetailsTab | "notify-prefs";
 type HeroEditField = "name" | "description" | null;
+
+/** Panel UI state — one reducer so related drafts don't fan out renders (react-doctor). */
+type PanelUiState = {
+  view: DetailsView;
+  nameDraft: string;
+  descriptionDraft: string;
+  larkDraft: string;
+  heroEdit: HeroEditField;
+};
+
+type PanelUiAction =
+  | { type: "set_view"; view: DetailsView }
+  | { type: "set_name_draft"; value: string }
+  | { type: "set_description_draft"; value: string }
+  | { type: "set_lark_draft"; value: string }
+  | { type: "begin_name_edit"; name: string }
+  | { type: "begin_description_edit"; description: string }
+  | { type: "cancel_name"; name: string }
+  | { type: "cancel_description"; description: string }
+  | { type: "end_hero_edit" };
+
+function panelUiReducer(state: PanelUiState, action: PanelUiAction): PanelUiState {
+  switch (action.type) {
+    case "set_view":
+      return { ...state, view: action.view };
+    case "set_name_draft":
+      return { ...state, nameDraft: action.value };
+    case "set_description_draft":
+      return { ...state, descriptionDraft: action.value };
+    case "set_lark_draft":
+      return { ...state, larkDraft: action.value };
+    case "begin_name_edit":
+      return { ...state, nameDraft: action.name, heroEdit: "name" };
+    case "begin_description_edit":
+      return { ...state, descriptionDraft: action.description, heroEdit: "description" };
+    case "cancel_name":
+      return { ...state, nameDraft: action.name, heroEdit: null };
+    case "cancel_description":
+      return { ...state, descriptionDraft: action.description, heroEdit: null };
+    case "end_hero_edit":
+      return { ...state, heroEdit: null };
+    default:
+      return state;
+  }
+}
 
 /** Caps capability / pending flags so the panel avoids many boolean props (react-doctor). */
 export type ChannelDetailsAccess = {
@@ -173,17 +224,14 @@ export function ChannelDetailsPanel({
 
   // Parent remounts via key when channel/tab opener changes — drafts/view
   // reset with that remount (not synced through effects).
-  // react-doctor-disable-next-line react-doctor/no-derived-state -- remount keyed by channel/initialTab
-  const [view, setView] = useState<DetailsView>(() =>
-    resolveInitialView(initialTab, hideSettingsTab),
-  );
-  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
-  const [nameDraft, setNameDraft] = useState(channel.name);
-  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
-  const [descriptionDraft, setDescriptionDraft] = useState(channel.description ?? "");
-  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
-  const [larkDraft, setLarkDraft] = useState(channel.lark_chat_id ?? "");
-  const [heroEdit, setHeroEdit] = useState<HeroEditField>(null);
+  const [ui, dispatch] = useReducer(panelUiReducer, undefined, () => ({
+    view: resolveInitialView(initialTab, hideSettingsTab),
+    nameDraft: channel.name,
+    descriptionDraft: channel.description ?? "",
+    larkDraft: channel.lark_chat_id ?? "",
+    heroEdit: null as HeroEditField,
+  }));
+  const { view, nameDraft, descriptionDraft, larkDraft, heroEdit } = ui;
   const skipHeroBlurRef = useRef(false);
 
   // LRM-724 / LRM-860 — channel icon upload from hero (no avatar sub-view).
@@ -223,13 +271,12 @@ export function ChannelDetailsPanel({
       return;
     }
     if (next !== channel.name) onRename(next);
-    setHeroEdit(null);
+    dispatch({ type: "end_hero_edit" });
   };
 
   const cancelName = () => {
     skipHeroBlurRef.current = true;
-    setNameDraft(channel.name);
-    setHeroEdit(null);
+    dispatch({ type: "cancel_name", name: channel.name });
   };
 
   const commitDescription = () => {
@@ -240,19 +287,21 @@ export function ChannelDetailsPanel({
     const next = descriptionDraft.trim() || null;
     const prev = channel.description?.trim() || null;
     if (next !== prev) onUpdateDescription?.(next);
-    setHeroEdit(null);
+    dispatch({ type: "end_hero_edit" });
   };
 
   const cancelDescription = () => {
     skipHeroBlurRef.current = true;
-    setDescriptionDraft(channel.description ?? "");
-    setHeroEdit(null);
+    dispatch({
+      type: "cancel_description",
+      description: channel.description ?? "",
+    });
   };
 
   const userCount = members.filter((m) => m.member_type === "user").length;
   const agentCount = members.filter((m) => m.member_type === "agent").length;
 
-  const goHome = () => setView("home");
+  const goHome = () => dispatch({ type: "set_view", view: "home" });
 
   const subTitle =
     view === "members"
@@ -326,7 +375,9 @@ export function ChannelDetailsPanel({
                   <div>
                     <Input
                       value={nameDraft}
-                      onChange={(e) => setNameDraft(e.target.value)}
+                      onChange={(e) =>
+                        dispatch({ type: "set_name_draft", value: e.target.value })
+                      }
                       disabled={renamePending}
                       autoFocus
                       aria-label={t(($) => $.details.rename_label)}
@@ -352,10 +403,9 @@ export function ChannelDetailsPanel({
                     type="button"
                     data-testid="channel-details-hero-name"
                     className="-mx-1 truncate rounded-md px-1 text-left text-base font-bold tracking-tight hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
-                    onClick={() => {
-                      setNameDraft(channel.name);
-                      setHeroEdit("name");
-                    }}
+                    onClick={() =>
+                      dispatch({ type: "begin_name_edit", name: channel.name })
+                    }
                   >
                     <span className="text-muted-foreground">#</span>
                     {channel.name}
@@ -379,7 +429,12 @@ export function ChannelDetailsPanel({
                   <div className="mt-2">
                     <Textarea
                       value={descriptionDraft}
-                      onChange={(e) => setDescriptionDraft(e.target.value)}
+                      onChange={(e) =>
+                        dispatch({
+                          type: "set_description_draft",
+                          value: e.target.value,
+                        })
+                      }
                       disabled={descriptionPending}
                       autoFocus
                       rows={3}
@@ -404,10 +459,12 @@ export function ChannelDetailsPanel({
                     type="button"
                     data-testid="channel-details-hero-description"
                     className="-mx-1.5 mt-2 w-[calc(100%+0.75rem)] rounded-md px-1.5 py-0.5 text-left text-sm leading-5 text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => {
-                      setDescriptionDraft(channel.description ?? "");
-                      setHeroEdit("description");
-                    }}
+                    onClick={() =>
+                      dispatch({
+                        type: "begin_description_edit",
+                        description: channel.description ?? "",
+                      })
+                    }
                   >
                     {channel.description?.trim()
                       ? channel.description
@@ -434,7 +491,7 @@ export function ChannelDetailsPanel({
 
           <button
             type="button"
-            onClick={() => setView("members")}
+            onClick={() => dispatch({ type: "set_view", view: "members" })}
             data-testid="channel-details-members-row"
             className="flex w-full items-center gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-left transition-colors hover:bg-muted/60"
           >
@@ -456,7 +513,7 @@ export function ChannelDetailsPanel({
           {channel.kind === "group" ? (
             <GroupManagerHint
               channelId={channel.id}
-              onOpenMembers={() => setView("members")}
+              onOpenMembers={() => dispatch({ type: "set_view", view: "members" })}
             />
           ) : null}
 
@@ -467,7 +524,7 @@ export function ChannelDetailsPanel({
               value={notifyPrefLabel}
               onClick={
                 variant === "page" && onSelectNotifyLevel
-                  ? () => setView("notify-prefs")
+                  ? () => dispatch({ type: "set_view", view: "notify-prefs" })
                   : onOpenNotificationPrefs
                     ? () => {
                         onClose();
@@ -519,7 +576,7 @@ export function ChannelDetailsPanel({
               <ChannelDetailsDetailRow
                 icon={<Settings className="size-4" />}
                 label={t(($) => $.details.row_settings)}
-                onClick={() => setView("settings")}
+                onClick={() => dispatch({ type: "set_view", view: "settings" })}
                 testId="channel-details-settings"
               />
             </ChannelDetailsSectionCard>
@@ -598,7 +655,9 @@ export function ChannelDetailsPanel({
               <div className="flex gap-2">
                 <Input
                   value={larkDraft}
-                  onChange={(e) => setLarkDraft(e.target.value)}
+                  onChange={(e) =>
+                    dispatch({ type: "set_lark_draft", value: e.target.value })
+                  }
                   disabled={!settingsEditable || larkPending}
                   placeholder={t(($) => $.sidebar.lark_placeholder)}
                   aria-label={t(($) => $.details.lark_label)}

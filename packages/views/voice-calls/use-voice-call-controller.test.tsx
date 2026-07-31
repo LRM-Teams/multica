@@ -147,7 +147,7 @@ describe("useVoiceCallController", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps ringback and connecting state until the server reports the provider active", async () => {
+  it("keeps ringback and connecting state until expected remote audio is audible", async () => {
     let resolveCreate:
       | ((created: CreateVoiceCallResponse) => void)
       | undefined;
@@ -193,10 +193,44 @@ describe("useVoiceCallController", () => {
       );
     });
 
-    await waitFor(() => {
-      expect(result.current.phase).toBe("connected");
+    await act(async () => {
+      await Promise.resolve();
     });
+    expect(result.current.phase).toBe("joining");
+    expect(ringback.ringback.stop).not.toHaveBeenCalled();
+
+    act(() => {
+      media.events().onRemoteAudioStarted?.("voice-agent-1");
+    });
+
+    expect(result.current.phase).toBe("connected");
     expect(ringback.ringback.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat a late local RTC connection event as an agent answer", async () => {
+    const media = createFakeMediaSession();
+    const ringback = createFakeRingback();
+    const { result } = renderHook(
+      () => useVoiceCallController("workspace-1", {
+        mediaSessionFactory: media.factory,
+        ringbackFactory: ringback.factory,
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.start({
+        channel_id: "channel-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    act(() => {
+      media.events().onStateChange?.("connected");
+    });
+
+    expect(result.current.phase).toBe("joining");
+    expect(ringback.ringback.stop).not.toHaveBeenCalled();
   });
 
   it("fails and cleans up when the provider never becomes active", async () => {
@@ -238,7 +272,7 @@ describe("useVoiceCallController", () => {
     }
   });
 
-  it("does not time out when a final server refresh finds the provider active", async () => {
+  it("times out when the provider task is active but no audio becomes audible", async () => {
     vi.useFakeTimers();
     try {
       const media = createFakeMediaSession();
@@ -264,10 +298,13 @@ describe("useVoiceCallController", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
 
-      expect(result.current.phase).toBe("connected");
-      expect(result.current.error).toBeNull();
-      expect(media.session.disconnect).not.toHaveBeenCalled();
-      expect(stopVoiceCall).not.toHaveBeenCalled();
+      expect(result.current.phase).toBe("failed");
+      expect(result.current.error).toMatchObject({
+        source: "server",
+        code: "provider_activation_timeout",
+      });
+      expect(media.session.disconnect).toHaveBeenCalledOnce();
+      expect(stopVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
       expect(ringback.ringback.stop).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -681,6 +718,7 @@ describe("useVoiceCallController", () => {
         voiceCallKeys.detail("workspace-1", "call-1"),
         activeCall,
       );
+      media.events().onRemoteAudioStarted?.("voice-agent-1");
     });
     await waitFor(() => {
       expect(result.current.phase).toBe("connected");

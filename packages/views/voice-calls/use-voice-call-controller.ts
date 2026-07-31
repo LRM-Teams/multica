@@ -149,11 +149,12 @@ function phaseFromServer(
         ? localPhase
         : "joining";
     case "active":
-      return localPhase === "muted" ||
-          localPhase === "reconnecting" ||
-          localPhase === "ending"
+      return localPhase === "connected" ||
+        localPhase === "muted" ||
+        localPhase === "reconnecting" ||
+        localPhase === "ending"
         ? localPhase
-        : "connected";
+        : "joining";
     case "reconnecting":
       return localPhase === "ending" ? "ending" : "reconnecting";
     case "ending":
@@ -328,13 +329,6 @@ export function useVoiceCallController(
         ) {
           return;
         }
-        if (latestStatus === "active") {
-          stopRingback();
-          if (mountedRef.current) {
-            setLocalPhase("connected");
-          }
-          return;
-        }
         if (TERMINAL_STATUSES.has(latestStatus)) {
           stopRingback();
           return;
@@ -475,9 +469,12 @@ export function useVoiceCallController(
         const events: VoiceCallMediaEvents = {
           onStateChange: (state) => {
             if (
-              !providerStartedRef.current &&
               !providerAnsweredRef.current &&
-              (state === "connected" || state === "muted")
+              (
+                state === "connected" ||
+                state === "muted" ||
+                state === "reconnecting"
+              )
             ) {
               return;
             }
@@ -743,11 +740,6 @@ export function useVoiceCallController(
 
   useEffect(() => {
     if (!callId) return;
-    if (serverStatus === "active") {
-      clearActivationTimeout();
-      stopRingback();
-      return;
-    }
     if (!TERMINAL_STATUSES.has(serverStatus ?? "")) return;
     clearActivationTimeout();
     stopRingback();

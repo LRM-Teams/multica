@@ -714,6 +714,177 @@ func TestAgentDMSupervisionListReadOnlyAndOwnerControls(t *testing.T) {
 	}
 }
 
+// TestSupervisedAgentPairListPreferences (LRM-845): owner may pin/mute/mark_unread/close
+// a supervised agent_pair DM; prefs key by channel in dm_peer_state; list projects them;
+// non-owners stay 403; message send stays read-only.
+func TestSupervisedAgentPairListPreferences(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Pref A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Pref B "+uuid.NewString(), []byte("[]"))
+	// Also seed a personal 1:1 with the lexicographically-first agent so channel-keyed
+	// prefs cannot collide with peer-keyed 1:1 state.
+	personalChannelID := seedAgentDMChannel(t, firstAgentID)
+
+	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
+	channel, created := testHandler.createDMChannel(
+		ctx,
+		nil,
+		testWorkspaceID,
+		testUserID,
+		canonical,
+		[]dmMember{
+			{memberType: "agent", memberID: parseUUID(firstAgentID)},
+			{memberType: "agent", memberID: parseUUID(secondAgentID)},
+		},
+	)
+	if !created {
+		t.Fatal("create supervised A2A DM channel failed")
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channel.ID)
+		testPool.Exec(ctx, `
+			DELETE FROM dm_peer_state
+			WHERE workspace_id = $1 AND user_id = $2 AND peer_type = 'channel' AND peer_id = $3`,
+			testWorkspaceID, testUserID, channel.ID)
+	})
+
+	callPref := func(method, path string, handler http.HandlerFunc) int {
+		t.Helper()
+		req := withURLParam(
+			withChatTestWorkspaceCtx(t, newRequestAs(testUserID, method, path, nil)),
+			"channelId",
+			channel.ID,
+		)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		return rec.Code
+	}
+
+	if code := callPref(http.MethodPut, "/api/dm/channels/"+channel.ID+"/pin", testHandler.PinDMChannel); code != http.StatusOK {
+		t.Fatalf("owner pin supervised: status=%d", code)
+	}
+	if code := callPref(http.MethodPut, "/api/dm/channels/"+channel.ID+"/mute", testHandler.MuteDMChannel); code != http.StatusOK {
+		t.Fatalf("owner mute supervised: status=%d", code)
+	}
+	if code := callPref(http.MethodPost, "/api/dm/channels/"+channel.ID+"/unread", testHandler.MarkDMChannelUnread); code != http.StatusOK {
+		t.Fatalf("owner mark unread supervised: status=%d", code)
+	}
+
+	var peerType string
+	var peerID string
+	var pinned, muted, manualUnread bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT peer_type, peer_id::text,
+		       pinned_at IS NOT NULL, muted_at IS NOT NULL, manual_unread_at IS NOT NULL
+		FROM dm_peer_state
+		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = 'channel' AND peer_id = $3`,
+		testWorkspaceID, testUserID, channel.ID,
+	).Scan(&peerType, &peerID, &pinned, &muted, &manualUnread); err != nil {
+		t.Fatalf("load channel-keyed dm_peer_state: %v", err)
+	}
+	if peerType != "channel" || peerID != channel.ID || !pinned || !muted || !manualUnread {
+		t.Fatalf("unexpected supervised pref row: type=%s id=%s pinned=%v muted=%v unread=%v",
+			peerType, peerID, pinned, muted, manualUnread)
+	}
+
+	// Personal 1:1 with firstAgent must remain unpinned/unmuted (no peer-key collision).
+	var personalPinned int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM dm_peer_state
+		WHERE workspace_id = $1 AND user_id = $2
+		  AND peer_type = 'agent' AND peer_id = $3
+		  AND (pinned_at IS NOT NULL OR muted_at IS NOT NULL OR manual_unread_at IS NOT NULL)`,
+		testWorkspaceID, testUserID, firstAgentID,
+	).Scan(&personalPinned); err != nil {
+		t.Fatalf("count personal peer state: %v", err)
+	}
+	if personalPinned != 0 {
+		t.Fatalf("supervised prefs leaked onto personal agent peer state; channel=%s", personalChannelID)
+	}
+
+	findSupervised := func() *DMItem {
+		t.Helper()
+		items := listDMItemsForTest(t)
+		for i := range items {
+			if items[i].ID == channel.ID {
+				return &items[i]
+			}
+		}
+		return nil
+	}
+	listed := findSupervised()
+	if listed == nil {
+		t.Fatal("supervised channel missing from DM list after prefs")
+	}
+	if listed.PinnedAt == nil || !listed.Muted || listed.MutedAt == nil || !listed.ManuallyUnread || listed.Unread == 0 {
+		t.Fatalf("list did not project supervised prefs: %+v", listed)
+	}
+
+	otherUserID := seedWorkspaceUserForTransportTargetTest(t, "a2a-pref-non-owner-"+uuid.NewString()[:8])
+	otherReq := withURLParam(
+		withChatTestWorkspaceCtx(t, newRequestAs(otherUserID, http.MethodPut, "/api/dm/channels/"+channel.ID+"/pin", nil)),
+		"channelId",
+		channel.ID,
+	)
+	otherRec := httptest.NewRecorder()
+	testHandler.PinDMChannel(otherRec, otherReq)
+	if otherRec.Code != http.StatusForbidden {
+		t.Fatalf("non-owner pin supervised: status=%d body=%s", otherRec.Code, otherRec.Body.String())
+	}
+
+	sendReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channel.ID+"/messages", map[string]any{
+				"content":           "owner must stay read-only",
+				"client_message_id": uuid.NewString(),
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	sendRec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusForbidden {
+		t.Fatalf("owner send after pref writes: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	if code := callPref(http.MethodDelete, "/api/dm/channels/"+channel.ID, testHandler.CloseDMChannel); code != http.StatusOK {
+		t.Fatalf("owner close supervised: status=%d", code)
+	}
+	if findSupervised() != nil {
+		t.Fatal("closed supervised channel still visible in DM list")
+	}
+
+	// New A2A message should unhide channel-keyed closed state for the supervisor.
+	if _, err := testHandler.insertChannelMessage(
+		ctx,
+		parseUUID(channel.ID),
+		parseUUID(testWorkspaceID),
+		"agent",
+		parseUUID(firstAgentID),
+		"Pref A",
+		"reopen after close",
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("seed reopen message: %v", err)
+	}
+	testHandler.clearDMHiddenForChannelMembers(ctx, testWorkspaceID, parseUUID(channel.ID))
+	if findSupervised() == nil {
+		t.Fatal("supervised channel did not reappear after clearDMHiddenForChannelMembers")
+	}
+}
+
 func TestAgentDMGlobalPauseIsScopedToPairsInvolvingOwnedAgents(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

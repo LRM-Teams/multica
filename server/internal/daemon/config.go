@@ -599,7 +599,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 // origin we treat as "official" for the auto-update default — staging,
 // preview, and any future *.multica.ai subdomains are deliberately excluded
 // so they inherit the safer self-host default until explicitly opted in.
-const officialCloudHost = "api.multica.ai"
+// Mirrors cli.OfficialCloudAPIHost (the single source of truth — see its doc
+// comment for why this isn't api.leagent.me yet) rather than a second literal
+// so the two can't silently drift apart.
+const officialCloudHost = cli.OfficialCloudAPIHost
 
 // isOfficialCloudServer reports whether the resolved server base URL points
 // at Multica's hosted cloud. Used to pick the auto-update default: cloud

@@ -290,7 +290,9 @@ func loadMemberManagementCapabilityRoster(
 		         ''
 		       ) AS display_name,
 		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
-		       cm.role
+		       cm.role,
+		       cm.added_by_type,
+		       cm.added_by_id
 		FROM channel_member cm
 		LEFT JOIN "user" u
 		  ON cm.member_type = 'user' AND u.id = cm.member_id
@@ -317,13 +319,23 @@ func loadMemberManagementCapabilityRoster(
 	roster := make([]memberManagementCapabilityRosterTarget, 0)
 	for rows.Next() {
 		var (
-			memberType  string
-			memberID    pgtype.UUID
-			displayName string
-			avatarURL   pgtype.Text
-			role        string
+			memberType   string
+			memberID     pgtype.UUID
+			displayName  string
+			avatarURL    pgtype.Text
+			role         string
+			addedByType  pgtype.Text
+			addedByID    pgtype.UUID
 		)
-		if err := rows.Scan(&memberType, &memberID, &displayName, &avatarURL, &role); err != nil {
+		if err := rows.Scan(
+			&memberType,
+			&memberID,
+			&displayName,
+			&avatarURL,
+			&role,
+			&addedByType,
+			&addedByID,
+		); err != nil {
 			return nil, err
 		}
 		target := MemberManagementTarget{
@@ -331,6 +343,10 @@ func loadMemberManagementCapabilityRoster(
 			ID:                       memberID,
 			Role:                     ChannelRole(role),
 			WouldBreakOwnerInvariant: role == string(ChannelRoleOwner),
+			AddedByID:                addedByID,
+		}
+		if addedByType.Valid {
+			target.AddedByKind = PrincipalKind(addedByType.String)
 		}
 		if !validMemberManagementTarget(&target) || displayName == "" {
 			return nil, memberManagementError(http.StatusInternalServerError, "invalid channel member")

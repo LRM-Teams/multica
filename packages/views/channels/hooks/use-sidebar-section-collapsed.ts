@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type MessagesSidebarSection = "pinned" | "dms" | "channels";
+export type MessagesSidebarSection = "pinned" | "dms" | "agent-dms" | "channels";
 
 /**
  * In-memory cache so Messages sidebar section collapse survives remounts of

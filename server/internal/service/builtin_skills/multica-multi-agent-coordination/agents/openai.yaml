@@ -1,0 +1,4 @@
+interface:
+  display_name: "Multi-agent coordination"
+  short_description: "Coordinate ordered, parallel, private, and staged Agent teamwork"
+  default_prompt: "Coordinate this work across the right Agents and return one clear result."

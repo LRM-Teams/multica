@@ -1256,6 +1256,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/agent", func(r chi.Router) {
 				r.Use(middleware.RequireAgentPrincipal)
 				r.Get("/channels", h.ListAgentChannels)
+				r.Post("/channels", h.CreateAgentCoordinationChannel)
+				r.Post("/channels/{channelId}/archive", h.ArchiveAgentCoordinationChannel)
 				r.Get("/channels/{channelId}/members", h.ListAgentChannelMembers)
 				r.Get("/channels/{channelId}/member-management-capabilities", h.GetAgentChannelMemberManagementCapabilities)
 				r.Post("/channels/{channelId}/members", h.AddAgentChannelMember)

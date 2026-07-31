@@ -322,4 +322,11 @@
 | 台账的诚实性比完整性重要——"看起来有人在做"是最贵的台账状态；意向≠claim，挂名≠在做 | ⑥review 红线 | 同日两例：#531 早晨无主 in_progress（事后发现）；#537 执行人裁定（事前拦：Felix"明早接"明确记为意向不记 claim，直到 Wren 实 claim 才报"有主"） | ⛔仅文档 owner @iris 提出、@parker 执行签 |
 
 ---
+
+### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）
+- Agent 可为顺序、并行、讨论收敛和分阶段工作创建临时协作群，但不能借此成为频道 owner、选择任意人类观察者或调用 human route。人类 owner 只能从当前有效执行的发起人事实推导；创建 Agent 必须是成员，其他成员只能是同 workspace 的 live Agent。
+- 创建请求必须携带由调用者稳定生成的 `client_request_id`；同 Agent、同 key、同请求返回原群，不同请求复用 key 必须冲突。重试不得留下重复频道、无 owner 频道、半套成员或孤儿 onboarding。
+- 游戏仅是验收面，存储、API、CLI 与内置技能只表达通用 coordination；不得出现狼人、法官、卧底等产品模型。
+- **物**：migration 255 的 provenance/temporary/idempotency 约束；`POST /api/agent/channels`；`multica channel create`；`multica-multi-agent-coordination` 技能及 source map；通用设计见 `docs/superpowers/specs/2026-07-31-general-multi-agent-coordination-design.md`。
+
 维护人：Parker（产品）。规矩变更走 PR；`可执行` 升降档需 owner 签字。

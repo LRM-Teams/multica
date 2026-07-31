@@ -31,6 +31,30 @@ func newChannelMemberAddTestCmd() *cobra.Command {
 	return cmd
 }
 
+func newChannelArchiveTestCmd(target string) *cobra.Command {
+	cmd := &cobra.Command{Use: "archive"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("target", target, "")
+	return cmd
+}
+
+func newChannelCreateTestCmd(name, requestID string, members []string) *cobra.Command {
+	cmd := &cobra.Command{Use: "create"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("name", name, "")
+	cmd.Flags().String("description", "", "")
+	cmd.Flags().StringSlice("member", members, "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().String("purpose", "review", "")
+	cmd.Flags().String("request-id", requestID, "")
+	cmd.Flags().String("output", "json", "")
+	return cmd
+}
+
 func TestSetChannelMuteResolvesNameAndUsesAgentEndpoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
@@ -109,6 +133,86 @@ func TestChannelMemberAddCommandIsRegistered(t *testing.T) {
 	}
 	if addCmd.Flags().Lookup("target") == nil {
 		t.Fatal("channel member add missing --target flag")
+	}
+}
+
+func TestChannelCreateCommandIsRegistered(t *testing.T) {
+	createCmd, _, err := channelCmd.Find([]string{"create"})
+	if err != nil || createCmd == nil || createCmd.Name() != "create" {
+		t.Fatalf("channel create subcommand not registered; got %#v (err %v)", createCmd, err)
+	}
+	for _, flag := range []string{"name", "member", "parent", "purpose", "request-id", "output"} {
+		if createCmd.Flags().Lookup(flag) == nil {
+			t.Fatalf("channel create missing --%s flag", flag)
+		}
+	}
+}
+
+func TestChannelArchiveCommandIsRegistered(t *testing.T) {
+	archiveCmd, _, err := channelCmd.Find([]string{"archive"})
+	if err != nil || archiveCmd == nil || archiveCmd.Name() != "archive" {
+		t.Fatalf("channel archive subcommand not registered; got %#v (err %v)", archiveCmd, err)
+	}
+	if archiveCmd.Flags().Lookup("target") == nil {
+		t.Fatal("channel archive missing --target flag")
+	}
+}
+
+func TestRunAgentChannelArchiveUsesDedicatedAgentRoute(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "mat_coordination_archive_test")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-123")
+	channelID := "22222222-2222-2222-2222-222222222222"
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": channelID})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	if err := runAgentChannelArchive(newChannelArchiveTestCmd(channelID), nil); err != nil {
+		t.Fatalf("runAgentChannelArchive: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/agent/channels/"+channelID+"/archive" {
+		t.Fatalf("request=%s %s, want POST dedicated Agent archive route", gotMethod, gotPath)
+	}
+}
+
+func TestRunAgentChannelCreateUsesDedicatedAgentRouteAndStableRequestID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "mat_coordination_create_test")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-123")
+	agentID := "33333333-3333-3333-3333-333333333333"
+	requestID := "issue-123-review"
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"channel_id": "44444444-4444-4444-4444-444444444444",
+			"name":       "backend-review",
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := newChannelCreateTestCmd("backend-review", requestID, []string{agentID, agentID})
+	if err := runAgentChannelCreate(cmd, nil); err != nil {
+		t.Fatalf("runAgentChannelCreate: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/agent/channels" {
+		t.Fatalf("request=%s %s, want POST /api/agent/channels", gotMethod, gotPath)
+	}
+	if gotBody["client_request_id"] != requestID {
+		t.Fatalf("client_request_id=%v, want %s", gotBody["client_request_id"], requestID)
+	}
+	members, ok := gotBody["member_agent_ids"].([]any)
+	if !ok || len(members) != 1 || members[0] != agentID {
+		t.Fatalf("member_agent_ids=%#v, want one deduplicated id", gotBody["member_agent_ids"])
 	}
 }
 

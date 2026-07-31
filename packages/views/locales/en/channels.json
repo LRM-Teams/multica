@@ -582,6 +582,7 @@
     "bubble_replied_time": "just now",
     "agent_pair": {
       "pill": "Agent DM",
+      "folder": "Agent DMs",
       "owner_readonly_note": "You’re supervising this agent pair’s DMs in read-only — you can’t post here."
     }
   },

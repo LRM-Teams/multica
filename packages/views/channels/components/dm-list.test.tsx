@@ -693,6 +693,7 @@ describe("DmList agent_pair row menu (LRM-752)", () => {
 
   it("renders the ⋯ menu with all four list-preference actions on agent_pair rows", async () => {
     renderDmList();
+    fireEvent.click(screen.getByRole("button", { name: /Agent DMs/ }));
     expect(screen.getByText("Alpha Bot · Beta Bot")).toBeInTheDocument();
 
     const trigger = screen.getByRole("button", { name: "Direct message actions" });
@@ -702,5 +703,48 @@ describe("DmList agent_pair row menu (LRM-752)", () => {
     expect(screen.getByText("Pin")).toBeInTheDocument();
     expect(screen.getByText("Mute notifications")).toBeInTheDocument();
     expect(screen.getByText("Close chat")).toBeInTheDocument();
+  });
+});
+
+describe("DmList supervised Agent DM folder", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dmsPending = false;
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-human",
+        peer: { type: "user", id: "user-2", name: "Human Peer" },
+      }),
+      makeDm({
+        id: "dm-agent-pair",
+        mode: "agent_pair",
+        supervised: true,
+        peer: { type: "agent", id: "agent-a", name: "Alice · Bob" },
+        participants: [
+          { type: "agent", id: "agent-a", name: "Alice" },
+          { type: "agent", id: "agent-b", name: "Bob" },
+        ],
+        unread: 3,
+        real_unread: 3,
+      }),
+    ];
+  });
+
+  it("keeps direct DMs visible and folds supervised Agent pairs by default", () => {
+    renderDmList();
+    expect(screen.getByText("Human Peer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Agent DMs/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByText("Alice · Bob")).not.toBeInTheDocument();
+  });
+
+  it("expands the folder to reveal the authorized Agent pair", () => {
+    renderDmList();
+    fireEvent.click(screen.getByRole("button", { name: /Agent DMs/ }));
+    expect(screen.getByText("Alice · Bob")).toBeInTheDocument();
   });
 });

@@ -61,6 +61,27 @@
     "info_daemon_id": "Daemon ID",
     "info_providers": "Providers",
     "delete_danger_row": "Delete this computer",
+    "table_status": "Status",
+    "table_name": "Name",
+    "table_agents": "Agents",
+    "table_last_seen": "Last seen",
+    "table_agents_count_one": "{{count}} agent",
+    "table_agents_count_other": "{{count}} agents",
+    "last_seen_active_now": "Active now",
+    "basics_section": "Basics",
+    "basics_display_name": "Display name",
+    "basics_hostname": "Hostname",
+    "basics_os": "OS",
+    "basics_daemon": "Daemon",
+    "agents_section": "Agents",
+    "workspaces_section": "Workspaces",
+    "scan_workspaces": "Scan workspaces",
+    "scan_workspaces_offline": "Machine must be online to scan workspaces",
+    "scan_workspaces_error": "Could not scan workspaces on this machine",
+    "scan_workspaces_empty": "No agent workspaces found",
+    "workspace_orphan": "Agent deleted",
+    "workspace_delete": "Delete",
+    "rename_failed": "Could not save name — reverted",
     "no_runtimes_hint": "No runtimes on this machine yet.",
     "back_to_list": "Back to all machines",
     "metrics": {
@@ -121,7 +142,9 @@
         "title": "Cannot delete this computer",
         "description": "\"{{name}}\" has no daemon id, so one-click delete is unavailable. Per-runtime delete is not used as a substitute."
       }
-    }
+    },
+    "daemon_version_chip": "daemon v{{version}}",
+    "version_prefix": "v{{version}}"
   },
   "health": {
     "online": {
@@ -244,9 +267,9 @@
     "live_listening": "Waiting for your computer",
     "live_listening_hint": "We'll detect it as soon as the daemon starts — usually under a minute.",
     "troubleshooting": "Can't open a browser on that computer?",
-      "install_trouble_summary": "Command not working?",
-      "install_trouble_retry": "Check your internet connection and try the command again — a one-off network blip is the most common cause.",
-      "install_trouble_network": "If you're on a work network, VPN, or firewall, it may be blocking outbound access to the install script. Try a different network, or ask whoever manages it to allow this connection.",
+    "install_trouble_summary": "Command not working?",
+    "install_trouble_retry": "Check your internet connection and try the command again — a one-off network blip is the most common cause.",
+    "install_trouble_network": "If you're on a work network, VPN, or firewall, it may be blocking outbound access to the install script. Try a different network, or ask whoever manages it to allow this connection.",
     "trouble_intro": "Use a token instead of the browser sign-in. This replaces step 2 and works anywhere you have a terminal.",
     "trouble_token_hint_prefix": "Create a token in ",
     "trouble_token_hint_destination": "Settings → Tokens",

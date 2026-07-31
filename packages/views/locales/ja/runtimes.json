@@ -59,6 +59,27 @@
     "info_daemon_id": "Daemon ID",
     "info_providers": "プロバイダー",
     "delete_danger_row": "このマシンを削除",
+    "table_status": "ステータス",
+    "table_name": "名前",
+    "table_agents": "Agent",
+    "table_last_seen": "最終確認",
+    "table_agents_count_one": "Agent {{count}}",
+    "table_agents_count_other": "Agent {{count}}",
+    "last_seen_active_now": "現在アクティブ",
+    "basics_section": "基本情報",
+    "basics_display_name": "表示名",
+    "basics_hostname": "ホスト名",
+    "basics_os": "OS",
+    "basics_daemon": "Daemon",
+    "agents_section": "Agent",
+    "workspaces_section": "Workspaces",
+    "scan_workspaces": "workspaces をスキャン",
+    "scan_workspaces_offline": "スキャンにはマシンがオンラインである必要があります",
+    "scan_workspaces_error": "workspaces をスキャンできませんでした",
+    "scan_workspaces_empty": "agent workspace が見つかりません",
+    "workspace_orphan": "agent 削除済み",
+    "workspace_delete": "削除",
+    "rename_failed": "名前を保存できませんでした — 元に戻しました",
     "no_runtimes_hint": "このマシンにはまだランタイムがありません。",
     "back_to_list": "マシン一覧に戻る",
     "metrics": {
@@ -117,7 +138,9 @@
         "title": "このコンピュータは削除できません",
         "description": "「{{name}}」にはコンピューター識別子がないため、完全に削除できません。"
       }
-    }
+    },
+    "daemon_version_chip": "daemon v{{version}}",
+    "version_prefix": "v{{version}}"
   },
   "health": {
     "online": {
@@ -234,9 +257,9 @@
     "live_listening": "あなたのコンピュータを待っています",
     "live_listening_hint": "デーモンが起動するとすぐに検出します — 通常は 1 分以内です。",
     "troubleshooting": "そのコンピュータでブラウザを開けませんか?",
-      "install_trouble_summary": "コマンドがうまくいきませんか?",
-      "install_trouble_retry": "インターネット接続を確認して、もう一度コマンドを試してください——一時的な通信の乱れが最も多い原因です。",
-      "install_trouble_network": "社内ネットワークや VPN、ファイアウォールを使用している場合、インストールスクリプトへの外部アクセスがブロックされている可能性があります。別のネットワークを試すか、管理者に接続を許可してもらってください。",
+    "install_trouble_summary": "コマンドがうまくいきませんか?",
+    "install_trouble_retry": "インターネット接続を確認して、もう一度コマンドを試してください——一時的な通信の乱れが最も多い原因です。",
+    "install_trouble_network": "社内ネットワークや VPN、ファイアウォールを使用している場合、インストールスクリプトへの外部アクセスがブロックされている可能性があります。別のネットワークを試すか、管理者に接続を許可してもらってください。",
     "trouble_intro": "ブラウザでのサインインの代わりにトークンを使ってください。手順 2 を置き換え、ターミナルがある場所ならどこでも動作します。",
     "trouble_token_hint_prefix": "トークンは ",
     "trouble_token_hint_destination": "設定 → トークン",

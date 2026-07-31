@@ -72,6 +72,7 @@ import type {
   AgentHonorRulesView,
   UpdateAgentHonorShowcaseRequest,
   AgentRuntime,
+  RuntimeAgentWorkspacesResponse,
   InboxItem,
   UserActivityListResponse,
   UserActivityTab,
@@ -1583,12 +1584,29 @@ export class ApiClient {
 
   async updateRuntime(
     runtimeId: string,
-    patch: { visibility?: "private" | "public" },
+    patch: { visibility?: "private" | "public"; display_name?: string | null },
   ): Promise<AgentRuntime> {
     return this.fetch(`/api/runtimes/${runtimeId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
+  }
+
+  /** LRM-810 — on-demand scan of `{workspace}/.multica/agents/*` on the machine. */
+  async listRuntimeAgentWorkspaces(
+    runtimeId: string,
+  ): Promise<RuntimeAgentWorkspacesResponse> {
+    return this.fetch(`/api/runtimes/${runtimeId}/agent-workspaces`);
+  }
+
+  async deleteRuntimeAgentWorkspace(
+    runtimeId: string,
+    dirName: string,
+  ): Promise<{ ok: boolean }> {
+    return this.fetch(
+      `/api/runtimes/${runtimeId}/agent-workspaces/${encodeURIComponent(dirName)}`,
+      { method: "DELETE" },
+    );
   }
 
   async getRuntimeUsage(

@@ -559,6 +559,21 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("centers the quiet timestamp with the author name and earned badge row", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    expect(screen.getByTestId("message-author-row")).toHaveClass("items-center");
+    expect(screen.getByText("Research Agent").closest("button")).toHaveClass(
+      "self-center",
+    );
+    expect(screen.getByTestId("message-author-time")).toHaveClass(
+      "h-5",
+      "items-center",
+      "text-[10px]",
+      "text-muted-foreground/50",
+    );
+  });
+
   it("lets message content fill the conversation column (LRM-400)", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
     const body = screen.getByTestId("message-body");

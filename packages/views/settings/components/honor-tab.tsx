@@ -34,7 +34,11 @@ import {
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { HonorBadgeCatalog } from "../../honor/honor-badge-catalog";
 import { HonorNextTargets } from "../../honor/honor-next-targets";
-import { honorLevelProgress, isRareHonorBadge } from "../../honor/honor-progress";
+import {
+  getHonorShowcaseBadges,
+  honorLevelProgress,
+  isRareHonorBadge,
+} from "../../honor/honor-progress";
 import { useT } from "../../i18n";
 import honorHeroImage from "./assets/honor-center-orbit.webp";
 
@@ -179,10 +183,12 @@ export function HonorTab() {
 
   const catalog = dashboard.badge_catalog ?? [];
   const showcaseIds = dashboard.showcase_badge_ids ?? [];
-  const showcasedBadges = showcaseIds
-    .map((id) => catalog.find((item) => item.id === id && item.unlocked))
-    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .slice(0, maxShowcaseBadges);
+  const showcasedBadges = getHonorShowcaseBadges(
+    catalog,
+    showcaseIds,
+    maxShowcaseBadges,
+  );
+  const visibleShowcaseIds = showcasedBadges.map((badge) => badge.id);
   const equippedBadge =
     catalog.find((item) => item.id === dashboard.equipped_badge_id) ??
     dashboard.unlocked_badges.find(
@@ -222,9 +228,9 @@ export function HonorTab() {
     .slice(0, 8);
 
   const toggleShowcase = (badgeId: string) => {
-    const next = showcaseIds.includes(badgeId)
-      ? showcaseIds.filter((id) => id !== badgeId)
-      : [...showcaseIds, badgeId].slice(-maxShowcaseBadges);
+    const next = visibleShowcaseIds.includes(badgeId)
+      ? visibleShowcaseIds.filter((id) => id !== badgeId)
+      : [...visibleShowcaseIds, badgeId].slice(-maxShowcaseBadges);
     showcase.mutate(next);
   };
 
@@ -471,7 +477,7 @@ export function HonorTab() {
           <HonorBadgeCatalog
             items={catalog}
             equippedBadgeId={dashboard.equipped_badge_id}
-            showcaseBadgeIds={showcaseIds}
+            showcaseBadgeIds={visibleShowcaseIds}
             completionLabel={t(($) => $.honor.completion_value, {
               unlocked,
               total,

@@ -807,13 +807,17 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           shell fix (#1154). Soft wrap stays on `.message-surface`. */}
       <div className="min-w-0 max-w-full">
         {showAuthor && (
-          <div className="mb-0.5 flex select-none items-baseline gap-2 text-[13.5px] md:pr-24">
+          <div
+            data-testid="message-author-row"
+            className="mb-0.5 flex select-none items-center gap-1.5 text-[13.5px] md:pr-24"
+          >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
                 memberType={profileActorType}
                 memberId={profileActorId}
                 side="top"
                 sideOffset={8}
+                className="self-center"
                 onClickCapture={handleOpenProfileCapture}
               >
                 {nameLabel}
@@ -832,7 +836,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               </span>
             )}
             <span
-              className="shrink-0 text-[11px] text-muted-foreground/60"
+              data-testid="message-author-time"
+              className="inline-flex h-5 shrink-0 items-center text-[10px] leading-none tabular-nums text-muted-foreground/50"
               title={messageTime.full(message.created_at)}
             >
               <Time kind="message" value={message.created_at} title={false} />

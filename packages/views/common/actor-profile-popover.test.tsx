@@ -267,7 +267,7 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.getAllByText("Channel-only")).toHaveLength(3);
   });
 
-  it("shows a human member's level, equipped badge, and public collection", async () => {
+  it("keeps a human member's level and equipped badge on the identity card", async () => {
     mockHonorApi.getUserHonor.mockResolvedValue({
       level: 42,
       name_style: "animated_prismatic",
@@ -301,17 +301,17 @@ describe("ActorProfileContentLoaded", () => {
 
     render(<ActorProfileContentLoaded profile={profile} />);
 
-    expect(await screen.findByTestId("member-honor-showcase")).toBeInTheDocument();
-    expect(screen.getByText("Developer honor")).toBeInTheDocument();
-    expect(screen.getByText("LV.42")).toBeInTheDocument();
-    expect(screen.getAllByText("Prism Core").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("28 / 51 collected")).toBeInTheDocument();
-    const styledName = screen.getAllByText("caosz2").at(-1);
-    expect(styledName).toHaveAttribute("data-honor-surface", "profile");
-    expect(styledName).toHaveClass("honor-name--animated-prismatic");
+    const summary = await screen.findByTestId("member-honor-showcase");
+    expect(summary).toHaveTextContent("LV.42");
+    expect(summary).toHaveTextContent("Prism Core");
+    expect(summary.closest("section")).toBeNull();
+    expect(summary).not.toHaveClass("honor-dark-surface");
+    expect(screen.queryByText("Developer honor")).toBeNull();
+    expect(screen.queryByText("28 / 51 collected")).toBeNull();
+    expect(screen.getAllByText("caosz2")).toHaveLength(1);
   });
 
-  it("shows an agent's permanent XP, fleet class, and equipped achievement", async () => {
+  it("keeps an agent's level and equipped achievement on the identity card", async () => {
     mockHonorApi.getAgentHonor.mockResolvedValue({
       agent_id: "agent-1",
       level: 12,
@@ -365,11 +365,13 @@ describe("ActorProfileContentLoaded", () => {
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    expect(await screen.findByTestId("agent-honor-showcase")).toBeInTheDocument();
-    expect(screen.getByText("Agent honor")).toBeInTheDocument();
-    expect(screen.getByText("LV.12")).toBeInTheDocument();
-    expect(screen.getAllByText("Clean Burn").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("3400 XP")).toBeInTheDocument();
-    expect(screen.getByText("Battleship")).toBeInTheDocument();
+    const summary = await screen.findByTestId("agent-honor-showcase");
+    expect(summary).toHaveTextContent("LV.12");
+    expect(summary).toHaveTextContent("Clean Burn");
+    expect(summary.closest("section")).toBeNull();
+    expect(summary).not.toHaveClass("honor-dark-surface");
+    expect(screen.queryByText("Agent honor")).toBeNull();
+    expect(screen.queryByText("3400 XP")).toBeNull();
+    expect(screen.queryByText("Battleship")).toBeNull();
   });
 });

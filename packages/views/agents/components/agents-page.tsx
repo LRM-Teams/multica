@@ -770,6 +770,11 @@ export function AgentsPage({
               metric={selectedMetric}
               fleet={fleetByAgentId.get(selectedAgent.id)}
               canManage={selectedCanManage}
+              onHonor={() =>
+                navigation.push(
+                  `${paths.agentDetail(selectedAgent.id)}?tab=honor`,
+                )
+              }
               onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}
               onDelete={() => setConfirmDeleteSelected(true)}
             />

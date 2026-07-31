@@ -197,32 +197,33 @@ export function ComposerQuotePreview({
 }) {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
+  const summary = quoteSummary(
+    quote,
+    {
+      attachment: t(($) => $.quote.attachment_summary),
+      attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
+      image: t(($) => $.quote.image_summary),
+      images: (count) => t(($) => $.quote.images_summary, { count }),
+      empty: t(($) => $.quote.empty_summary),
+    },
+    mentionResolverFrom(getActorName),
+  );
 
   return (
     <div
-      className="flex items-start gap-2 border-b border-border/35 bg-muted/25 px-3 py-2"
+      className="flex items-start gap-2 border-b border-border/35 px-3 py-1.5"
       data-testid="composer-quote-preview"
     >
-      <div className="min-w-0 flex-1 border-l-2 border-primary/45 pl-2">
-        <p className="truncate text-xs font-medium text-foreground/80">{quote.author_name}</p>
-        <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">
-          {quoteSummary(
-            quote,
-            {
-              attachment: t(($) => $.quote.attachment_summary),
-              attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
-              image: t(($) => $.quote.image_summary),
-              images: (count) => t(($) => $.quote.images_summary, { count }),
-              empty: t(($) => $.quote.empty_summary),
-            },
-            mentionResolverFrom(getActorName),
-          )}
-        </p>
-      </div>
+      <p className="min-w-0 flex-1 truncate text-xs leading-5 text-muted-foreground">
+        <span className="select-none text-muted-foreground/80">{"> "}</span>
+        <span className="font-medium text-foreground/75">{quote.author_name}</span>
+        <span>{": "}</span>
+        <span>{summary}</span>
+      </p>
       <button
         type="button"
         onClick={onCancel}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-label={cancelLabel}
         title={cancelLabel}
       >
@@ -259,18 +260,17 @@ function AvailableMessageQuoteCard({
       data-testid="message-quote-card"
       data-quote-status="active"
       className={cn(
-        "mb-2 w-full rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity",
+        "mb-1 w-full text-left transition-opacity",
         canJump ? "cursor-pointer hover:opacity-80" : "cursor-default",
       )}
       aria-label={t(($) => $.quote.jump_to)}
     >
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate text-[11px] font-semibold text-foreground/70">{presentation.author}</span>
-        <span className="shrink-0 rounded-full bg-background/70 px-1 py-0.5 text-[9px] leading-none text-muted-foreground">
-          {presentation.typeLabel}
-        </span>
+      <span className="block min-w-0 truncate text-[12px] leading-5 text-muted-foreground">
+        <span className="select-none text-muted-foreground/80">{"> "}</span>
+        <span className="font-medium text-foreground/75">{presentation.author}</span>
+        <span>{": "}</span>
+        <span>{presentation.summary}</span>
       </span>
-      <span className="block line-clamp-1 text-[11px] text-muted-foreground">{presentation.summary}</span>
     </button>
   );
 }
@@ -298,13 +298,15 @@ export function MessageQuoteCard({
       <div
         data-testid="message-quote-card"
         data-quote-status={quote?.status ?? "inaccessible"}
-        className="mb-2 w-full rounded border-l-2 border-dashed border-muted-foreground/25 bg-muted/20 px-2 py-1 text-left"
+        className="mb-1 w-full text-left"
       >
-        <p className="truncate text-[11px] font-semibold text-foreground/60">
-          {t(($) => $.quote.unavailable_title)}
-        </p>
-        <p className="line-clamp-1 text-[11px] text-muted-foreground">
-          {t(($) => $.quote.unavailable_summary)}
+        <p className="truncate text-[12px] leading-5 text-muted-foreground">
+          <span className="select-none text-muted-foreground/80">{"> "}</span>
+          <span className="font-medium text-foreground/60">
+            {t(($) => $.quote.unavailable_title)}
+          </span>
+          <span>{": "}</span>
+          <span>{t(($) => $.quote.unavailable_summary)}</span>
         </p>
       </div>
     );

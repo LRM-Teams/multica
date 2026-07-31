@@ -86,8 +86,9 @@ describe("ComposerQuotePreview", () => {
     );
 
     expect(screen.getByTestId("composer-quote-preview")).toBeInTheDocument();
-    expect(screen.getByText("agent")).toBeInTheDocument();
-    expect(screen.getByText("Hello world")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-quote-preview")).toHaveTextContent(
+      "> agent: Hello world",
+    );
   });
 
   it("resolves a quoted mention to the display name — no internal handle (#530)", () => {
@@ -282,8 +283,10 @@ describe("MessageQuoteCard", () => {
     );
 
     expect(screen.getByText("Helper Bot")).toBeInTheDocument();
-    expect(screen.getByText("Agent")).toBeInTheDocument();
-    expect(screen.getByText("Hello world")).toBeInTheDocument();
+    expect(screen.getByText(/Hello world/)).toBeInTheDocument();
+    expect(screen.getByTestId("message-quote-card")).toHaveTextContent(
+      "> Helper Bot: Hello world",
+    );
   });
 
   it("renders a private fallback for deleted or inaccessible quote snapshots", () => {

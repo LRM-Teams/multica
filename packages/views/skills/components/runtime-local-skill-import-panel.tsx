@@ -22,6 +22,7 @@ import type {
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
+  deriveRuntimeHealth,
   runtimeListOptions,
   runtimeLocalSkillsKeys,
   runtimeLocalSkillsOptions,
@@ -49,6 +50,7 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { useT } from "../../i18n";
+import { useHealthLabel } from "../../runtimes/components/shared";
 import { isNameConflictError } from "../lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -487,6 +489,7 @@ export function RuntimeLocalSkillImportPanel({
   onBulkDone?: () => void;
 }) {
   const { t } = useT("skills");
+  const healthLabel = useHealthLabel();
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.user?.id ?? null);
@@ -530,8 +533,16 @@ export function RuntimeLocalSkillImportPanel({
   }, [selectedRuntimeId]);
 
   const selectedRuntime = localRuntimes.find((r) => r.id === selectedRuntimeId);
-  const canBrowseSkills =
-    !!selectedRuntimeId && selectedRuntime?.status === "online";
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app). Computed once here (outside JSX, so react:doctor's
+  // hydration-mismatch rule doesn't flag a fresh Date.now() per render) and
+  // reused below so every gate/badge on this panel agrees on the same answer.
+  const selectedRuntimeHealth = selectedRuntime
+    ? deriveRuntimeHealth(selectedRuntime, Date.now())
+    : null;
+  const selectedRuntimeOnline = selectedRuntimeHealth === "online";
+  const canBrowseSkills = !!selectedRuntimeId && selectedRuntimeOnline;
   const skillsQuery = useQuery({
     ...runtimeLocalSkillsOptions(selectedRuntimeId || null),
     enabled: canBrowseSkills,
@@ -842,7 +853,7 @@ export function RuntimeLocalSkillImportPanel({
 
   const canImport =
     !!selectedRuntime &&
-    selectedRuntime.status === "online" &&
+    selectedRuntimeOnline &&
     selectedKeys.size > 0 &&
     // Single-select requires a non-empty name (user may be renaming)
     (selectedKeys.size > 1 || !!editName.trim()) &&
@@ -959,7 +970,7 @@ export function RuntimeLocalSkillImportPanel({
         </div>
       );
     }
-    if (selectedRuntime.status !== "online") {
+    if (!selectedRuntimeOnline) {
       return (
         <div className="flex items-start gap-2 rounded-md bg-warning/10 px-3 py-2 text-xs text-muted-foreground">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
@@ -1106,12 +1117,8 @@ export function RuntimeLocalSkillImportPanel({
             <span className="min-w-0 flex-1 truncate">
               {runtimeLabel(selectedRuntime)}
             </span>
-            <Badge
-              variant={
-                selectedRuntime.status === "online" ? "secondary" : "outline"
-              }
-            >
-              {selectedRuntime.status}
+            <Badge variant={selectedRuntimeOnline ? "secondary" : "outline"}>
+              {healthLabel(selectedRuntimeHealth ?? "loading")}
             </Badge>
           </div>
         )}

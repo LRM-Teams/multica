@@ -7,6 +7,7 @@ import {
 import { Camera, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type {
   Agent,
   AgentRuntime,
@@ -91,7 +92,10 @@ export function AgentDetailInspector({
   const { t } = useT("agents");
   const timeAgo = useTimeAgo();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
-  const isOnline = runtime?.status === "online";
+  // Derived, staleness-aware health instead of the raw `status` column
+  // (#10 — "runtime online status" had two divergent sources across the
+  // app).
+  const isOnline = !!runtime && deriveRuntimeHealth(runtime, Date.now()) === "online";
 
   return (
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">

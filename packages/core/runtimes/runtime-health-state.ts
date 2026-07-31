@@ -1,4 +1,5 @@
 import type { AgentRuntime, RuntimeHealthState } from "../types";
+import { deriveRuntimeHealth } from "./derive-health";
 import { isUpdateLifecycleActive } from "./update-status";
 
 /**
@@ -90,13 +91,18 @@ export function runtimeHasHealthAttention(
 export function runtimeCanStartSelfUpdate(
   runtime: AgentRuntime,
   userId: string | null | undefined,
+  now: number = Date.now(),
 ): boolean {
   if (!isCurrentUserLocalRuntime(runtime, userId)) return false;
   if (isDesktopManagedRuntime(runtime)) return false;
   // Sandbox daemons are managed by the sandbox runtime; the user can't
   // self-update them, so don't offer the start-update action.
   if (isSandboxRuntime(runtime)) return false;
-  if (runtime.status !== "online") return false;
+  // Read online-ness through the derived, staleness-aware health instead of
+  // the raw `status` column: a heartbeat that silently stopped can leave
+  // `status: "online"` long after the daemon is actually gone (#10 —
+  // "runtime online status" had two divergent sources across the app).
+  if (deriveRuntimeHealth(runtime, now) !== "online") return false;
   // Don't offer a new update while one is genuinely underway or staged. The
   // backend keeps `runtime_health: "update_available"` through `ready_to_apply`,
   // so health alone would re-open the prompt on a staged daemon (pinning a

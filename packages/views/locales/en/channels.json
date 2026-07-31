@@ -554,6 +554,7 @@
     "thread_empty": "No messages yet. Say hello.",
     "self_label": "you",
     "open_failed": "Couldn't open conversation. Please try again.",
+    "peer_deleted_notice": "This agent has been deleted. You can still read the history, but can't send new messages.",
     "open_forbidden": "You don't have permission to message this agent",
     "mark_unread": "Mark as unread",
     "pin": "Pin",

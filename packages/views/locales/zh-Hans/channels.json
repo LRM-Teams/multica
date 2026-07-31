@@ -554,6 +554,7 @@
     "thread_empty": "还没有消息，打个招呼吧。",
     "self_label": "你",
     "open_failed": "无法打开私聊，请重试",
+    "peer_deleted_notice": "该 agent 已删除。历史消息仍可查看，但无法再发送新消息。",
     "open_forbidden": "无权限与该 Agent 私聊",
     "mark_unread": "标为未读",
     "pin": "置顶",

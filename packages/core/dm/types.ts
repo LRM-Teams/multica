@@ -10,6 +10,13 @@ export interface DMPeer {
   id: string;
   name: string;
   avatar_url?: string;
+  /**
+   * True when the peer agent has been archived (the product-facing "delete
+   * agent" action is a soft archive — history is never hidden). The DM stays
+   * fully readable; the client shows a read-only banner and blocks new sends
+   * instead of losing the conversation (2026-07-31 Wendy DM incident, B1).
+   */
+  archived?: boolean;
 }
 
 /**

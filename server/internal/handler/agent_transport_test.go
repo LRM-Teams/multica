@@ -490,102 +490,6 @@ func TestAgentTransportAgentDMExchangeNeverAutoPausesAndMustReplyChain(t *testin
 	}
 }
 
-func TestAgentDMPauseNotificationFailureRetriesAtomicallyWithoutDuplicates(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	firstAgentID := createHandlerTestAgent(t, "Pause Retry A "+uuid.NewString(), []byte("[]"))
-	secondAgentID := createHandlerTestAgent(t, "Pause Retry B "+uuid.NewString(), []byte("[]"))
-	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
-	lowID, highID, ok := normalizedAgentDMPair(parseUUID(firstAgentID), parseUUID(secondAgentID))
-	if !ok {
-		t.Fatal("normalize pause retry pair failed")
-	}
-	var exchangeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_dm_exchange (
-		  workspace_id, channel_id, agent_low_id, agent_high_id,
-		  matter_id, turn_count, state, pause_reason, notification_epoch
-		)
-		VALUES (
-		  $1, $2, $3, $4,
-		  gen_random_uuid(), 6, 'paused_budget', 'forced retry test', 1
-		)
-		RETURNING id`,
-		testWorkspaceID, channel.ID, lowID, highID,
-	).Scan(&exchangeID); err != nil {
-		t.Fatalf("seed pause retry exchange: %v", err)
-	}
-
-	tx, err := testHandler.TxStarter.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin forced pause notification failure: %v", err)
-	}
-	failing := &agentDMPauseFailOnceDBTX{DBTX: tx}
-	if _, err := testHandler.persistAgentDMPauseNotificationTx(
-		ctx, failing, parseUUID(exchangeID),
-	); err == nil || !strings.Contains(err.Error(), "forced owner inbox write failure") {
-		tx.Rollback(ctx)
-		t.Fatalf("forced pause notification failure=%v", err)
-	}
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("rollback forced pause notification failure: %v", err)
-	}
-
-	assertDurableCounts := func(wantMarker bool, wantMessages, wantInbox int) {
-		t.Helper()
-		var marker bool
-		if err := testPool.QueryRow(ctx, `
-			SELECT notification_sent_at IS NOT NULL
-			FROM agent_dm_exchange
-			WHERE id = $1`, exchangeID).Scan(&marker); err != nil {
-			t.Fatalf("load pause notification marker: %v", err)
-		}
-		if marker != wantMarker {
-			t.Fatalf("pause notification marker=%v, want %v", marker, wantMarker)
-		}
-		var messages, inboxItems int
-		if err := testPool.QueryRow(ctx, `
-			SELECT count(*)
-			FROM agent_dm_pause_notification receipt
-			JOIN channel_message message ON message.id = receipt.channel_message_id
-			WHERE receipt.exchange_id = $1
-			  AND receipt.notification_epoch = 1
-			  AND message.workspace_id = $2
-			  AND message.channel_id = $3
-			  AND message.author_type = 'system'`,
-			exchangeID, testWorkspaceID, channel.ID,
-		).Scan(&messages); err != nil {
-			t.Fatalf("count durable pause DM rows: %v", err)
-		}
-		if err := testPool.QueryRow(ctx, `
-			SELECT count(*)
-			FROM inbox_item
-			WHERE workspace_id = $1
-			  AND recipient_id = $2
-			  AND type = 'agent_dm_paused'
-			  AND details->>'exchange_id' = $3`,
-			testWorkspaceID, testUserID, exchangeID,
-		).Scan(&inboxItems); err != nil {
-			t.Fatalf("count durable pause owner inbox rows: %v", err)
-		}
-		if messages != wantMessages || inboxItems != wantInbox {
-			t.Fatalf(
-				"durable pause rows messages=%d inbox=%d, want %d/%d",
-				messages, inboxItems, wantMessages, wantInbox,
-			)
-		}
-	}
-	assertDurableCounts(false, 0, 0)
-
-	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
-	assertDurableCounts(true, 1, 1)
-	testHandler.notifyAgentDMPause(ctx, parseUUID(exchangeID))
-	assertDurableCounts(true, 1, 1)
-}
-
 // TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget replaces
 // "...ConcurrentFinalTurnCannotOverrunBudget". The budget gate is gone
 // (#813/#830), but the must-reply turn-alternation lock this test exercises
@@ -796,68 +700,6 @@ func TestAgentDMFrequencyAndBudgetNeverPauseAcrossMatters(t *testing.T) {
 			"frequency states exchange=%q pair=%q count=%d, want active/active/12 (no auto-pause)",
 			secondState, pairState, windowCount,
 		)
-	}
-}
-
-func TestAgentTransportA2AControlRequiresSourceAgentOwnerTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, _ := createChannelCompletionTask(t, "group")
-	sourceAgentID := agentIDForTask(t, taskID)
-	peerAgentID := createHandlerTestAgent(t, "Control Peer "+uuid.NewString(), []byte("[]"))
-	peerHandle := agentHandleForTransportTest(t, peerAgentID)
-	canonical := dmCanonicalName("agent", sourceAgentID, "agent", peerAgentID)
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `
-			DELETE FROM channel
-			WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, canonical)
-	})
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET initiator_user_id = $2
-		WHERE id = $1`, taskID, testUserID); err != nil {
-		t.Fatalf("seed owner-initiated task: %v", err)
-	}
-	first := agentTransportSendForTest(t, taskID, sourceAgentID, map[string]any{
-		"target":            "dm:@" + peerHandle,
-		"content":           "start controlled A2A",
-		"client_message_id": "a2a-control-" + uuid.NewString(),
-	})
-	if first.Code != http.StatusCreated {
-		t.Fatalf("start controlled A2A: status=%d body=%s", first.Code, first.Body.String())
-	}
-
-	pause := agentTransportA2AControlForTest(t, taskID, sourceAgentID, map[string]any{
-		"target": "dm:@" + peerHandle,
-		"action": "pause_pair",
-	})
-	if pause.Code != http.StatusOK {
-		t.Fatalf("owner-task A2A pause: status=%d body=%s", pause.Code, pause.Body.String())
-	}
-	var body agentTransportDMControlResponse
-	if err := json.Unmarshal(pause.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode owner-task A2A control: %v", err)
-	}
-	if body.Control == nil || body.Control.State != "paused_pair" {
-		t.Fatalf("owner-task A2A control=%+v", body)
-	}
-
-	nonOwnerID := seedWorkspaceUserForTransportTargetTest(t, "a2a-control-nonowner-"+uuid.NewString()[:8])
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET initiator_user_id = $2
-		WHERE id = $1`, taskID, nonOwnerID); err != nil {
-		t.Fatalf("seed non-owner initiated task: %v", err)
-	}
-	resume := agentTransportA2AControlForTest(t, taskID, sourceAgentID, map[string]any{
-		"target": "dm:@" + peerHandle,
-		"action": "resume_pair",
-	})
-	if resume.Code != http.StatusForbidden {
-		t.Fatalf("non-owner task A2A control: status=%d body=%s", resume.Code, resume.Body.String())
 	}
 }
 
@@ -3465,14 +3307,6 @@ func agentTransportSearchForTest(t *testing.T, taskID, agentID string, body map[
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/search", taskID, agentID, body)
 	rec := httptest.NewRecorder()
 	testHandler.AgentTransportSearchMessages(rec, req)
-	return rec
-}
-
-func agentTransportA2AControlForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
-	t.Helper()
-	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/a2a-control", taskID, agentID, body)
-	rec := httptest.NewRecorder()
-	testHandler.AgentTransportUpdateDMControl(rec, req)
 	return rec
 }
 

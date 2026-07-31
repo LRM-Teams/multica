@@ -192,6 +192,7 @@
   "model_dropdown": {
     "label": "モデル",
     "select_runtime_first": "先にランタイムを選択してください",
+    "select_required": "モデルを選択してください",
     "default_provider": "デフォルト（プロバイダー）",
     "runtime_offline_manual": "ランタイムがオフライン — 手動で入力",
     "managed_by_runtime_title": "このランタイムがモデル選択を管理します。",

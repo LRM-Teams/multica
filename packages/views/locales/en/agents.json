@@ -205,6 +205,7 @@
   "model_dropdown": {
     "label": "Model",
     "select_runtime_first": "Select a runtime first",
+    "select_required": "Select a model",
     "default_provider": "Default (provider)",
     "runtime_offline_manual": "Runtime offline — enter manually",
     "managed_by_runtime_title": "Model selection is managed by this runtime.",

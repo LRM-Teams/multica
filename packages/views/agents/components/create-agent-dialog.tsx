@@ -145,6 +145,11 @@ export function CreateAgentDialog({
 
   const handleSubmit = async () => {
     if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    const trimmedModel = model.trim();
+    if (!trimmedModel) {
+      showErrorToast(t(($) => $.model_dropdown.select_required));
+      return;
+    }
     setCreating(true);
 
     try {
@@ -153,7 +158,7 @@ export function CreateAgentDialog({
         display_name: name.trim(),
         description: description.trim(),
         runtime_id: selectedRuntime.id,
-        model: model.trim() || undefined,
+        model: trimmedModel,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_selection: avatarSelectionRef.current ?? undefined,
@@ -302,6 +307,8 @@ export function CreateAgentDialog({
                 setThinkingLevel("");
               }}
               disabled={!selectedRuntime}
+              required
+              autoSelectFirst
             />
 
             <ThinkingDropdown
@@ -346,12 +353,18 @@ export function CreateAgentDialog({
           <Button
             onClick={handleSubmit}
             disabled={
-              creating || !name.trim() || !selectedRuntime || selectedRuntimeLocked
+              creating ||
+              !name.trim() ||
+              !selectedRuntime ||
+              selectedRuntimeLocked ||
+              !model.trim()
             }
             title={
               selectedRuntimeLocked
                 ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
-                : undefined
+                : !model.trim()
+                  ? t(($) => $.model_dropdown.select_required)
+                  : undefined
             }
           >
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}

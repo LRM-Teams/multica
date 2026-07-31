@@ -973,8 +973,11 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
+    // #1637 dropped the separate type-label badge (was "Message"/"Agent"/etc)
+    // from the quote card — the new `> author: summary` format has no badge
+    // to assert on; the author-resolves-to-live-identity behavior (the
+    // subject of this test) is unaffected and still checked below.
     expect(screen.getByText("Alice Display")).toBeInTheDocument();
-    expect(screen.getByText("Message")).toBeInTheDocument();
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
   });
 

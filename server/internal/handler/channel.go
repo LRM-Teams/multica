@@ -1282,6 +1282,17 @@ func (h *Handler) archiveChannel(w http.ResponseWriter, r *http.Request, workspa
 	return ch, true
 }
 
+// ListChannelInviteCandidates returns workspace members + agents that can be
+// invited into an ordinary group channel.
+//
+// Visibility contract (LRM-915 / #908 / #1613):
+//   - Every non-archived workspace agent is inviteable by any channel member.
+//     There is no agent.visibility / owner-only / Wendy-name silent filter —
+//     agent.visibility was retired (#908) and the Wendy SQL carve-out was
+//     removed (#1613). Candidates must not disappear without an explicit
+//     API error or UI empty-state reason.
+//   - Agents already in the channel are omitted (already members).
+//   - Archived agents are omitted (not inviteable).
 func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

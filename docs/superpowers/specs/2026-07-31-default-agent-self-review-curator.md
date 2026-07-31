@@ -16,7 +16,7 @@ workspace curator remains a single governance agent/runtime.
 
 1. Nightly `agent_self_review` is automatic.
    - The scheduler scans active agents in each workspace.
-   - Activity comes from `agent_inbox_event` and legacy `agent_task_queue`.
+   - Admission is material-based: an agent is targeted only when the prior day has reviewable material, such as `agent_inbox_event`, legacy `agent_task_queue`, memory write events, curation candidates, memory sync entries, or skill suggestions.
    - Each target agent gets one `memory_curation_agent_run` child run.
    - The child run is bound to that agent's own runtime.
    - Runtime offline or provider/cost/network failure is recorded on that child
@@ -40,7 +40,7 @@ Implement default scheduled self-review without requiring profile rows:
 - Add a default scheduler path for `agent_self_review`.
 - Create one workspace parent `memory_curation_run` per Beijing plan day.
 - Create child `memory_curation_agent_run` rows for active agents.
-- Include legacy `agent_task_queue` activity in active-agent detection.
+- Include legacy `agent_task_queue` plus memory/curation/skill material in active-agent detection so agents with no prior-day material do not self-review or feed curator work.
 - Preserve profile-backed `team_curation` scheduling.
 
 Out of scope for this phase:
@@ -49,6 +49,24 @@ Out of scope for this phase:
 - Narrowing team curation input strictly to candidates.
 - New DB constraints for default scheduled run uniqueness.
 - New partial-success status values beyond existing `succeeded` / `failed`.
+
+## Admission Rules
+
+An agent is eligible for default self-review for `planDate` only if at least one
+reviewable signal exists on that date:
+
+- `agent_inbox_event.created_at` for conversation, issue, or task wakeups.
+- Legacy `agent_task_queue` timestamps when that table exists.
+- `agent_memory_write_event.created_at`, including daily, memory, state, review,
+  project, channel, or user-scoped memory file writes.
+- `agent_memory_curation_candidate.created_at` for pending/promoted/rejected
+  candidates created by the agent.
+- `agent_memory_sync_entry.updated_at` for durable center-sync memory changes.
+- `agent_skill_suggestion.updated_at` for skill evolution suggestions.
+
+If none of those sources exists for the agent on the prior day, the scheduler
+skips the agent. Optional sources are checked with `to_regclass` so older schema
+versions do not fail.
 
 ## Data Rules
 
@@ -78,7 +96,8 @@ Parent dedupe:
 
 - With no `memory_curator_profile`, active agents receive self-review child runs.
 - Legacy `agent_task_queue` activity counts as active.
-- Inactive agents are skipped.
+- Memory write material without an inbox event counts as active.
+- Inactive agents with no reviewable material are skipped.
 - Offline active agents create `waiting_runtime` child rows without blocking
   online active agents.
 - Profile-backed `team_curation` still creates scheduled runs as before.

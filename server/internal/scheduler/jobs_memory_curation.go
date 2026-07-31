@@ -191,22 +191,9 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		return HandlerResult{Result: map[string]any{"stage": "agent_self_review", "run_intents_created": int64(0), "reason": "not_default_schedule_hour"}}, nil
 	}
 	planDate := time.Date(cycleLocal.Year(), cycleLocal.Month(), cycleLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
-	legacyTaskQueueAvailable, err := relationExists(ctx, pool, "public.agent_task_queue")
+	activeSources, err := defaultSelfReviewActiveSources(ctx, pool)
 	if err != nil {
 		return HandlerResult{}, err
-	}
-	activeSources := `
-		      SELECT agent_id
-		        FROM agent_inbox_event
-		       WHERE created_at >= $1::date
-		         AND created_at < ($1::date + interval '1 day')`
-	if legacyTaskQueueAvailable {
-		activeSources += `
-		      UNION
-		      SELECT q.agent_id
-		        FROM agent_task_queue q
-		       WHERE COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) >= $1::date
-		         AND COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) < ($1::date + interval '1 day')`
 	}
 	var created int64
 	err = pool.QueryRow(ctx, `
@@ -263,6 +250,75 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		_ = heartbeat(ctx)
 	}
 	return HandlerResult{RowsAffected: created, Result: map[string]any{"stage": "agent_self_review", "run_intents_created": created, "schedule": "default_active_agents"}}, nil
+}
+
+func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	sources := `
+		      SELECT agent_id
+		        FROM agent_inbox_event
+		       WHERE created_at >= $1::date
+		         AND created_at < ($1::date + interval '1 day')`
+	optionalSources := []struct {
+		relation string
+		query    string
+	}{
+		{
+			relation: "public.agent_task_queue",
+			query: `
+		      UNION
+		      SELECT q.agent_id
+		        FROM agent_task_queue q
+		       WHERE COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) >= $1::date
+		         AND COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) < ($1::date + interval '1 day')`,
+		},
+		{
+			relation: "public.agent_memory_write_event",
+			query: `
+		      UNION
+		      SELECT w.agent_id
+		        FROM agent_memory_write_event w
+		       WHERE w.created_at >= $1::date
+		         AND w.created_at < ($1::date + interval '1 day')`,
+		},
+		{
+			relation: "public.agent_memory_curation_candidate",
+			query: `
+		      UNION
+		      SELECT c.source_agent_id AS agent_id
+		        FROM agent_memory_curation_candidate c
+		       WHERE c.source_agent_id IS NOT NULL
+		         AND c.created_at >= $1::date
+		         AND c.created_at < ($1::date + interval '1 day')`,
+		},
+		{
+			relation: "public.agent_memory_sync_entry",
+			query: `
+		      UNION
+		      SELECT s.agent_id
+		        FROM agent_memory_sync_entry s
+		       WHERE s.updated_at >= $1::date
+		         AND s.updated_at < ($1::date + interval '1 day')`,
+		},
+		{
+			relation: "public.agent_skill_suggestion",
+			query: `
+		      UNION
+		      SELECT ss.agent_id
+		        FROM agent_skill_suggestion ss
+		       WHERE ss.updated_at >= $1::date
+		         AND ss.updated_at < ($1::date + interval '1 day')`,
+		},
+	}
+	for _, source := range optionalSources {
+		available, err := relationExists(ctx, pool, source.relation)
+		if err != nil {
+			return "", err
+		}
+		if available {
+			sources += source.query
+		}
+	}
+	return sources, nil
 }
 
 func memoryCurationAgentRunTableExists(ctx context.Context, pool *pgxpool.Pool) (bool, error) {

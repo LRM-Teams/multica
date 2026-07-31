@@ -300,6 +300,78 @@ func TestMemoryCurationSchedulerCountsLegacyTaskQueueActivity(t *testing.T) {
 	}
 }
 
+func TestMemoryCurationSchedulerCountsMemoryWriteMaterial(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := t.Context()
+	available, err := relationExists(ctx, pool, "public.agent_memory_write_event")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !available {
+		t.Skip("agent_memory_write_event table is not present in this schema")
+	}
+	suffix := uuid.NewString()[:8]
+	var userID, workspaceID, runtimeID, materialAgentID, idleAgentID string
+	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id::text`, "Default Self Review Memory Write "+suffix, "default-self-review-memory-write-"+suffix+"@example.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug) VALUES ($1, $2) RETURNING id::text`, "Default Self Review Memory Write "+suffix, "default-self-review-memory-write-"+suffix).Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
+		VALUES ($1, $2, 'Default Self Review Memory Write Runtime', 'local', 'codex', 'online', 'test', $3)
+		RETURNING id::text
+	`, workspaceID, "default-self-review-memory-write-"+suffix, userID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
+	`, workspaceID, "default_self_review_memory_write_"+suffix, runtimeID, userID).Scan(&materialAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
+	`, workspaceID, "default_self_review_memory_idle_"+suffix, runtimeID, userID).Scan(&idleAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_memory_write_event (
+		  workspace_id, agent_id, runtime_id, rel_path, scope_type, file_key, content_hash, delta_chars, created_at
+		) VALUES ($1, $2, $3, 'memory/daily/2026-07-09.md', 'agent_global', 'daily:2026-07-09', 'hash-2026-07-09', 128, '2026-07-09 10:00:00+00')
+	`, workspaceID, materialAgentID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	plan := time.Date(2026, 7, 10, defaultAgentSelfReviewScheduleHour, 0, 0, 0, time.FixedZone("CST", 8*60*60)).UTC()
+	res, err := makeMemoryCurationIntentHandler(pool, memorycuration.StageAgentSelfReview, 0)(ctx, HandlerInput{PlanTime: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowsAffected != 1 {
+		t.Fatalf("RowsAffected = %d, want 1 (%#v)", res.RowsAffected, res.Result)
+	}
+	var targets []string
+	if err := pool.QueryRow(ctx, `
+		SELECT target_agent_ids::text[]
+		  FROM memory_curation_run
+		 WHERE workspace_id = $1 AND profile_id IS NULL AND stage = 'agent_self_review'
+	`, workspaceID).Scan(&targets); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0] != materialAgentID {
+		t.Fatalf("targets = %v, want [%s] and not idle %s", targets, materialAgentID, idleAgentID)
+	}
+}
+
 func TestMemoryCurationStageNormalization(t *testing.T) {
 	cases := map[string]memorycuration.Stage{
 		"agent_self_review": memorycuration.StageAgentSelfReview,

@@ -25,9 +25,16 @@
 //
 //	DATABASE_URL=... S3_BUCKET=leagent S3_REGION=cn-beijing \
 //	AWS_ENDPOINT_URL=https://s3.oss-cn-beijing.aliyuncs.com \
+//	S3_FORCE_PATH_STYLE=false \
+//	AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
 //	AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
 //	LOCAL_UPLOAD_DIR=/app/data/uploads \
 //	  ./migrate-uploads-to-s3 --since 2026-07-30T06:20:00Z
+//
+// This talks to Aliyun OSS through storage.NewS3StorageFromEnv, so it
+// inherits every OSS compatibility gotcha documented in .env.example's
+// "S3 / CloudFront" section (bucket must pre-exist / addressing style /
+// checksum trailers) — the env vars above are not optional decoration.
 //
 // Defaults to --dry-run (lists candidate rows only, uploads nothing,
 // writes nothing). Pass --dry-run=false to actually migrate. Re-running

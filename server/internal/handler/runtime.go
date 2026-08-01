@@ -21,10 +21,10 @@ import (
 )
 
 type AgentRuntimeResponse struct {
-	ID             string                      `json:"id"`
-	WorkspaceID    string                      `json:"workspace_id"`
-	DaemonID       *string                     `json:"daemon_id"`
-	Name           string                      `json:"name"`
+	ID          string  `json:"id"`
+	WorkspaceID string  `json:"workspace_id"`
+	DaemonID    *string `json:"daemon_id"`
+	Name        string  `json:"name"`
 	// DisplayName is the user-editable machine label. Empty means unset —
 	// clients should fall back to Name (daemon hostname / reported label).
 	// Daemon register/upsert never overwrites a non-empty value.
@@ -189,8 +189,9 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
 	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
-	availableUpdateTarget := runtimeAvailableUpdateTarget(rt, metadata, currentVersion, targetVersion, updateState, release)
-	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState, availableUpdateTarget)
+	now := time.Now()
+	availableUpdateTarget := runtimeAvailableUpdateTarget(rt, metadata, currentVersion, targetVersion, updateState, release, now)
+	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState, availableUpdateTarget, now)
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
@@ -229,7 +230,7 @@ func (h *Handler) runtimeReleaseForResponse(ctx context.Context, rt db.AgentRunt
 	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
 	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
-	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState) {
+	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState, time.Now()) {
 		return nil
 	}
 	release, err := h.RuntimeReleaseSource.Latest(ctx)
@@ -330,8 +331,12 @@ func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateSta
 	return nil
 }
 
-func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string) bool {
-	if rt.Status != "online" || rt.RuntimeMode != "local" || currentVersion == nil {
+func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string, now time.Time) bool {
+	// Task #53: keyed off runtimeConnectivity (heartbeat freshness), not the
+	// raw status column — that column can still read "online" for up to
+	// ~180s after the runtime actually went silent (sweeper lag). See
+	// deriveRuntimeHealth below for the same reasoning.
+	if runtimeConnectivity(rt, now) != runtimeConnectivityOnline || rt.RuntimeMode != "local" || currentVersion == nil {
 		return false
 	}
 	if launchedBy(metadata) == "desktop" {
@@ -350,11 +355,11 @@ func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVe
 	}
 }
 
-func runtimeAvailableUpdateTarget(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string, release *RuntimeRelease) *string {
+func runtimeAvailableUpdateTarget(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string, release *RuntimeRelease, now time.Time) *string {
 	if release == nil || release.TagName == "" {
 		return nil
 	}
-	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState) {
+	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState, now) {
 		return nil
 	}
 	if currentVersion == nil || !cli.IsNewerVersion(release.TagName, *currentVersion) {
@@ -373,8 +378,16 @@ func launchedBy(metadata any) string {
 	return strings.TrimSpace(value)
 }
 
-func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *string, updateState string, availableUpdateTarget *string) string {
-	if rt.Status != "online" {
+func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *string, updateState string, availableUpdateTarget *string, now time.Time) string {
+	// Task #53: was `rt.Status != "online"`, trusting the raw column
+	// directly. That column can read "online" for up to ~180s after the
+	// runtime actually went silent (sweeper lag), which produced a real,
+	// user-visible bug: this health badge and the agent list's
+	// runtime_display_status field (#1664, which already made this same
+	// fix) could disagree about whether the same runtime was reachable.
+	// runtimeConnectivity derives freshness from last_seen_at at read time
+	// instead of trusting the lagging persisted value.
+	if runtimeConnectivity(rt, now) != runtimeConnectivityOnline {
 		return "offline"
 	}
 	switch updateState {
@@ -819,11 +832,11 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		newVisibility  string
-		needVisibility bool
-		newDisplayName string
+		newVisibility   string
+		needVisibility  bool
+		newDisplayName  string
 		needDisplayName bool
-		changed        bool
+		changed         bool
 	)
 	if req.Visibility != nil {
 		v := *req.Visibility

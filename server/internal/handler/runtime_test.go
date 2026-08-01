@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestRuntimeHandlersRejectMalformedRuntimeID(t *testing.T) {
@@ -400,5 +401,76 @@ func TestRuntimeHeatmapEndpointsUseViewerTZ(t *testing.T) {
 				t.Fatalf("%s: expected 200, got %d: %s", c.name, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// Task #53: deriveRuntimeHealth previously trusted the raw agent_runtime.status
+// column directly, which can read "online" for up to ~180s after the runtime
+// actually went silent (sweeper lag) — the exact same bug #1664 already fixed
+// for the agent list/detail display, and #50 fixed for the queued-task TTL.
+// This was a real, user-visible inconsistency: the runtime detail page's
+// health badge and the agent list's runtime_display_status could disagree
+// about whether the same runtime was reachable, because one read the raw
+// column and the other used runtimeConnectivity's freshness check.
+//
+// TestDeriveRuntimeHealthUsesHeartbeatFreshnessNotRawStatus is the regression
+// test for that gap: a runtime whose status column still says "online" but
+// whose heartbeat is stale must report health "offline", not "ok".
+func TestDeriveRuntimeHealthUsesHeartbeatFreshnessNotRawStatus(t *testing.T) {
+	now := time.Now()
+
+	staleOnline := db.AgentRuntime{
+		Status:     "online",
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)), // well past the 150s/5min thresholds
+		UpdatedAt:  pgtimestamptz(now.Add(-9 * time.Minute)),
+	}
+	if got := deriveRuntimeHealth(staleOnline, nil, nil, "idle", nil, now); got != "offline" {
+		t.Fatalf("stale-online runtime (status column lying): health = %q, want %q (must key off heartbeat freshness, not the raw status column)", got, "offline")
+	}
+
+	freshOnline := db.AgentRuntime{
+		Status:     "online",
+		LastSeenAt: pgtimestamptz(now.Add(-5 * time.Second)),
+		UpdatedAt:  pgtimestamptz(now.Add(-5 * time.Second)),
+	}
+	if got := deriveRuntimeHealth(freshOnline, nil, nil, "idle", nil, now); got != "ok" {
+		t.Fatalf("fresh-online runtime: health = %q, want %q", got, "ok")
+	}
+
+	explicitOffline := db.AgentRuntime{
+		Status:     "offline",
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)),
+		UpdatedAt:  pgtimestamptz(now.Add(-9 * time.Minute)),
+	}
+	if got := deriveRuntimeHealth(explicitOffline, nil, nil, "idle", nil, now); got != "offline" {
+		t.Fatalf("explicitly-offline runtime: health = %q, want %q", got, "offline")
+	}
+}
+
+// TestRuntimeShouldFetchLatestReleaseUsesHeartbeatFreshness is the same
+// regression, for the sibling function that gates whether the server bothers
+// checking for a newer CLI release at all.
+func TestRuntimeShouldFetchLatestReleaseUsesHeartbeatFreshness(t *testing.T) {
+	now := time.Now()
+	version := "0.3.90"
+
+	staleOnline := db.AgentRuntime{
+		Status:      "online",
+		RuntimeMode: "local",
+		LastSeenAt:  pgtimestamptz(now.Add(-10 * time.Minute)),
+		UpdatedAt:   pgtimestamptz(now.Add(-9 * time.Minute)),
+	}
+	if got := runtimeShouldFetchLatestRelease(staleOnline, nil, &version, nil, "idle", now); got {
+		t.Fatalf("stale-online runtime: runtimeShouldFetchLatestRelease = true, want false (must not treat a stale heartbeat as reachable)")
+	}
+
+	freshOnline := db.AgentRuntime{
+		Status:      "online",
+		RuntimeMode: "local",
+		LastSeenAt:  pgtimestamptz(now.Add(-5 * time.Second)),
+		UpdatedAt:   pgtimestamptz(now.Add(-5 * time.Second)),
+	}
+	if got := runtimeShouldFetchLatestRelease(freshOnline, nil, &version, nil, "idle", now); !got {
+		t.Fatalf("fresh-online local runtime: runtimeShouldFetchLatestRelease = false, want true")
 	}
 }
